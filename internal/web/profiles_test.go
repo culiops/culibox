@@ -797,3 +797,30 @@ func TestProfileViewSurfacesTheInlineAWSBinding(t *testing.T) {
 		t.Errorf("wire shape: %s", raw)
 	}
 }
+
+func TestProfileViewCarriesTheInlineSSODirectMode(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "direct", Bin: "claude", Runtime: config.RuntimeBox, AWS: &config.AWSBinding{
+			SourceProfile: "p", Region: "eu-west-1", Mode: config.AWSModeSSODirect, Label: "sbx"}},
+		{Name: "plain", Bin: "claude", Runtime: config.RuntimeBox, AWS: &config.AWSBinding{
+			SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/R", Region: "eu-west-1"}},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	if d := got["direct"].AWSInline; d == nil || d.Mode != config.AWSModeSSODirect {
+		t.Fatalf("direct inline = %+v", d)
+	}
+	if p := got["plain"].AWSInline; p == nil || p.Mode != "" {
+		t.Fatalf("plain inline = %+v", p)
+	}
+	raw, err := json.Marshal(got["plain"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"mode"`) {
+		t.Errorf("an assume_role inline binding must not emit mode: %s", raw)
+	}
+}

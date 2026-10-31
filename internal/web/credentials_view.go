@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/awsprobe"
+	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/credref"
@@ -261,6 +263,22 @@ func accountOf(arn string) string {
 	return ""
 }
 
+// connAccount is the account a connection's row shows: the role ARN's for
+// assume_role; for sso_direct (no role ARN) the source profile's
+// sso_account_id read from the host's AWS files, "" when unreadable.
+func connAccount(c config.AWSConnection) string {
+	if !c.SSODirect() {
+		return accountOf(c.RoleARN)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	id, err := broker.SSOAccountOf(ctx, c.SourceProfile)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 // hostLabel is how an egress rule reads on the card: host, host:port for a
 // non-default port, or the CIDR.
 func hostLabel(h config.TokenEgress) string {
@@ -348,7 +366,7 @@ func (s *Server) credView() credViewBody {
 	}
 
 	for _, e := range sn.aws {
-		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: accountOf(e.conn.RoleARN),
+		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: connAccount(e.conn),
 			Region: e.conn.Region, Prod: e.conn.Prod, Source: e.src, SourceProfile: e.conn.SourceProfile, RoleARN: e.conn.RoleARN, Mode: e.conn.Mode,
 			EgressAllow: slices.Clone(e.conn.EgressAllow), S3Read: slices.Clone(e.conn.S3Read),
 			Status: credOK, Error: e.err, UsedBy: orEmpty(e.usedBy), Base: verdictOf(e.base)}

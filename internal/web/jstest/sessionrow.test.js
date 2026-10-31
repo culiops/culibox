@@ -641,3 +641,19 @@ test("sso_direct: awsSig changes with the mode and the hours", () => {
 test("baseScope: sso_direct is its own state", () => {
   assert.strictEqual(baseScope(SSOA).state, "sso_direct");
 });
+
+test("sso_direct with no role name: the rail, chip title and connection detail show the mode, not an empty role", () => {
+  const A = { label: "sbx", account_id: "123456789012", role_arn: "", mode: "sso_direct", hours: 8 };
+  const role = awsRailRows({ aws: A }, null, NOW).find((r) => r.k === "role");
+  assert.strictEqual(role.v, "SSO role directly");
+  const chip = awsBadge({ aws: A }, NOW);
+  assert.strictEqual(chip.title, "AWS 123456789012 · read-only gate passed · up to 8 h · SSO role directly");
+  assert.doesNotMatch(chip.title, /·\s+·/);
+  const one = awsBadge({ aws_connections: [{ name: "sbx", ...A }] }, NOW);
+  assert.doesNotMatch(one.title, /·\s+·/);
+  const b = awsConnRailRows({ aws_connections: [{ name: "sbx", ...A, region: "eu-west-1" }] }, null, NOW)[0];
+  assert.strictEqual(b.detail, "sbx · 123456789012 · SSO role directly · eu-west-1");
+  // an assume_role binding keeps its role name
+  const plain = awsRailRows({ aws: { label: "x", account_id: "1", role_arn: "arn:aws:iam::1:role/ops" } }, null, NOW).find((r) => r.k === "role");
+  assert.strictEqual(plain.v, "ops");
+});

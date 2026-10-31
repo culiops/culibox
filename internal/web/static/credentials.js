@@ -142,8 +142,15 @@ function credTableHead(key) {
 
 // credProbeCell: the write-probe verdict, short. The full D4 sentence for a
 // "writes" verdict is the warnbox under the row, so the cell only says it.
+// CRED_SSO_DIRECT_LABEL / CRED_SSO_DIRECT_GATE_NOTE: an sso_direct connection has
+// no base role to probe; its read-only proof is the gate, which runs at every
+// save, spawn and mint. No verdict is cached, so none is claimed here.
+const CRED_SSO_DIRECT_LABEL = "SSO role directly";
+const CRED_SSO_DIRECT_GATE_NOTE = "Read-only gate runs on every use";
+
 function credProbeCell(e) {
   if (e.status !== "ok") return { text: "–", cls: "", kind: "pv", sub: "" };
+  if (e.mode === "sso_direct") return { text: CRED_SSO_DIRECT_GATE_NOTE, cls: "", kind: "pv", sub: "" };
   const v = baseText(e.base);
   return { text: v.cls === "bad" ? "Can write" : v.text, cls: v.cls, kind: "pv", sub: checkedText(e.base && e.base.checked_at, new Date()) };
 }
@@ -161,7 +168,7 @@ function credTableRow(key, e) {
     return {
       cells: [
         { text: e.name, tag: e.prod ? "PROD" : "", seed: isSeed(e), sub: credElevateText(e.elevate) },
-        { text: e.account_id || "", sub: credRoleName(e.role_arn), mono: true, subMono: true },
+        { text: e.account_id || "", sub: e.mode === "sso_direct" ? CRED_SSO_DIRECT_LABEL : credRoleName(e.role_arn), mono: true, subMono: e.mode !== "sso_direct" },
         st, probe, used,
       ],
       danger: e.status === "ok" && probe.cls === "bad",
@@ -732,7 +739,7 @@ if (typeof module !== "undefined" && module.exports) {
     templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
     tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
-    providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead,
+    providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead, awsGateBoxEmpty,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
     awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
@@ -821,12 +828,15 @@ function credCard(entry, title, sub, body, extra) {
 
 function credAWSCard(e) {
   const verdict = baseText(e.base);
-  const meta = [["Account", e.account_id], ["Role", credRoleName(e.role_arn)], ["Region", e.region]];
+  const direct = e.mode === "sso_direct";
+  const meta = [["Account", e.account_id], direct ? ["Mode", CRED_SSO_DIRECT_LABEL] : ["Role", credRoleName(e.role_arn)], ["Region", e.region]];
   if (e.source_profile) meta.push(["Profile", e.source_profile]);
   if (e.elevate) meta.push(["Elevate", credRoleName(e.elevate.role_arn) + (e.elevate.max_minutes ? " (" + e.elevate.max_minutes + " min)" : "")]);
   meta.push(["Used by", usedByText(e.used_by)]);
   const body = [credMeta(meta)];
-  if (e.status === "ok") {
+  if (e.status === "ok" && direct) {
+    body.push(credEl("div", "verdict", CRED_SSO_DIRECT_GATE_NOTE));
+  } else if (e.status === "ok") {
     if (verdict.cls === "bad") {
       const box = credEl("div", "warnbox", verdict.text);
       box.setAttribute("role", "alert");
@@ -1735,7 +1745,7 @@ function awsPaintRes(row) {
   if (row.mode === "sso_direct") {
     if (row.gate) {
       const g = awsGateView(row.gate);
-      nodes.push(awsGateNode(g));
+      if (!awsGateBoxEmpty(g)) nodes.push(awsGateNode(g));
       if (g.signIn) needSignIn = true;
     }
   } else if (row.assume) {
@@ -1755,6 +1765,13 @@ function awsPaintRes(row) {
   if (needSignIn) nodes.push(awsSignInNode(row));
   row.res.replaceChildren(...nodes);
   if (row.el) row.el.classList.toggle("danger", row.mode === "sso_direct" ? !!row.gate && row.gate.state === "not_read_only" : row.assume === "ok" && row.verdict === "writes");
+}
+
+// awsGateBoxEmpty: the sign-in prompt carries its own "SSO expired" badge, so a
+// sign-in gate with no refused lines, missing grants or data-read report would
+// draw an empty amber box above it.
+function awsGateBoxEmpty(g) {
+  return g.tone !== "ok" && g.signIn && !g.refused.length && !g.missing.length && !g.dataReadText;
 }
 
 // awsGateNode: the read-only gate's verdict, the lines that refused and the data-read report.
@@ -2094,6 +2111,10 @@ async function awsSaveAll() {
         // The server re-ran the gate (a label-only edit does too) and it did not pass.
         row.gate = e.body.gate;
         row.err = "";
+        // The gate did not pass, so no credential lifetime is known: a stale
+        // "up to N h" from an earlier check must not stay in the note.
+        row.hours = 0;
+        awsPaintModeNote(row);
       } else if (e.status === 409 && e.code === "needs_ack") {
         // The server checked and found write access the client had not seen (or the role changed).
         row.assume = "ok"; row.verdict = (v && v.state) || "writes"; row.actions = (v && v.actions) || []; row.acked = false;

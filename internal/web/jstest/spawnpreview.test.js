@@ -275,3 +275,12 @@ test("reach rows: an sso_direct connection says so and never claims write after 
   const r3 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: { aws_connections: [{ name: "sbx" }] }, creds: { aws: [{ name: "sbx" }] } });
   assert.strictEqual(byK(r3, "AWS")[0].v, "sbx · read only");
 });
+
+test("reach rows: an inline sso_direct binding ends with the mode label", () => {
+  const p = { runtime: "box", bin: "claude", claude: true, network: "allowlist", aws_inline: { name: "sbx", mode: "sso_direct" } };
+  const rows = reachRows({ profile: p, tier: "box", cwd: "/w", meta: null, creds: { store: { initialized: true, locked: false, platform: "linux" }, aws: [] } });
+  assert.strictEqual(byK(rows, "AWS")[0].v, "sbx · read only · SSO role directly");
+  const q = { ...p, aws_inline: { name: "old" } };
+  const rows2 = reachRows({ profile: q, tier: "box", cwd: "/w", meta: null, creds: { store: { initialized: true, locked: false, platform: "linux" }, aws: [] } });
+  assert.strictEqual(byK(rows2, "AWS")[0].v, "old · read only");
+});

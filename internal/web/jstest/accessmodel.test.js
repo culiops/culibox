@@ -368,3 +368,10 @@ test("accessModel: an sso_direct row shows the mode in its base line, not the As
   assert.strictEqual(row.baseWarn, false);
   assert.doesNotMatch(JSON.stringify(row), /no broad writes found/);
 });
+
+test("accessModel: an sso_direct row without a role name shows the mode label, not an empty role", () => {
+  const conn = { name: "sbx", label: "sbx", account_id: "123456789012", role_arn: "", mode: "sso_direct", region: "eu-west-1", hours: 4 };
+  const row = model({ session: sess({ aws_connections: [conn] }) }).creds.rows[0];
+  assert.strictEqual(row.sub, "account 123456789012 · SSO role directly · eu-west-1");
+  assert.doesNotMatch(row.sub, /role\s+·/);
+});

@@ -78,6 +78,8 @@ type ProfileAWSInline struct {
 	Name              string `json:"name"`
 	Prod              bool   `json:"prod,omitempty"`
 	ElevateMaxMinutes int    `json:"elevate_max_minutes,omitempty"`
+	// Mode is the binding's mode ("" = assume_role, "sso_direct").
+	Mode string `json:"mode,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -420,7 +422,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			CloneOf:        a.CloneOf,
 		}
 		if a.AWS != nil {
-			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod}
+			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod, Mode: a.AWS.Mode}
 			if in.Name == "" {
 				in.Name = "aws"
 			}

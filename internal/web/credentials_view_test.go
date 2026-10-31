@@ -37,6 +37,7 @@ type viewBody struct {
 		Source        string   `json:"source"`
 		SourceProfile string   `json:"source_profile"`
 		RoleARN       string   `json:"role_arn"`
+		Mode          string   `json:"mode"`
 		Elevate       any      `json:"elevate"`
 		EgressAllow   []string `json:"egress_allow"`
 		S3Read        []string `json:"s3_read"`
@@ -640,5 +641,29 @@ func TestViewInvalidEntriesAndBadFile(t *testing.T) {
 		if e.Name == "typo-tok" {
 			t.Errorf("a dropped undecodable entry is still listed invalid: %+v", b.Invalid)
 		}
+	}
+}
+
+func TestViewSSODirectRowCarriesTheProfileAccount(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config")
+	if err := os.WriteFile(cfg, []byte("[profile sso-p]\nsso_account_id = 123456789012\nsso_role_name = RO\nsso_start_url = https://example.awsapps.com/start\nsso_region = us-east-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	direct := config.AWSConnection{Name: "sbx", AWSBinding: config.AWSBinding{SourceProfile: "sso-p", Region: "us-east-1", Mode: config.AWSModeSSODirect}}
+	unreadable := config.AWSConnection{Name: "gone", AWSBinding: config.AWSBinding{SourceProfile: "no-such", Region: "us-east-1", Mode: config.AWSModeSSODirect}}
+	v := newViewFix(t, config.Config{AWSConnections: []config.AWSConnection{direct, unreadable}}, nil)
+	b, raw := v.get(t)
+	got := map[string]int{}
+	for i, a := range b.AWS {
+		got[a.Name] = i
+	}
+	if a := b.AWS[got["sbx"]]; a.AccountID != "123456789012" || a.Mode != "sso_direct" || a.RoleARN != "" {
+		t.Errorf("sso_direct row: %s", raw)
+	}
+	if a := b.AWS[got["gone"]]; a.AccountID != "" {
+		t.Errorf("an unreadable profile must give an empty account: %s", raw)
 	}
 }

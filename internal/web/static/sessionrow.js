@@ -161,6 +161,14 @@ function roleName(arn) {
   return i >= 0 ? arn.slice(i + 1) : (arn || "");
 }
 
+// roleText: the role a binding shows. An sso_direct binding may have no role
+// name (the spawn carries the account and the hours, not the ARN), so the mode
+// label stands in for it rather than leaving an empty role.
+function roleText(a, arn) {
+  const r = roleName(arn);
+  return r || (a && a.mode === SSO_DIRECT ? SSO_DIRECT_LABEL : "");
+}
+
 // hhmm: the local clock face of an ISO instant, "" when unparseable. Same
 // local-time idiom as startedText in steerrail.js.
 function hhmm(iso) {
@@ -286,7 +294,7 @@ function awsBadge(s, nowMs = Date.now()) {
       prod: !!a.prod,
       write: true,
       roleWrite: false,
-      title: "AWS " + a.account_id + " · " + roleName(a.elevate && a.elevate.role_arn) + " · write until " + hhmm(a.elevated_until),
+      title: ["AWS " + a.account_id, roleName(a.elevate && a.elevate.role_arn), "write until " + hhmm(a.elevated_until)].filter(Boolean).join(" · "),
     };
   }
   const roleWrite = baseState(a) === "writes";
@@ -295,7 +303,8 @@ function awsBadge(s, nowMs = Date.now()) {
     prod: !!a.prod,
     write: false,
     roleWrite,
-    title: "AWS " + a.account_id + " · " + roleName(a.role_arn) + " · " + baseChipTail(a),
+    // The role part is dropped when empty (sso_direct): the tail names the mode.
+    title: ["AWS " + a.account_id, roleName(a.role_arn), baseChipTail(a)].filter(Boolean).join(" \u00b7 "),
   };
 }
 
@@ -321,7 +330,7 @@ function awsBadgeParts(s, nowMs = Date.now()) {
   const roleWrite = !write && idle.some((c) => baseState(c) === "writes");
   if (cs.length === 1) {
     const c = cs[0];
-    const base = "AWS " + c.account_id + " \u00b7 " + roleName(write && c.elevate ? c.elevate.role_arn : c.role_arn);
+    const base = ["AWS " + c.account_id, roleName(write && c.elevate ? c.elevate.role_arn : c.role_arn)].filter(Boolean).join(" \u00b7 ");
     return { label: c.label || c.name, prod, write, roleWrite,
       title: base + (write ? " \u00b7 write until " + hhmm(c.elevated_until) : " \u00b7 " + baseChipTail(c)) };
   }
@@ -410,7 +419,7 @@ function awsRailRows(s, st, nowMs = Date.now()) {
   const elevated = isElevated(a, nowMs);
   const rows = [
     { k: "aws", v: a.label ? a.label + " · " + a.account_id : String(a.account_id), wrap: true },
-    { k: "role", v: roleName(elevated && a.elevate ? a.elevate.role_arn : a.role_arn), wrap: true },
+    { k: "role", v: roleText(a, elevated && a.elevate ? a.elevate.role_arn : a.role_arn), wrap: true },
     scopeRow(a, st, nowMs),
   ];
   if (a.prod) rows.push({ k: "prod", v: "production", chip: "bdg aws prod" });
@@ -489,7 +498,7 @@ function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
     if (c.prod) chips.push({ text: "prod", chip: "bdg aws prod" });
     if (live) chips.push({ text: "write until " + hhmm(c.elevated_until), chip: "bdg aws write" });
     if (c.sso_expired) chips.push({ text: "SSO expired", chip: "bdg dgr" });
-    const detail = [c.label, c.account_id, roleName(live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
+    const detail = [c.label, c.account_id, roleText(c, live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
     const { stat, err } = connStatLine((byName.get(c.name) || {}).stats, nowMs);
     // While a window is open the base role is not what the session holds.
     const b = live ? null : baseScope(c);
@@ -517,6 +526,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

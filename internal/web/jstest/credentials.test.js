@@ -8,7 +8,7 @@ const {
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
-  awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
+  awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -769,4 +769,48 @@ test("awsRowStateFor: an edit that only changes the label still needs the gate i
   assert.strictEqual(awsRowStateFor(row).canSave, true);
   const ar = { source_profile: "p", role_arn: "arn:aws:iam::1:role/x", orig: { source_profile: "p", role_arn: "arn:aws:iam::1:role/x" } };
   assert.strictEqual(awsRowStateFor(ar).canSave, true);
+});
+
+test("credTableRows aws: an sso_direct row shows the mode, the account and a gate note, never the AssumeRole 'Not checked'", () => {
+  const e = awsE("sbx", { mode: "sso_direct", role_arn: "", account_id: "123456789012", base: { state: "not_checked" } });
+  const [r] = credTableRows({ key: "aws", entries: [e] });
+  assert.deepStrictEqual([r.cells[1].text, r.cells[1].sub], ["123456789012", "SSO role directly"]);
+  assert.deepStrictEqual([r.cells[3].text, r.cells[3].cls, r.cells[3].sub], ["Read-only gate runs on every use", "", ""]);
+  assert.doesNotMatch(JSON.stringify(r.cells), /Not checked/);
+  assert.strictEqual(r.danger, false);
+  // an unreadable profile leaves the account empty, not a made-up one
+  const [u] = credTableRows({ key: "aws", entries: [awsE("x", { mode: "sso_direct", role_arn: "", account_id: "" })] });
+  assert.strictEqual(u.cells[1].text, "");
+  // an invalid entry keeps the plain dash, as for any row
+  const [bad] = credTableRows({ key: "aws", entries: [awsE("y", { mode: "sso_direct", status: "invalid" })] });
+  assert.strictEqual(bad.cells[3].text, "–");
+  // assume_role rows are unchanged
+  const [a] = credTableRows({ key: "aws", entries: [awsE("z", { base: { state: "none_found" } })] });
+  assert.strictEqual(a.cells[1].sub, "CuliShopLabAccess");
+});
+
+test("credAWSCard: an sso_direct connection names the mode and the gate, not an empty Role and 'Not checked'", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  const card = src.slice(src.indexOf("function credAWSCard"), src.indexOf("function credAWSCard") + 1800);
+  assert.match(card, /direct \? \["Mode", CRED_SSO_DIRECT_LABEL\] : \["Role"/);
+  assert.match(card, /e\.status === "ok" && direct/);
+});
+
+test("awsGateBoxEmpty: a bare sign-in gate draws no empty amber box; anything else to show keeps it", () => {
+  const bare = awsGateView({ state: "unverified", reason: "sso_expired" });
+  assert.strictEqual(bare.signIn, true);
+  assert.strictEqual(awsGateBoxEmpty(bare), true);
+  const withReads = awsGateView({ state: "unverified", reason: "sso_expired", data_reads: [{ action: "secretsmanager:GetSecretValue", denied: true }] });
+  if (withReads.dataReadText) assert.strictEqual(awsGateBoxEmpty(withReads), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "unverified", reason: "timeout" })), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "not_read_only", refused: [{ pattern: "s3:Put*", why: "writes" }] })), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "read_only" })), false);
+});
+
+test("the save 409 branch for a gate that did not pass resets the stale hours and repaints the mode note", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  const i = src.indexOf('e.code === "not_read_only" || e.code === "unverified"');
+  const branch = src.slice(i, src.indexOf("needs_ack", i));
+  assert.match(branch, /row\.hours = 0;\s*awsPaintModeNote\(row\);/);
+  assert.match(src, /if \(!awsGateBoxEmpty\(g\)\) nodes\.push\(awsGateNode\(g\)\)/);
 });
