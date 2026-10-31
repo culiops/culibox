@@ -54,7 +54,7 @@ func citDocker(t *testing.T) (bin, image string) {
 // citRemoveContainers removes every container of the test instance, box,
 // bundle or refresh container, and nothing else.
 func citRemoveContainers(bin string) {
-	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh} {
+	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh, LabelCloneList} {
 		out, err := exec.Command(bin, "ps", "-aq", "--filter", "label="+label+"="+citInstance).Output()
 		if err != nil {
 			continue
@@ -68,7 +68,7 @@ func citRemoveContainers(bin string) {
 func citLeftovers(t *testing.T, bin string) []string {
 	t.Helper()
 	var all []string
-	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh} {
+	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh, LabelCloneList} {
 		out, err := exec.Command(bin, "ps", "-aq", "--filter", "label="+label+"="+citInstance).Output()
 		if err != nil {
 			t.Fatalf("docker ps: %v", err)

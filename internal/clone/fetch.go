@@ -160,7 +160,35 @@ type FetchRequest struct {
 
 	DataDir         string // the host data dir that holds the clone's base record
 	AllowOldHistory bool   // -allow-old-history: let a known stale or unverified history through, loudly
+
+	// FastForwardOnly is auto-return only: box/<Branch> is created, or moved
+	// forward, and never overwritten or moved while checked out. False is the
+	// forced update the CLI and "Bring work home now" use (the latter also
+	// sets RefuseCheckedOut).
+	FastForwardOnly bool
+
+	// RefuseCheckedOut refuses a box/<Branch> that a worktree of clone_of has
+	// checked out, even when the update is forced: moving it would leave that
+	// work tree at the old commit, so git status shows the new work as reverted
+	// changes. Return sets it for every mode that fetches; the CLI leaves it
+	// false. FastForwardOnly implies it.
+	RefuseCheckedOut bool
 }
+
+// Refusal is a Fetch error with a reason Return records. Error() is the
+// wrapped error's text, unchanged, so every existing message and CLI test stays.
+type Refusal struct {
+	Reason string
+	Err    error
+}
+
+func (r *Refusal) Error() string { return r.Err.Error() }
+func (r *Refusal) Unwrap() error { return r.Err }
+
+// reasonEmpty is "nothing to fetch": the branch is already home. Return never records it.
+const reasonEmpty = "empty"
+
+func refused(reason string, err error) error { return &Refusal{Reason: reason, Err: err} }
 
 // FetchResult is what came home.
 type FetchResult struct {
@@ -220,6 +248,40 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// checkMounts is the check of every path a throwaway container over c mounts:
+// clone_of, the clone dir and the ancestors of the clone dir. Fetch and Return share it.
+func checkMounts(c config.Clone, home string, protected []box.ProtectedDir) error {
+	if err := CheckOf(c.Of, home, protected); err != nil {
+		return err
+	}
+	unusable := func(why string) error {
+		return fmt.Errorf("%w: clone %s %s", box.ErrUnboxableWorkspace, c.Dir, why)
+	}
+	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
+		return unusable("is not a clean absolute path")
+	}
+	// Every ancestor too, as at spawn: a box that owns one could swap it for a
+	// link and make the bundle container read a different repo.
+	if err := checkParents(c); err != nil {
+		return err
+	}
+	st, lerr := os.Lstat(c.Dir)
+	switch {
+	case lerr != nil:
+		return unusable("cannot be read: " + sanitize(lerr.Error()))
+	case st.Mode()&fs.ModeSymlink != 0:
+		return unusable("is a symlink; use the resolved path")
+	case !st.IsDir():
+		return unusable("is not a directory")
+	}
+	for _, p := range []string{c.Dir, filepath.Join(c.Of, ".git")} {
+		if why := box.MountUnsafe(p); why != "" {
+			return fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, p, why)
+		}
+	}
+	return nil
+}
+
 // Fetch brings branch r.Branch of the clone home as refs/heads/box/<Branch> in
 // clone_of, through a bundle made in a network-less container. Every host git
 // call runs in clone_of with CleanEnv(), never in the clone. Any error leaves
@@ -241,33 +303,8 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	}
 
 	// 2. Paths that are mounted into the container.
-	if err := CheckOf(c.Of, r.Home, r.Protected); err != nil {
+	if err := checkMounts(c, r.Home, r.Protected); err != nil {
 		return res, err
-	}
-	unusable := func(why string) error {
-		return fmt.Errorf("%w: clone %s %s", box.ErrUnboxableWorkspace, c.Dir, why)
-	}
-	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
-		return res, unusable("is not a clean absolute path")
-	}
-	// Every ancestor too, as at spawn: a box that owns one could swap it for a
-	// link and make the bundle container read a different repo.
-	if err := checkParents(c); err != nil {
-		return res, err
-	}
-	st, lerr := os.Lstat(c.Dir)
-	switch {
-	case lerr != nil:
-		return res, unusable("cannot be read: " + sanitize(lerr.Error()))
-	case st.Mode()&fs.ModeSymlink != 0:
-		return res, unusable("is a symlink; use the resolved path")
-	case !st.IsDir():
-		return res, unusable("is not a directory")
-	}
-	for _, p := range []string{c.Dir, filepath.Join(c.Of, ".git")} {
-		if why := box.MountUnsafe(p); why != "" {
-			return res, fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, p, why)
-		}
 	}
 
 	hostGit := func(args ...string) ([]byte, error) {
@@ -330,7 +367,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	var overridden []string // what -allow-old-history let through, for the warning
 	if bb == "" {
 		if !r.AllowOldHistory {
-			return res, fmt.Errorf("clone fetch: cannot check %s against host history: %s has no main or master branch", r.Branch, c.Of)
+			return res, refused(ReasonRefused, fmt.Errorf("clone fetch: cannot check %s against host history: %s has no main or master branch", r.Branch, c.Of))
 		}
 		overridden = append(overridden, c.Of+" has no main or master branch to check against")
 	}
@@ -363,7 +400,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 			if recErr != nil {
 				msg += " (" + unverified + ")"
 			}
-			return res, errors.New(msg)
+			return res, refused(ReasonRefused, errors.New(msg))
 		}
 		overridden = append(overridden, unverified)
 	}
@@ -395,7 +432,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	name := containerName("clonefetch", r.Instance)
 	runErr := runContainer(ctx, d, name, BundleArgs(r, base, name), cw)
 	if cw.err != nil {
-		return res, fmt.Errorf("clone fetch: the bundle is larger than %d bytes; refusing it", maxBundleBytes)
+		return res, refused(ReasonTooLarge, fmt.Errorf("clone fetch: the bundle is larger than %d bytes; refusing it", maxBundleBytes))
 	}
 	if runErr != nil {
 		if ctx.Err() != nil {
@@ -403,7 +440,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		}
 		msg := sanitizeN(runErr.Error(), maxLongErr)
 		if strings.Contains(runErr.Error(), "empty bundle") {
-			return res, fmt.Errorf("nothing to fetch: %s has no commits that %s lacks", r.Branch, r.Base)
+			return res, refused(reasonEmpty, fmt.Errorf("nothing to fetch: %s has no commits that %s lacks", r.Branch, r.Base))
 		}
 		return res, fmt.Errorf("clone fetch: bundling %s in the container: %s", r.Branch, msg)
 	}
@@ -427,8 +464,8 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		return res, fmt.Errorf("clone fetch: reading the bundle header: %w", err)
 	}
 	if n == 0 {
-		return res, fmt.Errorf("clone fetch: refusing %s: it shares no history with %s in %s (the bundle has no prerequisite commits). "+
-			"In the box: git rebase origin/%s, or recreate the clone", r.Branch, r.Base, c.Of, rebase)
+		return res, refused(ReasonRefused, fmt.Errorf("clone fetch: refusing %s: it shares no history with %s in %s (the bundle has no prerequisite commits). "+
+			"In the box: git rebase origin/%s, or recreate the clone", r.Branch, r.Base, c.Of, rebase))
 	}
 
 	// 6b. git does not fsck the objects of a bundle fetch (measured, git 2.43:
@@ -440,7 +477,41 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		if ctx.Err() != nil {
 			return res, fmt.Errorf("clone fetch: %w", ctx.Err())
 		}
-		return res, fmt.Errorf("clone fetch: the bundle's objects fail git's strict checks: %s", sanitizeN(err.Error(), maxLongErr))
+		return res, refused(ReasonRefused, fmt.Errorf("clone fetch: the bundle's objects fail git's strict checks: %s", sanitizeN(err.Error(), maxLongErr)))
+	}
+
+	// 6c. Which objects of this pack clone_of lacks, before the import moves any
+	// into it: those are the box's own, and the only commits that may be in the
+	// tip's history without a host branch or tag reaching them (7d). The import
+	// record holds the ones earlier fetches brought; it is seeded once from the
+	// box/* branches that already exist. A check that cannot run refuses, flag or not.
+	cannot := func(err error) error {
+		if ctx.Err() != nil {
+			return fmt.Errorf("clone fetch: %w", ctx.Err())
+		}
+		return fmt.Errorf("clone fetch: cannot check %s against host history: %s", r.Branch, sanitizeN(err.Error(), maxLongErr))
+	}
+	missing, packCommits, err := missingBefore(ctx, g, c.Of, strings.TrimSuffix(packOut, ".pack")+".idx")
+	if err != nil {
+		return res, cannot(err)
+	}
+	// The pack's new commits are the box's whatever happens next, so they are
+	// recorded BEFORE the import: objects that land in clone_of while the fetch is
+	// cut short (a failed ref update, a timeout, a restart) must not read as host
+	// history on the retry. They are absent from clone_of now, so this cannot
+	// launder a commit the host had.
+	var boxMade map[string]bool
+	if r.DataDir != "" {
+		err := seedImportRecord(ctx, g, r.DataDir, c.Of)
+		if err == nil {
+			err = AppendImported(r.DataDir, c.Of, packCommits)
+		}
+		if err == nil {
+			boxMade, _, err = ReadImportRecord(r.DataDir, c.Of)
+		}
+		if err != nil {
+			return res, cannot(err)
+		}
 	}
 
 	// 7. Into clone_of's quarantine ref, forced. The checks below use the SHA
@@ -477,12 +548,6 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// cannot run refuses even with the flag: it covers a known stale ancestor,
 	// not an unknown one.
 	if bb != "" {
-		cannot := func(err error) error {
-			if ctx.Err() != nil {
-				return fmt.Errorf("clone fetch: %w", ctx.Err())
-			}
-			return fmt.Errorf("clone fetch: cannot check %s against host history: %s", r.Branch, sanitizeN(err.Error(), maxLongErr))
-		}
 		stale, err := StaleSHAs(ctx, g, c.Of, bb, rec.SHAs)
 		if err != nil {
 			return res, cannot(err)
@@ -493,19 +558,47 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		}
 		if hit != "" {
 			if !r.AllowOldHistory {
-				return res, fmt.Errorf("clone fetch: refusing %s: it carries history host %s no longer has (recorded tip %s is an ancestor of %s). "+
+				return res, refused(ReasonRefused, fmt.Errorf("clone fetch: refusing %s: it carries history host %s no longer has (recorded tip %s is an ancestor of %s). "+
 					"In the box: git rebase origin/%s, or recreate the clone. The refused objects stay unreachable in %s until git gc; "+
-					"a push sends only reachable objects, so do not point a ref at them.", r.Branch, bb, hit[:12], r.Branch, bb, c.Of)
+					"a push sends only reachable objects, so do not point a ref at them.", r.Branch, bb, hit[:12], r.Branch, bb, c.Of))
 			}
 			overridden = append(overridden, fmt.Sprintf("recorded tip %s of host %s is an ancestor of %s", hit[:12], bb, r.Branch))
 		}
 	}
 
-	// 7c. Checked: box/<branch> takes the tip (forced); the deferred delete
-	// drops the quarantine ref.
+	// 7d. The branch must not bring back a host commit that clone_of still holds
+	// but no host branch reaches any more (history the host rewrote away, or a
+	// branch the user deleted): 7b only knows the recorded base tips. Same rule:
+	// a check that cannot run refuses even with the flag.
+	hit, err := rewrittenAway(ctx, g, c.Of, tip, missing, boxMade)
+	if err != nil {
+		return res, cannot(err)
+	}
+	if hit != "" {
+		if !r.AllowOldHistory {
+			return res, refused(ReasonRefused, fmt.Errorf("clone fetch: refusing %s: it carries commit %s that %s had but no branch there reaches any more "+
+				"(history rewritten away, or a branch you deleted). In the box: git rebase origin/%s. After review: -allow-old-history",
+				r.Branch, hit[:12], c.Of, rebase))
+		}
+		overridden = append(overridden, fmt.Sprintf("commit %s of %s is no longer reached by any branch there", hit[:12], c.Of))
+	}
+
+	// 7c. Checked: box/<branch> takes the tip; the deferred delete drops the
+	// quarantine ref. Forced, except for auto-return.
 	ref := "refs/heads/box/" + r.Branch
-	if _, err := hostGit("update-ref", ref, tip); err != nil {
-		return res, fmt.Errorf("clone fetch: %w", err)
+	if r.FastForwardOnly {
+		if err := fastForwardRef(ctx, g, c.Of, r.Branch, ref, tip); err != nil {
+			return res, err
+		}
+	} else {
+		if r.RefuseCheckedOut {
+			if err := refuseCheckedOut(ctx, g, c.Of, r.Branch, ref); err != nil {
+				return res, err
+			}
+		}
+		if _, err := hostGit("update-ref", ref, tip); err != nil {
+			return res, fmt.Errorf("clone fetch: %w", err)
+		}
 	}
 	res = FetchResult{Ref: ref, BaseSHA: base}
 	if len(overridden) > 0 {
@@ -724,4 +817,89 @@ func strictIndexPack(ctx context.Context, g Git, of, bundle, packOut string) err
 	}
 	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, hardened("index-pack", "--strict", "--fix-thin", "--stdin", packOut)...)
 	return err
+}
+
+// gitFail words a failed host git call: the context's error when it ran out,
+// else the sanitized git output.
+func gitFail(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("clone fetch: %w", ctx.Err())
+	}
+	return fmt.Errorf("clone fetch: %s", sanitizeN(err.Error(), maxLongErr))
+}
+
+// refuseCheckedOut returns a ReasonCheckedOut refusal when a worktree of of has
+// ref checked out. Every update of box/<branch> that must not leave a host work
+// tree behind its ref goes through it.
+func refuseCheckedOut(ctx context.Context, g Git, of, branch, ref string) error {
+	out, err := g.Run(ctx, of, CleanEnv(), hardened("worktree", "list", "--porcelain")...)
+	if err != nil {
+		return gitFail(ctx, err)
+	}
+	var where string
+	for _, line := range strings.Split(string(out), "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			where = p
+		} else if line == "branch "+ref {
+			return refused(ReasonCheckedOut, fmt.Errorf("box/%s is checked out in %s; not moved", branch, sanitizeN(where, maxErrRunes)))
+		}
+	}
+	return nil
+}
+
+// fastForwardRef moves ref to tip only when it is new or tip descends from it,
+// and never while a worktree of of has it checked out. update-ref carries the
+// value read here as its old value, so a ref that moved since is refused, not
+// overwritten.
+func fastForwardRef(ctx context.Context, g Git, of, branch, ref, tip string) error {
+	run := func(args ...string) ([]byte, error) {
+		return g.Run(ctx, of, CleanEnv(), hardened(args...)...)
+	}
+	fail := func(err error) error { return gitFail(ctx, err) }
+	// read is the commit ref names; "" when there is no such ref (exit 1 of --quiet).
+	read := func() (string, error) {
+		out, err := run("rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+		if code, ok := exitCode(err); ok && code == 1 {
+			return "", nil
+		}
+		if err != nil {
+			return "", fail(err)
+		}
+		sha := strings.TrimSpace(string(out))
+		if !shaRE.MatchString(sha) {
+			return "", fmt.Errorf("clone fetch: %s: unexpected rev-parse output", ref)
+		}
+		return sha, nil
+	}
+
+	old, err := read()
+	if err != nil {
+		return err
+	}
+
+	if err := refuseCheckedOut(ctx, g, of, branch, ref); err != nil {
+		return err
+	}
+
+	notFF := refused(ReasonNotFF, fmt.Errorf("box/%s on the host has commits %s lacks; not overwritten (agent-box clone fetch overwrites it)", branch, branch))
+	if old != "" {
+		if _, err := run("merge-base", "--is-ancestor", old, tip); err != nil {
+			if code, ok := exitCode(err); ok && code == 1 {
+				return notFF
+			}
+			return fail(err)
+		}
+	}
+	// old == "" tells update-ref the ref must not exist yet.
+	if _, err := run("update-ref", ref, tip, old); err != nil {
+		if ctx.Err() != nil {
+			return fail(err)
+		}
+		// If the ref no longer holds what was read, another writer won.
+		if now, rerr := read(); rerr == nil && now != old {
+			return notFF
+		}
+		return fail(err)
+	}
+	return nil
 }

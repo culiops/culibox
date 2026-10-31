@@ -69,6 +69,10 @@ type ProfileView struct {
 	// clone-mode profile clones.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// AutoReturn: a clone profile whose work comes home on its own (the switch
+	// is on). NotHome is what the clone's last return left behind, if anything.
+	AutoReturn bool                  `json:"auto_return,omitempty"`
+	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
 }
 
 // ProfileAWSInline names a profile's legacy inline AWS binding for the spawn
@@ -115,6 +119,9 @@ type ProfileManager struct {
 	// cloneCheck is the disk-side check of a clone profile's repo (clone.CheckOf,
 	// wired at boot); nil = pure validation only. Spawn re-checks.
 	cloneCheck func(config.Clone) error
+	// notHome reports what a clone's last return left behind (cloneHooks.NotHome,
+	// wired at boot); nil = nothing to show.
+	notHome func(config.Clone) *session.NotHomeState
 	// contextCheck is the disk-side check of one context_paths entry
 	// (box.CheckContextPath plus the box-owned refusal, wired at boot); nil =
 	// pure validation only. Spawn re-checks.
@@ -281,6 +288,14 @@ func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
 	m.mu.Unlock()
 }
 
+// SetNotHome installs the source of a clone profile's not-home state for the
+// profile views. Call at boot; nil shows none.
+func (m *ProfileManager) SetNotHome(f func(config.Clone) *session.NotHomeState) {
+	m.mu.Lock()
+	m.notHome = f
+	m.mu.Unlock()
+}
+
 // SetContextCheck installs the save-time check of one context_paths entry. Call
 // at boot; nil leaves only the pure validation.
 func (m *ProfileManager) SetContextCheck(f func(path string) error) {
@@ -420,6 +435,12 @@ func (m *ProfileManager) Views() []ProfileView {
 			AWSConnections: slices.Clone(a.AWSConnections),
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
+		}
+		if c, err := a.Clone(); err == nil && c != nil {
+			pv.AutoReturn = !c.NoAutoReturn
+			if m.notHome != nil {
+				pv.NotHome = m.notHome(*c)
+			}
 		}
 		if a.AWS != nil {
 			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod, Mode: a.AWS.Mode}

@@ -39,12 +39,22 @@ type BaseRecord struct {
 // baseRecordPath is <dataDir>/clone-bases/<hex sha256 of the resolved clone
 // dir>, so two spellings of one directory share a record.
 func baseRecordPath(dataDir, cloneDir string) (string, error) {
+	key, err := cloneKeyHash(cloneDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dataDir, baseRecordDir, key), nil
+}
+
+// cloneKeyHash is the hex sha256 of the resolved clone dir: the file name every
+// host-owned per-clone record uses.
+func cloneKeyHash(cloneDir string) (string, error) {
 	real, err := resolvePath(cloneDir)
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256([]byte(real))
-	return filepath.Join(dataDir, baseRecordDir, hex.EncodeToString(sum[:])), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // ReadBaseRecord reads the record of cloneDir. A missing file is not an error.

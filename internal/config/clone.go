@@ -22,6 +22,9 @@ type Clone struct {
 	Of     string   // host repo the clone is made from (clone_of)
 	Dir    string   // the clone itself (default_cwd)
 	Shares []string // relative paths under Of, mounted read-only at the same path under Dir
+	// NoAutoReturn is the clone_no_auto_return switch. It is deliberately left
+	// out of Hash: flipping it must not rename the box.
+	NoAutoReturn bool
 }
 
 // ParseShare validates one clone_share entry and returns its relative path.
@@ -68,7 +71,7 @@ func (a AgentConfig) Clone() (*Clone, error) {
 	if err := validateClone(a); err != nil {
 		return nil, err
 	}
-	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare)}, nil
+	return &Clone{Of: a.CloneOf, Dir: a.DefaultCwd, Shares: slices.Clone(a.CloneShare), NoAutoReturn: a.CloneNoAutoReturn}, nil
 }
 
 // Hash identifies the clone spec for the box name: two profiles that clone
@@ -110,6 +113,9 @@ func validateClone(a AgentConfig) error {
 	if a.CloneOf == "" {
 		if len(a.CloneShare) > 0 {
 			return errors.New("clone_share requires clone_of")
+		}
+		if a.CloneNoAutoReturn {
+			return errors.New("clone_no_auto_return requires clone_of")
 		}
 		return nil
 	}

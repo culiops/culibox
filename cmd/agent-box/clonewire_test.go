@@ -340,6 +340,14 @@ type refreshFake struct {
 	reqs   []clone.RefreshRequest
 	ctxErr []error // each refresh's ctx.Err() at the time it ran
 	result clone.RefreshResult
+
+	rets      []clone.ReturnRequest
+	retCtx    []context.Context // the context each return ran on
+	retResult clone.ReturnResult
+	order     []string // "ret" / "refresh", in call order
+	retDelay  time.Duration
+	active    int // returns running now, and the most at once
+	maxActive int
 }
 
 func newRefreshFake(t *testing.T) *refreshFake {
@@ -357,13 +365,45 @@ func newRefreshFake(t *testing.T) *refreshFake {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.reqs = append(f.reqs, r)
+		f.order = append(f.order, "refresh")
 		f.ctxErr = append(f.ctxErr, ctx.Err())
 		res := f.result
 		res.Skipped = r.Skip
 		return res
 	}
+	h.ret = func(ctx context.Context, _ clone.Git, _ clone.Docker, r clone.ReturnRequest) clone.ReturnResult {
+		f.mu.Lock()
+		f.rets = append(f.rets, r)
+		f.retCtx = append(f.retCtx, ctx)
+		f.order = append(f.order, "ret")
+		f.active++
+		f.maxActive = max(f.maxActive, f.active)
+		res, delay := f.retResult, f.retDelay
+		f.mu.Unlock()
+		time.Sleep(delay)
+		f.mu.Lock()
+		f.active--
+		f.mu.Unlock()
+		return res
+	}
 	f.h = h
 	return f
+}
+
+func (f *refreshFake) retCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.rets)
+}
+
+func (f *refreshFake) lastRet(t *testing.T) clone.ReturnRequest {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.rets) == 0 {
+		t.Fatal("clone.Return was not called")
+	}
+	return f.rets[len(f.rets)-1]
 }
 
 func (f *refreshFake) listCount() int {
@@ -638,12 +678,14 @@ func TestCloneInfoOf(t *testing.T) {
 		},
 		HeadInHost: &yes, Rewritten: true, Unverified: true,
 	}
+	ret := &session.ReturnSummary{Trigger: session.ReturnOnSpawn, Home: []string{"box/feat"}}
 	want := session.CloneInfo{
 		Refreshed: true, Skipped: "in-use", Error: "e", Base: "master", Branch: "feat",
 		Ahead: 1, Behind: 2, FFFrom: "a1", FFTo: "b2", FFCount: 3, FFRefused: true,
 		HeadInHost: &yes, StaleBranches: []string{"old"}, Rewritten: true, Unverified: true,
+		Return: ret,
 	}
-	got := cloneInfoOf(r)
+	got := cloneInfoOf(r, ret)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("cloneInfoOf =\n%+v\nwant\n%+v", got, want)
 	}
@@ -661,6 +703,7 @@ func TestSweepCloneContainers(t *testing.T) {
 	listed := map[string][]string{
 		clone.LabelCloneFetch + "=DEV":   {"clonefetch-1", "clonefetch-2"},
 		clone.LabelCloneRefresh + "=DEV": {"clonerefresh-1", "stuck"},
+		clone.LabelCloneList + "=DEV":    {"clonelist-1"},
 	}
 	var queried, removed []string
 	list := func(_ context.Context, label string) ([]string, error) {
@@ -675,14 +718,14 @@ func TestSweepCloneContainers(t *testing.T) {
 		return nil
 	}
 	n := sweepCloneContainers(context.Background(), list, remove, "DEV")
-	if want := []string{clone.LabelCloneFetch + "=DEV", clone.LabelCloneRefresh + "=DEV"}; !reflect.DeepEqual(queried, want) {
+	if want := []string{clone.LabelCloneFetch + "=DEV", clone.LabelCloneRefresh + "=DEV", clone.LabelCloneList + "=DEV"}; !reflect.DeepEqual(queried, want) {
 		t.Fatalf("queried %q, want %q", queried, want)
 	}
-	if want := []string{"clonefetch-1", "clonefetch-2", "clonerefresh-1", "stuck"}; !reflect.DeepEqual(removed, want) {
+	if want := []string{"clonefetch-1", "clonefetch-2", "clonerefresh-1", "stuck", "clonelist-1"}; !reflect.DeepEqual(removed, want) {
 		t.Fatalf("removed %q, want %q", removed, want)
 	}
-	if n != 3 {
-		t.Fatalf("count = %d, want 3 (the failed removal is not counted)", n)
+	if n != 4 {
+		t.Fatalf("count = %d, want 4 (the failed removal is not counted)", n)
 	}
 
 	// A failed listing of one label still sweeps the other.
@@ -693,7 +736,7 @@ func TestSweepCloneContainers(t *testing.T) {
 		}
 		return []string{"clonerefresh-1"}, nil
 	}
-	if n := sweepCloneContainers(context.Background(), failing, remove, "DEV"); n != 1 || !reflect.DeepEqual(removed, []string{"clonerefresh-1"}) {
+	if n := sweepCloneContainers(context.Background(), failing, remove, "DEV"); n != 2 || !reflect.DeepEqual(removed, []string{"clonerefresh-1", "clonerefresh-1"}) {
 		t.Fatalf("count = %d, removed %q", n, removed)
 	}
 }
@@ -714,4 +757,420 @@ func TestCloneUnavailableReason(t *testing.T) {
 			t.Errorf("%s: cloneUnavailableReason = %q, want %q", c.name, got, c.want)
 		}
 	}
+}
+
+// returnWorkAsync runs ReturnWork in a goroutine; the channel yields its summary.
+func returnWorkAsync(h *cloneHooks, ctx context.Context, c config.Clone, o session.ReturnOpts) <-chan session.ReturnSummary {
+	done := make(chan session.ReturnSummary, 1)
+	go func() { done <- h.ReturnWork(ctx, c, o) }()
+	return done
+}
+
+// A return and a refresh of one clone never overlap, and neither do an exit
+// return and a "now" return: both rewrite the same refs and state file.
+func TestCloneReturnTakesTheCloneLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+
+	// A spawn holds the clone: an exit return waits for it.
+	_, releaseSpawn := f.h.Refresh(context.Background(), c, session.RefreshOpts{})
+	exit := returnWorkAsync(f.h, context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	select {
+	case <-exit:
+		t.Fatal("a return ran while a refresh of the same clone held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if f.retCount() != 0 {
+		t.Fatal("clone.Return ran under another holder's lock")
+	}
+	releaseSpawn()
+	select {
+	case <-exit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the return did not run after the refresh released")
+	}
+
+	// A refresh waits for a return in progress.
+	f.retDelay = 200 * time.Millisecond
+	now := returnWorkAsync(f.h, context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow})
+	for deadline := time.Now().Add(5 * time.Second); f.retCount() < 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the \"now\" return did not start")
+		}
+	}
+	start := time.Now()
+	_, rel := f.h.Refresh(context.Background(), c, session.RefreshOpts{})
+	rel()
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("a refresh ran while a return of the same clone was in progress")
+	}
+	<-now
+
+	// An exit return and a "now" return of one clone run one after the other.
+	f.mu.Lock()
+	f.maxActive = 0
+	f.mu.Unlock()
+	a := returnWorkAsync(f.h, context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	b := returnWorkAsync(f.h, context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow})
+	<-a
+	<-b
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.maxActive != 1 {
+		t.Fatalf("%d returns of one clone ran at once, want 1", f.maxActive)
+	}
+}
+
+func TestCloneReturnSkipsLiveSessionUnlessNow(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+	live := func() bool { return true }
+
+	sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit, LiveSession: live})
+	if sum.Skipped != clone.SkipInUse || sum.Trigger != session.ReturnOnExit || f.retCount() != 0 {
+		t.Fatalf("exit with a live session: %+v, %d return call(s); want in-use and none", sum, f.retCount())
+	}
+	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnSpawn, LiveSession: live})
+	if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
+		t.Fatalf("spawn with a live session: %+v", sum)
+	}
+	sum = f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow, LiveSession: live})
+	if sum.Skipped != "" || f.retCount() != 1 || f.lastRet(t).Mode != clone.ReturnForced {
+		t.Fatalf("now with a live session: %+v, %d call(s), mode %v; want one forced call", sum, f.retCount(), f.lastRet(t).Mode)
+	}
+}
+
+// LiveSession is asked only once the lock is held.
+func TestCloneReturnChecksLiveAfterLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	var heldAtCall int
+	live := func() bool {
+		f.h.lockMu.Lock()
+		if ch := f.h.locks[dir]; ch != nil && len(ch) == 1 {
+			heldAtCall++
+		}
+		f.h.lockMu.Unlock()
+		return false
+	}
+	f.h.ReturnWork(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.ReturnOpts{Trigger: session.ReturnOnExit, LiveSession: live})
+	if heldAtCall != 1 {
+		t.Fatalf("LiveSession called %d time(s) with the lock held, want 1", heldAtCall)
+	}
+}
+
+func TestCloneReturnSkipsOtherInstanceBox(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+	c := config.Clone{Of: "/r", Dir: dir}
+	for _, trig := range []string{session.ReturnOnExit, session.ReturnNow} {
+		sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: trig, LiveSession: never})
+		if sum.Skipped != clone.SkipOtherInstance || sum.Error != "" || f.retCount() != 0 {
+			t.Fatalf("%s: %+v, %d return call(s); want other-instance, no error, no call", trig, sum, f.retCount())
+		}
+	}
+
+	// A listing that fails fails closed, with the error.
+	f.boxes, f.err = nil, errors.New("docker ps: down")
+	sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	if sum.Skipped != clone.SkipOtherInstance || !strings.Contains(sum.Error, "cannot check") || f.retCount() != 0 {
+		t.Fatalf("listing error: %+v", sum)
+	}
+}
+
+func TestCloneReturnModeFollowsTheSwitch(t *testing.T) {
+	f := newRefreshFake(t)
+	f.h.env.Home, f.h.env.Protected = "/home/u", []box.ProtectedDir{{Path: "/p"}}
+	f.h.dataDir = t.TempDir()
+	dir := cloneDir(t)
+	for _, c := range []struct {
+		off  bool
+		trig string
+		want clone.ReturnMode
+	}{
+		{false, session.ReturnOnExit, clone.ReturnAuto},
+		{false, session.ReturnOnSpawn, clone.ReturnAuto},
+		{true, session.ReturnOnExit, clone.ReturnDry},
+		{true, session.ReturnOnSpawn, clone.ReturnDry},
+		{false, session.ReturnNow, clone.ReturnForced},
+		{true, session.ReturnNow, clone.ReturnForced},
+	} {
+		cl := config.Clone{Of: "/r", Dir: dir, NoAutoReturn: c.off}
+		f.h.ReturnWork(context.Background(), cl, session.ReturnOpts{Trigger: c.trig})
+		r := f.lastRet(t)
+		if r.Mode != c.want {
+			t.Errorf("off=%v %s: mode %v, want %v", c.off, c.trig, r.Mode, c.want)
+		}
+		if !reflect.DeepEqual(r.Clone, cl) || r.Image != "img:1" || r.Instance != "DEV" || r.DataDir != f.h.dataDir ||
+			r.TempDir != filepath.Join(f.h.dataDir, "clone-fetch") || r.Home != "/home/u" || !reflect.DeepEqual(r.Protected, f.h.env.Protected) {
+			t.Errorf("request = %+v", r)
+		}
+	}
+}
+
+func TestCloneReturnUnavailable(t *testing.T) {
+	f := newRefreshFake(t)
+	f.h.unavailable = "no containment layer"
+	sum := f.h.ReturnWork(context.Background(), config.Clone{Of: "/r", Dir: cloneDir(t)}, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	if sum.Skipped != "unavailable" || sum.Trigger != session.ReturnOnExit || f.retCount() != 0 {
+		t.Fatalf("summary = %+v, %d return call(s)", sum, f.retCount())
+	}
+}
+
+// A lock wait that outlives the caller's deadline is a skip, not a return.
+func TestCloneReturnLockWaitTimesOut(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	_, held := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{})
+	defer held()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	sum := f.h.ReturnWork(ctx, config.Clone{Of: "/r", Dir: dir}, session.ReturnOpts{Trigger: session.ReturnNow})
+	if sum.Skipped != clone.SkipInUse || f.retCount() != 0 {
+		t.Fatalf("summary = %+v, %d return call(s); want in-use and none", sum, f.retCount())
+	}
+}
+
+func TestCloneReturnSummary(t *testing.T) {
+	at := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
+	got := returnSummaryOf(session.ReturnNow, clone.ReturnResult{
+		At: at, Base: "main", Home: []string{"box/a"},
+		NotHome:  []clone.NotHome{{Branch: "b", Reason: clone.ReasonNotFF, Detail: "d"}},
+		Warnings: []string{"w"}, Error: "e",
+	})
+	want := session.ReturnSummary{
+		Trigger: session.ReturnNow, At: at, Base: "main", Home: []string{"box/a"},
+		NotHome:  []session.NotHomeBranch{{Branch: "b", Reason: clone.ReasonNotFF, Detail: "d"}},
+		Warnings: []string{"w"}, Error: "e",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("returnSummaryOf =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestCloneRefreshRunsReturnFirst(t *testing.T) {
+	f := newRefreshFake(t)
+	f.retResult = clone.ReturnResult{Base: "main", Home: []string{"box/feat"}}
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+	info, release := f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+	release()
+	if !reflect.DeepEqual(f.order, []string{"ret", "refresh"}) {
+		t.Fatalf("call order = %v, want the return first", f.order)
+	}
+	if info.Return == nil || info.Return.Trigger != session.ReturnOnSpawn || !reflect.DeepEqual(info.Return.Home, []string{"box/feat"}) {
+		t.Fatalf("info.Return = %+v", info.Return)
+	}
+	if r := f.lastRet(t); r.Mode != clone.ReturnAuto || r.Clone.Dir != dir {
+		t.Fatalf("return request = %+v", r)
+	}
+	if dl, ok := f.retCtx[0].Deadline(); !ok || time.Until(dl) > time.Minute {
+		t.Fatalf("the return ran without the budget as its deadline (ok=%v)", ok)
+	}
+
+	// The switch off: a dry run, so "N branches not home" still has a source.
+	f.order = nil
+	_, rel2 := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir, NoAutoReturn: true}, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+	rel2()
+	if r := f.lastRet(t); r.Mode != clone.ReturnDry {
+		t.Fatalf("mode = %v, want dry with the switch off", r.Mode)
+	}
+
+	// No budget, no return.
+	f.order = nil
+	_, rel3 := f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never})
+	rel3()
+	if !reflect.DeepEqual(f.order, []string{"refresh"}) {
+		t.Fatalf("call order without a budget = %v", f.order)
+	}
+}
+
+func TestCloneRefreshNoReturnWhenSkipped(t *testing.T) {
+	budget := session.RefreshOpts{ReturnBudget: time.Minute}
+
+	f := newRefreshFake(t)
+	o := budget
+	o.Created = true
+	info, rel := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: cloneDir(t)}, o)
+	rel()
+	if f.retCount() != 0 || info.Return != nil {
+		t.Fatalf("created: %d return call(s), Return=%+v", f.retCount(), info.Return)
+	}
+
+	o = budget
+	o.LiveSession = func() bool { return true }
+	info, rel = f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: cloneDir(t)}, o)
+	rel()
+	if f.retCount() != 0 || info.Return != nil {
+		t.Fatalf("in-use: %d return call(s), Return=%+v", f.retCount(), info.Return)
+	}
+
+	dir := cloneDir(t)
+	f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+	o = budget
+	o.LiveSession = never
+	info, rel = f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, o)
+	rel()
+	if f.retCount() != 0 || info.Return != nil {
+		t.Fatalf("other-instance: %d return call(s), Return=%+v", f.retCount(), info.Return)
+	}
+}
+
+func TestCloneHooksNotHome(t *testing.T) {
+	h := testHooks(t, noClones)
+	h.dataDir = t.TempDir()
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+
+	if got := h.NotHome(c); got != nil {
+		t.Fatalf("no state file: %+v, want nil", got)
+	}
+
+	at := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
+	st := clone.ReturnState{At: at, Base: "main", NotHome: []clone.NotHome{
+		{Branch: "feat", Reason: clone.ReasonNotFF, Detail: "d"},
+		{Branch: "x", Reason: clone.ReasonCheckedOut},
+	}}
+	if err := clone.WriteReturnState(h.dataDir, dir, st); err != nil {
+		t.Fatal(err)
+	}
+	want := &session.NotHomeState{At: at, Base: "main", Branches: []session.NotHomeBranch{
+		{Branch: "feat", Reason: clone.ReasonNotFF, Detail: "d"},
+		{Branch: "x", Reason: clone.ReasonCheckedOut},
+	}}
+	if got := h.NotHome(c); !reflect.DeepEqual(got, want) {
+		t.Fatalf("NotHome = %+v, want %+v", got, want)
+	}
+
+	// Nothing to show and no error: nil. An error alone is worth showing.
+	if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Base: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.NotHome(c); got != nil {
+		t.Fatalf("empty not-home: %+v, want nil", got)
+	}
+	if err := clone.WriteReturnState(h.dataDir, dir, clone.ReturnState{At: at, Error: "listing failed"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.NotHome(c); got == nil || got.Error != "listing failed" || len(got.Branches) != 0 {
+		t.Fatalf("error state: %+v", got)
+	}
+
+	// A state file that cannot be read is reported, not silently hidden.
+	name := filepath.Join(h.dataDir, "clone-return")
+	entries, _ := os.ReadDir(name)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") {
+			if err := os.WriteFile(filepath.Join(name, e.Name()), []byte("{broken"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := h.NotHome(c); got == nil || got.Error == "" {
+		t.Fatalf("corrupt state: %+v, want an Error", got)
+	}
+
+	// No data dir, no state.
+	h.dataDir = ""
+	if got := h.NotHome(c); got != nil {
+		t.Fatalf("no data dir: %+v", got)
+	}
+}
+
+// clone_of is host-owned when the clone is made, but a profile saved or a dir
+// recorded later can make it a box's: host git must not run there on any trigger.
+func TestCloneReturnRefusesBoxOwnedCloneOf(t *testing.T) {
+	type setup func(t *testing.T, f *refreshFake) string // returns clone_of
+	for _, tc := range []struct {
+		name string
+		set  setup
+	}{
+		{"recorded dir", func(t *testing.T, f *refreshFake) string {
+			of := cloneDir(t)
+			if err := f.h.record(of); err != nil {
+				t.Fatal(err)
+			}
+			return of
+		}},
+		{"inside another profile's clone", func(t *testing.T, f *refreshFake) string {
+			other := cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: "/elsewhere", Dir: other}} }
+			return filepath.Join(other, "sub")
+		}},
+		{"corrupt record", func(t *testing.T, f *refreshFake) string {
+			if err := os.WriteFile(f.h.file, []byte("not/absolute\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return cloneDir(t)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			f.h.dataDir = t.TempDir()
+			dir := cloneDir(t)
+			of := tc.set(t, f)
+			c := config.Clone{Of: of, Dir: dir}
+			for _, trig := range []string{session.ReturnOnExit, session.ReturnNow} {
+				sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: trig})
+				if sum.Error == "" || sum.Trigger != trig || sum.At.IsZero() || len(sum.Home) != 0 {
+					t.Fatalf("%s: summary = %+v; want a set Error", trig, sum)
+				}
+			}
+			info, release := f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+			release()
+			if info.Return == nil || info.Return.Trigger != session.ReturnOnSpawn || info.Return.Error == "" {
+				t.Fatalf("spawn-time return = %+v; want a set Error", info.Return)
+			}
+			if f.retCount() != 0 {
+				t.Fatalf("clone.Return ran %d time(s) for a box-owned clone_of", f.retCount())
+			}
+			if _, ok, _ := clone.ReadReturnState(f.h.dataDir, dir); ok {
+				t.Fatal("a refused return wrote a state file")
+			}
+			if len(f.reqs) != 1 {
+				t.Fatalf("the refresh must still run after a refused spawn return: %d call(s)", len(f.reqs))
+			}
+		})
+	}
+}
+
+// A panic in clone.Return must not leave the clone locked, from ReturnWork or
+// from the return inside Refresh.
+func TestCloneReturnPanicReleasesLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+	f.h.ret = func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult {
+		panic("boom")
+	}
+	expectPanic := func(fn func()) {
+		t.Helper()
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Fatalf("recovered %v, want the original panic", p)
+			}
+		}()
+		fn()
+	}
+	free := func(what string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rel, ok := f.h.lockClone(ctx, dir)
+		if !ok {
+			t.Fatalf("%s left the clone locked", what)
+		}
+		rel()
+	}
+	expectPanic(func() {
+		f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	})
+	free("a panicking ReturnWork")
+	expectPanic(func() {
+		f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+	})
+	free("a panicking return inside Refresh")
 }

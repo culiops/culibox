@@ -171,3 +171,27 @@ func TestCloneRefusesControlCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestCloneCarriesNoAutoReturn(t *testing.T) {
+	a := AgentConfig{Name: "p", CloneOf: "/src/of", DefaultCwd: "/work/c", CloneNoAutoReturn: true}
+	c, err := a.Clone()
+	if err != nil || c == nil || !c.NoAutoReturn {
+		t.Fatalf("Clone() = %+v, %v", c, err)
+	}
+}
+
+func TestNoAutoReturnDoesNotChangeTheBoxHash(t *testing.T) {
+	a := Clone{Of: "/src/of", Dir: "/work/c"}
+	b := a
+	b.NoAutoReturn = true
+	if a.Hash() != b.Hash() {
+		t.Fatal("NoAutoReturn changed Clone.Hash")
+	}
+}
+
+func TestNoAutoReturnRequiresCloneOf(t *testing.T) {
+	err := validateClone(AgentConfig{Name: "p", CloneNoAutoReturn: true})
+	if err == nil || !strings.Contains(err.Error(), "clone_no_auto_return requires clone_of") {
+		t.Fatalf("err = %v", err)
+	}
+}

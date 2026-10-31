@@ -146,7 +146,14 @@ function renderSpawnPlist() {
     b.dataset.name = p.name;
     b.setAttribute("aria-pressed", p.name === cur ? "true" : "false");
     if (p.name === cur) b.classList.add("sel");
-    b.append(spawnPanelEl("span", "sp-name", p.name), spawnPanelEl("span", "sp-touch", profileTouchLine(p, boxRuntime)));
+    const touch = spawnPanelEl("span", "sp-touch", profileTouchLine(p, boxRuntime));
+    const nhLabel = notHomeLabel(p.not_home);
+    if (nhLabel) {
+      const nh = spawnPanelEl("span", "sp-nothome", nhLabel);
+      nh.title = notHomeTitle(p.not_home);
+      touch.append(" ", nh);
+    }
+    b.append(spawnPanelEl("span", "sp-name", p.name), touch);
     b.onclick = () => spawnPlistPick(p.name);
     b.onkeydown = (e) => {
       if (e.key === "ArrowDown") { e.preventDefault(); spawnPlistMove(b, 1); }
@@ -260,7 +267,10 @@ function syncSpawnPreview() {
 function syncSpawnCopyLine() {
   const el = $("spawn-copy-line");
   if (!el) return;
-  const text = wmCopyLine((currentProfile() || {}).clone_of || "", window.HOME_DIR);
+  const p = currentProfile() || {};
+  const line = wmCopyLine(p.clone_of || "", window.HOME_DIR);
+  // The suffix is workHomeSuffix's alone; no profile means no line at all.
+  const text = line ? line + workHomeSuffix(p) : "";
   el.textContent = text;
   el.hidden = text === "";
 }

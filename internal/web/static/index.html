@@ -363,7 +363,7 @@
               <tbody>
                 <tr><th scope="row">Sees changes live</th><td>Yes, in your folder</td><td>No: they stay in the copy until they come home</td></tr>
                 <tr><th scope="row">Agent can commit</th><td id="pf-mode-diff-commit">No: your git history is read-only</td><td>Yes: commit, branch and push</td></tr>
-                <tr><th scope="row">How work comes home</th><td>It is already there; you commit</td><td>As box/&lt;branch&gt; when you run agent-box clone fetch, or as a PR the agent pushes</td></tr>
+                <tr><th scope="row">How work comes home</th><td id="pf-mode-diff-home">It is already there; you commit</td><td>As box/&lt;branch&gt; on its own, or as a PR the agent pushes</td></tr>
                 <tr><th scope="row">Good for</th><td>Small changes you review as they happen</td><td>Longer tasks, branches and PRs</td></tr>
               </tbody>
             </table>
@@ -376,6 +376,8 @@
           <label class="flab" for="pf-copy-share">Read-only paths from the original</label>
           <textarea id="pf-copy-share" class="fld" rows="3" spellcheck="false" placeholder="CLAUDE.md"></textarea>
           <p class="tiny mut">One path per line, relative to the folder, at most 8. The box can read them and has internet access. CuliBox warns for names like .env*, *.pem, *.key and config*.json.</p>
+          <label class="pf-autoreturn"><input type="checkbox" id="pf-clone-autoreturn" checked> Bring work home automatically</label>
+          <div id="pf-nothome" class="tiny" hidden></div>
           <p class="tiny" id="pf-copy-gh" hidden>To push and open PRs, <a href="#pf-gh-block" class="lnk" id="pf-copy-gh-link">add a GitHub token</a></p>
           <p class="warnbox tiny" id="pf-copy-warn" role="status" hidden></p>
           <p class="warnbox tiny" id="pf-copy-err" role="alert" hidden></p>
@@ -798,6 +800,7 @@
   <script src="/drawerfiles.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/spawnpreview.js"></script>
+  <script src="/workhome.js"></script>
   <script src="/spawnpanel.js"></script>
   <script src="/app.js"></script>
 </body>

@@ -62,3 +62,14 @@ test("meta parts omit missing fields", () => {
   assert.strictEqual(m.model, "");
   assert.strictEqual(typeof m.cwd, "string");
 });
+
+test("Bring work home now is offered only for a boxed clone session, before end", () => {
+  const clone = { ...claude, clone_of: "/r", runtime: "box" };
+  const ids = sheetActions(clone).map((x) => x.id);
+  assert.deepStrictEqual(ids, ["open-terminal", "files", "rename", "copycwd", "bringhome", "end"]);
+  const it = sheetActions(clone).find((x) => x.id === "bringhome");
+  assert.strictEqual(it.label, "Bring work home now");
+  assert.ok(it.glyph);
+  assert.ok(!sheetActions({ ...clone, runtime: "host" }).some((x) => x.id === "bringhome"));
+  assert.ok(!sheetActions(claude).some((x) => x.id === "bringhome"));
+});

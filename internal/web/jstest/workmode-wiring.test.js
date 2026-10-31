@@ -139,3 +139,78 @@ test("the profile form keeps scrolled-to lines above the sticky footer", () => {
   const hit = rules.find((r) => r.selector.includes("#settings-modal.as-page #manage .ped") && /scroll-padding-bottom:\s*72px\s*;/.test(r.body));
   assert.ok(hit, "a desktop.css rule for #settings-modal.as-page #manage .ped must set scroll-padding-bottom: 72px");
 });
+
+test("readForm reads the auto-return switch only through wmFieldsToSend", () => {
+  const b = body(app, "readForm");
+  assert.match(b, /autoReturn:\s*\$\("pf-clone-autoreturn"\)\.checked/);
+  assert.doesNotMatch(b, /clone_no_auto_return/, "wmFieldsToSend alone decides whether the field goes out");
+  assert.ok(html.includes('id="pf-clone-autoreturn"') && html.includes("Bring work home automatically"));
+  assert.ok(html.includes('id="pf-nothome"'));
+});
+
+test("fillForm sets the switch from the loaded profile", () => {
+  const b = body(app, "fillForm");
+  assert.match(b, /pf-clone-autoreturn"\)\.checked\s*=\s*!p\.clone_no_auto_return/);
+});
+
+test("how work comes home: the table row is host-aware and no longer names the CLI", () => {
+  assert.ok(!html.includes("when you run agent-box clone fetch"));
+  assert.ok(html.includes("As box/&lt;branch&gt; on its own, or as a PR the agent pushes"));
+  assert.ok(html.includes('id="pf-mode-diff-home"'));
+  assert.match(body(app, "syncPfMode"), /\$\("pf-mode-diff-home"\)\.textContent\s*=\s*folderCopy\.homeCell/);
+});
+
+test("the sessions poll hands the list to noteReturns, which only applies returnNews", () => {
+  const poll = body(app, "refreshSessions");
+  assert.match(poll, /lastSessions = sessions \|\| \[\];\s*sessionsLoaded = true;\s*noteReturns\(lastSessions\)/);
+  const b = body(app, "noteReturns");
+  assert.match(b, /returnNews\(/);
+  assert.match(b, /refreshProfilesQuiet\(\)/);
+  assert.doesNotMatch(b, /loadProfiles\(/, "a background return must not rebuild the dialog's controls");
+  assert.doesNotMatch(b, /returnSig\(|returnToastText\(/, "the decisions live in workhome.js");
+  assert.match(body(app, "loadProfiles"), /notHomeToasts\(\)/);
+  assert.match(body(app, "notHomeToasts"), /notHomeNews\(/);
+  assert.match(app, /"ab\.notHomeSeen"/);
+  // Storage reads and writes are guarded.
+  assert.match(body(app, "notHomeSeenRead"), /try \{[\s\S]*localStorage[\s\S]*\} catch/);
+  assert.match(body(app, "notHomeSeenWrite"), /try \{[\s\S]*localStorage[\s\S]*\} catch/);
+});
+
+test("the quiet profile refresh repaints not-home state only", () => {
+  const b = body(app, "refreshProfilesQuiet");
+  assert.match(b, /renderProfileList\(\)/);
+  assert.match(b, /renderSpawnPlist\(\)/);
+  assert.match(b, /renderPfNotHome\(/);
+  assert.doesNotMatch(b, /renderOptions\(|renderProfileSeg\(|loadProfiles\(|\$\("agent"\)\.replaceChildren|fillForm\(/,
+    "option controls, the profile segment and the editor form are never rebuilt");
+});
+
+test("bringHomeNow shows its toast once", () => {
+  const b = body(app, "bringHomeNow");
+  assert.strictEqual((b.match(/Bringing work home…/g) || []).length, 1);
+});
+
+test("work-home text from box and server stays text: no innerHTML in the new renderers", () => {
+  for (const fn of ["renderPfNotHome", "noteReturns", "bringHomeNow", "sessionWorkHome", "toastReturnSuffix"]) {
+    assert.doesNotMatch(body(app, fn), /innerHTML|insertAdjacentHTML/, fn);
+  }
+  assert.match(body(app, "renderPfNotHome"), /d\.textContent = b\.detail/, "nh.detail shows beside the reason");
+});
+
+test("a session with no profile gets no work-home suffix; the spawn line and the rows call workHomeSuffix", () => {
+  const b = body(app, "sessionWorkHome");
+  assert.match(b, /p \? workHomeSuffix\(p\) : ""/);
+  assert.match(app, /wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/);
+  const sp = fs.readFileSync(path.join(STATIC, "spawnpanel.js"), "utf8");
+  assert.match(body(sp, "syncSpawnCopyLine"), /workHomeSuffix\(p\)/);
+  assert.match(body(sp, "renderSpawnPlist"), /sp-nothome/);
+});
+
+test("the profile row badge sits outside .psub and the menu dispatches bringhome", () => {
+  const b = body(app, "renderProfileList");
+  assert.ok(b.indexOf('"pnothome"') > 0 && b.indexOf('"pnothome"') < b.indexOf('"psub"'));
+  assert.match(body(app, "runSessionAction"), /bringhome: \(\) => bringHomeNow\(s\)/);
+  assert.match(body(app, "bringHomeNow"), /postSessionAction\(s\.id, "bring-home"\)/);
+  const css = fs.readFileSync(path.join(STATIC, "app.css"), "utf8");
+  assert.doesNotMatch(css, /\.pnothome[^{]*\{[^}]*display:\s*none/, "never hidden");
+});

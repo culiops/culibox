@@ -159,7 +159,7 @@ Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `
 
 ## Clone mode
 
-Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except through `agent-box clone fetch`, which brings a branch home for you to review. Linux only for now.
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `agent-box clone fetch`, for you to review. Linux only for now.
 
 Two profile fields turn it on:
 
@@ -190,6 +190,8 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 **Bringing code home**
 
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+
 ```sh
 agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
 ```
@@ -205,7 +207,7 @@ review: git -C /home/me/repo log -p main..box/feat-x; merge per your review poli
 
 Commit subjects are printed with control characters replaced, because a box wrote them. Bundles over 512 MiB are refused. The container runs the global `box_image`.
 
-**Keeping the clone current.** At each spawn of an existing clone, CuliBox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history CuliBox cannot verify, such as a clone made before this tracking existed. `-allow-old-history` overrides that after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
+**Keeping the clone current.** At each spawn of an existing clone, CuliBox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history CuliBox cannot verify, such as a clone made before this tracking existed. `clone fetch`, and auto-return, also refuse a branch that carries a commit your repo still holds but no branch or tag there reaches any more. It cannot see a commit that has since been pruned (by any means) and was never a recorded base tip, unless the latest `git filter-repo` `commit-map` names it (a second filter-repo run overwrites that map), nor a commit that was already behind a `box/*` branch when the record was first seeded. `-allow-old-history` overrides these after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
 
 **Refusals**
 
