@@ -540,7 +540,7 @@ type Bundles interface {
 	// because sessions of different bins share a box) and the extra argv flags
 	// bin's agent needs, plus the bundle hash for the log line. A bin with no
 	// layout (a shell, or "" when unresolved) gets the mounts and no flags.
-	For(bin string) (bundle.Grant, error)
+	For(bin string, withImports bool) (bundle.Grant, error)
 	// SessionMCP builds the MCP config of a boxed claude session that binds token
 	// entries declaring MCP servers: the bundle's servers (when includeUser), the
 	// entries' and the image's. drops is the bundle grant's; the result's Drops
@@ -1894,7 +1894,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// account is part of the box key, so this gate never differs between
 		// two sessions that share a box.
 		if bundles != nil && (acct.IsDefault || acct.InheritPersonal) {
-			g, err := bundles.For(bin)
+			g, err := bundles.For(bin, true)
 			if err != nil {
 				bundleFailed = true
 				// One row, not silence. The reason is a fixed string: err can

@@ -36,9 +36,10 @@ const (
 	// layoutMarker is folded into the source hash. v2 added image-mcp.json, v3
 	// refuses MCP servers carrying credentials in headers/args/url, v4 ships
 	// agent-box's statusLine script and replaces the host statusLine, so every
-	// bundle built before it rebuilds once. Bundle hashes are not part of the box
-	// key, so no box is recreated by that.
-	layoutMarker = "layout\x00v4\n"
+	// bundle built before it rebuilds once. v5 puts the files CLAUDE.md imports
+	// beside the bundle (<dir>.imports) and lists them in the lock. Bundle hashes
+	// are not part of the box key, so no box is recreated by that.
+	layoutMarker = "layout\x00v5\n"
 	// maxLinkDepth bounds symlink following. A cycle must terminate rather than
 	// hang the daemon before a spawn.
 	maxLinkDepth = 8
@@ -78,7 +79,7 @@ type entry struct {
 // Drop records something deliberately left out, so losing it is a named
 // decision rather than a silent degradation.
 type Drop struct {
-	Kind   string `json:"kind"` // "mcp" | "settings" | "symlink" | "plugins" | "bundle"
+	Kind   string `json:"kind"` // "mcp" | "settings" | "symlink" | "plugins" | "bundle" | "import"
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
 }
@@ -92,7 +93,23 @@ type Lock struct {
 	// EntryResolves is the probe's answer for Options.EntryCommands (agentbox-env
 	// and each token entry's MCP command). Absent when none were asked.
 	EntryResolves map[string]bool `json:"entry_resolves,omitempty"`
+	// Imports are the files CLAUDE.md imports that were copied to importsDir, by
+	// in-box path. Their bytes are not in Files: they live beside the bundle, so
+	// the dir mounted at BoxBundleDir never holds them.
+	Imports []LockImport `json:"imports,omitempty"`
 }
+
+// LockImport is one bundled import: where it appears in the box and the hash of
+// the bytes that were copied.
+type LockImport struct {
+	Box    string `json:"box"`
+	SHA256 string `json:"sha256"`
+}
+
+// importsDir is where a bundle's imports are copied: beside the bundle dir, so
+// the dir mounted at BoxBundleDir never holds them. Like the bundle dir it is
+// never removed, so a live box keeps the imports it was created with.
+func importsDir(bundleDir string) string { return bundleDir + ".imports" }
 
 func (l Lock) hasDrop(kind, name string) bool {
 	for _, d := range l.Dropped {
@@ -131,6 +148,13 @@ type Options struct {
 	// user's MCP commands and folded into the hash, so a new entry rebuilds the
 	// bundle and a session's MCP config can name what the image lacks.
 	EntryCommands []string
+	// HostHome is the home directory CLAUDE.md imports are resolved against.
+	// Empty means os.UserHomeDir(), symlinks resolved.
+	HostHome string
+	// ImportDeny are host directories no import may come from (agent-box's own
+	// data and state). Imports are also denied by the resolver's built-in list
+	// and Claude Code's credentials file.
+	ImportDeny []string
 }
 
 // Manager builds and caches bundles.
@@ -149,6 +173,28 @@ func New(opts Options) (*Manager, error) {
 	return &Manager{opts: opts}, nil
 }
 
+// Imports resolves the files CLAUDE.md imports, fresh from the host. It writes
+// nothing. Claude Code's OAuth credentials are always denied: the file name has
+// a leading dot, so the resolver's credentials* secret glob does not match it.
+func (m *Manager) Imports() ImportSet {
+	home := m.opts.HostHome
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return ImportSet{Files: []ImportFile{}}
+		}
+		if r, err := filepath.EvalSymlinks(h); err == nil {
+			h = r
+		}
+		home = h
+	}
+	deny := slices.Clone(m.opts.ImportDeny)
+	deny = append(deny,
+		filepath.Join(home, ".claude", ".credentials.json"),
+		filepath.Join(m.opts.Source, ".credentials.json"))
+	return resolveImports(importOpts{Source: m.opts.Source, HostHome: home, Deny: deny})
+}
+
 // Ensure returns a bundle for the current source, building it if the source
 // changed. Reuse requires the lock file, which is written last — so a build that
 // died half-way cannot be mistaken for a complete one.
@@ -158,15 +204,16 @@ func (m *Manager) Ensure() (*Built, error) {
 	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
 	mounted := len(ps.mounts) > 0
 	mcp := readMCPSource(m.opts.MCPFile)
-	hash, imageID, err := m.sourceHash(mounted, mcp)
+	imports := m.Imports()
+	hash, imageID, err := m.sourceHash(mounted, mcp, imports)
 	if err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(m.opts.Root, hash)
 	var built *Built
-	if lock, ok := readLock(dir); ok {
+	if lock, ok := readLock(dir); ok && importsPresent(dir, lock) {
 		built = &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}
-	} else if built, err = m.materialize(hash, imageID, dir, mounted, mcp); err != nil {
+	} else if built, err = m.materialize(hash, imageID, dir, mounted, mcp, imports); err != nil {
 		return nil, err
 	}
 	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
@@ -191,7 +238,7 @@ func (m *Manager) Ensure() (*Built, error) {
 // reuse compares mount destinations, not host paths, and neither kind of dir is
 // ever removed (no GC), so its settings and its plugins still match each other.
 // It sees a newer plugin snapshot only once it is recreated.
-func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource) (hash, imageID string, err error) {
+func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource, imports ImportSet) (hash, imageID string, err error) {
 	h := sha256.New()
 	io.WriteString(h, layoutMarker)
 	for _, c := range m.entryCommands() {
@@ -217,6 +264,9 @@ func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource) (hash, imageID 
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
 	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
+	// The imports' content and the refusals both reach the bundle (the files and
+	// the lock's drops), so both are folded in.
+	fmt.Fprintf(h, "imports\x00%s\n", imports.fingerprint())
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
 }
 
@@ -320,7 +370,7 @@ func pathologicalTarget(source, target string) (string, bool) {
 
 // materialize builds into a temp dir and renames, writing the lock last as the
 // completion sentinel.
-func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, mcp mcpSource) (*Built, error) {
+func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, mcp mcpSource, imports ImportSet) (*Built, error) {
 	// The image is probed before anything is written. A failed probe publishes
 	// nothing: a cached bundle would pin "no image servers" and "every stdio
 	// server dropped" until the source changed, while an error lets the spawn
@@ -416,11 +466,32 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, 
 		lock.Files[imageMCPName] = sum
 	}
 
+	// Imports are copied from the bytes the resolver hashed, never re-read from
+	// the host. They go into a temp dir of their own and are renamed into place
+	// before the bundle, so the lock, which lands last, never names imports that
+	// are not there.
+	impTmp, err := writeImports(m.opts.Root, imports, &lock)
+	if err != nil {
+		return nil, err
+	}
+	if impTmp != "" {
+		defer os.RemoveAll(impTmp)
+	}
+	for _, r := range imports.Refused {
+		addDrop(Drop{Kind: KindImport, Name: r.Import, Reason: r.Reason})
+	}
+
 	// The lock is the completion sentinel and therefore written last.
 	if _, err := writeJSON(filepath.Join(tmp, lockName), lock); err != nil {
 		return nil, err
 	}
 	_ = os.RemoveAll(final)
+	if impTmp != "" {
+		_ = os.RemoveAll(importsDir(final))
+		if err := os.Rename(impTmp, importsDir(final)); err != nil {
+			return nil, fmt.Errorf("bundle: publishing imports of %s: %w", final, err)
+		}
+	}
 	if err := os.Rename(tmp, final); err != nil {
 		return nil, fmt.Errorf("bundle: publishing %s: %w", final, err)
 	}

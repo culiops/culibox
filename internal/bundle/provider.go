@@ -2,6 +2,8 @@ package bundle
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/culiops/agent-box/internal/box"
 )
@@ -30,6 +32,8 @@ type Grant struct {
 	// drops are decided on every Ensure with the snapshot, so they cannot live
 	// in the lock.
 	Drops []Drop
+	// Imports is how many of Mounts are CLAUDE.md imports.
+	Imports int
 }
 
 // For returns the box's mounts and the agent's flags. The two are deliberately
@@ -51,7 +55,13 @@ type Grant struct {
 //
 // The plugin mounts are always Optional: a live box created before plugins were
 // mounted is reused and its session runs without them, rather than being refused.
-func (p *Provider) For(bin string) (Grant, error) {
+//
+// withImports adds one mount per file CLAUDE.md imports, file by file so nothing
+// else in the imports dir is exposed. They are Optional (a reused live box
+// lacks them and runs without) and Yield (a workspace or another mount that
+// already covers the path wins, so an import never shadows real content). With
+// withImports false the mounts and the import drops are both left out.
+func (p *Provider) For(bin string, withImports bool) (Grant, error) {
 	built, err := p.m.Ensure()
 	if err != nil {
 		return Grant{}, err
@@ -75,12 +85,40 @@ func (p *Provider) For(bin string) (Grant, error) {
 			mounts = append(mounts, mt)
 		}
 	}
+	imports := 0
+	if withImports {
+		for _, li := range built.Lock.Imports {
+			if !validImportBox(li.Box) || seen[li.Box] {
+				continue // the lock is host-owned, but a mount is not worth trusting it blindly
+			}
+			seen[li.Box] = true
+			imports++
+			mounts = append(mounts, box.Mount{
+				Host:     filepath.Join(importsDir(built.Dir), strings.TrimPrefix(li.Box, "/")),
+				Box:      li.Box,
+				Optional: true,
+				Yield:    true,
+			})
+		}
+	}
 	var flags []string
 	if agent {
 		flags = layout.Flags(built.Dir)
 	}
-	drops := append(append([]Drop(nil), built.Lock.Dropped...), built.pluginDrops...)
-	return Grant{Mounts: mounts, Flags: flags, Hash: built.Hash, Drops: drops}, nil
+	var drops []Drop
+	for _, d := range built.Lock.Dropped {
+		if d.Kind == KindImport && !withImports {
+			continue
+		}
+		drops = append(drops, d)
+	}
+	drops = append(drops, built.pluginDrops...)
+	return Grant{Mounts: mounts, Flags: flags, Hash: built.Hash, Drops: drops, Imports: imports}, nil
+}
+
+// validImportBox is an absolute, clean in-box path that is not the root.
+func validImportBox(p string) bool {
+	return p != "/" && filepath.IsAbs(p) && filepath.Clean(p) == p
 }
 
 // boxHome mirrors the box package's home path. Duplicated rather than imported

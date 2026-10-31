@@ -31,8 +31,9 @@ var pathEscapes = map[string]int{
 	"internal/config/resolve.go literal .config": 1,
 	// The bundle reads the user's Claude config (a read, never a write): "~" in
 	// bundle_source, the default ~/.claude source, and refusing a source whose
-	// symlinks resolve to the whole home.
-	"internal/bundle/bundle.go os.UserHomeDir": 3,
+	// symlinks resolve to the whole home, and the home CLAUDE.md imports resolve
+	// against (read-only).
+	"internal/bundle/bundle.go os.UserHomeDir": 4,
 	// Lists the profiles of the host's ~/.aws/config for the credentials screen (a read of
 	// the user's own AWS config, never a write; AWS_CONFIG_FILE wins when set).
 	"internal/awshost/profiles.go os.UserHomeDir": 1,

@@ -346,7 +346,7 @@ func (f *fakeBundles) SessionMCP(includeUser bool, drops []bundle.Drop, entries 
 	return bundle.SessionMCP{Doc: []byte(`{"mcpServers":{}}`), Key: key, Drops: drops}, nil
 }
 
-func (f *fakeBundles) For(bin string) (bundle.Grant, error) {
+func (f *fakeBundles) For(bin string, withImports bool) (bundle.Grant, error) {
 	f.askedBin = bin
 	f.calls++
 	if f.err != nil {

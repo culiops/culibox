@@ -494,6 +494,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// Probed with the user's MCP commands, so a token entry's server is
 			// only offered to a session when the image can run it.
 			EntryCommands: entryMCPCommands(cfg.StaticTokens),
+			// CLAUDE.md imports may not come from agent-box's own data or state.
+			ImportDeny: []string{dataDir, layer.stateRoot},
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
