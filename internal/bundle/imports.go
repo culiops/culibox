@@ -163,7 +163,7 @@ const (
 	ReasonImportTooLarge      = "is larger than 256 KiB"
 	ReasonImportTooMany       = "the imports exceed 64 files or 4 MiB; the rest are left out"
 	ReasonImportDenied        = "is inside a directory that holds host sockets, keys or agent-box state"
-	ReasonImportOutsideHome   = "is an absolute path outside your home directory"
+	ReasonImportOutsideHome   = "resolves outside your home directory"
 	ReasonImportLeavesHome    = "resolves outside the box's home directory"
 	ReasonImportReserved      = "would land on a path the box reserves"
 	ReasonImportChanged       = "changed while it was read"
@@ -483,9 +483,11 @@ func (w *importWalk) load(sp, host, bx string) (f *ImportFile, underSource bool,
 		return nil, false, ReasonImportOutsideHome
 	}
 	sum := sha256.Sum256(b)
+	name := filepath.Base(bx)
 	return &ImportFile{
-		Import: sp, Name: filepath.Base(bx), Box: bx, Host: real,
+		Import: sp, Name: name, Box: bx, Host: real,
 		Size: int64(len(b)), SHA256: hex.EncodeToString(sum[:]), content: b,
+		Warnings: importWarnings(name, b),
 	}, seen.source, ""
 }
 

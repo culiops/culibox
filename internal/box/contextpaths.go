@@ -310,6 +310,9 @@ func SecretFiles(dir string) []string {
 	return found
 }
 
+// LooksSecret reports whether a base name matches SecretFilePatterns.
+func LooksSecret(name string) bool { return looksSecret(name) }
+
 func looksSecret(name string) bool {
 	for _, pat := range SecretFilePatterns {
 		if ok, _ := filepath.Match(pat, name); ok {
