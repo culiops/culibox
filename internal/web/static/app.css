@@ -1343,9 +1343,18 @@
     .spawn-progress { margin-right: auto; font-size: 12px; color: var(--muted); }
     .spawn-progress:not([hidden]) ~ #spawn-foot-hint { display: none; }
     #spawn .spawn-actions button.busy:disabled { text-decoration: none; cursor: progress; }
-    .spawn-progress::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: spawn-pulse 1s ease-in-out infinite alternate; }
+    .spawn-progress::before, .pending-line::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: spawn-pulse 1s ease-in-out infinite alternate; }
     @keyframes spawn-pulse { from { opacity: .25; } to { opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { .spawn-progress::before { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .spawn-progress::before, .pending-line::before { animation: none; } }
+    /* Shared pending idiom (pending.js). Neutral: muted text + the accent pulse
+       above, never amber or red. .busy marks a control whose action is still
+       running (it is also disabled); .pending-line is the status row painted
+       above a content area that is loading, so stale content stays visible. */
+    .busy { cursor: progress; opacity: .7; }
+    .busy:disabled { text-decoration: none; cursor: progress; }
+    /* The Spawn button predates .busy and has never dimmed; keep its pixels. */
+    #spawn .busy { opacity: 1; }
+    .pending-line { font-size: 12px; color: var(--muted); padding: 4px 0; }
     /* Desktop-only parts of the New session dialog (desktop.css shows them above
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */

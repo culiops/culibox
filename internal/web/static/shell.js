@@ -11,7 +11,7 @@
 // terminal is noise.
 let toastTimer = null;
 
-// showToast(msg, {undo, ms, error, warn}): `undo` is a callback; supplying it reveals
+// showToast(msg, {undo, ms, error, warn, sticky}): `sticky` skips the auto-hide timer (a pending toast stays until its owner hides it). `undo` is a callback; supplying it reveals
 // the Undo button and clicking it dismisses the toast after running the callback. `warn` tints the border (a milder `error`).
 function showToast(msg, opts) {
   opts = opts || {};
@@ -41,7 +41,7 @@ function showToast(msg, opts) {
   }
   box.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, opts.ms || 6000);
+  if (!opts.sticky) toastTimer = setTimeout(hideToast, opts.ms || 6000);
 }
 
 function hideToast() {
