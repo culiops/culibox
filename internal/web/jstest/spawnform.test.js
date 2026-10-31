@@ -124,3 +124,17 @@ test("spawnProgressText counts up and explains a slow boxed spawn", () => {
   assert.strictEqual(spawnProgressText(12, "host"), "Starting session… 12s");
   assert.strictEqual(spawnProgressText(65, "box").split(" · ")[0], "Starting session… 1m 05s");
 });
+
+// Profile search (spec 5.5): case-insensitive substring on name or touch line.
+test("profileMatches: name, touch line, case, blank query", () => {
+  const { profileMatches, PLIST_SEARCH_MIN } = require("../static/spawnform.js");
+  assert.strictEqual(PLIST_SEARCH_MIN, 8);
+  assert.strictEqual(profileMatches("agent-box", "host · not contained", "BOX"), true);
+  assert.strictEqual(profileMatches("culifeed", "box · aws prod", "aws"), true);
+  assert.strictEqual(profileMatches("zsh", "host · zsh", "kube"), false);
+  assert.strictEqual(profileMatches("x", "y", "  "), true);
+  assert.strictEqual(profileMatches("x", "y", ""), true);
+  assert.strictEqual(profileMatches("x", "y", undefined), true);
+  assert.strictEqual(profileMatches("a b", "y", " a b "), true);
+  assert.strictEqual(profileMatches(undefined, undefined, "q"), false);
+});

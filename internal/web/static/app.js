@@ -827,10 +827,13 @@ function initMobileShell() {
     if (btn) setMobileScreen(btn.dataset.screen);
   });
   // The mobile Sessions screen draws its own full-width "+ new session" (M1)
-  // below the list; it delegates to the existing spawn trigger rather than
-  // binding a second spawn handler.
+  // below the list; it opens the same dialog as the spawn trigger. It wraps
+  // openSpawnDialog itself rather than forwarding a click to #spawn-go: that
+  // button is hidden on mobile, so its pending state would be invisible and a
+  // slow loadProfiles would look dead here. Plain-text button, so the label
+  // swap keeps no markup.
   const sgm = document.getElementById("spawn-go-mobile");
-  if (sgm) sgm.addEventListener("click", () => { const g = document.getElementById("spawn-go"); if (g) g.click(); });
+  if (sgm) sgm.addEventListener("click", () => withPending(sgm, "Opening…", () => openSpawnDialog()));
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
   renderMobileChips();
   renderMobileKeybar();
@@ -1549,7 +1552,7 @@ function buildEnableRepliesButton(id, after) {
   en.type = "button";
   en.className = "btn";
   en.textContent = "Enable replies";
-  en.title = "Allow answering this session from Culibox";
+  en.title = "Allow answering this session from CuliBox";
   en.onclick = async (e) => {
     e.stopPropagation();
     en.disabled = true;
@@ -1612,7 +1615,22 @@ async function interruptSession(id) {
 
 // restartSession replaces an ended session with a new one from the same spec;
 // its tab is swapped for the new session's.
-async function restartSession(s) {
+//
+// trigger: the control that was clicked, when one stays on screen (the pane's
+// Restart button). It shows the wait itself ("Restarting…"); without one
+// (palette, sidebar menu) a toast does, after the pending delay, and an error
+// toast replaces it.
+async function restartSession(s, trigger) {
+  if (trigger) return withPending(trigger, "Restarting…", () => restartSessionRun(s));
+  const done = pendingToast("Restarting " + (s.name || s.id) + "…");
+  try {
+    return await restartSessionRun(s);
+  } finally {
+    done();
+  }
+}
+
+async function restartSessionRun(s) {
   const res = await postSessionAction(s.id, "restart");
   if (!res.ok) {
     let msg = "";
@@ -3690,7 +3708,7 @@ function renderGhOwners(rows) {
     sel.value = r.token ? "token:" + r.token : r.app ? "app:" + r.app : apps.length ? "app:" + apps[0] : pats.length ? "token:" + pats[0] : "";
     const note = document.createElement("p");
     note.className = "tiny pf-gh-pat-note";
-    note.textContent = "A personal access token is not narrowed by Culibox: the permissions above do not apply to it and it may reach more than these repositories. Culibox only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
+    note.textContent = "A personal access token is not narrowed by CuliBox: the permissions above do not apply to it and it may reach more than these repositories. CuliBox only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
     note.hidden = !sel.value.startsWith("token:");
     sel.addEventListener("change", () => { note.hidden = !sel.value.startsWith("token:"); });
     const owner = document.createElement("input");
@@ -4184,49 +4202,61 @@ async function saveProfile() {
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
   if (ask && !(await askConfirm(ask))) return;
-  const editing = target.method === "PUT";
-  const path = editing ? "/api/profiles/" + encodeURIComponent(target.name) : "/api/profiles";
-  $("pf-st-err").hidden = true;
-  $("pf-awsc-err").hidden = true;
-  $("pf-context-warn").hidden = true;
-  let saved = null;
+  // From here the save is the slow part (PUT, refetch, fill), so the button
+  // shows "Saving…" if it runs long and a second click is ignored. Validation
+  // and the confirm above stay outside: they answer at once or by the user.
+  // withPending restores only what is still its own, and fillForm re-syncs the
+  // button mid-save, so re-run the form's own sync afterwards: its owner
+  // (syncEditorActions: saveLabel text, off/disabled) has the last word.
   try {
-    saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) {
-    pfSaveError("Save failed: " + e.message);
-    // A refusal that names a token entry is also shown on the Tokens block.
-    if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
-      $("pf-st-err").textContent = String(e.message);
-      $("pf-st-err").hidden = false;
-    }
-    // Likewise a refusal that names aws_connections (an undefined name, too
-    // many, or both bindings at once) shows on the connections block.
-    if (/aws_connections/.test(e.message)) {
-      $("pf-awsc-err").textContent = String(e.message);
-      $("pf-awsc-err").hidden = false;
-    }
-    return;
+    await withPending($("pf-save"), "Saving…", async () => {
+      const editing = target.method === "PUT";
+      const path = editing ? "/api/profiles/" + encodeURIComponent(target.name) : "/api/profiles";
+      $("pf-st-err").hidden = true;
+      $("pf-awsc-err").hidden = true;
+      $("pf-context-warn").hidden = true;
+      let saved = null;
+      try {
+        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+      } catch (e) {
+        pfSaveError("Save failed: " + e.message);
+        // A refusal that names a token entry is also shown on the Tokens block.
+        if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
+          $("pf-st-err").textContent = String(e.message);
+          $("pf-st-err").hidden = false;
+        }
+        // Likewise a refusal that names aws_connections (an undefined name, too
+        // many, or both bindings at once) shows on the connections block.
+        if (/aws_connections/.test(e.message)) {
+          $("pf-awsc-err").textContent = String(e.message);
+          $("pf-awsc-err").hidden = false;
+        }
+        return;
+      }
+      // Show what the server now holds, not what was typed: the editor and the
+      // stored profile can only disagree on screen if this step is skipped. The
+      // write succeeded, so a failure here must not say "Save failed".
+      // The profile now exists, so the editor is no longer a draft even if the
+      // reload below fails (a second Save must PUT, not POST again).
+      selectedProfile = p.name;
+      pfUserDraft = false;
+      try {
+        // No background retry: one that succeeds later would leave the "Saved, but
+        // reloading it failed" line on screen next to a good list.
+        if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
+        fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
+      } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
+      renderProfileList();
+      // After fillForm, which clears the warning: the save is done, and what the box
+      // may read is the user's call, so the warnings stay on the field (a toast would
+      // paint beneath the modal) for as long as the editor is showing this profile.
+      const warn = contextWarningsText(saved);
+      $("pf-context-warn").textContent = warn;
+      $("pf-context-warn").hidden = !warn;
+    });
+  } finally {
+    syncEditorActions();
   }
-  // Show what the server now holds, not what was typed: the editor and the
-  // stored profile can only disagree on screen if this step is skipped. The
-  // write succeeded, so a failure here must not say "Save failed".
-  // The profile now exists, so the editor is no longer a draft even if the
-  // reload below fails (a second Save must PUT, not POST again).
-  selectedProfile = p.name;
-  pfUserDraft = false;
-  try {
-    // No background retry: one that succeeds later would leave the "Saved, but
-    // reloading it failed" line on screen next to a good list.
-    if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
-    fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
-  } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
-  renderProfileList();
-  // After fillForm, which clears the warning: the save is done, and what the box
-  // may read is the user's call, so the warnings stay on the field (a toast would
-  // paint beneath the modal) for as long as the editor is showing this profile.
-  const warn = contextWarningsText(saved);
-  $("pf-context-warn").textContent = warn;
-  $("pf-context-warn").hidden = !warn;
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It opens an UNSAVED draft, as New profile does, so Save
@@ -5022,6 +5052,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   hideSpawnUnlock();
+  spawnPlistResetSearch(); // a fresh open starts with an empty profile filter
   spawnPanelOpen();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
@@ -5095,7 +5126,7 @@ function emptyNoneEl(m) {
 function emptyFirstEl() {
   const root = emptyEl("div", "placeholder empst");
   root.append(
-    emptyEl("h1", "empst-title", "Welcome to Culibox"),
+    emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
   );
   const docker = !metaLoaded ? "" : (boxRuntime ? " (found)" : " (not found)");
@@ -5153,8 +5184,12 @@ function initSpawnControl() {
   // The .seg's own buildSeg onChange (wired in syncRuntimeField) already calls
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
-  $("spawn-go").onclick = () => openSpawnDialog();
-  $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
+  // openSpawnDialog awaits loadProfiles (up to 5s), so a slow open reads
+  // "Opening…" on the button instead of looking dead. Both are persistent
+  // buttons; the sidebar menu item has none, so it stays unwrapped.
+  $("spawn-go").onclick = () => withPending($("spawn-go"), "Opening…", () => openSpawnDialog());
+  // the sidebar top's button: the same flow as "+ new"
+  $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
@@ -5807,13 +5842,25 @@ async function confirmKill(id, name) {
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
-  await refreshSessions(); // re-render → row shows "ending…"
+  // A boxed session's docker stop can take seconds: a toast covers the wait
+  // after the pending delay. It starts here, at the click, so the 300ms clock
+  // is not spent on the re-render below. done() runs (in finally) before the
+  // error toast is shown, so the toast cannot hide "End failed".
+  const sess = (lastSessions || []).find((s) => s.id === id);
+  const done = pendingToast("Ending " + ((sess && (sess.name || sess.id)) || id) + "…");
+  let failure = null;
   try {
+    await refreshSessions(); // re-render → row shows "ending…"
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
+    failure = e;
+  } finally {
+    done();
+  }
+  if (failure) {
     killing.delete(id);
     await refreshSessions();
-    showToast("End failed: " + e.message, { error: true });
+    showToast("End failed: " + failure.message, { error: true });
     return;
   }
   killing.delete(id);
@@ -5831,9 +5878,22 @@ async function killSession(id) {
 // Per-cell (not global) in-flight guard: a double click on one window is ignored,
 // but +sh on another window still works instead of dying silently.
 const shellSpawning = new WeakSet();
-async function spawnShellIn(cell, placement = "below") {
+//
+// trigger: the button that was clicked, when one stays on screen. It shows the
+// wait itself ("Starting shell…") and its re-entry guard replaces the caller's
+// own disabled/finally dance. Without one (palette, keyboard) a toast covers
+// the shell request after the pending delay.
+//
+// label: the text the trigger shows while pending. Icon-sized buttons (the dock
+// "+", the "+sh" chip) pass "…" so they do not grow into a sentence.
+async function spawnShellIn(cell, placement = "below", trigger, label = "Starting shell…") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   closePage();
+  if (trigger) return withPending(trigger, label, () => spawnShellRun(cell, placement, false));
+  return spawnShellRun(cell, placement, true);
+}
+
+async function spawnShellRun(cell, placement, toastWait) {
   shellSpawning.add(cell);
   try {
     // Only a gate and the form fallback's preselection now: the shell endpoint
@@ -5851,7 +5911,13 @@ async function spawnShellIn(cell, placement = "below") {
       openSpawnDialog(profile);
       return;
     }
-    const s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    const done = toastWait ? pendingToast("Starting shell…") : () => {};
+    let s;
+    try {
+      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    } finally {
+      done();
+    }
     await refreshSessions(); // the strip's "shell N" label reads the new list
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
     // can be removed). Attaching to a detached cell would leak a live xterm + socket
@@ -6094,9 +6160,9 @@ initMobileShell();
     if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
-    if (ver && vl) { ver.textContent = vl; ver.title = "Culibox " + meta.version; ver.hidden = false; }
+    if (ver && vl) { ver.textContent = vl; ver.title = "CuliBox " + meta.version; ver.hidden = false; }
     const sideVer = $("side-version");
-    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "Culibox " + meta.version; sideVer.hidden = false; }
+    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "CuliBox " + meta.version; sideVer.hidden = false; }
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
@@ -6110,7 +6176,7 @@ initMobileShell();
       sideEnv.hidden = false;
     }
     strip.hidden = false;
-    signalAttention(); // title = (N) [ENV] Culibox, now that ENV is known
+    signalAttention(); // title = (N) [ENV] CuliBox, now that ENV is known
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh

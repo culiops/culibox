@@ -940,11 +940,32 @@
      list, which writes the same #agent select; it stays in the DOM. */
   /* The dialog fits the viewport (the base 88vh left the Spawn row clipped at
      1280x800): the body scrolls and the action row stays pinned to its bottom. */
-  #spawn-modal { width: 820px; max-width: 96vw; max-height: calc(100vh - 32px); }
+  /* Chrome: a plain rounded card like the ask dialog (no box frame, no legend in the
+     border). The title is a header with its own rule; the close cross sits in the
+     corner and reads "Esc ✕" like the pages. */
+  #spawn-modal {
+    width: 820px; max-width: 96vw; max-height: calc(100vh - 32px); padding: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); overflow: hidden;
+  }
+  #spawn-modal::before { display: none; }
+  #spawn-modal .dlg-title {
+    position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
+    box-sizing: border-box; width: 100%; margin: 0; padding: 16px 20px; background: none;
+    border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 600; color: var(--fg);
+  }
+  #spawn-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
+  #spawn-modal .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #spawn-modal .dlg-x::before { content: "Esc"; font-size: 12px; }
+  #spawn-modal .dlg-x:hover { color: var(--fg); background: var(--raise); }
+  #spawn-modal .dlg-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #spawn-modal .dlg-body { display: flex; padding: 0; }
   #spawn-plist {
     display: flex; flex-direction: column; gap: 2px; flex: none; width: 236px; box-sizing: border-box;
     padding: 12px 8px; border-right: 1px solid var(--line); overflow-y: auto;
+    /* The list never sizes the row: the form decides the height and the list scrolls
+       inside it (so a long list, or the filter, cannot stretch the dialog). */
+    contain: size; align-self: stretch;
   }
   .sp-head { padding: 2px 10px 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
   .sp-item {
@@ -952,6 +973,23 @@
     padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
     background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-ctl);
   }
+  /* The profile filter (>= 8 rows): the heading and the box stay put and #sp-rows
+     scrolls under them, so the box is always in view however long the list. The
+     -2px/2px pair keeps a row's focus ring from being clipped by the scroller
+     without moving anything. */
+  #sp-search {
+    flex: none; width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 10px;
+    font: 13px var(--font-ui); color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #sp-search::placeholder { color: var(--faint); }
+  #sp-search:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+  #sp-rows {
+    display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 0; margin: -2px; padding: 2px; overflow-y: auto;
+  }
+  #sp-rows .sp-item { flex: none; }
+  .sp-item[hidden] { display: none; }
+  .sp-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
   .sp-item:hover { background: var(--raise); }
   .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
   .sp-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
@@ -985,7 +1023,14 @@
   #spawn > .spawn-actions { order: 13; }
   #effort-slot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   #effort-slot .opt, #effort-slot .opt.opt-seg { flex: none; flex-direction: row; align-items: center; }
-  #effort-slot select { width: auto; max-width: 190px; font-family: var(--font-mono); }
+  /* The Model control stays a native <select>; only its frame is ours. No width cap, so
+     a long model id is never clipped. */
+  #effort-slot select {
+    width: auto; max-width: none; padding-right: 28px; appearance: none; -webkit-appearance: none;
+    background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6adc8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    border: 1px solid var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono);
+  }
+  #spawn input[type="checkbox"] { accent-color: var(--accent); }
   #spawn-name-row input::placeholder { color: var(--faint); }
 
   /* The reach box: what this session will be able to touch, from the profile. */

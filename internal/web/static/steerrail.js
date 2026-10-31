@@ -227,7 +227,7 @@ function cloneClauses(c, profile) {
   }
   const skipText = {
     "in-use": "not refreshed: another session is using this clone",
-    "other-instance": "not refreshed: a box from another Culibox instance holds this clone",
+    "other-instance": "not refreshed: a box from another CuliBox instance holds this clone",
     "created": "new clone of host " + b,
     "no-base": "not refreshed: host repo has neither main nor master",
   };

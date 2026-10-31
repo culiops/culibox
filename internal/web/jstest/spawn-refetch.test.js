@@ -105,3 +105,26 @@ test("metaLoaded is set wherever boxRuntime is assigned from /api/meta", () => {
   assert.ok(all.length >= 2);
   assert.strictEqual(assigns.length, all.length, "every meta assignment of boxRuntime must set metaLoaded");
 });
+
+// The persistent New-session buttons show "Opening…" while openSpawnDialog
+// waits on loadProfiles. The sidebar menu item has no persistent button, so it
+// is exempt; spawnOpening stays for the callers that have no button to wrap.
+test("New session triggers show Opening… while profiles load", () => {
+  for (const id of ["spawn-go", "side-new"]) {
+    const m = new RegExp('\\$\\("' + id + '"\\)\\.onclick\\s*=\\s*([^\\n]*)').exec(APP);
+    assert.ok(m, id + " handler not found");
+    assert.match(m[1], new RegExp('withPending\\(\\s*\\$\\("' + id + '"\\),\\s*"Opening…",[^;]*openSpawnDialog\\('), id + " must wrap openSpawnDialog in withPending");
+  }
+  assert.match(APP, /let spawnOpening = false;/);
+});
+
+// #spawn-go is hidden on mobile, so forwarding the tap to it would show nothing.
+// The mobile CTA wraps openSpawnDialog itself, and is a plain-text button so the
+// "Opening…" label swap flattens no markup.
+test("the mobile New session button shows Opening… itself", () => {
+  const m = /const sgm = document\.getElementById\("spawn-go-mobile"\);\s*\n\s*if \(sgm\)([^\n]*)/.exec(APP);
+  assert.ok(m, "spawn-go-mobile handler not found");
+  assert.match(m[1], /withPending\(\s*sgm,\s*"Opening…",[^;]*openSpawnDialog\(/);
+  assert.doesNotMatch(m[1], /spawn-go"\)|\.click\(\)/, "must not forward to the hidden #spawn-go");
+  assert.match(HTML, /<button id="spawn-go-mobile"[^>]*>[^<]*<\/button>/, "#spawn-go-mobile must stay a plain-text button");
+});

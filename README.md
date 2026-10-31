@@ -1,14 +1,14 @@
-# Culibox
+# CuliBox
 
 A self-hosted web control plane for running, watching, containing and steering AI coding-agent sessions.
 
-Culibox (the binary, CLI and repository are still named `agent-box`) is the safe way to let an AI agent touch your cloud. You start Claude Code sessions from a browser, each one in its own container by default, and you keep an eye on what they are doing and what they cost. AWS access, when you grant it, is short-lived and scoped, and every grant is logged.
+CuliBox (the binary, CLI and repository are still named `agent-box`) is the safe way to let an AI agent touch your cloud. You start Claude Code sessions from a browser, each one in its own container by default, and you keep an eye on what they are doing and what they cost. AWS access, when you grant it, is short-lived and scoped, and every grant is logged.
 
 ## Why it exists
 
 Letting an agent run commands against real infrastructure is useful and risky. The usual setup is a terminal on a machine that holds your SSH keys, your cloud credentials and your whole home directory, with the agent running as you.
 
-Culibox puts a boundary around that. Sessions run in a per-project container that sees only the project folder. Cloud credentials are minted per session, last 15 minutes and are narrower than your own. You see every session in one place, including which ones are waiting for you.
+CuliBox puts a boundary around that. Sessions run in a per-project container that sees only the project folder. Cloud credentials are minted per session, last 15 minutes and are narrower than your own. You see every session in one place, including which ones are waiting for you.
 
 It is built first for ops, cloud, DevOps and SRE work, where you want a control panel rather than an editor.
 
@@ -25,7 +25,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 ### Run and steer
 
-- **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the Culibox daemon. On restart, Culibox re-attaches. Closing the browser or the terminal that runs `agent-box serve` does not kill sessions.
+- **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the CuliBox daemon. On restart, CuliBox re-attaches. Closing the browser or the terminal that runs `agent-box serve` does not kill sessions.
 - **Steer from the UI.** Interrupt a session, restart an exited one (Claude Code sessions on the host tier resume the same conversation), and, if `"replies_enabled": true` is set in config.json (off by default; restart to apply), answer permission prompts or send a one-line reply from the needs-you card. This is limited to Claude Code sessions.
 - **Profiles.** Agents are defined in the config file or created at runtime in the UI, with launch options (flags and env vars) as toggles on the spawn form. A quick-shell profile is detected from `$SHELL`.
 - **Files.** Browse, search, view, edit, upload, and download folders as an archive, with size and file-count caps.
@@ -33,7 +33,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 ### Contain
 
 - **Boxed runtime (the default).** Each project gets its own Docker container: only the project directory is mounted writable, with no host home, no `~/.ssh`, no Docker socket and no inherited daemon environment. The container runs as your uid, drops all capabilities, sets `no-new-privileges`, uses a read-only root filesystem, and has a PID limit and a memory cap (`box_memory`). Idle boxes are removed after a timeout. A `host` tier (no containment) exists for work that needs the machine, and you choose it explicitly.
-- **macOS.** Boxes run in Culibox's own [colima](https://github.com/abiosoft/colima) VM, separate from any Docker setup you already have. See [docs/MACOS.md](docs/MACOS.md).
+- **macOS.** Boxes run in CuliBox's own [colima](https://github.com/abiosoft/colima) VM, separate from any Docker setup you already have. See [docs/MACOS.md](docs/MACOS.md).
 - **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. Your Claude Code plugins come along as a read-only, git-free copy. If any part of the plugin set is a symlink, or a marketplace URL in it carries credentials, the whole set is left out and recorded as a drop. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop. The image ships Chromium and the Playwright MCP server (`playwright`), which writes its output to `/tmp/playwright-mcp`.
 - **Box shell.** A boxed shell profile whose shell is missing in the image (a Mac's quick shell is `$SHELL`, for example `/opt/homebrew/bin/zsh`) runs the image's shell of the same name, or else `/bin/bash` with a notice. Agent binaries never fall back. The image ships zsh with history search (fzf: Ctrl-R, Ctrl-T, Alt-C), autosuggestions, syntax highlighting, and completion for aws, terraform, kubectl (`k`), helm, stern, yq and gh. Its prompt shows the time, `box`, the directory, and only the context that is set: git branch, AWS profile and region, kube context and namespace, a non-default terraform workspace, and how long a slow command took. A value that looks like production (`prod`, `prd`, `production`, `live`) is shown in red. Defaults live in `/etc/agent-box/zshrc`; your own `~/.zshrc` loads after it. `ping`, `mtr`, `traceroute`, `tracepath` and `httping` are not installed. On Linux a box reaches the internet only through the HTTPS proxy, so these would measure the fence, not the target. Each name is a stand-in that says so and exits 127. Diagnose the network on the target or from a host-tier profile. `ipcalc`, `tree`, `file`, `bc` and `nano` work offline.
 - **Multiple accounts.** Run sessions under named agent accounts, each with its own config directory and its own token, kept apart from your personal login. Only Claude accounts can launch sessions.
@@ -74,7 +74,7 @@ Check the machine:
 ./agent-box doctor
 ```
 
-With no config file, Culibox listens on `127.0.0.1:8899`, runs one `claude` agent on the **host** tier (not contained) and uses a generated login token. To try that:
+With no config file, CuliBox listens on `127.0.0.1:8899`, runs one `claude` agent on the **host** tier (not contained) and uses a generated login token. To try that:
 
 ```sh
 ./agent-box serve
@@ -119,7 +119,7 @@ Claude Code needs a login inside the box. Create a long-lived token with `claude
 
 ## Configuration
 
-Everything Culibox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute path), else `~/.local/share/agent-box`. The config is read from `<data root>/config.json`, or from `-config <path>`. A `config.json` in the current directory is deliberately never read. The data root and config file must be owned by you and not writable by others.
+Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute path), else `~/.local/share/agent-box`. The config is read from `<data root>/config.json`, or from `-config <path>`. A `config.json` in the current directory is deliberately never read. The data root and config file must be owned by you and not writable by others.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -129,7 +129,7 @@ Everything Culibox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `allowed_hosts` | `[]` | Extra `Host` values to answer to, such as a reverse proxy's hostname. |
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
 | `default_runtime` | `box` | Tier for agents that do not set their own: `box` or `host`. With no config file at all, the built-in default is `host`. |
-| `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; Culibox never rebuilds or pulls a pinned tag. A digest or registry ref is pulled by `box setup` and never built; a box spawn never pulls. |
+| `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; CuliBox never rebuilds or pulls a pinned tag. A digest or registry ref is pulled by `box setup` and never built; a box spawn never pulls. |
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `audit_egress_retention_days` | `90` | Days of egress audit rows to keep; a daemon job prunes older ones once a day (at start, then every 24 h) while egress control is running; without it nothing is pruned and the Audit page says so. `0` keeps them forever (unset is `90`, not forever). Range 0-36500. Every other audit table is kept forever. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
@@ -184,7 +184,7 @@ Claude's memory notes for `clone_of` are readable by the box, which has internet
 
 Everything else is as in any boxed session: no host home, no Docker socket, egress only through the proxy.
 
-**Shares are read-only, and readable.** There is no writable share: a `:rw` suffix is refused by name, and so is any other `:`. A share path must be relative and clean, cannot be `.git`, cannot nest inside another share, and no part of its path may be a symlink. The box can read everything you share and has internet egress, so never share secrets. Culibox warns for names like `.env*`, `*.pem`, `*.key` and `config*.json`, but it does not stop you. A shared `CLAUDE.md` is readable in the box but is **not** loaded as project instructions: boxed Claude runs with `--setting-sources user`. Tell the agent to read it first, or put box guidance in your user-level `CLAUDE.md`. Files the box writes for you (plans, notes) go in a directory inside the clone, such as `docs/handover/box/`, that your `.gitignore` excludes; they never travel in a fetch.
+**Shares are read-only, and readable.** There is no writable share: a `:rw` suffix is refused by name, and so is any other `:`. A share path must be relative and clean, cannot be `.git`, cannot nest inside another share, and no part of its path may be a symlink. The box can read everything you share and has internet egress, so never share secrets. CuliBox warns for names like `.env*`, `*.pem`, `*.key` and `config*.json`, but it does not stop you. A shared `CLAUDE.md` is readable in the box but is **not** loaded as project instructions: boxed Claude runs with `--setting-sources user`. Tell the agent to read it first, or put box guidance in your user-level `CLAUDE.md`. Files the box writes for you (plans, notes) go in a directory inside the clone, such as `docs/handover/box/`, that your `.gitignore` excludes; they never travel in a fetch.
 
 **Bringing code home**
 
@@ -192,7 +192,7 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
 ```
 
-The flags come before the two names. `-base` defaults to `main`. Culibox makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
+The flags come before the two names. `-base` defaults to `main`. CuliBox makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
 
 ```text
 fetched box/feat-x (2 commit(s) not on main):
@@ -203,24 +203,24 @@ review: git -C /home/me/repo log -p main..box/feat-x; merge per your review poli
 
 Commit subjects are printed with control characters replaced, because a box wrote them. Bundles over 512 MiB are refused. The container runs the global `box_image`.
 
-**Keeping the clone current.** At each spawn of an existing clone, Culibox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history Culibox cannot verify, such as a clone made before this tracking existed. `-allow-old-history` overrides that after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
+**Keeping the clone current.** At each spawn of an existing clone, CuliBox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history CuliBox cannot verify, such as a clone made before this tracking existed. `-allow-old-history` overrides that after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
 
 **Refusals**
 
 - A host-tier session is refused anywhere inside a clone, including a subdirectory or a path that does not exist yet. The box wrote those files, and host-tier tools would trust them. A host-tier session at `clone_of` or at a share source is fine.
-- Culibox records every directory it has used as a clone in `<data dir>/clone-dirs`, one path per line. A recorded directory stays box-owned even after its profile is edited or deleted. Deleting the directory does not release it. To release one, remove its line from `<data dir>/clone-dirs`. An unreadable record refuses every host-tier spawn until it is fixed.
+- CuliBox records every directory it has used as a clone in `<data dir>/clone-dirs`, one path per line. A recorded directory stays box-owned even after its profile is edited or deleted. Deleting the directory does not release it. To release one, remove its line from `<data dir>/clone-dirs`. An unreadable record refuses every host-tier spawn until it is fixed.
 - A spawn is refused, never partly started, if `clone_of`, a share source or a mountpoint is unsafe: a symlink on the path, a path inside the data root or a config directory, or an existing clone whose `origin` is not `clone_of`.
 - A `clone_of` that is inside another profile's clone, or inside a recorded clone directory, is refused when you save the profile, when you spawn it and in `clone fetch`: the owning box could have planted git hooks there.
 - Changing `clone_of`, `default_cwd` or `clone_share` gives the profile a new box rather than reusing the old one.
 
 **Known limits**
 
-- Never put `clone_of` inside a boxed workspace (or any other directory a box can write): a box could plant git hooks in that repo, and the host runs git there during `clone fetch`. Culibox refuses a `clone_of` that is inside a clone or a recorded clone directory, and runs its own git calls with hooks disabled, but it cannot see every directory a box can write.
+- Never put `clone_of` inside a boxed workspace (or any other directory a box can write): a box could plant git hooks in that repo, and the host runs git there during `clone fetch`. CuliBox refuses a `clone_of` that is inside a clone or a recorded clone directory, and runs its own git calls with hooks disabled, but it cannot see every directory a box can write.
 - Never run a host-tier agent session in a directory above the clones (for example your home). Claude Code lazily loads nested `CLAUDE.md` and `.claude/` files from any subdirectory it reads, so files a box wrote under a clone could steer a host agent. Keep clones outside every tree where host sessions run.
 - Your own shell inside a clone cannot be policed. A box can plant git hooks, config and aliases in the clone's `.git`, so never run git or other host tools there. Review through `clone_of` after a fetch, not in the clone.
 - A file you copy out of a clone by hand might be a symlink the box planted, and `cp` would copy its target. Check that it is a regular file first.
 - The box and the host share a disk. A box can fill it; there is no per-box quota.
-- Culibox's file editor follows links inside box-written directories. Treat a clone's contents as untrusted when you open them in the UI.
+- CuliBox's file editor follows links inside box-written directories. Treat a clone's contents as untrusted when you open them in the UI.
 
 ## Reading other repos (context_paths)
 
@@ -232,15 +232,15 @@ The box can read everything you list and has internet egress: never list secrets
 |---|---|
 | `context_paths` | Up to 16 absolute, clean paths to directories or regular files. Prefer a directory to a single file (see Lifecycle). Example: `["/home/me/other-repo/docs", "/home/me/registry"]`. The profile editor shows it as "Readable host paths", one path per line, for boxed profiles only. |
 
-The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (or your user-level `CLAUDE.md`) can discover what is readable. Culibox sets it itself: a value in the profile's `env` or the daemon's environment is dropped. As with a clone's `clone_share`, a listed `CLAUDE.md` is readable but **not** loaded as project instructions, because boxed Claude runs with `--setting-sources user`; tell the agent to read it.
+The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (or your user-level `CLAUDE.md`) can discover what is readable. CuliBox sets it itself: a value in the profile's `env` or the daemon's environment is dropped. As with a clone's `clone_share`, a listed `CLAUDE.md` is readable but **not** loaded as project instructions, because boxed Claude runs with `--setting-sources user`; tell the agent to read it.
 
 **Refusals** (when you save the profile and when you spawn)
 
 - A host-tier profile, including one with no runtime set while `default_runtime` is `host`: a host session can already read any path.
 - More than 16 entries, a duplicate, or an entry inside another (list the outer one). A path that is not absolute or not clean, contains `:`, `,`, `"`, a control character or invalid UTF-8.
-- `/`, your home directory or any directory above it, and paths that would shadow the box's own filesystem: `/etc`, `/usr`, `/var`, `/opt`, `/root`, `/run`, `/home/agent` and the other system directories, and anything inside them; and exactly `/home`, `/tmp`, `/mnt` and `/media`. A directory below those (`/tmp/x`, `/mnt/data/repo`) is fine, except Culibox's own in-box paths `/tmp/agentbox-gh` (and anything inside it) and any `/tmp/ac-session-*`.
+- `/`, your home directory or any directory above it, and paths that would shadow the box's own filesystem: `/etc`, `/usr`, `/var`, `/opt`, `/root`, `/run`, `/home/agent` and the other system directories, and anything inside them; and exactly `/home`, `/tmp`, `/mnt` and `/media`. A directory below those (`/tmp/x`, `/mnt/data/repo`) is fine, except CuliBox's own in-box paths `/tmp/agentbox-gh` (and anything inside it) and any `/tmp/ac-session-*`.
 - A path that does not exist, has a symlink in any component, or is not a directory or regular file.
-- A path equal to or inside `~/.colima`, `~/.lima`, `~/.docker` or `~/.ssh`; equal to or inside your personal Claude config directory `~/.claude` (its hooks and settings run in host sessions, so it is protected); and Culibox's own data root, config and profile directories.
+- A path equal to or inside `~/.colima`, `~/.lima`, `~/.docker` or `~/.ssh`; equal to or inside your personal Claude config directory `~/.claude` (its hooks and settings run in host sessions, so it is protected); and CuliBox's own data root, config and profile directories.
 - A path inside a box-owned directory: a clone directory or one recorded in `<data dir>/clone-dirs` (see [Clone mode](#clone-mode)).
 - A directory that contains a unix socket or a named pipe (FIFO) at any depth. A read-only mount does not stop the box from connecting to a socket or writing into a pipe: a Docker socket is root on the host, and a pipe feeds whatever host process reads it. The scan also refuses a directory with over 20000 entries or a subdirectory it cannot read, because either could hide one: list narrower subdirectories.
 - A path that overlaps the profile's workspace (`default_cwd` or the clone directory) or `clone_of`, in either direction. Use `clone_share` to share part of a cloned repo.
@@ -257,7 +257,7 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 - The list is part of the box's identity. Changing it gives the profile a new box, with a fresh box home, rather than reusing the old one. Boxed sessions started in the old box cannot be resumed from the new one, and Claude's first-run onboarding may run again.
 - You cannot add a path to a running box. List partner repos up front, then start a session that uses the new list.
 - A listed file is mounted by inode. Git checkouts and most editors replace a file by renaming a new one over it, and a running (or reused) box keeps seeing the old one. List the folder that holds it instead where you can; a changed file inside a listed folder is seen at once. On Linux a later spawn into a box whose file (or a re-created folder) no longer matches the path is refused by the identity check below until that box is recreated.
-- The paths are checked when you save, again at spawn before the box is prepared, and once more right before it starts. On Linux that last check records each path's identity (device and inode, read without following any symlink), and once the box runs, and before the agent starts, Culibox compares it with what the box actually mounted. A mismatch means the path changed in between (for example a directory swapped for a symlink); the spawn is refused and a box created for it is removed. A box that other sessions still use is kept, and the refusal asks you to end those sessions so it is recreated.
+- The paths are checked when you save, again at spawn before the box is prepared, and once more right before it starts. On Linux that last check records each path's identity (device and inode, read without following any symlink), and once the box runs, and before the agent starts, CuliBox compares it with what the box actually mounted. A mismatch means the path changed in between (for example a directory swapped for a symlink); the spawn is refused and a box created for it is removed. A box that other sessions still use is kept, and the refusal asks you to end those sessions so it is recreated.
 - A socket or symlink that appears **after** the box starts is not caught: the mounts were made earlier and are not re-checked. Treat a listed directory as one that other tools on your machine can still change.
 - Each spawn logs one line with the session id, the profile and the mounted paths.
 
@@ -269,9 +269,9 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 
 A boxed profile can carry a `github` binding. The credential broker then mints short-lived, read-only GitHub App installation tokens for the repositories you list, so the agent can `git clone`, `git fetch` and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux; that is new and not yet verified on a Mac, and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
-**1. Create the GitHub App.** Give it read permissions only (Culibox never asks for write). Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
+**1. Create the GitHub App.** Give it read permissions only (CuliBox never asks for write). Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
-**2. Store the private key.** Put the PEM file where the daemon user owns it, as a regular file (not a symlink) with mode `0600` or tighter. Then declare the App in `config.json` and restart Culibox (see the `github_apps` row in [Configuration](#configuration)):
+**2. Store the private key.** Put the PEM file where the daemon user owns it, as a regular file (not a symlink) with mode `0600` or tighter. Then declare the App in `config.json` and restart CuliBox (see the `github_apps` row in [Configuration](#configuration)):
 
 ```json
 "github_apps": [
@@ -280,7 +280,7 @@ A boxed profile can carry a `github` binding. The credential broker then mints s
 ]
 ```
 
-The key is never copied into a box. Culibox reads the key file once per daemon run and caches it after the first load, so after you rotate or change the key file, restart Culibox. When a bound session spawns, Culibox checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
+The key is never copied into a box. CuliBox reads the key file once per daemon run and caches it after the first load, so after you rotate or change the key file, restart CuliBox. When a bound session spawns, CuliBox checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
 
 **3. Add the binding to a profile.** Set `"runtime": "box"` explicitly, then fill in the GitHub section of the profile form, or write it in `config.json`:
 
@@ -330,7 +330,7 @@ Some services have no short-lived credential to mint: Grafana service-account to
 - It does not stop a deliberate read, and the token outlives the session. The UI says so next to the picker: *"The agent can read this token. It is long-lived and is not revoked when the session ends."*
 - **Egress is per session, not per process.** Once an entry is bound, every process in the box can reach that entry's hosts, not only the `agentbox-env` child.
 
-**1. Define the entry.** Put the token in a file owned by the user that runs Culibox, a regular file (not a symlink) with mode `0600` or tighter, or in the daemon's own environment. Then declare the entry in `config.json` and restart Culibox:
+**1. Define the entry.** Put the token in a file owned by the user that runs CuliBox, a regular file (not a symlink) with mode `0600` or tighter, or in the daemon's own environment. Then declare the entry in `config.json` and restart CuliBox:
 
 ```json
 "static_tokens": [
@@ -346,7 +346,7 @@ Some services have no short-lived credential to mint: Grafana service-account to
 | Field | Rules |
 |---|---|
 | `name` | Required, unique. `^[a-z0-9][a-z0-9-]{0,62}$`. Profiles refer to the entry by it. |
-| `value` | Required. Where the token lives: `{"type": "file", "path": "<absolute path>"}` (0600, owned by the user that runs Culibox, not a symlink) or `{"type": "env", "var": "<NAME>"}` (the daemon's own environment; a name starting with `AB_`, or the `password_env` variable, is refused). Any other type is refused with `unsupported reference type "..." (want "file" or "env")`. One trailing newline is trimmed; an empty value or one with a control character is refused. The reference is read at each fetch and never cached. |
+| `value` | Required. Where the token lives: `{"type": "file", "path": "<absolute path>"}` (0600, owned by the user that runs CuliBox, not a symlink) or `{"type": "env", "var": "<NAME>"}` (the daemon's own environment; a name starting with `AB_`, or the `password_env` variable, is refused). Any other type is refused with `unsupported reference type "..." (want "file" or "env")`. One trailing newline is trimmed; an empty value or one with a control character is refused. The reference is read at each fetch and never cached. |
 | `env` | Required, 1 to 4 variable names (`^[A-Za-z_][A-Za-z0-9_]*$`) that carry the token. Names that change how programs run or connect (`PATH`, `HOME`, `NODE_OPTIONS`, `LD_*`, `*_proxy`, `npm_config_*`, `GIT_SSH*`, `AWS_*` credential variables, `AGENTBOX_*`, `AB_*` and similar) are refused. Names that only carry a token, such as `GH_TOKEN`, are allowed. |
 | `config_env` | Optional, up to 16 `NAME: value` pairs set next to the token (a URL, an org). Values up to 1024 bytes, no control characters, no name also in `env`. **Not secret**: it shows in the UI, in `agentbox-env --list` and possibly in audit rows. Never put a secret here. |
 | `egress` | Up to 16 hosts the entry's boxes may reach. Each is an exact lowercase DNS name: no `*.` wildcard (a shared domain like `*.atlassian.net` would open every tenant) and no IP address. See [self-hosted services](#self-hosted-services) for `port`, `private` and `cidr`. An entry with no `egress` can only serve as a GitHub PAT owner. |
@@ -402,8 +402,8 @@ The two share a variable name, which is fine: the agent picks one per command (`
 
 **GitHub personal access tokens.** A `github` owner can name a token entry instead of an App: set `"token": "<entry>"` and leave `app` out (exactly one of the two). The entry's `value` is the PAT. It works for `git` and `gh` like an App, with these differences:
 
-- A PAT is not narrowed by Culibox. The binding's `permissions` do not apply, and the token may reach more than the listed repositories. `repos` is only checked by the broker: a request has to name one of them, and one that names no repository is refused with `name the repository: a personal access token is not scoped by agent-box`. The `gh` wrapper fails closed when it cannot read the repository from `-R`.
-- Nothing is revoked when the session ends: Culibox cannot revoke a PAT.
+- A PAT is not narrowed by CuliBox. The binding's `permissions` do not apply, and the token may reach more than the listed repositories. `repos` is only checked by the broker: a request has to name one of them, and one that names no repository is refused with `name the repository: a personal access token is not scoped by agent-box`. The `gh` wrapper fails closed when it cannot read the repository from `-R`.
+- Nothing is revoked when the session ends: CuliBox cannot revoke a PAT.
 - Each fetch counts against the same 60-per-minute limit as `agentbox-env` (App tokens keep their own 10 per minute) and writes an audit row.
 - The profile form's owner picker offers PAT entries in a "Personal access tokens" group and shows the same caveat.
 
@@ -421,7 +421,7 @@ The two share a variable name, which is fine: the agent picks one per command (`
 
 A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (new, not yet verified on a Mac; see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
-**1. Define the connections.** Declare them next to `static_tokens` and restart Culibox:
+**1. Define the connections.** Declare them next to `static_tokens` and restart CuliBox:
 
 ```json
 "aws_connections": [
@@ -476,9 +476,9 @@ provider "aws" {
 - A session that binds any write-capable connection is exclusive: it gets its own box, even if you never grant a window.
 - A connection other than the elevated one stays on its own `role_arn` while a window is open, so it can write only if that role can (see the base-role check below).
 
-Read-only comes from the role, not from Culibox: point each connection's `role_arn` at a read-only role and put write access only in `elevate.role_arn`. The session policy Culibox adds narrows data reads; it does not remove writes, so a connection whose `role_arn` can write can write at any time.
+Read-only comes from the role, not from CuliBox: point each connection's `role_arn` at a read-only role and put write access only in `elevate.role_arn`. The session policy CuliBox adds narrows data reads; it does not remove writes, so a connection whose `role_arn` can write can write at any time.
 
-**Base-role check.** At spawn, Culibox asks each base role whether it can write. It runs IAM policy simulation of 11 broad write actions (`s3:PutObject`, `s3:DeleteObject`, `s3:CreateBucket`, `ec2:RunInstances`, `ec2:TerminateInstances`, `iam:CreateUser`, `iam:AttachRolePolicy`, `lambda:UpdateFunctionCode`, `rds:DeleteDBInstance`, `dynamodb:PutItem`, `cloudformation:CreateStack`) with the role's own credentials. The UI, `agentbox-env --list` and `agent-box doctor` then show one of:
+**Base-role check.** At spawn, CuliBox asks each base role whether it can write. It runs IAM policy simulation of 11 broad write actions (`s3:PutObject`, `s3:DeleteObject`, `s3:CreateBucket`, `ec2:RunInstances`, `ec2:TerminateInstances`, `iam:CreateUser`, `iam:AttachRolePolicy`, `lambda:UpdateFunctionCode`, `rds:DeleteDBInstance`, `dynamodb:PutItem`, `cloudformation:CreateStack`) with the role's own credentials. The UI, `agentbox-env --list` and `agent-box doctor` then show one of:
 
 - **role can write**, with the allowed actions.
 - **no broad writes found**.
@@ -490,16 +490,16 @@ The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a r
 
 **Limits and operations**
 
-- `aws_connections` is read at daemon start only: edit `config.json` and restart Culibox. A running session keeps the definition it was spawned with until you kill it, including a connection you have since removed from `config.json`; saving or spawning a profile that names a removed connection is refused.
+- `aws_connections` is read at daemon start only: edit `config.json` and restart CuliBox. A running session keeps the definition it was spawned with until you kill it, including a connection you have since removed from `config.json`; saving or spawning a profile that names a removed connection is refused.
 - Each connection signs in through its own `source_profile`. If connections use different SSO sessions and one expires, only that connection's credential requests fail, and the UI shows which source to sign in to.
 - `agent-box doctor` prints one `aws-connection <name>` line per connection: whether the `source_profile` exists in the host's AWS config (a missing one fails), whether its SSO login is valid or expired (checked once per SSO session, so connections sharing a login cost one check), and whether the connection can be elevated. It reads the shell's own AWS config, not the daemon's environment. A second line, `aws-connection <name> base role`, runs the base-role check above; inline `aws` bindings (from `config.json` and the profile store) get `aws-binding <profile>`. A base role that can write, or one that could not be checked, is a WARN; none found is a PASS. The check is never a FAIL.
-- **Rolling back to an older binary (operator step).** An older Culibox ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
+- **Rolling back to an older binary (operator step).** An older CuliBox ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
 
 ## SSO role directly (opt-in)
 
 The recommended way to give an agent AWS access is the **agent role** described above: a role you create (see [docs/aws/agent-role](docs/aws/agent-role/README.md)), assumed for 15 minutes at a time with a session policy that narrows it, and recorded in CloudTrail as the agent session. That stays the default.
 
-In some accounts you cannot create that role. For those, a binding can opt in to **`"mode": "sso_direct"`** (in the credentials screen, "SSO role directly" next to "Agent role (recommended)"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and Culibox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
+In some accounts you cannot create that role. For those, a binding can opt in to **`"mode": "sso_direct"`** (in the credentials screen, "SSO role directly" next to "Agent role (recommended)"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and CuliBox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
 
 ```json
 "aws_connections": [
@@ -517,7 +517,7 @@ The UI states what you give up:
 - **No agent attribution.** CloudTrail shows you, not an `agentbox-*` session.
 - **SSO profiles only.** The `source_profile` must be a plain IAM Identity Center profile. Static keys, a `credential_process` or an assume-role chain are refused, so no long-lived key is ever handed out.
 
-**The read-only gate.** Culibox reads the permission set's own inline and attached policies. Every Allow must be a read verb or a reviewed non-standard one, only an unconditional `Resource: "*"` Deny removes an Allow, and a screen over an embedded catalog of AWS actions, plus a reviewed list of secret-returning reads, requires credential-minting and secret-returning actions to be denied. An IAM policy simulation then confirms that writes, side-effecting reads (such as `sqs:ReceiveMessage`) and those actions are denied. The gate runs when you save, when a session spawns, in `agent-box doctor`, and on **every** credential mint (a refresh, about 5 minutes before expiry, is a mint). A permission set that gains a write mid-session is refused at the next mint; credentials already issued keep working until they expire (up to N hours), under the permission set's current policy, because the gate only re-checks at a mint. Anything it cannot verify (SSO expired, a timeout, a missing IAM read permission) refuses; there is no override. The refusal lists every action that failed.
+**The read-only gate.** CuliBox reads the permission set's own inline and attached policies. Every Allow must be a read verb or a reviewed non-standard one, only an unconditional `Resource: "*"` Deny removes an Allow, and a screen over an embedded catalog of AWS actions, plus a reviewed list of secret-returning reads, requires credential-minting and secret-returning actions to be denied. An IAM policy simulation then confirms that writes, side-effecting reads (such as `sqs:ReceiveMessage`) and those actions are denied. The gate runs when you save, when a session spawns, in `agent-box doctor`, and on **every** credential mint (a refresh, about 5 minutes before expiry, is a mint). A permission set that gains a write mid-session is refused at the next mint; credentials already issued keep working until they expire (up to N hours), under the permission set's current policy, because the gate only re-checks at a mint. Anything it cannot verify (SSO expired, a timeout, a missing IAM read permission) refuses; there is no override. The refusal lists every action that failed.
 
 **`ReadOnlyAccess` alone is refused.** It allows `sqs:ReceiveMessage`, `ec2:GetPasswordData`, ECR and CodeArtifact authorization tokens and more, about 270 actions in all. Add an inline Deny to the same permission set that denies them unconditionally (no `Condition`, `Resource: "*"`); a tag- or principal-based exception is refused. The refusal message gives the list to write the guardrail from, and [docs/aws/agent-role](docs/aws/agent-role/README.md#sso-direct-mode-read-only-permission-sets) has an example and the permission set's own IAM read requirements.
 
@@ -532,16 +532,16 @@ Prefer the agent role whenever you can create it. The account guidance in [docs/
 
 ## Store
 
-Culibox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
+CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
 
 **What it protects against, and what it does not**
 
 - **It protects against a disk snapshot or backup** taken by your hosting provider or a backup job: the values in the store are unreadable without the passphrase (Linux) or the login Keychain item (macOS).
 - **It does not hide values from agents.** While the store is unlocked, any process running as your user, a host-tier agent included, can read the master key and so every value. Boxed agents cannot. A value still reaches the box the way it always did (env for a declared secret, `agentbox-env` for a static token, the git helper for GitHub).
-- **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that Culibox does not own, such as SSH keys and cloud-CLI caches.
+- **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that CuliBox does not own, such as SSH keys and cloud-CLI caches.
 - It is not a vault product: one machine, one user, no sync.
 
-**Commands.** The CLI honours `-config` like the rest of Culibox, writes the files directly and does not need the daemon running.
+**Commands.** The CLI honours `-config` like the rest of CuliBox, writes the files directly and does not need the daemon running.
 
 | Command | What it does |
 |---|---|
@@ -556,64 +556,64 @@ Culibox can hold secret values itself: tokens, a GitHub App private key, the Cla
 
 An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a letter or digit, and a value is at most 64 KiB.
 
-**Unlock and TTL.** On Linux the master key sits in the kernel user keyring, not in the daemon, so unlocking survives a daemon restart. It does not survive a reboot. Unlock with `agent-box store unlock`, or from the web UI: a banner appears when the store is locked and Settings has a Lock button. Web unlock needs the browser session (an API bearer token cannot unlock) and failed attempts are rate limited. The key expires after `store.unlock_ttl` (default 7 days, a new unlock resets it, reads do not extend it); a lock or an expiry takes effect on the next value lookup. If you reach Culibox through a tunnel or proxy that terminates TLS, the passphrase is visible to that proxy in transit when you type it into the web UI. `agent-box store unlock` on the machine does not have that exposure. A forgotten passphrase cannot be recovered: remove `<data_dir>/store` and set the values again.
+**Unlock and TTL.** On Linux the master key sits in the kernel user keyring, not in the daemon, so unlocking survives a daemon restart. It does not survive a reboot. Unlock with `agent-box store unlock`, or from the web UI: a banner appears when the store is locked and Settings has a Lock button. Web unlock needs the browser session (an API bearer token cannot unlock) and failed attempts are rate limited. The key expires after `store.unlock_ttl` (default 7 days, a new unlock resets it, reads do not extend it); a lock or an expiry takes effect on the next value lookup. If you reach CuliBox through a tunnel or proxy that terminates TLS, the passphrase is visible to that proxy in transit when you type it into the web UI. `agent-box store unlock` on the machine does not have that exposure. A forgotten passphrase cannot be recovered: remove `<data_dir>/store` and set the values again.
 
 **After a reboot the store is locked.** Anything that needs a store value is then refused until someone unlocks: a spawn fails with `store is locked`, and a running boxed session's next token fetch gets a 503. If the Claude token is in the store, that means every Claude session. A host-tier agent hits this too.
 
 **Moving the Claude token into the store.** Out of the box the token comes from the daemon's environment.
 
 1. `printenv CLAUDE_CODE_OAUTH_TOKEN | agent-box store set CLAUDE_CODE_OAUTH_TOKEN`
-2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart Culibox.
+2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart CuliBox.
 3. Delete the value from every env file and shell profile that still holds it (the file your service manager loads as `EnvironmentFile=`, your dev and prod copies, your login shell's profile).
-4. Restart Culibox and check for leftovers. At start the daemon logs one line for each name the store serves that is still in the daemon's own environment, and Settings shows the same list for the running daemon. `agent-box doctor` only checks the environment it is run from, so it does not see what your service manager gives the daemon.
+4. Restart CuliBox and check for leftovers. At start the daemon logs one line for each name the store serves that is still in the daemon's own environment, and Settings shows the same list for the running daemon. `agent-box doctor` only checks the environment it is run from, so it does not see what your service manager gives the daemon.
 
 The protection exists only once every plaintext copy is gone.
 
-**Docker's seccomp profile must stay on.** The box barrier for the master key is Docker's default seccomp profile, which refuses the `keyctl` calls a box would need to read it. On Linux, at each boxed spawn Culibox checks that seccomp is active, and when it is not (and a store exists) it refuses the spawn, and `agent-box doctor` fails. A box that was already running when you ran `agent-box store init` is not re-checked: a container keeps the seccomp profile it was created with, so a box created while seccomp was off can read the keyring once the store is unlocked. If your host runs Docker with seccomp off, stop those boxes before `store init`. macOS boxes run in a VM and the store key stays in the host Keychain, so this gate does not apply there.
+**Docker's seccomp profile must stay on.** The box barrier for the master key is Docker's default seccomp profile, which refuses the `keyctl` calls a box would need to read it. On Linux, at each boxed spawn CuliBox checks that seccomp is active, and when it is not (and a store exists) it refuses the spawn, and `agent-box doctor` fails. A box that was already running when you ran `agent-box store init` is not re-checked: a container keeps the seccomp profile it was created with, so a box created while seccomp was off can read the keyring once the store is unlocked. If your host runs Docker with seccomp off, stop those boxes before `store init`. macOS boxes run in a VM and the store key stays in the host Keychain, so this gate does not apply there.
 
 **On macOS** there is no lock cycle: the Keychain holds the master key, `status` shows `expires: never`, and `unlock`, `lock` and `passwd` do nothing.
 
 ## Security model
 
-Culibox starts shells and agents on your machine, so authentication is never optional.
+CuliBox starts shells and agents on your machine, so authentication is never optional.
 
 **What is protected, and how**
 
 - **Login.** Either a generated token (printed once in a URL, kept at `0600` in the data root) or a password from the env var named by `password_env`. Failed logins are throttled. Browsers get a signed 30-day cookie; delete `cookie.secret` to log everyone out. Named, revocable bearer tokens exist for programmatic clients and are stored as hashes.
 - **Network exposure.** The default bind is loopback. Binding all interfaces is refused unless `allow_public` is set. Requests whose `Host` header is not in the allowlist are refused (DNS-rebinding defence), and state-changing requests are checked for same-origin.
-- **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback, other than Culibox's own credential broker and, for boxes with a credential binding, the egress proxy; on macOS Culibox checks this on every new box and refuses the box if the check fails.
+- **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback, other than CuliBox's own credential broker and, for boxes with a credential binding, the egress proxy; on macOS CuliBox checks this on every new box and refuses the box if the check fails.
 - **Cloud access.** The broker mints credentials only for live boxed sessions, with a per-spawn token, rate limits, and a 15-minute lifetime. The role is capped by `ReadOnlyAccess`, and a generated session policy denies reading S3 objects (outside an allowlist you set per binding), Secrets Manager values, SSM parameters, DynamoDB items and KMS decrypt. Trust is limited to the SSO permission sets you name and requires a `SourceIdentity` of `agentbox-*`. Create the role with [docs/aws/agent-role](docs/aws/agent-role/README.md). The inline `aws` binding gets the same base-role write check as named connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)). The opt-in [SSO role directly](#sso-role-directly-opt-in) mode has none of these protections: it hands the agent your read-only permission set's own credentials, so it is allowed only after a read-only gate passes on every mint, its credentials keep the expiry of your SSO role credentials (up to N hours), CloudTrail shows you, and the gate cannot see resource-based policies. Prefer the agent role.
 - **Store.** Values held in the [store](#store) are encrypted against disk snapshots and backups. While it is unlocked, host-tier agents can read them; boxed agents cannot.
 - **Static tokens.** A bound token is fetched per command through the broker, is audited, and reaches only the hosts its entry names. The agent can still read it, and it is long-lived and not revoked when the session ends. See [Static tokens for agents](#static-tokens-for-agents).
 
-**Never bind Culibox to a public interface without a front door.** A reachable Culibox is a remote shell. If you need access from elsewhere, keep the bind on loopback or a private network and put an authenticating proxy or tunnel in front (add its hostname to `allowed_hosts`). Do not rely on the login page alone on the open internet, and use a long password.
+**Never bind CuliBox to a public interface without a front door.** A reachable CuliBox is a remote shell. If you need access from elsewhere, keep the bind on loopback or a private network and put an authenticating proxy or tunnel in front (add its hostname to `allowed_hosts`). Do not rely on the login page alone on the open internet, and use a long password.
 
 **Known limits**
 
 - The `host` tier is not contained. A host session is you, with an agent.
 - The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- On Linux, boxes reach the network only through Culibox's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. A public IP that is NAT'd to the host but not on one of its interfaces is not known to Culibox. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. On macOS only boxes with a binding (an `aws` binding, named AWS connections, a `github` binding or static tokens) get this treatment, and it is new and not yet verified on a Mac; macOS boxes without a binding keep normal outbound access.
+- On Linux, boxes reach the network only through CuliBox's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. A public IP that is NAT'd to the host but not on one of its interfaces is not known to CuliBox. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. On macOS only boxes with a binding (an `aws` binding, named AWS connections, a `github` binding or static tokens) get this treatment, and it is new and not yet verified on a Mac; macOS boxes without a binding keep normal outbound access.
 - A box started in place sees the workspace root's `.git`, `.claude/` and any top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, so it cannot commit there or edit them. Repos with submodules, or whose git config sets `core.worktree` or `core.bare` to anything but false, are refused. When `core.hooksPath` is nested (for example `.husky/_`), the whole top-level directory that holds it (`.husky/`) is read-only in the box.
 - Those guards cover top-level names only, and block direct writes to them only. They do not make a workspace safe to hand back to the host:
   - The same names in subdirectories are writable: a box can edit an existing `sub/CLAUDE.md`, `sub/.mcp.json` or `sub/.claude/settings.json` (hooks), and a host session started in `sub/` loads them.
   - A box can create an absent `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json`, and a new `.git` anywhere in the workspace, including its root when it is not a repo. Servers in a new `.mcp.json` still need Claude Code's project-MCP approval, unless you auto-approve project servers.
   - A read-only file can still run writable workspace code: a git hook that calls a repo script or reads a tool config such as `.pre-commit-config.yaml`, a `.claude` hook that runs `./scripts/…`, an `@import` in `CLAUDE.md`.
   - So after a boxed session, review changes and untracked files (`git status`, `git diff`) before you run host git or a host-tier session there.
-- Boxed sessions that run with your personal config (the default account, or an account with `inherit_personal`) skip Claude Code's "Do you trust this folder?" dialog: when such a session creates its box, Culibox pre-accepts the dialog for the box's workspace. Those sessions start with `--setting-sources user`, so a repo's own `.claude/settings.json` (hooks, `env`) is not loaded either way. Other boxed sessions, and host sessions, still show the dialog, because there it is the only gate before a repo's hooks run with the agent's credentials in reach. Trust lives in the box home and outlasts the spawn that set it, so a claude that starts there later without `--setting-sources user` also skips the dialog and loads the repo's settings: one run when the config bundle fails to build (Culibox logs it) or is turned off, after `inherit_personal` is switched off for an account, or one you start by hand in a boxed shell.
+- Boxed sessions that run with your personal config (the default account, or an account with `inherit_personal`) skip Claude Code's "Do you trust this folder?" dialog: when such a session creates its box, CuliBox pre-accepts the dialog for the box's workspace. Those sessions start with `--setting-sources user`, so a repo's own `.claude/settings.json` (hooks, `env`) is not loaded either way. Other boxed sessions, and host sessions, still show the dialog, because there it is the only gate before a repo's hooks run with the agent's credentials in reach. Trust lives in the box home and outlasts the spawn that set it, so a claude that starts there later without `--setting-sources user` also skips the dialog and loads the repo's settings: one run when the config bundle fails to build (CuliBox logs it) or is turned off, after `inherit_personal` is switched off for an account, or one you start by hand in a boxed shell.
 - It is a single-user tool. There are no roles or per-user permissions.
 - Sessions that share one box (same workspace and same AWS binding) can read each other's process environment, so attribution between them is best effort. Two sessions in the same folder share it read-write, so a session without the AWS binding can plant a file that a bound session then runs. Give a bound session its own workspace.
 - Read access can still pull data into a transcript that `ReadOnlyAccess` allows and the session policy does not deny (Lambda code URLs, Athena and Glue results, CloudWatch Logs, and others). Use the broker with a sandbox or lab account for now, not production.
-- The credential broker holds access to your SSO session. Treat the machine running Culibox accordingly.
+- The credential broker holds access to your SSO session. Treat the machine running CuliBox accordingly.
 - Persistence covers the daemon restarting, not the whole container or machine being destroyed. After a restart the terminal repaints, but earlier scrollback is not replayed.
 - Codex accounts can be created and stored but cannot launch sessions yet.
 
 ## Platform notes
 
-- [docs/DOCKER.md](docs/DOCKER.md): running Culibox itself in a container, and keeping sessions across restarts.
+- [docs/DOCKER.md](docs/DOCKER.md): running CuliBox itself in a container, and keeping sessions across restarts.
 - [docs/MACOS.md](docs/MACOS.md): install, the colima-based boxed tier, rotating credentials.
 - [docs/aws/agent-role](docs/aws/agent-role/README.md): the Terraform for the IAM role the credential broker assumes.
 
-Only one Culibox can serve a data root at a time.
+Only one CuliBox can serve a data root at a time.
 
 ## Roadmap
 

@@ -729,8 +729,7 @@ class Cell {
       add.setAttribute("aria-label", add.title);
       add.onclick = (e) => {
         e.stopPropagation();
-        add.disabled = true;
-        Promise.resolve(spawnShellIn(this, this.dock ? this.dock.placement : "below")).finally(() => { add.disabled = false; });
+        spawnShellIn(this, this.dock ? this.dock.placement : "below", add, "…");
       };
       strip.append(dot, add);
     }
@@ -848,11 +847,12 @@ class Cell {
     sh.className = "cell-sh"; sh.textContent = "+sh";
     sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
-    // Disable while in flight so the ignored second click is visible, not silent.
+    // spawnShellIn disables the button while in flight (and shows a bare "…" if
+    // it is slow, to keep the chip its size), so the ignored second click is
+    // visible, not silent.
     sh.onclick = (e) => {
       e.stopPropagation();
-      sh.disabled = true;
-      Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
+      spawnShellIn(this, undefined, sh, "…");
     };
     const max = document.createElement("button");
     max.className = "cell-max"; max.textContent = maximized === this ? "❐" : "⛶";
@@ -1030,9 +1030,8 @@ class Cell {
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     sh.onclick = (e) => {
       e.stopPropagation();
-      sh.disabled = true;
       // Joins an open dock where it is: the button never flips Right to Below.
-      Promise.resolve(spawnShellIn(this, this.dock ? this.dock.placement : "below")).finally(() => { sh.disabled = false; });
+      spawnShellIn(this, this.dock ? this.dock.placement : "below", sh);
     };
     side.append(sh);
     // A narrow header keeps ONE control, ⋯, always in the flow: Maximize and

@@ -10,10 +10,17 @@
 // the messages here are transient confirmations, and a stack of them over a
 // terminal is noise.
 let toastTimer = null;
+// Bumped by every showToast call. A delayed writer (pendingToast) records it
+// when it starts and stays silent if it moved: someone else owns the slot now.
+let toastSeq = 0;
+function toastSeqNow() { return toastSeq; }
 
-// showToast(msg, {undo, ms, error, warn}): `undo` is a callback; supplying it reveals
-// the Undo button and clicking it dismisses the toast after running the callback. `warn` tints the border (a milder `error`).
+// showToast(msg, {undo, ms, error, warn, sticky}): `sticky` skips the auto-hide
+// timer (a pending toast stays until its owner hides it). `undo` is a callback;
+// supplying it reveals the Undo button and clicking it dismisses the toast after
+// running the callback. `warn` tints the border (a milder `error`).
 function showToast(msg, opts) {
+  toastSeq++;
   opts = opts || {};
   const box = document.getElementById("toast");
   const undoBtn = document.getElementById("toast-undo");
@@ -41,7 +48,7 @@ function showToast(msg, opts) {
   }
   box.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, opts.ms || 6000);
+  if (!opts.sticky) toastTimer = setTimeout(hideToast, opts.ms || 6000);
 }
 
 function hideToast() {
@@ -539,6 +546,9 @@ function setDialogError(dialogId, msg) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    showToast,
+    hideToast,
+    toastSeqNow,
     askOutcome,
     askAltVisible,
     matchesRequired,
