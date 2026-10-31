@@ -1,5 +1,5 @@
-// Package ghapp mints short-lived, read-only installation tokens for a
-// configured App. It holds the App's private key on the host only: the key and
+// Package ghapp mints short-lived installation tokens (the binding's
+// permissions, read-only by default) for a configured App. It holds the App's private key on the host only: the key and
 // the App JWT never leave this package's callers (the credential broker).
 package ghapp
 

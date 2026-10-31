@@ -215,13 +215,13 @@ function ghFormError(fields) {
 
 // ghWriteWarning: the one line shown under the permissions while any writable
 // key is set to write, or "". inPlace = the profile works in the user's own
-// folder (not a private copy): there the agent cannot git push, it can only
-// write through the API, so the wording differs.
+// folder (not a private copy): the agent can still push branches and write
+// through the API, but the profile has no private copy, so the wording differs.
 function ghWriteWarning(levels, inPlace) {
   const l = levels || {};
   if (!GH_WRITABLE.some((k) => l[k] === "write")) return "";
   if (inPlace) {
-    return "Write: this profile works in your folder, so the agent cannot git push, but it can open PRs and issues and change files on these repositories through the GitHub API for the session's lifetime; tokens expire in 1 hour.";
+    return "Write: this profile works in your folder, but the agent can still push branches, change files and open PRs and issues on these repositories for the session's lifetime; tokens expire in 1 hour.";
   }
   return "Write: the agent can push and open PRs on these repositories for the session's lifetime; tokens expire in 1 hour.";
 }

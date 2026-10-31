@@ -134,7 +134,7 @@ test("ghWriteWarning: fixed copy for a private copy and for a folder profile, em
   assert.strictEqual(ghWriteWarning({ contents: "write" }, false),
     "Write: the agent can push and open PRs on these repositories for the session's lifetime; tokens expire in 1 hour.");
   assert.strictEqual(ghWriteWarning({ issues: "write" }, true),
-    "Write: this profile works in your folder, so the agent cannot git push, but it can open PRs and issues and change files on these repositories through the GitHub API for the session's lifetime; tokens expire in 1 hour.");
+    "Write: this profile works in your folder, but the agent can still push branches, change files and open PRs and issues on these repositories for the session's lifetime; tokens expire in 1 hour.");
   assert.strictEqual(ghWriteWarning({ contents: "read", issues: "read" }, false), "");
   assert.strictEqual(ghWriteWarning({}, true), "");
   assert.strictEqual(ghWriteWarning(undefined, true), "");
