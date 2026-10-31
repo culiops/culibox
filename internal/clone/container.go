@@ -17,6 +17,7 @@ import (
 const (
 	LabelCloneFetch   = "io.culiops.agent-box.clonefetch"
 	LabelCloneRefresh = "io.culiops.agent-box.clonerefresh"
+	LabelCloneList    = "io.culiops.agent-box.clonelist"
 )
 
 // removeTimeout bounds the cleanup `docker rm -f`; it runs on its own context
@@ -24,7 +25,7 @@ const (
 const removeTimeout = 30 * time.Second
 
 // containerName is a unique, docker-legal name for one throwaway container:
-// kind is "clonefetch" or "clonerefresh". The random suffix keeps two runs from
+// kind is "clonefetch", "clonerefresh" or "clonelist". The random suffix keeps two runs from
 // colliding, and lets a failed run be removed by name.
 func containerName(kind, instance string) string {
 	var b [8]byte

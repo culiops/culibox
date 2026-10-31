@@ -240,6 +240,40 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// checkMounts is the check of every path a throwaway container over c mounts:
+// clone_of, the clone dir and the ancestors of the clone dir. Fetch and Return share it.
+func checkMounts(c config.Clone, home string, protected []box.ProtectedDir) error {
+	if err := CheckOf(c.Of, home, protected); err != nil {
+		return err
+	}
+	unusable := func(why string) error {
+		return fmt.Errorf("%w: clone %s %s", box.ErrUnboxableWorkspace, c.Dir, why)
+	}
+	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
+		return unusable("is not a clean absolute path")
+	}
+	// Every ancestor too, as at spawn: a box that owns one could swap it for a
+	// link and make the bundle container read a different repo.
+	if err := checkParents(c); err != nil {
+		return err
+	}
+	st, lerr := os.Lstat(c.Dir)
+	switch {
+	case lerr != nil:
+		return unusable("cannot be read: " + sanitize(lerr.Error()))
+	case st.Mode()&fs.ModeSymlink != 0:
+		return unusable("is a symlink; use the resolved path")
+	case !st.IsDir():
+		return unusable("is not a directory")
+	}
+	for _, p := range []string{c.Dir, filepath.Join(c.Of, ".git")} {
+		if why := box.MountUnsafe(p); why != "" {
+			return fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, p, why)
+		}
+	}
+	return nil
+}
+
 // Fetch brings branch r.Branch of the clone home as refs/heads/box/<Branch> in
 // clone_of, through a bundle made in a network-less container. Every host git
 // call runs in clone_of with CleanEnv(), never in the clone. Any error leaves
@@ -261,33 +295,8 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	}
 
 	// 2. Paths that are mounted into the container.
-	if err := CheckOf(c.Of, r.Home, r.Protected); err != nil {
+	if err := checkMounts(c, r.Home, r.Protected); err != nil {
 		return res, err
-	}
-	unusable := func(why string) error {
-		return fmt.Errorf("%w: clone %s %s", box.ErrUnboxableWorkspace, c.Dir, why)
-	}
-	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
-		return res, unusable("is not a clean absolute path")
-	}
-	// Every ancestor too, as at spawn: a box that owns one could swap it for a
-	// link and make the bundle container read a different repo.
-	if err := checkParents(c); err != nil {
-		return res, err
-	}
-	st, lerr := os.Lstat(c.Dir)
-	switch {
-	case lerr != nil:
-		return res, unusable("cannot be read: " + sanitize(lerr.Error()))
-	case st.Mode()&fs.ModeSymlink != 0:
-		return res, unusable("is a symlink; use the resolved path")
-	case !st.IsDir():
-		return res, unusable("is not a directory")
-	}
-	for _, p := range []string{c.Dir, filepath.Join(c.Of, ".git")} {
-		if why := box.MountUnsafe(p); why != "" {
-			return res, fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, p, why)
-		}
 	}
 
 	hostGit := func(args ...string) ([]byte, error) {

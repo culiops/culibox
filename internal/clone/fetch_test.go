@@ -108,11 +108,15 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	// stdout must be the 0600 temp file (possibly behind the size cap), made under TempDir.
+	// stdout must be the 0600 temp file (possibly behind the size cap), made under
+	// TempDir; the branch listing is the one container that writes to memory.
+	isList := slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, LabelCloneList+"=") })
 	named, ok := stdout.(interface{ Name() string })
-	if !ok {
+	switch {
+	case isList:
+	case !ok:
 		f.t.Errorf("stdout %T is not backed by a file", stdout)
-	} else {
+	default:
 		st, err := os.Stat(named.Name())
 		if err != nil {
 			f.t.Errorf("stdout file: %v", err)
