@@ -340,3 +340,55 @@ func TestWithoutCAEnvDropsTrustDirNamesToo(t *testing.T) {
 		t.Fatal("the caller's map must not be mutated")
 	}
 }
+
+func TestCloneFetchForgetsNotHome(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/feat"}
+	st := clone.ReturnState{At: time.Now(), Base: "main", NotHome: []clone.NotHome{
+		{Branch: "feat", Reason: clone.ReasonNotFF},
+		{Branch: "x", Reason: clone.ReasonCheckedOut},
+	}}
+	if err := clone.WriteReturnState(e.data, "/clones/r", st); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runCloneArgs(e, "p", "feat", "main")
+	if rc != 0 {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+	got, ok, err := clone.ReadReturnState(e.data, "/clones/r")
+	if err != nil || !ok || len(got.NotHome) != 1 || got.NotHome[0].Branch != "x" {
+		t.Fatalf("state after the fetch = %+v ok=%v err=%v; want only x", got, ok, err)
+	}
+	if strings.Contains(out, "WARN:") {
+		t.Fatalf("a clean forget printed a warning: %q", out)
+	}
+
+	// A failed fetch leaves the entry alone.
+	e.err = errors.New("nothing to fetch")
+	if rc, _ := runCloneArgs(e, "p", "x", "main"); rc != 1 {
+		t.Fatal("want the fetch to fail")
+	}
+	got, _, _ = clone.ReadReturnState(e.data, "/clones/r")
+	if len(got.NotHome) != 1 {
+		t.Fatalf("a failed fetch changed the state: %+v", got)
+	}
+}
+
+// A state file that cannot be rewritten is a warning, never a failed fetch.
+func TestCloneFetchForgetFailureIsOnlyAWarning(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/feat"}
+	if err := clone.WriteReturnState(e.data, "/clones/r", clone.ReturnState{NotHome: []clone.NotHome{{Branch: "feat", Reason: clone.ReasonNotFF}}}); err != nil {
+		t.Fatal(err)
+	}
+	ents, _ := os.ReadDir(filepath.Join(e.data, "clone-return"))
+	for _, en := range ents {
+		if strings.HasSuffix(en.Name(), ".json") {
+			os.WriteFile(filepath.Join(e.data, "clone-return", en.Name()), []byte("{broken"), 0o600)
+		}
+	}
+	rc, out := runCloneArgs(e, "p", "feat", "main")
+	if rc != 0 || !strings.Contains(out, "WARN: could not clear") {
+		t.Fatalf("rc=%d out=%q; want success with a WARN line", rc, out)
+	}
+}

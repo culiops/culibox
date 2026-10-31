@@ -51,6 +51,7 @@ type cloneHooks struct {
 	image, instance, dataDir string
 	listBoxes                func(context.Context) ([]box.BoxInfo, error)
 	refresh                  func(context.Context, clone.Git, clone.Docker, clone.RefreshRequest) clone.RefreshResult
+	ret                      func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult // clone.Return, swappable for tests
 
 	// locks holds one single-slot channel per resolved clone dir: a spawn holds
 	// its clone's slot from before the refresh checks until its session is
@@ -121,10 +122,7 @@ func (h *cloneHooks) Refresh(ctx context.Context, c config.Clone, o session.Refr
 	if h.unavailable != "" {
 		return session.CloneInfo{Error: fmt.Sprintf("clone mode is unavailable (%s)", h.unavailable)}, noop
 	}
-	key := c.Dir
-	if r, err := filepath.EvalSymlinks(c.Dir); err == nil {
-		key = r
-	}
+	key := cloneKey(c.Dir)
 	release, locked := h.lockClone(ctx, key) // a no-op release when not locked
 	// A panic below must not leave the clone locked for every later spawn. This
 	// runs only when the function does not return normally, so the panic goes
@@ -144,17 +142,8 @@ func (h *cloneHooks) Refresh(ctx context.Context, c config.Clone, o session.Refr
 		skip = clone.SkipCreated
 	case o.LiveSession != nil && o.LiveSession():
 		skip = clone.SkipInUse
-	case h.listBoxes == nil:
-		skip, listErr = clone.SkipOtherInstance, "cannot check whether another instance's box holds the clone: no box listing"
 	default:
-		boxes, err := h.listBoxes(ctx)
-		if err != nil {
-			skip = clone.SkipOtherInstance
-			listErr = "cannot check whether another instance's box holds the clone: " + clone.Sanitize(err.Error())
-		} else if holder, busy := box.OtherInstanceHolds(boxes, key, h.instance); busy {
-			skip = clone.SkipOtherInstance
-			log.Printf("clone refresh of %s skipped: container %s may be using it", key, clone.Sanitize(holder))
-		}
+		skip, listErr = h.otherInstanceSkip(ctx, key)
 	}
 
 	// The lock wait may have used up the caller's deadline; the host checks of
@@ -166,9 +155,19 @@ func (h *cloneHooks) Refresh(ctx context.Context, c config.Clone, o session.Refr
 		rctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), hostCheckTimeout)
 		defer cancel()
 	}
+	// Work the box left in the clone comes home first, under the same lock, so
+	// the refresh below sees it as host history. Only when the clone is about
+	// to be used and nothing else holds it.
+	var ret *session.ReturnSummary
+	if skip == "" && o.ReturnBudget > 0 {
+		bctx, cancel := context.WithTimeout(rctx, o.ReturnBudget)
+		sum := h.doReturn(bctx, c, session.ReturnOnSpawn, returnModeOf(c, session.ReturnOnSpawn))
+		cancel()
+		ret = &sum
+	}
 	info := cloneInfoOf(h.refresh(rctx, h.env.Git, h.docker, clone.RefreshRequest{
 		Clone: c, Image: h.image, Instance: h.instance, DataDir: h.dataDir, Skip: skip,
-	}))
+	}), ret)
 	if listErr != "" {
 		if info.Error != "" {
 			info.Error += "; "
@@ -179,8 +178,36 @@ func (h *cloneHooks) Refresh(ctx context.Context, c config.Clone, o session.Refr
 	return info, release
 }
 
-// cloneInfoOf is the session's view of a refresh result.
-func cloneInfoOf(r clone.RefreshResult) session.CloneInfo {
+// cloneKey is what a clone's lock and its box workspace label go by: the dir
+// with symlinks resolved, or as given when it cannot be.
+func cloneKey(dir string) string {
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return dir
+}
+
+// otherInstanceSkip decides whether a box of another instance (or one whose
+// labels cannot be trusted) may be using the clone. A failed listing fails
+// closed, with the reason in listErr.
+func (h *cloneHooks) otherInstanceSkip(ctx context.Context, key string) (skip, listErr string) {
+	if h.listBoxes == nil {
+		return clone.SkipOtherInstance, "cannot check whether another instance's box holds the clone: no box listing"
+	}
+	boxes, err := h.listBoxes(ctx)
+	if err != nil {
+		return clone.SkipOtherInstance, "cannot check whether another instance's box holds the clone: " + clone.Sanitize(err.Error())
+	}
+	if holder, busy := box.OtherInstanceHolds(boxes, key, h.instance); busy {
+		log.Printf("clone %s skipped: container %s may be using it", key, clone.Sanitize(holder))
+		return clone.SkipOtherInstance, ""
+	}
+	return "", ""
+}
+
+// cloneInfoOf is the session's view of a refresh result; ret is the
+// spawn-time return that ran before it, nil when none did.
+func cloneInfoOf(r clone.RefreshResult, ret *session.ReturnSummary) session.CloneInfo {
 	return session.CloneInfo{
 		Refreshed:     r.Refreshed,
 		Skipped:       r.Skipped,
@@ -197,16 +224,17 @@ func cloneInfoOf(r clone.RefreshResult) session.CloneInfo {
 		StaleBranches: r.Report.Stale,
 		Rewritten:     r.Rewritten,
 		Unverified:    r.Unverified,
+		Return:        ret,
 	}
 }
 
-// sweepCloneContainers removes this instance's refresh and `clone fetch`
-// containers a crash or a kill left behind: either can hold a clone or a fetch
-// directory mounted. It runs at boot, before any spawn. It returns how many it
+// sweepCloneContainers removes this instance's refresh, return-listing and
+// `clone fetch` containers a crash or a kill left behind: each can hold a clone
+// or a fetch directory mounted. It runs at boot, before any spawn. It returns how many it
 // removed; failures are logged and the sweep goes on.
 func sweepCloneContainers(ctx context.Context, list func(context.Context, string) ([]string, error), remove func(context.Context, string) error, instance string) int {
 	n := 0
-	for _, label := range []string{clone.LabelCloneFetch, clone.LabelCloneRefresh} {
+	for _, label := range []string{clone.LabelCloneFetch, clone.LabelCloneRefresh, clone.LabelCloneList} {
 		names, err := list(ctx, label+"="+instance)
 		if err != nil {
 			log.Printf("clone: listing leftover %s containers: %s", label, clone.Sanitize(err.Error()))
@@ -236,9 +264,87 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 	return clone.HostOriginURL(ctx, h.env.Git, of)
 }
 
-// ReturnWork is a stub until the next commit wires the real return.
+// returnModeOf is how a trigger returns a clone's branches: "now" forces, the
+// profile's switch off only records what is not home, otherwise fast-forward only.
+func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
+	switch {
+	case trigger == session.ReturnNow:
+		return clone.ReturnForced
+	case c.NoAutoReturn:
+		return clone.ReturnDry
+	}
+	return clone.ReturnAuto
+}
+
+// doReturn runs one return with the clone's lock already held.
+func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger string, mode clone.ReturnMode) session.ReturnSummary {
+	return returnSummaryOf(trigger, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
+		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
+		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,
+	}))
+}
+
+// returnSummaryOf is the session's view of a return result. The clone layer has
+// already sanitized every string in it.
+func returnSummaryOf(trigger string, r clone.ReturnResult) session.ReturnSummary {
+	s := session.ReturnSummary{
+		Trigger: trigger, At: r.At, Base: r.Base, Home: r.Home, Warnings: r.Warnings, Error: r.Error,
+	}
+	for _, n := range r.NotHome {
+		s.NotHome = append(s.NotHome, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
+	}
+	return s
+}
+
+// ReturnWork brings a clone's branches home under the clone's lock, the same
+// one a spawn's refresh holds, so the two never rewrite a clone's refs
+// together. Except for "now" it skips while another boxed session of this
+// instance uses the clone (asked once the lock is held); every trigger skips
+// when a box of another instance may hold it. Never an error: the outcome,
+// failures included, is in the summary.
 func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.ReturnOpts) session.ReturnSummary {
-	return session.ReturnSummary{Trigger: o.Trigger, At: time.Now(), Skipped: "unavailable"}
+	sum := session.ReturnSummary{Trigger: o.Trigger, At: time.Now()}
+	if h.unavailable != "" {
+		sum.Skipped = "unavailable"
+		return sum
+	}
+	key := cloneKey(c.Dir)
+	release, locked := h.lockClone(ctx, key)
+	defer release()
+	if !locked {
+		sum.Skipped = clone.SkipInUse
+		return sum
+	}
+	if o.Trigger != session.ReturnNow && o.LiveSession != nil && o.LiveSession() {
+		sum.Skipped = clone.SkipInUse
+		return sum
+	}
+	if skip, listErr := h.otherInstanceSkip(ctx, key); skip != "" {
+		sum.Skipped, sum.Error = skip, listErr
+		return sum
+	}
+	return h.doReturn(ctx, c, o.Trigger, returnModeOf(c, o.Trigger))
+}
+
+// NotHome is what the clone's return state says did not come home, for the
+// profile row. nil: no state, or nothing to show. A state that cannot be read
+// is shown as an error rather than hidden.
+func (h *cloneHooks) NotHome(c config.Clone) *session.NotHomeState {
+	if h.dataDir == "" {
+		return nil
+	}
+	st, ok, err := clone.ReadReturnState(h.dataDir, c.Dir)
+	if err != nil {
+		return &session.NotHomeState{Error: "cannot read what is not home: " + clone.Sanitize(err.Error())}
+	}
+	if !ok || (len(st.NotHome) == 0 && st.Error == "") {
+		return nil
+	}
+	out := &session.NotHomeState{At: st.At, Base: st.Base, Error: st.Error}
+	for _, n := range st.NotHome {
+		out.Branches = append(out.Branches, session.NotHomeBranch{Branch: n.Branch, Reason: n.Reason, Detail: n.Detail})
+	}
+	return out
 }
 
 // BoxOwned checks the live profiles' clones plus every recorded dir. An
@@ -425,6 +531,7 @@ func newCloneHooks(goos string, layer *boxLayer, home, memRoot, dataDir, instanc
 		instance: instance,
 		dataDir:  dataDir,
 		refresh:  clone.Refresh,
+		ret:      clone.Return,
 	}
 	if layer == nil {
 		h.unavailable = "no containment layer"

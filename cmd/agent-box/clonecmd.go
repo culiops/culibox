@@ -134,12 +134,18 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 		return fail("%v", err)
 	}
 	ref := strings.TrimPrefix(res.Ref, "refs/heads/")
+	// The branch is home now: its not-home entry would only mislead the profile
+	// row. Best effort; a state that cannot be rewritten is the next return's to fix.
+	forgetErr := clone.ForgetNotHome(dataDir, c.Dir, a.Branch)
 	fmt.Fprintf(w, "fetched %s (%d commit(s) not on %s):\n", ref, len(res.Commits), a.Base)
 	for _, line := range res.Commits {
 		fmt.Fprintf(w, "  %s\n", line)
 	}
 	for _, warn := range res.Warnings {
 		fmt.Fprintf(w, "WARN: %s\n", warn)
+	}
+	if forgetErr != nil {
+		fmt.Fprintf(w, "WARN: could not clear %s from the not-home list: %s\n", a.Branch, clone.Sanitize(forgetErr.Error()))
 	}
 	fmt.Fprintf(w, "review: git -C %s log -p %s..%s; merge per your review policy\n", shellQuote(c.Of), a.Base, ref)
 	return 0

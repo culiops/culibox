@@ -159,7 +159,7 @@ Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `
 
 ## Clone mode
 
-Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except through `agent-box clone fetch`, which brings a branch home for you to review. Linux only for now.
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `agent-box clone fetch`, for you to review. Linux only for now.
 
 Two profile fields turn it on:
 
@@ -189,6 +189,8 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 **Shares are read-only, and readable.** There is no writable share: a `:rw` suffix is refused by name, and so is any other `:`. A share path must be relative and clean, cannot be `.git`, cannot nest inside another share, and no part of its path may be a symlink. The box can read everything you share and has internet egress, so never share secrets. CuliBox warns for names like `.env*`, `*.pem`, `*.key` and `config*.json`, but it does not stop you. A shared `CLAUDE.md` is readable in the box but is **not** loaded as project instructions: boxed Claude runs with `--setting-sources user`. Tell the agent to read it first, or put box guidance in your user-level `CLAUDE.md`. Files the box writes for you (plans, notes) go in a directory inside the clone, such as `docs/handover/box/`, that your `.gitignore` excludes; they never travel in a fetch.
 
 **Bringing code home**
+
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update, as does "Bring work home now" in the session.
 
 ```sh
 agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
