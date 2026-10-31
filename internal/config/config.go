@@ -81,6 +81,18 @@ func (o OptionDef) AppliesTo(bin string) bool {
 	return false
 }
 
+// OfferedBy reports whether a profile offers this option at spawn time. A key
+// the profile sets a default for is offered. Otherwise an enum that applies to
+// the profile's bin is offered too (blank = the agent's own default, and any
+// value is still checked against Choices), but a bool is not: a bool can be a
+// capability (skip_permissions), and a profile has to opt into one.
+func (o OptionDef) OfferedBy(a AgentConfig) bool {
+	if _, ok := a.Options[o.Key]; ok {
+		return true
+	}
+	return o.Type == OptEnum && o.AppliesTo(a.Bin)
+}
+
 // AgentConfig describes one launchable agent CLI and its environment policy.
 type AgentConfig struct {
 	Name       string            `json:"name"`

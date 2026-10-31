@@ -3143,6 +3143,13 @@ function renderOptions() {
         row.className = "opt opt-seg";
       } else {
         ctrl = document.createElement("select");
+        // A profile without a default for this enum (#35) starts on the agent's
+        // own default: blank is sent, and the launcher adds no flag for it.
+        if (!o.value) {
+          const none = document.createElement("option");
+          none.value = ""; none.textContent = "(agent default)";
+          ctrl.appendChild(none);
+        }
         for (const c of choices) {
           const co = document.createElement("option");
           co.value = c; co.textContent = c;
@@ -3940,7 +3947,9 @@ function syncEditorActions() {
 // no-op; only grab focus when the dialog is actually on screen.
 function newProfile() {
   selectedProfile = "";
-  fillForm({ base: "inherit" });
+  // bin starts as a real value, not just the placeholder: a blank bin hides the
+  // claude-only options (Model, Effort) while the field still reads "claude" (#35).
+  fillForm({ base: "inherit", bin: "claude" });
   setDialogError("settings-modal", "");
   renderProfileList();
   syncEditorActions();

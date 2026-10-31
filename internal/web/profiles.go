@@ -436,12 +436,19 @@ func (m *ProfileManager) Views() []ProfileView {
 				pv.GitHubOwners = append(pv.GitHubOwners, o.Owner)
 			}
 		}
+		// An unset enum is offered with a blank value (the agent's own default),
+		// so a profile made in the editor can still pick Model/Effort at spawn.
 		for _, def := range m.options {
-			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {
-				pv.Options = append(pv.Options, ProfileOption{
-					Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v,
-				})
+			if !def.AppliesTo(a.Bin) || !def.OfferedBy(a) {
+				continue
 			}
+			v, ok := a.Options[def.Key]
+			if !ok {
+				v = ""
+			}
+			pv.Options = append(pv.Options, ProfileOption{
+				Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v,
+			})
 		}
 		out = append(out, pv)
 	}

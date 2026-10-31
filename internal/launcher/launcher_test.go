@@ -209,7 +209,10 @@ func TestBuild_OptionEnumFlagAndEnv(t *testing.T) {
 }
 
 func TestBuild_OptionSecurity(t *testing.T) {
-	defs := []config.OptionDef{{Key: "effort", Type: "enum", Choices: []string{"high"}, Flag: "--effort"}}
+	defs := []config.OptionDef{
+		{Key: "effort", Type: "enum", Choices: []string{"high"}, Flag: "--effort"},
+		{Key: "skip", Type: "bool", Flag: "--dangerously-skip-permissions"},
+	}
 	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit",
 		Options: map[string]any{"effort": "high"}}}, fakeResolver{}, defs)
 
@@ -222,11 +225,11 @@ func TestBuild_OptionSecurity(t *testing.T) {
 		t.Fatalf("invalid override should fall back to default: %v", argv)
 	}
 
-	// a request option NOT exposed by the profile is ignored
+	// a bool the profile does not expose is ignored: a profile opts into a capability
 	l2 := New([]config.AgentConfig{{Name: "b", Bin: "/bin/cat", Base: "inherit"}}, fakeResolver{}, defs)
-	argv2, _, _ := l2.Build(SpawnSpec{Agent: "b", Options: map[string]any{"effort": "high"}})
-	if argvHasPair(argv2, "--effort", "high") {
-		t.Fatalf("option not exposed by profile must be ignored: %v", argv2)
+	argv2, _, _ := l2.Build(SpawnSpec{Agent: "b", Options: map[string]any{"skip": true}})
+	if contains(argv2, "--dangerously-skip-permissions") {
+		t.Fatalf("bool option not exposed by profile must be ignored: %v", argv2)
 	}
 }
 
