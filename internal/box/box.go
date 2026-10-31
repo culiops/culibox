@@ -71,6 +71,11 @@ const (
 type Mount struct {
 	Host, Box string
 	Optional  bool
+	// Yield marks a mount that gives way: Wrap drops it when the workspace or any
+	// non-yielding extra mount already shows its Box path (yieldCovered), so the
+	// box sees the live file and docker gets no nested or duplicate mount. A
+	// CLAUDE.md import is one.
+	Yield bool
 	// ID, when set, is Host's identity when it was last checked (a context
 	// path on Linux). Once the box runs, ensure refuses it unless Box shows the
 	// same identity inside it (checkMountIDs).
@@ -415,6 +420,12 @@ type BoxKey struct {
 	// user, which keeps a repo's own settings and hooks from loading; without it
 	// the dialog is the only gate before those run, so it stays.
 	PreTrust bool
+	// NoImports is set when the profile turns CLAUDE.md imports off, so the box
+	// carries no import mounts. It is part of the identity, like Context:
+	// reuseMounts treats a box with extra mounts as fine for a spawn that asks
+	// for fewer, so without it an imports-off profile could land in a live box
+	// that still mounts imports.
+	NoImports bool
 }
 
 // CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
@@ -437,7 +448,8 @@ type CloneMounts struct {
 // shares a box with one that has a binding, sessions with the same binding
 // share, and an unbound session's name is unchanged from before bindings.
 // A clone-mode spec hash goes after those, so a non-clone name is unchanged too,
-// and a context_paths hash goes last for the same reason.
+// and a context_paths hash goes after that for the same reason. An imports-off
+// key adds "\x00noimports" last, only when set, so every other name is unchanged.
 func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -462,6 +474,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Context != "" {
 		key += "\x00ctx:" + k.Context
+	}
+	if k.NoImports {
+		key += "\x00noimports"
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -738,6 +753,8 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		}
 		extraRO = append(slices.Clip(extraRO), guard...)
 	}
+	// Last, so the clone and guard mounts above count as covering too.
+	extraRO = yieldCovered(real, extraRO)
 	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust); err != nil {
 		return nil, nil, "", err
 	}
@@ -753,6 +770,28 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	m.prepareHomePid(name, sessionID)
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
+}
+
+// yieldCovered drops each Yield mount whose Box path the workspace or a
+// non-yielding extra already covers (UnderMount: at or below, so equality
+// counts). Yield mounts are checked against non-yield mounts only, never each
+// other. It returns a new slice and keeps the order of the rest; the caller's
+// backing array is never written to.
+func yieldCovered(workspace string, extraRO []Mount) []Mount {
+	covers := []string{workspace}
+	for _, mt := range extraRO {
+		if !mt.Yield {
+			covers = append(covers, mt.Box)
+		}
+	}
+	out := make([]Mount, 0, len(extraRO))
+	for _, mt := range extraRO {
+		if mt.Yield && UnderMount(filepath.Clean(mt.Box), covers) {
+			continue
+		}
+		out = append(out, mt)
+	}
+	return out
 }
 
 // withoutNames returns env without the named variables, as a new slice: the

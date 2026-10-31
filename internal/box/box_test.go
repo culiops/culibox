@@ -1161,3 +1161,29 @@ func TestBoxNameDiffersByContext(t *testing.T) {
 		t.Fatalf("context hashes must name distinct boxes: none=%s a=%s b=%s", none, a, b)
 	}
 }
+
+func TestBoxNameNoImports(t *testing.T) {
+	m := newTestManagerWithInstance(t, "PROD")
+	dir := t.TempDir()
+	plain, err := m.boxName(dir, BoxKey{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	off, err := m.boxName(dir, BoxKey{NoImports: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain == off {
+		t.Fatal("an imports-off profile must not share a box with one that mounts imports")
+	}
+	if !isBoxName(off) {
+		t.Fatalf("%s: must keep the prefix+12hex format", off)
+	}
+	// BoxKey{} stays the pre-change name: TestBoxNameDefaultMatchesPreAccountFormula
+	// holds the independent formula; repeat it here for the same dir.
+	real, _ := filepath.EvalSymlinks(dir)
+	sum := sha256.Sum256([]byte("PROD\x00" + real))
+	if want := namePrefix + hex.EncodeToString(sum[:6]); plain != want {
+		t.Fatalf("BoxKey{} name %s, pre-change formula gives %s", plain, want)
+	}
+}
