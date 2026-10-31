@@ -16,6 +16,30 @@
 // the honest statement of what a stored token is.
 const CRED_D4 = "The agent will be able to change this AWS account: create, modify and delete resources.";
 const CRED_N3 = "The agent can read this token. It is long-lived and is not revoked when the session ends.";
+
+// The two ways to give a box GitHub, side by side under "Add GitHub".
+const GH_ROUTE_CHOICES = [
+  { id: "pat", title: "Personal access token \u2014 simple", line: "One token you create on github.com. The agent can read it; it is long-lived and not revoked when the session ends." },
+  { id: "app", title: "GitHub App \u2014 safer", line: "CuliBox mints 1-hour tokens limited to each profile's repositories and permissions. A few more minutes to set up." },
+];
+
+const GH_PAT_SUGGESTION = 'Suggested: a fine-grained token with only the repositories you need \u00b7 Contents: Read and write \u00b7 Pull requests: Read and write \u00b7 Metadata: Read. Avoid Administration and "All repositories". Add Workflows only if the agent must change CI files.';
+
+// ghPatValueWarning: a classic token (ghp_) reaches every repository the account
+// can. Read from the pasted value in the browser only; it goes nowhere new.
+function ghPatValueWarning(value) {
+  return typeof value === "string" && value.startsWith("ghp_")
+    ? "This looks like a classic token: it reaches every repository your account can. A fine-grained token limited to the repos you need is safer."
+    : "";
+}
+
+const GH_APP_HELP = [
+  "On github.com: Settings \u203a Developer settings \u203a GitHub Apps \u203a New GitHub App. Untick Webhook \u203a Active.",
+  "Repository permissions: Metadata: Read (required). Contents, Pull requests, Issues: Read, or Read and write if agents should push and open PRs. Actions, Checks, Commit statuses: Read for CI results. Leave Administration and Workflows unset.",
+  "Create it, then Install App on the account that owns the repos and choose Only select repositories.",
+  "Generate a private key (.pem) and copy the Client ID into this form.",
+  "Protect main with branch protection if agents must not push to it.",
+];
 const CRED_FILE_BAD = "credentials.json could not be read; it will be kept as a .bad copy on your next save";
 // Said under a "writes" base role. Never "read-only" unqualified: a role that
 // has no write access found is not a guarantee, and the word promises one.
@@ -744,6 +768,7 @@ if (typeof module !== "undefined" && module.exports) {
     awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
+    GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP,
   };
 }
 
@@ -940,7 +965,7 @@ function credLegacyBody(entries) {
 
 const CRED_EMPTY = {
   aws: "No AWS accounts yet. Add one and the agent gets short-lived credentials for its role, never your profile.",
-  github: "No GitHub Apps yet.",
+  github: "No GitHub Apps yet. Add GitHub to choose a token or an App.",
   values: "No stored values.",
 };
 
@@ -1067,7 +1092,7 @@ function credSection(g) {
   const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
   const add = kind && credActionHandlers[kind] && credActionHandlers[kind].add;
   if (typeof add === "function") {
-    const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub App" : "Add token");
+    const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
     b.type = "button";
     b.onclick = () => add(g, loadCredentials);
     h.appendChild(b);
@@ -2482,6 +2507,9 @@ function credTokenDetails(t, taken) {
   const valuesHost = credEl("div", "fcol full");
   grid.appendChild(valuesHost);
   let valueEls = [];
+  const isGHPat = t.id === "github-pat";
+  const patWarn = credEl("p", "hint warnline");
+  patWarn.hidden = true;
   const hintText = (i) => "Goes into the encrypted store as " + valueIdsText(t, nm.inp.value, i) + " and is never shown again. The field clears after you save. You can add it while the store is locked.";
   let hints = [];
   const paintValues = () => {
@@ -2497,7 +2525,15 @@ function credTokenDetails(t, taken) {
       valueEls.push(f.inp);
       hints.push(f.hint);
       nodes.push(f.col);
+      if (isGHPat) {
+        f.inp.addEventListener("input", () => {
+          patWarn.textContent = ghPatValueWarning(f.inp.value);
+          patWarn.hidden = !patWarn.textContent;
+        });
+        f.col.appendChild(patWarn);
+      }
     }
+    if (isGHPat) nodes.unshift(credEl("p", "hint", GH_PAT_SUGGESTION));
     valuesHost.replaceChildren(...nodes);
   };
   nm.inp.addEventListener("input", () => { hints.forEach((hn, i) => { hn.textContent = hintText(i); }); });
@@ -2512,11 +2548,11 @@ function credTokenDetails(t, taken) {
       fields: Object.fromEntries(Object.keys(getters).map((k) => [k, getters[k]()])),
       values: valueEls.map((e) => e.value),
     }),
-    clearValues: () => { for (const e of valueEls) valueFieldCleared(e); },
+    clearValues: () => { for (const e of valueEls) valueFieldCleared(e); patWarn.textContent = ""; patWarn.hidden = true; },
   };
 }
 
-async function credTokenAdd(group) {
+async function credTokenAdd(group, startID) {
   let tpls;
   try {
     tpls = await credLoadTemplates();
@@ -2526,7 +2562,7 @@ async function credTokenAdd(group) {
   }
   if (!tpls.length) { setCredErr("There are no token providers to choose from."); return; }
   const want = group && group.key && group.key.startsWith("token:") ? group.key.slice(6) : "";
-  const start = tpls.find((t) => want && t.provider === want && t.id !== "other") || (want ? tpls.find((t) => t.id === "other") : null) || tpls[0];
+  const start = tpls.find((t) => startID && t.id === startID) || tpls.find((t) => want && t.provider === want && t.id !== "other") || (want ? tpls.find((t) => t.id === "other") : null) || tpls[0];
   const taken = (credView && credView.tokens ? credView.tokens : []).map((t) => t.name);
 
   const tilesSec = credEl("section", "sec");
@@ -2574,6 +2610,29 @@ async function credTokenAdd(group) {
     return ok;
   });
   select(start);
+}
+
+// credGitHubChoose: "Add GitHub" -- a token or an App, side by side.
+function credGitHubChoose() {
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", "GitHub");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", "How should the agent reach GitHub?"));
+  const tiles = credEl("div", "tiles");
+  for (const c of GH_ROUTE_CHOICES) {
+    const b = credEl("button", "tile");
+    b.type = "button";
+    b.append(credEl("span", "n", c.title), credEl("span", "s", c.line));
+    b.onclick = () => (c.id === "pat" ? credTokenAdd({ key: "token:github" }, "github-pat") : credAppForm(null));
+    tiles.appendChild(b);
+  }
+  sec.append(h, tiles);
+  credOpenForm({ kind: "github-choose", saveLabel: "Save" }, "Add GitHub", [sec], async () => {
+    credFormErr("Choose a token or an App above.");
+    return false;
+  });
+  const save = document.getElementById("cred-form-save");
+  if (save) save.disabled = true;
 }
 
 function credTokenEdit(entry) {
@@ -2629,7 +2688,12 @@ function credAppForm(entry) {
   const cid = credField(uid + "-cid", "Client ID", { value: edit ? entry.client_id || "" : "", placeholder: "Iv1.…", max: 100 });
   const keyHost = credEl("div", "fcol full");
   grid.append(nm.col, cid.col, keyHost);
-  sec.append(h, grid);
+  const help = document.createElement("details");
+  help.appendChild(credEl("summary", "", "How to create the App"));
+  const steps = document.createElement("ol");
+  for (const step of GH_APP_HELP) steps.appendChild(credEl("li", "", step));
+  help.appendChild(steps);
+  sec.append(h, help, grid);
 
   let useFile = false;
   let keyEl = null;
@@ -2789,7 +2853,7 @@ function credConfirmDelete(host, text, path, noun, reload) {
       "/api/credentials/tokens/" + encodeURIComponent(e.name), "token", reload),
   };
   credActionHandlers.github = {
-    add: () => credAppForm(null),
+    add: () => credGitHubChoose(),
     edit: (e) => credAppForm(e),
     delete: (e, reload, btn) => credConfirmDelete(credEntryHost(btn),
       "Delete the GitHub App " + e.name + "? The private key " + (e.key_ref_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "file is not touched."),
