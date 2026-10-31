@@ -980,3 +980,75 @@ func TestCloneSpawnLiveSessionSeenAfterConcurrentPublish(t *testing.T) {
 		t.Fatalf("LiveSession answers = %v, want [false true]: B must see A's published session", hooks.lives)
 	}
 }
+
+// argvLauncher builds an argv that shows what the session layer asked for: the
+// bin, the extra args, then "--" and a first message, like the real Build.
+type argvLauncher struct {
+	cloneGHLauncher
+	bin string
+}
+
+func (l argvLauncher) BinFor(launcher.SpawnSpec) (string, error) { return l.bin, nil }
+
+func (l argvLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error) {
+	_, env, err := l.cloneGHLauncher.Build(spec)
+	argv := append([]string{l.bin}, spec.ExtraArgs...)
+	return append(argv, "--", "first message"), env, err
+}
+
+func spawnGuidance(t *testing.T, bin, agent string, noAutoReturn bool, gh *config.GitHubBinding) []string {
+	t.Helper()
+	cl, dir := testCloneLauncher(t, config.RuntimeBox)
+	cl.clone.NoAutoReturn = noAutoReturn
+	m := NewManager(argvLauncher{cloneGHLauncher: cloneGHLauncher{cloneLauncher: cl, gh: gh}, bin: bin}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	m.SetClone(&fakeCloneHooks{origin: "https://github.com/culiops/agent-box.git"})
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+	if agent != "clone" {
+		dir = t.TempDir()
+	}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: agent, Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	return boxes.lastArgv
+}
+
+func TestCloneSpawnClaudeGetsGuidance(t *testing.T) {
+	write := &config.GitHubBinding{
+		Owners:      []config.GitHubOwner{{Owner: "culiops", App: "main", Repos: []string{"agent-box"}}},
+		Permissions: map[string]string{"contents": "write", "metadata": "read"},
+	}
+	read := &config.GitHubBinding{Owners: write.Owners}
+
+	t.Run("claude clone spawn with push gets the push line before --", func(t *testing.T) {
+		argv := spawnGuidance(t, "claude", "clone", false, write)
+		i := slices.Index(argv, "--append-system-prompt")
+		sep := slices.Index(argv, "--")
+		if i < 0 || i+1 >= len(argv) || sep < 0 || i+1 > sep-1 {
+			t.Fatalf("argv = %q: want --append-system-prompt and its value before --", argv)
+		}
+		if want := cloneGuidance("/home/u/repo", true, true); argv[i+1] != want {
+			t.Fatalf("value = %q, want %q", argv[i+1], want)
+		}
+	})
+	t.Run("no push route and auto return off", func(t *testing.T) {
+		argv := spawnGuidance(t, "claude", "clone", true, read)
+		if got, want := argAfter(argv, "--append-system-prompt"), cloneGuidance("/home/u/repo", false, false); got != want {
+			t.Fatalf("value = %q, want %q", got, want)
+		}
+	})
+	t.Run("a shell in the clone gets no guidance", func(t *testing.T) {
+		if argv := spawnGuidance(t, "bash", "clone", false, write); slices.Contains(argv, "--append-system-prompt") {
+			t.Fatalf("argv = %q", argv)
+		}
+	})
+	t.Run("a boxed claude that is not a clone gets no guidance", func(t *testing.T) {
+		if argv := spawnGuidance(t, "claude", "plain", false, nil); slices.Contains(argv, "--append-system-prompt") {
+			t.Fatalf("argv = %q", argv)
+		}
+	})
+}

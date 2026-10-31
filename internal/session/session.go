@@ -1935,6 +1935,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			spec.ExtraArgs, bundleDrops = flags, drops
 		}
+		// Claude only: a shell is never handed agent flags. Flag and value are
+		// separate argv elements, ahead of the "--" Build adds for a first message.
+		if cl != nil && isClaudeBin(bin) {
+			spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), "--append-system-prompt",
+				cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
+		}
 	}
 
 	argv, env, err := m.launcher.Build(spec)
