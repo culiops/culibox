@@ -126,10 +126,13 @@ type AgentConfig struct {
 	// AWSConnections names host aws_connections entries this profile's boxes may
 	// mint credentials for (several at once); exclusive with the inline AWS binding.
 	AWSConnections []string `json:"aws_connections,omitempty"`
-	Tokens         []string `json:"tokens,omitempty"`        // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
-	CloneOf        string   `json:"clone_of,omitempty"`      // host repo this boxed profile clones into default_cwd (clone mode)
-	CloneShare     []string `json:"clone_share,omitempty"`   // read-only host paths (relative to clone_of) shared into the clone
-	ContextPaths   []string `json:"context_paths,omitempty"` // absolute host paths a boxed agent can read, mounted read-only at the same path
+	Tokens         []string `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
+	CloneOf        string   `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
+	CloneShare     []string `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
+	// CloneNoAutoReturn turns off bringing the clone's work home automatically;
+	// the work then stays in the copy until "Bring work home now".
+	CloneNoAutoReturn bool     `json:"clone_no_auto_return,omitempty"`
+	ContextPaths      []string `json:"context_paths,omitempty"` // absolute host paths a boxed agent can read, mounted read-only at the same path
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours
