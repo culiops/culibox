@@ -89,7 +89,7 @@ function spawnRefusedLocked(status, code) {
 
 // spawnProgressText is the dialog's status line while a spawn POST is in flight
 // (#36). The server answers only once the session exists, and a boxed spawn may
-// first start the box VM and a container, which takes tens of seconds after an
+// first start the box (on a Mac, its VM too) and a container, which takes tens of seconds after an
 // idle spell. So: an elapsed count, and for a box past 3s, the reason.
 function spawnProgressText(seconds, runtime) {
   const s = Math.max(0, Math.floor(seconds || 0));

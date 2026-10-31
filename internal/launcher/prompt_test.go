@@ -274,9 +274,10 @@ func TestDroppedOptionsUnexposedKey(t *testing.T) {
 	}
 }
 
-// An enum that applies to the bin is offered on every profile (#35): a profile
-// made in the editor with Model/Effort left unset still lets a spawn pick them.
-// The value is still checked against the choices, and the bin scoping holds.
+// model/effort apply to the bin and default to offer_unset, so they are offered
+// on every profile (#35): a profile made in the editor with Model/Effort unset
+// still lets a spawn pick them. Values are still checked against the choices,
+// and the bin scoping holds. Any other enum stays opt-in (see the next test).
 func TestEnumOptionOfferedWithoutProfileDefault(t *testing.T) {
 	defs := []config.OptionDef{
 		{Key: "model", Type: "enum", Choices: []string{"opus", "sonnet"}, Flag: "--model", Bins: []string{"claude"}},
@@ -298,6 +299,23 @@ func TestEnumOptionOfferedWithoutProfileDefault(t *testing.T) {
 	argv, _, _ := l.Build(SpawnSpec{Agent: "bare", Runtime: config.RuntimeHost, Options: map[string]any{"model": ""}})
 	if contains(argv, "--model") {
 		t.Fatalf("blank enum reached argv: %v", argv)
+	}
+}
+
+// An enum other than model/effort can grant a capability: unset on a profile, a
+// spawn cannot pick it unless the option opts in with offer_unset (review A-1).
+func TestCapabilityEnumNotOfferedUnset(t *testing.T) {
+	defs := []config.OptionDef{
+		{Key: "permission_mode", Type: "enum", Choices: []string{"default", "bypassPermissions"}, Flag: "--permission-mode", Bins: []string{"claude"}},
+	}
+	l := New([]config.AgentConfig{{Name: "bare", Bin: "claude"}}, fakeResolver{}, defs)
+	spec := SpawnSpec{Agent: "bare", Runtime: config.RuntimeHost, Options: map[string]any{"permission_mode": "bypassPermissions"}}
+	if got := l.AcceptedOptions(spec); len(got) != 0 {
+		t.Fatalf("capability enum accepted unset: %v", got)
+	}
+	argv, _, _ := l.Build(spec)
+	if contains(argv, "bypassPermissions") {
+		t.Fatalf("capability enum reached argv: %v", argv)
 	}
 }
 

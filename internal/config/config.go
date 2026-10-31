@@ -64,7 +64,7 @@ type OptionDef struct {
 	Env     string   `json:"env,omitempty"`
 	Bins    []string `json:"bins,omitempty"` // agent bins this option applies to; empty = all
 	// OfferUnset: an enum is pickable at spawn on a profile that sets no default
-	// for it (blank = the agent's own default). nil = on for model and effort only.
+	// for it (blank = the agent's own default). nil = on for model, effort and effortLevel only.
 	OfferUnset *bool `json:"offer_unset,omitempty"`
 }
 
