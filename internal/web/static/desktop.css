@@ -423,13 +423,25 @@
   /* Over the right of the grid, below the focused pane's header (JS sets top
      and --grid-w). The docked rail is gone on desktop: Access is a pane view. */
   #layout > #steer-rail { display: none; }
+  /* Width (issue #34): min(960px, 62% of the grid) until the left edge is
+     dragged; then --dr-w, the stored share of the grid (drawersize.js), never
+     under 360px. ⛶ (data-max) covers the whole grid until pressed again. */
   #drawer {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 10;
-    width: min(720px, calc(var(--grid-w, 100%) * .62));
+    width: min(960px, calc(var(--grid-w, 100%) * .62));
     display: flex; flex-direction: column; min-height: 0;
     background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 30px #0009;
   }
+  #drawer[data-sized="1"] { width: min(var(--grid-w, 100%), max(360px, calc(var(--grid-w, 100%) * var(--dr-w)))); }
+  #drawer[data-max="1"] { width: var(--grid-w, 100%); }
   #drawer[hidden] { display: none; }
+  /* The left-edge handle: 7px straddling the border, nothing drawn until
+     hover, drag or keyboard focus. Gone while maximized (nothing to drag). */
+  .dr-edge {
+    position: absolute; top: 0; bottom: 0; left: -4px; width: 7px; z-index: 4;
+    cursor: col-resize; touch-action: none;
+  }
+  #drawer[data-max="1"] .dr-edge { display: none; }
   .dr-head {
     flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px;
     font-weight: 600; border-bottom: 1px solid var(--line);
@@ -437,12 +449,13 @@
   .dr-title { flex: none; }
   .dr-sess { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
   .dr-fill { flex: 1; }
-  #drawer-x {
+  #drawer-x, #drawer-max {
     flex: none; width: 26px; height: 24px; font: 13px var(--font-ui); color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
-  #drawer-x:hover { color: var(--fg); background: var(--raise); }
-  #drawer-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #drawer-x:hover, #drawer-max:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x:focus-visible, #drawer-max:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #drawer-max[aria-pressed="true"] { color: var(--accent); }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   /* The moved tree stays in the body once moved; the kind shows it. */
   #drawer:not([data-kind="files"]) #files-pane { display: none; }
@@ -453,13 +466,25 @@
   #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
   #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
 
-  /* --- Files drawer body: tree 200px | viewer (spec 5.4) ------------------ */
+  /* --- Files drawer body: tree | splitter | viewer (spec 5.4, #34) -------- */
   #drawer[data-kind="files"] .dr-body { flex-direction: row; }
   #drawer:not([data-kind="files"]) .dr-tree, #drawer:not([data-kind="files"]) .dr-viewer,
-  #drawer:not([data-kind="files"]) .dr-acts { display: none; }
+  #drawer:not([data-kind="files"]) .dr-acts, #drawer:not([data-kind="files"]) .dr-split { display: none; }
+  /* --dr-tree is the tree's stored share of the body (default 40%). The px
+     clamp keeps a readable tree and a usable viewer whatever the share; in a
+     body too narrow for both, the tree's 160px wins. */
   .dr-tree {
-    flex: 0 0 200px; width: 200px; min-width: 0; min-height: 0;
+    flex: 0 0 clamp(160px, calc(var(--dr-tree, .4) * 100%), calc(100% - 240px)); min-width: 0; min-height: 0;
     display: flex; flex-direction: column; border-right: 1px solid var(--line);
+  }
+  /* Zero net width (the negative margins): it straddles the tree's border. */
+  .dr-split {
+    flex: none; width: 7px; margin: 0 -4px 0 -3px; position: relative; z-index: 2;
+    cursor: col-resize; touch-action: none;
+  }
+  .dr-edge:hover, .dr-edge.dragging, .dr-edge:focus-visible,
+  .dr-split:hover, .dr-split.dragging, .dr-split:focus-visible {
+    outline: none; background: color-mix(in srgb, var(--accent) 40%, transparent);
   }
   #drawer .dr-tree #files-pane { min-width: 0; }
   #drawer .dr-tree #files-phd { padding-left: 8px; padding-right: 6px; }
@@ -469,7 +494,7 @@
   #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
   /* "Go to file…" (Ctrl+P): a filename jump at the top of the tree column. The
      list is fixed-position (set from the input's rect in drawerGoPosition) so
-     the 200px column does not clip it; .ft-opt/.ft-note rows are shared. */
+     the tree column does not clip it; .ft-opt/.ft-note rows are shared. */
   .dr-goto { flex: none; padding: 6px 8px 0; }
   #drawer-goto-in {
     width: 100%; box-sizing: border-box; padding: 4px 7px; font: 12px var(--font-ui);
@@ -514,6 +539,9 @@
     background: transparent; border: 1px solid transparent; border-radius: var(--r-ctl); white-space: nowrap;
   }
   .dr-act[hidden] { display: none; }
+  /* 1.5ch per depth level instead of 2ch: every prefix is two characters a
+     level, so a uniform squeeze keeps the │ columns aligned across rows. */
+  #drawer .ft-branch { letter-spacing: -.25ch; }
   /* A file (or a folder above one) the agent changed: a dot after the name. */
   #drawer .ft-chg { flex: none; color: var(--accent); font-size: 8px; line-height: 1; padding: 0 4px; }
   .dr-act:hover:not(:disabled) { color: var(--fg); background: var(--raise); }

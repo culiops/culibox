@@ -130,11 +130,13 @@
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
     <aside id="drawer" aria-label="Session drawer" hidden>
+      <div id="drawer-edge" class="dr-edge" role="separator" aria-orientation="vertical" aria-label="Resize the drawer" tabindex="0" title="Drag to resize the drawer, double-click to reset"></div>
       <div class="dr-head">
         <span id="drawer-title" class="dr-title">Files</span>
         <span id="drawer-sess" class="dr-sess"></span>
         <span class="dr-fill"></span>
         <span id="drawer-acts" class="dr-acts"><span id="drawer-menu" class="dr-menu" role="menu" aria-label="More file actions" hidden></span></span>
+        <button id="drawer-max" type="button" title="Expand the drawer over the panes" aria-label="Expand the drawer" aria-pressed="false">&#9974;</button>
         <button id="drawer-x" type="button" title="Close the drawer" aria-label="Close the drawer">&#10005;</button>
       </div>
       <div id="drawer-body" class="dr-body">
@@ -144,6 +146,7 @@
             <div id="drawer-goto-list" role="listbox" aria-label="Matching files" hidden></div>
           </div>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
+        <div id="drawer-split" class="dr-split" role="separator" aria-orientation="vertical" aria-label="Resize the file tree" aria-controls="drawer-tree" tabindex="0" title="Drag to resize the tree, double-click to reset"></div>
         <div id="drawer-viewer" class="dr-viewer">
           <div class="dr-vtop"><span id="drawer-vpath" class="dr-vpath"></span><span id="drawer-vst" class="dr-vst"></span></div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>
@@ -752,6 +755,7 @@
   <script src="/chipmodel.js"></script>
   <script src="/palette.js"></script>
   <script src="/sheet.js"></script>
+  <script src="/drawersize.js"></script>
   <script src="/drawerfiles.js"></script>
   <script src="/filesdrawer.js"></script>
   <script src="/spawnpreview.js"></script>
