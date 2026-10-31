@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
 )
 
@@ -711,6 +712,48 @@ func TestContextWarnings(t *testing.T) {
 	got = pm2.ContextWarnings(contextProfile("", many))
 	if len(got) != 1 || !strings.HasSuffix(strings.TrimSuffix(got[0], "; the box will be able to read and send them"), ", …)") {
 		t.Fatalf("more than 5 names must end with an ellipsis, got %q", got)
+	}
+}
+
+func TestViewsCarryAutoReturnAndNotHome(t *testing.T) {
+	on := cloneProfile(config.RuntimeBox)
+	off := cloneProfile(config.RuntimeBox)
+	off.Name, off.CloneNoAutoReturn = "off", true
+	plain := config.AgentConfig{Name: "plain", Bin: "claude", Runtime: config.RuntimeBox}
+	pm := NewProfileManager([]config.AgentConfig{on, off, plain}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	state := &session.NotHomeState{Error: "boom"}
+	var asked []config.Clone
+	pm.SetNotHome(func(c config.Clone) *session.NotHomeState { asked = append(asked, c); return state })
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	if !got["cl"].AutoReturn || got["cl"].NotHome != state {
+		t.Errorf("switch on: auto_return %v not_home %v", got["cl"].AutoReturn, got["cl"].NotHome)
+	}
+	if got["off"].AutoReturn || got["off"].NotHome != state {
+		t.Errorf("switch off: auto_return %v not_home %v", got["off"].AutoReturn, got["off"].NotHome)
+	}
+	if got["plain"].AutoReturn || got["plain"].NotHome != nil {
+		t.Errorf("non-clone profile carries clone fields: %+v", got["plain"])
+	}
+	if len(asked) != 2 || asked[0].Dir != "/home/u/clones/repo" {
+		t.Errorf("the hook must be asked only for clone profiles, got %+v", asked)
+	}
+	b, _ := json.Marshal(got["cl"])
+	if !strings.Contains(string(b), `"auto_return":true`) || !strings.Contains(string(b), `"not_home":{`) {
+		t.Errorf("on-switch clone JSON = %s", b)
+	}
+	b, _ = json.Marshal(got["plain"])
+	if strings.Contains(string(b), "auto_return") || strings.Contains(string(b), "not_home") {
+		t.Errorf("non-clone JSON must omit both fields: %s", b)
+	}
+	// A nil hook reports no not_home; the switch still reports.
+	pm.SetNotHome(nil)
+	for _, v := range pm.Views() {
+		if v.Name == "cl" && (v.NotHome != nil || !v.AutoReturn) {
+			t.Errorf("nil hook: %+v", v)
+		}
 	}
 }
 

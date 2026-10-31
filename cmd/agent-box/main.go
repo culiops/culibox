@@ -658,6 +658,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	recordBoxedProfiles(boxedReg, lnch.Clones(), lnch.BoxedDefaultCwds())
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
+	if h != nil {
+		pm.SetNotHome(h.NotHome)
+	}
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
 	pm.SetEgressAll(layer != nil && runtime.GOOS == "linux")
 	var vmShared []string // the box VM's shared directories; nil without a VM

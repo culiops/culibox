@@ -70,6 +70,8 @@ func (a ManagerService) Restart(id string) (session.Info, error) {
 	return s.Info(), nil
 }
 
+func (a ManagerService) BringHome(id string) error { return a.M.BringHome(id) }
+
 // awsRecentRows is how many audit rows a status reply carries. Fixed, not a
 // query parameter: the audit store reads limit <= 0 as unlimited.
 const awsRecentRows = 20

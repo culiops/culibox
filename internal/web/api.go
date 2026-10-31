@@ -40,6 +40,9 @@ type SessionService interface {
 	Interrupt(id string) error
 	Answer(id, choice, askSHA256 string) error
 	Restart(id string) (session.Info, error)
+	// BringHome starts a "now" return of a clone session's work; it returns at
+	// once (see session.Manager.BringHome).
+	BringHome(id string) error
 }
 
 // API holds the HTTP handlers for sessions.
@@ -554,6 +557,24 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, err.Error())
 		default:
 			writeSpawnErr(w, "(restart "+strings.TrimSuffix(id, "/restart")+")", err)
+		}
+		return
+	}
+	// POST /api/sessions/{id}/bring-home — "Bring work home now": start the
+	// return and answer 202 at once; the result lands on the session's return state.
+	if sid, ok := strings.CutSuffix(id, "/bring-home"); ok {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		switch err := a.Sessions.BringHome(sid); {
+		case err == nil:
+			writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
+		case errors.Is(err, session.ErrNoSession):
+			writeErr(w, http.StatusNotFound, "no such session")
+		case errors.Is(err, session.ErrNotClone), errors.Is(err, session.ErrReturning):
+			writeErr(w, http.StatusConflict, err.Error())
+		default:
+			writeErr(w, http.StatusInternalServerError, "bring home failed")
 		}
 		return
 	}

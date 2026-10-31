@@ -56,6 +56,8 @@ type mockSvc struct {
 	restartID        string
 	restartInfo      session.Info
 	restartErr       error
+	bringHomeID      string
+	bringHomeErr     error
 	boxOut           map[string]string // session id -> box output dir (boxed sessions only)
 }
 
@@ -182,6 +184,10 @@ func (m *mockSvc) Answer(id, choice, sha string) error {
 func (m *mockSvc) Restart(id string) (session.Info, error) {
 	m.restartID = id
 	return m.restartInfo, m.restartErr
+}
+func (m *mockSvc) BringHome(id string) error {
+	m.bringHomeID = id
+	return m.bringHomeErr
 }
 
 func TestAPI_Attribution(t *testing.T) {
@@ -987,6 +993,44 @@ func TestRestartEndpoint(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	(&API{Sessions: &mockSvc{}}).handleSession(rec, crossSiteReq("/api/sessions/claude-3/restart", ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d want 403", rec.Code)
+	}
+}
+
+// POST /bring-home starts a "now" return and answers 202 at once; the
+// refusals map to 404 (no session) and 409 (not a clone, or already returning).
+func TestBringHomeEndpoint(t *testing.T) {
+	svc := &mockSvc{}
+	rec := httptest.NewRecorder()
+	(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/claude-3/bring-home", ""))
+	if rec.Code != http.StatusAccepted || svc.bringHomeID != "claude-3" || !strings.Contains(rec.Body.String(), `"started":true`) {
+		t.Fatalf("code %d id %q body %s", rec.Code, svc.bringHomeID, rec.Body)
+	}
+	for _, c := range []struct {
+		err  error
+		code int
+	}{
+		{session.ErrNoSession, http.StatusNotFound},
+		{session.ErrNotClone, http.StatusConflict},
+		{session.ErrReturning, http.StatusConflict},
+	} {
+		rec := httptest.NewRecorder()
+		(&API{Sessions: &mockSvc{bringHomeErr: c.err}}).handleSession(rec, postReq("/api/sessions/claude-3/bring-home", ""))
+		if rec.Code != c.code {
+			t.Errorf("err %v: code %d want %d", c.err, rec.Code, c.code)
+		}
+		if c.code == http.StatusConflict && !strings.Contains(rec.Body.String(), c.err.Error()) {
+			t.Errorf("err %v: body %s must carry the message", c.err, rec.Body)
+		}
+	}
+	rec = httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, httptest.NewRequest(http.MethodGet, "/api/sessions/claude-3/bring-home", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d want 405", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, crossSiteReq("/api/sessions/claude-3/bring-home", ""))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-site: %d want 403", rec.Code)
 	}
