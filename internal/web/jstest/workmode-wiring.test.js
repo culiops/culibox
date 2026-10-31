@@ -49,6 +49,15 @@ test("saveProfile refuses an incomplete copy before the PUT starts", () => {
   assert.match(b, /\$\("pf-copy-warn"\)\.hidden = !/, "un-hides pf-copy-warn");
 });
 
+test("saveProfile scrolls the share warning into view after un-hiding it", () => {
+  const b = body(app, "saveProfile");
+  const shown = b.indexOf('$("pf-copy-warn").hidden = !shareWarn');
+  assert.ok(shown > 0, "un-hides pf-copy-warn");
+  const m = /\$\("pf-copy-warn"\)\.scrollIntoView\(\{ block: "nearest" \}\)/.exec(b);
+  assert.ok(m, "scrolls pf-copy-warn with block nearest");
+  assert.ok(m.index > shown, "the scroll follows the un-hide");
+});
+
 test("duplicateProfile gives a copy profile a fresh copy directory", () => {
   const b = body(app, "duplicateProfile");
   assert.match(b, /wmCopyDirSuggestion\(/);

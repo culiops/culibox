@@ -4245,9 +4245,11 @@ function readForm() {
 // about a field folded under Advanced (the allowlist's rows, or a server refusal
 // naming args, an option or the base environment), so any failed Save opens the
 // fold: a message pointing at a field nobody can see is a dead end.
+// The fold opens FIRST: the line scrolls itself into view, and opening the fold
+// afterwards adds the Advanced block above it and pushes it off screen.
 function pfSaveError(msg) {
-  setDialogError("settings-modal", msg);
   setPfAdvOpen(true);
+  setDialogError("settings-modal", msg);
 }
 async function saveProfile() {
   const p = readForm();
@@ -4294,7 +4296,8 @@ async function saveProfile() {
       try {
         saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
       } catch (e) {
-        pfSaveError("Save failed: " + e.message);
+        // The per-block lines first, the dialog's line (which scrolls) last: they sit
+        // above it, so un-hiding one after the scroll would push it back off screen.
         // A refusal that names a token entry is also shown on the Tokens block.
         if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
           $("pf-st-err").textContent = String(e.message);
@@ -4312,6 +4315,7 @@ async function saveProfile() {
           $("pf-copy-err").textContent = ce;
           $("pf-copy-err").hidden = false;
         }
+        pfSaveError("Save failed: " + e.message);
         return;
       }
       // Show what the server now holds, not what was typed: the editor and the
@@ -4337,6 +4341,9 @@ async function saveProfile() {
       const shareWarn = wmShareWarningsText(saved);
       $("pf-copy-warn").textContent = shareWarn;
       $("pf-copy-warn").hidden = !shareWarn;
+      // Un-hidden with no scroll it can sit under the Save bar. "nearest" moves
+      // nothing when it is already on screen.
+      if (shareWarn) $("pf-copy-warn").scrollIntoView({ block: "nearest" });
     });
   } finally {
     syncEditorActions();
