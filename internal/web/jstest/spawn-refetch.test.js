@@ -117,3 +117,14 @@ test("New session triggers show Opening… while profiles load", () => {
   }
   assert.match(APP, /let spawnOpening = false;/);
 });
+
+// #spawn-go is hidden on mobile, so forwarding the tap to it would show nothing.
+// The mobile CTA wraps openSpawnDialog itself, and is a plain-text button so the
+// "Opening…" label swap flattens no markup.
+test("the mobile New session button shows Opening… itself", () => {
+  const m = /const sgm = document\.getElementById\("spawn-go-mobile"\);\s*\n\s*if \(sgm\)([^\n]*)/.exec(APP);
+  assert.ok(m, "spawn-go-mobile handler not found");
+  assert.match(m[1], /withPending\(\s*sgm,\s*"Opening…",[^;]*openSpawnDialog\(/);
+  assert.doesNotMatch(m[1], /spawn-go"\)|\.click\(\)/, "must not forward to the hidden #spawn-go");
+  assert.match(HTML, /<button id="spawn-go-mobile"[^>]*>[^<]*<\/button>/, "#spawn-go-mobile must stay a plain-text button");
+});

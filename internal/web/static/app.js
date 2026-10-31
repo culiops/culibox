@@ -818,10 +818,13 @@ function initMobileShell() {
     if (btn) setMobileScreen(btn.dataset.screen);
   });
   // The mobile Sessions screen draws its own full-width "+ new session" (M1)
-  // below the list; it delegates to the existing spawn trigger rather than
-  // binding a second spawn handler.
+  // below the list; it opens the same dialog as the spawn trigger. It wraps
+  // openSpawnDialog itself rather than forwarding a click to #spawn-go: that
+  // button is hidden on mobile, so its pending state would be invisible and a
+  // slow loadProfiles would look dead here. Plain-text button, so the label
+  // swap keeps no markup.
   const sgm = document.getElementById("spawn-go-mobile");
-  if (sgm) sgm.addEventListener("click", () => { const g = document.getElementById("spawn-go"); if (g) g.click(); });
+  if (sgm) sgm.addEventListener("click", () => withPending(sgm, "Opening…", () => openSpawnDialog()));
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
   renderMobileChips();
   renderMobileKeybar();
