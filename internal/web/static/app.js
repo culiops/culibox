@@ -5043,6 +5043,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   hideSpawnUnlock();
+  spawnPlistResetSearch(); // a fresh open starts with an empty profile filter
   spawnPanelOpen();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");

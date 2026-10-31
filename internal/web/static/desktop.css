@@ -952,6 +952,23 @@
     padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
     background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-ctl);
   }
+  /* The profile filter (>= 8 rows): the heading and the box stay put and #sp-rows
+     scrolls under them, so the box is always in view however long the list. The
+     -2px/2px pair keeps a row's focus ring from being clipped by the scroller
+     without moving anything. */
+  #sp-search {
+    flex: none; width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 10px;
+    font: 13px var(--font-ui); color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #sp-search::placeholder { color: var(--faint); }
+  #sp-search:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+  #sp-rows {
+    display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 0; margin: -2px; padding: 2px; overflow-y: auto;
+  }
+  #sp-rows .sp-item { flex: none; }
+  .sp-item[hidden] { display: none; }
+  .sp-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
   .sp-item:hover { background: var(--raise); }
   .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
   .sp-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }

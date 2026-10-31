@@ -41,14 +41,99 @@ function spawnPlistPick(name) {
   sel.dispatchEvent(new Event("change"));
 }
 
+// spawnPlistMove: ArrowDown/Up between the visible rows (a row the filter hid is
+// skipped). ArrowUp from the first visible row goes back to the search box.
 function spawnPlistMove(btn, dir) {
-  const all = Array.from($("spawn-plist").querySelectorAll("button.sp-item"));
-  const next = all[all.indexOf(btn) + dir];
+  const all = Array.from($("spawn-plist").querySelectorAll("button.sp-item:not([hidden])"));
+  const i = all.indexOf(btn);
+  if (dir < 0 && i <= 0) {
+    const s = $("sp-search");
+    if (s) s.focus();
+    return;
+  }
+  const next = all[i + dir];
   if (next) next.focus();
 }
 
+// spawnPlistFilter hides the rows the search box does not match (the hidden
+// attribute, never removal: spawnPlistSelect still finds the selected row, which
+// keeps its .sel while filtered out) and shows the muted no-match line. No box
+// (fewer than PLIST_SEARCH_MIN profiles) means an empty query: every row shows.
+function spawnPlistFilter() {
+  const host = $("spawn-plist");
+  const box = host && host.querySelector("#sp-rows");
+  if (!box) return;
+  const input = host.querySelector("#sp-search");
+  const q = input ? input.value : "";
+  let shown = 0;
+  for (const b of box.querySelectorAll("button.sp-item")) {
+    const touch = b.querySelector(".sp-touch");
+    const ok = profileMatches(b.dataset.name, touch ? touch.textContent : "", q);
+    b.hidden = !ok;
+    if (ok) shown++;
+  }
+  const old = box.querySelector(".sp-empty");
+  if (old) old.remove();
+  if (shown === 0 && q.trim() !== "") box.append(spawnPanelEl("div", "sp-empty", 'No profile matches "' + q.trim() + '"'));
+}
+
+// spawnPlistResetSearch: a fresh open starts unfiltered.
+function spawnPlistResetSearch() {
+  const s = $("sp-search");
+  if (!s || s.value === "") return;
+  s.value = "";
+  spawnPlistFilter();
+}
+
+// spawnPlistSearchKey: the search box lives outside <form id="spawn">, so it has
+// its own keys. Real focus moves (no aria-activedescendant): ArrowDown goes to the
+// first visible row, whose own keys take over. Enter picks the first visible match
+// and focus stays in the box. Escape with text clears it and stops there, so the
+// dialog stays open (a second Escape, on an empty box, closes it as today).
+function spawnPlistSearchKey(e) {
+  const input = e.currentTarget;
+  if (isSubmitHotkey(e, /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ""))) {
+    e.preventDefault();
+    $("spawn").requestSubmit();
+    return;
+  }
+  if (e.isComposing) return;
+  if (e.key === "ArrowDown") {
+    const first = $("spawn-plist").querySelector("button.sp-item:not([hidden])");
+    if (first) { e.preventDefault(); first.focus(); }
+  } else if (e.key === "Enter") {
+    const first = $("spawn-plist").querySelector("button.sp-item:not([hidden])");
+    e.preventDefault();
+    if (first) spawnPlistPick(first.dataset.name);
+  } else if (e.key === "Escape" && input.value !== "") {
+    // keydown's default action is what asks the <dialog> to close; stopping it
+    // here keeps the dialog (and any document-level Escape handler) out of it.
+    e.preventDefault();
+    e.stopPropagation();
+    input.value = "";
+    spawnPlistFilter();
+  }
+}
+
+function spawnPlistSearchInput() {
+  const input = spawnPanelEl("input");
+  input.id = "sp-search";
+  input.type = "text";
+  input.placeholder = "Filter profiles";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", "Filter profiles");
+  input.setAttribute("aria-controls", "sp-rows");
+  input.addEventListener("input", spawnPlistFilter);
+  input.addEventListener("keydown", spawnPlistSearchKey);
+  return input;
+}
+
 // renderSpawnPlist rebuilds the list from profiles[]. Cheap (a handful of rows);
-// called when profiles load and when the dialog opens.
+// called when profiles load and when the dialog opens. Layout: heading, the search
+// box (only from PLIST_SEARCH_MIN rows up), then #sp-rows. Once the box exists a
+// re-render replaces only the rows, so the box keeps its node, value and focus,
+// and the current filter is applied to the new rows.
 function renderSpawnPlist() {
   const host = $("spawn-plist");
   if (!host || !spawnPanelOn()) return;
@@ -67,7 +152,17 @@ function renderSpawnPlist() {
     };
     return b;
   });
-  host.replaceChildren(spawnPanelEl("div", "sp-head", "Profile"), ...rows);
+  const wantSearch = rows.length >= PLIST_SEARCH_MIN;
+  let box = host.querySelector("#sp-rows");
+  if (!box || wantSearch !== !!host.querySelector("#sp-search")) {
+    box = spawnPanelEl("div");
+    box.id = "sp-rows";
+    const kids = [spawnPanelEl("div", "sp-head", "Profile")];
+    if (wantSearch) kids.push(spawnPlistSearchInput());
+    host.replaceChildren(...kids, box);
+  }
+  box.replaceChildren(...rows);
+  spawnPlistFilter();
 }
 
 // spawnPlistSelect: only the selection moved (a change of #agent).

@@ -80,6 +80,19 @@ function isSubmitHotkey(e, mac) {
   return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
 }
 
+// PLIST_SEARCH_MIN: the New session profile list gets a search box from this many
+// rendered rows up (desktop only; the list does not exist on mobile).
+const PLIST_SEARCH_MIN = 8;
+
+// profileMatches: the list filter. Case-insensitive substring on the profile name
+// or its "touches" line; no fuzzy matching. A blank query matches everything.
+function profileMatches(name, touch, q) {
+  const needle = String(q == null ? "" : q).trim().toLowerCase();
+  if (needle === "") return true;
+  return String(name == null ? "" : name).toLowerCase().includes(needle)
+    || String(touch == null ? "" : touch).toLowerCase().includes(needle);
+}
+
 // spawnRefusedLocked: the server refused a spawn or restart because the secret
 // store is locked (HTTP 423 with code "store_locked"). The dialog answers by
 // showing the unlock form inline, not by closing with a toast.
@@ -103,5 +116,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     spawnRefusedLocked, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
+    PLIST_SEARCH_MIN, profileMatches,
   };
 }
