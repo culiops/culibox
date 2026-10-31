@@ -4345,10 +4345,12 @@ function duplicateProfile() {
   const name = selectedProfileName();
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
-  // Two profiles writing one clone directory would share a .git: a duplicate of
-  // a private copy gets its own.
-  if (draft.clone_of) {
-    const fresh = wmCopyDirSuggestion(draft.clone_of, window.HOME_DIR || "", profiles.map((x) => x.default_cwd).filter(Boolean));
+  // Two profiles writing one clone directory would share a .git: a duplicate made
+  // from copy mode never keeps the source's copy dir. Decided on the form's mode,
+  // not on draft.clone_of: with the folder field cleared clone_of is omitted but
+  // default_cwd (the source's clone dir) would still ride along.
+  if (pfMode() === "copy") {
+    const fresh = draft.clone_of ? wmCopyDirSuggestion(draft.clone_of, window.HOME_DIR || "", profiles.map((x) => x.default_cwd).filter(Boolean)) : "";
     if (fresh) draft.default_cwd = fresh;
     else delete draft.default_cwd;
   }

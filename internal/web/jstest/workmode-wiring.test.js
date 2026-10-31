@@ -45,12 +45,22 @@ test("saveProfile refuses an incomplete copy before the PUT starts", () => {
   assert.ok(at < b.indexOf("withPending("), "wmFormError must run before withPending");
   assert.match(b, /wmErrText\(/);
   assert.match(b, /wmShareWarningsText\(/);
+  assert.ok(b.indexOf("wmShareWarningsText(") > b.lastIndexOf("fillForm("), "the share warning is shown after the refetch, which clears it");
+  assert.match(b, /\$\("pf-copy-warn"\)\.hidden = !/, "un-hides pf-copy-warn");
 });
 
 test("duplicateProfile gives a copy profile a fresh copy directory", () => {
   const b = body(app, "duplicateProfile");
   assert.match(b, /wmCopyDirSuggestion\(/);
   assert.ok(b.indexOf("wmCopyDirSuggestion(") < b.indexOf("fillForm("), "before fillForm");
+});
+
+test("duplicateProfile decides on the form's mode, and drops the source's copy dir when no fresh one exists", () => {
+  const b = body(app, "duplicateProfile");
+  assert.match(b, /pfMode\(\)\s*===\s*"copy"/);
+  assert.doesNotMatch(b, /if \(draft\.clone_of\)/, "clone_of is omitted when the folder field is cleared");
+  assert.match(b, /delete draft\.default_cwd/);
+  assert.ok(b.indexOf('pfMode() === "copy"') < b.indexOf("delete draft.default_cwd"));
 });
 
 test("fillForm shows the folder to copy in the workspace field", () => {
