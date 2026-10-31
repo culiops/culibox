@@ -2,7 +2,7 @@
 // workmode.js: the profile editor's pure work-mode rules.
 const test = require("node:test");
 const assert = require("node:assert");
-const { wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine } = require("../static/workmode.js");
+const { wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine, wmFolderCopy } = require("../static/workmode.js");
 
 test("mode: copy only for a non-empty string clone_of", () => {
   assert.strictEqual(wmModeOf({ clone_of: "/r" }), "copy");
@@ -104,4 +104,15 @@ test("github hint: copy mode with no github route", () => {
 test("copy line: Private copy of <~path>", () => {
   assert.strictEqual(wmCopyLine("/h/culiops-skills", "/h"), "Private copy of ~/culiops-skills");
   assert.strictEqual(wmCopyLine("", "/h"), "");
+});
+
+test("folder copy: the box tier keeps the verbatim copy, the host tier never claims read-only", () => {
+  assert.deepStrictEqual(wmFolderCopy(false), {
+    body: "The agent edits your files directly. Your git history stays read-only: you review and commit yourself.",
+    commitCell: "No: your git history is read-only",
+  });
+  assert.deepStrictEqual(wmFolderCopy(true), {
+    body: "The agent edits your files directly, as you. On the host tier nothing is read-only.",
+    commitCell: "Yes: on the host tier it runs as you",
+  });
 });

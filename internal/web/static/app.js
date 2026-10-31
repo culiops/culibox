@@ -4157,6 +4157,10 @@ function syncPfMode() {
   $("pf-mode-copy-card").classList.toggle("off", st.copyDisabled);
   folderRadio.closest(".pf-mode-card").classList.toggle("off", folderRadio.disabled);
   $("pf-mode-copy-why").textContent = st.copyReason;
+  // Same tier test as renderPfTouch: no box layer means every session is host.
+  const folderCopy = wmFolderCopy((metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host");
+  $("pf-mode-folder-body").textContent = folderCopy.body;
+  $("pf-mode-diff-commit").textContent = folderCopy.commitCell;
   $("pf-mode-hint").textContent = st.hint;
   $("pf-mode-hint").hidden = !st.hint;
   const note = wmSwitchNote(pfSavedMode, mode, pfSavedCopyDir, window.HOME_DIR || "");
@@ -4358,6 +4362,12 @@ function duplicateProfile() {
   selectedProfile = "";
   pfUserDraft = true;
   fillForm(draft);
+  // fillForm took the saved mode and copy dir from an unsaved draft; nothing is
+  // saved yet, so no "your private copy stays on disk" note may name a directory
+  // that was never made.
+  pfSavedMode = "folder";
+  pfSavedCopyDir = "";
+  syncPfMode();
   setDialogError("settings-modal", "");
   $("settings-modal").classList.add("editing");
   renderProfileList();

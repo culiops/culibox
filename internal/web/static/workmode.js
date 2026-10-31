@@ -135,6 +135,22 @@ function wmCopyLine(cloneOf, home) {
   return "Private copy of " + wmDep("shortPath", "./fsops.js")(cloneOf, home);
 }
 
+// wmFolderCopy: the folder card's body and the "Agent can commit" cell of the
+// difference table. In a box the git history is read-only (the box enforces
+// it); on the host tier the agent runs as the user, so nothing is.
+function wmFolderCopy(isHost) {
+  if (isHost) {
+    return {
+      body: "The agent edits your files directly, as you. On the host tier nothing is read-only.",
+      commitCell: "Yes: on the host tier it runs as you",
+    };
+  }
+  return {
+    body: "The agent edits your files directly. Your git history stays read-only: you review and commit yourself.",
+    commitCell: "No: your git history is read-only",
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine };
+  module.exports = { wmFolderCopy, wmModeOf, wmCardState, wmFieldsToSend, wmFormError, wmErrText, wmShareWarningsText, wmCopyDirSuggestion, wmSwitchNote, wmNeedsGitHubHint, wmCopyLine };
 }

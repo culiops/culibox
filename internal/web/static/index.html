@@ -349,7 +349,7 @@
           <div class="pf-mode-cards" role="radiogroup" aria-labelledby="pf-mode-lab">
             <label class="pf-mode-card"><input type="radio" name="pf-mode" value="folder" checked>
               <span class="pf-mode-txt"><b>Work in this folder</b>
-              <span class="tiny mut">The agent edits your files directly. Your git history stays read-only: you review and commit yourself.</span></span></label>
+              <span class="tiny mut" id="pf-mode-folder-body">The agent edits your files directly. Your git history stays read-only: you review and commit yourself.</span></span></label>
             <label class="pf-mode-card" id="pf-mode-copy-card"><input type="radio" name="pf-mode" value="copy">
               <span class="pf-mode-txt"><b>Work on a private copy</b>
               <span class="tiny mut">The agent gets its own copy: it can commit, branch and push. Your folder is untouched until its work comes home.</span>
@@ -362,7 +362,7 @@
               <thead><tr><th scope="col"></th><th scope="col">Work in this folder</th><th scope="col">Work on a private copy</th></tr></thead>
               <tbody>
                 <tr><th scope="row">Sees changes live</th><td>Yes, in your folder</td><td>No: they stay in the copy until they come home</td></tr>
-                <tr><th scope="row">Agent can commit</th><td>No: your git history is read-only</td><td>Yes: commit, branch and push</td></tr>
+                <tr><th scope="row">Agent can commit</th><td id="pf-mode-diff-commit">No: your git history is read-only</td><td>Yes: commit, branch and push</td></tr>
                 <tr><th scope="row">How work comes home</th><td>It is already there; you commit</td><td>As box/&lt;branch&gt; when you run agent-box clone fetch, or as a PR the agent pushes</td></tr>
                 <tr><th scope="row">Good for</th><td>Small changes you review as they happen</td><td>Longer tasks, branches and PRs</td></tr>
               </tbody>

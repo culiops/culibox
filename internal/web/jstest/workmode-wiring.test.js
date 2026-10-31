@@ -78,6 +78,25 @@ test("syncPfMode is display only", () => {
   assert.match(b, /wmNeedsGitHubHint\(/);
 });
 
+test("syncPfMode: the folder card tells the truth on the host tier", () => {
+  const b = body(app, "syncPfMode");
+  assert.ok(b.includes("wmFolderCopy("), "syncPfMode calls wmFolderCopy(");
+  assert.match(b, /\(metaLoaded && !boxRuntime\) \|\| segValue\(\$\("pf-runtime"\)\) === "host"/, "same tier test as renderPfTouch");
+  assert.match(b, /\$\("pf-mode-folder-body"\)\.textContent/);
+  assert.match(b, /\$\("pf-mode-diff-commit"\)\.textContent/);
+  assert.ok(html.includes('id="pf-mode-folder-body"') && html.includes('id="pf-mode-diff-commit"'));
+});
+
+test("duplicateProfile clears the saved-mode memory, so no stale switch note names a directory that was never made", () => {
+  const b = body(app, "duplicateProfile");
+  const fill = b.indexOf("fillForm(draft)");
+  assert.ok(fill > 0);
+  const after = b.slice(fill);
+  assert.match(after, /pfSavedMode\s*=\s*"folder"/);
+  assert.match(after, /pfSavedCopyDir\s*=\s*""/);
+  assert.ok(after.indexOf("syncPfMode()") > after.indexOf("pfSavedCopyDir"), "re-synced after the reset");
+});
+
 test("the editor lock closes the work-mode radios too, and syncPfMode runs last", () => {
   assert.match(app, /\.ped input\[type=radio\]/);
   const b = body(app, "syncEditorActions");
