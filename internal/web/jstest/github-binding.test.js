@@ -3,7 +3,7 @@
 // halves are pure functions so the rules can be read and tested without a DOM.
 const test = require("node:test");
 const assert = require("node:assert");
-const { ghBindingFromForm, ghFormError, ghPermLevels, ghWriteWarning, ghRouteOf, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
+const { ghBindingFromForm, ghFormError, ghPermLevels, ghWriteWarning, ghRouteOf, ghUsableTokens, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
 const { ghRowText, ghRailRows } = require("../static/steerrail.js");
 
 const allDefaults = () => Object.fromEntries(GH_PERMS.map((k) => [k, GH_DEFAULT_PERMS.includes(k) ? "read" : "off"]));
@@ -210,4 +210,14 @@ test("ghRowText: PAT <entry> only for a github row; an aws row names its connect
   assert.match(aws, / · sbx-a/);
   assert.doesNotMatch(aws, /PAT/);
   assert.doesNotMatch(ghRowText({ provider: "aws", outcome: "minted", entry: "sbx-a" }), /PAT/);
+});
+
+test("ghUsableTokens keeps GitHub tokens by provider or by host, in input order", () => {
+  const got = ghUsableTokens([
+    { name: "sentry", provider: "sentry", hosts: [{ host: "sentry.io" }] },
+    { name: "gh-pat", provider: "github", hosts: [] },
+    { name: "legacy", hosts: [{ host: "api.github.com" }] },
+  ]);
+  assert.deepStrictEqual(got.map((e) => e.name), ["gh-pat", "legacy"]);
+  assert.deepStrictEqual(ghUsableTokens(undefined), []);
 });

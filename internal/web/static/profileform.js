@@ -238,6 +238,13 @@ function ghRouteOf(binding) {
 // The Tokens block (N3). entries are /api/meta's static_tokens (names and
 // shape only; the value and where it is read from never reach the browser).
 
+// ghUsableTokens: the Tokens entries a GitHub owner row can use, in input order:
+// provider "github", or a host of github.com / api.github.com for an entry that
+// predates providers. A Sentry or Datadog token never reaches the owner picker.
+function ghUsableTokens(entries) {
+  return (entries || []).filter((e) => e && (e.provider === "github" || (e.hosts || []).some((h) => h && (h.host === "github.com" || h.host === "api.github.com"))));
+}
+
 // stGroups: the picker's groups, by provider. Providers sorted, an entry with
 // none under "other" last, names sorted inside each.
 function stGroups(entries) {
@@ -420,5 +427,5 @@ function autoReturnToSend(checked) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
 }

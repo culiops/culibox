@@ -3779,11 +3779,11 @@ function renderGhOwners(rows) {
     // One picker for both kinds of owner: an App (values app:<name>) or a
     // personal access token entry (token:<entry>); see readGhRows.
     const apps = ghApps.includes(r.app) || !r.app ? ghApps : [...ghApps, r.app];
-    const pats = stEntries.map((e) => e.name);
+    const pats = ghUsableTokens(stEntries).map((e) => e.name);
     if (r.token && !pats.includes(r.token)) pats.push(r.token);
     if (!apps.length && !pats.length) {
       const o = document.createElement("option");
-      o.value = ""; o.textContent = "no App defined"; o.disabled = true;
+      o.value = ""; o.textContent = "no App or token defined"; o.disabled = true;
       sel.append(o);
     }
     for (const [label, kind, list] of [["Apps", "app", apps], ["Personal access tokens", "token", pats]]) {
@@ -3821,10 +3821,10 @@ function renderGhOwners(rows) {
     const rmCol = document.createElement("div");
     rmCol.className = "fcol rm";
     rmCol.append(rm);
-    row.append(ghField("app", "App", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol, note);
+    row.append(ghField("app", "App or token", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol, note);
     host.append(row);
   });
-  $("pf-gh-noapps").hidden = ghApps.length > 0;
+  $("pf-gh-noapps").hidden = ghApps.length > 0 || ghUsableTokens(stEntries).length > 0;
 }
 function readGhRows() {
   return [...$("pf-gh-owners").querySelectorAll(".pf-gh-owner")].map((row) => {
