@@ -276,8 +276,16 @@ func returnModeOf(c config.Clone, trigger string) clone.ReturnMode {
 	return clone.ReturnAuto
 }
 
-// doReturn runs one return with the clone's lock already held.
+// doReturn runs one return with the clone's lock already held. Host git runs in
+// clone_of, so a clone_of that has become box-owned since the spawn (another
+// profile's clone, a dir now in the clone-dirs record, or a record that cannot
+// be read) is refused before anything runs: a box could have planted hooks or
+// config there. A refused return runs nothing, so the state file is left as it
+// was.
 func (h *cloneHooks) doReturn(ctx context.Context, c config.Clone, trigger string, mode clone.ReturnMode) session.ReturnSummary {
+	if err := h.checkOf(c.Of); err != nil {
+		return session.ReturnSummary{Trigger: trigger, At: time.Now(), Error: clone.Sanitize(err.Error())}
+	}
 	return returnSummaryOf(trigger, h.ret(ctx, h.env.Git, h.docker, clone.ReturnRequest{
 		Clone: c, Mode: mode, Image: h.image, Instance: h.instance,
 		TempDir: filepath.Join(h.dataDir, "clone-fetch"), Home: h.env.Home, DataDir: h.dataDir, Protected: h.env.Protected,

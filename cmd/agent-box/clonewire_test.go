@@ -794,8 +794,10 @@ func TestCloneReturnTakesTheCloneLock(t *testing.T) {
 	// A refresh waits for a return in progress.
 	f.retDelay = 200 * time.Millisecond
 	now := returnWorkAsync(f.h, context.Background(), c, session.ReturnOpts{Trigger: session.ReturnNow})
-	for f.retCount() < 2 {
-		time.Sleep(5 * time.Millisecond)
+	for deadline := time.Now().Add(5 * time.Second); f.retCount() < 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the \"now\" return did not start")
+		}
 	}
 	start := time.Now()
 	_, rel := f.h.Refresh(context.Background(), c, session.RefreshOpts{})
@@ -1076,4 +1078,99 @@ func TestCloneHooksNotHome(t *testing.T) {
 	if got := h.NotHome(c); got != nil {
 		t.Fatalf("no data dir: %+v", got)
 	}
+}
+
+// clone_of is host-owned when the clone is made, but a profile saved or a dir
+// recorded later can make it a box's: host git must not run there on any trigger.
+func TestCloneReturnRefusesBoxOwnedCloneOf(t *testing.T) {
+	type setup func(t *testing.T, f *refreshFake) string // returns clone_of
+	for _, tc := range []struct {
+		name string
+		set  setup
+	}{
+		{"recorded dir", func(t *testing.T, f *refreshFake) string {
+			of := cloneDir(t)
+			if err := f.h.record(of); err != nil {
+				t.Fatal(err)
+			}
+			return of
+		}},
+		{"inside another profile's clone", func(t *testing.T, f *refreshFake) string {
+			other := cloneDir(t)
+			f.h.clones = func() []config.Clone { return []config.Clone{{Of: "/elsewhere", Dir: other}} }
+			return filepath.Join(other, "sub")
+		}},
+		{"corrupt record", func(t *testing.T, f *refreshFake) string {
+			if err := os.WriteFile(f.h.file, []byte("not/absolute\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return cloneDir(t)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefreshFake(t)
+			f.h.dataDir = t.TempDir()
+			dir := cloneDir(t)
+			of := tc.set(t, f)
+			c := config.Clone{Of: of, Dir: dir}
+			for _, trig := range []string{session.ReturnOnExit, session.ReturnNow} {
+				sum := f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: trig})
+				if sum.Error == "" || sum.Trigger != trig || sum.At.IsZero() || len(sum.Home) != 0 {
+					t.Fatalf("%s: summary = %+v; want a set Error", trig, sum)
+				}
+			}
+			info, release := f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+			release()
+			if info.Return == nil || info.Return.Trigger != session.ReturnOnSpawn || info.Return.Error == "" {
+				t.Fatalf("spawn-time return = %+v; want a set Error", info.Return)
+			}
+			if f.retCount() != 0 {
+				t.Fatalf("clone.Return ran %d time(s) for a box-owned clone_of", f.retCount())
+			}
+			if _, ok, _ := clone.ReadReturnState(f.h.dataDir, dir); ok {
+				t.Fatal("a refused return wrote a state file")
+			}
+			if len(f.reqs) != 1 {
+				t.Fatalf("the refresh must still run after a refused spawn return: %d call(s)", len(f.reqs))
+			}
+		})
+	}
+}
+
+// A panic in clone.Return must not leave the clone locked, from ReturnWork or
+// from the return inside Refresh.
+func TestCloneReturnPanicReleasesLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	c := config.Clone{Of: "/r", Dir: dir}
+	f.h.ret = func(context.Context, clone.Git, clone.Docker, clone.ReturnRequest) clone.ReturnResult {
+		panic("boom")
+	}
+	expectPanic := func(fn func()) {
+		t.Helper()
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Fatalf("recovered %v, want the original panic", p)
+			}
+		}()
+		fn()
+	}
+	free := func(what string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rel, ok := f.h.lockClone(ctx, dir)
+		if !ok {
+			t.Fatalf("%s left the clone locked", what)
+		}
+		rel()
+	}
+	expectPanic(func() {
+		f.h.ReturnWork(context.Background(), c, session.ReturnOpts{Trigger: session.ReturnOnExit})
+	})
+	free("a panicking ReturnWork")
+	expectPanic(func() {
+		f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
+	})
+	free("a panicking return inside Refresh")
 }
