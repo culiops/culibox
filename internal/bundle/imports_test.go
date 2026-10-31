@@ -623,3 +623,112 @@ func TestResolveImportsEmptyHostHome(t *testing.T) {
 		}
 	}
 }
+
+// impLink makes link point at target, creating link's parent.
+func impLink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A box can replace a folder in a tree it writes (a workspace) with a link.
+// Through it, an import's spelled path would reach any file of the same name
+// anywhere under home, so a folder link on the path is followed only when the
+// link itself sits in Source (S5).
+func TestResolveImportsDirLinkOutsideSourceRefused(t *testing.T) {
+	t.Run("planted in a workspace, to a secret under ~/.claude", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		mem := filepath.Join(src, "projects", "-secret", "memory")
+		impWrite(t, filepath.Join(mem, "MEMORY.md"), "SECRET")
+		impLink(t, mem, filepath.Join(home, "work", "repo", "docs"))
+		abs := filepath.Join(home, "work", "repo", "docs", "MEMORY.md")
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/work/repo/docs/MEMORY.md\n@"+abs+"\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if len(s.Files) != 0 {
+			t.Fatalf("files = %v", impBoxes(s))
+		}
+		for _, sp := range []string{"~/work/repo/docs/MEMORY.md", abs} {
+			if got := impRefusal(s, sp); got != ReasonImportSymlinkEscape {
+				t.Errorf("%s: reason %q", sp, got)
+			}
+		}
+	})
+	t.Run("a link outside Source to a folder inside home", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		impWrite(t, filepath.Join(home, "dotfiles", "notes", "a.md"), "A")
+		impLink(t, filepath.Join(home, "dotfiles", "notes"), filepath.Join(home, "notes"))
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/notes/a.md\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if len(s.Files) != 0 || impRefusal(s, "~/notes/a.md") != ReasonImportSymlinkEscape {
+			t.Fatalf("got %+v", s)
+		}
+	})
+	t.Run("a second link past the trusted one", func(t *testing.T) {
+		// ~/.claude/context -> ~/dotfiles/context is the user's; a link inside
+		// ~/dotfiles/context is not in ~/.claude, so it is not followed.
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		impWrite(t, filepath.Join(home, "vault", "a.md"), "V")
+		impLink(t, filepath.Join(home, "dotfiles", "context"), filepath.Join(src, "context"))
+		impLink(t, filepath.Join(home, "vault"), filepath.Join(home, "dotfiles", "context", "sub"))
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@context/sub/a.md\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if len(s.Files) != 0 || impRefusal(s, "context/sub/a.md") != ReasonImportSymlinkEscape {
+			t.Fatalf("got %+v", s)
+		}
+	})
+	t.Run("a link outside home leading back in", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		impWrite(t, filepath.Join(home, "vault", "a.md"), "V")
+		impLink(t, filepath.Join(home, "vault"), filepath.Join(tmp, "out", "ctx"))
+		impLink(t, filepath.Join(tmp, "out", "ctx"), filepath.Join(src, "context"))
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@context/a.md\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if len(s.Files) != 0 || impRefusal(s, "context/a.md") != ReasonImportSymlinkEscape {
+			t.Fatalf("got %+v", s)
+		}
+	})
+	t.Run("relative and chained links inside Source are followed", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		impWrite(t, filepath.Join(src, "real", "deep", "a.md"), "R")
+		impLink(t, "real", filepath.Join(src, "r1"))
+		impLink(t, filepath.Join("..", "r1", "deep"), filepath.Join(src, "real", "d2"))
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@r1/d2/a.md\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if got := impBoxes(s); !reflect.DeepEqual(got, []string{"/home/agent/.claude/r1/d2/a.md"}) || s.Files[0].SHA256 != impSum("R") {
+			t.Fatalf("boxes = %v refused %v", got, s.Refused)
+		}
+	})
+	t.Run("~/.claude itself a link is the user's Source", func(t *testing.T) {
+		tmp := t.TempDir()
+		home := filepath.Join(tmp, "home")
+		real := filepath.Join(home, "dotfiles", "claude")
+		impWrite(t, filepath.Join(real, "CLAUDE.md"), "@context/a.md\n@~/.claude/context/a.md\n")
+		impWrite(t, filepath.Join(real, "context", "a.md"), "A")
+		src := filepath.Join(home, ".claude")
+		impLink(t, real, src)
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if got := impBoxes(s); !reflect.DeepEqual(got, []string{"/home/agent/.claude/context/a.md"}) || len(s.Refused) != 0 {
+			t.Fatalf("boxes = %v refused %v", got, s.Refused)
+		}
+	})
+	t.Run("a link loop is skipped, not followed forever", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, src := impFixture(t, tmp)
+		impLink(t, "l2", filepath.Join(src, "l1"))
+		impLink(t, "l1", filepath.Join(src, "l2"))
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@l1/a.md\n")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if len(s.Files) != 0 || len(s.Refused) != 0 {
+			t.Fatalf("got %+v", s)
+		}
+	})
+}

@@ -278,15 +278,16 @@ func TestImportsDenySanitizedConfigFiles(t *testing.T) {
 	impWrite(t, filepath.Join(src, "settings.json"), `{"env":{"TOKEN":"sk-literal"}}`)
 	impWrite(t, filepath.Join(src, "settings.local.json"), `{"env":{"TOKEN":"sk-local"}}`)
 	// A directory link that leads to the config dir: the file's identity, not its
-	// spelling, is what is denied.
-	if err := os.Symlink(src, filepath.Join(home, "cfg")); err != nil {
+	// spelling, is what is denied. The link sits in the config dir, the only
+	// place a folder link on an import's path is followed (S5).
+	if err := os.Symlink(src, filepath.Join(src, "cfg")); err != nil {
 		t.Fatal(err)
 	}
 	spell := []string{
 		mcp,
 		filepath.Join(src, "settings.json"),
 		filepath.Join(src, "settings.local.json"),
-		"~/cfg/settings.json",
+		"~/.claude/cfg/settings.json",
 	}
 	var md strings.Builder
 	for _, sp := range spell {

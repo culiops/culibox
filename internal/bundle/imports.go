@@ -154,11 +154,12 @@ const (
 	maxImportFiles = 64
 	maxImportBytes = 256 << 10 // per file
 	maxImportTotal = 4 << 20   // per set
+	maxImportLinks = 40        // per path, like the kernel's ELOOP
 )
 
 // Refusal reasons, shown to the user as "<import> <reason>".
 const (
-	ReasonImportSymlinkEscape = "is a symlink that leads out of its folder; only files that stay in the folder they are imported from are given to the box"
+	ReasonImportSymlinkEscape = "goes through a symlink the box could have planted: a file link must stay in its folder, and a folder link must be inside your ~/.claude folder"
 	ReasonImportNotRegular    = "is not a regular file (a directory, socket, named pipe or device)"
 	ReasonImportTooLarge      = "is larger than 256 KiB"
 	ReasonImportTooMany       = "the imports exceed 64 files or 4 MiB; the rest are left out"
@@ -238,6 +239,7 @@ type importSeen struct{ home, source bool }
 type importWalk struct {
 	o        importOpts
 	home     string // EvalSymlinks(HostHome), "" when unresolved
+	srcReal  string // EvalSymlinks(Source), "" when unresolved
 	denySpel []string
 	ids      importIDs
 	seen     map[string]string // in-box path -> host path it was mapped from
@@ -284,6 +286,7 @@ func resolveImports(o importOpts) ImportSet {
 		}
 	}
 	if s, err := filepath.EvalSymlinks(o.Source); err == nil {
+		w.srcReal = s
 		w.ids.source, _ = os.Stat(s)
 	}
 	// The root is read the way the bundle copies it (resolveIn): links
@@ -429,9 +432,9 @@ func (w *importWalk) mapImport(sp string, n importNode) (host, bx string, absFra
 // read. underSource is true when the read passed through Source, which is what
 // lets the file's own imports be followed.
 func (w *importWalk) load(sp, host, bx string) (f *ImportFile, underSource bool, reason string) {
-	realDir, err := filepath.EvalSymlinks(filepath.Dir(host))
-	if err != nil {
-		return nil, false, ""
+	realDir, reason, ok := w.resolveDir(filepath.Dir(host))
+	if !ok {
+		return nil, false, reason
 	}
 	// Resolved, the file must still sit under the resolved home: a directory
 	// link out of home would hand the box files the spelling never named.
@@ -489,6 +492,126 @@ func (w *importWalk) load(sp, host, bx string) (f *ImportFile, underSource bool,
 		Size: int64(len(b)), SHA256: hex.EncodeToString(sum[:]), content: b,
 		Warnings: importWarnings(name, b),
 	}, seen.source, ""
+}
+
+// resolveDir resolves dir, an absolute clean host directory, to its real path
+// the way the kernel walks it, one component at a time, and decides each folder
+// link on the way (S5): it is followed only when the link itself sits in Source,
+// that is its real parent passes through Source by identity. A box can replace
+// a folder in any tree it writes with a link, and through it the import would
+// name a same-named file anywhere. A link elsewhere is refused (SymlinkEscape),
+// or, when it sits outside home and does not lead back in, OutsideHome as S2
+// would say. ok=false with no reason is a silent skip: a missing or non-folder
+// component, or a link loop.
+//
+// The decision for a plain folder can go stale if the box swaps it for a link
+// right after: readImport then walks the returned real path, which names that
+// folder as a plain component, and refuses the link it finds there. A link in
+// Source is trusted because no box can write Source (S1, S6).
+func (w *importWalk) resolveDir(dir string) (real, reason string, ok bool) {
+	cur, rest := w.anchor(dir)
+	if cur == "" {
+		return "", "", false
+	}
+	links := 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur) // cur is real: ".." is its parent
+			continue
+		}
+		next := filepath.Join(cur, c)
+		fi, err := os.Lstat(next)
+		if err != nil {
+			return "", "", false
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			if !fi.IsDir() {
+				return "", "", false
+			}
+			cur = next
+			continue
+		}
+		if links++; links > maxImportLinks {
+			return "", "", false
+		}
+		if !w.inSource(cur) {
+			return "", w.escapeReason(cur, next, rest), false
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", "", false
+		}
+		if filepath.IsAbs(target) {
+			var pre []string
+			if cur, pre = w.anchor(filepath.Clean(target)); cur == "" {
+				return "", "", false
+			}
+			rest = append(pre, rest...)
+		} else {
+			rest = append(strings.Split(target, "/"), rest...)
+		}
+	}
+	return cur, "", true
+}
+
+// anchor splits p, absolute and clean, into the real path of its longest
+// trusted prefix (Source or the home, as spelled or resolved: the user's own
+// paths, which no box can write) and the components below it. With no trusted
+// prefix the walk starts at "/". cur is "" when the prefix does not resolve.
+func (w *importWalk) anchor(p string) (cur string, rest []string) {
+	pre := "/"
+	for _, a := range []string{w.o.Source, w.srcReal, w.o.HostHome, w.home} {
+		if a != "" && len(a) > len(pre) && box.UnderMount(p, []string{a}) {
+			pre = filepath.Clean(a)
+		}
+	}
+	real, err := filepath.EvalSymlinks(pre)
+	if err != nil {
+		return "", nil
+	}
+	if rel, _ := filepath.Rel(pre, p); rel != "." && rel != "" {
+		rest = strings.Split(rel, "/")
+	}
+	return real, rest
+}
+
+// inSource reports whether dir, a real path, is Source or under it, by
+// identity (Lstat: an ancestor swapped for a link to Source does not count).
+func (w *importWalk) inSource(dir string) bool {
+	if w.ids.source == nil {
+		return false
+	}
+	for p := dir; ; p = filepath.Dir(p) {
+		if fi, err := os.Lstat(p); err == nil && os.SameFile(fi, w.ids.source) {
+			return true
+		}
+		if p == "/" || p == "." {
+			return false
+		}
+	}
+}
+
+// escapeReason is the refusal for the link at next (in the real dir parent)
+// that is not in Source. A link outside home that also ends outside home is
+// what S2 refuses anyway (on macOS /tmp and /var are such links), so it says
+// that; one inside home, or one that leads back into home, is the escape.
+func (w *importWalk) escapeReason(parent, next string, rest []string) string {
+	if w.home == "" {
+		return ReasonImportOutsideHome
+	}
+	if box.UnderMount(parent, []string{w.home}) {
+		return ReasonImportSymlinkEscape
+	}
+	full, err := filepath.EvalSymlinks(filepath.Join(append([]string{next}, rest...)...))
+	if err == nil && !box.UnderMount(full, []string{w.home}) {
+		return ReasonImportOutsideHome
+	}
+	return ReasonImportSymlinkEscape
 }
 
 // readImport reads the regular file at real, an absolute path with no links in
