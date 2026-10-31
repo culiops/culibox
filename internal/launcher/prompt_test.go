@@ -266,10 +266,56 @@ func dropTestLauncher() *AgentLauncher {
 
 func TestDroppedOptionsUnexposedKey(t *testing.T) {
 	l := dropTestLauncher()
-	got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"model": "sonnet"}})
-	want := []OptionDrop{{Key: "model", Reason: "this profile does not expose this option"}}
+	// A bool is a capability (skip = bypass permissions): a profile must opt in.
+	got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"skip": true}})
+	want := []OptionDrop{{Key: "skip", Reason: "this profile does not expose this option"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("DroppedOptions = %v, want %v", got, want)
+	}
+}
+
+// model/effort apply to the bin and default to offer_unset, so they are offered
+// on every profile (#35): a profile made in the editor with Model/Effort unset
+// still lets a spawn pick them. Values are still checked against the choices,
+// and the bin scoping holds. Any other enum stays opt-in (see the next test).
+func TestEnumOptionOfferedWithoutProfileDefault(t *testing.T) {
+	defs := []config.OptionDef{
+		{Key: "model", Type: "enum", Choices: []string{"opus", "sonnet"}, Flag: "--model", Bins: []string{"claude"}},
+	}
+	l := New([]config.AgentConfig{{Name: "bare", Bin: "claude"}, {Name: "sh", Bin: "bash"}}, fakeResolver{}, defs)
+	if got := l.AcceptedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"model": "sonnet"}}); got["model"] != "sonnet" {
+		t.Fatalf("unset enum not offered: %v", got)
+	}
+	if got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"model": "$(evil)"}}); len(got) != 1 || got[0].Reason != "invalid value for this option" {
+		t.Fatalf("bad enum value: %v", got)
+	}
+	if got := l.DroppedOptions(SpawnSpec{Agent: "sh", Options: map[string]any{"model": "sonnet"}}); len(got) != 1 || got[0].Reason != "this profile does not expose this option" {
+		t.Fatalf("claude-only enum offered to bash: %v", got)
+	}
+	// Blank = the agent's own default: nothing reaches the command, nothing is reported.
+	if got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"model": ""}}); len(got) != 0 {
+		t.Fatalf("blank enum reported as dropped: %v", got)
+	}
+	argv, _, _ := l.Build(SpawnSpec{Agent: "bare", Runtime: config.RuntimeHost, Options: map[string]any{"model": ""}})
+	if contains(argv, "--model") {
+		t.Fatalf("blank enum reached argv: %v", argv)
+	}
+}
+
+// An enum other than model/effort can grant a capability: unset on a profile, a
+// spawn cannot pick it unless the option opts in with offer_unset (review A-1).
+func TestCapabilityEnumNotOfferedUnset(t *testing.T) {
+	defs := []config.OptionDef{
+		{Key: "permission_mode", Type: "enum", Choices: []string{"default", "bypassPermissions"}, Flag: "--permission-mode", Bins: []string{"claude"}},
+	}
+	l := New([]config.AgentConfig{{Name: "bare", Bin: "claude"}}, fakeResolver{}, defs)
+	spec := SpawnSpec{Agent: "bare", Runtime: config.RuntimeHost, Options: map[string]any{"permission_mode": "bypassPermissions"}}
+	if got := l.AcceptedOptions(spec); len(got) != 0 {
+		t.Fatalf("capability enum accepted unset: %v", got)
+	}
+	argv, _, _ := l.Build(spec)
+	if contains(argv, "bypassPermissions") {
+		t.Fatalf("capability enum reached argv: %v", argv)
 	}
 }
 
@@ -299,7 +345,6 @@ func TestDroppedOptionsMixOfAcceptedAndDropped(t *testing.T) {
 	}})
 	want := []OptionDrop{
 		{Key: "bogus", Reason: "this profile does not expose this option"},
-		{Key: "model", Reason: "this profile does not expose this option"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("DroppedOptions = %v, want %v", got, want)

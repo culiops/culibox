@@ -113,8 +113,10 @@ function combine(names, replies) {
 }
 
 function run(cmd, args, env) {
-  const child = spawn(cmd, args, { env, stdio: 'inherit' });
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child.kill(sig));
+  // Handlers go in before spawn (see agentbox-gh.js runGh).
+  let child;
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child && child.kill(sig));
+  child = spawn(cmd, args, { env, stdio: 'inherit' });
   child.on('error', (e) => fail('cannot run ' + cmd + ' (' + e.message + ')', 127));
   child.on('close', (code, signal) => {
     process.exit(signal ? 128 + (os.constants.signals[signal] || 0) : code);

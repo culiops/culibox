@@ -820,14 +820,19 @@ const (
 )
 
 // checkOverride is the one rule for a per-spawn option override: the profile
-// exposes the key, and the value is valid for its type. An untrusted enum
-// value never reaches the command. reason is "" when ok.
+// offers the key (config.OptionDef.OfferedBy), and the value is valid for its
+// type. An untrusted enum value never reaches the command. A blank enum is no
+// override at all (the profile's default, else the agent's own): not ok, and
+// no reason, so it is not reported as dropped. reason is "" when ok.
 func (l *AgentLauncher) checkOverride(cfg config.AgentConfig, k string, v any) (ok bool, reason string) {
-	if _, exposed := cfg.Options[k]; !exposed {
+	def, known := l.optionDefs[k]
+	if !known || !def.OfferedBy(cfg) {
 		return false, dropNotExposed
 	}
-	def, known := l.optionDefs[k]
-	if !known || !validOptionValue(def, v) {
+	if s, isStr := v.(string); isStr && s == "" && def.Type == config.OptEnum {
+		return false, ""
+	}
+	if !validOptionValue(def, v) {
 		return false, dropInvalidValue
 	}
 	return true, ""
@@ -882,7 +887,7 @@ func (l *AgentLauncher) DroppedOptions(spec SpawnSpec) []OptionDrop {
 	}
 	var out []OptionDrop
 	for _, k := range sortedKeys(spec.Options) {
-		if ok, reason := l.checkOverride(cfg, k, spec.Options[k]); !ok {
+		if ok, reason := l.checkOverride(cfg, k, spec.Options[k]); !ok && reason != "" {
 			out = append(out, OptionDrop{Key: truncateBytes(k, maxDroppedKeyBytes), Reason: reason})
 		}
 	}

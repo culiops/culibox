@@ -63,6 +63,9 @@ type OptionDef struct {
 	Flag    string   `json:"flag,omitempty"`
 	Env     string   `json:"env,omitempty"`
 	Bins    []string `json:"bins,omitempty"` // agent bins this option applies to; empty = all
+	// OfferUnset: an enum is pickable at spawn on a profile that sets no default
+	// for it (blank = the agent's own default). nil = on for model, effort and effortLevel only.
+	OfferUnset *bool `json:"offer_unset,omitempty"`
 }
 
 // AppliesTo reports whether this option is offered for an agent binary. No bins →
@@ -79,6 +82,30 @@ func (o OptionDef) AppliesTo(bin string) bool {
 		}
 	}
 	return false
+}
+
+// OfferedBy reports whether a profile offers this option at spawn time. A key
+// the profile sets a default for is offered. An unset one is offered only when
+// it is an enum that applies to the profile's bin and opts in (offerUnset): a
+// profile made in the editor with Model left unset can still pick one (#35).
+// Opt-in, not every enum, because an enum can be a capability too (a
+// --permission-mode with a bypass choice); a bool never is offered unset.
+func (o OptionDef) OfferedBy(a AgentConfig) bool {
+	if _, ok := a.Options[o.Key]; ok {
+		return true
+	}
+	return o.Type == OptEnum && o.AppliesTo(a.Bin) && o.offerUnset()
+}
+
+// unsetOfferKeys are the enums offered unset when offer_unset is not given:
+// they pick how the agent thinks, not what it may do.
+var unsetOfferKeys = map[string]bool{"model": true, "effort": true, "effortLevel": true}
+
+func (o OptionDef) offerUnset() bool {
+	if o.OfferUnset != nil {
+		return *o.OfferUnset
+	}
+	return unsetOfferKeys[o.Key]
 }
 
 // AgentConfig describes one launchable agent CLI and its environment policy.

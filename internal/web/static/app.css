@@ -1336,6 +1336,16 @@
        only things marking it as the secondary controls below the primary D5
        fields above. */
     .spawn-adv { border-top: 1px solid var(--border); padding-top: 10px; }
+    /* #36: the in-flight spawn's status line (spawnProgressText). It sits in the
+       actions row, where the eye already is after pressing Spawn, and stands in
+       for the footer hint while it shows. A busy button is working, not
+       unavailable, so it drops the disabled strike-through. */
+    .spawn-progress { margin-right: auto; font-size: 12px; color: var(--muted); }
+    .spawn-progress:not([hidden]) ~ #spawn-foot-hint { display: none; }
+    #spawn .spawn-actions button.busy:disabled { text-decoration: none; cursor: progress; }
+    .spawn-progress::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: spawn-pulse 1s ease-in-out infinite alternate; }
+    @keyframes spawn-pulse { from { opacity: .25; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .spawn-progress::before { animation: none; } }
     /* Desktop-only parts of the New session dialog (desktop.css shows them above
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */
@@ -1839,6 +1849,7 @@
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-ended .pane-ended-restart + button { margin-left: 0; }
     /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--warn-tint); border-bottom: 1px solid var(--warn); color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
@@ -2627,4 +2638,10 @@
         box-sizing: border-box;
       }
       #spawn-modal .spawn-actions button { flex: 1; min-height: var(--tap); }
+      /* The phone footer is a fixed 64px row of two buttons: the status line
+         rides on its top edge instead of squeezing them. */
+      #spawn-modal .spawn-progress {
+        position: absolute; left: 0; right: 0; bottom: 100%; margin: 0;
+        padding: 8px 13px; background: var(--panel); border-top: 1px solid var(--border);
+      }
     }

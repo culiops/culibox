@@ -175,6 +175,30 @@ func TestViewsFilterOptionsByBin(t *testing.T) {
 	}
 }
 
+// TestViewsOfferUnsetEnums covers #35: a profile saved from the editor with
+// Model left "(not set)" still offers Model at spawn, blank = the agent's own
+// default. An unset bool is not offered: it can be a capability (bypass).
+func TestViewsOfferUnsetEnums(t *testing.T) {
+	opts := []config.OptionDef{
+		{Key: "skip", Label: "Skip", Type: config.OptBool, Flag: "-x", Bins: []string{"claude"}},
+		{Key: "model", Label: "Model", Type: config.OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
+	}
+	fs := newFakeStore()
+	_ = fs.Save(config.AgentConfig{Name: "fresh", Bin: "claude"})
+	_ = fs.Save(config.AgentConfig{Name: "sh", Bin: "bash"})
+	m := NewProfileManager(nil, opts, "", nil, fs, func([]config.AgentConfig) {})
+	got := map[string][]ProfileOption{}
+	for _, v := range m.Views() {
+		got[v.Name] = v.Options
+	}
+	if o := got["fresh"]; len(o) != 1 || o[0].Key != "model" || o[0].Value != "" {
+		t.Fatalf("fresh claude profile options = %+v, want model only, blank", o)
+	}
+	if len(got["sh"]) != 0 {
+		t.Fatalf("bash profile offered claude options: %+v", got["sh"])
+	}
+}
+
 // TestMergedStripsInapplicableOptions covers a legacy stored profile (created
 // via an older editor, before bin-scoping was enforced) that still carries a
 // claude-only option on a bash bin. merged() must strip it before it reaches

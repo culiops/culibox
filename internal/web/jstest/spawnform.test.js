@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
-  runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey,
+  runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
 } = require("../static/spawnform.js");
 const { spawnRuntimeDefault } = require("../static/tier.js");
 
@@ -113,4 +113,14 @@ test("spawnRefusedLocked: only a 423 carrying the store_locked code", () => {
   assert.strictEqual(spawnRefusedLocked(423, ""), false);
   assert.strictEqual(spawnRefusedLocked(400, "store_locked"), false);
   assert.strictEqual(spawnRefusedLocked(undefined, undefined), false);
+});
+
+// #36: a spawn in flight says so, with how long it has waited; a boxed spawn
+// that is not instant says why (the box VM/container may be starting).
+test("spawnProgressText counts up and explains a slow boxed spawn", () => {
+  assert.strictEqual(spawnProgressText(0, "box"), "Starting session…");
+  assert.strictEqual(spawnProgressText(2, "box"), "Starting session… 2s");
+  assert.match(spawnProgressText(3, "box"), /^Starting session… 3s · starting the box/);
+  assert.strictEqual(spawnProgressText(12, "host"), "Starting session… 12s");
+  assert.strictEqual(spawnProgressText(65, "box").split(" · ")[0], "Starting session… 1m 05s");
 });

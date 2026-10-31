@@ -135,8 +135,11 @@ function mint(payload, cb) {
 }
 
 function runGh(args, env) {
-  const child = spawn(realGh, args, { env, stdio: 'inherit' });
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
+  // Handlers go in before spawn: the child can run (and be signalled) before
+  // spawn returns, and a signal with no handler kills us instead of reaching gh.
+  let child;
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child && child.kill(sig));
+  child = spawn(realGh, args, { env, stdio: 'inherit' });
   child.on('error', (e) => {
     process.stderr.write('agentbox: cannot run gh (' + e.message + ')\n');
     process.exit(127);

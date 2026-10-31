@@ -87,9 +87,21 @@ function spawnRefusedLocked(status, code) {
   return status === 423 && code === "store_locked";
 }
 
+// spawnProgressText is the dialog's status line while a spawn POST is in flight
+// (#36). The server answers only once the session exists, and a boxed spawn may
+// first start the box (on a Mac, its VM too) and a container, which takes tens of seconds after an
+// idle spell. So: an elapsed count, and for a box past 3s, the reason.
+function spawnProgressText(seconds, runtime) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  let line = "Starting session…";
+  if (s > 0) line += " " + (s < 60 ? s + "s" : Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s");
+  if (runtime === "box" && s >= 3) line += " · starting the box (this can take a minute after an idle spell)";
+  return line;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     spawnRefusedLocked, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
-    runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey,
+    runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
   };
 }
