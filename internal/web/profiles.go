@@ -61,7 +61,11 @@ type ProfileView struct {
 	// AWSInline is the legacy inline AWS binding, named like a connection.
 	AWSInline    *ProfileAWSInline `json:"aws_inline,omitempty"`
 	GitHubOwners []string          `json:"github_owners,omitempty"`
-	Tokens       []string          `json:"tokens,omitempty"`
+	// GitHubWrite: the binding can push (a PAT owner, or an App granted
+	// contents write). GitHubPAT: some owner takes a static token.
+	GitHubWrite bool     `json:"github_write,omitempty"`
+	GitHubPAT   bool     `json:"github_pat,omitempty"`
+	Tokens      []string `json:"tokens,omitempty"`
 	// Network is the posture a session of this profile reports ("allowlist",
 	// "open" or "": session.EgressMode applied to the profile's bindings).
 	Network string `json:"network,omitempty"`
@@ -456,6 +460,8 @@ func (m *ProfileManager) Views() []ProfileView {
 			for _, o := range a.GitHub.Owners {
 				pv.GitHubOwners = append(pv.GitHubOwners, o.Owner)
 			}
+			pv.GitHubWrite = a.GitHub.PushRoute()
+			pv.GitHubPAT = a.GitHub.HasPAT()
 		}
 		// An unset enum is offered with a blank value (the agent's own default),
 		// so a profile made in the editor can still pick Model/Effort at spawn.

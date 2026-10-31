@@ -41,7 +41,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 ### Cloud access, audit and secrets
 
 - **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`. A profile can instead bind several named AWS connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)). Where you cannot create that role, a binding can opt in to using a read-only SSO permission set directly, behind a read-only gate (see [SSO role directly](#sso-role-directly-opt-in)).
-- **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour, read-only GitHub App installation tokens scoped to the repos you list; `git` and `gh` in the box use them, and the box never holds a personal access token (see [GitHub access for agents](#github-access-for-agents)).
+- **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour GitHub App installation tokens scoped to the repos you list, read-only by default, with write on contents, pull requests and issues if you allow it; `git` and `gh` in the box use them, and the box never holds a personal access token unless you bind one (see [GitHub access for agents](#github-access-for-agents)).
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you. The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
 - **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment, a file or the encrypted store, injected only into the agent that declares them, and never logged.
 - **Encrypted value store.** A small encrypted store in the data root holds tokens, a GitHub App key or the Claude token as ciphertext, so a disk snapshot or backup does not expose what you keep in it (see [Store](#store)).
@@ -196,6 +196,8 @@ Work comes home by itself as `box/<branch>` in `clone_of`, the base branch inclu
 agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
 ```
 
+**Pushing to GitHub.** When the profile's GitHub binding can push to the clone's `origin` repository (it has write on `contents`, or it uses a personal access token), CuliBox adds a push-only URL rewrite to the session's git configuration. It is set through the session's environment; nothing is written into the clone. Inside the box, `git push -u origin <branch>` then goes to GitHub, while `git fetch origin` still reads the host repo, and `gh pr create` works. The `box/*` refs come home as usual (unless auto-return is off), whether or not you push. The boxed claude is told this in one appended system-prompt line, and the session shows "work comes home as a PR". Pushes that touch `.github/workflows/` are refused by GitHub for App tokens and for PATs without the Workflows permission (see [GitHub access for agents](#github-access-for-agents)).
+
 The flags come before the two names. `-base` defaults to `main`. CuliBox makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
 
 ```text
@@ -271,9 +273,9 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 
 ## GitHub access for agents
 
-A boxed profile can carry a `github` binding. The credential broker then mints short-lived, read-only GitHub App installation tokens for the repositories you list, so the agent can `git clone`, `git fetch` and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux; that is new and not yet verified on a Mac, and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux; that is new and not yet verified on a Mac, and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
-**1. Create the GitHub App.** Give it read permissions only (CuliBox never asks for write). Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
+**1. Create the GitHub App.** The in-app guide (the **How to create the App** guide in Settings › Credentials › Add GitHub › GitHub App) lists the permissions to tick. Give it read access, and add write on Contents, Pull requests and Issues only if agents should push and open PRs. Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
 **2. Store the private key.** Put the PEM file where the daemon user owns it, as a regular file (not a symlink) with mode `0600` or tighter. Then declare the App in `config.json` and restart CuliBox (see the `github_apps` row in [Configuration](#configuration)):
 
@@ -301,7 +303,7 @@ The key is never copied into a box. CuliBox reads the key file once per daemon r
 | `owners[].owner` | The account or organisation that owns the repos. |
 | `owners[].app` | The `name` of a `github_apps` entry that is installed on that owner. |
 | `owners[].repos` | The repositories a token may reach (up to 100 per owner). |
-| `permissions` | Optional, read-only. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`; `statuses` can be added. Any value other than `"read"` is refused. |
+| `permissions` | Optional. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`, all `"read"`; `statuses` can be added. `contents`, `pull_requests` and `issues` may be `"write"`; every other key is `"read"` only, and any other value is refused. |
 | `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
 
 The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` above).
@@ -310,7 +312,7 @@ The box image must include `gh`: use an image built from this version (tag `2026
 
 - `git` over HTTPS to `github.com` asks the broker for a token through a credential helper. Nothing is stored and no token is in the environment.
 - `gh` is a thin wrapper that fetches a token for the repo's owner and sets `GH_TOKEN` only on the real `gh` process it starts. In a clone-mode box, `GH_REPO` is set from the host repo's `origin` when that repo is in the binding, because the box's own `origin` is a host path.
-- Each token lasts one hour (GitHub's fixed lifetime for installation tokens), covers only the repos you listed and the read permissions you chose, and is reused until 10 minutes before it expires.
+- Each token lasts one hour (GitHub's fixed lifetime for installation tokens), covers only the repos you listed and the permissions you chose, and is reused until 10 minutes before it expires.
 - Two sessions with an identical binding share one box and one uid, so their audit rows are effectively per box. That is no scope escalation: both hold the same scope.
 - Every mint is written to the audit log (`audit.db`) with the session, owner and installation, never the token. If that row cannot be written, no token is returned.
 - Tokens are revoked at GitHub when the agent exits or you kill the session, and on a clean daemon shutdown. If the daemon crashes, they are left to expire, at most one hour later.
@@ -320,7 +322,8 @@ The box image must include `gh`: use an image built from this version (tag `2026
 **What this does and does not protect against**
 
 - **The agent can read the token while it runs.** It can run `git credential fill`, read the `gh` child's environment, or call the broker socket itself. The helper design prevents accidental exposure only: the token is not inherited by every child process or MCP server, does not show up in `env` dumps and is not pasted into transcripts. It does not stop a deliberate read.
-- The real controls are the one-hour lifetime, the repo and read-only scope, the egress lock, the per-mint audit and revocation when the session ends.
+- The real controls are the one-hour lifetime, the repo and permission scope, the egress lock, the per-mint audit and revocation when the session ends.
+- **Workflow files.** GitHub refuses a push that touches `.github/workflows/` unless the token has the Workflows permission. An App token cannot edit `.github/workflows/` (CuliBox does not request Workflows); a PAT can if you granted it. Either way, a pushed branch runs your existing push and pull-request workflows on the agent's code, with whatever secrets those workflows get. Keep secrets in protected environments or branches, or require approval for workflow runs.
 - **Residual: exfiltration through `github.com`.** It is open to every bound box, so an agent could push data to a repository it controls, using credentials it brought itself. This is not new and not fixed here.
 
 ## Static tokens for agents
@@ -410,6 +413,8 @@ The two share a variable name, which is fine: the agent picks one per command (`
 - Nothing is revoked when the session ends: CuliBox cannot revoke a PAT.
 - Each fetch counts against the same 60-per-minute limit as `agentbox-env` (App tokens keep their own 10 per minute) and writes an audit row.
 - The profile form's owner picker offers PAT entries in a "Personal access tokens" group and shows the same caveat.
+
+When you create the token on GitHub, make it a fine-grained one: only the repos you need, Contents read and write, Pull requests read and write, Metadata read; avoid Administration and "All repositories". CuliBox cannot read a fine-grained token's permissions or repository list; scope it on GitHub.
 
 **Audit.** Every fetch writes a row to `audit.db` (session, profile, entry name, outcome) before the value leaves, never the value; if the row cannot be written, no token is returned. That is one row per `agentbox-env` call and per `git` or `gh` call with a PAT owner. There is no pruning yet, so the table grows with use; plan for it.
 

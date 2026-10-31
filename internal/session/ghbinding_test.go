@@ -92,7 +92,7 @@ func TestSpawnGitHubOnlyIsBound(t *testing.T) {
 	if got := envNamed(env, "AGENTBOX_BROKER_TOKEN"); !reflect.DeepEqual(got, []string{"AGENTBOX_BROKER_TOKEN=tok-" + s.ID + "." + fakeNonce}) {
 		t.Fatalf("token env = %q", got)
 	}
-	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(env, "AGENTBOX_GH_OWNERS=acme") {
+	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(env, "AGENTBOX_GH_OWNERS=acme,other") {
 		t.Fatalf("env %q lacks the GitHub helper env", env)
 	}
 	if got := envNamed(env, "HTTPS_PROXY"); len(got) != 1 {

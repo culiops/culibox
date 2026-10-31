@@ -347,7 +347,7 @@ func TestStripGitHubEnvCoversGitHub(t *testing.T) {
 	got := StripGitHubEnv()
 	for _, n := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
 		"GH_CONFIG_DIR", "GH_REPO", "GH_HOST", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-		"GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "AGENTBOX_GH_OWNERS",
+		"GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2", "AGENTBOX_GH_OWNERS",
 		"GIT_CONFIG_PARAMETERS", "GIT_ASKPASS", "SSH_ASKPASS"} {
 		if !slices.Contains(got, n) {
 			t.Errorf("StripGitHubEnv misses %s", n)

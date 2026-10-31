@@ -122,7 +122,7 @@ type AgentConfig struct {
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
-	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (read-only installation tokens); boxed profiles only
+	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (installation tokens carry the binding's permissions, read-only by default); boxed profiles only
 	// AWSConnections names host aws_connections entries this profile's boxes may
 	// mint credentials for (several at once); exclusive with the inline AWS binding.
 	AWSConnections []string `json:"aws_connections,omitempty"`

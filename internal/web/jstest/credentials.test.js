@@ -9,6 +9,7 @@ const {
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
   awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
+  GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -813,4 +814,32 @@ test("the save 409 branch for a gate that did not pass resets the stale hours an
   const branch = src.slice(i, src.indexOf("needs_ack", i));
   assert.match(branch, /row\.hours = 0;\s*awsPaintModeNote\(row\);/);
   assert.match(src, /if \(!awsGateBoxEmpty\(g\)\) nodes\.push\(awsGateNode\(g\)\)/);
+});
+
+test("Add GitHub offers a token or an App side by side", () => {
+  assert.deepStrictEqual(GH_ROUTE_CHOICES.map((c) => c.id), ["pat", "app"]);
+  assert.deepStrictEqual(GH_ROUTE_CHOICES.map((c) => c.title), ["Personal access token \u2014 simple", "GitHub App \u2014 safer"]);
+  assert.strictEqual(GH_ROUTE_CHOICES[0].line, "One token you create on github.com. The agent can read it; it is long-lived and not revoked when the session ends.");
+  assert.strictEqual(GH_ROUTE_CHOICES[1].line, "CuliBox mints 1-hour tokens limited to each profile's repositories and permissions. A few more minutes to set up.");
+});
+
+test("the PAT suggestion names the minimal fine-grained setup, and the N3 warning is unchanged", () => {
+  assert.strictEqual(GH_PAT_SUGGESTION, 'Suggested: a fine-grained token with only the repositories you need \u00b7 Contents: Read and write \u00b7 Pull requests: Read and write \u00b7 Metadata: Read. Avoid Administration and "All repositories". Add Workflows only if the agent must change CI files.');
+  assert.strictEqual(CRED_N3, "The agent can read this token. It is long-lived and is not revoked when the session ends.");
+});
+
+test("ghPatValueWarning flags a classic token only", () => {
+  assert.strictEqual(ghPatValueWarning("ghp_x"), "This looks like a classic token: it reaches every repository your account can. A fine-grained token limited to the repos you need is safer.");
+  assert.strictEqual(ghPatValueWarning("github_pat_x"), "");
+  assert.strictEqual(ghPatValueWarning(""), "");
+  assert.strictEqual(ghPatValueWarning(undefined), "");
+});
+
+test("GH_APP_HELP walks through creating the App with read or write choices", () => {
+  assert.strictEqual(GH_APP_HELP.length, 5);
+  const all = GH_APP_HELP.join("\n");
+  for (const w of ["Metadata", "Contents", "Pull requests", "Issues", "Only select repositories", "Client ID", "branch protection"]) assert.ok(all.includes(w), w);
+  assert.ok(!all.includes("Administration: Read"));
+  assert.strictEqual(GH_APP_HELP[0], "On github.com: Settings \u203a Developer settings \u203a GitHub Apps \u203a New GitHub App. Untick Webhook \u203a Active.");
+  assert.strictEqual(GH_APP_HELP[2], "Create it, then Install App on the account that owns the repos and choose Only select repositories.");
 });

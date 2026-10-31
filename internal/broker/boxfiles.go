@@ -84,6 +84,9 @@ func StripGitHubEnv() []string {
 	return []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
 		"GH_CONFIG_DIR", "GH_REPO", "GH_HOST",
 		"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
+		// Index 2 is the clone push rewrite (session.withGitPushRewrite) and must
+		// never be a profile's own entry.
+		"GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2",
 		"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "AGENTBOX_GH_OWNERS",
 		// A profile must not add git config through the env (credential.helper=store
 		// would write minted tokens to disk) or a prompt helper that could capture one.

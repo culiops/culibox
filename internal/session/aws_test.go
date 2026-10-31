@@ -226,7 +226,9 @@ func (f *fakeBrokerHooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Re
 		env = append([]string{"AWS_PROFILE=agentbox"}, env...)
 	}
 	if bs.GitHub != nil {
-		env = append(env, "GIT_TERMINAL_PROMPT=0", "AGENTBOX_GH_OWNERS=acme")
+		// The real GitHubEnv, so the git config count and indexes are the ones a
+		// push rewrite has to extend.
+		env = append(env, broker.GitHubEnv(*bs.GitHub)...)
 	}
 	return []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}}, env, nil
 }

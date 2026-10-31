@@ -291,6 +291,9 @@ type CloneInfo struct {
 	StaleBranches []string `json:"stale_branches,omitempty"`
 	Rewritten     bool     `json:"rewritten,omitempty"`
 	Unverified    bool     `json:"unverified,omitempty"`
+	// PushRepo is "owner/repo" when the GitHub binding can push to the clone's
+	// origin, so a plain `git push` in the box reaches GitHub.
+	PushRepo string `json:"push_repo,omitempty"`
 	// Return is the spawn-time return that ran before this refresh.
 	Return *ReturnSummary `json:"return,omitempty"`
 }
@@ -335,6 +338,41 @@ func cloneGHRepo(h CloneHooks, of string, g *config.GitHubBinding) string {
 		return ""
 	}
 	return owner + "/" + repo
+}
+
+// withGitPushRewrite routes `git push` of the clone's origin (a host path) to
+// GitHub: GIT_CONFIG_COUNT grows by one and a pushInsteadOf pair is appended at
+// the new index, so fetches still use the local path. Any pair already at that
+// index is dropped first. A missing or non-numeric count returns env unchanged
+// (fail closed: no rewrite). env itself is never modified.
+//
+// pushInsteadOf is a prefix match, so of=/a/x also rewrites an origin /a/x2 to
+// a repository that is not bound. The broker refuses that, so it is harmless.
+func withGitPushRewrite(env []string, of, ownerRepo string) []string {
+	n := -1
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "GIT_CONFIG_COUNT="); ok {
+			c, err := strconv.Atoi(v)
+			if err != nil || c < 0 {
+				return env
+			}
+			n = c
+			break
+		}
+	}
+	if n < 0 {
+		return env
+	}
+	idx := strconv.Itoa(n)
+	out := withoutEnv(env, []string{"GIT_CONFIG_KEY_" + idx, "GIT_CONFIG_VALUE_" + idx})
+	for i, kv := range out {
+		if strings.HasPrefix(kv, "GIT_CONFIG_COUNT=") {
+			out[i] = "GIT_CONFIG_COUNT=" + strconv.Itoa(n+1)
+		}
+	}
+	return append(out,
+		"GIT_CONFIG_KEY_"+idx+"=url.https://github.com/"+ownerRepo+".git.pushInsteadOf",
+		"GIT_CONFIG_VALUE_"+idx+"="+of)
 }
 
 // BrokerHooks is what spawning a bound session needs from the credential
@@ -1806,6 +1844,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// returned as is because it already carries its own remedy.
 	var cloneMounts *box.CloneMounts
 	var cloneInfo *CloneInfo
+	var cloneGH string // "owner/repo" of the clone's origin when the binding covers it
 	// Held until the new session is published (or the spawn fails): a second
 	// concurrent spawn of this clone must then see the first as a live session.
 	releaseClone := func() {}
@@ -1826,6 +1865,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		rcancel()
 		releaseClone = sync.OnceFunc(release)
 		cloneInfo = &info
+		if bs.GitHub != nil {
+			// Asked once: the answer feeds both GH_REPO and the push rewrite.
+			cloneGH = cloneGHRepo(ch, cl.Of, bs.GitHub)
+			if owner, repo, ok := strings.Cut(cloneGH, "/"); ok && bs.GitHub.CanPush(owner, repo) {
+				cloneInfo.PushRepo = cloneGH
+			}
+		}
 	}
 
 	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
@@ -1888,6 +1934,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
 			}
 			spec.ExtraArgs, bundleDrops = flags, drops
+		}
+		// Claude only: a shell is never handed agent flags. Flag and value are
+		// separate argv elements, ahead of the "--" Build adds for a first message.
+		if cl != nil && isClaudeBin(bin) {
+			spec.ExtraArgs = append(slices.Clip(spec.ExtraArgs), "--append-system-prompt",
+				cloneGuidance(cl.Of, cloneInfo.PushRepo != "", !cl.NoAutoReturn))
 		}
 	}
 
@@ -2023,8 +2075,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
 			if cl != nil && bs.GitHub != nil {
 				// After the strip, which drops a profile's own GH_REPO.
-				if repo := cloneGHRepo(ch, cl.Of, bs.GitHub); repo != "" {
-					env = append(env, "GH_REPO="+repo)
+				if cloneGH != "" {
+					env = append(env, "GH_REPO="+cloneGH)
+				}
+				if cloneInfo.PushRepo != "" {
+					env = withGitPushRewrite(env, cl.Of, cloneInfo.PushRepo)
 				}
 			}
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array

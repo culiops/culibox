@@ -417,6 +417,18 @@ test("pfTouchProfile carries clone_of only for a private copy", () => {
   assert.ok(!("clone_of" in pfTouchProfile({ clone_of: "", bin: "claude" }, {})));
 });
 
+test("pfTouchProfile carries github_write and github_pat from the form's binding", () => {
+  const owners = [{ owner: "acme", app: "main", repos: ["api"] }];
+  const plain = pfTouchProfile({ bin: "claude", github: { owners } }, {});
+  assert.ok(!("github_write" in plain) && !("github_pat" in plain));
+  const w = pfTouchProfile({ bin: "claude", github: { owners, permissions: { contents: "write" } } }, {});
+  assert.strictEqual(w.github_write, true);
+  assert.ok(!("github_pat" in w));
+  const pat = pfTouchProfile({ bin: "claude", github: { owners: [{ owner: "o", token: "gh-pat", repos: [] }] } }, {});
+  assert.strictEqual(pat.github_write, true);
+  assert.strictEqual(pat.github_pat, true);
+});
+
 test("autoReturnToSend: only an unticked switch is sent", () => {
   assert.deepStrictEqual(autoReturnToSend(true), {});
   assert.deepStrictEqual(autoReturnToSend(false), { clone_no_auto_return: true });

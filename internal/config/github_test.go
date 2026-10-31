@@ -33,7 +33,14 @@ func TestGitHubBindingValidate(t *testing.T) {
 		{"statuses is allowed", func(b *GitHubBinding) { b.Permissions = map[string]string{"statuses": "read"} }, ""},
 		{"empty non-nil permissions", func(b *GitHubBinding) { b.Permissions = map[string]string{} }, "github.permissions: empty"},
 		{"nil permissions are the defaults", func(b *GitHubBinding) { b.Permissions = nil }, ""},
-		{"write permission", func(b *GitHubBinding) { b.Permissions = map[string]string{"contents": "write"} }, "github.permissions"},
+		{"contents write", func(b *GitHubBinding) { b.Permissions = map[string]string{"contents": "write"} }, ""},
+		{"pull_requests and issues write", func(b *GitHubBinding) {
+			b.Permissions = map[string]string{"pull_requests": "write", "issues": "write", "metadata": "read"}
+		}, ""},
+		{"metadata write", func(b *GitHubBinding) { b.Permissions = map[string]string{"metadata": "write"} }, "github.permissions"},
+		{"actions write", func(b *GitHubBinding) { b.Permissions = map[string]string{"actions": "write"} }, "github.permissions"},
+		{"statuses write", func(b *GitHubBinding) { b.Permissions = map[string]string{"statuses": "write"} }, "github.permissions"},
+		{"admin level", func(b *GitHubBinding) { b.Permissions = map[string]string{"contents": "admin"} }, "github.permissions"},
 		{"unknown permission", func(b *GitHubBinding) { b.Permissions = map[string]string{"administration": "read"} }, "github.permissions"},
 		{"bad owner", func(b *GitHubBinding) { b.Owners[0].Owner = "-bad" }, "github.owners[0].owner"},
 		{"bad repo", func(b *GitHubBinding) { b.Owners[0].Repos = []string{"a/b"} }, "github.owners[0].repos[0]"},
@@ -401,5 +408,98 @@ func TestCheckGitHubAppsIgnoresTokenOwners(t *testing.T) {
 	a.GitHub.Owners = append(a.GitHub.Owners, GitHubOwner{Owner: "other", App: "ghost", Repos: []string{"r"}})
 	if err := CheckGitHubApps(a, nil); err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("an App owner is still checked, got %v", err)
+	}
+}
+
+func TestGitHubWriteRefusalNamesWritableKeys(t *testing.T) {
+	b := goodGitHub()
+	b.Permissions = map[string]string{"metadata": "write"}
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, k := range []string{"contents", "pull_requests", "issues"} {
+		if !strings.Contains(err.Error(), k) {
+			t.Fatalf("error %q does not name %q", err, k)
+		}
+	}
+}
+
+func TestGitHubWritablePermissionsAndAllowed(t *testing.T) {
+	w := GitHubWritablePermissions()
+	if strings.Join(w, ",") != "contents,pull_requests,issues" {
+		t.Fatalf("writable = %v", w)
+	}
+	w[0] = "x"
+	if GitHubWritablePermissions()[0] != "contents" {
+		t.Fatal("GitHubWritablePermissions must return a fresh slice")
+	}
+	cases := []struct {
+		key, level string
+		want       bool
+	}{
+		{"contents", "read", true}, {"contents", "write", true},
+		{"pull_requests", "write", true}, {"issues", "write", true},
+		{"metadata", "read", true}, {"metadata", "write", false},
+		{"actions", "write", false}, {"checks", "write", false}, {"statuses", "write", false},
+		{"contents", "admin", false}, {"contents", "", false},
+		{"administration", "read", false},
+	}
+	for _, tc := range cases {
+		if got := GitHubPermissionAllowed(tc.key, tc.level); got != tc.want {
+			t.Errorf("GitHubPermissionAllowed(%q, %q) = %v, want %v", tc.key, tc.level, got, tc.want)
+		}
+	}
+}
+
+// A binding with no write keeps its stored shape and therefore its box key.
+func TestGitHubHashUnchangedForReadOnly(t *testing.T) {
+	const golden = "0f4522b2154b" // computed on ea70639, before the write rule
+	if got := goodGitHub().Hash(); got != golden {
+		t.Fatalf("Hash() = %s, want %s", got, golden)
+	}
+	b := goodGitHub()
+	b.Permissions = DefaultGitHubPermissions()
+	if got := b.Hash(); got != golden {
+		t.Fatalf("Hash() with explicit defaults = %s, want %s", got, golden)
+	}
+}
+
+func TestGitHubCanPushAndRoute(t *testing.T) {
+	pat := GitHubBinding{Owners: []GitHubOwner{{Owner: "Acme", Token: "gh-pat", Repos: []string{"Widget"}}}}
+	appRead := GitHubBinding{Owners: []GitHubOwner{ghOwner("Acme", "Widget")}}
+	appWrite := GitHubBinding{Owners: []GitHubOwner{ghOwner("Acme", "Widget")}, Permissions: map[string]string{"contents": "write", "metadata": "read"}}
+	appPRs := GitHubBinding{Owners: []GitHubOwner{ghOwner("Acme", "Widget")}, Permissions: map[string]string{"pull_requests": "write"}}
+	mixed := GitHubBinding{Owners: []GitHubOwner{ghOwner("Acme", "Widget"), {Owner: "Zed", Token: "gh-pat", Repos: []string{"q"}}}}
+	cases := []struct {
+		name        string
+		b           GitHubBinding
+		owner, repo string
+		canPush     bool
+		route, pat  bool
+	}{
+		{"PAT bound repo", pat, "Acme", "Widget", true, true, true},
+		{"PAT unbound repo", pat, "Acme", "Other", false, true, true},
+		{"PAT unbound owner", pat, "Nobody", "Widget", false, true, true},
+		{"App defaults", appRead, "Acme", "Widget", false, false, false},
+		{"App contents write", appWrite, "Acme", "Widget", true, true, false},
+		{"App contents write, case-insensitive", appWrite, "acme", "widget", true, true, false},
+		{"App contents write, unbound repo", appWrite, "Acme", "Other", false, true, false},
+		{"App pull_requests write only", appPRs, "Acme", "Widget", false, false, false},
+		{"mixed: App owner without write", mixed, "Acme", "Widget", false, true, true},
+		{"mixed: PAT owner", mixed, "zed", "Q", true, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.b.CanPush(tc.owner, tc.repo); got != tc.canPush {
+				t.Errorf("CanPush = %v, want %v", got, tc.canPush)
+			}
+			if got := tc.b.PushRoute(); got != tc.route {
+				t.Errorf("PushRoute = %v, want %v", got, tc.route)
+			}
+			if got := tc.b.HasPAT(); got != tc.pat {
+				t.Errorf("HasPAT = %v, want %v", got, tc.pat)
+			}
+		})
 	}
 }
