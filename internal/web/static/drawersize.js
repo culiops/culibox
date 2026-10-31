@@ -97,10 +97,20 @@ function splitAria(r, kind) {
   return { now: Math.round(Math.min(hi, Math.max(lo, r)) * 100), min: Math.round(lo * 100), max: Math.round(hi * 100) };
 }
 
+// maxEscapeRestores: does this Escape restore a maximized drawer? `where` is
+// where focus is: "body" (nothing focused, e.g. after a tree row click, which
+// re-renders the row), "drawer", or "other" (a terminal, the sidebar, a
+// dialog: their Escape is theirs). `owned`: a field, the editor or a menu item
+// has focus. An open menu takes the press to close itself, and only that.
+function maxEscapeRestores(s) {
+  if (!s || !s.max || s.owned || s.menuOpen) return false;
+  return s.where === "body" || s.where === "drawer";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DRAWER_SIZE_KEY, DRAWER_W_MIN, DRAWER_W_MAX, TREE_DEFAULT, TREE_MIN, TREE_MAX,
     normalizeDrawerSize, loadDrawerSize, saveDrawerSize,
-    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, splitAria,
+    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, splitAria, maxEscapeRestores,
   };
 }
