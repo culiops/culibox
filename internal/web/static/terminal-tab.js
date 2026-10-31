@@ -527,7 +527,7 @@ class TerminalTab {
     if (probe === "unreachable") { this.showTrouble("offline"); return; }
     const status = await sessionStatus(this.id);
     if (this.closed || !this.retryTimer) return;
-    if (status === null || status === "exited") { this.clearRetry(); this.markEnded(); return; }
+    if (status === null || status === "exited") { this.clearRetry(); this.markEnded(status === "exited"); return; }
     if (status === "detached") { this.showTrouble("detached"); return; }
     this.showTrouble("offline"); // server is up, socket is not: keep retrying
   }
@@ -663,7 +663,10 @@ class TerminalTab {
     this.showTrouble("taken-over");
   }
 
-  markEnded() {
+  // markEnded parks the pane on its "session ended" bar. restartable = the
+  // session still exists as exited (a removed one has nothing to restart), so the
+  // bar offers Restart too: on a phone it is the only restart within reach (#2).
+  markEnded(restartable) {
     if (this.ended) return;
     this.ended = true;
     this.clearRetry();
@@ -676,7 +679,18 @@ class TerminalTab {
     const btn = document.createElement("button");
     btn.textContent = "Close";
     btn.onclick = () => closeTabEverywhere(this);
-    bar.append(msg, btn);
+    bar.append(msg);
+    if (restartable) {
+      const rb = document.createElement("button");
+      rb.textContent = "Restart";
+      rb.className = "pane-ended-restart";
+      rb.onclick = () => {
+        rb.disabled = true;
+        restartSession({ id: this.id }).finally(() => { rb.disabled = false; });
+      };
+      bar.append(rb);
+    }
+    bar.append(btn);
     this.el.insertBefore(bar, this.el.firstChild);
     this.fit();
   }

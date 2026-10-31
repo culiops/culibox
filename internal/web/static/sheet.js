@@ -8,6 +8,7 @@ var menuItems = _sr.menuItems || (typeof window !== "undefined" && window.menuIt
 
 var SHEET_GLYPHS = {
   "open-terminal": "▮",
+  restart: "↻",
   files: "▢",
   attribution: "▤",
   rename: "✎",
@@ -27,7 +28,10 @@ var SHEET_GLYPHS = {
 // un-closable dead-end (collides with the "steer/analytics hidden on mobile"
 // decision). The desktop menu (openSessionMenu → menuItems) still offers it;
 // only this mobile sheet drops it.
-var ORDER = ["open-terminal", "files", "rename", "copycwd", "end"];
+//
+// `restart` only exists for an exited session (menuItems), where it is the
+// main thing to do, so it sits right under Open terminal.
+var ORDER = ["open-terminal", "restart", "files", "rename", "copycwd", "end"];
 
 function sheetActions(s) {
   var byId = {};

@@ -33,6 +33,18 @@ test("row order matches the M5 canvas: terminal, files, rename, copy, end", () =
   assert.deepStrictEqual(ids, ["open-terminal", "files", "rename", "copycwd", "end"]);
 });
 
+test("an exited session offers Restart right after Open terminal (#2)", () => {
+  const ids = sheetActions({ ...claude, exited: true }).map((x) => x.id);
+  assert.deepStrictEqual(ids, ["open-terminal", "restart", "files", "rename", "copycwd", "end"]);
+  const r = sheetActions({ ...claude, exited: true, resumable: true }).find((x) => x.id === "restart");
+  assert.strictEqual(r.label, "Restart (resume conversation)");
+  assert.ok(r.glyph);
+});
+
+test("a live session never offers Restart", () => {
+  assert.ok(!sheetActions(claude).some((x) => x.id === "restart"));
+});
+
 test("attribution is never offered on mobile (un-closable steer-rail dead-end)", () => {
   const full = { ...claude, claude: true };
   assert.ok(!sheetActions(full).some((x) => x.id === "attribution"));

@@ -1839,6 +1839,7 @@
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-ended .pane-ended-restart + button { margin-left: 0; }
     /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--warn-tint); border-bottom: 1px solid var(--warn); color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
