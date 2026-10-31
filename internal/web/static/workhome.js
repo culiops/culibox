@@ -110,6 +110,33 @@ function notHomeNews(seen, profiles) {
   return { toasts, seen: next };
 }
 
+// returnNews: what one sessions poll means for returns. seen is the array of
+// session return sigs already announced (null before the first poll, which only
+// seeds); cloneIds the clone sessions the previous poll listed. Returns the
+// toasts to show, the PROFILE sigs (returnSig(agent, at)) to mark seen for
+// notHomeNews so the same return is not announced twice, the next seen/cloneIds
+// to keep, and whether the profile list needs a refresh: a new return landed or
+// a clone session left the list (a kill). seen is pruned to the sessions still
+// listed, so it cannot grow. Inputs are not changed.
+function returnNews(seen, cloneIds, sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const nextClones = list.filter((s) => s && s.clone_of).map((s) => s.id);
+  const nextSeen = list.filter((s) => s && s.return).map((s) => returnSig(s.id, s.return.at));
+  if (!Array.isArray(seen)) return { toasts: [], sigs: [], seen: nextSeen, cloneIds: nextClones, refetch: false };
+  const known = new Set(seen);
+  const toasts = [];
+  const sigs = [];
+  for (const s of list) {
+    if (!s || !s.return || known.has(returnSig(s.id, s.return.at))) continue;
+    const text = returnToastText(s.agent, s.return);
+    if (text) toasts.push(text);
+    sigs.push(returnSig(s.agent, s.return.at));
+  }
+  const now = new Set(nextClones);
+  const left = (Array.isArray(cloneIds) ? cloneIds : []).some((id) => !now.has(id));
+  return { toasts, sigs, seen: nextSeen, cloneIds: nextClones, refetch: sigs.length > 0 || left };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews };
 }

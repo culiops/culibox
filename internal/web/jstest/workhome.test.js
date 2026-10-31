@@ -2,7 +2,7 @@
 // workhome.js: the wording for where a private copy's work goes and what is not home.
 const test = require("node:test");
 const assert = require("node:assert");
-const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews } = require("../static/workhome.js");
+const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews, returnNews } = require("../static/workhome.js");
 
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
@@ -175,4 +175,50 @@ test("notHomeTitle: one reason line per branch, or the error alone", () => {
     notHomeTitle({ branches: [{ branch: "a", reason: "not-ff" }, { branch: "b", reason: "checked-out" }] }),
     "box/a on the host has commits this branch lacks\nbox/b is checked out in your repo, so it did not move");
   assert.strictEqual(notHomeTitle({ branches: [], error: "clone unreadable" }), "clone unreadable");
+});
+
+const EXIT = (id, agent, at, home) => ({ id, agent, clone_of: "/r", return: { trigger: "exit", at, home: home || ["feat"] } });
+
+test("returnNews: the first poll seeds silently and asks for nothing", () => {
+  const n = returnNews(null, [], [EXIT("s1", "p", "t1")]);
+  assert.deepStrictEqual(n.toasts, []);
+  assert.deepStrictEqual(n.sigs, []);
+  assert.strictEqual(n.refetch, false);
+  assert.deepStrictEqual(n.seen, [returnSig("s1", "t1")]);
+  assert.deepStrictEqual(n.cloneIds, ["s1"]);
+});
+
+test("returnNews: a new sig toasts once, marks the profile sig seen, and asks for a refetch", () => {
+  const first = returnNews(null, [], [EXIT("s1", "p", "t1")]);
+  const list = [EXIT("s1", "p", "t1"), EXIT("s2", "p", "t2")];
+  const n = returnNews(first.seen, first.cloneIds, list);
+  assert.deepStrictEqual(n.toasts, ["p: feat came home"]);
+  assert.deepStrictEqual(n.sigs, [returnSig("p", "t2")]);
+  assert.strictEqual(n.refetch, true);
+  const again = returnNews(n.seen, n.cloneIds, list);
+  assert.deepStrictEqual(again.toasts, []);
+  assert.deepStrictEqual(again.sigs, []);
+  assert.strictEqual(again.refetch, false);
+});
+
+test("returnNews: a skipped return is news for the profile list but says nothing", () => {
+  const first = returnNews(null, [], [{ id: "s1", agent: "p", clone_of: "/r" }]);
+  const sk = { id: "s1", agent: "p", clone_of: "/r", return: { trigger: "exit", at: "t9", skipped: "off" } };
+  const n = returnNews(first.seen, first.cloneIds, [sk]);
+  assert.deepStrictEqual(n.toasts, []);
+  assert.strictEqual(n.refetch, true);
+});
+
+test("returnNews: a clone session leaving the list asks for a refetch; a plain one does not", () => {
+  const first = returnNews(null, [], [EXIT("s1", "p", "t1"), { id: "sh", agent: "x" }]);
+  const gone = returnNews(first.seen, first.cloneIds, [{ id: "sh", agent: "x" }]);
+  assert.strictEqual(gone.refetch, true);
+  assert.deepStrictEqual(gone.toasts, []);
+  assert.deepStrictEqual(gone.seen, [], "seen is pruned to the sessions still listed");
+  const plainGone = returnNews(gone.seen, gone.cloneIds, []);
+  assert.strictEqual(plainGone.refetch, false);
+});
+
+test("returnNews: tolerates a missing list", () => {
+  assert.deepStrictEqual(returnNews(["x"], ["s1"], null).toasts, []);
 });

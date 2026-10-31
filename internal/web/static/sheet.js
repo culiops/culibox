@@ -13,6 +13,7 @@ var SHEET_GLYPHS = {
   attribution: "▤",
   rename: "✎",
   copycwd: "⇱",
+  bringhome: "⌂",
   end: "⏹",
 };
 
@@ -31,7 +32,7 @@ var SHEET_GLYPHS = {
 //
 // `restart` only exists for an exited session (menuItems), where it is the
 // main thing to do, so it sits right under Open terminal.
-var ORDER = ["open-terminal", "restart", "files", "rename", "copycwd", "end"];
+var ORDER = ["open-terminal", "restart", "files", "rename", "copycwd", "bringhome", "end"];
 
 function sheetActions(s) {
   var byId = {};

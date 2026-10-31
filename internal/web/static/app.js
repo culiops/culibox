@@ -1610,19 +1610,15 @@ async function postSessionAction(id, action) {
 // bringHomeNow: "Bring work home now". The request only starts the return (202);
 // its result lands on the session's return state and noteReturns toasts it.
 async function bringHomeNow(s) {
-  const done = pendingToast("Bringing work home…");
-  try {
-    const res = await postSessionAction(s.id, "bring-home");
-    if (!res.ok) {
-      let msg = "";
-      try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
-      showToast(msg ? "Bring work home failed: " + msg : actionFailText("bringhome", res.status), { error: true });
-      return;
-    }
-    showToast("Bringing work home…");
-  } finally {
-    done();
+  const res = await postSessionAction(s.id, "bring-home");
+  if (!res.ok) {
+    let msg = "";
+    try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
+    showToast(msg ? "Bring work home failed: " + msg : actionFailText("bringhome", res.status), { error: true });
+    return;
   }
+  // The request answers 202 at once, so a pending toast would never show.
+  showToast("Bringing work home…");
 }
 
 // sessionWorkHome: the "work comes home" suffix for a clone session's line. The
@@ -1640,38 +1636,40 @@ function toastReturnSuffix(s) {
   return t ? " \u00b7 " + t : "";
 }
 
-// Returns already announced, so a poll never toasts one twice. null until the
-// first poll after boot, which seeds it silently: returns that finished before
-// the page opened are not news.
+// What the last sessions poll showed, for returnNews: seen is null until the
+// first poll after boot, which seeds it silently (returns that finished before
+// the page opened are not news).
 let returnsSeen = null;
-let cloneSessionIds = new Set();
-// noteReturns: the sessions poll's return handling. A new exit or "now" return
-// toasts once, marks it seen for the profile's not-home toast, and refreshes the
-// profile list; a clone session leaving the list (a kill) refreshes it too.
+let returnsCloneIds = [];
+// noteReturns: the sessions poll's return handling, a thin caller of returnNews.
 function noteReturns(sessions) {
-  const list = Array.isArray(sessions) ? sessions : [];
-  const cloneIds = new Set(list.filter((s) => s.clone_of).map((s) => s.id));
-  let refetch = false;
-  if (returnsSeen === null) {
-    returnsSeen = new Set(list.filter((s) => s.return).map((s) => returnSig(s.id, s.return.at)));
-  } else {
-    for (const s of list) {
-      if (!s.return) continue;
-      const sig = returnSig(s.id, s.return.at);
-      if (returnsSeen.has(sig)) continue;
-      returnsSeen.add(sig);
-      const text = returnToastText(s.agent, s.return);
-      if (text) showToast(text);
-      // The profile-level toast for the same return would say it twice. With no
-      // stored list there is nothing to add to: the next load seeds it whole.
-      const seen = notHomeSeenRead();
-      if (seen) notHomeSeenWrite(seen.concat(returnSig(s.agent, s.return.at)));
-      refetch = true;
-    }
-    for (const id of cloneSessionIds) if (!cloneIds.has(id)) refetch = true;
-  }
-  cloneSessionIds = cloneIds;
-  if (refetch) loadProfiles(false);
+  const n = returnNews(returnsSeen, returnsCloneIds, sessions);
+  returnsSeen = n.seen;
+  returnsCloneIds = n.cloneIds;
+  for (const t of n.toasts) showToast(t);
+  // With no stored list there is nothing to add to: the next load seeds it whole.
+  const stored = n.sigs.length ? notHomeSeenRead() : null;
+  if (stored) notHomeSeenWrite(stored.concat(n.sigs));
+  if (n.refetch) refreshProfilesQuiet();
+}
+
+// refreshProfilesQuiet: the background profile refresh (a return landed, a clone
+// session ended). Unlike loadProfiles it repaints only what shows not-home state:
+// loadProfiles rebuilds the profile segment and the option controls from profile
+// defaults, which would reset a New-session dialog the user is editing.
+let quietProfilesSeq = 0;
+async function refreshProfilesQuiet() {
+  const seq = ++quietProfilesSeq;
+  let got;
+  try { got = await api("/api/profiles", { signal: deadlineSignal(5000) }); } catch (_) { return; }
+  if (seq !== quietProfilesSeq || !Array.isArray(got)) return;
+  profiles = got;
+  profilesLoaded = true;
+  notHomeToasts();
+  renderProfileList();
+  renderSpawnPlist(); // the desktop dialog's profile list only: keeps its search box
+  syncSpawnCopyLine();
+  if (selectedProfile) renderPfNotHome(selectedProfile);
 }
 
 // The not-home signatures already announced, kept across reloads. Storage can be

@@ -160,21 +160,34 @@ test("how work comes home: the table row is host-aware and no longer names the C
   assert.match(body(app, "syncPfMode"), /\$\("pf-mode-diff-home"\)\.textContent\s*=\s*folderCopy\.homeCell/);
 });
 
-test("the sessions poll hands the list to noteReturns, and return news goes through workhome.js", () => {
+test("the sessions poll hands the list to noteReturns, which only applies returnNews", () => {
   const poll = body(app, "refreshSessions");
   assert.match(poll, /lastSessions = sessions \|\| \[\];\s*sessionsLoaded = true;\s*noteReturns\(lastSessions\)/);
   const b = body(app, "noteReturns");
-  assert.match(b, /returnsSeen === null/, "the first poll seeds silently");
-  assert.match(b, /returnToastText\(s\.agent, s\.return\)/);
-  assert.match(b, /returnSig\(/);
-  assert.match(b, /loadProfiles\(/);
+  assert.match(b, /returnNews\(/);
+  assert.match(b, /refreshProfilesQuiet\(\)/);
+  assert.doesNotMatch(b, /loadProfiles\(/, "a background return must not rebuild the dialog's controls");
+  assert.doesNotMatch(b, /returnSig\(|returnToastText\(/, "the decisions live in workhome.js");
   assert.match(body(app, "loadProfiles"), /notHomeToasts\(\)/);
-  const t = body(app, "notHomeToasts");
-  assert.match(t, /notHomeNews\(/);
+  assert.match(body(app, "notHomeToasts"), /notHomeNews\(/);
   assert.match(app, /"ab\.notHomeSeen"/);
   // Storage reads and writes are guarded.
   assert.match(body(app, "notHomeSeenRead"), /try \{[\s\S]*localStorage[\s\S]*\} catch/);
   assert.match(body(app, "notHomeSeenWrite"), /try \{[\s\S]*localStorage[\s\S]*\} catch/);
+});
+
+test("the quiet profile refresh repaints not-home state only", () => {
+  const b = body(app, "refreshProfilesQuiet");
+  assert.match(b, /renderProfileList\(\)/);
+  assert.match(b, /renderSpawnPlist\(\)/);
+  assert.match(b, /renderPfNotHome\(/);
+  assert.doesNotMatch(b, /renderOptions\(|renderProfileSeg\(|loadProfiles\(|\$\("agent"\)\.replaceChildren|fillForm\(/,
+    "option controls, the profile segment and the editor form are never rebuilt");
+});
+
+test("bringHomeNow shows its toast once", () => {
+  const b = body(app, "bringHomeNow");
+  assert.strictEqual((b.match(/Bringing work home…/g) || []).length, 1);
 });
 
 test("work-home text from box and server stays text: no innerHTML in the new renderers", () => {
