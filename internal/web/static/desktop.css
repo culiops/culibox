@@ -1198,7 +1198,7 @@
      120px). Same stack as the phone: App or token with remove at the end of
      the first line, then Owner and Repositories each on a full line, then the
      PAT note. */
-  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: start; }
+  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 10px; align-items: start; }
   #page-host > #settings-modal.as-page .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
   #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { grid-column: 2; grid-row: 1; align-self: end; }
   #page-host > #settings-modal.as-page .pf-gh-owner .fcol.own, #page-host > #settings-modal.as-page .pf-gh-owner .fcol.repos, #page-host > #settings-modal.as-page .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
