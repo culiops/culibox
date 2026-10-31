@@ -1166,6 +1166,10 @@
   #page-host > #settings-modal.as-page #manage .ped {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
     padding: 18px 22px 84px; background: var(--bg);
+    /* The footer (#foot-manage) is 56px and overlays the bottom of this
+       scroller, so scroll-into-view "nearest" (setDialogError) would count a
+       line under it as visible. 72px = footer 56px + 16px clearance. */
+    scroll-padding-bottom: 72px;
   }
   #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
   #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }

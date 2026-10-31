@@ -101,3 +101,13 @@ test("index.html carries the two cards with their exact copy", () => {
     assert.ok(html.includes('id="' + id + '"'), id);
   }
 });
+
+test("the profile form keeps scrolled-to lines above the sticky footer", () => {
+  // setDialogError scrolls the error block with block:"nearest". On desktop the
+  // scroller .ped runs under the 56px #foot-manage, so scroll-padding-bottom
+  // (footer 56px + 16px) is what keeps the line clear of the footer.
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1], body: m[2] }));
+  const hit = rules.find((r) => r.selector.includes("#settings-modal.as-page #manage .ped") && /scroll-padding-bottom:\s*72px\s*;/.test(r.body));
+  assert.ok(hit, "a desktop.css rule for #settings-modal.as-page #manage .ped must set scroll-padding-bottom: 72px");
+});
