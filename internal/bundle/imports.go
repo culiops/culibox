@@ -242,7 +242,8 @@ type importWalk struct {
 	srcReal  string // EvalSymlinks(Source), "" when unresolved
 	denySpel []string
 	ids      importIDs
-	seen     map[string]string // in-box path -> host path it was mapped from
+	seen     map[string]string  // in-box path -> host path of the file bundled there
+	tried    map[[2]string]bool // (in-box, host) pairs loaded and not bundled
 	refused  map[ImportRefusal]bool
 	total    int64
 	stopped  bool
@@ -267,7 +268,7 @@ var (
 // pulls a host secret into the next box.
 func resolveImports(o importOpts) ImportSet {
 	w := &importWalk{
-		o: o, seen: map[string]string{}, refused: map[ImportRefusal]bool{},
+		o: o, seen: map[string]string{}, tried: map[[2]string]bool{}, refused: map[ImportRefusal]bool{},
 		set: ImportSet{Files: []ImportFile{}},
 	}
 	deny := slices.Clone(o.Deny)
@@ -316,25 +317,32 @@ func (w *importWalk) walk(spellings []string, n importNode) {
 			w.refuse(sp, reason)
 			continue
 		}
+		// Only a bundled file claims its in-box path, so a spelling that was
+		// missing or refused does not make a later file there a Conflict. A
+		// pair already tried is not loaded (or reported) again; a bundled one
+		// is in seen before its imports are walked, which ends cycles.
+		if w.tried[[2]string{bx, host}] {
+			continue
+		}
 		if prev, ok := w.seen[bx]; ok {
 			if prev != host {
 				w.refuse(sp, ReasonImportConflict)
 			}
 			continue
 		}
-		w.seen[bx] = host
 		f, underSource, reason := w.load(sp, host, bx)
-		if reason != "" {
-			w.refuse(sp, reason)
-			continue
-		}
-		if f == nil {
+		if reason != "" || f == nil {
+			w.tried[[2]string{bx, host}] = true
+			if reason != "" {
+				w.refuse(sp, reason)
+			}
 			continue
 		}
 		if len(w.set.Files) >= maxImportFiles || w.total+f.Size > maxImportTotal {
 			w.refuse(sp, ReasonImportTooMany)
 			return
 		}
+		w.seen[bx] = host
 		w.set.Files = append(w.set.Files, *f)
 		w.total += f.Size
 		hop := n.hop + 1

@@ -732,3 +732,38 @@ func TestResolveImportsDirLinkOutsideSourceRefused(t *testing.T) {
 		}
 	})
 }
+
+// Only a bundled file claims its in-box path: a first spelling that is missing
+// or refused must not turn a later, different host file there into a Conflict.
+func TestResolveImportsUnbundledDoesNotClaimBoxPath(t *testing.T) {
+	t.Run("missing first", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, _ := impFixture(t, tmp)
+		src := filepath.Join(home, "cfg")
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@x.md\n@~/.claude/x.md\n")
+		impWrite(t, filepath.Join(home, ".claude", "x.md"), "home")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if got := impBoxes(s); !reflect.DeepEqual(got, []string{"/home/agent/.claude/x.md"}) || s.Files[0].SHA256 != impSum("home") || len(s.Refused) != 0 {
+			t.Fatalf("boxes = %v refused %v", got, s.Refused)
+		}
+	})
+	t.Run("refused first", func(t *testing.T) {
+		tmp := t.TempDir()
+		home, _ := impFixture(t, tmp)
+		src := filepath.Join(home, "cfg")
+		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@x.md\n@~/.claude/x.md\n@x.md\n")
+		if err := os.MkdirAll(filepath.Join(src, "x.md"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		impWrite(t, filepath.Join(home, ".claude", "x.md"), "home")
+		s := resolveImports(importOpts{Source: src, HostHome: home})
+		if got := impBoxes(s); !reflect.DeepEqual(got, []string{"/home/agent/.claude/x.md"}) || s.Files[0].SHA256 != impSum("home") {
+			t.Fatalf("boxes = %v refused %v", got, s.Refused)
+		}
+		// The refused spelling keeps its one reason; trying it again adds no row.
+		want := []ImportRefusal{{Import: "x.md", Reason: ReasonImportNotRegular}}
+		if !reflect.DeepEqual(s.Refused, want) {
+			t.Fatalf("refused = %v, want %v", s.Refused, want)
+		}
+	})
+}
