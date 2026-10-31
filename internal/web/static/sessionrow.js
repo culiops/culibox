@@ -100,6 +100,8 @@ function menuItems(s, opts) {
       : { id: "replies-on", label: "Allow replies", danger: false });
   }
   if (v.exited) items.push({ id: "restart", label: v.resumable ? "Restart (resume conversation)" : "Restart", danger: false });
+  // A clone's work can be brought home on request; the card only exists in a box.
+  if (v.clone_of && v.runtime === "box") items.push({ id: "bringhome", label: "Bring work home now", danger: false });
   items.push({ id: "duplicate", label: "Duplicate…", danger: false });
   items.push({ id: "end", label: "End session…", danger: true });
   if (opts && opts.nested) return items.filter((m) => NESTED_SHELL_ACTIONS.indexOf(m.id) >= 0);
@@ -128,7 +130,8 @@ function actionFailText(action, status) {
   if (action === "interrupt" && status === 409) return "Nothing to interrupt — the session is not running.";
   if (action === "restart" && status === 409) return "Only an ended session can be restarted.";
   if (status === 429) return "Too soon — try again in a second.";
-  return (action === "restart" ? "Restart" : "Interrupt") + " failed (" + status + ").";
+  const verb = action === "restart" ? "Restart" : action === "bringhome" ? "Bring work home" : "Interrupt";
+  return verb + " failed (" + status + ").";
 }
 
 // restartNotice: the toast for a restart that could not continue the old

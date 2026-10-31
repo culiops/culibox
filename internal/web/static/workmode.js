@@ -56,6 +56,9 @@ function wmFieldsToSend(mode, v) {
     if (copyDir) out.default_cwd = copyDir;
     const share = wmDep("contextPathsFromText", "./profileform.js")(x.shareText);
     if (share.length) out.clone_share = share;
+    // Unset means on. Only here: the server refuses clone_no_auto_return without
+    // clone_of, so folder mode must never carry it, whatever the loaded profile had.
+    Object.assign(out, wmDep("autoReturnToSend", "./profileform.js")(x.autoReturn !== false));
     return out;
   }
   if (folder) out.default_cwd = folder;
@@ -136,18 +139,21 @@ function wmCopyLine(cloneOf, home) {
 }
 
 // wmFolderCopy: the folder card's body and the "Agent can commit" cell of the
-// difference table. In a box the git history is read-only (the box enforces
-// it); on the host tier the agent runs as the user, so nothing is.
+// difference table, plus homeCell for the "How work comes home" row. In a box
+// the git history is read-only (the box enforces it); on the host tier the
+// agent runs as the user, so nothing is and it can commit in the folder too.
 function wmFolderCopy(isHost) {
   if (isHost) {
     return {
       body: "The agent edits your files directly, as you. On the host tier nothing is read-only.",
       commitCell: "Yes: on the host tier it runs as you",
+      homeCell: "It is already there, and the agent can commit it too",
     };
   }
   return {
     body: "The agent edits your files directly. Your git history stays read-only: you review and commit yourself.",
     commitCell: "No: your git history is read-only",
+    homeCell: "It is already there; you commit",
   };
 }
 

@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -415,4 +415,9 @@ test("pfTouchProfile carries clone_of only for a private copy", () => {
   assert.strictEqual(pfTouchProfile({ clone_of: "/h/r", bin: "claude" }, {}).clone_of, "/h/r");
   assert.ok(!("clone_of" in pfTouchProfile({ bin: "claude" }, {})));
   assert.ok(!("clone_of" in pfTouchProfile({ clone_of: "", bin: "claude" }, {})));
+});
+
+test("autoReturnToSend: only an unticked switch is sent", () => {
+  assert.deepStrictEqual(autoReturnToSend(true), {});
+  assert.deepStrictEqual(autoReturnToSend(false), { clone_no_auto_return: true });
 });

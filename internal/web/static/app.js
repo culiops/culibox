@@ -1607,6 +1607,95 @@ async function postSessionAction(id, action) {
   }
 }
 
+// bringHomeNow: "Bring work home now". The request only starts the return (202);
+// its result lands on the session's return state and noteReturns toasts it.
+async function bringHomeNow(s) {
+  const done = pendingToast("Bringing work home…");
+  try {
+    const res = await postSessionAction(s.id, "bring-home");
+    if (!res.ok) {
+      let msg = "";
+      try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
+      showToast(msg ? "Bring work home failed: " + msg : actionFailText("bringhome", res.status), { error: true });
+      return;
+    }
+    showToast("Bringing work home…");
+  } finally {
+    done();
+  }
+}
+
+// sessionWorkHome: the "work comes home" suffix for a clone session's line. The
+// profile is looked up by the session's agent; with none found there is no
+// suffix (workHomeSuffix of a bare clone_of would wrongly say auto-return is off).
+function sessionWorkHome(s) {
+  const p = profiles.find((x) => x.name === s.agent);
+  return p ? workHomeSuffix(p) : "";
+}
+
+// toastReturnSuffix: the spawn toast's tail for the return that ran before the
+// spawn. "" when it has nothing to say.
+function toastReturnSuffix(s) {
+  const t = returnToastText(s.agent, s.clone && s.clone.return);
+  return t ? " \u00b7 " + t : "";
+}
+
+// Returns already announced, so a poll never toasts one twice. null until the
+// first poll after boot, which seeds it silently: returns that finished before
+// the page opened are not news.
+let returnsSeen = null;
+let cloneSessionIds = new Set();
+// noteReturns: the sessions poll's return handling. A new exit or "now" return
+// toasts once, marks it seen for the profile's not-home toast, and refreshes the
+// profile list; a clone session leaving the list (a kill) refreshes it too.
+function noteReturns(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const cloneIds = new Set(list.filter((s) => s.clone_of).map((s) => s.id));
+  let refetch = false;
+  if (returnsSeen === null) {
+    returnsSeen = new Set(list.filter((s) => s.return).map((s) => returnSig(s.id, s.return.at)));
+  } else {
+    for (const s of list) {
+      if (!s.return) continue;
+      const sig = returnSig(s.id, s.return.at);
+      if (returnsSeen.has(sig)) continue;
+      returnsSeen.add(sig);
+      const text = returnToastText(s.agent, s.return);
+      if (text) showToast(text);
+      // The profile-level toast for the same return would say it twice. With no
+      // stored list there is nothing to add to: the next load seeds it whole.
+      const seen = notHomeSeenRead();
+      if (seen) notHomeSeenWrite(seen.concat(returnSig(s.agent, s.return.at)));
+      refetch = true;
+    }
+    for (const id of cloneSessionIds) if (!cloneIds.has(id)) refetch = true;
+  }
+  cloneSessionIds = cloneIds;
+  if (refetch) loadProfiles(false);
+}
+
+// The not-home signatures already announced, kept across reloads. Storage can be
+// absent or full: every access is guarded, and "no list" seeds silently.
+const NOT_HOME_SEEN_KEY = "ab.notHomeSeen";
+function notHomeSeenRead() {
+  try {
+    const v = JSON.parse(localStorage.getItem(NOT_HOME_SEEN_KEY) || "null");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
+  } catch (_) { return null; }
+}
+function notHomeSeenWrite(list) {
+  try { localStorage.setItem(NOT_HOME_SEEN_KEY, JSON.stringify(list)); } catch (_) {}
+}
+// notHomeToasts: after each profile load, one toast per profile whose last
+// return left branches behind and was not announced yet.
+function notHomeToasts() {
+  const seen = notHomeSeenRead();
+  const news = notHomeNews(seen || [], profiles);
+  // First load with nothing stored (or no storage) only records what is there.
+  if (seen !== null) for (const t of news.toasts) showToast(t);
+  notHomeSeenWrite(news.seen);
+}
+
 // interruptSession: no confirmation (spec §2.4) — it only stops work.
 async function interruptSession(id) {
   const res = await postSessionAction(id, "interrupt");
@@ -2034,7 +2123,7 @@ function renderSession(s, opts) {
   if (!compact) {
     const smeta = document.createElement("div");
     smeta.className = "smeta";
-    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
     grow.appendChild(smeta);
   }
   li.appendChild(grow);
@@ -2148,7 +2237,7 @@ function paintCompactRow(li, sname, grow, s) {
   if (ab) facts.push(ab.title);
   const aws = awsBadge(s, nowMs);
   if (aws) facts.push("AWS: " + aws.title);
-  if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR));
+  if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
   li.title = facts.join("\n");
   // The session's cost, muted mono, before the chip. cost_usd is absent unless
   // the whole conversation history is known, and then no "$" is shown at all.
@@ -3083,6 +3172,7 @@ async function refreshSessions() {
   }
   lastSessions = sessions || [];
   sessionsLoaded = true;
+  noteReturns(lastSessions);
   refreshEmptyState();
   // The Files drawer reads the list (box tier, workspace): at a boot restore
   // it opened before the list was here.
@@ -3224,6 +3314,7 @@ async function loadProfiles(retry = true) {
     // timeout is just a failed refresh.
     profiles = (await api("/api/profiles", { signal: deadlineSignal(5000) })) || [];
     profilesLoaded = true;
+    notHomeToasts();
     // replaceChildren resets a <select> to its first option, so a refetch while
     // the user has a profile picked would silently switch it.
     const prev = $("agent").value;
@@ -3236,6 +3327,8 @@ async function loadProfiles(retry = true) {
     renderProfileSeg();
     renderOptions();
     renderProfileList();
+    // The editor's list follows the refetch (a return can land while it is open).
+    if (selectedProfile) renderPfNotHome(selectedProfile);
     refreshEmptyState();
     return true;
   } catch (_) {
@@ -4020,6 +4113,8 @@ function fillForm(p) {
   renderPfWorkspaceOptions(copy ? p.clone_of : p.default_cwd || "");
   $("pf-copy-dir").value = pfSavedCopyDir;
   $("pf-copy-share").value = contextPathsToText(p.clone_share);
+  $("pf-clone-autoreturn").checked = !p.clone_no_auto_return;
+  renderPfNotHome(p.name);
   $("pf-copy-warn").hidden = true;
   $("pf-copy-err").hidden = true;
   renderPfOptions(p.options || {});
@@ -4161,6 +4256,7 @@ function syncPfMode() {
   const folderCopy = wmFolderCopy((metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host");
   $("pf-mode-folder-body").textContent = folderCopy.body;
   $("pf-mode-diff-commit").textContent = folderCopy.commitCell;
+  $("pf-mode-diff-home").textContent = folderCopy.homeCell;
   $("pf-mode-hint").textContent = st.hint;
   $("pf-mode-hint").hidden = !st.hint;
   const note = wmSwitchNote(pfSavedMode, mode, pfSavedCopyDir, window.HOME_DIR || "");
@@ -4168,6 +4264,43 @@ function syncPfMode() {
   $("pf-mode-switch").hidden = !note;
   const ghBinding = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms() });
   $("pf-copy-gh").hidden = st.copyDisabled || !wmNeedsGitHubHint(mode, ghBinding, readStTicked(), stEntries);
+}
+// renderPfNotHome: what the last return left behind for this profile, from the
+// profile list's view (the editor's own GET has no such state). Per branch the
+// reason, the fix and, when the server has one, the specific guard or git error.
+// Every string is box-derived or server text: textContent only.
+function renderPfNotHome(name) {
+  const host = $("pf-nothome");
+  const view = profiles.find((x) => x.name === name);
+  const nh = view && view.not_home;
+  const rows = [];
+  for (const b of (nh && Array.isArray(nh.branches) ? nh.branches : [])) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    const why = document.createElement("span");
+    why.className = "pf-nh-why";
+    why.textContent = notHomeReasonText(b);
+    row.appendChild(why);
+    if (b.detail) {
+      const d = document.createElement("span");
+      d.className = "pf-nh-detail";
+      d.textContent = b.detail;
+      row.appendChild(d);
+    }
+    const fix = document.createElement("span");
+    fix.className = "pf-nh-fix mut";
+    fix.textContent = notHomeFix(name, nh.base, b);
+    row.appendChild(fix);
+    rows.push(row);
+  }
+  if (!rows.length && nh && nh.error) {
+    const row = document.createElement("div");
+    row.className = "pf-nh-row";
+    row.textContent = notHomeLabel(nh) + ": " + nh.error;
+    rows.push(row);
+  }
+  host.replaceChildren(...rows);
+  host.hidden = rows.length === 0;
 }
 // pfFillCopyDir: a copy with no directory yet gets ~/box-clones/<folder name>,
 // never a directory another profile already writes. Only fills an empty field.
@@ -4232,6 +4365,7 @@ function readForm() {
     folder: pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value),
     copyDir: $("pf-copy-dir").value,
     shareText: $("pf-copy-share").value,
+    autoReturn: $("pf-clone-autoreturn").checked,
   }));
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
@@ -4467,6 +4601,17 @@ function renderProfileList() {
       lk.className = "lk";
       lk.textContent = "built-in";
       b.appendChild(lk);
+    }
+    // Outside .psub on purpose: the mobile list hides .psub, and work that has
+    // not come home must stay visible there. Before .psub so it sits on the
+    // name's line, not under the full-width second line.
+    const nhLabel = notHomeLabel(p.not_home);
+    if (nhLabel) {
+      const nh = document.createElement("span");
+      nh.className = "pnothome";
+      nh.textContent = nhLabel;
+      nh.title = notHomeTitle(p.not_home);
+      b.appendChild(nh);
     }
     // The desktop page's second line (pg-1b): "claude · box", "built-in · host".
     // Hidden at <= 700px, where the row stays one line.
@@ -4981,7 +5126,7 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s),
+    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
   }
   return s;
@@ -5502,6 +5647,7 @@ function runSessionAction(action, s) {
     "replies-on": () => setRepliesFromMenu(s.id, true),
     "replies-off": () => setRepliesFromMenu(s.id, false),
     restart: () => restartSession(s),
+    bringhome: () => bringHomeNow(s),
     // Duplicate opens the form prefilled — never a spawn from one click (the
     // workspace IS the containment boundary; see "+ New session" above).
     duplicate: () => openSpawnDialog(s.agent, spawnPrefill(s)),

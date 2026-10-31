@@ -657,3 +657,20 @@ test("sso_direct with no role name: the rail, chip title and connection detail s
   const plain = awsRailRows({ aws: { label: "x", account_id: "1", role_arn: "arn:aws:iam::1:role/ops" } }, null, NOW).find((r) => r.k === "role");
   assert.strictEqual(plain.v, "ops");
 });
+
+test("menuItems offers Bring work home now for a boxed clone session, before duplicate", () => {
+  const ids = (s, o) => menuItems(s, o).map((i) => i.id);
+  const clone = menuItems({ clone_of: "/r", runtime: "box" });
+  const it = clone.find((i) => i.id === "bringhome");
+  assert.deepStrictEqual(it, { id: "bringhome", label: "Bring work home now", danger: false });
+  assert.ok(ids({ clone_of: "/r", runtime: "box" }).indexOf("bringhome") < ids({ clone_of: "/r", runtime: "box" }).indexOf("duplicate"));
+  assert.ok(!ids({ clone_of: "/r", runtime: "host" }).includes("bringhome"), "host");
+  assert.ok(!ids({ runtime: "box" }).includes("bringhome"), "not a clone");
+  assert.ok(!ids({ clone_of: "/r", runtime: "box" }, { nested: true }).includes("bringhome"), "nested shell");
+  assert.ok(!paletteActionItems({ clone_of: "/r", runtime: "box" }).some((i) => i.id === "bringhome"), "not a palette action");
+});
+
+test("actionFailText names Bring work home for its own failures", () => {
+  assert.strictEqual(actionFailText("bringhome", 500), "Bring work home failed (500).");
+  assert.strictEqual(actionFailText("bringhome", 0), "No connection — try again.");
+});

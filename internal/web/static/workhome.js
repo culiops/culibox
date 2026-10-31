@@ -46,6 +46,15 @@ function notHomeReasonText(nh) {
   }
 }
 
+// notHomeTitle: the reason lines behind the short count, one per branch, for a
+// hover title. An error with no branches gets the error itself.
+function notHomeTitle(st) {
+  if (!st) return "";
+  const lines = Array.isArray(st.branches) ? st.branches.map(notHomeReasonText) : [];
+  if (!lines.length && st.error) lines.push(st.error);
+  return lines.join("\n");
+}
+
 // notHomeFix: the action for nh's reason. Commands are backticked; -base is
 // shown only when the base is not main (an empty base means main).
 function notHomeFix(profile, base, nh) {
@@ -102,5 +111,5 @@ function notHomeNews(seen, profiles) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeFix, returnToastText, returnSig, notHomeNews };
+  module.exports = { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews };
 }

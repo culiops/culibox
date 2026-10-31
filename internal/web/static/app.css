@@ -1430,6 +1430,18 @@
     .pitem.on { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
     .pitem .lk { margin-left: auto; color: var(--muted); font-size: 11px; }
     .pitem .psub { display: none; } /* the desktop page shows it (desktop.css) */
+    /* Work that has not come home: shown at every width, unlike .psub. */
+    .pitem .pnothome, .sp-nothome {
+      padding: 1px 6px; border: 1px solid var(--warn); border-radius: var(--r-chip, 3px);
+      background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; line-height: 1.4; white-space: nowrap;
+    }
+    .pitem .pnothome { margin-left: auto; flex: none; }
+    #pf-nothome { margin: 0 0 10px; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+    #pf-nothome .pf-nh-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-left: 2px solid var(--warn); background: var(--warn-bg); }
+    #pf-nothome .pf-nh-fix { font-family: var(--font-mono, monospace); font-size: 11.5px; }
+    #pf-nothome .pf-nh-why { color: var(--fg); }
+    #pf-nothome .pf-nh-detail { color: var(--muted); }
+    .pf-autoreturn { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; text-transform: none; letter-spacing: 0; }
 
     .ped { flex: 1; min-width: 0; padding: 20px 22px; overflow-y: auto; }
     /* A built-in profile, seen from the editor. Accent rather than danger: it

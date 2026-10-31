@@ -110,9 +110,23 @@ test("folder copy: the box tier keeps the verbatim copy, the host tier never cla
   assert.deepStrictEqual(wmFolderCopy(false), {
     body: "The agent edits your files directly. Your git history stays read-only: you review and commit yourself.",
     commitCell: "No: your git history is read-only",
+    homeCell: "It is already there; you commit",
   });
   assert.deepStrictEqual(wmFolderCopy(true), {
     body: "The agent edits your files directly, as you. On the host tier nothing is read-only.",
     commitCell: "Yes: on the host tier it runs as you",
+    homeCell: "It is already there, and the agent can commit it too",
   });
+});
+
+test("fields to send: the auto-return switch rides only with a private copy", () => {
+  const v = { folder: "/h/r", copyDir: "/h/box-clones/r", shareText: "" };
+  assert.deepStrictEqual(wmFieldsToSend("copy", { ...v, autoReturn: false }),
+    { clone_of: "/h/r", default_cwd: "/h/box-clones/r", clone_no_auto_return: true });
+  assert.ok(!("clone_no_auto_return" in wmFieldsToSend("copy", { ...v, autoReturn: true })), "ticked");
+  assert.ok(!("clone_no_auto_return" in wmFieldsToSend("copy", v)), "unset means on");
+  // The server answers 400 for the field without clone_of: folder mode never sends it,
+  // not even when the loaded profile had it or the caller passes it through.
+  assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "/h/r", autoReturn: false, clone_no_auto_return: true }), { default_cwd: "/h/r" });
+  assert.deepStrictEqual(wmFieldsToSend("folder", { folder: "", autoReturn: false }), {});
 });

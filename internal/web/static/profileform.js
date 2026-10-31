@@ -378,6 +378,14 @@ function pfTouchProfile(form, o) {
   return out;
 }
 
+// autoReturnToSend: the auto-return switch's part of a save. The field is the
+// off switch (omitted means on), so a ticked box sends nothing. Only a private
+// copy may carry it (the server refuses it without clone_of): wmFieldsToSend
+// calls this for copy mode alone.
+function autoReturnToSend(checked) {
+  return checked ? {} : { clone_no_auto_return: true };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
 }

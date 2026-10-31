@@ -2,7 +2,7 @@
 // workhome.js: the wording for where a private copy's work goes and what is not home.
 const test = require("node:test");
 const assert = require("node:assert");
-const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeFix, returnToastText, returnSig, notHomeNews } = require("../static/workhome.js");
+const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTitle, notHomeFix, returnToastText, returnSig, notHomeNews } = require("../static/workhome.js");
 
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
@@ -167,4 +167,12 @@ test("news: a box-derived branch name never reaches a toast as markup", () => {
   const { toasts } = notHomeNews([], profiles);
   assert.deepStrictEqual(toasts, ["p: 1 branch not home"]);
   assert.ok(!toasts.join("").includes("<img"));
+});
+
+test("notHomeTitle: one reason line per branch, or the error alone", () => {
+  assert.strictEqual(notHomeTitle(null), "");
+  assert.strictEqual(
+    notHomeTitle({ branches: [{ branch: "a", reason: "not-ff" }, { branch: "b", reason: "checked-out" }] }),
+    "box/a on the host has commits this branch lacks\nbox/b is checked out in your repo, so it did not move");
+  assert.strictEqual(notHomeTitle({ branches: [], error: "clone unreadable" }), "clone unreadable");
 });
