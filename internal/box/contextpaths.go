@@ -208,6 +208,16 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, shared []strin
 // host services (the docker, colima and lima daemons, ssh keys and agent).
 var hostSocketDirs = []string{".colima", ".lima", ".docker", ".ssh"}
 
+// HostSocketDirs returns hostSocketDirs joined to home: the host directories a
+// bundled file must never be read from.
+func HostSocketDirs(home string) []string {
+	out := make([]string, 0, len(hostSocketDirs))
+	for _, d := range hostSocketDirs {
+		out = append(out, filepath.Join(home, d))
+	}
+	return out
+}
+
 // socketScanMaxEntries bounds findSocketOrPipe's walk. A tree bigger than this
 // is refused, not allowed unscanned: a socket anywhere in it would go unseen. A
 // var so a test can lower it.

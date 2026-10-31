@@ -362,3 +362,11 @@ func TestCheckContextPathRefusesUnreadableSubdir(t *testing.T) {
 	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
 		"cannot read locked to scan for unix sockets and named pipes")
 }
+
+func TestHostSocketDirs(t *testing.T) {
+	got := HostSocketDirs("/h")
+	want := []string{"/h/.colima", "/h/.lima", "/h/.docker", "/h/.ssh"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
