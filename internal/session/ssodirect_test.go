@@ -50,7 +50,7 @@ func (h *ssoHooks) checkedKeys() []string {
 	return append([]string(nil), h.checked...)
 }
 
-const ssoTestRole = "arn:aws:iam::226198813800:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ReadOnly_abc"
+const ssoTestRole = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ReadOnly_abc"
 
 func readOnlyVerdict(exp time.Time) ssoVerdict {
 	return ssoVerdict{res: awsprobe.GateResult{State: awsprobe.GateReadOnly, RoleARN: ssoTestRole, CheckedAt: time.Now()}, exp: exp}
@@ -203,7 +203,7 @@ func TestSpawnSSODirectReadOnlyReportsModeAndHours(t *testing.T) {
 	if ro == nil || ar == nil {
 		t.Fatalf("connections = %+v", info.AWSConnections)
 	}
-	if ro.Mode != config.AWSModeSSODirect || ro.Hours != 8 || ro.RoleARN != "" || ro.AccountID != "226198813800" {
+	if ro.Mode != config.AWSModeSSODirect || ro.Hours != 8 || ro.RoleARN != "" || ro.AccountID != "123456789012" {
 		t.Fatalf("sso_direct info = %+v, want mode sso_direct, 8 h, no role, the gate's account", ro)
 	}
 	if ro.BaseAccess != string(awsprobe.NoneFound) {
@@ -237,7 +237,7 @@ func TestSpawnSSODirectInlineBinding(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	in := s.Info().AWS
-	if in == nil || in.Mode != config.AWSModeSSODirect || in.Hours != 1 || in.RoleARN != "" || in.AccountID != "226198813800" {
+	if in == nil || in.Mode != config.AWSModeSSODirect || in.Hours != 1 || in.RoleARN != "" || in.AccountID != "123456789012" {
 		t.Fatalf("AWSInfo = %+v", in)
 	}
 	hooks.verdicts[""] = ssoVerdict{res: awsprobe.GateResult{State: awsprobe.GateNotReadOnly}}
@@ -284,7 +284,7 @@ func TestSSODirectInfoSurvivesARestart(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	r := reconcileWith(t, l, path, fb, s.ID)
 	got := r.Info().AWSConnections
-	if len(got) != 1 || got[0].Mode != config.AWSModeSSODirect || got[0].Hours != 3 || got[0].AccountID != "226198813800" {
+	if len(got) != 1 || got[0].Mode != config.AWSModeSSODirect || got[0].Hours != 3 || got[0].AccountID != "123456789012" {
 		t.Fatalf("restored info = %+v", got)
 	}
 }

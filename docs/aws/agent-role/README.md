@@ -115,8 +115,11 @@ does and does not cover). Only a definite "read-only"
 lets credentials out, a save happen or a spawn proceed. Anything the gate cannot verify (SSO
 expired, a timeout, a throttled call, a missing permission, a policy it cannot parse) refuses.
 There is no "I understand" override. The gate runs when you save the connection, when a session
-spawns, in `agent-box doctor`, and again on **every** credential mint, a refresh included. A
-permission set that gains a write mid-session is cut off at the next refresh.
+spawns, in `agent-box doctor`, and again on **every** credential mint, a refresh included
+(about 5 minutes before the credentials expire). A permission set that gains a write
+mid-session is refused at the next mint. Credentials already issued keep working until they
+expire (up to N h), and AWS applies the permission set's current policy to them immediately;
+only the gate's re-check waits for the next mint.
 
 What it does, in plain words:
 
