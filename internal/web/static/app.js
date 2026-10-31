@@ -1603,7 +1603,22 @@ async function interruptSession(id) {
 
 // restartSession replaces an ended session with a new one from the same spec;
 // its tab is swapped for the new session's.
-async function restartSession(s) {
+//
+// trigger: the control that was clicked, when one stays on screen (the pane's
+// Restart button). It shows the wait itself ("Restarting…"); without one
+// (palette, sidebar menu) a toast does, after the pending delay, and an error
+// toast replaces it.
+async function restartSession(s, trigger) {
+  if (trigger) return withPending(trigger, "Restarting…", () => restartSessionRun(s));
+  const done = pendingToast("Restarting " + (s.name || s.id) + "…");
+  try {
+    return await restartSessionRun(s);
+  } finally {
+    done();
+  }
+}
+
+async function restartSessionRun(s) {
   const res = await postSessionAction(s.id, "restart");
   if (!res.ok) {
     let msg = "";
@@ -5838,9 +5853,19 @@ async function killSession(id) {
 // Per-cell (not global) in-flight guard: a double click on one window is ignored,
 // but +sh on another window still works instead of dying silently.
 const shellSpawning = new WeakSet();
-async function spawnShellIn(cell, placement = "below") {
+//
+// trigger: the button that was clicked, when one stays on screen. It shows the
+// wait itself ("Starting shell…") and its re-entry guard replaces the caller's
+// own disabled/finally dance. Without one (palette, keyboard) a toast covers
+// the shell request after the pending delay.
+async function spawnShellIn(cell, placement = "below", trigger) {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   closePage();
+  if (trigger) return withPending(trigger, "Starting shell…", () => spawnShellRun(cell, placement, false));
+  return spawnShellRun(cell, placement, true);
+}
+
+async function spawnShellRun(cell, placement, toastWait) {
   shellSpawning.add(cell);
   try {
     // Only a gate and the form fallback's preselection now: the shell endpoint
@@ -5858,7 +5883,13 @@ async function spawnShellIn(cell, placement = "below") {
       openSpawnDialog(profile);
       return;
     }
-    const s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    const done = toastWait ? pendingToast("Starting shell…") : () => {};
+    let s;
+    try {
+      s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    } finally {
+      done();
+    }
     await refreshSessions(); // the strip's "shell N" label reads the new list
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
     // can be removed). Attaching to a detached cell would leak a live xterm + socket

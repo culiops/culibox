@@ -132,9 +132,17 @@ function ftPaintChanged(set) {
 
 async function ftRenderDir(path, container, prefix) {
   prefix = prefix || "";
-  let data;
+  // The pending line sits where the children will go, indented to match them
+  // (app.css reads --ft-indent). One line per directory in flight: a restored
+  // subtree loads level by level, each into its own box. It is gone before the
+  // entries or the error row are appended.
+  container.style.setProperty("--ft-indent", prefix.length + "ch");
+  const done = pendingRegion(container, "Loading…");
+  let data, failure = null;
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
-  catch (e) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = e.message; container.append(d); return; }
+  catch (e) { failure = e; }
+  finally { done(); }
+  if (failure) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = failure.message; container.append(d); return; }
   const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
     ? drawerChangedFor(ftRoot()) : null;
   for (let i = 0; i < data.entries.length; i++) {
@@ -273,7 +281,15 @@ async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
   const box = document.createElement("div");
-  await ftRenderDir(ftRoot(), box);
+  // The whole render happens in an off-DOM box, so the pending lines
+  // ftRenderDir paints there are never seen. This one sits in the live tree,
+  // above whatever it shows now, and covers every level of a restored subtree.
+  const done = pendingRegion(ftTreeEl, "Loading…");
+  try {
+    await ftRenderDir(ftRoot(), box);
+  } finally {
+    done();
+  }
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
   // A refresh asks again what the agent has changed since (Files drawer only).

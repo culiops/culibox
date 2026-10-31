@@ -1355,6 +1355,10 @@
     /* The Spawn button predates .busy and has never dimmed; keep its pixels. */
     #spawn .busy { opacity: 1; }
     .pending-line { font-size: 12px; color: var(--muted); padding: 4px 0; }
+    /* In the file tree the line is a row among rows: the tree's own font, the
+       row padding, and --ft-indent (set by ftRenderDir to the width of the
+       branch prefix) so it sits where the children will appear. */
+    #filetree .pending-line { font-size: inherit; padding: .11lh .55ch .11lh calc(.55ch + var(--ft-indent, 0ch)); }
     /* Desktop-only parts of the New session dialog (desktop.css shows them above
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */

@@ -684,10 +684,9 @@ class TerminalTab {
       const rb = document.createElement("button");
       rb.textContent = "Restart";
       rb.className = "pane-ended-restart";
-      rb.onclick = () => {
-        rb.disabled = true;
-        restartSession({ id: this.id }).finally(() => { rb.disabled = false; });
-      };
+      // The button shows the wait itself; its re-entry guard replaces the old
+      // disabled/finally pair.
+      rb.onclick = () => { restartSession({ id: this.id }, rb); };
       bar.append(rb);
     }
     bar.append(btn);

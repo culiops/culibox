@@ -1228,14 +1228,22 @@ async function loadCredentials() {
   // Re-selecting the tab hides the Add / Edit footer; the view is still there.
   if (awsFlow) awsShowFoot(true);
   if (credForm) credFormFoot(true);
-  // The store strip also reads GET /api/store (plaintext copies, value count).
-  if (typeof refreshStore === "function") await refreshStore();
+  // A muted "Loading credentials…" above whatever is already shown, only if the
+  // two calls below outlast the pending delay. done() runs on every exit,
+  // including the error return, so no line is left behind.
+  const done = pendingRegion(document.getElementById("creds-body"), "Loading credentials…");
   let view;
   try {
-    view = await api("/api/credentials");
-  } catch (e) {
-    setCredErr("Could not load credentials: " + e.message);
-    return;
+    // The store strip also reads GET /api/store (plaintext copies, value count).
+    if (typeof refreshStore === "function") await refreshStore();
+    try {
+      view = await api("/api/credentials");
+    } catch (e) {
+      setCredErr("Could not load credentials: " + e.message);
+      return;
+    }
+  } finally {
+    done();
   }
   renderCredentials(view);
   // Every mutation ends in a reload, so this is the one place the profile form's
