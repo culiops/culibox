@@ -79,6 +79,10 @@ type Server struct {
 	// trees (host behaviour).
 	BoxTrees func() BoxTrees
 
+	// ScratchDirs are candidate Claude Code temp folders (claude-<uid>), from
+	// ScratchCandidates. The fs API reads an accepted one read-only.
+	ScratchDirs []string
+
 	// Commit is the build's commit, published in /api/meta so the UI and a bug
 	// report can name the build.
 	Commit string

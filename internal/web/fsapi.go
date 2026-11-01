@@ -17,6 +17,7 @@ import (
 var (
 	errBadPath     = errors.New("bad path")
 	errOutsideHome = errors.New("outside home")
+	errDenied      = errors.New("denied tree") // agent-box's own data dir / box state
 )
 
 // imageExt maps a lowercase extension to the MIME type served raw for <img>.
@@ -48,7 +49,7 @@ func writeFsErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "not found")
 	case errors.Is(err, errNotDir):
 		writeErr(w, http.StatusBadRequest, "not a directory")
-	case errors.Is(err, errOutsideHome):
+	case errors.Is(err, errOutsideHome), errors.Is(err, errDenied):
 		writeErr(w, http.StatusForbidden, "forbidden")
 	default:
 		writeErr(w, http.StatusInternalServerError, "error")
