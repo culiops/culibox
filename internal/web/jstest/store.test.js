@@ -15,6 +15,24 @@ test("banner shows only for an initialized, locked, in-use, non-darwin store", (
   assert.strictEqual(storeBannerVisible(undefined), false);
 });
 
+test("banner stays hidden on darwin for every Keychain state, including an unavailable one", () => {
+  for (const kind of ["access", "key_lost", "store_unreadable"]) {
+    assert.strictEqual(storeBannerVisible({ ...base, platform: "darwin", locked: false, unavailable: { kind, reason: "r", fix: "f" } }), false, kind);
+  }
+  assert.strictEqual(storeBannerVisible({ ...base, platform: "darwin", locked: true }), false);
+});
+
+test("expiry text names the Keychain failure by kind", () => {
+  const dar = { ...base, platform: "darwin", locked: false };
+  const un = (kind) => ({ ...dar, unavailable: { kind, reason: "r", fix: "f" } });
+  assert.strictEqual(storeExpiryText(un("access"), 0), "Keychain access failed");
+  assert.strictEqual(storeExpiryText(un("key_lost"), 0), "Keychain key lost");
+  assert.strictEqual(storeExpiryText(un("store_unreadable"), 0), "Store unreadable");
+  // An unknown kind still says it is unavailable, never a healthy Keychain.
+  assert.match(storeExpiryText(un("surprise"), 0), /unavailable/i);
+  assert.strictEqual(storeExpiryText(dar, 0), "Keychain (macOS)");
+});
+
 const H = 3600 * 1000;
 const iso = (ms) => new Date(ms).toISOString();
 

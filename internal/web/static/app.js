@@ -1742,11 +1742,12 @@ async function restartSession(s, trigger) {
 async function restartSessionRun(s) {
   const res = await postSessionAction(s.id, "restart");
   if (!res.ok) {
-    let msg = "";
-    try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
+    let msg = "", code = "";
+    try { const b = (await res.json()) || {}; msg = b.error || ""; code = b.code || ""; } catch (_) {}
     // 423 = the store is locked: its message names the way out, and the banner
-    // (refreshStore) is where the passphrase goes.
-    const named = (res.status === 400 || res.status === 423) && msg;
+    // (refreshStore) is where the passphrase goes. 503 store_unavailable = the
+    // Keychain failed: its message names the fix, and there is nothing to type.
+    const named = (res.status === 400 || res.status === 423 || spawnRefusedUnavailable(res.status, code)) && msg;
     showToast(named ? "Restart failed: " + msg : actionFailText("restart", res.status), { error: true });
     if (res.status === 423) refreshStore();
     await refreshSessions();
@@ -5626,6 +5627,8 @@ function initSpawnControl() {
 // server answers (a refused spawn must be able to show its unlock form in
 // place), so a second submit would start a second session.
 let spawnBusy = false;
+// The Keychain refusal text the spawn dialog's error line is showing, if it is.
+let spawnUnavailMsg = "";
 
 // hideSpawnUnlock clears the inline unlock block. Called on every dialog open
 // and on Retry, so a stale "store unlocked" never outlives its dialog.
@@ -5697,6 +5700,10 @@ $("spawn").addEventListener("submit", async (ev) => {
     $("spawn-prompt").value = "";
   };
   hideSpawnUnlock();
+  // A Keychain refusal left on the line by the previous try is stale now; any
+  // other note there (profiles could not be refreshed) is not ours to clear.
+  if (spawnUnavailMsg && $("spawn-err").textContent === spawnUnavailMsg) setDialogError("spawn-modal", "");
+  spawnUnavailMsg = "";
   // The POST returns only once the session exists (#36): say it is working.
   const prog = $("spawn-progress");
   const rt = req.runtime || (currentProfile() || {}).runtime || "";
@@ -5710,6 +5717,11 @@ $("spawn").addEventListener("submit", async (ev) => {
   } catch (e) {
     if (spawnRefusedLocked(e.status, e.code)) {
       showSpawnUnlock(e.message); // dialog and form values stay as they were
+    } else if (spawnRefusedUnavailable(e.status, e.code)) {
+      // Keychain failure: nothing to type. The sentence names the fix; the dialog
+      // and form values stay as they were.
+      spawnUnavailMsg = e.message;
+      setDialogError("spawn-modal", e.message);
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it

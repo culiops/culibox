@@ -21,8 +21,20 @@ function storeBannerVisible(st) {
   return !!(st && st.initialized && st.locked && st.in_use && st.platform !== "darwin");
 }
 
+// storeUnavailableLabel: the short name of a macOS Keychain failure, by kind.
+// The long text (what happened and how to fix it) comes from the server, which
+// owns it; this is only the label. An unknown kind still says "unavailable"
+// instead of looking like a healthy Keychain.
+function storeUnavailableLabel(kind) {
+  if (kind === "access") return "Keychain access failed";
+  if (kind === "key_lost") return "Keychain key lost";
+  if (kind === "store_unreadable") return "Store unreadable";
+  return "Keychain unavailable";
+}
+
 // storeExpiryText: the Settings status line. nowMs is injected so it is testable.
 function storeExpiryText(st, nowMs) {
+  if (st && st.unavailable) return storeUnavailableLabel(st.unavailable.kind);
   if (!st || !st.initialized) return "not set up";
   if (st.platform === "darwin") return "Keychain (macOS)";
   if (st.locked) return "locked";
@@ -70,7 +82,7 @@ function storeUnlockOutcome(status, text, retryAfter) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
+  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storeUnavailableLabel, storePlaintextText, storeUnlockOutcome };
 }
 
 // --- DOM wiring (browser only) -------------------------------------------------
