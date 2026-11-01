@@ -546,6 +546,7 @@ class ViewerTab {
       value: this.lastContent || "",
       mode: mode,
       lineNumbers: true,
+      lineWrapping: viewerPrefs.getWrap(),
       autofocus: true,
     });
     // Returning false stops CodeMirror's own key handling from also inserting
@@ -757,6 +758,67 @@ class ViewerTab {
     this.findRefresh();
   }
 
+  // --- wrap lines (D9) -------------------------------------------------------
+  // The read view wraps by the viewer-wrap class on <html> (CSS only, no re-render);
+  // an editor wraps by CodeMirror's lineWrapping option. wrapAnchor() is called
+  // BEFORE the preference flips and returns the function that, called after,
+  // puts the reader back on the same line: a wrapped row is taller, so the same
+  // pixel offset would be somewhere else in the file.
+  wrapAnchor() {
+    const none = () => {};
+    if (this.editing && this.cm) {
+      const cm = this.cm;
+      const top = cm.getScrollInfo().top;
+      const line = cm.lineAtHeight(top, "local");
+      const off = top - cm.heightAtLine(line, "local");
+      return () => cm.scrollTo(null, cm.heightAtLine(line, "local") + off);
+    }
+    // A hidden tab has no layout to measure; it keeps its pixel offset.
+    if (!this.hasLines || !this.content.isConnected) return none;
+    const row = this.firstVisibleRow();
+    if (!row) return none;
+    const n = row.dataset.n;
+    const off = row.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
+    return () => {
+      const r = this.content.querySelector('.vl[data-n="' + n + '"]');
+      if (!r) return;
+      const top = r.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop - off;
+      this.setScrollTop(Math.max(0, Math.round(top)));
+    };
+  }
+
+  // firstVisibleRow: the first .vl whose bottom edge is below the scroller's top.
+  // In a chunked file the chunks are found first (a handful of boxes), so only
+  // one block of rows is measured, not every row of a 50,000-line file.
+  firstVisibleRow() {
+    const top = this.content.getBoundingClientRect().top;
+    let scope = this.content;
+    const chunks = this.content.querySelectorAll(".vl-chunk");
+    if (chunks.length) {
+      scope = chunks[chunks.length - 1];
+      for (const ch of chunks) if (ch.getBoundingClientRect().bottom > top) { scope = ch; break; }
+    }
+    for (const r of scope.querySelectorAll(".vl")) if (r.getBoundingClientRect().bottom > top) return r;
+    return null;
+  }
+
+  // applyWrap brings this viewer's editor (if any) in line with the preference.
+  // The read view needs nothing: it follows the root class.
+  applyWrap() {
+    if (!this.cm) return;
+    this.cm.setOption("lineWrapping", viewerPrefs.getWrap());
+    this.cm.refresh();
+  }
+
+  // applyWrapAll: every live viewer, in every pane and the Files drawer's.
+  static applyWrapAll() {
+    const all = [];
+    eachViewer((vt) => all.push(vt));
+    const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
+    if (dv && !all.includes(dv)) all.push(dv);
+    for (const vt of all) vt.applyWrap();
+  }
+
   renderImage() {
     this.showingMsg = false;
     const img = document.createElement("img");
@@ -767,6 +829,25 @@ class ViewerTab {
     this.content.replaceChildren(img);
     this.hasLines = false;
   }
+}
+
+function isViewerWrap() { return viewerPrefs.getWrap(); }
+
+// toggleViewerWrap flips "Wrap lines" for every open viewer, read and edit, and
+// remembers it for this browser. Each viewer's first visible line is noted
+// before the flip and scrolled back to after it, so the reader keeps their place.
+function toggleViewerWrap() {
+  const all = [];
+  eachViewer((vt) => all.push(vt));
+  const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
+  if (dv && !all.includes(dv)) all.push(dv);
+  const restores = all.map((vt) => vt.wrapAnchor());
+  const on = !viewerPrefs.getWrap();
+  viewerPrefs.setWrap(on);
+  document.documentElement.classList.toggle("viewer-wrap", on);
+  ViewerTab.applyWrapAll();
+  for (const restore of restores) restore();
+  return on;
 }
 
 function escapeHtml(s) {

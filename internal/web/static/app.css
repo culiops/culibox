@@ -1919,6 +1919,16 @@
        for a skipped block is exact. Without the `auto` keyword on purpose: auto remembers
        the height from when the block last rendered, which a text-size change makes wrong. */
     .vl-chunk { content-visibility: auto; contain-intrinsic-height: calc(var(--vl-rows, 500) * 1.55 * var(--fs-code)); }
+    /* Wrap lines (viewerprefs.js; the class is on <html> so the pre-paint script in
+       index.html can set it). The pre stops sizing itself to its longest line, and the
+       code column may shrink so it can wrap. Rows are then different heights, so the
+       one-line-per-row stand-in for a skipped block is wrong (measured: a wrapped block
+       was ~4x the stand-in, `auto` or not, and the scrollbar roughly doubled as blocks
+       rendered while a jump to a line landed far off). So wrapped, no block is skipped:
+       the cost is bounded by the 2 MiB preview cap (maxTextBytes). */
+    .viewer-wrap .viewer-pre { width: auto; min-width: 0; white-space: pre-wrap; }
+    .viewer-wrap .vl-c { flex: 1 1 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .viewer-wrap .vl-chunk { content-visibility: visible; }
     .vl-target { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
     .vl-target .vl-n { color: var(--fg); }
     /* Find in file / Go to line (viewerfind.js). The bar sits between the toolbar and
