@@ -86,8 +86,8 @@ func TestEnsureRebuildsWhenAnImportChanges(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(importsDir(c.Dir), "home/agent/.claude/context/a.md")); string(got) != "BBBB" {
 		t.Fatalf("new import bytes = %q", got)
 	}
-	// The old bundle's imports stay: a live box keeps its old mounts, and no
-	// bundle dir is ever removed.
+	// The old bundle's imports stay: a live box keeps its old mounts, and only GC
+	// removes a bundle dir.
 	if got, _ := os.ReadFile(filepath.Join(importsDir(a.Dir), "home/agent/.claude/context/a.md")); string(got) != "AAA" {
 		t.Fatalf("old import bytes = %q", got)
 	}

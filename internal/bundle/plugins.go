@@ -15,7 +15,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 )
@@ -124,53 +126,17 @@ type pluginSet struct {
 // or marketplaces/ recopies that tree. The set is still all or nothing: every
 // slot must publish and pass, or nothing is mounted.
 //
-// There is no garbage collection yet: like the bundle dirs, old snapshots stay.
 // A change to cache/ or marketplaces/ costs one new copy of that tree (about 40
-// MB together on this host); a json rewrite costs one small dir.
-func pluginSnapshot(src, root string) pluginSet {
-	pdir := filepath.Join(src, "plugins")
+// MB together on this host); a json rewrite costs one small dir. Old ones go by
+// Manager.GC. No bundle dir names a snapshot: every Ensure gets its snapshots from
+// here, by the host's fingerprint, so removing an old one breaks no kept bundle.
+func pluginSnapshot(src, root string, guard snapshotGuard) pluginSet {
+	pdir, fi, verdict, ok := pluginGate(src)
+	if !ok {
+		return verdict
+	}
 	incomplete := pluginSet{drops: []Drop{{Kind: KindPlugins, Name: "*", Reason: ReasonPluginsIncomplete}}}
-
-	fi, err := os.Lstat(pdir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return pluginSet{} // no plugins
-	}
-	if err != nil {
-		return incomplete
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return pluginSet{drops: []Drop{{Kind: KindPlugins, Name: "plugins", Reason: ReasonPluginSymlink}}}
-	}
-	if !fi.IsDir() {
-		return pluginSet{}
-	}
-	if _, err := os.Lstat(filepath.Join(pdir, pluginEntries[0].name)); errors.Is(err, fs.ErrNotExist) {
-		return pluginSet{} // no installed_plugins.json: the user has no plugins
-	}
-
-	var symlinks []Drop
-	wrong := false
-	for _, e := range pluginEntries {
-		fi, err := os.Lstat(filepath.Join(pdir, e.name))
-		switch {
-		case err != nil:
-			wrong = true
-		case fi.Mode()&os.ModeSymlink != 0:
-			symlinks = append(symlinks, Drop{Kind: KindPlugins, Name: e.name, Reason: ReasonPluginSymlink})
-		case e.dir && !fi.IsDir(), !e.dir && !fi.Mode().IsRegular():
-			// A bind of the wrong type is a docker mount error; a FIFO would also
-			// block a reader. Either way the set is unusable.
-			wrong = true
-		}
-	}
-	if len(symlinks) > 0 {
-		return pluginSet{drops: symlinks} // a symlink names itself; the rest is moot
-	}
-	if wrong {
-		return incomplete
-	}
-
-	hosts, err := publishSnapshot(pdir, fi, root)
+	hosts, err := publishSnapshot(pdir, fi, root, guard)
 	if err != nil {
 		return incomplete
 	}
@@ -189,6 +155,60 @@ func pluginSnapshot(src, root string) pluginSet {
 		})
 	}
 	return pluginSet{mounts: mounts}
+}
+
+// snapshotGuard keeps a snapshot from Manager.GC between a spawn taking it and
+// the spawn's container existing, the same way Manager.reuse does for a bundle.
+type snapshotGuard struct {
+	mu    *sync.Mutex
+	touch func(path string, t time.Time) error
+}
+
+// pluginGate is the part of the verdict that needs no copy. ok means the host set
+// is usable, with pdir and fi to fingerprint it from; otherwise verdict is final.
+func pluginGate(src string) (pdir string, fi fs.FileInfo, verdict pluginSet, ok bool) {
+	pdir = filepath.Join(src, "plugins")
+	incomplete := pluginSet{drops: []Drop{{Kind: KindPlugins, Name: "*", Reason: ReasonPluginsIncomplete}}}
+
+	fi, err := os.Lstat(pdir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil, pluginSet{}, false // no plugins
+	}
+	if err != nil {
+		return "", nil, incomplete, false
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return "", nil, pluginSet{drops: []Drop{{Kind: KindPlugins, Name: "plugins", Reason: ReasonPluginSymlink}}}, false
+	}
+	if !fi.IsDir() {
+		return "", nil, pluginSet{}, false
+	}
+	if _, err := os.Lstat(filepath.Join(pdir, pluginEntries[0].name)); errors.Is(err, fs.ErrNotExist) {
+		return "", nil, pluginSet{}, false // no installed_plugins.json: the user has no plugins
+	}
+
+	var symlinks []Drop
+	wrong := false
+	for _, e := range pluginEntries {
+		fi, err := os.Lstat(filepath.Join(pdir, e.name))
+		switch {
+		case err != nil:
+			wrong = true
+		case fi.Mode()&os.ModeSymlink != 0:
+			symlinks = append(symlinks, Drop{Kind: KindPlugins, Name: e.name, Reason: ReasonPluginSymlink})
+		case e.dir && !fi.IsDir(), !e.dir && !fi.Mode().IsRegular():
+			// A bind of the wrong type is a docker mount error; a FIFO would also
+			// block a reader. Either way the set is unusable.
+			wrong = true
+		}
+	}
+	if len(symlinks) > 0 {
+		return "", nil, pluginSet{drops: symlinks}, false // a symlink names itself; the rest is moot
+	}
+	if wrong {
+		return "", nil, incomplete, false
+	}
+	return pdir, fi, pluginSet{}, true
 }
 
 const snapshotMarker = ".complete"
@@ -320,42 +340,23 @@ func (s *slotState) name(root string) string {
 // All or nothing across slots: every slot to copy is built first, and only when
 // all of them built (and the caps held over the whole set) is any renamed into
 // place; on any failure every temp dir is removed and nothing new is published.
-func publishSnapshot(pdir string, checked fs.FileInfo, root string) (map[string]string, error) {
-	src, err := os.OpenRoot(pdir)
+func publishSnapshot(pdir string, checked fs.FileInfo, root string, guard snapshotGuard) (map[string]string, error) {
+	src, states, err := fingerprintSlots(pdir, checked, root)
 	if err != nil {
 		return nil, err
 	}
 	defer src.Close()
-	// pdir was Lstat'd as a real directory before this open; if it was swapped
-	// for another directory in between, the verdict no longer describes it.
-	if st, err := src.Stat("."); err != nil || !os.SameFile(st, checked) {
-		return nil, fmt.Errorf("bundle: %s changed between the check and the open", pdir)
-	}
-
-	// Fingerprint every slot under ONE budget, so the caps bound the whole set
-	// before anything is copied.
-	var fp budget
-	states := make([]*slotState, len(pluginSlots))
-	for i, sl := range pluginSlots {
-		before := fp
-		h := sha256.New()
-		if err := walkPluginTree(src, sl.entries, &fp, func(rel string, fi fs.FileInfo) error {
-			return describe(h, src, rel, fi)
-		}); err != nil {
-			return nil, err
-		}
-		st := &slotState{slot: sl, token: fingerprint(h),
-			used: budget{fp.entries - before.entries, fp.bytes - before.bytes}}
-		st.final = st.name(root)
-		states[i] = st
-	}
 
 	// The copy budget starts with what the reused slots hold, so the published
 	// set as a whole stays under the caps even if the host grows between walks.
 	var cp budget
 	var todo []*slotState
 	for _, st := range states {
-		if snapshotComplete(st.final, st.token) {
+		reused, err := reuseSnapshot(st, guard)
+		if err != nil {
+			return nil, err
+		}
+		if reused {
 			cp.entries += st.used.entries
 			cp.bytes += st.used.bytes
 			continue
@@ -383,6 +384,10 @@ func publishSnapshot(pdir string, checked fs.FileInfo, root string) (map[string]
 		}
 		st.final = st.name(root)
 	}
+	if len(todo) > 0 {
+		guard.mu.Lock()
+		defer guard.mu.Unlock()
+	}
 	for _, st := range todo {
 		if err := publishSlot(st.tmp, st.final, st.token); err != nil {
 			return nil, err
@@ -396,6 +401,65 @@ func publishSnapshot(pdir string, checked fs.FileInfo, root string) (map[string]
 		}
 	}
 	return hosts, nil
+}
+
+// fingerprintSlots opens the host set and fingerprints every slot, writing
+// nothing. The caller closes the returned root.
+func fingerprintSlots(pdir string, checked fs.FileInfo, root string) (*os.Root, []*slotState, error) {
+	src, err := os.OpenRoot(pdir)
+	if err != nil {
+		return nil, nil, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			src.Close()
+		}
+	}()
+	// pdir was Lstat'd as a real directory before this open; if it was swapped
+	// for another directory in between, the verdict no longer describes it.
+	if st, err := src.Stat("."); err != nil || !os.SameFile(st, checked) {
+		return nil, nil, fmt.Errorf("bundle: %s changed between the check and the open", pdir)
+	}
+
+	// Fingerprint every slot under ONE budget, so the caps bound the whole set
+	// before anything is copied.
+	var fp budget
+	states := make([]*slotState, len(pluginSlots))
+	for i, sl := range pluginSlots {
+		before := fp
+		h := sha256.New()
+		if err := walkPluginTree(src, sl.entries, &fp, func(rel string, fi fs.FileInfo) error {
+			return describe(h, src, rel, fi)
+		}); err != nil {
+			return nil, nil, err
+		}
+		st := &slotState{slot: sl, token: fingerprint(h),
+			used: budget{fp.entries - before.entries, fp.bytes - before.bytes}}
+		st.final = st.name(root)
+		states[i] = st
+	}
+	ok = true
+	return src, states, nil
+}
+
+// reuseSnapshot reports whether the slot's complete snapshot exists, refreshing
+// its date if so: that date is all that keeps GC away until the spawn's container
+// exists. A date that cannot be written is an error, because the snapshot would go
+// out unprotected.
+func reuseSnapshot(st *slotState, guard snapshotGuard) (bool, error) {
+	guard.mu.Lock()
+	defer guard.mu.Unlock()
+	if !snapshotComplete(st.final, st.token) {
+		return false, nil
+	}
+	if err := guard.touch(st.final, time.Now()); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("bundle: refreshing the date of %s: %w", st.final, err)
+	}
+	return true, nil
 }
 
 // copySlot copies a slot's entries into st.tmp and writes its marker. The copy

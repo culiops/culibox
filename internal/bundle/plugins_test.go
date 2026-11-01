@@ -38,7 +38,7 @@ var pluginBoxPaths = []string{
 func snap(t *testing.T, src string) (ps pluginSet, root string) {
 	t.Helper()
 	root = t.TempDir()
-	return pluginSnapshot(src, root), root
+	return pluginSnapshot(src, root, testGuard()), root
 }
 
 // hostOf is the snapshot path the mount for entry name points at.
@@ -400,7 +400,7 @@ func fifoForJSONEntry(t *testing.T, name string) {
 	}
 	root := t.TempDir()
 	done := make(chan pluginSet, 1)
-	go func() { done <- pluginSnapshot(src, root) }() // no t.* off the test goroutine
+	go func() { done <- pluginSnapshot(src, root, testGuard()) }() // no t.* off the test goroutine
 	select {
 	case ps := <-done:
 		if len(ps.mounts) != 0 || len(ps.drops) != 1 || ps.drops[0].Reason != ReasonPluginsIncomplete {
@@ -557,7 +557,7 @@ func TestSnapshotSkipsFifosInsideTheTree(t *testing.T) {
 	}
 	root := t.TempDir()
 	done := make(chan pluginSet, 1)
-	go func() { done <- pluginSnapshot(src, root) }() // no t.* off the test goroutine
+	go func() { done <- pluginSnapshot(src, root, testGuard()) }() // no t.* off the test goroutine
 	select {
 	case ps := <-done:
 		if len(ps.mounts) != 4 {
@@ -604,13 +604,13 @@ func TestSnapshotIsKeyedByThePluginTreeOnly(t *testing.T) {
 	src := realisticSource(t)
 	pluginTree(t, src)
 	root := t.TempDir()
-	first := pluginSnapshot(src, root)
+	first := pluginSnapshot(src, root, testGuard())
 	before := slotStats(t, first)
 
 	if err := os.WriteFile(filepath.Join(src, "skills", "demo", "SKILL.md"), []byte("# edited"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	again := pluginSnapshot(src, root)
+	again := pluginSnapshot(src, root, testGuard())
 	for name, fi := range slotStats(t, again) {
 		if !sameSlot(before[name], fi) {
 			t.Fatalf("editing a skill must reuse the %s snapshot, not recopy it", name)
@@ -618,12 +618,13 @@ func TestSnapshotIsKeyedByThePluginTreeOnly(t *testing.T) {
 	}
 }
 
-// slotStats Lstats the snapshot dir each entry's mount lives in.
+// slotStats Lstats the completion marker of the snapshot each entry's mount lives
+// in. The marker and not the dir, whose date every reuse refreshes for the GC.
 func slotStats(t *testing.T, ps pluginSet) map[string]os.FileInfo {
 	t.Helper()
 	out := map[string]os.FileInfo{}
 	for _, mt := range ps.mounts {
-		fi, err := os.Lstat(filepath.Dir(mt.Host))
+		fi, err := os.Lstat(filepath.Join(filepath.Dir(mt.Host), snapshotMarker))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -635,8 +636,8 @@ func slotStats(t *testing.T, ps pluginSet) map[string]os.FileInfo {
 	return out
 }
 
-// sameSlot is true when the snapshot dir is the very same one, untouched: same
-// inode, and its mtime unchanged (a recopy into it, or a replacement, changes one).
+// sameSlot is true when the snapshot is the very same copy, given slotStats: same
+// marker inode and mtime (a recopy into it, or a replacement, changes one).
 func sameSlot(a, b os.FileInfo) bool {
 	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime())
 }
@@ -910,14 +911,14 @@ func TestPublishSnapshotRefusesASwappedPluginsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if _, err := publishSnapshot(filepath.Join(b, "plugins"), checked, root); err == nil {
+	if _, err := publishSnapshot(filepath.Join(b, "plugins"), checked, root, testGuard()); err == nil {
 		t.Fatal("a swapped plugins dir must be refused")
 	}
 	if ents, _ := os.ReadDir(root); len(ents) != 0 {
 		t.Fatalf("nothing may be published: %v", ents)
 	}
 	same, _ := os.Lstat(filepath.Join(a, "plugins"))
-	if _, err := publishSnapshot(filepath.Join(a, "plugins"), same, root); err != nil {
+	if _, err := publishSnapshot(filepath.Join(a, "plugins"), same, root, testGuard()); err != nil {
 		t.Fatalf("the checked dir itself must publish: %v", err)
 	}
 }
@@ -930,7 +931,7 @@ func TestPublishSnapshotKeepsASiblingsCompleteSnapshot(t *testing.T) {
 	root := t.TempDir()
 	pdir := filepath.Join(src, "plugins")
 	fi, _ := os.Lstat(pdir)
-	first, err := publishSnapshot(pdir, fi, root)
+	first, err := publishSnapshot(pdir, fi, root, testGuard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,7 +941,7 @@ func TestPublishSnapshotKeepsASiblingsCompleteSnapshot(t *testing.T) {
 	}
 	// Same content again: every marker matches, so the existing complete dirs
 	// are returned untouched.
-	again, err := publishSnapshot(pdir, fi, root)
+	again, err := publishSnapshot(pdir, fi, root, testGuard())
 	if err != nil || again["cache"] != first["cache"] {
 		t.Fatalf("second publish: %v %q", err, again["cache"])
 	}
@@ -952,13 +953,13 @@ func TestPublishSnapshotKeepsASiblingsCompleteSnapshot(t *testing.T) {
 	if err := os.Remove(filepath.Join(slot, snapshotMarker)); err != nil {
 		t.Fatal(err)
 	}
-	jsonSlot, _ := os.Lstat(filepath.Dir(first["installed_plugins.json"]))
-	healed, err := publishSnapshot(pdir, fi, root)
+	jsonSlot, _ := os.Lstat(filepath.Join(filepath.Dir(first["installed_plugins.json"]), snapshotMarker))
+	healed, err := publishSnapshot(pdir, fi, root, testGuard())
 	token := strings.TrimPrefix(filepath.Base(slot), "plugins-cache-")
 	if err != nil || healed["cache"] != first["cache"] || !snapshotComplete(slot, token) {
 		t.Fatalf("an incomplete leftover must be replaced: %v", err)
 	}
-	if now, _ := os.Lstat(filepath.Dir(healed["installed_plugins.json"])); !sameSlot(jsonSlot, now) {
+	if now, _ := os.Lstat(filepath.Join(filepath.Dir(healed["installed_plugins.json"]), snapshotMarker)); !sameSlot(jsonSlot, now) {
 		t.Fatal("healing the cache slot must not touch the json slot")
 	}
 }

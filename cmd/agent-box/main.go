@@ -520,6 +520,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// below as the memory root.
 	bundleSrc := ""
 	var bundleImports func() bundle.ImportSet
+	var bundles *bundle.Manager
 	if src := bundleSourceOf(cfg); layer != nil && src != "" {
 		bundleSrc = src
 		// Root is under the layer's state root: on macOS the symlink-resolved
@@ -542,6 +543,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		} else {
 			mgr.SetBundles(bundle.NewProvider(bm))
 			bundleImports = bm.Imports
+			bundles = bm
 			log.Printf("config bundle source: %s", src)
 		}
 	}
@@ -932,6 +934,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		stopRetention = runRetention(egressSvc.Audit, cfg.EgressRetentionDays(), log.Printf)
 	}
 
+	// Remove old unmounted config bundles (once at start, then daily) off the
+	// spawn path and the boot path; shutdown cancels it.
+	stopBundleGC := func() {}
+	if layer != nil && bundles != nil {
+		stopBundleGC = layer.startBundleGC(func(ctx context.Context) { layer.bundleGCPass(ctx, bundles) }, log.Printf)
+	}
+
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
 	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
 	// UI's spawn request has no deadline either. Adding a write timeout here
@@ -949,6 +958,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			}
 		},
 		StopRetention: stopRetention,
+		StopBundleGC:  stopBundleGC,
 		StopEgress:    stopEgress,
 		StopBroker:    stopBroker,
 		ShutdownHTTP: func(ctx context.Context) error {

@@ -232,6 +232,82 @@ func (c CLIClient) ListByLabel(ctx context.Context, label string) ([]string, err
 	return strings.Split(out, "\n"), nil
 }
 
+// mountSourcesFormat prints one line per container: its full id, then its mounts
+// as JSON. Only the mounts: a whole inspect answer carries the container's env.
+const mountSourcesFormat = `{{.Id}} {{json .Mounts}}`
+
+// MountSources returns the host path of every mount of every container in the
+// docker store, running or not and whichever instance created it. Anything it
+// cannot read is an error, never a shorter list: the caller deletes what is not
+// listed. A container removed between the two calls fails the listing too, which
+// costs one retried pass.
+func (c CLIClient) MountSources(ctx context.Context) ([]string, error) {
+	out, err := c.Stdout(ctx, []string{"ps", "-a", "-q", "--no-trunc"})
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	ids := strings.Split(out, "\n")
+	for _, id := range ids {
+		if !isContainerID(id) {
+			return nil, fmt.Errorf("docker ps: unexpected output %q", id)
+		}
+	}
+	out, err = c.Stdout(ctx, append([]string{"inspect", "--type", "container", "--format", mountSourcesFormat}, ids...))
+	if err != nil {
+		return nil, err
+	}
+	return parseMountSources(ids, out)
+}
+
+// isContainerID is a full container id, as `ps --no-trunc` prints it.
+func isContainerID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0123456789abcdef") == ""
+}
+
+// parseMountSources reads mountSourcesFormat. Every id asked for must be
+// answered, and a mount that should have a host path must state one.
+func parseMountSources(ids []string, out string) ([]string, error) {
+	seen := make(map[string]bool, len(ids))
+	var sources []string
+	for line := range strings.Lines(out) {
+		id, raw, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			return nil, fmt.Errorf("docker inspect: unexpected line %q", id)
+		}
+		var mounts *[]struct{ Type, Source string }
+		if err := json.Unmarshal([]byte(raw), &mounts); err != nil {
+			return nil, fmt.Errorf("docker inspect: mounts of %s: %w", id, err)
+		}
+		if mounts == nil {
+			return nil, fmt.Errorf("docker inspect: %s has no mount list", id)
+		}
+		for _, mt := range *mounts {
+			switch {
+			case mt.Type == "":
+				return nil, fmt.Errorf("docker inspect: %s has a mount without a type", id)
+			case mt.Type == "tmpfs":
+				continue // has no host path to hold on to
+			case !strings.HasPrefix(mt.Source, "/"):
+				return nil, fmt.Errorf("docker inspect: %s has a %s mount with source %q", id, mt.Type, mt.Source)
+			}
+			sources = append(sources, mt.Source)
+		}
+		seen[id] = true
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			return nil, fmt.Errorf("docker inspect: no answer for container %s", id)
+		}
+	}
+	return sources, nil
+}
+
 // Stop removes the container. `rm -f` rather than `stop`: a stopped-but-present
 // container would be adopted as "not running" on the next spawn and then collide
 // on the name.
