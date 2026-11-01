@@ -107,14 +107,25 @@ type conn struct {
 	deadline time.Time
 }
 
-// handshake reads and validates the header exactly once.
+// handshake reads and validates the header exactly once. If anything goes
+// wrong, including a panic in the allow callback, the connection ends up
+// closed with a sticky ErrHeader.
 func (c *conn) handshake() {
 	c.once.Do(func() {
+		ok := false
+		defer func() {
+			if !ok {
+				if c.err == nil {
+					c.err = ErrHeader
+				}
+				c.Conn.Close()
+			}
+		}()
 		if err := c.readHeader(); err != nil {
 			c.err = err
-			c.Conn.Close()
 			return
 		}
+		ok = true
 		c.mu.Lock()
 		c.ready = true
 		// Restore the caller's deadline (zero clears ours), under the lock so
@@ -129,14 +140,14 @@ func (c *conn) readHeader() error {
 		return fmt.Errorf("%w: peer %v is not loopback", ErrHeader, c.Conn.RemoteAddr())
 	}
 	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
-		return fmt.Errorf("%w: %v", ErrHeader, err)
+		return fmt.Errorf("%w: %w", ErrHeader, err)
 	}
 	c.br = bufio.NewReaderSize(c.Conn, 4096)
 	line := make([]byte, 0, maxLine)
 	for {
 		b, err := c.br.ReadByte()
 		if err != nil {
-			return fmt.Errorf("%w: %v", ErrHeader, err)
+			return fmt.Errorf("%w: %w", ErrHeader, err)
 		}
 		line = append(line, b)
 		if b == '\n' {
@@ -174,6 +185,37 @@ func (c *conn) Read(p []byte) (int, error) {
 		return 0, c.err
 	}
 	return c.br.Read(p)
+}
+
+// Write is gated by the same handshake as Read: nothing is ever written to a
+// peer whose header has not been validated.
+func (c *conn) Write(p []byte) (int, error) {
+	c.handshake()
+	if c.err != nil {
+		return 0, c.err
+	}
+	return c.Conn.Write(p)
+}
+
+// CloseWrite forwards the half-close (the egress tunnel splice type-asserts
+// for it) once the header has been validated.
+func (c *conn) CloseWrite() error {
+	c.handshake()
+	if c.err != nil {
+		return c.err
+	}
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.New("proxyline: connection does not support CloseWrite")
+}
+
+// CloseRead forwards the read half-close if the inner conn supports it.
+func (c *conn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errors.New("proxyline: connection does not support CloseRead")
 }
 
 // RemoteAddr returns the header's source after a successful handshake and the

@@ -343,3 +343,88 @@ func TestWrapKeepsCallerReadDeadline(t *testing.T) {
 		t.Fatal("caller deadline not honoured")
 	}
 }
+
+func TestWrapWriteBeforeHeaderFails(t *testing.T) {
+	l := listen(t, allowAll, 100*time.Millisecond)
+	cl := dial(t, l) // sends no header
+	sc := accept(t, l)
+	n, err := sc.Write([]byte("secret"))
+	if !errors.Is(err, ErrHeader) || n != 0 {
+		t.Fatalf("Write = %d, %v; want 0, ErrHeader", n, err)
+	}
+	cl.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, rerr := io.ReadAll(cl)
+	if rerr != nil || len(got) != 0 {
+		t.Fatalf("client received %q, err %v; want nothing", got, rerr)
+	}
+}
+
+func TestWrapForwardsCloseWrite(t *testing.T) {
+	l := listen(t, allowAll, 5*time.Second)
+	cl := dial(t, l)
+	cl.Write([]byte(goodHeader))
+	sc := accept(t, l)
+	cw, ok := sc.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("conn does not expose CloseWrite")
+	}
+	if err := cw.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	cl.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := cl.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("client read err = %v, want EOF", err)
+	}
+	// Server can still read what the client sends after the half-close.
+	if _, err := cl.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(sc, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("server read %q, %v", buf, err)
+	}
+}
+
+func TestWrapCloseWriteUnsupportedInner(t *testing.T) {
+	cs, ss := net.Pipe()
+	defer cs.Close()
+	go func() { cs.Write([]byte(goodHeader)) }()
+	l := Wrap(&fakeListener{conn: fakeConn{Conn: ss, remote: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}}}, allowAll, time.Second)
+	c, _ := l.Accept()
+	defer c.Close()
+	if err := c.(interface{ CloseWrite() error }).CloseWrite(); err == nil {
+		t.Fatal("want error from inner conn without CloseWrite")
+	}
+}
+
+func TestWrapAllowPanicFailsClosed(t *testing.T) {
+	l := listen(t, func(netip.Addr) bool { panic("boom") }, 5*time.Second)
+	cl := dial(t, l)
+	cl.Write([]byte(goodHeader))
+	sc := accept(t, l)
+	func() {
+		defer func() { recover() }()
+		sc.Read(make([]byte, 1))
+	}()
+	if _, err := sc.Read(make([]byte, 1)); !errors.Is(err, ErrHeader) {
+		t.Fatalf("Read after panic = %v, want ErrHeader", err)
+	}
+	if _, err := sc.Write([]byte("x")); !errors.Is(err, ErrHeader) {
+		t.Fatalf("Write after panic = %v, want ErrHeader", err)
+	}
+	cl.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := cl.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("client err = %v, want EOF (conn closed)", err)
+	}
+}
+
+func TestWrapTimeoutKeepsNetErrorTimeout(t *testing.T) {
+	l := listen(t, allowAll, 100*time.Millisecond)
+	_ = dial(t, l)
+	sc := accept(t, l)
+	_, err := sc.Read(make([]byte, 1))
+	var ne net.Error
+	if !errors.Is(err, ErrHeader) || !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("err = %v, want ErrHeader that is also a net.Error timeout", err)
+	}
+}
