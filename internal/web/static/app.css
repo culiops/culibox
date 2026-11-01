@@ -1199,6 +1199,11 @@
        one offers no break opportunity. #toast-msg carries it for the same reason. */
     #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     #ask-modal #ask-body:empty { display: none; }
+    /* The read-only Keyboard shortcuts dialog (askDialog info:true): a padded key
+       column, so monospace and no wrapping at every width (desktop.css sets the
+       same on desktop). ~33 lines, so it scrolls in its own box; 180px leaves room
+       for the title and the Close row under the dialog's 88vh cap. Info only. */
+    #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono, ui-monospace, Menlo, monospace); white-space: pre; overflow-wrap: normal; overflow: auto; max-height: calc(100dvh - 180px); }
     #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }

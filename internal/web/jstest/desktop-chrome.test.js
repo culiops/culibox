@@ -111,3 +111,21 @@ test("the Model select is a styled native select that never clips a long id", ()
 test("checkboxes in the New session form use the accent colour", () => {
   assert.ok(rulesFor('#spawn input[type="checkbox"]').some((b) => /accent-color:\s*var\(--accent\)/.test(b)));
 });
+
+// The help dialog is ~33 lines and #ask-modal is overflow:hidden, so the info
+// body must scroll on its own or the Close button falls off a short viewport.
+test("the info ask body scrolls inside the viewport on desktop", () => {
+  const r = rulesFor("#ask-modal.info #ask-body").join(" ");
+  assert.ok(/max-height:\s*calc\(100dvh - \d+px\)/.test(r), "bounded height");
+  assert.ok(/overflow-y:\s*auto/.test(r), "scrolls vertically");
+});
+
+test("the info ask body is monospace, unwrapped and bounded on phones too (app.css, not in a media block)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const m = /#ask-modal\.info #ask-body\s*\{([^{}]*)\}/.exec(app);
+  assert.ok(m, "app.css has an info body rule");
+  assert.match(m[1], /font:[^;]*var\(--font-mono/);
+  assert.match(m[1], /white-space:\s*pre\s*;/);
+  assert.match(m[1], /overflow:\s*auto/);
+  assert.match(m[1], /max-height:\s*calc\(100dvh - \d+px\)/);
+});
