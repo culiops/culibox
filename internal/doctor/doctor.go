@@ -27,6 +27,7 @@ import (
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/awsprobe"
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
@@ -186,6 +187,9 @@ func Checks(in Input) []Result {
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
 	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c, vst))...)
+	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
+		out = append(out, CheckHostListeners())
+	}
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
 }

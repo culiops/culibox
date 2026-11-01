@@ -12,6 +12,7 @@ import (
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -150,6 +151,12 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	// call and refuses when they cannot be read, so a failure here only logs.
 	if err := svc.RefreshHostAddrs(); err != nil {
 		log.Printf("egress: could not read the host's addresses (%v); boxes are refused until they can be", err)
+	}
+
+	if goos == "linux" {
+		if r := doctor.CheckHostListeners(); r.Status == doctor.Warn {
+			log.Printf("egress: %s", r.Detail)
+		}
 	}
 
 	// Spec correction 10: an existing network means bound sessions may be

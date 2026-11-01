@@ -434,9 +434,11 @@ One box can hold several environments of the same service. Give each its own ent
 
 The two share a variable name, which is fine: the agent picks one per command (`agentbox-env sentry-prod -- ...`). Naming both in one command is refused.
 
+**Services on this host (Linux).** The proxy does not cover the host itself. A box's network gateway is the host, so a box can open raw TCP to any host service listening on all addresses (`0.0.0.0` or `::`), and those connections are not audited. Services bound to `127.0.0.1` or to one specific address are not reachable. `agent-box doctor` lists the exposed ports, and the daemon logs them at startup. Bind anything a box must not reach to `127.0.0.1`. macOS is not affected: there the gateway is the VM.
+
 **MCP servers.** An entry's `mcp` adds a server to a per-session MCP config. The server is started through `agentbox-env`, so it gets its token only for its own process. The merge order is image servers, then entry servers, then your host servers: the first one with a given name wins and the others are listed as dropped. Your host MCP config is not modified, and host servers that need tokens are still left out of boxes. A session's config that carries your personal servers is mounted read-only at `/opt/agent-session-mcp` and only into boxes of an account that inherits your personal config. Accounts that do not inherit it get the entry and image servers only. An entry is also left out, with a reason, when the box image lacks `agentbox-env` or the server's command.
 
-**Self-hosted services.** Boxes reach the network only through the egress proxy, on port 443 and public addresses. Two optional fields on an `egress` item relax that for one exact host:
+**Self-hosted services.** Boxes reach other networks only through the egress proxy, on port 443 and public addresses. Two optional fields on an `egress` item relax that for one exact host:
 
 | Field | Meaning |
 |---|---|
