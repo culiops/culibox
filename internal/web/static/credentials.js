@@ -49,6 +49,7 @@ const CRED_STATUS = {
   ok: ["ready", "Ready"],
   missing: ["missing", "Missing"],
   stored_locked: ["locked", "Stored (store locked)"],
+  stored_unavailable: ["locked", "Stored (Keychain unavailable)"],
   invalid: ["invalid", "Invalid"],
   unset: ["notset", "Not set in the daemon's environment"],
 };
@@ -1175,10 +1176,20 @@ function credSection(g) {
 // of the tab (it used to be a tab of its own).
 function credStrip(view) {
   const st = view.store || {};
-  const locked = st.initialized && st.locked && st.platform !== "darwin";
+  // A macOS Keychain failure: the server's reason and fix, nothing to type or lock.
+  // It wins over "not set up": a store whose key is missing must never offer to be
+  // created over.
+  const unavail = st.unavailable || null;
+  const locked = !unavail && st.initialized && st.locked && st.platform !== "darwin";
   // On the desktop page the strip is quiet (amber only when it needs you), in cards as in tables.
-  const strip = credEl("div", credPageMode() ? "strip cstrip" + (locked || !st.initialized ? " need" : "") : "strip");
-  if (!st.initialized) {
+  const strip = credEl("div", credPageMode() ? "strip cstrip" + (locked || unavail || !st.initialized ? " need" : "") : "strip");
+  if (unavail) {
+    strip.appendChild(credEl("span", "st locked", "Keychain"));
+    const txt = credEl("div", "txt");
+    txt.appendChild(credEl("b", null, "Encrypted store: " + storeExpiryText(st, Date.now()) + ". "));
+    txt.appendChild(document.createTextNode([unavail.reason, unavail.fix].filter(Boolean).join(" ")));
+    strip.appendChild(txt);
+  } else if (!st.initialized) {
     strip.appendChild(credEl("span", "st notset", "Not set up"));
     strip.appendChild(credEl("div", "txt", "There is no encrypted store yet. Without one, tokens can only come from the daemon's environment or a file."));
     const slot = credEl("div", "storeslot");
@@ -1202,7 +1213,7 @@ function credStrip(view) {
     const slot = credEl("div", "storeslot");
     renderUnlockForm(slot, () => loadCredentials());
     strip.appendChild(slot);
-  } else if (st.initialized && st.platform !== "darwin") {
+  } else if (!unavail && st.initialized && st.platform !== "darwin") {
     const b = credEl("button", "btn", "Lock now");
     b.type = "button";
     b.id = "store-lock";

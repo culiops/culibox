@@ -90,9 +90,8 @@ context and never edits `~/.ssh/config`.
   config file CuliBox reads, or of `profiles_path` (symlinks are followed to
   their targets); a folder below those is fine.
 - A box cannot reach services listening on your Mac's 127.0.0.1, other than
-  CuliBox's own credential broker and, for boxes with a binding, the egress
-  proxy (see below). CuliBox checks this on every new box and refuses the box
-  if the check fails.
+  CuliBox's own credential broker and the egress proxy (see below). CuliBox
+  checks this on every new box and refuses the box if the check fails.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.
   Create a token for boxes with `claude setup-token`, store it as a secret
   source, and add `CLAUDE_CODE_OAUTH_TOKEN` to the agent's `secrets`.
@@ -109,46 +108,78 @@ context and never edits `~/.ssh/config`.
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
   still tell you to recreate. `agent-box doctor` reads the VM fresh each run.
 
-### Boxes with credential bindings
+### Every box
 
-A profile with any binding (an `aws` binding, named AWS connections, a `github`
-binding or static tokens) gets a locked-down network. Its box sits on an
+Every box, with or without a credential binding (an `aws` binding, named AWS
+connections, a `github` binding or static tokens), gets a locked-down network,
+as on Linux. It sits on an
 internal Docker network inside the VM (`172.29.72.0/24`, gateway `172.29.72.1`),
 with no route to the internet, no DNS, and no route to other boxes. The only
 way out is a small relay container, `agentbox-relay-<instance>`, that runs on
 the VM's own network and listens on `172.29.72.1` only. It forwards exactly
 two ports from there to your Mac: CuliBox's egress proxy (port `egress_port`,
 default 9072) and the credential broker (port `broker_port`, default 9071),
-both of which listen on `127.0.0.1` on the Mac. The proxy lets through only the
-hosts the profile's bindings allow. Rules in the VM's firewall let the bound
-subnet reach those two ports and nothing else, and keep every other box off the
-relay. If those rules are missing or out of order, agent-box refuses to start a
-bound session and tells you to run `agent-box box setup -recreate`; it checks
-them again on every bound spawn. Profiles without a binding are unchanged and
-keep normal outbound access.
+both of which listen on `127.0.0.1` on the Mac. A profile without a binding
+reaches any public host on port 443 through the proxy ("open" in the steer
+rail); a profile with bindings reaches only the hosts they allow. Rules in the
+VM's firewall let the box subnet reach those two ports and nothing else, and
+keep every other box off the relay. If those rules are missing or out of order,
+agent-box refuses to start a boxed session and tells you that this VM predates
+egress control for all boxes and to run `agent-box box setup -recreate`; it
+checks them again on every boxed spawn.
 
-Egress control for macOS boxes is new and has not yet been verified on a Mac.
+Egress control for every macOS box is new and has not yet been verified on a Mac.
+
+What this means for an unbound profile, which used to have normal outbound
+access on a Mac:
+
+- No git over ssh and no other port than 443: the only way out is an HTTPS
+  CONNECT through the proxy.
+- No DNS for external names inside the box. The proxy resolves the name.
+- A tool must honour `HTTPS_PROXY` (CuliBox sets it, and `NODE_USE_ENV_PROXY=1`
+  for Node). A tool that ignores it cannot connect.
+- Private and internal addresses are refused unless a binding's `egress` entry
+  opts in for one exact host (see the README, "Self-hosted services").
+
+These limits are the same as on Linux and are not configurable.
 
 - After upgrading, run `agent-box box setup -recreate` once. The rules live in
-  the VM's provisioning, so an existing VM has none until it is recreated;
-  `agent-box doctor` warns "box VM config changed since setup" until you do.
+  the VM's provisioning, so an existing VM has none until it is recreated, and
+  from this version that applies to every box, not only bound ones;
+  `agent-box doctor` fails "this VM predates egress control for all boxes" and
+  every boxed spawn is refused until you do.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards.
-- The bound network uses the fixed subnet `172.29.72.0/24` inside the VM. An
+- The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
   `docker network rm`. After an upgrade, run `agent-box box setup -recreate`
   instead: it deletes the VM, so its networks and rules come back fresh. Then
   restart CuliBox.
-- The relay container has no restart policy. After a VM restart the next bound
+- The relay container has no restart policy. After a VM restart the next boxed
   session checks the firewall rules and starts it again, so that spawn can be
   a little slower than later ones.
+- A box left from an older build, on the default network, is removed and
+  recreated on the egress network when it is idle. If it still runs sessions,
+  the next spawn into it is refused ("started before egress control") until you
+  end them.
 - A tool that ignores `HTTPS_PROXY` cannot connect, by design: there is no
   direct route to fall back on. A connection that fails with a timeout, not a
   clear error, is usually such a tool.
 - Denials show in the steer rail's egress row for the session ("N denied since
   start") and, with host and time, in the `egress_audit` table of `audit.db` in
   the data directory.
+
+### Token binding
+
+The relay prepends a one-line header (PROXY protocol v1)
+naming the box's own address on every connection it forwards. The proxy and
+the broker on your Mac accept a connection only when that header is present and
+names an address inside the box subnet other than the gateway, so a box's
+proxy token works only from that box, as on Linux. Residual risk: a process on
+your Mac running as your user can connect to `127.0.0.1` and write that header
+itself. It already runs as you, inside your trust boundary, so this is not an
+additional exposure.
 
 ## Behind a TLS-inspecting proxy
 

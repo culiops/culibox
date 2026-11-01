@@ -13,13 +13,17 @@ import (
 )
 
 // relayScript is the whole relay: one TCP listener per (listen port, target
-// host, target port) triple on the bind address, piped straight through. It
+// host, target port) triple on the bind address, piped through. Every
+// upstream connection first carries a PROXY v1 line ("PROXY TCP4 <box-ip>
+// <bind> <box-port> <listen-port>\r\n") naming the box that connected, so the
+// host listeners can tell boxes apart: the relay itself makes every box arrive
+// from loopback (#71). A peer that is not a plain IPv4 address is dropped. It
 // prints "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a
 // listen error, which is all Ensure reads (never a dial: the INPUT rules also
 // drop the VM's own connections to the gateway). Run as
 // `node -e <script> BIND LPORT THOST TPORT ...`, where argv.slice(1) is the
-// arguments after the script (measured on the Mac). Verbatim from the spike.
-const relayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{const u=net.connect(tp,th);c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+// arguments after the script (measured on the Mac).
+const relayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write("PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
 
 const (
 	relayLabel       = "io.culiops.agent-box.relay"
@@ -49,7 +53,7 @@ func RelayName(instance string) string {
 // provisioning writes. Option (a) VMs and VMs provisioned before the egress
 // rules existed end up here.
 func errRulesMissing(why string) error {
-	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); run `agent-box box setup -recreate`", why)
+	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes; run `agent-box box setup -recreate`", why)
 }
 
 // CheckInputRules verifies that the first four rules of `iptables -S INPUT`
@@ -192,13 +196,13 @@ func (r *Relay) remove(ctx context.Context) error {
 
 // Ensure makes the relay run for gateway gw, or returns an error and leaves no
 // relay behind. The INPUT rules are checked live first, every time: they are
-// what keeps an unbound box off the relay, so a VM without them gets no relay.
+// what keeps an unfenced box off the relay, so a VM without them gets no relay.
 //
 // Rules read and wrong: the relay is removed. Rules that could not be read
 // (colima ssh error, timeout): this Ready is refused but a running relay is
 // left alone. The relay only ever started after the rules were verified this
 // boot; a VM reboot or dockerd restart stops it (no restart policy); and a
-// transient ssh failure must not cut every live bound session's proxy and
+// transient ssh failure must not cut every live fenced session's proxy and
 // broker.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {

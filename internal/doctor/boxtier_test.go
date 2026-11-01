@@ -57,6 +57,8 @@ func TestBoxTierRows(t *testing.T) {
 		{"stopped", func(f *boxFacts) { f.Status.Running = false; f.ProbeRan = false }, Pass, "first boxed spawn"},
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
+		{"provision drift fails with the egress reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
+			`this VM predates egress control for all boxes; run "agent-box box setup -recreate"`},
 		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},
@@ -170,6 +172,12 @@ func TestClaudeBoxTokenStoreSource(t *testing.T) {
 	}
 	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
 		t.Fatalf("a store source with no store: %+v", r)
+	}
+	// A Keychain failure is a FAIL with the fix: neither "locked" nor "/login".
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	if r := ClaudeBoxToken(c, stubStore{err: ue}); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
+		strings.Contains(r.Detail, "locked") || strings.Contains(r.Detail, "/login") {
+		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
 	}
 }
 

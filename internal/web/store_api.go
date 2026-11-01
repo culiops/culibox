@@ -96,16 +96,35 @@ func zero(b []byte) {
 	}
 }
 
+// storeUnavailableBody says why the macOS Keychain did not give the store key:
+// kind is "access", "key_lost" or "store_unreadable"; reason is short printable
+// text; fix is what the operator does (always present).
+type storeUnavailableBody struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+	Fix    string `json:"fix"`
+}
+
+func unavailableBody(ue *secretstore.UnavailableError) *storeUnavailableBody {
+	if ue == nil {
+		return nil
+	}
+	return &storeUnavailableBody{Kind: string(ue.Kind), Reason: ue.Reason, Fix: ue.Fix()}
+}
+
 // storeStatusBody is the GET /api/store answer: state and counts, never a
-// value, an id or a path.
+// value or an id. The one place a path can appear is unavailable.fix, which
+// names the store directory for key_lost / store_unreadable; the endpoint is
+// operator-only, by design.
 type storeStatusBody struct {
-	Initialized     bool       `json:"initialized"`
-	Locked          bool       `json:"locked"`
-	ExpiresAt       *time.Time `json:"expires_at"`
-	Platform        string     `json:"platform"`
-	Values          int        `json:"values"`
-	InUse           bool       `json:"in_use"`
-	PlaintextCopies []string   `json:"plaintext_copies"`
+	Initialized     bool                  `json:"initialized"`
+	Locked          bool                  `json:"locked"`
+	ExpiresAt       *time.Time            `json:"expires_at"`
+	Platform        string                `json:"platform"`
+	Values          int                   `json:"values"`
+	InUse           bool                  `json:"in_use"`
+	PlaintextCopies []string              `json:"plaintext_copies"`
+	Unavailable     *storeUnavailableBody `json:"unavailable,omitempty"`
 }
 
 // handleStore is GET /api/store. Any authenticated caller, bearer included.
@@ -120,7 +139,8 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	}
 	st := s.Store.Status()
 	body := storeStatusBody{Initialized: st.Initialized, Locked: st.Locked, Platform: st.Platform,
-		Values: st.Values, InUse: s.storeInUse(), PlaintextCopies: append([]string{}, s.StorePlaintextCopies...)}
+		Values: st.Values, InUse: s.storeInUse(), PlaintextCopies: append([]string{}, s.StorePlaintextCopies...),
+		Unavailable: unavailableBody(st.Unavailable)}
 	if !st.ExpiresAt.IsZero() {
 		t := st.ExpiresAt
 		body.ExpiresAt = &t
@@ -197,10 +217,25 @@ func (s *Server) handleStoreUnlock(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "this platform's store unlocks with the Keychain, not a passphrase")
 	case errors.Is(err, secretstore.ErrNotInitialized):
 		writeErr(w, http.StatusConflict, "the store is not initialized — run \"agent-box store init\"")
+	case errors.Is(err, secretstore.ErrKeeperUnavailable):
+		writeStoreUnavailable(w, err)
 	default:
-		// The error text is not shown: it can name a path.
+		// The error text is not shown: it can name a path. (Only the typed
+		// Keychain failure above carries a path, deliberately, in its fix.)
 		writeErr(w, http.StatusInternalServerError, "could not unlock the store")
 	}
+}
+
+// writeStoreUnavailable answers a Keychain failure: 503 store_unavailable with
+// the UnavailableError's own message (reason + fix, which names the store
+// directory only for key_lost / store_unreadable). Never 423: nothing to unlock.
+func writeStoreUnavailable(w http.ResponseWriter, err error) {
+	msg := secretstore.ErrKeeperUnavailable.Error()
+	var ue *secretstore.UnavailableError
+	if errors.As(err, &ue) {
+		msg = ue.Error()
+	}
+	writeErrCode(w, http.StatusServiceUnavailable, msg, "store_unavailable")
 }
 
 // handleStoreLock is POST /api/store/lock: cheap, but under the same rule.

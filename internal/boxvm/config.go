@@ -23,8 +23,8 @@ import (
 // <COLIMA_HOME>/_lima/colima-<profile>/, and macOS caps a socket path at 103 bytes.
 const Profile = "agent-box"
 
-// EgressSubnet is the subnet of the --internal egress network for bound boxes
-// (M3c). It is fixed, not chosen by docker: the provision script runs before the
+// EgressSubnet is the subnet of the --internal egress network for fenced boxes (every
+// box on macOS; M3c). It is fixed, not chosen by docker: the provision script runs before the
 // network exists and must name it.
 const EgressSubnet = "172.29.72.0/24"
 
@@ -34,8 +34,8 @@ const EgressSubnet = "172.29.72.0/24"
 const EgressGateway = "172.29.72.1"
 
 // LimaHostGateway is lima's host gateway (host.lima.internal), measured in the
-// M2 spike. The loopback check dials it by address from both unbound and bound
-// boxes and fails closed if the address is wrong. Bound boxes sit on an internal
+// M2 spike. The loopback check dials it by address from both fenced and unfenced
+// boxes and fails closed if the address is wrong. Fenced boxes sit on an internal
 // network with no route to it (and no host.lima.internal): they reach the Mac
 // only through the relay on EgressGateway.
 const LimaHostGateway = "192.168.5.2"
@@ -127,7 +127,14 @@ func (c Config) DockerConfigDir() string { return filepath.Join(c.Root, "docker"
 func (c Config) ProfileDir() string      { return filepath.Join(c.ColimaHome(), Profile) }
 func (c Config) YAMLPath() string        { return filepath.Join(c.ProfileDir(), "colima.yaml") }
 func (c Config) StampPath() string       { return filepath.Join(c.ColimaHome(), Profile+".stamp") }
-func (c Config) DockerSocket() string    { return filepath.Join(c.ProfileDir(), "docker.sock") }
+
+// ProvisionStampPath holds the hash of the provision script (the egress INPUT
+// rules) the VM was set up with, apart from the whole-config stamp, so doctor
+// can tell "the egress rules are out of date" from "the VM size changed".
+func (c Config) ProvisionStampPath() string {
+	return filepath.Join(c.ColimaHome(), Profile+".provision")
+}
+func (c Config) DockerSocket() string { return filepath.Join(c.ProfileDir(), "docker.sock") }
 
 // DockerArgs pin every docker call to this VM and to a docker config dir
 // agent-box owns, so the user's contexts are neither read nor written.
@@ -190,12 +197,12 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
 
 // provisionEgress is formatted with only the two ports, egress then broker,
 // each in a delete line and an insert line (the subnet and gateway are literals
-// from EgressSubnet and EgressGateway, so no % can come from them). Bound boxes
+// from EgressSubnet and EgressGateway, so no % can come from them). Fenced boxes
 // sit on an --internal docker network, which has no route to the lima gateway
 // and none out; the relay that serves them listens on that network's gateway,
 // inside the VM, so these INPUT rules are what guard it. They are load-bearing
-// (measured on the Mac, spike c9/c7): without them an unbound box reaches the
-// relay and a bound box reaches every other VM listener. Top down: the relay's
+// (measured on the Mac, spike c9/c7): without them an unfenced box reaches the
+// relay and a fenced box reaches every other VM listener. Top down: the relay's
 // two ports for the subnet, then the subnet to anywhere, then anyone to the
 // relay's address. INPUT, not DOCKER-USER: traffic to the VM itself is never
 // forwarded, so DOCKER-USER does not see it. Each rule is removed and the four

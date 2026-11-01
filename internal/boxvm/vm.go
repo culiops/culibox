@@ -164,6 +164,21 @@ func (v *VM) Drifted() bool {
 	return err != nil || strings.TrimSpace(string(b)) != yamlHash(y)
 }
 
+// provisionHash is the hash of the base provision script (the egress and broker
+// INPUT rules), without the user's extra CA block.
+func (v *VM) provisionHash() string {
+	return yamlHash([]byte(provisionScript(v.cfg.BrokerPort, v.cfg.EgressPort)))
+}
+
+// ProvisionDrifted reports whether the VM was provisioned with a different
+// provision script than agent-box would write now. A VM set up before the
+// script was stamped has no stamp and reads as drifted: that is the VM that
+// predates egress control for all boxes. Fails closed on an unreadable stamp.
+func (v *VM) ProvisionDrifted() bool {
+	b, err := os.ReadFile(v.cfg.ProvisionStampPath())
+	return err != nil || strings.TrimSpace(string(b)) != v.provisionHash()
+}
+
 // Status asks colima. A non-zero exit means "not running" (colima reports a
 // stopped or never-created profile that way); a cancelled context is an error.
 func (v *VM) Status(ctx context.Context) (Status, error) {
@@ -302,6 +317,7 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 			return err
 		}
 		_ = os.Remove(v.cfg.StampPath())
+		_ = os.Remove(v.cfg.ProvisionStampPath())
 	}
 	if err := os.MkdirAll(v.cfg.ProfileDir(), 0o700); err != nil {
 		return err
@@ -323,6 +339,9 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		if _, err := v.r.Run(sctx, v.env(), v.cfg.ColimaBin, v.cfg.StartArgs()...); err != nil {
 			return fmt.Errorf("starting the box VM: %w", err)
 		}
+	}
+	if err := writeOwnerOnly(v.cfg.ProvisionStampPath(), []byte(v.provisionHash()+"\n")); err != nil {
+		return err
 	}
 	return writeOwnerOnly(v.cfg.StampPath(), []byte(yamlHash(y)+"\n"))
 }

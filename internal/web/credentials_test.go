@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -995,5 +997,20 @@ func TestGitHubAppReplaceOwnIDWins(t *testing.T) {
 	}
 	if got := f.file(t).GitHubApps[0].PrivateKey; got != (config.KeyRef{Type: "store", ID: "gh-gh-key"}) {
 		t.Fatalf("ref: %+v", got)
+	}
+}
+
+// A write that reaches an unavailable Keychain says so with the fix (503,
+// store_unavailable), not as a generic persist failure or "store missing".
+func TestWriteCredErrUnavailable(t *testing.T) {
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	err := storeErr("put token", fmt.Errorf("get: %w", ue))
+	if errors.Is(err, ErrCredPersist) || !errors.Is(err, secretstore.ErrKeeperUnavailable) {
+		t.Fatalf("storeErr = %v, want the unavailable error passed on", err)
+	}
+	w := httptest.NewRecorder()
+	writeCredErr(w, err)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), ue.Fix()) || !strings.Contains(w.Body.String(), "store_unavailable") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }

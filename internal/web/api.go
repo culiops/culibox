@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 )
 
@@ -126,6 +127,15 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	case errors.Is(err, launcher.ErrStoreLocked):
 		// The fixed text only: the wrapped error names the secret, which stays in the log above.
 		writeErrCode(w, http.StatusLocked, launcher.ErrStoreLocked.Error(), "store_locked")
+	case errors.Is(err, launcher.ErrStoreUnavailable):
+		// 503, never 423: no unlock form for a Keychain failure. The message is the
+		// UnavailableError's own (reason + fix); the wrapped secret name stays in the log.
+		var ue *secretstore.UnavailableError
+		if errors.As(err, &ue) {
+			writeErrCode(w, http.StatusServiceUnavailable, ue.Error(), "store_unavailable")
+		} else {
+			writeErrCode(w, http.StatusServiceUnavailable, launcher.ErrStoreUnavailable.Error(), "store_unavailable")
+		}
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, box.ErrBoxOwned),
 		errors.Is(err, launcher.ErrBadPrompt),

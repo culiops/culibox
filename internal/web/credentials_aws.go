@@ -623,6 +623,8 @@ func writeCredErr(w http.ResponseWriter, err error) {
 		writeErrCode(w, http.StatusNotFound, "no such value in the store", "not_found")
 	case errors.Is(err, secretstore.ErrNotInitialized):
 		writeErrCode(w, http.StatusConflict, "the encrypted store is not created yet", "store_missing")
+	case errors.Is(err, secretstore.ErrKeeperUnavailable):
+		writeStoreUnavailable(w, err)
 	case errors.Is(err, secretstore.ErrBadID):
 		writeErr(w, http.StatusBadRequest, secretstore.ErrBadID.Error())
 	case errors.Is(err, secretstore.ErrCaseCollision):

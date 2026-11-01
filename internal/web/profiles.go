@@ -146,7 +146,7 @@ type ProfileManager struct {
 	// not exist. nil = none defined.
 	awsConns []config.AWSConnection
 	// egressAll: every boxed spawn goes through the egress proxy, bound or not
-	// (Linux; Manager.SetEgressAll). It decides whether an unbound boxed profile
+	// (both OSes; Manager.SetEgressAll). It decides whether an unbound boxed profile
 	// previews as "open" or as no egress control.
 	egressAll bool
 }

@@ -297,6 +297,65 @@ func TestPreEgressUnboundIdleBoxIsRecreatedOnNetwork(t *testing.T) {
 	}
 }
 
+// newDarwinShapedManager is what boxLayer.options builds on macOS since #69:
+// EgressAll on (every box fenced), the VM hooks set, GuardInPlace off.
+func newDarwinShapedManager(t *testing.T, verify func(context.Context, string) error) (*Manager, *fakeClient) {
+	t.Helper()
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "culiops/agent-box:base", Instance: "TEST", IdleTTL: time.Hour,
+		StateRoot: t.TempDir(), Client: f, EgressAll: true, GuardInPlace: false,
+		Prepare:   func(context.Context) error { return nil },
+		Reachable: func(context.Context) bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: verify})
+	return m, f
+}
+
+// An unbound box left on the default bridge by a build from before #69 fails
+// the fenced verify. With sessions in it, it is refused (not killed); idle, it
+// is recreated on the egress network.
+func TestDarwinUnboundOldBoxRefusedWhileLive(t *testing.T) {
+	m, f := newDarwinShapedManager(t, func(context.Context, string) error { return errors.New("direct egress open") })
+	dir := t.TempDir()
+	name, _ := m.boxName(dir, BoxKey{})
+	f.running[name] = true
+	m.AdoptBox(name)
+	_, _, _, err := m.Wrap(context.Background(), dir, "s2", BoxKey{}, []string{"sh"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "started before egress control") {
+		t.Fatalf("err = %v", err)
+	}
+	if f.stops() != 0 || f.runs() != 0 {
+		t.Fatalf("a box with a live session was touched: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+func TestDarwinUnboundOldIdleBoxRecreatedOnEgressNetwork(t *testing.T) {
+	calls := 0
+	m, f := newDarwinShapedManager(t, func(context.Context, string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("direct egress open")
+		}
+		return nil
+	})
+	dir := t.TempDir()
+	name, _ := m.boxName(dir, BoxKey{})
+	f.running[name] = true
+	f.mounts[name] = []string{dir, boxHome, PlaywrightOutBox}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 1 {
+		t.Fatalf("stops=%d runs=%d, want 1/1", f.stops(), f.runs())
+	}
+	if !containsPair(f.runArgs[0], "--network", "agentbox-egress-TEST") {
+		t.Fatalf("recreated box is not on the egress network: %q", f.runArgs[0])
+	}
+}
+
 func TestEgressAllOffKeepsUnboundOnBridge(t *testing.T) {
 	var optsN, egressN int
 	m, f := newVerifyCountingManager(t, func(context.Context, string) error { optsN++; return nil })

@@ -12,9 +12,13 @@ import (
 type fakeStore struct {
 	vals   map[string][]byte
 	locked bool
+	err    error
 }
 
 func (f fakeStore) Get(id string) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.locked {
 		return nil, secretstore.ErrLocked
 	}
@@ -183,5 +187,28 @@ func TestCheckFallsBackToGetAndZeroes(t *testing.T) {
 	l, _ := New([]config.SecretSource{storeSrc}, fakeStore{locked: true})
 	if got, _ := l.Check("A"); got != StoredLocked {
 		t.Fatalf("locked = %v", got)
+	}
+}
+
+type unavailProbe struct{ probeStore }
+
+func (p unavailProbe) Status() secretstore.Status {
+	return secretstore.Status{Initialized: true, Unavailable: &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}}
+}
+
+// A stored value behind a failing Keychain is StoredUnavailable, never
+// StoredLocked (no passphrase to type) and never Absent.
+func TestCheckUnavailableStore(t *testing.T) {
+	c, _ := New([]config.SecretSource{storeSrc}, unavailProbe{probeStore{t: t, ids: []string{"A"}}})
+	if got, err := c.Check("A"); err != nil || got != StoredUnavailable {
+		t.Fatalf("A = %v %v, want StoredUnavailable", got, err)
+	}
+	if got, err := c.Check("B"); err != nil || got != Absent {
+		t.Fatalf("B = %v %v, want Absent", got, err)
+	}
+	// The Get fallback (no List/Status) maps the same way.
+	g, _ := New([]config.SecretSource{storeSrc}, fakeStore{err: &secretstore.UnavailableError{Kind: secretstore.KindKeyLost, Reason: "x"}})
+	if got, err := g.Check("A"); err != nil || got != StoredUnavailable {
+		t.Fatalf("Get path = %v %v, want StoredUnavailable", got, err)
 	}
 }

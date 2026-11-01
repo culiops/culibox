@@ -581,23 +581,19 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 
-	// Egress control: on Linux every box reaches the network only through the
-	// allowlist proxy (bound or not), so it starts without the broker. Not fatal
+	// Egress control: on both OSes every box reaches the network only through
+	// the allowlist proxy (bound or not), so it starts without the broker. Not fatal
 	// when it cannot start: boxed spawns then refuse, and the rest of the console
 	// keeps working. Before Reconcile, and the box hooks before it too, so
 	// reattached boxes find them.
 	var egressSvc *egressService
 	if layer != nil {
-		if runtime.GOOS == "linux" {
-			// Set whether or not egress starts: without it every boxed spawn is refused.
-			mgr.SetEgressAll(true)
-		}
+		// Set whether or not egress starts: without it every boxed spawn is refused.
+		mgr.SetEgressAll(true)
 		svc, err := startEgress(dataDir, layer, cfg, runtime.GOOS, mgr.Get)
 		switch {
-		case err != nil && runtime.GOOS == "linux":
-			log.Printf("egress control disabled (%v); every boxed spawn will be refused", err)
 		case err != nil:
-			log.Printf("egress control disabled (%v); profiles with an AWS binding will refuse to spawn", err)
+			log.Printf("egress control disabled (%v); every boxed spawn will be refused", err)
 		default:
 			egressSvc = svc
 			mgr.SetEgress(svc.Svc)
@@ -707,7 +703,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		pm.SetNotHome(h.NotHome)
 	}
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
-	pm.SetEgressAll(layer != nil && runtime.GOOS == "linux")
+	pm.SetEgressAll(layer != nil)
 	var vmShared []string // the box VM's shared directories; nil without a VM
 	if layer != nil && layer.vm != nil {
 		vmShared = layer.vm.Config().Mounts()

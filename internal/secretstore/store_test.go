@@ -637,3 +637,180 @@ func TestSetSameIdUpdatesAndDistinctIdsCoexist(t *testing.T) {
 		t.Fatalf("distinct ids coexist: %v", l)
 	}
 }
+
+// initMac initialises a passphrase-less store (macOS shape).
+func initMac(t *testing.T) (*Store, *FakeKeeper, string) {
+	t.Helper()
+	s, k, _, dir := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	return s, k, dir
+}
+
+func TestPassphraselessAccessFailure(t *testing.T) {
+	s, k, _ := initMac(t)
+	k.FailLoad(errors.New("User interaction is not allowed."))
+	st := s.Status()
+	if st.Locked {
+		t.Fatal("a Keychain failure must never be reported as locked")
+	}
+	if st.Unavailable == nil || st.Unavailable.Kind != KindAccess {
+		t.Fatalf("unavailable = %+v", st.Unavailable)
+	}
+	if !strings.Contains(st.Unavailable.Reason, "User interaction is not allowed.") {
+		t.Fatalf("reason %q", st.Unavailable.Reason)
+	}
+	_, err := s.Get("a")
+	if !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+	var ue *UnavailableError
+	if !errors.As(err, &ue) || ue.Kind != KindAccess || !strings.Contains(ue.Fix(), "Unlock the login keychain") {
+		t.Fatalf("typed error: %+v", ue)
+	}
+	// Recovery: the same store reads again once the keychain does.
+	k.FailLoad(nil)
+	if got, err := s.Get("a"); err != nil || string(got) != "v" {
+		t.Fatalf("after recovery: %q %v", got, err)
+	}
+	if u := s.Status().Unavailable; u != nil {
+		t.Fatalf("still unavailable: %+v", u)
+	}
+}
+
+func TestPassphraselessMissingItemIsKeyLost(t *testing.T) {
+	s, k, dir := initMac(t)
+	if err := k.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Status()
+	if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindKeyLost {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if st.Unavailable.Reason != "no Keychain item for this store" {
+		t.Fatalf("reason %q", st.Unavailable.Reason)
+	}
+	msg := st.Unavailable.Error()
+	if !strings.Contains(msg, filepath.Join(dir, "store")) || !strings.Contains(msg, "agent-box store init") {
+		t.Fatalf("message lacks the manual steps: %q", msg)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestPassphraselessMalformedKeyIsKeyLost(t *testing.T) {
+	s, k, _ := initMac(t)
+	if err := k.Save("NOT-A-KEY", 0); err != nil {
+		t.Fatal(err)
+	}
+	u := s.Status().Unavailable
+	if u == nil || u.Kind != KindKeyLost || u.Reason != "the Keychain item is malformed" {
+		t.Fatalf("unavailable %+v", u)
+	}
+}
+
+func TestPassphraselessMismatchIsKeyLost(t *testing.T) {
+	s, k, _ := initMac(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Save(other.String(), 0); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Status()
+	if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindKeyLost ||
+		st.Unavailable.Reason != "the Keychain item belongs to a different store" {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestUnavailableErrorFix(t *testing.T) {
+	a := &UnavailableError{Kind: KindAccess, Reason: "r", StoreDir: "/d/store"}
+	if a.Fix() != "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about agent-box, then retry." {
+		t.Fatalf("access fix %q", a.Fix())
+	}
+	l := &UnavailableError{Kind: KindKeyLost, Reason: "r", StoreDir: "/d/store"}
+	want := `The key for this store is gone, so its stored values cannot be decrypted. To start over: remove /d/store, run "agent-box store init", then add your tokens again.`
+	if l.Fix() != want {
+		t.Fatalf("key-lost fix %q", l.Fix())
+	}
+	if !errors.Is(a, ErrKeeperUnavailable) || errors.Is(a, ErrLocked) {
+		t.Fatal("Is")
+	}
+	dot := &UnavailableError{Kind: KindAccess, Reason: "User interaction is not allowed.", StoreDir: "/d/store"}
+	if strings.Contains(dot.Error(), "..") || !strings.Contains(dot.Error(), "User interaction is not allowed. Unlock") {
+		t.Fatalf("double period / lost reason: %q", dot.Error())
+	}
+	if strings.Count(dot.Error(), "keychain read failed") != 0 {
+		t.Fatalf("repeated phrase: %q", dot.Error())
+	}
+	if !strings.Contains(a.Error(), "r") || !strings.Contains(a.Error(), a.Fix()) {
+		t.Fatalf("Error %q", a.Error())
+	}
+}
+
+func TestPassphraseKeeperUnchanged(t *testing.T) {
+	s, k, _, _ := initLinux(t)
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	k.SetNow(func() time.Time { return time.Now().Add(2 * time.Hour) })
+	st := s.Status()
+	if !st.Locked || st.Unavailable != nil {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrLocked) || errors.Is(err, ErrKeeperUnavailable) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestPassphraselessUnreadableStoreDir(t *testing.T) {
+	check := func(t *testing.T, s *Store, dir string) {
+		t.Helper()
+		st := s.Status()
+		if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindStoreUnreadable {
+			t.Fatalf("status %+v / %+v", st, st.Unavailable)
+		}
+		if st.Unavailable.Reason == "" {
+			t.Fatal("empty reason")
+		}
+		fix := st.Unavailable.Fix()
+		if !strings.Contains(fix, filepath.Join(dir, "store")) || strings.Contains(strings.ToLower(st.Unavailable.Error()), "keychain") {
+			t.Fatalf("fix/error %q / %q", fix, st.Unavailable.Error())
+		}
+		if !errors.Is(st.Unavailable, ErrKeeperUnavailable) || errors.Is(st.Unavailable, ErrLocked) {
+			t.Fatal("Is")
+		}
+	}
+	t.Run("recipient file unreadable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads any file")
+		}
+		s, _, dir := initMac(t)
+		rf := filepath.Join(dir, "store", "recipient")
+		if err := os.Chmod(rf, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(rf, 0o600) })
+		check(t, s, dir)
+	})
+	t.Run("store dir open to others", func(t *testing.T) {
+		s, _, dir := initMac(t)
+		if err := os.Chmod(filepath.Join(dir, "store"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check(t, s, dir)
+	})
+}

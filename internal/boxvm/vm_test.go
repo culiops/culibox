@@ -344,6 +344,35 @@ func TestProvisionWritesYAMLAndStampAndDetectsDrift(t *testing.T) {
 	}
 }
 
+// Doctor's "predates egress control" reason hangs on this: a size change is
+// drift but not provision drift; a VM with no provision stamp (set up before it
+// existed) or a stale one is provision drift.
+func TestProvisionDriftIsSeparateFromOtherDrift(t *testing.T) {
+	r := &fakeRunner{}
+	v := setUpVM(t, r)
+	if v.ProvisionDrifted() {
+		t.Fatal("a fresh provision must not be provision-drifted")
+	}
+	c := v.Config()
+	c.CPUs = 8
+	v2 := NewVM(c, r)
+	if !v2.Drifted() || v2.ProvisionDrifted() {
+		t.Fatal("a size change is drift, not provision drift")
+	}
+	if err := os.Remove(v.Config().ProvisionStampPath()); err != nil {
+		t.Fatal(err)
+	}
+	if !v.ProvisionDrifted() {
+		t.Fatal("a VM without a provision stamp predates it and must read as drifted")
+	}
+	if err := os.WriteFile(v.Config().ProvisionStampPath(), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !v.ProvisionDrifted() {
+		t.Fatal("a stale provision stamp must read as drifted")
+	}
+}
+
 func TestProvisionRecreateDeletesFirst(t *testing.T) {
 	r := &fakeRunner{}
 	v := setUpVM(t, r)

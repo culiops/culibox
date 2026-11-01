@@ -75,12 +75,50 @@ func TestCheckStoreNotInitializedFails(t *testing.T) {
 	}
 }
 
-func TestCheckStoreLockedWarns(t *testing.T) {
-	st, k := storeFixture(t, true)
+// A passphrase-less keeper that lost its key is not "locked": nothing can be
+// unlocked, so doctor FAILs with the reason and the store dir to start over.
+func TestCheckStoreKeyLostFails(t *testing.T) {
+	dir := t.TempDir()
+	k := secretstore.NewFakeKeeper(false)
+	st := secretstore.Open(dir, k, nil)
+	if err := st.Init(nil, "test"); err != nil {
+		t.Fatal(err)
+	}
 	if err := k.Clear(); err != nil {
 		t.Fatal(err)
 	}
 	got := checkStore(storeConfig(), st, nil, noEnv, "darwin", nil)
+	if !find(got, Fail, "no Keychain item for this store") || !find(got, Fail, dir) || !find(got, Fail, "agent-box store init") {
+		t.Fatalf("want FAIL key lost with reason and store dir:\n%s", dump(got))
+	}
+	if find(got, Warn, "store locked") || find(got, Pass, "unlocked") {
+		t.Fatalf("a key-less Keychain store is neither locked nor unlocked:\n%s", dump(got))
+	}
+}
+
+func TestCheckStoreKeychainAccessFails(t *testing.T) {
+	st, k := storeFixture(t, true)
+	k.FailLoad(errors.New("User interaction is not allowed"))
+	got := checkStore(storeConfig(), st, nil, noEnv, "darwin", nil)
+	if !find(got, Fail, "User interaction is not allowed") || !find(got, Fail, "Unlock the login keychain") {
+		t.Fatalf("want FAIL access with reason and fix:\n%s", dump(got))
+	}
+	if find(got, Warn, "store locked") {
+		t.Fatalf("an access failure is not a locked store:\n%s", dump(got))
+	}
+}
+
+// A passphrase keeper that is cleared is a real lock: still a WARN.
+func TestCheckStoreLockedWarns(t *testing.T) {
+	k := secretstore.NewFakeKeeper(true)
+	st := secretstore.Open(t.TempDir(), k, nil)
+	if err := st.Init([]byte("correct horse battery"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	got := checkStore(storeConfig(), st, nil, noEnv, "linux", nil)
 	if !find(got, Warn, `store locked (unlock with "agent-box store unlock")`) {
 		t.Fatalf("want WARN locked:\n%s", dump(got))
 	}

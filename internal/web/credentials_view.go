@@ -27,8 +27,11 @@ const (
 	credOK           = "ok"
 	credMissing      = "missing"
 	credStoredLocked = "stored_locked"
-	credInvalid      = "invalid"
-	credUnset        = "unset"
+	// credStoredUnavailable: the value is there but the Keychain did not give
+	// the key (see credStoreBody.Unavailable for why and how to fix it).
+	credStoredUnavailable = "stored_unavailable"
+	credInvalid           = "invalid"
+	credUnset             = "unset"
 )
 
 // credFileRefused is why a file reference is invalid: the file is there, but
@@ -156,6 +159,9 @@ type credStoreBody struct {
 	ExpiresAt      *time.Time `json:"expires_at"`
 	Platform       string     `json:"platform"`
 	PassphraseMode bool       `json:"passphrase_mode"`
+	// Unavailable is set (omitted otherwise) when the macOS Keychain did not
+	// give the store key; Locked is then false.
+	Unavailable *storeUnavailableBody `json:"unavailable,omitempty"`
 }
 
 type credElevateBody struct {
@@ -297,6 +303,8 @@ type storeIDs struct {
 	ids     map[string]secretstore.Entry
 	listErr bool
 	locked  bool
+	// unavailable: the Keychain did not give the store key.
+	unavailable bool
 }
 
 func (s storeIDs) has(id string) bool { _, ok := s.ids[id]; return ok }
@@ -312,6 +320,8 @@ func (s storeIDs) refStatus(r config.KeyRef) (status, errText string) {
 			return credMissing, credStoreReadError
 		case !s.has(r.ID):
 			return credMissing, ""
+		case s.unavailable:
+			return credStoredUnavailable, ""
 		case s.locked:
 			return credStoredLocked, ""
 		}
@@ -345,18 +355,19 @@ func (s *Server) credView() credViewBody {
 		Values: []credValueBody{}, LegacySecrets: []credLegacyBody{}, Invalid: []credInvalidBody{},
 		FileBad: sn.bad,
 	}
-	var locked bool
+	var locked, unavailable bool
 	if s.Store != nil {
 		st := s.Store.Status()
-		locked = st.Locked
-		body.Store = credStoreBody{Initialized: st.Initialized, Locked: st.Locked, Platform: st.Platform, PassphraseMode: st.PassphraseMode}
+		locked, unavailable = st.Locked, st.Unavailable != nil
+		body.Store = credStoreBody{Initialized: st.Initialized, Locked: st.Locked, Platform: st.Platform, PassphraseMode: st.PassphraseMode,
+			Unavailable: unavailableBody(st.Unavailable)}
 		if !st.ExpiresAt.IsZero() {
 			t := st.ExpiresAt
 			body.Store.ExpiresAt = &t
 		}
 	}
 
-	ids := storeIDs{ids: map[string]secretstore.Entry{}, locked: locked}
+	ids := storeIDs{ids: map[string]secretstore.Entry{}, locked: locked, unavailable: unavailable}
 	if ents, err := s.Creds.vals.List(); err == nil {
 		for _, e := range ents {
 			ids.ids[e.ID] = e
@@ -422,6 +433,8 @@ func (s *Server) credView() credViewBody {
 				st = credOK
 			case p == secretchain.StoredLocked:
 				st = credStoredLocked
+			case p == secretchain.StoredUnavailable:
+				st = credStoredUnavailable
 			}
 		}
 		body.LegacySecrets = append(body.LegacySecrets, credLegacyBody{Name: name, Status: st})

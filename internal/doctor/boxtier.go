@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/secretchain"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a
@@ -28,7 +29,9 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	const check = "boxed claude token"
 	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
-	var locked []string // agents whose credential failed only because the store is locked
+	var locked []string   // agents whose credential failed only because the store is locked
+	var unavailable error // the first Keychain failure met for an agent that found no other credential
+	var unavailableAgents []string
 	boxed := 0
 	for _, a := range c.Agents {
 		if filepath.Base(a.Bin) != "claude" || c.RuntimeFor(a) != config.RuntimeBox {
@@ -36,6 +39,7 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 		}
 		boxed++
 		found, isLocked := false, false
+		var unavail error
 		for _, name := range a.Secrets {
 			if name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "ANTHROPIC_API_KEY" {
 				continue
@@ -47,11 +51,20 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 					found = true
 				case errors.Is(err, credref.ErrLocked):
 					isLocked = true
+				case errors.Is(err, secretstore.ErrKeeperUnavailable) && unavail == nil:
+					unavail = err
 				}
 			}
 		}
 		switch {
 		case found:
+		case unavail != nil:
+			// A Keychain failure is neither "locked" nor "missing": the token is
+			// stored but unreadable, and the fix is the Keychain's.
+			unavailableAgents = append(unavailableAgents, a.Name)
+			if unavailable == nil {
+				unavailable = unavail
+			}
 		case isLocked:
 			locked = append(locked, a.Name)
 		default:
@@ -61,6 +74,9 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	switch {
 	case boxed == 0:
 		return Result{Pass, check, "no boxed claude agent in config.json"}
+	case len(unavailableAgents) > 0:
+		return Result{Fail, check, "agent(s) " + strings.Join(unavailableAgents, ", ") +
+			": the Claude token is in the store, but " + unavailable.Error()}
 	case len(locked) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
 			`: the Claude token is in the store, which is locked — unlock it ("agent-box store unlock")`}
@@ -92,6 +108,9 @@ type boxFacts struct {
 	ProbeRan    bool
 	UserContext error    // boxvm.CheckUserDockerContext result
 	Stopped     []string // this instance's boxes that are not running
+	// ProvisionDrifted: the drift includes the provision script (the egress
+	// INPUT rules), so every boxed spawn is refused until the VM is recreated.
+	ProvisionDrifted bool
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -143,7 +162,9 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.ColimaVer != "" && !boxvm.VersionAtLeast(f.ColimaVer, 0, 8) {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
-	if f.Drifted {
+	if f.Drifted && f.ProvisionDrifted {
+		out = append(out, Result{Fail, "box VM config", "this VM predates egress control for all boxes; run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
+	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
 	out = append(out, userCtx)
@@ -206,6 +227,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)
 	f.SocketErr = vc.CheckSocketPaths()
 	f.SetUp, f.Drifted = vm.SetUp(), vm.Drifted()
+	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
 	if !f.SetUp {
 		return f
 	}

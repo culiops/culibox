@@ -13,6 +13,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/ghapp"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // ghRefreshMargin: a cached GitHub token is reused only while more than this
@@ -459,6 +460,9 @@ func (b *Broker) serveGitHubPAT(w http.ResponseWriter, base Row, sv SessionView,
 		b.storeLockedReply(w, base, sid)
 		return
 	}
+	if b.storeUnavailableReply(w, base, err) {
+		return
+	}
 	if err != nil {
 		msg := sanitize(err.Error()) // names the reference, never the value
 		row := base
@@ -481,10 +485,14 @@ func (b *Broker) serveGitHubPAT(w http.ResponseWriter, base Row, sv SessionView,
 // ghMintFailed maps a minter error to its outcome, audit row and reply.
 func (b *Broker) ghMintFailed(w http.ResponseWriter, base Row, sid, owner string, err error) {
 	var se *ghapp.ScopeError
+	var ue *secretstore.UnavailableError
 	switch {
 	case errors.Is(err, credref.ErrLocked): // the App key is in the store and it is locked
 		b.ghFail(w, base, OutcomeStoreLocked, http.StatusServiceUnavailable, storeLockedMsg, storeLockedMsg)
 		b.storeWasLocked(sid)
+	case errors.As(err, &ue): // the App key is in the store and the Keychain failed
+		b.ghFail(w, base, OutcomeStoreUnavailable, http.StatusServiceUnavailable,
+			boxUnavailableMsg(ue.Kind), sanitizeN(ue.Error(), maxUnavailableLen))
 	case errors.Is(err, ghapp.ErrNotInstalled):
 		msg := "install the GitHub App on " + owner
 		b.ghFail(w, base, OutcomeNotInstalled, http.StatusForbidden, msg, msg)

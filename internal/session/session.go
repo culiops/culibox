@@ -35,6 +35,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
@@ -1374,7 +1375,7 @@ type Manager struct {
 	// Nil = no store: no session ever needs it unlocked.
 	storeLocked func() bool
 	egress      EgressHooks // nil = egress control not running; bound profiles are refused
-	egressAll   bool        // every boxed spawn needs egress (Linux); see SetEgressAll
+	egressAll   bool        // every boxed spawn needs egress; see SetEgressAll
 	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
 	home        string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
@@ -1521,7 +1522,7 @@ func (m *Manager) SetEgress(h EgressHooks) {
 
 // SetEgressAll makes egress mandatory for every boxed spawn, bound or not: an
 // unbound box gets the same proxy env in open mode, and is refused when egress
-// control is not running. Call once at boot (Linux), with SetEgress.
+// control is not running. Call once at boot, with SetEgress.
 func (m *Manager) SetEgressAll(all bool) {
 	m.mu.Lock()
 	m.egressAll = all
@@ -2011,6 +2012,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 					if errors.Is(err, credref.ErrLocked) {
 						// A key in the locked store: say so (423), not a containment failure.
 						return nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, spec.Agent)
+					}
+					var ue *secretstore.UnavailableError
+					if errors.As(err, &ue) {
+						// The Keychain did not give the key: 503 with the fix, not a containment failure.
+						return nil, fmt.Errorf("%w: %w (GitHub App key, profile %q)", launcher.ErrStoreUnavailable, ue, spec.Agent)
 					}
 					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}

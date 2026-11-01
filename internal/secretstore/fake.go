@@ -12,6 +12,7 @@ type FakeKeeper struct {
 	identity string
 	expires  time.Time
 	now      func() time.Time
+	loadErr  error
 }
 
 // NewFakeKeeper returns an empty keeper. needsPassphrase true behaves like
@@ -28,11 +29,22 @@ func (f *FakeKeeper) SetNow(now func() time.Time) {
 	f.now = now
 }
 
+// FailLoad makes every following Load return err until FailLoad(nil). It
+// stands in for a Keychain read that fails (locked keychain, Deny).
+func (f *FakeKeeper) FailLoad(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadErr = err
+}
+
 func (f *FakeKeeper) NeedsPassphrase() bool { return f.needs }
 
 func (f *FakeKeeper) Load() (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return "", time.Time{}, f.loadErr
+	}
 	if f.identity == "" {
 		if f.needs {
 			return "", time.Time{}, ErrLocked

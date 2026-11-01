@@ -246,3 +246,20 @@ func TestCheckFileMatchesReadFileGate(t *testing.T) {
 		}
 	}
 }
+
+type errGetter struct{ err error }
+
+func (e errGetter) Get(string) ([]byte, error) { return nil, e.err }
+
+// A Keychain failure keeps its own message (reason + fix) and never gains the
+// store id; other store errors still name the id.
+func TestGetStoreUnavailablePassesThrough(t *testing.T) {
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	_, err := GetStore(errGetter{ue}, "my-secret-id")
+	if err != error(ue) || strings.Contains(err.Error(), "my-secret-id") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := GetStore(errGetter{secretstore.ErrNoSuchValue}, "my-secret-id"); err == nil || !strings.Contains(err.Error(), "my-secret-id") {
+		t.Fatalf("other errors name the id: %v", err)
+	}
+}

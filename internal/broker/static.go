@@ -10,6 +10,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // maxStaticBody bounds the request body: it is one short name.
@@ -98,6 +99,9 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 		b.storeLockedReply(w, base, sid)
 		return
 	}
+	if b.storeUnavailableReply(w, base, err) {
+		return
+	}
 	if err != nil {
 		msg := sanitize(err.Error()) // names the reference, never the value
 		row := base
@@ -129,6 +133,22 @@ func (b *Broker) storeLockedReply(w http.ResponseWriter, base Row, sid string) {
 	b.recordDenied(row)
 	b.storeWasLocked(sid)
 	replyErr(w, http.StatusServiceUnavailable, storeLockedMsg)
+}
+
+// storeUnavailableReply refuses a read of a store whose key the Keychain did not
+// give: a store_unavailable row (full UnavailableError text, host side) and a
+// fixed path-free message per kind to the box (boxUnavailableMsg). The session is NOT flagged store-locked: there is
+// no passphrase to type. It reports whether err was such a failure.
+func (b *Broker) storeUnavailableReply(w http.ResponseWriter, base Row, err error) bool {
+	var ue *secretstore.UnavailableError
+	if !errors.As(err, &ue) {
+		return false
+	}
+	row := base
+	row.Outcome, row.Error = OutcomeStoreUnavailable, sanitizeN(ue.Error(), maxUnavailableLen)
+	b.recordDenied(row)
+	replyErr(w, http.StatusServiceUnavailable, boxUnavailableMsg(ue.Kind))
+	return true
 }
 
 func writeStaticToken(w http.ResponseWriter, value string, e config.StaticToken) {

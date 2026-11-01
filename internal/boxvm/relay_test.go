@@ -1,17 +1,23 @@
 package boxvm
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/proxyline"
 )
 
 const goodRules = `-P INPUT ACCEPT
@@ -529,5 +535,129 @@ func TestRelayScriptParses(t *testing.T) {
 	}
 	if out, err := exec.Command(node, "--check", f).CombinedOutput(); err != nil {
 		t.Fatalf("relay script does not parse: %v\n%s", err, out)
+	}
+}
+
+func TestRelayScriptSendsProxyHeader(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH")
+	}
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { target.Close() })
+	tport := target.Addr().(*net.TCPAddr).Port
+
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lport := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+
+	cmd := exec.Command(node, "-e", relayScript, "127.0.0.1", strconv.Itoa(lport), "127.0.0.1", strconv.Itoa(tport))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	want := fmt.Sprintf("listening 127.0.0.1:%d", lport)
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != want {
+		t.Fatalf("relay stdout = %q, %v; want %q", line, err, want)
+	}
+
+	type result struct {
+		src, dst netip.AddrPort
+		body     string
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		c, err := target.Accept()
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+		br := bufio.NewReader(c)
+		hdr, err := br.ReadBytes('\n')
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		src, dst, err := proxyline.ParseV1(hdr)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		body := make([]byte, 4)
+		if _, err := io.ReadFull(br, body); err != nil {
+			done <- result{err: err}
+			return
+		}
+		_, err = c.Write([]byte("pong"))
+		done <- result{src: src, dst: dst, body: string(body), err: err}
+	}()
+
+	cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := cl.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client reply = %q, %v; want pong", reply, err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("target side: %v", r.err)
+	}
+	if r.src.Addr() != netip.MustParseAddr("127.0.0.1") {
+		t.Errorf("header src = %v, want 127.0.0.1", r.src)
+	}
+	if want := netip.MustParseAddrPort(fmt.Sprintf("127.0.0.1:%d", lport)); r.dst != want {
+		t.Errorf("header dst = %v, want %v", r.dst, want)
+	}
+	if want := cl.LocalAddr().(*net.TCPAddr).Port; int(r.src.Port()) != want {
+		t.Errorf("header src port = %d, want the client's %d", r.src.Port(), want)
+	}
+	if r.body != "ping" {
+		t.Errorf("payload after header = %q, want ping", r.body)
+	}
+}
+
+// preProxyLineRelayScript is the relay script before #71 (no PROXY line).
+const preProxyLineRelayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{const u=net.connect(tp,th);c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+
+// A relay started before the PROXY line existed carries the old config hash, so
+// the next Ready replaces it (the host listeners now refuse its header-less
+// connections). In-flight tunnels drop once when that happens.
+func TestDarwinRelayReplacedWhenScriptChanges(t *testing.T) {
+	r := testRelay(fakeVM{}, nil)
+	old := r.runArgs(gw)
+	n := 0
+	for i, a := range old {
+		if a == relayScript {
+			old[i] = preProxyLineRelayScript
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("relayScript appears %d times in the run argv", n)
+	}
+	if hashArgs(old) == r.configHash(gw) {
+		t.Fatal("the pre-#71 relay has the same config hash as the current one; it would not be replaced")
 	}
 }

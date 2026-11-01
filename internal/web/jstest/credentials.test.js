@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  credGroups, statusText, baseText, credWriteActions, usedByText, entryActions, isSeed,
+  credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
   providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, CRED_D4, CRED_N3, CRED_FILE_BAD,
   awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsConnFromRow, awsRoleARN, awsCheckView, awsErrText, CRED_D4_REMEDY,
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
@@ -55,6 +55,8 @@ test("statusText has the five exact texts", () => {
   assert.strictEqual(statusText("missing"), "Missing");
   assert.strictEqual(statusText("stored_locked"), "Stored (store locked)");
   assert.strictEqual(statusText("invalid"), "Invalid");
+  assert.strictEqual(statusText("stored_unavailable"), "Stored (Keychain unavailable)");
+  assert.strictEqual(statusClass("stored_unavailable"), "locked");
   assert.strictEqual(statusText("unset"), "Not set in the daemon's environment");
   assert.strictEqual(statusText("weird"), "Invalid");
 });

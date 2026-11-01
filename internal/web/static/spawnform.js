@@ -100,6 +100,15 @@ function spawnRefusedLocked(status, code) {
   return status === 423 && code === "store_locked";
 }
 
+// spawnRefusedUnavailable: the server refused a spawn or restart because the
+// macOS Keychain did not give the store key (HTTP 503 with code
+// "store_unavailable"). Unlike a locked store there is nothing to type, so the
+// dialog shows the server's sentence (what failed, how to fix it) in its error
+// line and offers no unlock form.
+function spawnRefusedUnavailable(status, code) {
+  return status === 503 && code === "store_unavailable";
+}
+
 // spawnProgressText is the dialog's status line while a spawn POST is in flight
 // (#36). The server answers only once the session exists, and a boxed spawn may
 // first start the box (on a Mac, its VM too) and a container, which takes tens of seconds after an
@@ -114,7 +123,7 @@ function spawnProgressText(seconds, runtime) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    spawnRefusedLocked, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
+    spawnRefusedLocked, spawnRefusedUnavailable, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
     PLIST_SEARCH_MIN, profileMatches,
   };

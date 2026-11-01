@@ -134,9 +134,10 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		CPUs:       cfg.BoxCPUs,
 		ExtraCA:    extra,
 		ExtraCAErr: extraErr,
-		// Linux: every box sits on the egress network and has its guard files
-		// read-only in place. darwin keeps its default network and Verify.
-		EgressAll:    l.goos == "linux",
+		// Both OSes: every box sits on the egress network (darwin through the
+		// option (c) relay, since #69). Only Linux has its guard files
+		// read-only in place (#68).
+		EgressAll:    true,
 		GuardInPlace: l.goos == "linux",
 	}
 	if l.vm != nil {
@@ -224,9 +225,9 @@ func (l *boxLayer) egressExec(name string) egress.ExecInput {
 	}
 }
 
-// egressVerify is box.Egress.Verify: it proves a bound box is contained by the
+// egressVerify is box.Egress.Verify: it proves a fenced box is contained by the
 // egress network and allowlist, by running the probe inside the real container
-// against the live proxy. It runs instead of verify for bound boxes. Fail
+// against the live proxy. It runs instead of verify for every fenced box (every box on macOS). Fail
 // closed: a proxy that cannot start or a probe that cannot run is a refusal.
 //
 // darwin adds the loopback check after the egress probe. The network is
@@ -234,7 +235,7 @@ func (l *boxLayer) egressExec(name string) egress.ExecInput {
 // the probe's DIRECT/DNS legs prove the VM rules only for the paths they try;
 // the loopback check proves the Mac's loopback services stay unreachable
 // through the gateway. It runs second because the probe's
-// ALLOW 200 is its positive control (a bound box's DNS is closed, so the plain
+// ALLOW 200 is its positive control (a fenced box's DNS is closed, so the plain
 // check's DNS control cannot be used); a probe that fails never reaches it.
 func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, name string) error {
 	return func(ctx context.Context, name string) error {
@@ -259,7 +260,7 @@ func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, n
 	}
 }
 
-// recreateHint is appended to a darwin refusal of a bound box when the VM's
+// recreateHint is appended to a darwin refusal of a boxed spawn when the VM's
 // provision config has drifted: a VM provisioned before the egress subnet rules
 // existed fails the probe with a message that does not say what to do. Only the
 // text changes; the refusal itself is unchanged. Empty off darwin and when the
