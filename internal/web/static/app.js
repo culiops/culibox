@@ -556,13 +556,12 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const dr = $("drawer");
   const t = e.target;
-  const dm = $("drawer-menu");
   const rm = $("ft-menu");
   const restore = maxEscapeRestores({
     max: !!dr && dr.dataset.max === "1",
     where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
     owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
-    menuOpen: !!((dm && !dm.hidden) || (rm && rm.classList.contains("open"))),
+    menuOpen: !!(vtMenuOpen() || (rm && rm.classList.contains("open"))),
     prevented: e.defaultPrevented,
   });
   if (!restore) return;

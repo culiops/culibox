@@ -74,58 +74,6 @@ class ViewerTab {
 
     this.el = document.createElement("div");
     this.el.className = "tab-body viewer-body";
-    this.toolbar = document.createElement("div");
-    this.toolbar.className = "viewer-tools";
-    const reload = document.createElement("button");
-    reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
-    reload.onclick = () => this.load();
-    this.toolbar.append(reload);
-    // Download works for files this viewer refuses to render: binaries and
-    // anything over the 2 MiB preview cap, which are exactly the ones worth
-    // fetching, so the button is never conditional on the render succeeding.
-    const dl = document.createElement("button");
-    dl.className = "viewer-reload";
-    dl.textContent = "⤓";
-    dl.title = "Download this file";
-    dl.onclick = () => this.download();
-    this.toolbar.append(dl);
-    // A word, not a glyph: a button's accessible name comes from its text
-    // content before its title, and an unprobed codepoint ships as a tofu box no
-    // test catches. `viewer-auto` is the existing text-button style.
-    if (!IMAGE_EXTS.has(ext0)) { // an image has no text to copy and nothing to poll
-      const cp = document.createElement("button");
-      cp.className = "viewer-auto";
-      cp.textContent = "Copy";
-      cp.title = "Copy this file's contents";
-      cp.onclick = () => this.copyContents(cp);
-      this.toolbar.append(cp);
-      if (!this.box) { // a box file is read-only: the host cannot write into the box
-        const edit = document.createElement("button");
-        edit.className = "viewer-auto";
-        edit.textContent = "Edit";
-        edit.title = "Edit this file";
-        edit.onclick = () => this.enterEdit();
-        this.toolbar.append(edit);
-        this.editBtn = edit; // hidden once a read says the file is read-only
-      }
-      const auto = document.createElement("button");
-      auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
-      auto.onclick = () => this.toggleAuto();
-      this.autoBtn = auto; // toggleAuto keeps its "on" state, whoever toggles
-      this.toolbar.append(auto);
-    }
-    if (this.zoomVar) { // text viewers only: images have nothing to size
-      const zout = document.createElement("button");
-      zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (" + shortcutHint("zoom.out", IS_MAC) + ")";
-      zout.onclick = () => this.fontStep(-1);
-      const zin = document.createElement("button");
-      zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (" + shortcutHint("zoom.in", IS_MAC) + ")";
-      zin.onclick = () => this.fontStep(+1);
-      this.toolbar.append(zout, zin);
-    }
-    const pathLbl = document.createElement("span");
-    pathLbl.className = "viewer-path"; pathLbl.textContent = path; pathLbl.title = path;
-    this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
     // Focusable so a file the user just opened takes the keyboard (arrows, PgDn,
@@ -163,6 +111,10 @@ class ViewerTab {
     this.isImage = IMAGE_EXTS.has(ext0);
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
+    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
+    // for the Files drawer: its extra button and its shorter path label.
+    this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
+    this.toolbar = this.toolbarApi.el;
     this.el.append(this.toolbar, this.findBar, this.content);
     // Bubble phase, on the viewer's own element: it fires for the read scroller,
     // the find bar and CodeMirror's textarea, and never for a terminal or the
@@ -243,7 +195,7 @@ class ViewerTab {
   // The line-number menu below and Task 7's Path ▾ menu both go through these.
 
   // insertCandidate: the terminal an insert would go to. The Files drawer's
-  // viewer uses the drawer's session (as drawerInsertPath does, not whichever
+  // viewer uses the drawer's session (not whichever
   // terminal holds focus); a pane viewer uses the terminal its cell is about.
   // insertTargetFor then applies the box rule.
   insertCandidate() {
@@ -321,7 +273,7 @@ class ViewerTab {
   title() { return this.name; }
   status() { return this.statusText; }
   onShow() {}
-  onHide() {}
+  onHide() { this.toolbarApi.closeMenus(); } // a menu belongs to the pane that is on screen
   // onAttach: the element was just (re)inserted, so the browser has reset the
   // scroller to the top. Idempotent and NON-CONSUMING — it never clears
   // this.scroll and never reads the applied value back — because it also fires
@@ -345,10 +297,10 @@ class ViewerTab {
   }
   dispose() {
     if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
+    this.toolbarApi.closeMenus();
     this.find.close(true); // frees the document-wide highlight names if this bar held them
   }
-  // The toolbar buttons' actions as methods, so a host that hides this toolbar
-  // (the desktop Files drawer has its own header) can offer the same ones.
+  // The toolbar's actions as methods (viewertoolbar.js calls these).
   reload() { return this.load(); }
   download() {
     downloadPath(this.path, false, this.box ? boxFileURL(this.box, this.path, true) : undefined);
@@ -357,10 +309,9 @@ class ViewerTab {
   fontStep(d) { this.zoom(d * fontPrefs.STEP); }
   toggleAuto() {
     this.auto = !this.auto;
-    if (this.autoBtn) this.autoBtn.classList.toggle("on", this.auto);
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
-    this.onUpdate?.();
+    this.changed();
   }
   // Live zoom (transient): override the pane-local CSS var so only this viewer's
   // text resizes; the var lives on this.el, an ancestor of the rendered content,
@@ -376,7 +327,10 @@ class ViewerTab {
     this.fontPx = null;
     this.el.style.removeProperty(this.zoomVar);
   }
-  setStatus(t) { this.statusText = t; this.onUpdate?.(); }
+  setStatus(t) { this.statusText = t; this.changed(); }
+  // changed repaints the toolbar and tells the host (a pane's tab bar, the
+  // drawer header). Call it whenever something the toolbar shows moved.
+  changed() { this.toolbarApi?.paint(); this.onUpdate?.(); }
 
   // showingMsg tracks whether the pane holds a MESSAGE rather than the file, so
   // load() can tell "nothing changed, skip the re-render" from "the text is the
@@ -436,8 +390,8 @@ class ViewerTab {
     // Only a successful read answers the question; a dropped poll keeps the
     // last known answer rather than bringing back an Edit that cannot save.
     if (res.ok) {
-      this.readOnly = readOnlyFrom(res);
-      if (this.editBtn) this.editBtn.hidden = this.readOnly;
+      const ro = readOnlyFrom(res);
+      if (ro !== this.readOnly) { this.readOnly = ro; this.changed(); } // Edit follows readOnly
     }
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
@@ -643,30 +597,21 @@ class ViewerTab {
     this.renderEditBar();
     this.findRefresh(); // an open find now searches the buffer
     // A fresh edit: a "saved" left from the last one says nothing about this
-    // buffer. setStatus also tells a host header to show Cancel · Save.
+    // buffer. (setStatus repaints the toolbar: Save · Cancel replace Edit.)
     this.setStatus("");
   }
 
-  // renderEditBar builds the action row above the editor: Save · Cancel, plus a
-  // status/conflict message that showConflict() fills in and adds Reload /
-  // Overwrite anyway to. It is appended as holder's sibling inside `content`
-  // (not inside holder itself) so CodeMirror's own sizing is undisturbed.
+  // renderEditBar builds the message row above the editor: Save and Cancel live
+  // in the toolbar. The row stays empty (and hidden, app.css) until showConflict()
+  // fills it with the conflict message and adds Reload / Overwrite anyway. It is
+  // prepended inside `content` (not inside holder itself) so CodeMirror's own
+  // sizing is undisturbed.
   renderEditBar() {
     const bar = document.createElement("div");
     bar.className = "viewer-editbar";
-    const save = document.createElement("button");
-    save.className = "viewer-auto viewer-save";
-    save.textContent = "Save";
-    save.title = "Save (" + shortcutHint("editor.save", IS_MAC) + ")";
-    save.onclick = () => this.save(false);
-    const cancel = document.createElement("button");
-    cancel.className = "viewer-auto viewer-cancel";
-    cancel.textContent = "Cancel";
-    cancel.title = "Discard changes and return to the read view";
-    cancel.onclick = () => this.cancelEdit();
     const msg = document.createElement("span");
     msg.className = "viewer-edit-msg";
-    bar.append(save, cancel, msg);
+    bar.append(msg);
     this.editBar = bar;
     this.editMsg = msg;
     this.conflictBtns = null;
@@ -727,7 +672,7 @@ class ViewerTab {
     this.editBar = null;
     this.editMsg = null;
     this.conflictBtns = null;
-    this.onUpdate?.(); // back to the read view's actions
+    this.changed(); // back to the read view's actions
     if (typeof savedText === "string") {
       this.lastContent = savedText;
       this.renderCode(savedText, this.lang);

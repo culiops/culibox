@@ -148,7 +148,10 @@ test("readOnlyFrom: only a successful read flagged readonly is read-only", () =>
 
 test("the viewer hides Edit and refuses enterEdit for a read-only file", () => {
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/viewer-tab.js"), "utf8");
-  assert.match(src, /this\.readOnly = readOnlyFrom\(res\)/, "load() records readOnly from the read");
-  assert.match(src, /this\.editBtn\.hidden = this\.readOnly/, "the Edit button follows readOnly");
+  assert.match(src, /this\.readOnly = ro/, "load() records readOnly from the read");
+  assert.match(src, /readOnlyFrom\(res\)/, "...taken from the read's own answer");
+  // The toolbar hides Edit through the model (viewertoolbar.test.js asserts it);
+  // here only that a change of readOnly repaints it.
+  assert.match(src, /this\.readOnly = ro; this\.changed\(\)/, "the toolbar repaints when readOnly changes");
   assert.match(src, /enterEdit\(\) \{\n\s+if \(this\.editing \|\| this\.box \|\| this\.readOnly\) return;/, "enterEdit guards readOnly");
 });

@@ -469,7 +469,7 @@
   /* --- Files drawer body: tree | splitter | viewer (spec 5.4, #34) -------- */
   #drawer[data-kind="files"] .dr-body { flex-direction: row; }
   #drawer:not([data-kind="files"]) .dr-tree, #drawer:not([data-kind="files"]) .dr-viewer,
-  #drawer:not([data-kind="files"]) .dr-acts, #drawer:not([data-kind="files"]) .dr-split { display: none; }
+  #drawer:not([data-kind="files"]) .dr-split { display: none; }
   /* --dr-tree is the tree's stored share of the body (default 40%). The px
      clamp keeps a readable tree and a usable viewer whatever the share; in a
      body too narrow for both, the tree's 160px wins. */
@@ -515,63 +515,18 @@
   #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }
   #drawer[data-noroot="1"] .dr-vempty { visibility: hidden; } /* "pick a file in the tree": there is none */
   .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
-  .dr-vtop {
-    flex: none; display: flex; align-items: baseline; gap: 6px; min-width: 0;
-    padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
-  }
-  .dr-vpath {
-    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font: 500 12px var(--font-mono); color: var(--fg);
-  }
-  .dr-vst { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
   .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
-  .dr-vtop:has(.dr-vpath:empty) { display: none; }
   .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: 12px; }
-  /* The drawer header carries the viewer's actions, so its own toolbar goes. */
-  #drawer .viewer-tools { display: none; }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
   .viewer-wrap #drawer .viewer-pre { white-space: pre-wrap; width: auto; min-width: 0; }
-  /* Header actions: Copy · Insert path · Edit · Open in pane · ⋯, or Cancel · Save. */
-  .dr-acts { flex: none; position: relative; display: flex; align-items: center; gap: 2px; }
-  .dr-act {
-    height: 24px; padding: 0 8px; font: 500 12px var(--font-ui); color: var(--muted); cursor: pointer;
-    background: transparent; border: 1px solid transparent; border-radius: var(--r-ctl); white-space: nowrap;
-  }
-  .dr-act[hidden] { display: none; }
   /* 1.5ch per depth level instead of 2ch: every prefix is two characters a
      level, so a uniform squeeze keeps the │ columns aligned across rows. */
   #drawer .ft-branch { letter-spacing: -.25ch; }
   /* A file (or a folder above one) the agent changed: a dot after the name. */
   #drawer .ft-chg { flex: none; color: var(--accent); font-size: 8px; line-height: 1; padding: 0 4px; }
-  .dr-act:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
-  /* Dimmed, not struck through (primitives.css): with no file every action is
-     off at once, and a row of struck words reads as an error. */
-  .dr-act:disabled { opacity: .4; cursor: default; text-decoration: none; }
-  .dr-act:focus-visible, .dr-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  .dr-act.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
-  .dr-act.pri:hover:not(:disabled) { color: var(--bg); background: color-mix(in srgb, var(--accent) 85%, #fff); }
-  .dr-menu {
-    position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 130px;
-    display: flex; flex-direction: column; padding: 4px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 8px 24px #000a;
-  }
-  .dr-menu[hidden] { display: none; }
-  .dr-mi {
-    text-align: left; padding: 5px 10px; font: 400 12px var(--font-ui); color: var(--fg); cursor: pointer;
-    background: transparent; border: 0; border-radius: var(--r-chip);
-  }
-  .dr-mi:hover:not(:disabled) { background: var(--raise); }
-  .dr-mi:disabled { color: var(--faint); cursor: default; text-decoration: none; }
-  .dr-mi.on { color: var(--accent); font-weight: 600; }
-  /* In the drawer the header holds Save and Cancel; the viewer's own edit bar
-     keeps only its message and the conflict's Reload / Overwrite, and shows
-     only when it has something to say. */
-  #drawer .viewer-editbar .viewer-save, #drawer .viewer-editbar .viewer-cancel { display: none; }
-  #drawer .viewer-editbar:not(:has(.viewer-edit-msg:not(:empty))) { display: none; }
-  #drawer .viewer-editbar .viewer-edit-msg { margin-left: 0; margin-right: auto; }
   /* "The agent may change this file again": neutral with an accent edge, never
      amber or red (D23). Shown wherever a desktop viewer edits. */
   .edit-warn {

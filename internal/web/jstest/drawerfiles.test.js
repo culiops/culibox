@@ -4,40 +4,6 @@ const test = require("node:test");
 const assert = require("node:assert");
 const d = require("../static/drawerfiles.js");
 
-const NONE = { copy: false, insert: false, edit: false, openInPane: false, overflow: false, cancel: false, save: false };
-
-test("drawerActions: with no file everything is disabled (only the close button remains)", () => {
-  assert.deepEqual(d.drawerActions({ path: null, editing: false, box: false, dirty: false }), NONE);
-  assert.deepEqual(d.drawerActions({}), NONE);
-  assert.deepEqual(d.drawerActions(null), NONE);
-});
-
-test("drawerActions: a host file in the read view enables every action", () => {
-  assert.deepEqual(d.drawerActions({ path: "/h/u/a.go", editing: false, box: false, dirty: false }),
-    { copy: true, insert: true, edit: true, openInPane: true, overflow: true, cancel: false, save: false });
-});
-
-test("drawerActions: a box file cannot be edited, everything else stays", () => {
-  assert.deepEqual(d.drawerActions({ path: "/tmp/playwright-mcp/a.txt", editing: false, box: true, dirty: false }),
-    { copy: true, insert: true, edit: false, openInPane: true, overflow: true, cancel: false, save: false });
-});
-
-test("drawerActions: an image has nothing to copy or edit", () => {
-  const a = d.drawerActions({ path: "/h/u/shot.png", editing: false, box: false, dirty: false, image: true });
-  assert.equal(a.copy, false);
-  assert.equal(a.edit, false);
-  assert.equal(a.insert, true);
-  assert.equal(a.openInPane, true);
-  assert.equal(a.overflow, true);
-});
-
-test("drawerActions: while editing the header shows only Cancel and Save, dirty or not", () => {
-  for (const dirty of [false, true]) {
-    assert.deepEqual(d.drawerActions({ path: "/h/u/a.go", editing: true, box: false, dirty }),
-      { copy: false, insert: false, edit: false, openInPane: false, overflow: false, cancel: true, save: true });
-  }
-});
-
 test("rememberDrawerFile / drawerFileFor: per-session memory survives a session switch", () => {
   let m = new Map();
   m = d.rememberDrawerFile(m, "A", { path: "/h/u/a.go", scroll: 120 });

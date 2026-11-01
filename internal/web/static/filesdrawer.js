@@ -1,6 +1,8 @@
 "use strict";
 
-// The desktop Files drawer's viewer column and header actions (spec 5.4). The
+// The desktop Files drawer's viewer column (spec 5.4). Its actions are the shared
+// viewer toolbar's (viewertoolbar.js), inside the column; the header keeps the title,
+// the session, maximize and close. The
 // tree column is the existing #files-pane, moved in by app.js's applyDrawer;
 // this file adds a ViewerTab beside it that belongs to no cell, so a file can be
 // read (and thinly edited) without leaving the session's terminal. Mobile never
@@ -21,8 +23,6 @@ let drawerAsking = false;     // a discard prompt is on screen: never stack a se
 // back on that session or the buffer changes, a later focus event (a click,
 // a terminal's cwd arriving) holds quietly instead of asking again.
 let drawerKept = null;
-let drawerActBtns = null;     // data-act -> button
-let drawerMenuBtns = null;    // data-m -> menu item
 
 function drawerEl(id) { return document.getElementById(id); }
 
@@ -131,8 +131,8 @@ async function drawerShowFile(path) {
 function drawerMountViewer(sid, path, opts) {
   const host = drawerEl("drawer-vhost");
   if (!host) return;
-  const v = new ViewerTab(path, opts);
-  v.onUpdate = drawerPaint;
+  const v = new ViewerTab(path, Object.assign({}, opts, { host: drawerToolbarHost }));
+  v.onUpdate = () => drawerPaint(true);
   drawerViewer = v;
   drawerViewerSid = sid;
   host.replaceChildren(v.el);
@@ -456,22 +456,14 @@ function initDrawerGoto() {
   bindShortcut("files.goto", () => drawerGoFocus());
 }
 
-// --- header actions ----------------------------------------------------------
+// --- toolbar host -------------------------------------------------------------
 
-function drawerInsertPath() {
-  const v = drawerViewer;
-  if (!v) return;
-  // The drawer's session, not whichever terminal has the keys: the header
-  // names this session, and a docked shell or another pane may hold focus.
-  const term = drawerState.sessionId ? terminalTabFor(drawerState.sessionId) : null;
-  const res = insertTextAtPrompt(term, shellQuote(v.path) + " ");
-  if (res.ok) { if (term.term) term.term.focus(); return; }
-  showToast(
-    res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
-    res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
-    "That session is not connected, so the path was not inserted",
-    { error: true });
-}
+// What the drawer adds to the shared toolbar: Open in pane on the primary row, and
+// the path as the tree shows it (relative to the root: the column is narrow).
+const drawerToolbarHost = {
+  extras: [{ key: "openInPane", label: "Open in pane", title: "Open this file in a pane, at the same place", run: () => drawerOpenInPane() }],
+  pathText: (v) => relativeTo(typeof ftRoot === "function" ? ftRoot() : "", v.path),
+};
 
 // drawerOpenInPane hands the file to a pane at the scroll it is read at, then
 // clears the drawer's viewer (openFile itself closes the Files drawer).
@@ -487,43 +479,13 @@ function drawerOpenInPane() {
   }
 }
 
-function drawerMenuOpen(open) {
-  const menu = drawerEl("drawer-menu");
-  if (!menu || !drawerActBtns) return;
-  menu.hidden = !open;
-  drawerActBtns.overflow.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-function drawerAct(k, btn) {
-  const v = drawerViewer;
-  if (!v) return;
-  if (k === "copy") v.copy(btn);
-  else if (k === "insert") drawerInsertPath();
-  else if (k === "edit") v.enterEdit();
-  else if (k === "openInPane") drawerOpenInPane();
-  else if (k === "overflow") drawerMenuOpen(drawerEl("drawer-menu").hidden);
-  else if (k === "cancel") v.cancelEdit();
-  else if (k === "save") v.save(false);
-}
-
-function drawerMenuAct(k) {
-  const v = drawerViewer;
-  if (!v) return;
-  if (k === "reload") v.reload();
-  else if (k === "download") v.download();
-  else if (k === "auto") v.toggleAuto();
-  else if (k === "smaller") v.fontStep(-1);
-  else if (k === "bigger") v.fontStep(+1);
-  // A−/A+ are pressed in a row: the menu stays for them.
-  if (k !== "smaller" && k !== "bigger") drawerMenuOpen(false);
-  drawerPaint();
-}
-
-// drawerPaint brings the header actions, the path line and the column in step
-// with the viewer. Cheap and idempotent: it runs on every viewer update.
-function drawerPaint() {
+// drawerPaint brings the column and the dataset flags in step with the viewer.
+// Cheap and idempotent: it runs on every viewer update (`fromViewer`: the viewer
+// has just repainted its own toolbar) and when the session list or the tree root
+// moves, which change the path label.
+function drawerPaint(fromViewer) {
   const dr = drawerEl("drawer");
-  if (!dr || !drawerActBtns) return;
+  if (!dr) return;
   const sess = drawerState.sessionId ? (lastSessions || []).find((x) => x.id === drawerState.sessionId) : null;
   // A box session's tree shows only its workspace: the root picker goes.
   // (Repainted on every session poll: at a boot restore the list arrives
@@ -536,96 +498,11 @@ function drawerPaint() {
     drawerTreeBlocked(drawerState.sessionId, cwd, typeof rootableCwd === "function" && rootableCwd(cwd));
   dr.dataset.noroot = blocked ? "1" : "";
   const v = drawerState.open === "files" && drawerViewerSid === drawerState.sessionId ? drawerViewer : null;
-  const image = !!v && IMAGE_EXTS.has(extOf(v.path));
-  const a = drawerActions({ path: v ? v.path : null, editing: !!(v && v.editing), box: !!(v && v.box), dirty: drawerHasUnsaved(), image });
-  const editing = a.cancel;
-  for (const [k, b] of Object.entries(drawerActBtns)) {
-    const editRow = k === "cancel" || k === "save";
-    b.hidden = editRow ? !editing : editing;
-    b.disabled = !a[k];
-  }
-  if (!a.overflow) drawerMenuOpen(false);
-  if (drawerMenuBtns) {
-    const text = !!v && !image;
-    drawerMenuBtns.auto.disabled = !text;
-    drawerMenuBtns.auto.classList.toggle("on", !!(v && v.auto));
-    drawerMenuBtns.auto.setAttribute("aria-checked", v && v.auto ? "true" : "false");
-    drawerMenuBtns.smaller.disabled = !text;
-    drawerMenuBtns.bigger.disabled = !text;
-  }
-  const pathEl = drawerEl("drawer-vpath");
-  const stEl = drawerEl("drawer-vst");
+  if (v && fromViewer !== true) v.toolbarApi.paint();
   const host = drawerEl("drawer-vhost");
   const empty = drawerEl("drawer-vempty");
-  if (pathEl) {
-    const shown = v ? relativeTo(typeof ftRoot === "function" ? ftRoot() : "", v.path) : "";
-    pathEl.textContent = shown;
-    pathEl.title = v ? v.path : "";
-  }
-  if (stEl) stEl.textContent = v && v.statusText ? "\u00B7 " + v.statusText : "";
   if (host) host.hidden = !v;
   if (empty) empty.hidden = !!v;
 }
 
-// initFilesDrawer builds the header's action buttons and the overflow menu
-// (labels as text, never markup) and wires them. Runs once, at load: the
-// drawer's markup is already in the page above the scripts.
-function initFilesDrawer() {
-  const acts = drawerEl("drawer-acts");
-  const menu = drawerEl("drawer-menu");
-  if (!acts || !menu || drawerActBtns) return;
-  const mk = (k, label, title, extra) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "dr-act" + (extra ? " " + extra : "");
-    b.dataset.act = k;
-    b.textContent = label;
-    b.title = title;
-    b.onclick = (e) => { e.stopPropagation(); drawerAct(k, b); };
-    // Nothing to act on until a file is shown (drawerPaint takes over then;
-    // it cannot run here, before app.js has declared the drawer's state).
-    b.disabled = true;
-    b.hidden = k === "cancel" || k === "save";
-    return b;
-  };
-  drawerActBtns = {
-    copy: mk("copy", "Copy", "Copy this file's contents"),
-    insert: mk("insert", "Insert path", "Type this file's path at this session's prompt"),
-    edit: mk("edit", "Edit", "Edit this file"),
-    openInPane: mk("openInPane", "Open in pane", "Open this file in a pane, at the same place"),
-    overflow: mk("overflow", "⋯", "More file actions"),
-    cancel: mk("cancel", "Cancel", "Discard changes and return to the read view"),
-    save: mk("save", "Save", "Save (" + shortcutHint("editor.save", IS_MAC) + ")", "pri"),
-  };
-  drawerActBtns.overflow.setAttribute("aria-label", "More file actions");
-  drawerActBtns.overflow.setAttribute("aria-haspopup", "menu");
-  drawerActBtns.overflow.setAttribute("aria-expanded", "false");
-  acts.prepend(...Object.values(drawerActBtns));
-  const item = (k, label, title, role) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "dr-mi";
-    b.setAttribute("role", role || "menuitem");
-    b.textContent = label;
-    b.title = title;
-    b.onclick = (e) => { e.stopPropagation(); drawerMenuAct(k); };
-    return b;
-  };
-  drawerMenuBtns = {
-    reload: item("reload", "Reload", "Re-read this file"),
-    download: item("download", "Download", "Download this file"),
-    auto: item("auto", "Auto 2s", "Auto-reload every 2s", "menuitemcheckbox"),
-    smaller: item("smaller", "A−", "Smaller text"),
-    bigger: item("bigger", "A+", "Bigger text"),
-  };
-  menu.replaceChildren(...Object.values(drawerMenuBtns));
-  document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) drawerMenuOpen(false); });
-  // preventDefault marks the press as used, so the maximized drawer's own
-  // Escape (app.js) leaves it alone.
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !menu.hidden) { e.preventDefault(); drawerMenuOpen(false); }
-  });
-}
-
-initFilesDrawer();
 initDrawerGoto();

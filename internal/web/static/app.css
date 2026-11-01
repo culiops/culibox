@@ -1892,15 +1892,43 @@
     #grid.maximized { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
     /* viewer (code / markdown / image) */
     .viewer-body { background: var(--bg); }
-    .viewer-tools { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--panel)); }
-    .viewer-reload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; }
-    .viewer-reload:hover { color: var(--fg); border-color: var(--accent); }
+    /* The shared viewer toolbar (viewertoolbar.js): pane and Files drawer alike.
+       Enabled words are --fg, not --muted (a muted label on a control that works reads as
+       disabled); a control that cannot act dims instead, and keeps its title as the reason.
+       The path label takes what the buttons leave and ellipsises; with no room at all it
+       drops to its own row rather than overflowing. */
+    .viewer-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--panel)); }
+    .vt-btn { flex: none; min-height: 24px; padding: 1px 8px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
+    .vt-btn[hidden] { display: none; }
+    .vt-btn:hover:not(.vt-off), .vt-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .vt-btn:focus-visible, .vt-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+    .vt-btn.vt-off { opacity: .45; cursor: default; }
+    .vt-btn.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .vt-more { padding: 1px 10px; font-size: 14px; line-height: 1; }
+    .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vt-path { flex: 1 1 8em; min-width: 0; }
+    .vt-status { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .vt-status:empty { display: none; }
+    /* The menus hang off <body> (position: fixed, set from the trigger's rect), so no pane
+       or drawer edge can clip them. */
+    .vt-menu { position: fixed; z-index: 40; min-width: 200px; max-width: min(92vw, 320px); display: flex; flex-direction: column; padding: 4px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); box-shadow: 0 10px 34px #000b; }
+    .vt-mi { position: relative; text-align: left; padding: 6px 10px 6px 28px; background: none; border: 0; color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer; }
+    .vt-mi:hover:not([aria-disabled="true"]), .vt-mi:focus-visible { background: var(--sel); }
+    .vt-mi[aria-disabled="true"] { opacity: .5; cursor: default; }
+    .vt-mi[role="menuitemcheckbox"]::before { content: ""; position: absolute; left: 10px; top: 50%; width: 10px; height: 10px; margin-top: -6px; border: 1px solid var(--muted); }
+    .vt-mi[aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+    .vt-size { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 4px 2px 28px; border-top: 1px solid var(--border); font-size: 12.5px; }
+    .vt-size-lbl { flex: 1; }
+    .vt-size .vt-mi { padding: 3px 10px; min-width: 36px; text-align: center; border: 1px solid var(--border); }
+    .vt-size .vt-mi:hover:not([aria-disabled="true"]) { border-color: var(--accent); }
+    @media (max-width: 700px) {
+      .vt-btn { min-height: 32px; padding: 1px 9px; }
+      .vt-mi { min-height: 36px; }
+      .vt-size .vt-mi { min-height: 32px; }
+    }
+    /* The conflict row's own buttons (showConflict). */
     .viewer-auto { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-auto:hover { color: var(--fg); border-color: var(--accent); }
-    .viewer-auto.on { color: #fff; border-color: var(--accent); background: var(--sel); }
-    .viewer-zoom { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; }
-    .viewer-zoom:hover { color: var(--fg); border-color: var(--accent); }
-    .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .viewer-content { flex: 1; min-height: 0; overflow: auto; }
     /* The read view: one .vl row per source line, a number (.vl-n) beside the code
        (.vl-c). The pre carries .hljs (the highlight theme colours by it) but not
@@ -1968,8 +1996,11 @@
     .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: var(--bg); }
     /* edit mode (CodeMirror 5) */
     .viewer-content:has(.viewer-edit) { display: flex; flex-direction: column; overflow: hidden; }
-    .viewer-editbar { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--panel)); flex: 0 0 auto; }
-    .viewer-edit-msg { font-size: 11px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+    /* Save and Cancel are in the toolbar; this row holds only the conflict message and its
+       Reload / Overwrite anyway, and shows only when it has one. */
+    .viewer-editbar:not(:has(.viewer-edit-msg:not(:empty))) { display: none; }
+    .viewer-editbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--panel)); flex: 0 0 auto; }
+    .viewer-edit-msg { font-size: 11px; color: var(--muted); }
     .viewer-edit-msg.err { color: var(--danger); }
     .viewer-edit { flex: 1; min-height: 0; }
     .viewer-edit .CodeMirror { height: 100%; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); }

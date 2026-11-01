@@ -112,7 +112,7 @@ function buildViewerToolbar(viewer, host) {
   host = host || {};
   const extras = Array.isArray(host.extras) ? host.extras : [];
   const el = document.createElement("div");
-  el.className = "viewer-tools vt";
+  el.className = "viewer-tools";
   el.setAttribute("role", "toolbar");
   el.setAttribute("aria-label", "File actions");
 

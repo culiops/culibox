@@ -96,10 +96,10 @@ test("app.js and the drawer set their hints from the registry", () => {
   assert.match(app, /shortcutHint\("spawn\.submit", IS_MAC\) \+ " spawns"/);
   assert.match(app, /shortcutHint\("spawn\.submit", IS_MAC\) \+ " to spawn"/);
   assert.match(read("filesdrawer.js"), /shortcutHint\("files\.goto", IS_MAC\)/);
-  assert.match(read("filesdrawer.js"), /shortcutHint\("editor\.save", IS_MAC\)/);
-  assert.match(read("viewer-tab.js"), /shortcutHint\("editor\.save", IS_MAC\)/);
-  assert.match(read("viewer-tab.js"), /shortcutHint\("zoom\.out", IS_MAC\)/);
-  assert.match(read("viewer-tab.js"), /shortcutHint\("zoom\.in", IS_MAC\)/);
+  // The viewer's buttons (pane and drawer alike) are the shared toolbar's.
+  for (const id of ["editor.save", "zoom.out", "zoom.in", "viewer.find", "viewer.gotoLine"]) {
+    assert.match(read("viewertoolbar.js"), new RegExp('shortcutHint\\("' + id.replace(".", "\\.") + '", IS_MAC\\)'), id);
+  }
 });
 
 test("emptyHint splits the palette.open rendering into key caps", () => {
