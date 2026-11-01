@@ -23,15 +23,13 @@ let palAbort = null;
 // real rows the moment a heading is inserted ahead of it.
 let palRowEls = [];
 
-// isInsertHotkey matches Ctrl+Enter (⌘+Enter on mac): insert the selected file's
-// path at the focused prompt instead of opening it in a viewer. Plain Enter must
-// stay the open action, so the modifier is the whole distinction. Alt is
-// excluded so AltGr (common off-mac) reports as both
-// ctrlKey and altKey, and without the exclusion AltGr+Enter would insert a path
-// instead of opening the file it looks like it should open.
+// isInsertHotkey: palette.insert in the shortcut registry (Ctrl+Enter, ⌘+Enter
+// on mac): insert the selected file's path at the focused prompt instead of
+// opening it in a viewer. The registry match is exact on modifiers, so plain
+// Enter stays the open action and AltGr / IME composition never match.
 function isInsertHotkey(e, mac) {
-  if (e.key !== "Enter" || e.altKey) return false;
-  return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
+  const matches = typeof shortcutMatches === "function" ? shortcutMatches : require("./shortcuts.js").shortcutMatches;
+  return matches("palette.insert", e, mac);
 }
 
 function paletteOpen() {

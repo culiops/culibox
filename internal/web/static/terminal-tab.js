@@ -351,15 +351,16 @@ class TerminalTab {
     });
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      if (e.code === "KeyC" && !e.altKey && ((e.ctrlKey && e.shiftKey) || e.metaKey)) {
-        const sel = this.term.getSelection();
-        if (!sel) return true;
+      const act = termKeyAction(e, IS_MAC, !!this.term.getSelection());
+      if (act === "copy") {
         e.preventDefault();
-        copyText(sel, () => this.term.focus());
+        copyText(this.term.getSelection(), () => this.term.focus());
         return false;
       }
-      if (e.code === "KeyV" && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return false;
-      return true;
+      if (act === "consume") { e.preventDefault(); return false; }
+      // paste: xterm must not handle it, and the browser's own paste event must
+      // still fire, so no preventDefault.
+      return act !== "paste";
     });
 
     // cwd: used to resolve relative clicked paths AND to root the file tree.
@@ -794,6 +795,23 @@ function classifyTermPath(tok, cwd, agentCwd, home, boxed) {
   return { kind: "host", path: p };
 }
 
+// termKeyAction: what the xterm key handler does with a keydown, decided from
+// the shortcut registry (term.copy / term.paste). Returns
+//   "copy"    a copy chord with a selection: copy it, swallow the key
+//   "consume" off-mac Ctrl+Shift+C with no selection: swallow it, never ^C
+//   "paste"   off-mac exact Ctrl+V: xterm ignores it, the browser pastes
+//   "pass"    everything else reaches the PTY, including mac Ctrl+V and a
+//             bare mac Cmd+C (nothing selected, so Cmd+C is not a copy)
+function termKeyAction(e, mac, hasSelection) {
+  const matches = typeof shortcutMatches === "function" ? shortcutMatches : require("./shortcuts.js").shortcutMatches;
+  if (matches("term.copy", e, mac)) {
+    if (hasSelection) return "copy";
+    return mac ? "pass" : "consume";
+  }
+  if (!mac && !e.shiftKey && matches("term.paste", e, mac)) return "paste";
+  return "pass";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termKeyAction, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

@@ -5581,7 +5581,7 @@ function initSpawnControl() {
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const mac = IS_MAC;
   $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
   const foot = $("spawn-foot-hint");
   if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";

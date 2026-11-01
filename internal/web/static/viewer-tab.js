@@ -383,10 +383,9 @@ class ViewerTab {
     });
     // Returning false stops CodeMirror's own key handling from also inserting
     // whatever the browser would (nothing, normally, but this is belt-and-braces).
-    this.cm.setOption("extraKeys", {
-      "Ctrl-S": () => { this.save(false); return false; },
-      "Cmd-S": () => { this.save(false); return false; },
-    });
+    const saveKeys = {};
+    for (const k of cmKeys("editor.save", IS_MAC)) saveKeys[k] = () => { this.save(false); return false; };
+    this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
     // A fresh edit: a "saved" left from the last one says nothing about this
     // buffer. setStatus also tells a host header to show Cancel · Save.

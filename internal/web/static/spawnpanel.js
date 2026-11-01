@@ -92,7 +92,7 @@ function spawnPlistResetSearch() {
 // dialog stays open (a second Escape, on an empty box, closes it as today).
 function spawnPlistSearchKey(e) {
   const input = e.currentTarget;
-  if (isSubmitHotkey(e, /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ""))) {
+  if (isSubmitHotkey(e, IS_MAC)) {
     e.preventDefault();
     $("spawn").requestSubmit();
     return;

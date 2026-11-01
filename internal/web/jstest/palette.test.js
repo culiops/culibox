@@ -36,6 +36,14 @@ test("cmd+alt+enter on mac is not the insert hotkey", () => {
   assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true, altKey: true }, true), false);
 });
 
+test("shift or alt-graph or IME composition is not the insert hotkey", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter", ctrlKey: true, shiftKey: true }, false), false);
+  assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true, shiftKey: true }, true), false);
+  const ag = { key: "Enter", ctrlKey: true, getModifierState: (k) => k === "AltGraph" };
+  assert.strictEqual(isInsertHotkey(ag, false), false);
+  assert.strictEqual(isInsertHotkey({ key: "Enter", ctrlKey: true, isComposing: true }, false), false);
+});
+
 // --- palSection / palGroup (kind -> D4 section heading) ---------------------
 
 test("palSection maps session and file to their own headings, everything else to COMMANDS", () => {

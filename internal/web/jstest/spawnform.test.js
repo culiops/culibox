@@ -80,6 +80,15 @@ test("Ctrl+Enter (⌘+Enter on mac) spawns; plain Enter, AltGr and IME compositi
   assert.strictEqual(isSubmitHotkey(ev({ metaKey: true }), false), false);
 });
 
+test("Shift, AltGraph, a missing event and a non-Enter key do not spawn", () => {
+  const ev = (m) => Object.assign({ key: "Enter", ctrlKey: false, metaKey: false, altKey: false, isComposing: false }, m);
+  assert.strictEqual(isSubmitHotkey(ev({ ctrlKey: true, shiftKey: true }), false), false);
+  assert.strictEqual(isSubmitHotkey(ev({ metaKey: true, shiftKey: true }), true), false);
+  assert.strictEqual(isSubmitHotkey(ev({ ctrlKey: true, getModifierState: (k) => k === "AltGraph" }), false), false);
+  assert.strictEqual(isSubmitHotkey(null, false), false);
+  assert.strictEqual(isSubmitHotkey(ev({ ctrlKey: true, key: "k" }), false), false);
+});
+
 test("spawnPayload sends any chosen account (even default, to override a pinned profile); omits an unset one", () => {
   assert.strictEqual(spawnPayload({ agent: "c", account: "work" }).account, "work");
   assert.strictEqual(spawnPayload({ agent: "c", account: "default" }).account, "default");
