@@ -19,8 +19,8 @@ import (
 )
 
 // PidResolver is implemented by persistence backends that know the agent's own
-// pid (abduco's pidfile `inner=`). Optional: without it, transcripts are located
-// by the cwd+mtime heuristic alone.
+// pid (abduco's pidfile `inner=`). Optional: without it, no registry entry
+// validates and a session's transcript is found only by its persisted sid.
 type PidResolver interface {
 	InnerPid(id string) (int, bool)
 }
@@ -220,9 +220,14 @@ type located struct {
 //     entry VALIDATES it is trusted outright — if its named transcript does not
 //     exist, that is reported as "no transcript" (path=""), never papered over
 //     by falling back to a sibling's file;
-//  2. boxed tier: the per-box home already isolates the session;
-//  3. otherwise (no validated registry entry, live or boxed) the cwd + mtime
-//     heuristic (transcriptPath).
+//  2. boxed tier, live: the box-home pidfile + registry entry, read through
+//     boxread;
+//  3. otherwise (no validated registry entry, live or boxed, or an exited
+//     session) l.path is "" and l.reg is nil. There is deliberately no
+//     fallback that lists the project dir (#28): it cost an unbounded scan per
+//     poll and its answer could be a sibling's conversation (#21). The caller
+//     that wants a transcript for such a session, boundTranscript, looks only
+//     for the exact <sid>.jsonl of the persisted conversation id.
 //
 // The registry step is skipped entirely for an already-exited session: abduco's
 // pidfile `inner=` pid is the agent's LAST known pid and is never updated after
@@ -243,31 +248,15 @@ func (m *Manager) locate(id string) located {
 	var bin, cwd, box, configDir string
 	var created time.Time
 	var exited bool
-	var sid string
-	var siblingSIDs map[string]bool // conversation ids of the OTHER sessions in this session's box
 	if s != nil {
 		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
 		s.mu.Lock()
 		exited = s.status == statusExited
 		s.mu.Unlock()
-		if box != "" {
-			siblingSIDs = map[string]bool{}
-			for _, o := range m.sessions {
-				if o == s || o.Box != box {
-					continue
-				}
-				if osid := o.claudeSID(); osid != "" { // o.mu nested under m.mu, as above
-					siblingSIDs[osid] = true
-				}
-			}
-		}
 	}
 	m.mu.Unlock()
 	if s == nil || !isClaudeBin(bin) {
 		return located{}
-	}
-	if box != "" {
-		sid = s.claudeSID() // the conversation id noted earlier, "" if none yet
 	}
 	l := located{claude: true, created: created, cwd: cwd, boxed: box != ""}
 	// The .claude dir this session's registry and transcripts live in: the
@@ -295,12 +284,12 @@ func (m *Manager) locate(id string) located {
 	if l.boxDir != "" && !exited {
 		// Boxed tier, live: the box-home pidfile names the in-box pid and its
 		// registry entry names the exact transcript. Every read is guarded
-		// (boxread); any surprise silently falls through to the heuristic.
+		// (boxread); any surprise silently leaves the session unbound.
 		if e, ok := readBoxedRegistry(l.boxDir, id, l.cwds); ok {
 			l.reg = &e
 			m.noteClaudeSessionID(s, id, e.SessionID)
 			// Trusted as is, whether or not the transcript exists: never fall
-			// through to the newest-mtime heuristic and a sibling's file.
+			// back to a sibling's file.
 			l.path = boxedTranscriptPath(l.boxDir, e, l.cwds)
 			return l
 		}
@@ -323,26 +312,17 @@ func (m *Manager) locate(id string) located {
 						}
 					}
 					// A validated entry is trusted as-is, whether or not its
-					// transcript exists — never fall through to the heuristic,
-					// which is exactly the newer-sibling misattribution this
-					// locator exists to fix.
+					// transcript exists — never fall back to a sibling's file,
+					// which is exactly the misattribution this locator exists to
+					// fix.
 					return l
 				}
 			}
 		}
 	}
-	if claudeDir == "" {
-		return l
-	}
-	if l.boxDir != "" {
-		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, siblingSIDs, created); ok {
-			l.path = p
-		}
-		return l
-	}
-	if p, ok := transcriptPath(cwd, claudeDir, created); ok {
-		l.path = p
-	}
+	// No validated registry entry: l.path stays "" and nothing here lists a
+	// project dir. A transcript for such a session is only ever the exact
+	// <sid>.jsonl of its persisted conversation id, which boundTranscript looks up.
 	return l
 }
 
@@ -433,10 +413,11 @@ func (m *Manager) persistConversations(s *Session, id string) {
 // a live registry entry validated (l.reg != nil: the registry names the exact
 // sessionId, and locate never falls back from a validated entry). Otherwise —
 // an exited session, or a registry that failed validation — the only candidate
-// is the exact <sid>.jsonl of the persisted claudeSessionID; the newest-by-cwd
-// heuristic locate falls back to is never used, because it can hand back a
-// sibling's conversation. ok=false means no bound transcript; l.claude still
+// is the exact <sid>.jsonl of the persisted claudeSessionID; a newest-by-cwd
+// guess is never used, because it can hand back a sibling's conversation. ok=false means no bound transcript; l.claude still
 // says whether this is a claude session at all (zero l = unknown session).
+// Nothing here lists a project dir: locate names no path without a validated
+// registry entry, and the sid lookup below stats exactly one file per cwd form.
 func (m *Manager) boundTranscript(id string) (located, bool) {
 	l := m.locate(id)
 	if !l.claude {
@@ -445,7 +426,6 @@ func (m *Manager) boundTranscript(id string) (located, bool) {
 	if l.reg != nil {
 		return l, l.path != ""
 	}
-	l.path = "" // whatever the heuristic picked is not ours
 	m.mu.Lock()
 	s := m.sessions[id]
 	home := m.home
@@ -466,7 +446,7 @@ func (m *Manager) boundTranscript(id string) (located, bool) {
 		return l, true
 	}
 	if l.boxDir != "" {
-		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, nil, l.created); ok {
+		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid); ok {
 			l.path = p
 			return l, true
 		}

@@ -19,7 +19,7 @@ type pidBackend struct {
 
 func (b pidBackend) InnerPid(id string) (int, bool) { p, ok := b.pids[id]; return p, ok }
 
-func writeReg(t *testing.T, home string, pid int, body string) {
+func writeReg(t testing.TB, home string, pid int, body string) {
 	t.Helper()
 	dir := filepath.Join(home, ".claude", "sessions")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -37,7 +37,7 @@ func regJSON(pid int, sid, procStart, status string) string {
 
 // writeTx writes a one-record transcript whose text is `text` and whose model
 // is "model-<sid>", then pins its mtime.
-func writeTx(t *testing.T, home, cwd, sid, text string, mtime time.Time) string {
+func writeTx(t testing.TB, home, cwd, sid, text string, mtime time.Time) string {
 	t.Helper()
 	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -60,7 +60,7 @@ const locCwd = "/work/proj"
 // newLocatorManager: two prompted claude sessions in ONE cwd (the misattribution
 // case), pids 101/202 with procStart 5000/6000. Transcripts A (s1) and B (s2);
 // B is newer, so the old heuristic hands B to both.
-func newLocatorManager(t *testing.T) (*Manager, string) {
+func newLocatorManager(t testing.TB) (*Manager, string) {
 	t.Helper()
 	home := t.TempDir()
 	m := &Manager{
@@ -85,16 +85,16 @@ func newLocatorManager(t *testing.T) (*Manager, string) {
 	return m, home
 }
 
-// wantHeuristicButUnbound pins both halves of #21 for a session with no
-// validated registry entry and no persisted conversation id: locate's cwd
-// heuristic still names wantBase (nothing in production uses it: locate's only
-// caller, boundTranscript, discards it), but peek, usage
-// and attribution refuse to read it because it is not proven to be this
+// wantUnbound pins #21 and #28 for a session with no validated registry entry
+// and no persisted conversation id, in a test that has planted candidate
+// transcripts the old cwd+mtime heuristic would have picked: locate names no
+// path at all (it no longer scans the project dir), and peek, usage and
+// attribution refuse to read anything because nothing is proven to be this
 // session's.
-func wantHeuristicButUnbound(t *testing.T, m *Manager, id, wantBase string) {
+func wantUnbound(t *testing.T, m *Manager, id string) {
 	t.Helper()
-	if got := filepath.Base(m.locate(id).path); got != wantBase {
-		t.Errorf("locate(%s) heuristic path=%q want %q", id, got, wantBase)
+	if got := m.locate(id).path; got != "" {
+		t.Errorf("locate(%s) path=%q, want none: an unbound session must not scan the project dir", id, got)
 	}
 	if p, ok := m.PeekFor(id); ok {
 		t.Errorf("PeekFor(%s) read an unbound transcript: %q", id, p.Text)
@@ -139,7 +139,7 @@ func TestLocateFollowsClear(t *testing.T) {
 	}
 }
 
-func TestLocateFallsBack(t *testing.T) {
+func TestLocateNamesNoPathWithoutRegistry(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
@@ -153,9 +153,9 @@ func TestLocateFallsBack(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m, home := newLocatorManager(t)
 			writeReg(t, home, 101, c.body)
-			// locate falls back to the cwd+mtime heuristic = the newest
-			// transcript (B), but nothing reads it: s1 is unbound.
-			wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
+			// No entry validates: s1 is unbound, so locate names no path even
+			// though a newer sibling transcript (B) sits in the dir.
+			wantUnbound(t, m, "s1")
 		})
 	}
 }
@@ -199,7 +199,7 @@ func TestLocateRejectsCwdMismatch(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("cwd mismatch accepted; reg=%+v", l.reg)
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
+	wantUnbound(t, m, "s1")
 }
 
 // TestLocateRejectsSymlinkRegistryFile: a registry entry reached through a
@@ -219,7 +219,7 @@ func TestLocateRejectsSymlinkRegistryFile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Error("symlinked registry file accepted")
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl") // symlink must be ignored
+	wantUnbound(t, m, "s1") // symlink must be ignored
 }
 
 // TestLocateRejectsOversizedRegistryFile: a registry file over registryMaxBytes
@@ -232,7 +232,7 @@ func TestLocateRejectsOversizedRegistryFile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Error("oversized registry file accepted")
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl") // oversized file must be ignored
+	wantUnbound(t, m, "s1") // oversized file must be ignored
 }
 
 // TestLocateMissingTranscriptBlocksWithoutPeek: a validated "waiting" registry
@@ -267,7 +267,7 @@ func TestLocateBoxedIgnoresHostRegistry(t *testing.T) {
 	m.stateDir = state
 	m.sessions["s1"].Box = "box-1"
 	writeTx(t, filepath.Join(state, "boxstate", "box-1"), locCwd, "dddd-4", "from box", time.Now())
-	wantHeuristicButUnbound(t, m, "s1", "dddd-4.jsonl") // the box's file, never the host registry's A
+	wantUnbound(t, m, "s1") // the box's file, never the host registry's A
 }
 
 func TestLocateReportsRegistryStatus(t *testing.T) {
@@ -411,7 +411,7 @@ func TestStartMatches(t *testing.T) {
 // TestLocateFollowsSessionConfigDir: a host session run under an agent account
 // has its registry and transcripts under the account's config dir. A newer
 // transcript for the same cwd under the default ~/.claude must not be
-// attributed to it, via the registry path or the heuristic fallback.
+// attributed to it, via the registry path or the sid lookup.
 func TestLocateFollowsSessionConfigDir(t *testing.T) {
 	m, home := newLocatorManager(t) // decoy: default ~/.claude holds A (s1's registry) and a newer B
 	cd := filepath.Join(t.TempDir(), "acct", "claude")
@@ -446,12 +446,21 @@ func TestLocateFollowsSessionConfigDir(t *testing.T) {
 		t.Errorf("s1 peek=%q want %q", got, "from account")
 	}
 
-	// No account registry entry: the heuristic must still stay inside ConfigDir.
+	// No account registry entry: locate names nothing (no scan), and a session
+	// bound by its persisted sid still resolves inside ConfigDir, never to the
+	// decoys under <home>/.claude.
 	if err := os.Remove(filepath.Join(sessions, "101.json")); err != nil {
 		t.Fatal(err)
 	}
-	if l := m.locate("s1"); l.reg != nil || l.path != want {
-		t.Fatalf("heuristic path: locate = %q reg=%v, want %q", l.path, l.reg, want)
+	if l := m.locate("s1"); l.reg != nil || l.path != "" {
+		t.Fatalf("no registry: locate = %q reg=%v, want no path", l.path, l.reg)
+	}
+	bindSID(m, "s1", "acct-1")
+	if l, ok := m.boundTranscript("s1"); !ok || l.path != want {
+		t.Fatalf("sid-bound path = %q ok=%v, want %q", l.path, ok, want)
+	}
+	if got := peekText(t, m, "s1"); got != "from account" {
+		t.Errorf("sid-bound s1 peek=%q want %q", got, "from account")
 	}
 }
 

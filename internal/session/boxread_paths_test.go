@@ -10,7 +10,7 @@ import (
 
 // boxedLocManager: one claude session "s1" running in box "box-1". Returns the
 // manager and the box's state dir (<state>/boxstate/box-1).
-func boxedLocManager(t *testing.T) (*Manager, string) {
+func boxedLocManager(t testing.TB) (*Manager, string) {
 	t.Helper()
 	m, _ := newLocatorManager(t)
 	state := t.TempDir()
@@ -69,11 +69,11 @@ func TestBoxedPeekIgnoresFIFOTranscript(t *testing.T) {
 	writeTx(t, bd, locCwd, "older-1", "from regular", now.Add(-10*time.Minute))
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), now)
 
-	// The heuristic still ranks past the FIFO to the regular file.
+	// An unbound session names no path, so nothing opens the FIFO.
 	var l located
 	within2s(t, "locate", func() { l = m.locate("s1") })
-	if got := filepath.Base(l.path); got != "older-1.jsonl" {
-		t.Errorf("locate path=%q, want the FIFO skipped and older-1.jsonl chosen", got)
+	if l.path != "" {
+		t.Errorf("locate path=%q, want none", l.path)
 	}
 	// A session bound to the FIFO's own name (its persisted sid) must miss
 	// without ever opening it.
@@ -263,9 +263,16 @@ func TestBoxedPeekIgnoresSlugDirSymlinkedInsideBox(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(projDirIn(bd)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(other, projDirIn(bd)); err != nil {
+	// Relative on purpose: os.Root refuses an absolute link by itself, so only a
+	// link that stays inside the box exercises transcriptPathIn's slug-dir Lstat.
+	rel, err := filepath.Rel(filepath.Dir(projDirIn(bd)), other)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(rel, projDirIn(bd)); err != nil {
+		t.Fatal(err)
+	}
+	bindSID(m, "s1", "x")
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a slug dir symlinked inside the box: %q", p.Text)
 	}

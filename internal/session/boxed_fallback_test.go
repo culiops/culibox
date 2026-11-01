@@ -1,7 +1,6 @@
 package session
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,26 +54,9 @@ func TestBoxedExitedSessionKnownSidFindsOwnTranscript(t *testing.T) {
 	}
 }
 
-// With no sid, a transcript older than the session cannot be its own.
-func TestBoxedUnknownSidIgnoresOlderTranscripts(t *testing.T) {
-	m, bd := boxedLocManager(t)
-	now := time.Now()
-	m.sessions["s1"].Created = now
-	writeTx(t, bd, locCwd, "older-1", "from before the session", now.Add(-10*time.Minute))
-	if p, ok := m.PeekFor("s1"); ok {
-		t.Errorf("peek=%q, want a miss: the only file predates the session", p.Text)
-	}
-	if u, ok := m.UsageFor("s1"); ok {
-		t.Errorf("usage=%+v, want a miss", u)
-	}
-	// A file at or after Created is used.
-	writeTx(t, bd, locCwd, "newer-2", "from during the session", now.Add(time.Minute))
-	wantHeuristicButUnbound(t, m, "s1", "newer-2.jsonl")
-}
-
 // M4: the box runs claude in the resolved dir, so the transcript sits under the
 // slug of the resolved path, not of the (symlinked) Session.Cwd.
-func TestBoxedFallbackUsesResolvedCwd(t *testing.T) {
+func TestBoxedSIDLookupUsesResolvedCwd(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	real := filepath.Join(t.TempDir(), "real")
 	if err := os.MkdirAll(real, 0o755); err != nil {
@@ -86,19 +68,15 @@ func TestBoxedFallbackUsesResolvedCwd(t *testing.T) {
 	}
 	m.sessions["s1"].Cwd = link
 	writeTx(t, bd, real, "res-1", "from resolved", time.Now())
-	wantHeuristicButUnbound(t, m, "s1", "res-1.jsonl")
-	// The same through the known-sid lookup.
-	s := m.sessions["s1"]
-	s.mu.Lock()
-	s.claudeSessionID = "res-1"
-	s.mu.Unlock()
+	wantUnbound(t, m, "s1") // no sid yet: the file is there, but not provably s1's
+	bindSID(m, "s1", "res-1")
 	if got := peekText(t, m, "s1"); got != "from resolved" {
 		t.Errorf("sid peek=%q want %q", got, "from resolved")
 	}
 }
 
-// Non-regular entries and names that are not session ids are never ranked.
-func TestBoxedFallbackSkipsOddEntries(t *testing.T) {
+// A directory named <sid>.jsonl, and a sid that is not a session id, never bind.
+func TestBoxedSIDLookupSkipsOddEntries(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	now := time.Now()
 	writeTx(t, bd, locCwd, "good-1", "good", now.Add(-time.Minute))
@@ -107,30 +85,16 @@ func TestBoxedFallbackSkipsOddEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeBoxFile(t, filepath.Join(dir, "bad name.jsonl"), `{"message":{"role":"assistant","content":[{"type":"text","text":"odd"}]}}`+"\n", now)
-	wantHeuristicButUnbound(t, m, "s1", "good-1.jsonl")
-}
-
-// M3: ranking a directory costs one os.Root, not one per entry.
-func BenchmarkTranscriptPathIn1000(b *testing.B) {
-	bd := b.TempDir()
-	dir := filepath.Join(bd, ".claude", "projects", projectSlug(locCwd))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		b.Fatal(err)
-	}
-	now := time.Now()
-	for i := 0; i < 1000; i++ {
-		p := filepath.Join(dir, fmt.Sprintf("s-%04d.jsonl", i))
-		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
-			b.Fatal(err)
+	wantUnbound(t, m, "s1")
+	for _, sid := range []string{"dir", "bad name"} {
+		bindSID(m, "s1", sid)
+		if p, ok := m.PeekFor("s1"); ok {
+			t.Errorf("sid %q bound an odd entry: %q", sid, p.Text)
 		}
-		mt := now.Add(time.Duration(i) * time.Second)
-		_ = os.Chtimes(p, mt, mt)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, ok := transcriptPathIn(bd, []string{locCwd}, "", nil, now.Add(-time.Hour)); !ok {
-			b.Fatal("no transcript")
-		}
+	bindSID(m, "s1", "good-1")
+	if got := peekText(t, m, "s1"); got != "good" {
+		t.Errorf("good-1 peek=%q want %q", got, "good")
 	}
 }
 
@@ -157,7 +121,8 @@ func TestBoxedFreshUnknownSidSkipsSiblingTranscript(t *testing.T) {
 	if got := peekText(t, m, "s1"); got != "from sibling" {
 		t.Errorf("s1 peek=%q want its own", got)
 	}
-	// A transcript no sibling claims is still found by the heuristic.
+	// A transcript no sibling claims is not s2's either: s2 has no sid, and the
+	// newest-unclaimed guess is gone (#28).
 	writeTx(t, bd, locCwd, "cccc-3", "unclaimed", now.Add(-time.Second))
-	wantHeuristicButUnbound(t, m, "s2", "cccc-3.jsonl")
+	wantUnbound(t, m, "s2")
 }
