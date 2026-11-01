@@ -78,6 +78,33 @@ test("a terminal whose cwd is outside $HOME is not followed", () => {
   assert.strictEqual(follow(term("s1", "/opt/culiops/staging")), null);
 });
 
+// An agent that entered a git worktree (Claude Code's EnterWorktree moves it
+// without a chdir) works in agentCwd, the worktree root the usage poll reports.
+// The tree must show THAT checkout: rooted at the spawn cwd it listed the main
+// checkout's copies, and a click opened those instead of the agent's (#49).
+const wterm = (id, cwd, agentCwd) => ({ kind: "terminal", id, cwd, agentCwd });
+const WT = "/home/claude/repo/.claude/worktrees/t49";
+
+test("a terminal whose agent is in a worktree follows the worktree", () => {
+  assert.deepStrictEqual(follow(wterm("s1", "/home/claude/repo", WT)), { root: WT, key: "sess:s1@" + WT });
+});
+
+test("entering and leaving a worktree change the key, so the tree re-roots both ways", () => {
+  const before = follow(wterm("s1", "/home/claude/repo", ""));
+  const inside = follow(wterm("s1", "/home/claude/repo", WT));
+  const after = follow(wterm("s1", "/home/claude/repo", ""));
+  assert.notStrictEqual(before.key, inside.key);
+  assert.deepStrictEqual(after, { root: "/home/claude/repo", key: "sess:s1" });
+});
+
+test("the worktree is known before the spawn cwd has resolved", () => {
+  assert.deepStrictEqual(follow(wterm("s1", "", WT)), { root: WT, key: "sess:s1@" + WT });
+});
+
+test("an agent cwd /api/fs/list would refuse falls back to the spawn cwd", () => {
+  assert.deepStrictEqual(follow(wterm("s1", "/home/claude/repo", "/srv/wt")), { root: "/home/claude/repo", key: "sess:s1" });
+});
+
 test("home itself is a legitimate root", () => {
   assert.deepStrictEqual(follow(viewer(HOME + "/notes.md")), { root: HOME, key: "view:" + HOME });
   assert.deepStrictEqual(follow(term("s1", HOME)), { root: HOME, key: "sess:s1" });

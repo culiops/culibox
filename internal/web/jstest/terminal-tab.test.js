@@ -338,3 +338,27 @@ test("classifyTermPath: boxed, traversal out of the out dir is not box", () => {
 test("classifyTermPath: a sibling dir sharing the cwd prefix is not the workspace", () => {
   assert.strictEqual(classifyTermPath("/tmp/ab-xyz/a.go", "/tmp/ab-x", "", "/h", true).kind, "boxonly");
 });
+
+// The usage poll is the only thing that learns the agent entered (or left) a
+// git worktree. When agentCwd moves, the tree has to hear about it: until the
+// next focus change it would otherwise keep listing the main checkout (#49).
+test("setUsage re-syncs the tree exactly when the agent's worktree changes", () => {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const tab = Object.create(TerminalTab.prototype);
+  tab.agentCwd = "";
+  let syncs = 0;
+  global.syncFocusedTree = () => { syncs++; };
+  try {
+    const WT = "/home/u/repo/.claude/worktrees/t49";
+    tab.setUsage({ contextTokens: 1, model: "m", effort: "low", cwd: WT });
+    assert.strictEqual(tab.agentCwd, WT);
+    assert.strictEqual(syncs, 1, "entering a worktree re-syncs");
+    tab.setUsage({ contextTokens: 2, model: "m", effort: "low", cwd: WT });
+    assert.strictEqual(syncs, 1, "a poll that only moves the numbers does not");
+    tab.setUsage(null);
+    assert.strictEqual(tab.agentCwd, "");
+    assert.strictEqual(syncs, 2, "leaving it re-syncs");
+  } finally {
+    delete global.syncFocusedTree;
+  }
+});

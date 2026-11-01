@@ -564,6 +564,12 @@ function treeFollowTarget(tab, home) {
   // allows: initFileTree re-asserts the root once the list arrives.
   const insideHome = (d) => !home || d === home || d.indexOf(home + "/") === 0;
   if (tab.kind === "terminal") {
+    // agentCwd: the worktree root the agent moved into (Claude Code's
+    // EnterWorktree does not chdir), from the usage poll; "" outside one. The
+    // tree shows that checkout, as terminal links already resolve into it, or a
+    // click in the tree opens the main checkout's copy. The key carries it so
+    // entering or leaving re-roots, while a manual pick still holds in between.
+    if (tab.agentCwd && insideHome(tab.agentCwd)) return { root: tab.agentCwd, key: "sess:" + tab.id + "@" + tab.agentCwd };
     // cwd is "" until TerminalTab's fetch resolves it; rooting there would send
     // the server a request it must reject.
     if (!tab.cwd || !insideHome(tab.cwd)) return null;

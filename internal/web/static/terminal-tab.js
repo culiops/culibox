@@ -383,7 +383,8 @@ class TerminalTab {
     // a file path, which wins when they overlap (the bug that used to send
     // `https://host/a.html` to the file viewer as a relative path), and which
     // links may be returned for this row. Absolute paths open directly; relative paths
-    // join the session's initial cwd (best-effort: may miss if the agent cd'd).
+    // join the agent's live worktree when it entered one (agentCwd), else the spawn
+    // cwd (resolveTermPath). A plain `cd` inside the checkout does not move the base.
     // Guarded like the other cross-file collaborators in this file: without it a
     // missing /links.js would throw on every hover, not merely lose the feature.
     if (this.term.registerLinkProvider && typeof linksForRow === "function") {
@@ -426,9 +427,15 @@ class TerminalTab {
     // same numbers doesn't rebuild the tab strip.
     const key = u ? `${u.contextTokens}|${u.pct ?? ""}|${u.model}|${u.effort}` : "";
     if (key !== this._usageKey) { this._usageKey = key; this.usageData = u; this.onUpdate?.(); }
-    // Where the agent works NOW (a worktree it entered), for resolvePath. Not in
-    // the render key: nothing on screen shows it.
-    this.agentCwd = (u && u.cwd) || "";
+    // Where the agent works NOW (a worktree it entered), for resolvePath and the
+    // file tree. Not in the render key: the tab strip does not show it. The
+    // tree follows it, so a move re-syncs the tree (treeFollowTarget keys on it;
+    // only the focused tab's change can re-root anything).
+    const ac = (u && u.cwd) || "";
+    if (ac !== this.agentCwd) {
+      this.agentCwd = ac;
+      if (typeof syncFocusedTree === "function") syncFocusedTree();
+    }
   }
 
   onShow() { this.fit(); this.term.focus(); }
@@ -784,5 +791,5 @@ function classifyTermPath(tok, cwd, agentCwd, home, boxed) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }
