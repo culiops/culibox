@@ -290,6 +290,9 @@ func TestSecretReturningCatchesRealSecretReads(t *testing.T) {
 		"finspace:getkxconnectionstring",
 		"glue:getconnection", "glue:getconnections",
 		"mediapackage:describechannel", "mediapackage:listchannels",
+		"kinesisvideo:geticeserverconfig",
+		"directconnect:describevirtualinterfaces",
+		"chime:getbot", "chime:listbots", "chime:getattendee",
 	} {
 		service, _, _ := strings.Cut(a, ":")
 		mustDeny, unknown := MintingScreen([]string{service + ":*"})

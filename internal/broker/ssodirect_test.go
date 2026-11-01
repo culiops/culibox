@@ -21,6 +21,7 @@ type gateCall struct {
 	creds           Creds
 	region, account string
 	budget          time.Duration // the ctx deadline left when the gate was called
+	source          string
 }
 
 // fakeGate returns its results in order, then Unverified (error). With
@@ -51,7 +52,7 @@ func (g *fakeGate) fn(ctx context.Context, c Creds, region, account, source stri
 	if d, ok := ctx.Deadline(); ok {
 		budget = time.Until(d)
 	}
-	g.calls = append(g.calls, gateCall{c, region, account, budget})
+	g.calls = append(g.calls, gateCall{c, region, account, budget, source})
 	if len(g.results) == 0 {
 		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonError}
 	}
@@ -106,6 +107,9 @@ func TestServeSSODirectGatesEveryMint(t *testing.T) {
 		r.SourceIdentity != "" || r.AccountID != "123456789012" || !r.Expires.Equal(now.Add(time.Hour)) ||
 		r.ScopeHash != ssoDirectBinding().Hash() {
 		t.Fatalf("minted row %+v", rec.rows)
+	}
+	if len(g.calls) != 1 || g.calls[0].source != "sso-ro" {
+		t.Fatalf("gate did not get the binding's source profile: %+v", g.calls)
 	}
 	if len(g.calls) != 1 || g.calls[0].account != "123456789012" || g.calls[0].region != "ap-southeast-1" ||
 		g.calls[0].creds.AccessKeyID != "ASIAFAKE" || g.calls[0].budget <= 0 || g.calls[0].budget > 15*time.Second {
@@ -323,7 +327,7 @@ func TestCheckSSODirect(t *testing.T) {
 	b, fm, rec, now := ssoDirectSetup(t, g)
 	res, exp := b.CheckSSODirect(context.Background(), bnd)
 	if res.State != awsprobe.GateReadOnly || !exp.Equal(now.Add(time.Hour)) || len(g.calls) != 1 ||
-		g.calls[0].account != "123456789012" || g.calls[0].budget > 15*time.Second {
+		g.calls[0].account != "123456789012" || g.calls[0].source != "sso-ro" || g.calls[0].budget > 15*time.Second {
 		t.Fatalf("read-only: %+v %v %+v", res, exp, g.calls)
 	}
 	if r := lastRow(rec); r.Outcome != OutcomeProbeMinted || r.Mode != config.AWSModeSSODirect || r.RoleARN != ssoRoleARN ||

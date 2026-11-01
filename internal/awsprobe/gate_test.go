@@ -888,7 +888,12 @@ func TestNewIAMGateLoadsTheDefaultConfig(t *testing.T) {
 func TestGateConfigUsesTheSourceProfile(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "config")
-	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") + "\n[profile plain]\nmax_attempts = 5\n"
+	marker := filepath.Join(dir, "credential-process-ran")
+	// plain also carries every way a profile can name its own credentials: the
+	// static ones must still win, and the credential_process must never run.
+	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") +
+		"\n[profile plain]\nmax_attempts = 5\ncredential_process = /usr/bin/touch " + marker + "\n" +
+		"[profile assume]\nrole_arn = arn:aws:iam::123456789012:role/x\ncredential_source = Environment\n"
 	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -908,6 +913,16 @@ func TestGateConfigUsesTheSourceProfile(t *testing.T) {
 	got, err := cfg.Credentials.Retrieve(context.Background())
 	if err != nil || got.AccessKeyID != "AK" {
 		t.Fatalf("creds = %q, %v: the static credentials must win", got.AccessKeyID, err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the profile's credential_process ran")
+	}
+	cfg, err = gateConfig(context.Background(), creds, "eu-west-1", "assume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cfg.Credentials.Retrieve(context.Background()); err != nil || got.AccessKeyID != "AK" {
+		t.Fatalf("creds = %q, %v: a role_arn on the profile must not replace the static credentials", got.AccessKeyID, err)
 	}
 }
 

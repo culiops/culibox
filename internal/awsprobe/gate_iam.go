@@ -43,8 +43,11 @@ type iamGate struct {
 // classify them; a missing field in a reply is an error. The client config is
 // the SDK's load of the binding's source profile (host shared files, ca_bundle,
 // retry settings), the same profile the broker's SSO and STS clients read, with
-// only the credentials and region fixed. A config that cannot load is an error,
-// which the caller treats as unverified.
+// only the credentials and region fixed. That includes the profile's endpoint_url:
+// whoever can write the host's AWS config already controls the minter's clients on
+// this profile, so this adds no privilege, but a local endpoint there answers the
+// gate too. A config that cannot load is an error, which the caller treats as
+// unverified.
 func NewIAMGate(ctx context.Context, creds aws.Credentials, region, sourceProfile string) (GateAPI, error) {
 	cfg, err := gateConfig(ctx, creds, region, sourceProfile)
 	if err != nil {

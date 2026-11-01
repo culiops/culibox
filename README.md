@@ -577,7 +577,7 @@ The UI states what you give up:
 - Resource-based policies (bucket, queue and key policies) are invisible: AWS cannot simulate them for roles.
 - Denies that live only in an SCP or a permission boundary do not count.
 - Secrets stored in configuration (Lambda environment variables, EC2 user data and launch templates, CloudFront origin headers, SSM parameters) are only reported by the data-read report, never blocked.
-- Fields the AWS models mark secret but that are shared with the create and modify APIs (Redshift and RDS `MasterUserPassword`, FSx `FsxAdminPassword`, DMS and DataSync `Password`) are not blocked: nothing shows a read returns them, and a deny would remove a core read.
+- The list of reads that return secrets is kept by hand and is not complete. Some reads whose replies may carry a secret are deliberately not blocked, because a deny would remove a core read: Redshift and RDS `PendingModifiedValues.MasterUserPassword`, which AWS documents as a response field and which may be masked (not verified against live AWS), EC2 VPN `PreSharedKey`, and DMS and DataSync `Password`.
 - Actions AWS adds after the catalog snapshot (2026-10-30) are unscreened under a wildcard the permission set already allows, until it is refreshed with `go run ./internal/awsprobe/gencatalog`.
 
 Prefer the agent role whenever you can create it. The account guidance in [docs/aws/agent-role](docs/aws/agent-role/README.md#which-accounts) applies to this mode too.
