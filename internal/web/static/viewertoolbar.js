@@ -243,7 +243,9 @@ function buildViewerToolbar(viewer, host) {
 
   for (const name of ["path", "more"]) {
     menus[name].addEventListener("keydown", (e) => {
-      const live = [...menus[name].querySelectorAll('[role^="menuitem"]:not([aria-disabled="true"])')];
+      // Disabled items stay reachable (WAI-ARIA menu practice) so a keyboard user can
+      // land on one and hear its title, the reason; activating it does nothing.
+      const live = [...menus[name].querySelectorAll('[role^="menuitem"]')];
       if (!live.length) return;
       const i = live.indexOf(document.activeElement);
       let to = null;

@@ -547,10 +547,11 @@ wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
 $("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
-// document, not the drawer: a tree row click leaves focus on body. Neither menu
-// takes focus when it opens (focus stays on its ⋯), so an open one is checked
-// by state, and a closer that ran first (filesdrawer.js loads earlier; the page
-// host) marks the press used with preventDefault. Not a capture listener: its
+// document, not the drawer: a tree row click leaves focus on body. The viewer
+// toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they
+// open, so an open one is also checked by state (vtMenuOpen), and they mark the
+// press used with preventDefault when they close on it. The tree's row menu
+// takes no focus, so its open state is checked too. Not a capture listener: its
 // preventDefault would stop the page host closing a page.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
