@@ -137,10 +137,13 @@ func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
 		switch {
 		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 			return "", nil, "", os.ErrNotExist
+		case errors.Is(err, os.ErrPermission):
+			return "", nil, "", os.ErrPermission
+		case t.Strict:
+			// os.Root refused a link that leaves the workspace, or a swap.
+			return "", nil, "", errLinkEscape
 		default:
-			// A link that leaves the root, a permission, a swap: the caller
-			// learns only "forbidden", as writeOpenErr does for reads.
-			return "", nil, "", errOutsideHome
+			return "", nil, "", errBlocked
 		}
 	}
 	if !fi.IsDir() {

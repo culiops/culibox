@@ -21,12 +21,12 @@ import (
 func (a *API) handleBoxFile(w http.ResponseWriter, r *http.Request, sid string) {
 	p := r.URL.Query().Get("path")
 	if !filepath.IsAbs(p) {
-		writeErr(w, http.StatusForbidden, "only inside the box")
+		writeErr(w, http.StatusForbidden, msgBoxOnly)
 		return
 	}
 	rel, ok := strings.CutPrefix(filepath.Clean(p), box.PlaywrightOutBox+"/")
 	if !ok || rel == "" {
-		writeErr(w, http.StatusForbidden, "only inside the box")
+		writeErr(w, http.StatusForbidden, msgBoxOnly)
 		return
 	}
 	dir, ok := a.Sessions.BoxOutputDir(sid)
@@ -40,5 +40,5 @@ func (a *API) handleBoxFile(w http.ResponseWriter, r *http.Request, sid string) 
 		return
 	}
 	defer f.Close()
-	serveFsFile(w, r, f, fi, filepath.Base(rel))
+	serveFsFile(w, r, f, fi, filepath.Base(rel), true)
 }
