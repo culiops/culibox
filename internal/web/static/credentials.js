@@ -155,7 +155,12 @@ function credDeleteText(kind, e) {
   const app = kind === "github";
   const head = (app ? "Delete the GitHub App " : "Delete the token ") + e.name + "? ";
   const inStore = (app ? e.key_ref_kind : e.value_kind) === "store";
-  if (inStore && e.status === "missing") return head + "Its store value is already missing.";
+  if (inStore && e.status === "missing") {
+    // The view also reports "missing" when the store could not be listed.
+    return head + (e.error ? "The store could not be read, so any value there stays." : "Its store value is already missing.");
+  }
+  // A failed merge reads "invalid" whether or not the value exists.
+  if (inStore && e.status === "invalid") return head + "Any value in the store stays; delete it under Stored values if you no longer need it.";
   const what = app ? "The private key " : "The value ";
   if (inStore) return head + what + "stays in the encrypted store; delete it under Stored values if you no longer need it.";
   return head + what + (app ? "file is not touched." : "is not touched.");

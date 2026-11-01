@@ -870,3 +870,17 @@ test("credColumnCount: the cells of the entry's own row, with a safe floor", () 
   assert.strictEqual(credColumnCount(tbodyWith(6)), 6);
   assert.strictEqual(credColumnCount({ rows: [] }), 1);
 });
+
+// status "missing" also covers a store that could not be listed, and a broken
+// entry reads "invalid" whether or not its value exists. Neither may state a fact
+// nobody checked: a live secret must not be reported gone, or promised present.
+test("credDeleteText: says nothing it does not know about the store value", () => {
+  const unread = { name: "t", status: "missing", value_kind: "store", error: "could not read the store" };
+  assert.ok(!credDeleteText("token", unread).includes("already missing"));
+  assert.match(credDeleteText("token", unread), /could not be read/);
+  const brokenApp = { name: "a", status: "missing", key_ref_kind: "store", error: "could not read the store" };
+  assert.ok(!credDeleteText("github", brokenApp).includes("already missing"));
+  const invalid = { name: "t", status: "invalid", value_kind: "store" };
+  assert.ok(!credDeleteText("token", invalid).includes("stays in the encrypted store"));
+  assert.match(credDeleteText("token", invalid), /Any value in the store stays/);
+});
