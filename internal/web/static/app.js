@@ -669,7 +669,7 @@ function paintRailMeters() {
 
 // Live count of open MODAL dialogs, for shortcutContext (shell.js) and the
 // page host's Esc. A desktop page (pagehost.js, `.as-page`) is not one: with
-// Settings open as a page, Alt+1..9 or a layout switch must still work, and
+// Settings open as a page, a session jump (Mod+1..9) or a layout switch must still work, and
 // they close the page on their way.
 const dialogsOpen = () => document.querySelectorAll("dialog[open]:not(.as-page)").length;
 
@@ -1263,11 +1263,8 @@ function hintShortcuts() {
   // Reuse tier.js's own runtime label (the same string the sidebar's tier
   // badge tooltip uses) rather than re-deriving "runc"/"sysbox" here.
   const runc = tierRuntimeLabel(boxRuntime);
-  // Palette and sidebar combos match paletteCommands' own hints (⌘K/⌘B on
-  // macOS, Ctrl+Shift+K/Ctrl+Shift+B elsewhere). Session-jump is genuinely
-  // Option/Alt+digit on every platform (see JUMP_MOD) — paletteCommands
-  // already labels that "⌥" on macOS, so this uses the same symbol rather
-  // than "⌘", which is not the key that actually jumps sessions.
+  // The chords named below are the registry's (shortcuts.js); this literal
+  // string is replaced by hints rendered from it in a later step.
   return mac
     ? `${runc} · ⌘K palette · ⌘B sidebar · ⌥1-9 session`
     : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
@@ -6643,9 +6640,11 @@ document.addEventListener("keydown", (e) => {
   dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC);
 }, true);
 
-// cellVisible: the cell's own element is attached and laid out. A page, or a
-// mobile screen that shows another pane, leaves focusedCell pointing at a cell
-// nobody can see; acting on it would spawn into a grid hidden behind the page.
+// cellVisible: the cell's own element is attached and laid out. On a mobile
+// screen other than the terminal, #grid is display:none but focusedCell still
+// points at a cell nobody can see; acting on it would spawn a shell into, or
+// change the font of, a hidden pane (spec "Hidden panes"). Returning false
+// from a binding hands the key back to the browser.
 function cellVisible(cell) {
   return !!(cell && cell.el && cell.el.isConnected && cell.el.getClientRects().length > 0);
 }
@@ -6684,22 +6683,24 @@ bindShortcut("session.jump", (e, ctx) => {
   return true;
 });
 
-// Ctrl+Shift+` -> + Shell below, in the focused window. A held key is swallowed
-// (true) so it is not typed into the terminal, but must not start a shell per
-// repeat. With no visible focused cell it is not ours: false leaves the key alone.
+// Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused
+// cell it is not ours: false leaves the key alone. A held key over a visible
+// cell is swallowed (true) so it is not typed into the terminal, but must not
+// start a shell per repeat.
 bindShortcut("shell.below", (e) => {
+  if (!cellVisible(focusedCell)) return false; // before the repeat check: a hidden cell answers the same held or not
   if (e.repeat) return true;
-  if (!cellVisible(focusedCell)) return false;
   spawnShellIn(focusedCell, "below");
   return true;
 });
 
-// Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-' smaller, '0' reset.
-// zoomFocused / resetZoomFocused return false when the focused tab has nothing
-// to zoom, which hands the key back to the browser's own page zoom.
-bindShortcut("zoom.in", () => zoomFocused(+fontPrefs.STEP));
-bindShortcut("zoom.out", () => zoomFocused(-fontPrefs.STEP)); // key "-" only: Ctrl+_ is readline undo in terminals
-bindShortcut("zoom.reset", () => resetZoomFocused());
+// Live zoom the focused pane: Mod + '='/'+' bigger, '-' smaller, '0' reset (Mod
+// is Cmd on mac, Ctrl elsewhere). A hidden pane is not zoomed: false hands the
+// key back to the browser's own page zoom, as zoomFocused / resetZoomFocused do
+// when the focused tab has nothing to zoom.
+bindShortcut("zoom.in", () => cellVisible(focusedCell) && zoomFocused(+fontPrefs.STEP));
+bindShortcut("zoom.out", () => cellVisible(focusedCell) && zoomFocused(-fontPrefs.STEP)); // key "-" only: Ctrl+_ is readline undo in terminals
+bindShortcut("zoom.reset", () => cellVisible(focusedCell) && resetZoomFocused());
 
 bindShortcut("help.open", () => {
   showShortcuts();

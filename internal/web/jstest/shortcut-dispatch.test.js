@@ -9,9 +9,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const STATIC = path.join(__dirname, "..", "static");
+// Whole-line comments only, plus a trailing comment only when no quote follows
+// it on the line (a quote after " // " means it sat inside a string literal).
 const src = (f) => fs.readFileSync(path.join(STATIC, f), "utf8")
   .split("\n")
-  .map((l) => l.replace(/^\s*\/\/.*$/, "").replace(/\s\/\/ .*$/, ""))
+  .map((l) => l.replace(/^\s*\/\/.*$/, "").replace(/\s\/\/ [^"'`]*$/, ""))
   .join("\n");
 
 const app = src("app.js");
@@ -21,12 +23,18 @@ const shell = src("shell.js");
 const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
 
 test("app.js has exactly one keydown listener that dispatches, and it is capture-phase", () => {
-  const re = /document\.addEventListener\("keydown",[\s\S]*?\}, true\);/g;
-  const hits = (app.match(re) || []).filter((b) => b.includes("dispatchShortcut"));
-  assert.strictEqual(hits.length, 1);
   assert.strictEqual((app.match(/dispatchShortcut\(/g) || []).length, 1);
-  assert.match(hits[0], /shortcutContext\(/);
-  assert.match(hits[0], /IS_MAC/);
+  // Anchor on the dispatcher itself: walk back from the call to the keydown
+  // listener that owns it, and read forward to that listener's own close.
+  const at = app.indexOf("dispatchShortcut(");
+  const start = app.lastIndexOf('document.addEventListener("keydown"', at);
+  assert.ok(start >= 0, "no keydown listener before dispatchShortcut");
+  const end = app.indexOf("}, true);", at);
+  assert.ok(end > at, "the dispatcher listener is not capture-phase");
+  const slice = app.slice(start, end + "}, true);".length);
+  assert.strictEqual((slice.match(/addEventListener\(/g) || []).length, 1, "slice spans more than one listener");
+  assert.match(slice, /shortcutContext\(/);
+  assert.match(slice, /IS_MAC/);
 });
 
 test("the old per-feature key plumbing is gone", () => {
@@ -39,6 +47,9 @@ test("the old per-feature key plumbing is gone", () => {
 
 test("palette.js and filesdrawer.js add no document keydown listener for shortcuts", () => {
   assert.ok(!palette.includes('document.addEventListener("keydown"'));
+  // filesdrawer.js keeps a legitimate document keydown listener (Escape closes
+  // its menu), so "no keydown listener" would be false there. The old Ctrl+P
+  // listener is identified by its KeyP guard instead.
   assert.ok(!drawer.includes('e.code !== "KeyP"'));
 });
 
@@ -50,12 +61,23 @@ test("handlers are bound by registry id", () => {
   }
 });
 
-test("shell.below stands down when the focused cell is not visible", () => {
+test("shell.below stands down on a hidden cell, before the repeat check", () => {
   const i = app.indexOf('bindShortcut("shell.below"');
   assert.ok(i > 0);
   const body = app.slice(i, app.indexOf("});", i));
-  assert.match(body, /cellVisible\(focusedCell\)/);
-  assert.match(body, /e\.repeat/);
+  const vis = body.indexOf("cellVisible(focusedCell)");
+  const rep = body.indexOf("e.repeat");
+  assert.ok(vis > 0 && rep > 0);
+  assert.ok(vis < rep, "cellVisible must be checked before e.repeat");
+});
+
+test("zoom bindings stand down on a hidden pane (spec: Hidden panes)", () => {
+  for (const id of ["zoom.in", "zoom.out", "zoom.reset"]) {
+    const i = app.indexOf(`bindShortcut("${id}"`);
+    assert.ok(i > 0, id);
+    const line = app.slice(i, app.indexOf("\n", i));
+    assert.match(line, /cellVisible\(focusedCell\)/, id);
+  }
 });
 
 test("session.jump consumes an out-of-range digit (R5)", () => {
