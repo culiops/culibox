@@ -1052,7 +1052,12 @@ function credCellNode(c) {
 function credTable(g) {
   const table = credEl("table", "ctab");
   const tr = credEl("tr");
-  for (const h of credTableHead(g.key)) tr.appendChild(credEl("th", null, h));
+  for (const h of credTableHead(g.key)) {
+    const th = credEl("th", null, h);
+    // The actions column has no heading to see; a screen reader still needs a name.
+    if (!h) th.appendChild(credEl("span", "sr-only", "Actions"));
+    tr.appendChild(th);
+  }
   table.appendChild(credEl("thead")).appendChild(tr);
   for (const r of credTableRows(g)) {
     const tb = credEl("tbody", "crow");
@@ -1300,7 +1305,7 @@ async function loadCredentials() {
   renderCredentials(view);
   // Every mutation ends in a reload, so this is the one place the profile form's
   // pickers learn that an entry was added, changed or deleted.
-  if (typeof refreshCredLists === "function") refreshCredLists();
+  if (typeof refreshCredLists === "function") refreshCredLists(view);
 }
 
 // --- Add / edit AWS connections (browser only) ---------------------------------
@@ -2839,6 +2844,18 @@ function credValueForm(replaceId) {
   });
 }
 
+// credDismissConfirm: takes a confirmation away. In table mode it sat in the
+// entry's full-width row (credEntryExtra); once that row holds nothing else it
+// goes too, or it stays as an empty padded strip under the entry. A row that
+// still holds the entry's error or write warning stays.
+function credDismissConfirm(box) {
+  const host = box.parentElement;
+  box.remove();
+  if (!host || !host.classList.contains("ctab-ex") || host.firstElementChild) return;
+  const row = host.closest("tr.ctab-x");
+  if (row) row.remove();
+}
+
 // credConfirmDelete: an inline confirmation in the card or row (no browser
 // dialog), then DELETE `path`. `noun` picks the words for a refusal.
 function credConfirmDelete(host, text, path, noun, reload) {
@@ -2864,7 +2881,7 @@ function credConfirmDelete(host, text, path, noun, reload) {
   };
   const cancel = credEl("button", "btn", "Cancel");
   cancel.type = "button";
-  cancel.onclick = () => box.remove();
+  cancel.onclick = () => credDismissConfirm(box);
   btns.append(del, cancel);
   box.append(err, btns);
   host.appendChild(box);

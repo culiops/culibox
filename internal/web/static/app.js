@@ -3687,10 +3687,12 @@ function applyCredLists(meta) {
 let credListsPainted = false;
 // refreshCredLists re-reads /api/meta and repaints the pickers: when the
 // Profiles tab is shown and after a Credentials change. Newest answer wins; a
-// failed fetch leaves the lists as they were.
+// failed fetch leaves the lists as they were. `view` is a GET /api/credentials
+// answer the caller has just read (loadCredentials); without one the line's
+// view is fetched.
 let credListsSeq = 0;
-async function refreshCredLists() {
-  refreshPfCreds();
+async function refreshCredLists(view) {
+  refreshPfCreds(view);
   const seq = ++credListsSeq;
   let meta;
   try { meta = await api("/api/meta"); } catch (_) { return; }
@@ -3766,14 +3768,20 @@ function paintPfImports() {
 // like the New session box that reads the same view (spawnpanel.js).
 let pfCredsView = null;
 let pfCredsSeq = 0;
-async function refreshPfCreds() {
+// `known` is a view the caller has just read: it is used as it is, with no second
+// request, and still wins over a fetch that is in flight.
+async function refreshPfCreds(known) {
   if (!drawerDesktop()) return;
   const seq = ++pfCredsSeq;
   let got = null;
-  try {
-    const v = await api("/api/credentials", { signal: deadlineSignal(5000) });
-    if (v && typeof v === "object") got = v;
-  } catch (_) { /* no creds answer: no Store part, no window */ }
+  if (known && typeof known === "object") {
+    got = known;
+  } else {
+    try {
+      const v = await api("/api/credentials", { signal: deadlineSignal(5000) });
+      if (v && typeof v === "object") got = v;
+    } catch (_) { /* no creds answer: no Store part, no window */ }
+  }
   if (seq !== pfCredsSeq) return;
   pfCredsView = got;
   renderPfTouch();
