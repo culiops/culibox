@@ -18,6 +18,15 @@ const LINK_URL_RE = /https?:\/\/[^\s<>"'`]+/gi;
 // URLs is resolved by precedence below, not by making this regex cleverer.
 const LINK_PATH_RE = /(?:\/|~\/|\.{1,2}\/|[\w.\-]+\/)[\w./\-]+\.[A-Za-z0-9]{1,8}/g;
 
+// LINK_DIR_TAIL_RE, run sticky at the end of a path match, sees whether that
+// "extension" sat inside a directory name: `.claude/worktrees/x`, where Claude
+// Code keeps worktrees, otherwise links as the directory `.claude`. The greedy
+// match already ends at the LAST dot-extension of the whole run, so a directory
+// after it means the run names no file at all and the match is dropped. Checked
+// here and not as a lookahead in LINK_PATH_RE: the lookahead re-scans on every
+// backtrack step, which measured 15s on one crafted 60k-character line.
+const LINK_DIR_TAIL_RE = /[\w.\-]*\//y;
+
 const LINK_TRAILING_PUNCT = ".,;:!?";
 const LINK_CLOSERS = { ")": "(", "]": "[", "}": "{" };
 
@@ -81,6 +90,8 @@ function scanLinks(text) {
     const start = m.index;
     const end = start + m[0].length;
     if (claimed.some(([s, e]) => start < e && s < end)) continue;
+    LINK_DIR_TAIL_RE.lastIndex = end;
+    if (LINK_DIR_TAIL_RE.test(text)) continue;
     out.push({ start, end, kind: "path", text: m[0] });
   }
 
