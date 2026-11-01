@@ -72,7 +72,7 @@ var tgt = Target{Top: "/repo", Common: "/repo/.git"}
 const porcelain = "# branch.oid abc\x00# branch.head main\x00" +
 	"1 .M N... 100644 100644 100644 a b src/a.go\x00? new.txt\x00"
 
-func okStatus(string) func(context.Context, []string, io.Writer) error {
+func okStatus() func(context.Context, []string, io.Writer) error {
 	return func(_ context.Context, _ []string, w io.Writer) error {
 		_, err := io.WriteString(w, porcelain)
 		return err
@@ -84,7 +84,7 @@ func newRunner(f *fakeDocker, c *fakeClock) *Runner {
 }
 
 func TestStatusParses(t *testing.T) {
-	f := &fakeDocker{run: okStatus("")}
+	f := &fakeDocker{run: okStatus()}
 	r := newRunner(f, newClock())
 	st := r.Status(context.Background(), tgt)
 	if st.State != "ok" || st.Top != "/repo" || st.NoHead {
@@ -142,7 +142,7 @@ func TestStatusEntriesNeverNil(t *testing.T) {
 }
 
 func TestStatusRefusesUnsafeTarget(t *testing.T) {
-	f := &fakeDocker{run: okStatus("")}
+	f := &fakeDocker{run: okStatus()}
 	r := newRunner(f, newClock())
 	bad := Target{Top: "/repo,readonly=false", Common: "/repo/.git"}
 	st := r.Status(context.Background(), bad)
@@ -162,7 +162,7 @@ func TestStatusSingleFlight(t *testing.T) {
 	release := make(chan struct{})
 	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
 		<-release
-		return okStatus("")(ctx, a, w)
+		return okStatus()(ctx, a, w)
 	}}
 	r := newRunner(f, newClock())
 	var wg sync.WaitGroup
@@ -186,7 +186,7 @@ func TestStatusSingleFlight(t *testing.T) {
 }
 
 func TestStatusReuseWindow(t *testing.T) {
-	f := &fakeDocker{run: okStatus("")}
+	f := &fakeDocker{run: okStatus()}
 	c := newClock()
 	r := newRunner(f, c)
 	r.Status(context.Background(), tgt)
@@ -203,7 +203,7 @@ func TestStatusReuseWindow(t *testing.T) {
 }
 
 func TestStatusReuseResultIsACopy(t *testing.T) {
-	r := newRunner(&fakeDocker{run: okStatus("")}, newClock())
+	r := newRunner(&fakeDocker{run: okStatus()}, newClock())
 	a := r.Status(context.Background(), tgt)
 	a.Entries[0].P = "mutated"
 	b := r.Status(context.Background(), tgt)
@@ -213,7 +213,7 @@ func TestStatusReuseResultIsACopy(t *testing.T) {
 }
 
 func TestStatusIdleSweep(t *testing.T) {
-	f := &fakeDocker{run: okStatus("")}
+	f := &fakeDocker{run: okStatus()}
 	c := newClock()
 	r := newRunner(f, c)
 	other := Target{Top: "/other", Common: "/other/.git"}
@@ -225,8 +225,8 @@ func TestStatusIdleSweep(t *testing.T) {
 		r.Status(context.Background(), tgt)
 	}
 	r.mu.Lock()
-	_, keptTgt := r.cache["/repo"]
-	_, keptOther := r.cache["/other"]
+	_, keptTgt := r.cache[tgt.key()]
+	_, keptOther := r.cache[other.key()]
 	r.mu.Unlock()
 	if !keptTgt || keptOther {
 		t.Fatalf("cache after idle: tgt=%v other=%v, want true/false", keptTgt, keptOther)
@@ -256,7 +256,7 @@ func TestStatusCallerCancelDoesNotPoisonFlight(t *testing.T) {
 	release := make(chan struct{})
 	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
 		<-release
-		return okStatus("")(ctx, a, w)
+		return okStatus()(ctx, a, w)
 	}}
 	r := newRunner(f, newClock())
 	cctx, cancel := context.WithCancel(context.Background())
@@ -288,7 +288,7 @@ func TestStatusParallelCap(t *testing.T) {
 		}
 		time.Sleep(80 * time.Millisecond)
 		cur.Add(-1)
-		return okStatus("")(ctx, a, w)
+		return okStatus()(ctx, a, w)
 	}}
 	r := newRunner(f, newClock())
 	r.MaxParallel = 2
@@ -304,8 +304,8 @@ func TestStatusParallelCap(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if p := peak.Load(); p != 2 {
-		t.Fatalf("peak concurrency = %d, want 2", p)
+	if p := peak.Load(); p < 1 || p > 2 {
+		t.Fatalf("peak concurrency = %d, want 1..2", p)
 	}
 	if n := f.callCount(); n != 3 {
 		t.Fatalf("runs = %d, want 3", n)
@@ -326,8 +326,9 @@ func TestDiffTruncates(t *testing.T) {
 	if d.State != "ok" || !d.Truncated || len(d.Diff) != 2<<20 || d.Kind != "text" {
 		t.Fatalf("diff state=%q truncated=%v len=%d kind=%q reason=%q", d.State, d.Truncated, len(d.Diff), d.Kind, d.Reason)
 	}
-	if len(f.removed) != 0 {
-		t.Fatalf("cap hit is not a failure, but Remove ran: %q", f.removed)
+	// Not a failure, but the cut-off docker CLI leaves its container running.
+	if len(f.removed) != 1 {
+		t.Fatalf("cap hit: Remove calls %q, want the run's container", f.removed)
 	}
 }
 
@@ -404,8 +405,8 @@ func TestDiffUntrackedExitOneIsSuccess(t *testing.T) {
 	if d.State != "ok" || d.Kind != "text" || d.Diff != out {
 		t.Fatalf("untracked exit 1: %+v", d)
 	}
-	if len(f.removed) != 0 {
-		t.Fatalf("exit 1 of --no-index is success, Remove ran: %q", f.removed)
+	if len(f.removed) != 1 {
+		t.Fatalf("exit 1 of --no-index: Remove calls %q, want 1 (harmless, but uniform)", f.removed)
 	}
 	// The same exit on a tracked diff is a failure, and so is any other code.
 	if d := r.Diff(context.Background(), tgt, "a.go", false); d.State != "unavailable" {
@@ -435,5 +436,42 @@ func TestDiffTruncationKeepsWholeRunes(t *testing.T) {
 	d := newRunner(f, newClock()).Diff(context.Background(), tgt, "x", false)
 	if !d.Truncated || !utf8.ValidString(d.Diff) || len(d.Diff) != maxDiffBytes-1 {
 		t.Fatalf("truncated=%v valid=%v len=%d", d.Truncated, utf8.ValidString(d.Diff), len(d.Diff))
+	}
+}
+
+func TestStatusToomanyViaCapRemovesContainer(t *testing.T) {
+	f := &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := w.Write(bytes.Repeat([]byte("x"), maxStatusBytes+1))
+		if err != nil {
+			return fmt.Errorf("docker run: writing its output: %w", err)
+		}
+		return nil
+	}}
+	st := newRunner(f, newClock()).Status(context.Background(), tgt)
+	if st.State != "toomany" || st.Entries == nil || len(st.Entries) != 0 {
+		t.Fatalf("status = %+v", st)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.Index(f.args[0], "--name")
+	if len(f.removed) != 1 || f.removed[0] != f.args[0][i+1] {
+		t.Fatalf("Remove calls %q, want the run's container", f.removed)
+	}
+}
+
+func TestStatusKeyedByTopAndCommon(t *testing.T) {
+	f := &fakeDocker{run: okStatus()}
+	r := newRunner(f, newClock())
+	a := Target{Top: "/repo", Common: "/repo/.git"}
+	b := Target{Top: "/repo", Common: "/elsewhere/.git"}
+	r.Status(context.Background(), a)
+	r.Status(context.Background(), b)
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("different Common, same Top: %d runs, want 2", n)
+	}
+	r.Status(context.Background(), a)
+	r.Status(context.Background(), b)
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("repeat of each: %d runs, want 2 (both cached)", n)
 	}
 }

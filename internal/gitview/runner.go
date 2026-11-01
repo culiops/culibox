@@ -112,25 +112,26 @@ func (r *Runner) Status(ctx context.Context, t Target) Status {
 	if why := t.Unsafe(); why != "" {
 		return unavailableStatus(t, why)
 	}
+	key := t.key()
 	now := r.now()
 	r.mu.Lock()
 	r.sweepLocked(now)
-	if c := r.cache[t.Top]; c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
+	if c := r.cache[key]; c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
 		c.lastUsed = now
 		st := cloneStatus(c.st)
 		r.mu.Unlock()
 		return st
 	}
-	f := r.flights[t.Top]
+	f := r.flights[key]
 	if f == nil {
 		f = &flight{done: make(chan struct{})}
 		if r.flights == nil {
 			r.flights = map[string]*flight{}
 		}
-		r.flights[t.Top] = f
+		r.flights[key] = f
 		// The run belongs to the flight, not to the caller that started it: its
 		// own context, so one caller leaving does not fail the others.
-		go r.runStatus(t, f)
+		go r.runStatus(t, key, f)
 	}
 	r.mu.Unlock()
 	select {
@@ -140,6 +141,10 @@ func (r *Runner) Status(ctx context.Context, t Target) Status {
 		return unavailableStatus(t, "request cancelled")
 	}
 }
+
+// key identifies a repository for the cache and single-flight: Top and Common,
+// since two resolutions of one Top may name different common git dirs.
+func (t Target) key() string { return t.Top + "\x00" + t.Common }
 
 // sweepLocked drops cache entries nothing has asked for within Idle.
 func (r *Runner) sweepLocked(now time.Time) {
@@ -151,15 +156,15 @@ func (r *Runner) sweepLocked(now time.Time) {
 	}
 }
 
-func (r *Runner) runStatus(t Target, f *flight) {
+func (r *Runner) runStatus(t Target, key string, f *flight) {
 	st := r.doStatus(t)
 	now := r.now()
 	r.mu.Lock()
 	if r.cache == nil {
 		r.cache = map[string]*cached{}
 	}
-	r.cache[t.Top] = &cached{st: st, at: now, lastUsed: now}
-	delete(r.flights, t.Top)
+	r.cache[key] = &cached{st: st, at: now, lastUsed: now}
+	delete(r.flights, key)
 	r.mu.Unlock()
 	f.st = st
 	close(f.done)
@@ -176,11 +181,15 @@ func (r *Runner) doStatus(t Target) Status {
 	name := newName()
 	out := &capBuffer{max: maxStatusBytes}
 	err = r.Docker.RunStream(ctx, StatusArgs(t, r.Image, name, r.UID, r.GID), out)
+	if err != nil {
+		// Killing the docker CLI does not stop the container, so remove it on
+		// every error, even one that still yields a result (the output cap).
+		r.remove(name)
+	}
 	switch {
 	case out.hit || errors.Is(err, errCapped):
 		return Status{State: "toomany", Top: t.Top, Entries: []Entry{}}
 	case err != nil:
-		r.remove(name)
 		if strings.Contains(err.Error(), "not a git repository") {
 			return Status{State: "notrepo", Top: t.Top, Entries: []Entry{}}
 		}
@@ -215,10 +224,13 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 	name := newName()
 	out := &capBuffer{max: maxDiffBytes}
 	err = r.Docker.RunStream(ctx, DiffArgs(t, r.Image, name, r.UID, r.GID, rel, untracked), out)
+	if err != nil {
+		// As in doStatus: remove the container on every error, result or not.
+		r.remove(name)
+	}
 	if err != nil && !errors.Is(err, errCapped) && !(untracked && exitCode(err) == 1) {
 		// A cut-short diff is a result, not a failure; so is exit 1 of --no-index,
 		// which git uses to say "the files differ".
-		r.remove(name)
 		return Diff{State: "unavailable", Reason: failReason(ctx, err)}
 	}
 	b := out.b
