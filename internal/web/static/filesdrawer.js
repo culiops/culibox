@@ -441,6 +441,7 @@ function drawerGoFocus() {
 function initDrawerGoto() {
   const input = drawerEl("drawer-goto-in");
   if (!input) return;
+  input.title = "Go to file (" + shortcutHint("files.goto", IS_MAC) + ")";
   input.addEventListener("input", drawerGoInput);
   input.addEventListener("keydown", drawerGoKey);
   // Stop first: a debounce or fetch still pending would re-open the list over
@@ -594,7 +595,7 @@ function initFilesDrawer() {
     openInPane: mk("openInPane", "Open in pane", "Open this file in a pane, at the same place"),
     overflow: mk("overflow", "⋯", "More file actions"),
     cancel: mk("cancel", "Cancel", "Discard changes and return to the read view"),
-    save: mk("save", "Save", "Save (Ctrl/Cmd-S)", "pri"),
+    save: mk("save", "Save", "Save (" + shortcutHint("editor.save", IS_MAC) + ")", "pri"),
   };
   drawerActBtns.overflow.setAttribute("aria-label", "More file actions");
   drawerActBtns.overflow.setAttribute("aria-haspopup", "menu");

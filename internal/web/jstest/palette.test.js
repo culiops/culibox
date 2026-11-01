@@ -95,8 +95,9 @@ test("sessions match by name and by summary", () => {
 
 test("palModHint follows the selected row's kind (⌘↵ keeps inserting a file's path)", () => {
   assert.strictEqual(palModHint("session", true), "⌘↵ open in new pane");
-  assert.strictEqual(palModHint("session", false), "^↵ open in new pane");
+  assert.strictEqual(palModHint("session", false), "Ctrl+↵ open in new pane");
   assert.strictEqual(palModHint("file", true), "⌘↵ insert path");
+  assert.strictEqual(palModHint("file", false), "Ctrl+↵ insert path");
   assert.strictEqual(palModHint("view", false), "");
 });
 
@@ -114,7 +115,16 @@ test("paletteShellCommands: desktop offers shortcuts, files drawer and the Activ
   cmds.find((c) => c.id === "activity-view").run();
   cmds.find((c) => c.id === "access-view").run();
   assert.deepEqual(ran, ["activity", "access"]);
-  assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Alt+F");
+  assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Shift+E");
+});
+
+test("paletteShellCommands: hints are the registry's, per platform", () => {
+  const { paletteShellCommands } = require("../static/palette.js");
+  const hint = (mac, desktop, id) => paletteShellCommands(mac, desktop, {}).find((c) => c.id === id).hint;
+  assert.equal(hint(true, true, "files-drawer"), "⇧⌘E");
+  assert.equal(hint(false, false, "toggle-files"), "Ctrl+Shift+E");
+  assert.equal(hint(true, true, "shortcuts"), "⌘/");
+  assert.equal(hint(false, true, "shortcuts"), "Ctrl+/");
 });
 
 test("paletteShellCommands: mobile keeps the old entries and gets none of the new", () => {
@@ -126,9 +136,10 @@ test("paletteShellCommands: mobile keeps the old entries and gets none of the ne
 test("paletteShellSpawn: desktop offers + Shell below (the shortcut), right and own pane", () => {
   const { paletteShellSpawn } = require("../static/palette.js");
   const asked = [];
-  const cmds = paletteShellSpawn(true, (p) => asked.push(p));
+  const cmds = paletteShellSpawn(false, true, (p) => asked.push(p));
   assert.deepEqual(cmds.map((c) => c.label), ["+ Shell below", "+ Shell right", "+ Shell in own pane"]);
   assert.deepEqual(cmds.map((c) => c.hint), ["Ctrl+Shift+`", "", ""]);
+  assert.equal(paletteShellSpawn(true, true, () => {})[0].hint, "⌃⇧`");
   for (const c of cmds) { assert.equal(c.kind, "new"); c.run(); }
   assert.deepEqual(asked, ["below", "right", "own"]);
 });
@@ -136,7 +147,7 @@ test("paletteShellSpawn: desktop offers + Shell below (the shortcut), right and 
 test("paletteShellSpawn: mobile keeps the one v0.2.0 entry", () => {
   const { paletteShellSpawn } = require("../static/palette.js");
   const asked = [];
-  const cmds = paletteShellSpawn(false, (p) => asked.push(p));
+  const cmds = paletteShellSpawn(false, false, (p) => asked.push(p));
   assert.deepEqual(cmds.map((c) => [c.label, c.hint]), [["New shell here", "Ctrl+Shift+`"]]);
   cmds[0].run();
   assert.deepEqual(asked, ["below"]);

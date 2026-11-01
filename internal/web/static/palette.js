@@ -72,10 +72,16 @@ function palSessionMatchText(s) {
   return [v.name || v.id || "", v.summary || ""].filter((x) => x !== "").join(" ");
 }
 
+// palReg: the registry's hint renderers. In the browser they are globals of
+// shortcuts.js (loaded first); under node --test they come from the module.
+function palReg() {
+  return typeof shortcutHint === "function" ? { shortcutHint, jumpHint } : require("./shortcuts.js");
+}
+
 // palModHint: what ⌘↵ / Ctrl+↵ does on the selected row. A session opens in a
 // new pane; a file keeps inserting its path (the shipped behaviour).
 function palModHint(kind, mac) {
-  const k = mac ? "⌘↵" : "^↵";
+  const k = palReg().shortcutHint("palette.insert", mac);
   if (kind === "session") return k + " open in new pane";
   if (kind === "file") return k + " insert path";
   return "";
@@ -87,7 +93,7 @@ function palPaintModHint() {
   const hint = document.getElementById("pal-insert-hint");
   const sep = document.getElementById("pal-mod-sep");
   if (!hint) return;
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const mac = IS_MAC;
   const it = palItems[palSel];
   hint.textContent = it ? palModHint(it.kind, mac) : "";
   hint.hidden = hint.textContent === "";
@@ -121,17 +127,18 @@ function palSessionRun(s, nested, act) {
 // to is worse than no hint. mac is threaded in from the caller (palRefresh)
 // rather than computed again here — see the mac note on paletteCommands.
 function paletteSessions(mac) {
-  // In the order Alt+digit uses, so the hint on a row is the key that opens it.
+  // In the order the jump shortcut uses, so the hint on a row is the key that opens it.
   const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
   return jumpOrder(lastSessions, mobile).map((s, i) => {
     const name = s.name || s.id;
-    const jumpHint = i < 9 ? (mac ? "⌥" + (i + 1) : "Alt+" + (i + 1)) : "";
+    // No digit hint on mobile: the jump shortcut has no keyboard there.
+    const hintN = !mobile && i < 9 ? palReg().jumpHint(i + 1, mac) : "";
     // Reuses the same activityClass() the sidebar's own status dot is built
     // from (activity.js), so a session row here and its sidebar row always
     // agree on colour/label for the same state.
     const act = activityClass(s.activity);
     return {
-      kind: "session", label: name, hint: jumpHint || (s.cwd ? shortPath(s.cwd) : ""),
+      kind: "session", label: name, hint: hintN || (s.cwd ? shortPath(s.cwd) : ""),
       sub: s.summary || "", match: palSessionMatchText(s),
       dotCls: act.cls, dotTitle: act.title,
       run: palSessionRun(s, isNestedShell(s, lastSessions), { reveal: revealShell, open: openTerminal }),
@@ -149,24 +156,25 @@ function paletteShellCommands(mac, desktop, act) {
   if (!desktop) {
     return [
       { id: "steer-rail", kind: "view", label: "Toggle session detail rail", hint: "", run: act.steerRail },
-      { id: "toggle-files", kind: "view", label: "Collapse/expand files", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: act.toggleFiles },
+      { id: "toggle-files", kind: "view", label: "Collapse/expand files", hint: palReg().shortcutHint("files.toggle", mac), run: act.toggleFiles },
     ];
   }
   return [
     { id: "activity-view", kind: "view", label: "Activity", hint: "", run: act.activityView },
     { id: "access-view", kind: "view", label: "Access", hint: "", run: act.accessView },
-    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: mac ? "⌥⌘F" : "Ctrl+Alt+F", run: act.filesDrawer },
-    { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: "", run: act.shortcuts },
+    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: palReg().shortcutHint("files.toggle", mac), run: act.filesDrawer },
+    { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: palReg().shortcutHint("help.open", mac), run: act.shortcuts },
   ];
 }
 
 // paletteShellSpawn: the "+ Shell" entries. Desktop names the three places a
 // shell can go (spawnShellIn's placements); the shortcut docks below. Mobile
 // draws no dock, so it keeps its one v0.2.0 entry.
-function paletteShellSpawn(desktop, spawn) {
-  if (!desktop) return [{ kind: "new", label: "New shell here", hint: "Ctrl+Shift+`", run: () => spawn("below") }];
+function paletteShellSpawn(mac, desktop, spawn) {
+  const below = palReg().shortcutHint("shell.below", mac);
+  if (!desktop) return [{ kind: "new", label: "New shell here", hint: below, run: () => spawn("below") }];
   return [
-    { kind: "new", label: "+ Shell below", hint: "Ctrl+Shift+`", run: () => spawn("below") },
+    { kind: "new", label: "+ Shell below", hint: below, run: () => spawn("below") },
     { kind: "new", label: "+ Shell right", hint: "", run: () => spawn("right") },
     { kind: "new", label: "+ Shell in own pane", hint: "", run: () => spawn("own") },
   ];
@@ -210,7 +218,7 @@ function paletteCommands(mac) {
   cmds.push({ kind: "new", label: "New session…", hint: "", run: () => openSpawnDialog() });
   if (window.shellProfile) {
     const deskShell = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
-    cmds.push(...paletteShellSpawn(deskShell, (placement) => spawnShellIn(focusedCell, placement)));
+    cmds.push(...paletteShellSpawn(mac, deskShell, (placement) => spawnShellIn(focusedCell, placement)));
   }
   // The focused session's control commands, through the same dispatch the
   // row menu uses (runSessionAction) — one handler per action.
@@ -236,7 +244,7 @@ function paletteCommands(mac) {
   }
   // toggleSidebar is a no-op on mobile, so don't offer it there.
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
-    cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
+    cmds.push({ kind: "view", label: "Toggle sidebar", hint: palReg().shortcutHint("sidebar.toggle", mac), run: toggleSidebar });
   }
   // Desktop: the rail's content lives in the pane's Access view (R6: one
   // entry), beside the Activity view. Both toggle on the focused pane's agent.
@@ -253,12 +261,12 @@ function paletteCommands(mac) {
   });
   const shellCmd = (id) => shell.find((c) => c.id === id);
   for (const id of ["activity-view", "access-view", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
-  if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
+  if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: palReg().shortcutHint("sidebar.toggle", mac), run: () => togglePane("sessions") });
   for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
-  cmds.push({ kind: "view", label: "Increase font size", hint: "Ctrl +", run: () => zoomFocused(+fontPrefs.STEP) });
-  cmds.push({ kind: "view", label: "Decrease font size", hint: "Ctrl -", run: () => zoomFocused(-fontPrefs.STEP) });
-  cmds.push({ kind: "view", label: "Reset font size", hint: "Ctrl 0", run: () => resetZoomFocused() });
+  cmds.push({ kind: "view", label: "Increase font size", hint: palReg().shortcutHint("zoom.in", mac), run: () => zoomFocused(+fontPrefs.STEP) });
+  cmds.push({ kind: "view", label: "Decrease font size", hint: palReg().shortcutHint("zoom.out", mac), run: () => zoomFocused(-fontPrefs.STEP) });
+  cmds.push({ kind: "view", label: "Reset font size", hint: palReg().shortcutHint("zoom.reset", mac), run: () => resetZoomFocused() });
   return cmds;
 }
 
@@ -293,7 +301,7 @@ function palRefresh() {
   if (palAbort) { palAbort.abort(); palAbort = null; }
   // Computed once here and threaded into paletteSessions()/paletteCommands()
   // rather than each recomputing it.
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const mac = IS_MAC;
 
   if (raw.charAt(0) === ">") { // VS Code convention: > means commands only
     palRender(palFilter(paletteCommands(mac), raw.slice(1).trim().toLowerCase()), "");
@@ -500,12 +508,12 @@ function initPalette() {
   const d = document.getElementById("palette");
   const inp = document.getElementById("pal-input");
   if (!d || !inp) return;
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-  const combo = mac ? "⌘K" : "Ctrl+Shift+K";
+  const mac = IS_MAC;
+  const combo = shortcutHint("palette.open", mac);
   // The fallback is written next to the primary everywhere the combo appears:
   // when another app has grabbed the primary system-wide, the user needs to be
   // told a second one exists: they cannot guess it.
-  const combos = combo + " or Ctrl+Shift+Space";
+  const combos = combo + " or " + shortcutHint("palette.open.alt", mac);
 
   const openBtn = document.getElementById("palette-open");
   if (openBtn) {
@@ -518,8 +526,8 @@ function initPalette() {
     // shortcut means nothing on a phone and its width is what lets the product
     // name stay in the header. Assigning textContent here would delete it.
     const long = openBtn.querySelector(".pal-long");
-    if (long) long.textContent = mac ? "⌘K" : "^⇧K";
-    else openBtn.textContent = mac ? "⌘K" : "^⇧K";
+    if (long) long.textContent = combo;
+    else openBtn.textContent = combo;
     openBtn.title = "Command palette (" + combos + ")";
     openBtn.onclick = openPalette;
   }

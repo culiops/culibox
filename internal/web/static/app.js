@@ -1259,22 +1259,22 @@ function onTerminalSwipe(dir) {
 // shipped once when an earlier IIFE called it at parse time; caught in
 // review, since app.js isn't executed under node --test).
 function hintShortcuts() {
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const mac = IS_MAC;
   // Reuse tier.js's own runtime label (the same string the sidebar's tier
   // badge tooltip uses) rather than re-deriving "runc"/"sysbox" here.
   const runc = tierRuntimeLabel(boxRuntime);
-  // The chords named below are the registry's (shortcuts.js); this literal
-  // string is replaced by hints rendered from it in a later step.
-  return mac
-    ? `${runc} · ⌘K palette · ⌘B sidebar · ⌥1-9 session`
-    : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
+  // Every chord named here is rendered from the registry (shortcuts.js), so the
+  // bar cannot drift from the keys that work. The session jump is Mod+digit
+  // (Cmd on macOS, Ctrl elsewhere), shown as the 1-9 range.
+  return `${runc} · ${shortcutHint("palette.open", mac)} palette · ${shortcutHint("sidebar.toggle", mac)} sidebar`
+    + ` · ${jumpHint(1, mac)}-9 session · ${shortcutHint("help.open", mac)} shortcuts`;
 }
 
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
 // desktop). The rows are built from the same facts the old status bar showed,
 // plus the box runtime; the text goes in through textContent in askDialog.
 function showShortcuts() {
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const mac = IS_MAC;
   return askDialog({
     title: "Keyboard shortcuts",
     body: shortcutText(shortcutRows(mac, boxRuntime)),
@@ -5480,9 +5480,10 @@ function emptyKbd(text) { return emptyEl("span", "empst-kbd", text); }
 
 function emptyHint() {
   const hint = emptyEl("div", "empst-hint");
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  // One key cap per glyph on macOS (⇧ ⌘ K), per "+"-separated name elsewhere.
+  const chord = shortcutHint("palette.open", IS_MAC);
   const pal = emptyEl("span");
-  for (const k of mac ? ["\u2318", "K"] : ["Ctrl", "Shift", "K"]) pal.append(emptyKbd(k), " ");
+  for (const k of IS_MAC ? Array.from(chord) : chord.split("+")) pal.append(emptyKbd(k), " ");
   pal.append("command palette");
   hint.append(pal, emptyEl("span", "", "All profiles in New session"));
   return hint;
@@ -5582,9 +5583,9 @@ function initSpawnControl() {
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
   const mac = IS_MAC;
-  $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
+  $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   const foot = $("spawn-foot-hint");
-  if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
+  if (foot) foot.textContent = shortcutHint("spawn.submit", IS_MAC) + " to spawn";
   // From any field of the form (it bubbles up from the first message, the name,
   // the selects). A button keeps its own Enter. The submit handler spawns only
   // when the workspace field shows the directory in use.
