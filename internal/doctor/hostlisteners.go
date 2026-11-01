@@ -20,17 +20,18 @@ import (
 const (
 	hostListenersCheck = "host listeners"
 	tcpListenState     = "0A"
+	udpUnboundState    = "07" // an unconnected UDP socket
 )
 
-// wildcardPorts returns the sorted, unique ports with a listening socket on the
-// wildcard address, from the text of /proc/net/tcp and /proc/net/tcp6. A row it
+// wildcardPorts returns the sorted, unique ports with a socket in state on the
+// wildcard address, from the text of two /proc/net tables (v4 and v6). A row it
 // cannot parse is skipped.
-func wildcardPorts(tcp, tcp6 []byte) []int {
+func wildcardPorts(state string, v4, v6 []byte) []int {
 	var ports []int
-	for _, table := range [][]byte{tcp, tcp6} {
+	for _, table := range [][]byte{v4, v6} {
 		for _, line := range strings.Split(string(table), "\n") {
 			f := strings.Fields(line)
-			if len(f) < 4 || f[3] != tcpListenState {
+			if len(f) < 4 || f[3] != state {
 				continue
 			}
 			addr, portHex, ok := strings.Cut(f[1], ":")
@@ -59,23 +60,34 @@ func isWildcardHex(addr string) bool {
 func CheckHostListeners() Result { return checkHostListeners(os.ReadFile) }
 
 func checkHostListeners(read func(string) ([]byte, error)) Result {
-	tcp, err := read("/proc/net/tcp")
-	if err != nil {
-		return Result{Warn, hostListenersCheck, fmt.Sprintf("could not read the listening sockets (%v), so what a box can reach on this host is unknown", err)}
+	var tables [4][]byte
+	for i, name := range []string{"tcp", "tcp6", "udp", "udp6"} {
+		b, err := read("/proc/net/" + name)
+		// Only tcp is certain to exist: a kernel can lack IPv6, or UDP diagnostics.
+		if err != nil && (name == "tcp" || !errors.Is(err, fs.ErrNotExist)) {
+			return Result{Warn, hostListenersCheck, fmt.Sprintf("could not read the listening sockets (%v), so what a box can reach on this host is unknown", err)}
+		}
+		tables[i] = b
 	}
-	tcp6, err := read("/proc/net/tcp6")
-	if err != nil && !errors.Is(err, fs.ErrNotExist) { // no IPv6 in this kernel
-		return Result{Warn, hostListenersCheck, fmt.Sprintf("could not read the listening sockets (%v), so what a box can reach on this host is unknown", err)}
+	var parts []string
+	if p := wildcardPorts(tcpListenState, tables[0], tables[1]); len(p) > 0 {
+		parts = append(parts, "TCP ports "+joinPorts(p))
 	}
-	ports := wildcardPorts(tcp, tcp6)
-	if len(ports) == 0 {
-		return Result{Pass, hostListenersCheck, "no service listens on all addresses, so a box cannot reach one directly"}
+	if p := wildcardPorts(udpUnboundState, tables[2], tables[3]); len(p) > 0 {
+		parts = append(parts, "UDP ports "+joinPorts(p))
 	}
+	if len(parts) == 0 {
+		return Result{Pass, hostListenersCheck, "no TCP or UDP service listens on all addresses"}
+	}
+	return Result{Warn, hostListenersCheck, fmt.Sprintf(
+		"a box can connect directly to %s on this host, because they listen on all addresses. The egress proxy does not see these connections. Bind a service to 127.0.0.1 if a box must not reach it",
+		strings.Join(parts, " and "))}
+}
+
+func joinPorts(ports []int) string {
 	list := make([]string, len(ports))
 	for i, p := range ports {
 		list[i] = strconv.Itoa(p)
 	}
-	return Result{Warn, hostListenersCheck, fmt.Sprintf(
-		"a box can connect directly to TCP ports %s on this host, because they listen on all addresses. The egress proxy does not see these connections. Bind a service to 127.0.0.1 if a box must not reach it",
-		strings.Join(list, ", "))}
+	return strings.Join(list, ", ")
 }

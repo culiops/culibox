@@ -23,7 +23,7 @@ const procTCP6 = procTCPHeader +
 	"   3: 00000000000000000000000001000000:1F92 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 8 1\n" // [::1]:8082
 
 func TestWildcardPortsKeepsOnlyListeningWildcardSockets(t *testing.T) {
-	got := wildcardPorts([]byte(procTCP), []byte(procTCP6))
+	got := wildcardPorts(tcpListenState, []byte(procTCP), []byte(procTCP6))
 	want := []int{22, 8080, 8081}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
@@ -37,7 +37,7 @@ func TestWildcardPortsKeepsOnlyListeningWildcardSockets(t *testing.T) {
 
 func TestWildcardPortsIgnoresGarbage(t *testing.T) {
 	bad := procTCPHeader + "nonsense\n   0: 00000000 00000000:0000 0A\n   1: 00000000:ZZZZ 00000000:0000 0A\n"
-	if got := wildcardPorts([]byte(bad), nil); len(got) != 0 {
+	if got := wildcardPorts(tcpListenState, []byte(bad), nil); len(got) != 0 {
 		t.Fatalf("got %v, want none", got)
 	}
 }
@@ -52,6 +52,8 @@ func fakeProc(tcp, tcp6 string) func(string) ([]byte, error) {
 				return nil, os.ErrNotExist // an IPv6-less kernel has no such file
 			}
 			return []byte(tcp6), nil
+		case "/proc/net/udp", "/proc/net/udp6":
+			return nil, os.ErrNotExist
 		}
 		return nil, errors.New("unexpected path " + p)
 	}
@@ -70,8 +72,33 @@ func TestCheckHostListenersWarnsWithPortsAndFix(t *testing.T) {
 }
 
 func TestCheckHostListenersPassesWhenNoneExposed(t *testing.T) {
-	if r := checkHostListeners(fakeProc(procTCPHeader, "")); r.Status != Pass {
+	r := checkHostListeners(fakeProc(procTCPHeader, ""))
+	if r.Status != Pass {
 		t.Fatalf("status = %s: %s", r.Status, r.Detail)
+	}
+	// It must say what it looked at, not promise that a box reaches nothing.
+	if !strings.Contains(r.Detail, "TCP or UDP") || !strings.Contains(r.Detail, "all addresses") {
+		t.Errorf("detail overclaims: %s", r.Detail)
+	}
+}
+
+// An unconnected UDP socket is state 07; a connected one has a remote address.
+func TestCheckHostListenersReportsUDPWildcards(t *testing.T) {
+	udp := procTCPHeader +
+		"   0: 00000000:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 1 1\n" + // 0.0.0.0:5353
+		"   1: 0100007F:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0 0 2 1\n" // 127.0.0.1:53
+	read := func(p string) ([]byte, error) {
+		switch p {
+		case "/proc/net/tcp":
+			return []byte(procTCPHeader), nil
+		case "/proc/net/udp":
+			return []byte(udp), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	r := checkHostListeners(read)
+	if r.Status != Warn || !strings.Contains(r.Detail, "UDP ports 5353") || strings.Contains(r.Detail, "TCP ports") {
+		t.Fatalf("%s: %s", r.Status, r.Detail)
 	}
 }
 
