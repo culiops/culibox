@@ -49,6 +49,11 @@ class ViewerTab {
     // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
     // may close itself when its file turns out to be gone (see load).
     this.restored = !!(opts && opts.restored);
+    // The line (and column) a terminal link such as `x.go:12:5` asked for; the
+    // first render consumes it (revealLine). null when the file was opened plainly.
+    this.pendingLine = opts && Number.isInteger(opts.line) && opts.line > 0
+      ? { line: opts.line, col: Number.isInteger(opts.col) && opts.col > 0 ? opts.col : undefined }
+      : null;
     this.firstLoad = true;
     this.applying = false;  // true while applyScroll's own assignment is echoing back
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
@@ -112,6 +117,9 @@ class ViewerTab {
     this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
+    // Focusable so a file the user just opened takes the keyboard (arrows, PgDn,
+    // Space scroll it) instead of leaving it in the terminal they clicked in.
+    this.content.tabIndex = 0;
     // Three things have to be excluded here, because scrollTop cannot say which
     // of them moved it — only this listener knows:
     //
@@ -133,6 +141,16 @@ class ViewerTab {
     }, { passive: true });
     this.el.append(this.toolbar, this.content);
     this.load();
+  }
+
+  // focusReader puts keyboard focus on the scroller. Only user-initiated opens
+  // call it (openFile / openBoxFile); a layout restore must not steal focus. A
+  // freshly built tab may not be in the document yet (a maximized other pane keeps
+  // its cell detached), so when detached it retries once on the next frame.
+  focusReader() {
+    const f = () => { if (this.content.isConnected) this.content.focus({ preventScroll: true }); };
+    if (this.content.isConnected) f();
+    else requestAnimationFrame(f);
   }
 
   title() { return this.name; }

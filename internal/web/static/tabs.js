@@ -1840,7 +1840,12 @@ function moveToOwnPane(from, tab) {
 // separate "viewer" screen to land on. renderMobileChips is likewise
 // typeof-guarded and re-painted here rather than waiting for the next
 // session poll, so a newly opened file's chip appears at once.
-function openFile(path) {
+// opts = {line?, col?}: a terminal link such as `x.go:12:5` carries its line.
+// A new tab stores it (ViewerTab.pendingLine); an already-open one is told to
+// reveal it. The viewer takes keyboard focus either way: every caller here (tree,
+// palette, terminal link, drawer "Open in pane") is a user action. Layout restore
+// builds its ViewerTabs directly and never comes through here.
+function openFile(path, opts) {
   // Normalise BEFORE matching, on the same rule ViewerTab's constructor uses.
   // Comparing the raw argument meant "/home/u/./a.md" missed the tab already
   // showing "/home/u/a.md" and opened a second one carrying an identical path —
@@ -1851,20 +1856,24 @@ function openFile(path) {
     const t = c.tabs.find((t) => t.kind === "viewer" && !t.box && t.path === path);
     if (t) {
       setFocusedCell(c); c.activate(t);
+      if (opts && opts.line && typeof t.revealLine === "function") t.revealLine(opts.line, opts.col);
       if (typeof closeDrawerFor === "function") closeDrawerFor(undefined, "files");
       if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
       if (typeof renderMobileChips === "function") renderMobileChips();
+      t.focusReader();
       return;
     }
   }
   const cell = focusedCellOrCreate();
-  cell.addTab(new ViewerTab(path));
+  const nt = new ViewerTab(path, opts && opts.line ? { line: opts.line, col: opts.col } : undefined);
+  cell.addTab(nt);
   renderGrid();
   // Desktop: a file opened from the Files drawer opens in the pane UNDER the
   // drawer, so the drawer gets out of its way.
   if (typeof closeDrawerFor === "function") closeDrawerFor(undefined, "files");
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
   if (typeof renderMobileChips === "function") renderMobileChips();
+  nt.focusReader();
 }
 
 // openBoxFile opens (or focuses) a read-only viewer for a file inside a
@@ -1872,22 +1881,26 @@ function openFile(path) {
 // through window.openBoxFile, typeof-guarded. Identical to openFile except for
 // identity: a box tab is matched on (session, path), never on the path alone, so
 // it cannot be mistaken for a host file at the same path or another box's.
-function openBoxFile(sessionId, path) {
+function openBoxFile(sessionId, path, opts) {
   if (typeof normalizePath === "function") path = normalizePath(path);
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "viewer" && t.box === sessionId && t.path === path);
     if (t) {
       setFocusedCell(c); c.activate(t);
+      if (opts && opts.line && typeof t.revealLine === "function") t.revealLine(opts.line, opts.col);
       if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
       if (typeof renderMobileChips === "function") renderMobileChips();
+      t.focusReader();
       return;
     }
   }
   const cell = focusedCellOrCreate();
-  cell.addTab(new ViewerTab(path, { box: sessionId }));
+  const nt = new ViewerTab(path, { box: sessionId, line: opts && opts.line, col: opts && opts.col });
+  cell.addTab(nt);
   renderGrid();
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
   if (typeof renderMobileChips === "function") renderMobileChips();
+  nt.focusReader();
 }
 
 function closeTabEverywhere(tab) {

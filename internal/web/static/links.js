@@ -27,6 +27,15 @@ const LINK_PATH_RE = /(?:\/|~\/|\.{1,2}\/|[\w.\-]+\/)[\w./\-]+\.[A-Za-z0-9]{1,8}
 // backtrack step, which measured 15s on one crafted 60k-character line.
 const LINK_DIR_TAIL_RE = /[\w.\-]*\//y;
 
+// LINK_LINE_RE, run sticky at the end of a path match, reads a `:line` or
+// `:line:col` suffix (compiler errors, grep -n, stack traces). Sticky and not
+// appended to LINK_PATH_RE for the same reason as LINK_DIR_TAIL_RE: the path
+// regex's backtracking cost stays what it was. Numbers are 1..9999999 so a port,
+// a timestamp or a PID is not read as a line. The lookahead rejects `:12abc` and
+// `:3.5`; when it rejects the col, the engine backtracks to the line alone, which
+// is what makes `src/a.go:12:func x` link as line 12.
+const LINK_LINE_RE = /:([1-9]\d{0,6})(?::([1-9]\d{0,6}))?(?![\w.])/y;
+
 const LINK_TRAILING_PUNCT = ".,;:!?";
 const LINK_CLOSERS = { ")": "(", "]": "[", "}": "{" };
 
@@ -92,7 +101,18 @@ function scanLinks(text) {
     if (claimed.some(([s, e]) => start < e && s < end)) continue;
     LINK_DIR_TAIL_RE.lastIndex = end;
     if (LINK_DIR_TAIL_RE.test(text)) continue;
-    out.push({ start, end, kind: "path", text: m[0] });
+    const tok = { start, end, kind: "path", text: m[0] };
+    LINK_LINE_RE.lastIndex = end;
+    const lm = LINK_LINE_RE.exec(text);
+    if (lm) {
+      tok.end = end + lm[0].length;
+      tok.line = Number(lm[1]);
+      if (lm[2] !== undefined) tok.col = Number(lm[2]);
+      // Resume after the suffix: its digits could otherwise start a second,
+      // overlapping path match (`a.go:1/b.ts`), which xterm's linkifier forbids.
+      LINK_PATH_RE.lastIndex = tok.end;
+    }
+    out.push(tok);
   }
 
   out.sort((a, b) => a.start - b.start);
@@ -195,6 +215,8 @@ function linksForRow(term, y, maxRows) {
       },
       text: tok.text,
       kind: tok.kind,
+      line: tok.line,
+      col: tok.col,
     }))
     .filter((l) => l.range.start.y <= y && l.range.end.y >= y);
 }

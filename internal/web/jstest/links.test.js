@@ -372,3 +372,60 @@ test("each row returns exactly the links that cross it", () => {
   assert.deepStrictEqual(linksForRow(t, 2).map((l) => l.text), ["http://b.dev/c.md"]);
   assert.deepStrictEqual(linksForRow(t, 3).map((l) => l.text), ["http://b.dev/c.md"]);
 });
+
+// ---- path:line[:col] suffix (v0.17 viewer tier 1, D1) ----
+
+const paths = (s) => scanLinks(s).filter((t) => t.kind === "path").map((t) => [t.text, t.line, t.col, s.slice(t.start, t.end)]);
+
+test("suffix: line", () => {
+  assert.deepStrictEqual(paths("see internal/web/x.go:123 here"), [["internal/web/x.go", 123, undefined, "internal/web/x.go:123"]]);
+});
+
+test("suffix: line and col", () => {
+  assert.deepStrictEqual(paths("./a/b.ts:12:5"), [["./a/b.ts", 12, 5, "./a/b.ts:12:5"]]);
+});
+
+test("suffix: grep -n output", () => {
+  assert.deepStrictEqual(paths("src/a.go:12:func x"), [["src/a.go", 12, undefined, "src/a.go:12"]]);
+  assert.deepStrictEqual(paths("src/a.go:12:5: error"), [["src/a.go", 12, 5, "src/a.go:12:5"]]);
+});
+
+test("suffix: rejected", () => {
+  for (const s of ["a/b.go:0", "a/b.go:12345678", "a/b.go:12abc", "a/b.go:3.5"]) {
+    assert.deepStrictEqual(paths(s), [["a/b.go", undefined, undefined, "a/b.go"]], s);
+  }
+});
+
+test("suffix: a col that fails the lookahead falls back to the line alone", () => {
+  assert.deepStrictEqual(paths("a/b.go:12:5x"), [["a/b.go", 12, undefined, "a/b.go:12"]]);
+});
+
+test("suffix: trailing prose punctuation", () => {
+  assert.deepStrictEqual(paths("(see a/b.go:7)."), [["a/b.go", 7, undefined, "a/b.go:7"]]);
+});
+
+test("suffix: a URL still wins", () => {
+  assert.deepStrictEqual(paths("https://x.dev/a/b.go:12"), []);
+});
+
+test("suffix: tokens never overlap", () => {
+  const toks = scanLinks("a/b.go:1/c.ts and d/e.go:2");
+  for (let i = 1; i < toks.length; i++) assert.ok(toks[i - 1].end <= toks[i].start);
+});
+
+test("suffix: linksForRow carries line and col through", () => {
+  const t = fakeTerm([{ text: "x src/a.go:12:5 y" }], 30);
+  const l = linksForRow(t, 1)[0];
+  assert.strictEqual(l.text, "src/a.go");
+  assert.strictEqual(l.line, 12);
+  assert.strictEqual(l.col, 5);
+  // the clickable range covers the suffix too
+  assert.deepStrictEqual(l.range, { start: { x: 3, y: 1 }, end: { x: 15, y: 1 } });
+});
+
+test("suffix: adversarial line is fast", () => {
+  const s = "a/b.go" + ":1".repeat(30000);
+  const t0 = performance.now();
+  scanLinks(s);
+  assert.ok(performance.now() - t0 < 200, "scan took " + (performance.now() - t0) + "ms");
+});
