@@ -532,6 +532,31 @@ function shortcutsBlocked(activeElement, openDialogCount) {
   return false;
 }
 
+// shortcutContext builds the one ctx object shortcutFor (shortcuts.js) reads, so
+// no handler re-derives "where is focus" on its own. The three focus flags are
+// mutually exclusive: xterm's helper textarea is the terminal, a textarea inside
+// CodeMirror is the editor, and only then does a real text control count as an
+// input. SELECT is an input too: arrow keys in a select belong to the user.
+// Every field is a strict boolean; a missing dialog count is 0.
+function shortcutContext(activeElement, openDialogCount, pageOpen, mobile) {
+  const ae = activeElement;
+  const inTerminal = !!(ae && ae.classList && ae.classList.contains("xterm-helper-textarea"));
+  const inEditor = !inTerminal && !!(ae && ae.closest && ae.closest(".CodeMirror"));
+  const inInput =
+    !inTerminal &&
+    !inEditor &&
+    !!ae &&
+    (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT" || !!ae.isContentEditable);
+  return {
+    dialogOpen: (openDialogCount || 0) > 0,
+    pageOpen: !!pageOpen,
+    inTerminal,
+    inEditor,
+    inInput,
+    mobile: !!mobile,
+  };
+}
+
 // setDialogError writes into a dialog's inline error line. Errors raised while a
 // dialog is open cannot use the toast, which paints beneath the backdrop.
 function setDialogError(dialogId, msg) {
@@ -556,6 +581,7 @@ if (typeof module !== "undefined" && module.exports) {
     shouldRefocusTerminal,
     askIsBusy,
     shortcutsBlocked,
+    shortcutContext,
     setDialogError,
   };
 }

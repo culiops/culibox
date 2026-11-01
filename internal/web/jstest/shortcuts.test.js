@@ -4,7 +4,7 @@
 // dialog still reaches document in the capture phase.
 const test = require("node:test");
 const assert = require("node:assert");
-const { shortcutsBlocked } = require("../static/shell.js");
+const { shortcutsBlocked, shortcutContext } = require("../static/shell.js");
 const SC = require("../static/shortcuts.js");
 
 const el = (tagName, className) => ({ tagName, classList: { contains: (c) => c === className } });
@@ -329,4 +329,67 @@ test("dispatchShortcut", () => {
 test("cmKeys", () => {
   assert.deepStrictEqual(SC.cmKeys("editor.save", true), ["Cmd-S"]);
   assert.deepStrictEqual(SC.cmKeys("editor.save", false), ["Ctrl-S"]);
+});
+
+// shortcutContext: the one place that decides where focus is, for every shortcut.
+const focusEl = (tagName, o = {}) => ({
+  tagName,
+  classList: { contains: (c) => c === o.cls },
+  closest: (sel) => (sel === ".CodeMirror" && o.inCM ? {} : null),
+  isContentEditable: !!o.editable,
+});
+const FOCUS_KEYS = ["inTerminal", "inEditor", "inInput"];
+const onlyFocus = (ctx, key) => FOCUS_KEYS.every((k) => ctx[k] === (k === key));
+
+test("ctx: xterm textarea is inTerminal only", () => {
+  const ctx = shortcutContext(focusEl("TEXTAREA", { cls: "xterm-helper-textarea" }), 0, false, false);
+  assert.ok(onlyFocus(ctx, "inTerminal"));
+});
+
+test("ctx: CodeMirror's textarea is inEditor only, not inInput", () => {
+  const ctx = shortcutContext(focusEl("TEXTAREA", { inCM: true }), 0, false, false);
+  assert.ok(onlyFocus(ctx, "inEditor"));
+});
+
+test("ctx: INPUT, SELECT, plain TEXTAREA, contenteditable DIV are inInput", () => {
+  for (const e of [focusEl("INPUT"), focusEl("SELECT"), focusEl("TEXTAREA"), focusEl("DIV", { editable: true })]) {
+    assert.ok(onlyFocus(shortcutContext(e, 0, false, false), "inInput"), e.tagName);
+  }
+});
+
+test("ctx: a button or body is no focus kind; null is all false", () => {
+  for (const e of [focusEl("BUTTON"), focusEl("BODY"), null, undefined]) {
+    const ctx = shortcutContext(e, 0, false, false);
+    assert.ok(FOCUS_KEYS.every((k) => ctx[k] === false));
+  }
+});
+
+test("ctx: element without closest/classList does not throw", () => {
+  const ctx = shortcutContext({ tagName: "INPUT" }, 0, false, false);
+  assert.ok(onlyFocus(ctx, "inInput"));
+});
+
+test("ctx: dialogOpen follows the count; undefined is 0", () => {
+  assert.strictEqual(shortcutContext(null, 2, false, false).dialogOpen, true);
+  assert.strictEqual(shortcutContext(null, 1, false, false).dialogOpen, true);
+  assert.strictEqual(shortcutContext(null, 0, false, false).dialogOpen, false);
+  assert.strictEqual(shortcutContext(null, undefined, false, false).dialogOpen, false);
+});
+
+test("ctx: pageOpen and mobile pass through as strict booleans", () => {
+  const a = shortcutContext(null, 0, true, true);
+  assert.strictEqual(a.pageOpen, true);
+  assert.strictEqual(a.mobile, true);
+  const b = shortcutContext(null, 0, undefined, 0);
+  assert.strictEqual(b.pageOpen, false);
+  assert.strictEqual(b.mobile, false);
+  const c = shortcutContext(null, 0, "x", 1);
+  assert.strictEqual(c.pageOpen, true);
+  assert.strictEqual(c.mobile, true);
+});
+
+test("ctx: every field is a strict boolean", () => {
+  const ctx = shortcutContext(focusEl("TEXTAREA", { inCM: true }), 3, 1, "y");
+  assert.deepStrictEqual(Object.keys(ctx).sort(), ["dialogOpen", "inEditor", "inInput", "inTerminal", "mobile", "pageOpen"]);
+  for (const v of Object.values(ctx)) assert.strictEqual(typeof v, "boolean");
 });
