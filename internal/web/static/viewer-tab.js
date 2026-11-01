@@ -118,7 +118,8 @@ class ViewerTab {
     // straight into it (a tree badge's click, openFile / drawerShowFile).
     this.changes = !!(opts && opts.view === "changes") && !this.isImage && !this.box;
     if (this.changes) this.pendingLine = null; // a diff has no line to reveal
-    this.diffSeq = 0;       // guards loadDiff against a toggle or reload that overtook it
+    this.diffSeq = 0;       // a newer diff read overtakes an older one
+    this.viewSeq = 0;       // bumped on every switch between the file and its diff (viewReplyPaints)
     this.fileScroll = 0;    // where the file was read, kept while the diff is up
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
@@ -380,6 +381,7 @@ class ViewerTab {
       this.changes = true;
       this.pendingLine = null;
       if (this.auto) this.toggleAutoOff();
+      this.viewSeq++; // a file read still in flight must not paint over the diff
       this.fileScroll = this.scroll;
       this.scroll = 0;
       this.resetForOtherView();
@@ -392,7 +394,7 @@ class ViewerTab {
   leaveChanges() {
     if (!this.changes) return;
     this.changes = false;
-    this.diffSeq++; // a diff still in flight must not paint over the file
+    this.viewSeq++; // a diff still in flight must not paint over the file
     this.scroll = this.fileScroll;
     this.resetForOtherView();
     this.load();
@@ -420,9 +422,11 @@ class ViewerTab {
   async loadDiff(poll) {
     if (poll || !this.changes || this.editing) return;
     const seq = ++this.diffSeq;
+    const vseq = this.viewSeq;
     this.setStatus("loading…");
     const res = await fsPost("/api/git/diff", { path: this.path });
-    if (seq !== this.diffSeq || !this.changes) return; // overtaken: a newer read or the file view owns the pane
+    // Overtaken: a newer diff read, or a switch back to the file, owns the pane.
+    if (seq !== this.diffSeq || !viewReplyPaints(vseq, this.viewSeq, true, this.changes)) return;
     this.setStatus("");
     const d = res.ok && res.data ? res.data : null;
     if (!d) {
@@ -584,6 +588,7 @@ class ViewerTab {
     // cannot also count as "first".
     const first = this.firstLoad;
     this.firstLoad = false;
+    const vseq = this.viewSeq;
     const ext = extOf(this.path);
     if (IMAGE_EXTS.has(ext)) {
       // Stated, not implied. Copy has no button on an image today, so this is
@@ -596,6 +601,10 @@ class ViewerTab {
     }
     if (!poll) this.setStatus("loading…");
     const res = await fsRead(this.path, this.box ? boxFileURL(this.box, this.path) : undefined);
+    // Changes was clicked while this read (or a Follow tick) was in flight: the pane
+    // shows the diff now, and this reply would paint the file over it and overwrite
+    // lastContent / copyRefusal.
+    if (!viewReplyPaints(vseq, this.viewSeq, false, this.changes)) return;
     // Only a successful read answers the question; a dropped poll keeps the
     // last known answer rather than bringing back an Edit that cannot save.
     if (res.ok) {
@@ -749,9 +758,14 @@ class ViewerTab {
       showToast(m.text, { error: m.error });
       return;
     }
+    const diff = this.changes; // what is on screen is the diff: say so, not "Copied the file"
     copyText(plan.text, (ok) => {
       btn?.focus();
-      const m = copyResultMessage(plan, this.name, ok);
+      const m = diff
+        ? (ok
+          ? { text: 'Copied the changes to "' + this.name + '" (' + plan.lines + " line" + (plan.lines === 1 ? "" : "s") + " of diff)", error: false }
+          : { text: 'Could not copy the changes to "' + this.name + '" to the clipboard — try again', error: true })
+        : copyResultMessage(plan, this.name, ok);
       showToast(m.text, { error: m.error });
     });
   }

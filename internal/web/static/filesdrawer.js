@@ -151,7 +151,7 @@ function drawerMountViewer(sid, path, opts) {
 function drawerParkViewer() {
   const v = drawerViewer;
   if (!v) return;
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: savedScroll(v) });
   v.dispose();
   v.onUpdate = null;
   v.el.remove();
@@ -219,7 +219,7 @@ function drawerFilesDetach() {
   if (!v) return;
   if (!drawerHasUnsaved()) { drawerParkViewer(); return; }
   if (v.auto) v.toggleAuto();
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: savedScroll(v) });
   v.el.remove();
 }
 

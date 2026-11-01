@@ -2022,7 +2022,9 @@
     .vd-hunk, .vd-hunk .vl-n { background: var(--panel); }
     .vd-hunk .vl-c, .vd-meta .vl-c { color: var(--muted); }
     .vd-meta .vl-n, .vd-hunk .vl-n, .vd-del .vl-n { cursor: default; }
-    .vd-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+    /* Sticky inside the scroller, so a screenshot taken mid-diff still says what it shows.
+       Opaque (--bg), above the sticky gutter cells (z-index 1). */
+    .vd-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; }
     .vd-title { font-weight: 600; color: var(--fg); }
     .vd-trunc { color: var(--fg); }
     .vd-back { margin-left: 6px; }

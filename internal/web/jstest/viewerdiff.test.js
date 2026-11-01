@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { parseUnifiedDiff, diffSign, diffRowHtml, diffMaxLine } = require("../static/viewerdiff.js");
+const { parseUnifiedDiff, diffSign, diffRowHtml, diffMaxLine, viewReplyPaints, diffCopyBlock } = require("../static/viewerdiff.js");
 
 const TWO_HUNKS = [
   "diff --git a/a.go b/a.go",
@@ -148,4 +148,22 @@ test("diffRowHtml: a span that crosses lines is closed and reopened per row", ()
   const html = diffRowHtml(rows, hl, esc);
   assert.equal(html[1], '<span class="c">a</span>');
   assert.equal(html[2], '<span class="c">b</span>');
+});
+
+test("viewReplyPaints: a reply from before a view switch never paints", () => {
+  assert.equal(viewReplyPaints(3, 3, false, false), true);  // file read, still the file view
+  assert.equal(viewReplyPaints(3, 3, true, true), true);    // diff read, still the diff view
+  assert.equal(viewReplyPaints(3, 4, false, true), false);  // Changes was clicked while the file read was in flight
+  assert.equal(viewReplyPaints(4, 5, true, false), false);  // back to the file while the diff was in flight
+  assert.equal(viewReplyPaints(3, 3, false, true), false);  // mode differs even if the counter did not move
+  assert.equal(viewReplyPaints(2, 4, false, false), false); // away and back again: a newer read owns the pane
+});
+
+test("diffCopyBlock: a reason for every state with no diff text, empty when there is text", () => {
+  assert.equal(diffCopyBlock(null), "");
+  assert.equal(diffCopyBlock(undefined), "");
+  assert.match(diffCopyBlock("loading"), /still loading/);
+  assert.match(diffCopyBlock("empty"), /no changes/);
+  assert.match(diffCopyBlock("binary"), /binary/);
+  assert.match(diffCopyBlock("unreadable"), /could not be read/);
 });

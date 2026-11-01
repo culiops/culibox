@@ -19,6 +19,7 @@
 // s = {path, image, box, readOnly, editing, dirty, markdown, auto, wrap,
 //      gitChanged,       // git says this file is M/A/U/C (gitstatus.js): Changes can be offered
 //      changes,          // the diff vs HEAD is on screen instead of the file
+//      diffNoText,       // in Changes mode: why there is no diff text to copy ("" = there is)
 //      lines,            // are there numbered lines to jump to (read view or editor)
 //      insert, reveal, rel, // {ok, title} from viewerpath.js; a boolean is accepted
 //      extras: [{key, label, title}],   // host buttons, between Find and ⋯
@@ -45,7 +46,8 @@ function viewerToolbarModel(s) {
   m.edit = ent(!editing && !image && !s.box && !s.readOnly && !changes, true, "Edit", "Edit this file");
   m.save = ent(editing, true, "Save", "Save" + hint("save"));
   m.cancel = ent(editing, true, "Cancel", "Discard changes and return to the read view");
-  m.copy = ent(true, !image, "Copy", image ? "An image has no text to copy" : changes ? "Copy this diff" : "Copy this file's contents");
+  const noDiff = changes && !image ? s.diffNoText || "" : ""; // why there is no diff text to copy ("" = there is)
+  m.copy = ent(true, !image && !noDiff, "Copy", image ? "An image has no text to copy" : changes ? noDiff || "Copy this diff" : "Copy this file's contents");
   m.path = ent(true, true, "Path ▾", "Copy, insert or reveal this file's path");
   m.find = ent(true, !image, "Find", image ? "An image has no text to search" : "Find in this file" + hint("find"));
   // Changes toggles the file and its diff vs HEAD. Offered for a git-changed file,
@@ -314,6 +316,7 @@ function buildViewerToolbar(viewer, host) {
       wrap: isViewerWrap(),
       gitChanged: typeof gitStatusCodeFor === "function" && "MAUC".includes(gitStatusCodeFor(viewer.path) || "-") && !viewer.box,
       changes: !!viewer.changes,
+      diffNoText: viewer.changes && typeof diffCopyBlock === "function" ? diffCopyBlock(viewer.copyRefusal) : "",
       lines: !!viewer.hasLines || !!(viewer.editing && viewer.cm),
       insert: insertTargetFor(viewer, viewer.insertCandidate()),
       reveal: revealable(viewer, home),

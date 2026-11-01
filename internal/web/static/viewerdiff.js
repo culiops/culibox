@@ -115,6 +115,26 @@ function diffRowHtml(rows, hl, esc) {
   return out;
 }
 
+// viewReplyPaints: may a finished read paint the pane? One counter (`seq`) is
+// bumped on every switch between the file and its diff, and each async read
+// remembers the counter and the mode it started in. A reply that outlived a
+// switch (Changes clicked while the file read, or a Follow tick, was in flight)
+// must be dropped: it would paint the file under a toolbar saying Changes.
+function viewReplyPaints(startSeq, nowSeq, startChanges, nowChanges) {
+  return startSeq === nowSeq && !!startChanges === !!nowChanges;
+}
+
+// diffCopyBlock: why Copy has no diff to give, or "" when it has. `refusal` is the
+// viewer's copyRefusal while the diff is on screen (null = there is text).
+function diffCopyBlock(refusal) {
+  if (refusal === null || refusal === undefined) return "";
+  return {
+    loading: "The diff is still loading",
+    empty: "There are no changes to copy",
+    binary: "A binary file has no text diff to copy",
+  }[refusal] || "The changes could not be read, so there is no diff to copy";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parseUnifiedDiff, diffSign, diffMaxLine, diffRowHtml };
+  module.exports = { parseUnifiedDiff, diffSign, diffMaxLine, diffRowHtml, viewReplyPaints, diffCopyBlock };
 }

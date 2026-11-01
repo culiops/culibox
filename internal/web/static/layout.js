@@ -56,6 +56,13 @@ function clampScroll(v) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// savedScroll: the offset a viewer tab is stored at. A tab showing its diff vs
+// HEAD stores where the FILE was read: the diff is not persisted, so the tab
+// restores as the file and the diff's offset would mean nothing there.
+function savedScroll(t) {
+  return t.changes ? t.fileScroll : t.scroll;
+}
+
 // dockApi → the dock normaliser from shelldock.js. Resolved at call time so load
 // order cannot matter: a browser global when the page loaded it first, a require
 // under node.
@@ -83,8 +90,8 @@ function storedTab(t) {
   if (t.kind === "viewer" && t.path) {
     // `box` only when set: a host viewer's stored shape is unchanged, so old
     // snapshots and new ones stay interchangeable.
-    if (typeof t.box === "string" && t.box) return { path: t.path, box: t.box, scroll: clampScroll(t.scroll) };
-    return { path: t.path, scroll: clampScroll(t.scroll) };
+    if (typeof t.box === "string" && t.box) return { path: t.path, box: t.box, scroll: clampScroll(savedScroll(t)) };
+    return { path: t.path, scroll: clampScroll(savedScroll(t)) };
   }
   if (t.kind === "terminal" && t.id) return { id: t.id };
   return null;
@@ -175,8 +182,8 @@ function reconcileLayout(saved, sessions) {
       // — `{id: "sess-1", path: 42}` — pass the terminal liveness check above and
       // then be emitted as a viewer, which applyPlan hands to `new ViewerTab(42)`
       // and which throws out of the restore, half-building the grid.
-      if (key[0] === "b") tabs.push({ path: t.path, box: t.box, scroll: clampScroll(t.scroll) });
-      else tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
+      if (key[0] === "b") tabs.push({ path: t.path, box: t.box, scroll: clampScroll(savedScroll(t)) });
+      else tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(savedScroll(t)) } : { id: t.id });
     }
     if (!tabs.length) return;
     // Follow the active tab by identity: after dropping dead tabs its old index

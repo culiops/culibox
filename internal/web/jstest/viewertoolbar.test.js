@@ -235,3 +235,14 @@ test("Changes sits between Find and the host extras", () => {
   assert.ok(keys.indexOf("find") < keys.indexOf("changes"));
   assert.ok(keys.indexOf("changes") < keys.indexOf("x"));
 });
+
+test("Copy in Changes mode: disabled with the reason when there is no diff text", () => {
+  const m = viewerToolbarModel(base({ gitChanged: true, changes: true, diffNoText: "There are no changes to copy" }));
+  assert.equal(m.copy.enabled, false);
+  assert.equal(m.copy.title, "There are no changes to copy");
+  const ok = viewerToolbarModel(base({ gitChanged: true, changes: true, diffNoText: "" }));
+  assert.equal(ok.copy.enabled, true);
+  assert.equal(ok.copy.title, "Copy this diff");
+  // The reason only applies to the diff: the file view is unaffected.
+  assert.equal(viewerToolbarModel(base({ diffNoText: "x" })).copy.enabled, true);
+});
