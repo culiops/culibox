@@ -157,7 +157,7 @@ function credDeleteText(kind, e) {
   const inStore = (app ? e.key_ref_kind : e.value_kind) === "store";
   if (inStore && e.status === "missing") {
     // The view also reports "missing" when the store could not be listed.
-    return head + (e.error ? "The store could not be read, so any value there stays." : "Its store value is already missing.");
+    return head + (e.error ? "The store could not be read. Any value in it stays." : "Its store value is already missing.");
   }
   // A failed merge reads "invalid" whether or not the value exists.
   if (inStore && e.status === "invalid") return head + "Any value in the store stays; delete it under Stored values if you no longer need it.";
