@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  ancestorsBetween, pathLineText, relativePath, relativeAvail, insertTargetFor, revealable,
+  ancestorsBetween, pathLineText, relativePath, relativeAvail, insertTargetFor, revealable, alternatesOutcome, altNote, agoText,
 } = require("../static/viewerpath.js");
 const { shellQuote } = require("../static/upload.js");
 
@@ -91,4 +91,59 @@ test("revealable: box file and outside-home file are refused with a reason", () 
 
 test("revealable: unknown home allows (same convention as treeFollowTarget)", () => {
   assert.equal(revealable({ box: "", path: "/etc/x" }, "").ok, true);
+});
+
+// alternatesOutcome: what the viewer does with GET /api/fs/alternates after a 404.
+test("alternatesOutcome: nothing, or anything unusable, is none", () => {
+  assert.deepEqual(alternatesOutcome([]), { kind: "none" });
+  assert.deepEqual(alternatesOutcome(null), { kind: "none" });
+  assert.deepEqual(alternatesOutcome(undefined), { kind: "none" });
+  assert.deepEqual(alternatesOutcome([{ worktree: "w" }, null, { path: 5 }]), { kind: "none" });
+});
+
+test("alternatesOutcome: one candidate names the path and worktree", () => {
+  assert.deepEqual(alternatesOutcome([{ path: "/r/.claude/worktrees/w/a.md", worktree: "w", mtime: 5 }]),
+    { kind: "one", path: "/r/.claude/worktrees/w/a.md", worktree: "w" });
+  // the main checkout is worktree ""
+  assert.deepEqual(alternatesOutcome([{ path: "/r/a.md", worktree: "", mtime: 5 }]),
+    { kind: "one", path: "/r/a.md", worktree: "" });
+});
+
+test("alternatesOutcome: several candidates are a pick list, newest first", () => {
+  const o = alternatesOutcome([
+    { path: "/r/w1/a.md", worktree: "w1", mtime: 100 },
+    { path: "/r/a.md", worktree: "", mtime: 300 },
+    { path: "/r/w2/a.md", worktree: "w2", mtime: 200 },
+  ]);
+  assert.equal(o.kind, "pick");
+  assert.deepEqual(o.items.map((i) => i.worktree), ["", "w2", "w1"]);
+  assert.deepEqual(o.items[0], { path: "/r/a.md", worktree: "", mtime: 300 });
+});
+
+test("alternatesOutcome: ties keep the server order, and the list is capped at 64", () => {
+  const o = alternatesOutcome([
+    { path: "/a", worktree: "a", mtime: 1 }, { path: "/b", worktree: "b", mtime: 1 },
+  ]);
+  assert.deepEqual(o.items.map((i) => i.worktree), ["a", "b"]);
+  const many = Array.from({ length: 70 }, (_, i) => ({ path: "/p" + i, worktree: "w" + i, mtime: i }));
+  assert.equal(alternatesOutcome(many).items.length, 64);
+});
+
+test("alternatesOutcome: a missing mtime sorts last and does not throw", () => {
+  const o = alternatesOutcome([{ path: "/a", worktree: "a" }, { path: "/b", worktree: "b", mtime: 9 }]);
+  assert.deepEqual(o.items.map((i) => i.worktree), ["b", "a"]);
+});
+
+test("altNote: the sentence for a single candidate, with the worktree name split out", () => {
+  assert.deepEqual(altNote("w"), { pre: "Opened from worktree ", name: "w", post: " \u2014 not found here." });
+  assert.deepEqual(altNote(""), { pre: "Opened from the main checkout \u2014 not found in this worktree.", name: "", post: "" });
+});
+
+test("agoText: coarse relative time", () => {
+  assert.equal(agoText(1000, 1030), "just now");
+  assert.equal(agoText(1000, 1000 + 5 * 60), "5 min ago");
+  assert.equal(agoText(1000, 1000 + 3 * 3600), "3 h ago");
+  assert.equal(agoText(1000, 1000 + 2 * 86400), "2 d ago");
+  assert.equal(agoText(2000, 1000), "just now"); // clock skew
+  assert.equal(agoText(0, 1000), "");              // unknown mtime
 });

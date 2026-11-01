@@ -936,6 +936,7 @@
        download included, would be unreachable on a phone. */
     @media (hover: none) {
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
+      button.ft-git { padding: 4px 6px; }
       /* Touch targets, at every width rather than only the narrow breakpoint:
          a tablet has no hover either. Desktop keeps its denser header.
          HEIGHT ONLY, deliberately. These buttons are 29-40px wide already, so a
@@ -945,6 +946,25 @@
       header button { min-height: 36px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
+    /* Git marks (gitstatus.js): a one-letter badge after the name, a dot on a folder
+       with changes below it. Never amber. Colours are tokens, and each measured
+       against the tree background (--bg and --panel, plus the hover wash):
+         Graphite  M --accent 7.44  A/U --ok 9.07  D/C --danger 5.97  (on --panel)
+         Mocha     M --accent 5.97  A/U --ok 8.46  D/C --danger 5.43  (on --panel)
+       Worst case over --bg/--panel/hover: 5.28 (Mocha M), 4.80 (Mocha D/C).
+       The selected row's wash is darker for the text on it, where Mocha M/D and
+       Graphite D fall under 4.5, so those marks lean toward --fg there. The
+       badge never shrinks: .ft-name (min-width:0) ellipsizes first. */
+    .ft-git { flex: none; min-width: 1.4ch; padding: 0 2px; border: 0; background: none; font: 700 11px/1 ui-monospace, Menlo, monospace; text-align: center; }
+    button.ft-git { cursor: pointer; }
+    button.ft-git:hover { text-decoration: underline; }
+    .ft-git-dot { flex: none; font-size: 8px; line-height: 1; padding: 0 4px; }
+    .ft-git-m { color: var(--accent); }
+    .ft-git-a, .ft-git-u { color: var(--ok); }
+    .ft-git-d, .ft-git-c { color: var(--danger); }
+    .ft-node.ft-sel .ft-git-m { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
+    .ft-node.ft-sel .ft-git-a, .ft-node.ft-sel .ft-git-u { color: color-mix(in srgb, var(--ok) 50%, var(--fg)); }
+    .ft-node.ft-sel .ft-git-d, .ft-node.ft-sel .ft-git-c { color: color-mix(in srgb, var(--danger) 50%, var(--fg)); }
     /* Same treatment as the header controls: these sit 40px below them, so a
        muted pair next to a lifted pair reads as "one of these is disabled". */
     #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
@@ -1903,6 +1923,8 @@
     .vt-btn:hover:not(.vt-off), .vt-btn[aria-expanded="true"] { border-color: var(--accent); }
     .vt-btn:focus-visible, .vt-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
     .vt-btn.vt-off { opacity: .45; cursor: default; }
+    /* A pressed toggle (Changes): an accent ring on the border, plus bold, so it is not hue alone. */
+    .vt-btn.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
     .vt-btn.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
     .vt-more { padding: 1px 10px; font-size: 14px; line-height: 1; }
     .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1981,6 +2003,31 @@
        (accent on --bg 7.8:1, over the 3:1 a graphic needs) carries the mark. */
     .vl-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
     .vl-target .vl-n { color: var(--fg); background: color-mix(in srgb, var(--accent) 5%, var(--bg)); box-shadow: inset 3px 0 0 var(--accent); }
+    /* Changes vs HEAD (viewer-tab.js renderDiff): the same .vl rows with a sign column
+       (.vd-sign) between the number and the code. Added rows tint --ok, removed rows
+       --danger (never amber: that is needs-you). The row wash is 7% over --bg; the
+       gutter and sign cells are a stronger 14% so the stripe reads at a glance, and
+       the + / − sign says it without colour. Measured, WCAG (graphite / Mocha):
+       code text #c9d1d9 on the 7% wash 11.29 / 9.05 worst (ok) ; the dimmest syntax
+       token (.hljs-comment #8b949e) 5.67 / 4.54 (it fails 4.5 at 8% in Mocha, which
+       is why the wash is 7%); the number (--muted) on the 14% gutter 4.87 / 5.22;
+       the sign (--fg) on it 12.3 / 8.0 ; hunk and meta text (--muted) on --panel
+       5.79 / 5.65 and on --bg above 6. */
+    .vd-sign { position: sticky; left: calc(var(--vl-digits, 3) * 1ch + 1ch + 12px + 1px); z-index: 1; flex: none; box-sizing: border-box; width: 2ch; text-align: center; font-weight: 700; color: var(--fg); -webkit-user-select: none; user-select: none; }
+    .viewer-wrap .vd-sign { position: static; }
+    .vd-add { background: color-mix(in srgb, var(--ok) 7%, var(--bg)); }
+    .vd-del { background: color-mix(in srgb, var(--danger) 7%, var(--bg)); }
+    .vd-add .vl-n, .vd-add .vd-sign { background: color-mix(in srgb, var(--ok) 14%, var(--bg)); }
+    .vd-del .vl-n, .vd-del .vd-sign { background: color-mix(in srgb, var(--danger) 14%, var(--bg)); }
+    .vd-hunk, .vd-hunk .vl-n { background: var(--panel); }
+    .vd-hunk .vl-c, .vd-meta .vl-c { color: var(--muted); }
+    .vd-meta .vl-n, .vd-hunk .vl-n, .vd-del .vl-n { cursor: default; }
+    /* Sticky inside the scroller, so a screenshot taken mid-diff still says what it shows.
+       Opaque (--bg), above the sticky gutter cells (z-index 1). */
+    .vd-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; }
+    .vd-title { font-weight: 600; color: var(--fg); }
+    .vd-trunc { color: var(--fg); }
+    .vd-back { margin-left: 6px; }
     /* Find in file / Go to line (viewerfind.js). The bar sits between the toolbar and
        the scroller. Colours, measured against the code text (Catppuccin Mocha / the
        desktop graphite palette): every match is --fg on a 35% --accent wash over --bg
@@ -2006,6 +2053,18 @@
     @media (max-width: 700px) { .vf-input { font-size: 16px; } .vf-btn { min-height: 32px; min-width: 36px; } }
     .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
     .viewer-msg.err { color: var(--danger); }
+    /* #53: the note over a file opened from another checkout, and the in-pane list
+       when several checkouts hold it. --fg on --panel: the same pair the toolbar uses. */
+    .viewer-altnote { flex: 0 0 auto; padding: 4px 12px; font-size: 12px; color: var(--fg); background: var(--panel); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .viewer-altnote[hidden] { display: none; }
+    .viewer-altnote code { font-weight: 600; }
+    .viewer-alts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .viewer-alts-title { color: var(--fg); font-size: 14px; font-weight: 600; }
+    .viewer-alts-sub { overflow-wrap: anywhere; }
+    .viewer-alt { display: flex; align-items: baseline; gap: 10px; max-width: 100%; min-height: 36px; padding: 6px 12px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font-size: 13px; text-align: left; cursor: pointer; }
+    .viewer-alt:hover { border-color: var(--accent); }
+    .viewer-alt-name { overflow-wrap: anywhere; }
+    .viewer-alt-ago { color: var(--muted); font-size: 12px; white-space: nowrap; }
     .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }
     .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: var(--bg); }
     /* edit mode (CodeMirror 5) */

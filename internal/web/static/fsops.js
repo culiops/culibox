@@ -37,6 +37,22 @@ async function fsRead(path, url) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// fsAlternates is GET /api/fs/alternates (#53): the same repo-relative path in the
+// repo's OTHER checkouts (main checkout + linked worktrees), newest first, each
+// {path, worktree ("" = the main checkout), mtime}. Every failure (a refusal, the
+// network, a body that is not the expected shape) is "no candidates": the caller
+// then shows the ordinary not-found, which is what it would have shown anyway.
+async function fsAlternates(base, rel) {
+  try {
+    const res = await fetch("/api/fs/alternates?base=" + encodeURIComponent(base) + "&rel=" + encodeURIComponent(rel));
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data && Array.isArray(data.candidates) ? data.candidates : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 // boxFileURL is the read-only route for a file inside a session's box (see
 // boxfile.go): same response shapes as /api/fs/read, `download` for the save.
 // Keyed on the session id because the client never learns box names.

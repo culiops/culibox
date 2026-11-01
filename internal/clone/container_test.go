@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -160,4 +161,60 @@ func TestFetchRemovesBundleContainerOnTimeout(t *testing.T) {
 		t.Error("argv has no --init")
 	}
 	x.tempEmpty()
+}
+
+func TestExecDockerPrependsArgs(t *testing.T) {
+	d := ExecDocker{Bin: "docker", Args: []string{"--context", "colima-agent-box"}}
+	if got, want := d.argv("rm", "-f", "n1"), []string{"--context", "colima-agent-box", "rm", "-f", "n1"}; !slices.Equal(got, want) {
+		t.Errorf("argv = %q, want %q", got, want)
+	}
+	if got, want := (ExecDocker{Bin: "docker"}).argv("run"), []string{"run"}; !slices.Equal(got, want) {
+		t.Errorf("zero Args: argv = %q, want %q", got, want)
+	}
+	// The prefix must not alias the caller's slice.
+	d.argv("a")
+	d.argv("b")
+	if len(d.Args) != 2 {
+		t.Fatalf("Args changed: %q", d.Args)
+	}
+	// Both entry points really use it: a fake docker that records its argv.
+	dir := t.TempDir()
+	out := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + out + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d = ExecDocker{Bin: bin, Args: []string{"--context", "c1"}}
+	for name, call := range map[string]func() error{
+		"RunStream": func() error { return d.RunStream(context.Background(), []string{"run", "x"}, io.Discard) },
+		"Remove":    func() error { return d.Remove(context.Background(), "n1") },
+	} {
+		if err := call(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		b, _ := os.ReadFile(out)
+		if !strings.HasPrefix(string(b), "--context\nc1\n") {
+			t.Errorf("%s argv = %q, want --context c1 first", name, b)
+		}
+	}
+}
+
+// A container that exits non-zero must reach the caller as an *exec.ExitError
+// carrying the code: gitview treats exit 1 of `git diff --no-index` as success.
+func TestExecDockerRunStreamExposesExitCode(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho out\necho oops >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := ExecDocker{Bin: bin}.RunStream(context.Background(), []string{"run"}, &out)
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+		t.Fatalf("err = %v, want an *exec.ExitError with code 1", err)
+	}
+	if out.String() != "out\n" {
+		t.Fatalf("stdout = %q", out.String())
+	}
 }

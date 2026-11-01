@@ -811,6 +811,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// A companion shell runs the verified quick-shell profile, read when used.
 	api.QuickShell = srv.QuickShell
+	// The file tree's git badges and diffs; nil without the box layer.
+	srv.Git = gitViewFor(layer, os.Getuid(), os.Getgid())
 	host, _ := os.Hostname()
 	srv.BugReport = buildBugReport(bugDeps{
 		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },

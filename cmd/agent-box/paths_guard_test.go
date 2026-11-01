@@ -74,6 +74,8 @@ var pathEscapes = map[string]int{
 	"internal/broker/boxfiles.go literal /tmp": 1,
 	// The bundle container's own tmpfs and HOME (clone fetch), not a host path.
 	"internal/clone/fetch.go literal /tmp": 1,
+	// The git status/diff container's own tmpfs and HOME (gitview), not a host path.
+	"internal/gitview/args.go literal /tmp": 1,
 	// Claude Code's per-user temp folder (claude-<uid> under $CLAUDE_CODE_TMPDIR,
 	// /tmp or the OS temp dir): a READ of another program's files. The fs API
 	// serves it read-only (#50); agent-box never writes there.

@@ -116,14 +116,20 @@ function drawerSessionCwd(sid) {
 
 // drawerShowFile: a tree row was clicked while the drawer owns file clicks.
 // Resolves false when the user kept a dirty buffer instead.
-async function drawerShowFile(path) {
+// opts = {view?}: "changes" (a tree badge's click) opens the file's diff vs HEAD,
+// whether the file is already in the column or about to be mounted.
+async function drawerShowFile(path, opts) {
   if (!path) return false;
   if (typeof normalizePath === "function") path = normalizePath(path);
+  const changes = !!opts && opts.view === "changes";
   const v = drawerViewer;
-  if (v && v.path === path && drawerViewerSid === drawerState.sessionId) return true;
+  if (v && v.path === path && drawerViewerSid === drawerState.sessionId) {
+    if (changes) v.showChanges(); // refuses (with a toast) while the file is being edited
+    return true;
+  }
   if (!(await drawerConfirmLeave())) return false;
   drawerParkViewer(); // remembers the file being left, for this session
-  drawerMountViewer(drawerState.sessionId, path, { scroll: 0 });
+  drawerMountViewer(drawerState.sessionId, path, changes ? { scroll: 0, view: "changes" } : { scroll: 0 });
   return true;
 }
 
@@ -145,7 +151,7 @@ function drawerMountViewer(sid, path, opts) {
 function drawerParkViewer() {
   const v = drawerViewer;
   if (!v) return;
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: savedScroll(v) });
   v.dispose();
   v.onUpdate = null;
   v.el.remove();
@@ -213,7 +219,7 @@ function drawerFilesDetach() {
   if (!v) return;
   if (!drawerHasUnsaved()) { drawerParkViewer(); return; }
   if (v.auto) v.toggleAuto();
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: savedScroll(v) });
   v.el.remove();
 }
 
@@ -470,12 +476,18 @@ const drawerToolbarHost = {
 function drawerOpenInPane() {
   const v = drawerViewer;
   if (!v || v.editing) return;
-  const path = v.path, scroll = v.scroll;
+  const path = v.path, scroll = v.scroll, changes = !!v.changes, fileScroll = v.fileScroll;
   drawerClearViewer();
-  openFile(path);
+  openFile(path, changes ? { view: "changes" } : undefined); // "at the same place" includes the diff
   for (const c of cells) {
     const t = c.tabs.find((x) => x.kind === "viewer" && !x.box && x.path === path);
-    if (t) { t.scroll = scroll; t.applyScroll(); break; }
+    if (t) {
+      t.scroll = scroll;
+      // The file's own offset comes along, so Show file / Changes off lands where it was read.
+      if (t.changes && Number.isFinite(fileScroll)) t.fileScroll = fileScroll;
+      t.applyScroll();
+      break;
+    }
   }
 }
 

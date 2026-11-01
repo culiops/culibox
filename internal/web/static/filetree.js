@@ -120,9 +120,11 @@ function ftMarkRow(row, path, set) {
   const dot = document.createElement("span");
   dot.className = "ft-chg";
   dot.textContent = "\u25CF";
-  dot.title = "changed by the agent";
-  const name = row.querySelector(":scope > .ft-name");
-  if (name) name.after(dot); else row.append(dot);
+  dot.title = "edited by this session's agent";
+  // After the git badge (gitstatus.js) when there is one: the badge is the
+  // fact, this dot is the lesser hint, and it stays alone where git has no mark.
+  const anchor = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot") || row.querySelector(":scope > .ft-name");
+  if (anchor) anchor.after(dot); else row.append(dot);
 }
 function ftPaintChanged(set) {
   if (!ftTreeEl) return;
@@ -202,6 +204,9 @@ async function ftRenderDir(path, container, prefix) {
     row.append(more);
     ftRowPaths.set(row, full);
     ftMarkRow(row, full, chg);
+    // Marks from the status already held: a folder opened later, or a re-list
+    // while a refresh is in flight, paints at once instead of waiting.
+    if (typeof gitMarkRow === "function") gitMarkRow(row, full);
     // Appended BEFORE the directory branch, not after it: auto-open below calls
     // row.after(childBox), and ChildNode.after() is a silent no-op while the node
     // has no parent — so an orphaned row would render its restored subtree into a
@@ -248,6 +253,7 @@ async function ftRenderDir(path, container, prefix) {
             if (!open || !childBox) return;
             childBox.replaceChildren();
             ftRenderDir(full, childBox, b.childPrefix);
+            if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon();
           },
         });
       }
@@ -286,7 +292,9 @@ async function ftRenderDir(path, container, prefix) {
 // straight into the tree let a superseded load leave its rows behind (the tree
 // showed home while the picker said the session's directory).
 let ftLoading = Promise.resolve(); // settles when the newest ftLoadRoot has finished its render, so ftReveal can wait for it
-async function ftLoadRoot() {
+// opts.fresh: the caller just changed something on disk (or the user pressed
+// refresh), so git status must be re-read rather than reused.
+async function ftLoadRoot(opts) {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
   let release;
@@ -305,6 +313,8 @@ async function ftLoadRoot() {
   }
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
+  // The listing is on screen; now ask what git says about it (badges follow).
+  if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
   // A refresh asks again what the agent has changed since (Files drawer only).
   if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
 }
@@ -467,7 +477,7 @@ async function promptMkdir(dir) {
   const res = await fsMkdir(dir, name);
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
-  ftLoadRoot();
+  ftLoadRoot({ fresh: true });
 }
 
 async function promptRename(path, name) {
@@ -500,7 +510,7 @@ async function promptRename(path, name) {
   forgetSubtree(ftExpanded, path);
   saveExpanded(ftExpanded);
   showToast("Renamed to " + next);
-  ftLoadRoot();
+  ftLoadRoot({ fresh: true });
 }
 
 // confirmDelete drives the server's two-step gate: the first request reports
@@ -539,7 +549,7 @@ async function confirmDelete(path, name, isDir) {
   forgetSubtree(ftExpanded, path); // the path and its children are gone; drop their expand state
   saveExpanded(ftExpanded);
   showToast("Deleted " + name);
-  ftLoadRoot();
+  ftLoadRoot({ fresh: true });
 }
 
 // treeFollowTarget answers, for the focused tab, which directory the tree should
@@ -767,7 +777,7 @@ async function initFileTree() {
   if (refresh) {
     refresh.onclick = async () => {
       refresh.disabled = true;
-      try { await ftLoadRoot(); } finally { refresh.disabled = false; }
+      try { await ftLoadRoot({ fresh: true }); } finally { refresh.disabled = false; }
     };
   }
   // Initial root: whatever the focused TAB resolves to — a terminal's cwd or a

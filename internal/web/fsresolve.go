@@ -75,6 +75,10 @@ type fsPolicy struct {
 	// sees (a renamed workspace is no longer contained, a renamed data dir no
 	// longer denied), so rename and delete refuse them; see guardsTree.
 	guarded map[fileKey]struct{}
+	// deniedOrAbove is every denied root plus all of its ancestors, by
+	// identity: a directory in it would carry a denied tree along if it were
+	// handed out whole (the git status mounts, see gitapi.go).
+	deniedOrAbove map[fileKey]struct{}
 }
 
 // newFsPolicy builds the policy for home and trees. Entries that do not exist are
@@ -92,7 +96,7 @@ func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, erro
 		return fsPolicy{}, err
 	}
 	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{},
-		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}}
+		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}, deniedOrAbove: map[fileKey]struct{}{}}
 
 	forbidden := map[fileKey]struct{}{}
 	addSelfAndAncestors := func(dir string) {
@@ -120,6 +124,7 @@ func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, erro
 		p.denied[k] = struct{}{}
 		addSelfAndAncestors(rd)
 		addGuarded(p.guarded, rd)
+		addGuarded(p.deniedOrAbove, rd)
 	}
 	for _, c := range trees.Contained {
 		fi, err := os.Stat(c)

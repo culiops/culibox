@@ -5,6 +5,10 @@
 const MD_EXTS = new Set(["md", "markdown"]);
 // Rows per block in a big file's read view (renderCode, .vl-chunk in app.css).
 const VT_CHUNK = 500;
+// A diff over this many characters is shown without syntax highlighting: the
+// highlighter runs on the main thread and two passes over a 2 MiB diff would
+// freeze the pane. (Measured; see the task report.)
+const VD_HL_MAX = 400000;
 
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
@@ -51,6 +55,13 @@ class ViewerTab {
     // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
     // may close itself when its file turns out to be gone (see load).
     this.restored = !!(opts && opts.restored);
+    // #53: {base, rel} when this tab came from a relative terminal token. If the
+    // first read is a 404, the file may live in another checkout of the repo
+    // (findAlternates). Never persisted: a restored tab has none. altPending is
+    // true while that lookup is in flight (a poll must not paint over it).
+    this.alt = opts && opts.alt && typeof opts.alt.base === "string" && typeof opts.alt.rel === "string" ? opts.alt : null;
+    this.altPending = false;
+    this.disposed = false;
     // The line (and column) a terminal link such as `x.go:12:5` asked for; the
     // first render consumes it (revealLine). null when the file was opened plainly.
     this.pendingLine = opts && Number.isInteger(opts.line) && opts.line > 0
@@ -109,13 +120,26 @@ class ViewerTab {
       if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // fixed-position: it would leave its number behind
     }, { passive: true });
     this.isImage = IMAGE_EXTS.has(ext0);
+    // Changes mode: the pane shows this file's diff vs HEAD instead of the file
+    // (spec 5.2). Only a host text file has one. opts.view === "changes" opens
+    // straight into it (a tree badge's click, openFile / drawerShowFile).
+    this.changes = !!(opts && opts.view === "changes") && !this.isImage && !this.box;
+    if (this.changes) this.pendingLine = null; // a diff has no line to reveal
+    this.diffSeq = 0;       // a newer diff read overtakes an older one
+    this.viewSeq = 0;       // bumped on every switch between the file and its diff (viewReplyPaints)
+    this.fileScroll = 0;    // where the file was read, kept while the diff is up
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
     // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
     // for the Files drawer: its extra button and its shorter path label.
     this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
     this.toolbar = this.toolbarApi.el;
-    this.el.append(this.toolbar, this.findBar, this.content);
+    // The one-line note over a file opened from another checkout (altOpened). Like
+    // the find bar it sits outside the scroller, so no render ever removes it.
+    this.noteEl = document.createElement("div");
+    this.noteEl.className = "viewer-altnote";
+    this.noteEl.hidden = true;
+    this.el.append(this.toolbar, this.findBar, this.noteEl, this.content);
     // Bubble phase, on the viewer's own element: it fires for the read scroller,
     // the find bar and CodeMirror's textarea, and never for a terminal or the
     // rest of the page, so Mod+F / Ctrl+G stay the browser's and readline's there.
@@ -143,7 +167,7 @@ class ViewerTab {
   // needs numbered lines: the code view or the editor.
   openFind(mode) {
     if (mode === "line") {
-      if (!(this.editing && this.cm) && !this.hasLines) return false;
+      if (!(this.editing && this.cm) && (!this.hasLines || this.changes)) return false;
     } else if (this.isImage) return false;
     this.find.open(mode);
     return true;
@@ -304,6 +328,7 @@ class ViewerTab {
     requestAnimationFrame(() => { this.applying = false; });
   }
   dispose() {
+    this.disposed = true; // a lookup still in flight must not touch a closed tab
     if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
     this.toolbarApi.closeMenus();
     if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // its buttons would act on a closed viewer
@@ -317,6 +342,7 @@ class ViewerTab {
   copy(btn) { this.copyContents(btn || null); }
   fontStep(d) { this.zoom(d * fontPrefs.STEP); }
   toggleAuto() {
+    if (this.changes) return; // the diff is not re-read on a timer: each read starts a container
     this.auto = !this.auto;
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
@@ -354,6 +380,186 @@ class ViewerTab {
     this.findRefresh();
   }
 
+  // --- Changes vs HEAD (spec 5.2) ---------------------------------------------
+
+  // toggleChanges flips this tab between the file and its diff vs HEAD.
+  toggleChanges() { return this.changes ? this.leaveChanges() : this.showChanges(); }
+
+  // showChanges puts the diff on screen (or re-reads it when it already is: a
+  // badge click after the file changed again). Says whether it could.
+  showChanges() {
+    if (this.isImage || this.box) return false;
+    if (this.editing) { showToast("Save or cancel your edit first"); return false; }
+    if (!this.changes) {
+      this.changes = true;
+      this.pendingLine = null;
+      if (this.auto) this.toggleAutoOff();
+      this.viewSeq++; // a file read still in flight must not paint over the diff
+      this.fileScroll = this.scroll;
+      this.scroll = 0;
+      this.resetForOtherView();
+    }
+    this.loadDiff();
+    return true;
+  }
+
+  // leaveChanges goes back to the file, re-read from disk.
+  leaveChanges() {
+    if (!this.changes) return;
+    this.changes = false;
+    this.viewSeq++; // a diff still in flight must not paint over the file
+    this.scroll = this.fileScroll;
+    this.resetForOtherView();
+    this.load();
+  }
+
+  toggleAutoOff() {
+    this.auto = false;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  // resetForOtherView forgets what the other view showed, so nothing (Copy, the
+  // unchanged-text check in load, the line mark) reads the wrong text.
+  resetForOtherView() {
+    this.lastContent = null;
+    this.renderedText = null;
+    this.copyRefusal = "loading";
+    this.targetLine = null;
+    this.changed();
+  }
+
+  // loadDiff fetches this file's diff vs HEAD and renders it (or the sentence for
+  // a state that has no rows). The server answers 200 for every git outcome, in
+  // `state`/`kind`; a non-OK status is the request itself failing.
+  async loadDiff(poll) {
+    if (poll || !this.changes || this.editing) return;
+    const seq = ++this.diffSeq;
+    const vseq = this.viewSeq;
+    this.setStatus("loading…");
+    const res = await fsPost("/api/git/diff", { path: this.path });
+    // Overtaken: a newer diff read, or a switch back to the file, owns the pane.
+    if (seq !== this.diffSeq || !viewReplyPaints(vseq, this.viewSeq, true, this.changes)) return;
+    const o = diffOutcome(res);
+    if (o.view === "msg") this.diffMessage(o.text, o.cls, o.refusal, o.back);
+    else this.renderDiff(o.rows, o.diff, o.truncated);
+    this.applyScroll();
+    // Last, after the render has set copyRefusal: setStatus repaints the toolbar,
+    // and Copy's enabled state reads copyRefusal (a repaint before it left Copy
+    // disabled as "still loading").
+    this.setStatus("");
+  }
+
+  // diffHeader: the strip that says what the pane shows, so a screenshot is
+  // unambiguous, plus the banner when the server cut the diff short.
+  diffHeader(truncated) {
+    const bar = document.createElement("div");
+    bar.className = "vd-bar";
+    const h = document.createElement("span");
+    h.className = "vd-title";
+    h.textContent = "Changes vs HEAD";
+    bar.append(h);
+    if (truncated) {
+      const t = document.createElement("span");
+      t.className = "vd-trunc";
+      t.textContent = "Diff cut at 2 MiB: only the start is shown";
+      bar.append(t);
+    }
+    return bar;
+  }
+
+  // diffMessage shows a state with no rows under the header. `refusal` is the
+  // copyRefusal that fits it; `back` adds the button to the file.
+  diffMessage(text, cls, refusal, back) {
+    const d = document.createElement("div");
+    d.className = "viewer-msg" + (cls ? " " + cls : "");
+    d.append(text);
+    if (back) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "viewer-auto vd-back";
+      b.textContent = "Show file";
+      b.onclick = () => this.leaveChanges();
+      d.append(" ", b);
+    }
+    this.content.replaceChildren(this.diffHeader(false), d);
+    this.showingMsg = true;
+    this.hasLines = false;
+    this.lastContent = null;
+    this.copyRefusal = refusal;
+    this.findRefresh();
+  }
+
+  // renderDiff draws the rows through the read view's machinery: .vl rows, the
+  // gutter, the 500-row blocks. The gutter is the NEW-file line (blank on a removed
+  // row), so the line-number menu still points at a real line; a sign column says
+  // + or − so colour is not the only cue. Code is highlighted in the file's
+  // language (two streams, old side and new side: viewerdiff.js diffRowHtml).
+  renderDiff(rows, text, truncated) {
+    this.showingMsg = false;
+    const lang = this.lang || extOf(this.path);
+    const hl = window.hljs && lang && hljs.getLanguage(lang) && text.length <= VD_HL_MAX
+      ? (src) => hljs.highlight(src, { language: lang }).value
+      : null;
+    const html = diffRowHtml(rows, hl, escapeHtml);
+    const maxLine = diffMaxLine(rows);
+    const pre = this.buildPre(rows.length, Math.max(3, String(maxLine).length), (i) => {
+      const r = rows[i];
+      const row = document.createElement("div");
+      row.className = "vl vd-" + r.t;
+      row.dataset.i = String(i);
+      if (r.n !== null) row.dataset.n = String(r.n);
+      const num = document.createElement("span");
+      num.className = "vl-n";
+      num.setAttribute("aria-hidden", "true");
+      num.textContent = r.n === null ? "" : String(r.n);
+      const sign = document.createElement("span");
+      sign.className = "vd-sign";
+      sign.textContent = diffSign(r.t);
+      const code = document.createElement("span");
+      code.className = "vl-c";
+      code.innerHTML = html[i];
+      row.append(num, sign, code);
+      return row;
+    });
+    this.content.replaceChildren(this.diffHeader(truncated), pre);
+    this.lineCount = maxLine;
+    this.hasLines = true;
+    this.targetLine = null;
+    this.renderedText = null;
+    this.lastContent = text;
+    this.copyRefusal = null;
+    this.findRefresh();
+  }
+
+  // buildPre makes the .viewer-pre of `count` rows, each made by makeRow(i), laid
+  // out in VT_CHUNK-row blocks when there are many (renderCode and renderDiff).
+  buildPre(count, digits, makeRow) {
+    const pre = document.createElement("pre");
+    pre.className = "viewer-pre hljs";
+    pre.style.setProperty("--vl-digits", String(digits));
+    const frag = document.createDocumentFragment();
+    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
+    // browser until it nears the viewport (content-visibility, app.css).
+    const chunked = count > VT_CHUNK * 2;
+    let chunk = null;
+    for (let i = 0; i < count; i++) {
+      const row = makeRow(i);
+      if (chunked) {
+        if (i % VT_CHUNK === 0) {
+          chunk = document.createElement("div");
+          chunk.className = "vl-chunk";
+          // The last block is shorter: say so, or its skipped height is overstated.
+          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, count - i)));
+          frag.append(chunk);
+        }
+        chunk.append(row);
+      } else frag.append(row);
+    }
+    pre.append(frag);
+    return pre;
+  }
+
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
   // churn and skips the re-render when the content is unchanged. Scroll is no
   // longer its business: every render path ends in applyScroll().
@@ -380,10 +586,12 @@ class ViewerTab {
       this.exitEdit();
       return;
     }
+    if (this.changes) return this.loadDiff(poll); // Reload in Changes mode re-reads the diff
     // Claimed synchronously so an auto-reload tick that overlaps the first read
     // cannot also count as "first".
     const first = this.firstLoad;
     this.firstLoad = false;
+    const vseq = this.viewSeq;
     const ext = extOf(this.path);
     if (IMAGE_EXTS.has(ext)) {
       // Stated, not implied. Copy has no button on an image today, so this is
@@ -396,6 +604,20 @@ class ViewerTab {
     }
     if (!poll) this.setStatus("loading…");
     const res = await fsRead(this.path, this.box ? boxFileURL(this.box, this.path) : undefined);
+    // Changes was clicked while this read (or a Follow tick) was in flight: the pane
+    // shows the diff now, and this reply would paint the file over it and overwrite
+    // lastContent / copyRefusal.
+    if (!viewReplyPaints(vseq, this.viewSeq, false, this.changes)) return;
+    // A fallback lookup is in flight: its answer owns the pane (a poll tick that
+    // lands now would paint "not found" over it, or re-run the lookup).
+    if (this.altPending) return;
+    // The alternates lookup is for the FIRST read only: a file that is deleted
+    // later is a deletion, not a path that was never here. Consumed either way.
+    const alt = first ? this.alt : null;
+    this.alt = null;
+    // The message paths below drop pendingLine; a fallback to another checkout
+    // still wants the line the link asked for.
+    const altLine = alt ? this.pendingLine : null;
     // Only a successful read answers the question; a dropped poll keeps the
     // last known answer rather than bringing back an Edit that cannot save.
     if (res.ok) {
@@ -444,13 +666,11 @@ class ViewerTab {
         // so a restored image of a deleted file keeps its "could not load
         // image" message and is closed by hand.
         if (first && this.restored && res.status === 404) { closeTabEverywhere(this); return; }
-        // The server's own sentence, not the clipboard's. This pane is the
-        // RENDER failure surface: a 5 MB log opened here must read "file too
-        // large to preview", not "too large to copy — use Download instead".
-        this.msg(
-          (res.data && res.data.error) || (res.status ? "HTTP " + res.status : "could not reach the server"),
-          "err");
-        this.setStatus("error");
+        // #53: a relative terminal link that is not here may be in another
+        // checkout. A restored tab never has `alt`, so the auto-close above is
+        // never pre-empted by a lookup, and a tab with `alt` is never restored.
+        if (alt && res.status === 404 && !this.box) { this.findAlternates(alt, vseq, res, altLine); return; }
+        this.showReadError(res);
       }
       return;
     }
@@ -478,6 +698,100 @@ class ViewerTab {
     }
   }
 
+  // showReadError paints a failed read. The server's own sentence, not the
+  // clipboard's. This pane is the RENDER failure surface: a 5 MB log opened here
+  // must read "file too large to preview", not "too large to copy — use Download
+  // instead".
+  showReadError(res) {
+    this.msg(
+      (res.data && res.data.error) || (res.status ? "HTTP " + res.status : "could not reach the server"),
+      "err");
+    this.setStatus("error");
+  }
+
+  // findAlternates (#53): the first read of a relative terminal link was a 404.
+  // Look for the same repo-relative path in the repo's other checkouts. None: the
+  // ordinary not-found. One: open it, with a note saying where from. Several: an
+  // in-pane list to choose from. `res` is the failed read, for the none case.
+  async findAlternates(alt, vseq, res, line) {
+    this.altPending = true;
+    const list = await fsAlternates(alt.base, alt.rel);
+    this.altPending = false;
+    // Closed, or the pane moved on (Changes was clicked): nothing here is ours to paint.
+    if (this.disposed || !viewReplyPaints(vseq, this.viewSeq, false, this.changes)) return;
+    const o = alternatesOutcome(list);
+    if (o.kind === "one") { this.openAlternate(o.path, o.worktree, line); return; }
+    if (o.kind === "pick") { this.renderAltPick(o.items, alt, line); return; }
+    this.showReadError(res);
+  }
+
+  // openAlternate re-points this tab at a file in another checkout and reads it.
+  // `line` ({line, col} or null) is what the link asked for: it goes back into
+  // pendingLine, which the read consumes. A tab already showing that file wins
+  // and this one closes (two tabs on one path would be stored twice and collapse
+  // at the next boot); repointViewer opens it at the same line.
+  openAlternate(path, worktree, line) {
+    if (typeof repointViewer === "function" && !repointViewer(this, path, line)) return;
+    this.pendingLine = line || null;
+    this.setAltNote(worktree);
+    this.setStatus("loading…");
+    this.load();
+  }
+
+  // setAltNote shows where the file was opened from; null clears it. Text only:
+  // the worktree name comes from a directory name on disk.
+  setAltNote(worktree) {
+    if (worktree === null) { this.noteEl.hidden = true; this.noteEl.replaceChildren(); return; }
+    const n = altNote(worktree);
+    this.noteEl.replaceChildren(n.pre);
+    if (n.name) {
+      const code = document.createElement("code");
+      code.textContent = n.name;
+      this.noteEl.append(code, n.post);
+    }
+    this.noteEl.hidden = false;
+  }
+
+  // renderAltPick: several other checkouts hold the file. A list in the pane, not
+  // a modal: it works on a phone and cannot collide with #ask-modal's single slot.
+  renderAltPick(items, alt, line) {
+    const box = document.createElement("div");
+    box.className = "viewer-msg viewer-alts";
+    const h = document.createElement("div");
+    h.className = "viewer-alts-title";
+    h.textContent = "This file exists in " + items.length + " places";
+    const sub = document.createElement("div");
+    sub.className = "viewer-alts-sub";
+    sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
+    box.append(h, sub);
+    const now = Date.now() / 1000;
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "viewer-alt";
+      b.title = it.path;
+      const name = document.createElement("span");
+      name.className = "viewer-alt-name";
+      name.textContent = it.worktree || "main checkout";
+      b.append(name);
+      const ago = agoText(it.mtime, now);
+      if (ago) {
+        const t = document.createElement("span");
+        t.className = "viewer-alt-ago";
+        t.textContent = ago;
+        b.append(t);
+      }
+      b.onclick = () => this.openAlternate(it.path, it.worktree, line);
+      box.append(b);
+    }
+    this.content.replaceChildren(box);
+    this.showingMsg = true;
+    this.hasLines = false;
+    this.lastContent = null;
+    this.findRefresh();
+    this.setStatus("");
+  }
+
   // revealLine shows the 1-based `line` (and, in the editor, column `col`) of
   // this file: the read view marks the line and scrolls it about a third of the
   // way down; edit mode moves the cursor there. A line past the end is clamped to
@@ -495,6 +809,7 @@ class ViewerTab {
       this.cm.focus();
       return;
     }
+    if (this.changes) return; // a diff's gutter is not the file's line numbers: nothing to reveal
     if (this.copyRefusal === "loading") { // the first read has not landed: ask again then
       this.pendingLine = { line, col };
       return;
@@ -548,9 +863,14 @@ class ViewerTab {
       showToast(m.text, { error: m.error });
       return;
     }
+    const diff = this.changes; // what is on screen is the diff: say so, not "Copied the file"
     copyText(plan.text, (ok) => {
       btn?.focus();
-      const m = copyResultMessage(plan, this.name, ok);
+      const m = diff
+        ? (ok
+          ? { text: 'Copied the changes to "' + this.name + '" (' + plan.lines + " line" + (plan.lines === 1 ? "" : "s") + " of diff)", error: false }
+          : { text: 'Could not copy the changes to "' + this.name + '" to the clipboard — try again', error: true })
+        : copyResultMessage(plan, this.name, ok);
       showToast(m.text, { error: m.error });
     });
   }
@@ -563,6 +883,7 @@ class ViewerTab {
   // since Step 1 above seeds an empty buffer with a real version).
   enterEdit() {
     if (this.editing || this.box || this.readOnly) return; // a box file is read-only (no button either; this guards a stray caller)
+    if (this.changes) return; // a diff is read-only too
     if (this.copyRefusal && this.copyRefusal !== "empty") return; // image/binary/loading/error stay non-editable
     // The vendor bundle can fail to reach the browser (blocked, offline, a
     // hiccup loading /vendor/codemirror.min.js). Checked before any state
@@ -660,6 +981,7 @@ class ViewerTab {
       this.baseVersion = decision.version || "";
       this.version = this.baseVersion;
       this.setStatus("saved");
+      if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon(); // the file's git mark may have changed
       this.exitEdit(content); // back to read view showing the saved text
     } else if (decision.outcome === "conflict") {
       this.baseVersion = decision.currentVersion || this.baseVersion;
@@ -715,15 +1037,7 @@ class ViewerTab {
     // and the highlighted code (hljs output only, which escapes the file's own
     // markup). The container carries hljs, the class its theme colours by.
     const lines = splitHighlightedLines(html);
-    const pre = document.createElement("pre");
-    pre.className = "viewer-pre hljs";
-    pre.style.setProperty("--vl-digits", String(Math.max(3, String(lines.length).length)));
-    const frag = document.createDocumentFragment();
-    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
-    // browser until it nears the viewport (content-visibility, app.css).
-    const chunked = lines.length > VT_CHUNK * 2;
-    let chunk = null;
-    for (let i = 0; i < lines.length; i++) {
+    const pre = this.buildPre(lines.length, Math.max(3, String(lines.length).length), (i) => {
       const row = document.createElement("div");
       row.className = "vl";
       row.dataset.n = String(i + 1);
@@ -735,18 +1049,8 @@ class ViewerTab {
       code.className = "vl-c";
       code.innerHTML = lines[i];
       row.append(num, code);
-      if (chunked) {
-        if (i % VT_CHUNK === 0) {
-          chunk = document.createElement("div");
-          chunk.className = "vl-chunk";
-          // The last block is shorter: say so, or its skipped height is overstated.
-          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, lines.length - i)));
-          frag.append(chunk);
-        }
-        chunk.append(row);
-      } else frag.append(row);
-    }
-    pre.append(frag);
+      return row;
+    });
     this.content.replaceChildren(pre);
     this.lineCount = lines.length;
     this.hasLines = true;
@@ -818,10 +1122,11 @@ class ViewerTab {
     if (!this.hasLines || !this.content.isConnected) return none;
     const row = this.firstVisibleRow();
     if (!row) return none;
-    const n = row.dataset.n;
+    // A diff row may have no line number (a removed line); its index always exists.
+    const sel = row.dataset.i !== undefined ? '.vl[data-i="' + row.dataset.i + '"]' : '.vl[data-n="' + row.dataset.n + '"]';
     const off = row.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
     return () => {
-      const r = this.content.querySelector('.vl[data-n="' + n + '"]');
+      const r = this.content.querySelector(sel);
       if (!r) return;
       const top = r.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop - off;
       this.setScrollTop(Math.max(0, Math.round(top)));
