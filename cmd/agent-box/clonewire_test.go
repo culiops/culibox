@@ -52,7 +52,7 @@ func TestNewCloneHooksLinuxOnly(t *testing.T) {
 	if err != nil || h == nil || h.unavailable != "" {
 		t.Fatalf("linux with a layer: got %v, %v; want ready hooks", h, err)
 	}
-	if h.docker != (clone.ExecDocker{Bin: "/usr/bin/docker"}) || h.image != "img:1" || h.instance != "DEV" ||
+	if d, ok := h.docker.(clone.ExecDocker); !ok || d.Bin != "/usr/bin/docker" || len(d.Args) != 0 || h.image != "img:1" || h.instance != "DEV" ||
 		h.dataDir != data || h.listBoxes == nil || h.refresh == nil {
 		t.Fatalf("refresh wiring: docker=%v image=%q instance=%q dataDir=%q listBoxes=%v refresh=%v",
 			h.docker, h.image, h.instance, h.dataDir, h.listBoxes != nil, h.refresh != nil)

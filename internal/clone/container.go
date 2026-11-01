@@ -63,7 +63,7 @@ func runContainer(ctx context.Context, d Docker, name string, args []string, std
 // Remove runs `docker rm -f name`. A container that is already gone (--rm won
 // the race) is not an error.
 func (d ExecDocker) Remove(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, d.Bin, "rm", "-f", name)
+	cmd := exec.CommandContext(ctx, d.Bin, d.argv("rm", "-f", name)...)
 	errb := &tailBuffer{max: maxDockerStderr}
 	cmd.Stdout, cmd.Stderr = io.Discard, errb
 	if err := cmd.Run(); err != nil {

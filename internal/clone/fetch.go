@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -70,8 +71,18 @@ type Docker interface {
 }
 
 // ExecDocker is the real Docker, running the docker binary at Bin (resolve it
-// with box.LookDocker).
-type ExecDocker struct{ Bin string }
+// with box.LookDocker). Args are docker's global flags (for example
+// "--context", "colima-agent-box"), put before the subcommand of every
+// invocation; the zero value adds nothing.
+type ExecDocker struct {
+	Bin  string
+	Args []string
+}
+
+// argv is the full argument list for one invocation: the global Args, then args.
+func (d ExecDocker) argv(args ...string) []string {
+	return append(slices.Clone(d.Args), args...)
+}
 
 // RunStream runs docker with args. stdout is copied to the writer as it
 // arrives, never held whole in memory. stderr keeps its last 8 KiB (the final
@@ -82,7 +93,7 @@ type ExecDocker struct{ Bin string }
 func (d ExecDocker) RunStream(ctx context.Context, args []string, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, d.Bin, args...)
+	cmd := exec.CommandContext(ctx, d.Bin, d.argv(args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	sink := &stopOnError{w: stdout, stop: cancel}
