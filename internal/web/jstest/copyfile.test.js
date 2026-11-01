@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { copyContentPlan, copyResultMessage, extOf, IMAGE_EXTS } = require("../static/copyfile.js");
+const { copyContentPlan, copyResultMessage, extOf, IMAGE_EXTS, readOnlyFrom } = require("../static/copyfile.js");
 
 const okRes = (data) => ({ ok: true, status: 200, data });
 const errRes = (status, error) => ({ ok: false, status, data: { error } });
@@ -133,4 +133,22 @@ test("extOf lowercases, so an uppercase image extension is still an image", () =
   assert.ok(IMAGE_EXTS.has(extOf("/tmp/photo.PNG")));
   assert.equal(extOf("/tmp/README"), "");
   assert.equal(extOf("/tmp/a.b/c"), "");
+});
+
+// #50: the server marks scratch-folder files readonly; the viewer must then
+// offer no Edit, because a save there is always refused.
+test("readOnlyFrom: only a successful read flagged readonly is read-only", () => {
+  assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x", readonly: true })), true);
+  assert.equal(readOnlyFrom(okRes({ kind: "binary", size: 3, readonly: true })), true);
+  assert.equal(readOnlyFrom(okRes({ kind: "text", content: "x" })), false);
+  assert.equal(readOnlyFrom(errRes(403, "the Claude scratch folder is read-only")), false);
+  assert.equal(readOnlyFrom(okRes(null)), false);
+  assert.equal(readOnlyFrom(undefined), false);
+});
+
+test("the viewer hides Edit and refuses enterEdit for a read-only file", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/viewer-tab.js"), "utf8");
+  assert.match(src, /this\.readOnly = readOnlyFrom\(res\)/, "load() records readOnly from the read");
+  assert.match(src, /this\.editBtn\.hidden = this\.readOnly/, "the Edit button follows readOnly");
+  assert.match(src, /enterEdit\(\) \{\n\s+if \(this\.editing \|\| this\.box \|\| this\.readOnly\) return;/, "enterEdit guards readOnly");
 });

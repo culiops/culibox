@@ -79,6 +79,9 @@ var pathEscapes = map[string]int{
 	// serves it read-only (#50); agent-box never writes there.
 	"internal/web/fsscratch.go literal /tmp": 1,
 	"cmd/agent-box/main.go os.TempDir":       1,
+	// msgBoxOnly names /tmp/playwright-mcp in the refusal text: prose shown to
+	// the user, never a location used.
+	"internal/web/fsmsg.go literal /tmp": 1,
 	// The file-search index skips or includes dirs under the home it browses.
 	"internal/web/fssearch.go literal .local":  1,
 	"internal/web/fssearch.go literal .config": 3,
