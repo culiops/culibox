@@ -545,7 +545,7 @@ test("credTableRows token: name with label, env with hosts, status, used by; a m
   assert.deepStrictEqual([credTableRows(g2)[0].cells[2].text, credTableRows(g2)[0].cells[2].cls], ["Missing", "missing"]);
 });
 
-test("table mode keys on the as-page class, and the card path never looks at it", () => {
+test("table mode needs the as-page class and room in #creds-body; the card path never looks at it", () => {
   const fs = require("node:fs");
   const src = fs.readFileSync(require("node:path").join(__dirname, "..", "static", "credentials.js"), "utf8");
   const body = (name) => {
@@ -553,8 +553,11 @@ test("table mode keys on the as-page class, and the card path never looks at it"
     assert.ok(i >= 0, name);
     return src.slice(i, src.indexOf("\n}\n", i));
   };
-  assert.ok(/as-page/.test(body("credTableMode")));
-  assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "table mode is not width-based");
+  assert.ok(/as-page/.test(body("credPageMode")));
+  assert.ok(/credPageMode\(\)/.test(body("credTableMode")));
+  // The room is the body's own width (the sidebar is draggable), never the window's.
+  assert.ok(/creds-body/.test(body("credTableMode")) && /CRED_TABLE_MIN_WIDTH/.test(body("credTableMode")));
+  assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "not keyed on the window width");
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
 });
@@ -569,6 +572,39 @@ test("desktop creds table: status wraps at word boundaries only", () => {
   assert.match(rule[1], /white-space:\s*normal/);
   assert.match(rule[1], /overflow-wrap:\s*break-word/);
   assert.doesNotMatch(rule[1], /nowrap|anywhere/);
+});
+
+// The Profiles footer (#foot-manage) wraps to two lines (89px) while the dialog is narrower
+// than 559px, measured with Discard showing: Delete, Duplicate, Discard and Save are 316px, plus
+// 30px of gaps, 40px of padding and the 170px nav. The form scrolls under it, so below that width
+// its bottom padding and scroll padding must clear 89px, not the one-line 56px.
+test("the Profiles form clears a two-line footer from the width the footer wraps at", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  const q = /@container\s*\(max-width:\s*(\d+)px\)\s*\{([^@]*?\n\s*\})/g;
+  let found = null, m;
+  while ((m = q.exec(css))) if (/#manage \.ped \{[^}]*padding-bottom:\s*(\d+)px/.test(m[2])) found = m;
+  assert.ok(found, "a @container rule raises #manage .ped's bottom padding");
+  assert.ok(Number(found[1]) >= 570, "the query reaches the width the footer wraps at (559px) with room to spare, got " + found[1]);
+  const pad = /#manage \.ped \{[^}]*padding-bottom:\s*(\d+)px[^}]*scroll-padding-bottom:\s*(\d+)px/.exec(found[2]);
+  assert.ok(pad && Number(pad[2]) >= 89 + 8, "scroll padding clears the 89px footer");
+  assert.ok(Number(pad[1]) >= 89 + 16, "bottom padding clears the 89px footer");
+});
+
+// A card on the desktop page has the room of #creds-body, not of the window: at 701px
+// that is 178px, and the two-column card (info | Edit Delete) left the info 18px. The
+// phone's single-column card rule is applied to the page by a container query on the
+// same element the table/card switch measures.
+test("desktop creds cards stack when #creds-body is narrow, keyed on the body not the window", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  assert.match(css, /#creds-body\s*\{[^}]*container-type:\s*inline-size/);
+  const q = /@container\s*\(max-width:\s*(\d+)px\)\s*\{([^@]*?\n\s*\})/g;
+  let found = null, m;
+  while ((m = q.exec(css))) if (/#creds \.ent \{[^}]*grid-template-columns:\s*1fr/.test(m[2])) found = m;
+  assert.ok(found, "a @container rule stacks #creds .ent");
+  const width = Number(found[1]);
+  assert.ok(width > 227 && width < 700, "above the measured two-column floor (227px), below the table switch (700px)");
+  assert.match(found[2], /#creds \.ent-act \{[^}]*align-self:\s*stretch/);
+  assert.match(found[2], /#creds \.ent-act \.btn \{[^}]*flex:\s*1/);
 });
 
 // The fixed-layout tables size every column as a share of the table: a px
