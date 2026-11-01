@@ -114,18 +114,33 @@ test("checkboxes in the New session form use the accent colour", () => {
 
 // The help dialog is ~33 lines and #ask-modal is overflow:hidden, so the info
 // body must scroll on its own or the Close button falls off a short viewport.
-test("the info ask body scrolls inside the viewport on desktop", () => {
-  const r = rulesFor("#ask-modal.info #ask-body").join(" ");
-  assert.ok(/max-height:\s*calc\(100dvh - \d+px\)/.test(r), "bounded height");
-  assert.ok(/overflow-y:\s*auto/.test(r), "scrolls vertically");
+// The bound is the dialog's OWN height cap (dialog { max-height: 88vh }), not
+// the viewport: .dlg-body becomes a column that clips, #ask-body takes the
+// leftover height and scrolls, and the actions row never shrinks. The same
+// rules live in app.css (global), so desktop and phones get one guarantee.
+test("the info ask body is bounded by the dialog's own cap, on every width (app.css)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => {
+    const m = new RegExp(sel.replace(/[.#]/g, "\\$&") + "\\s*\\{([^{}]*)\\}").exec(app);
+    assert.ok(m, "app.css has " + sel);
+    return m[1];
+  };
+  const wrap = rule("#ask-modal.info .dlg-body");
+  assert.match(wrap, /display:\s*flex/);
+  assert.match(wrap, /flex-direction:\s*column/);
+  assert.match(wrap, /overflow:\s*hidden/);
+  const body = rule("#ask-modal.info #ask-body");
+  assert.match(body, /flex:\s*1 1 auto/);
+  assert.match(body, /min-height:\s*0/);
+  assert.match(body, /overflow:\s*auto/);
+  assert.match(body, /margin-bottom:\s*0/, "flex margins do not collapse; the actions row's own margin spaces it");
+  assert.match(body, /font:[^;]*var\(--font-mono/);
+  assert.match(body, /white-space:\s*pre\s*;/);
+  assert.ok(!/(^|[^-])height:\s*calc\(100/.test(body) && !/100dvh|100vh/.test(body), "no viewport-based bound");
+  assert.match(rule("#ask-modal.info .ask-actions"), /flex:\s*none/);
 });
 
-test("the info ask body is monospace, unwrapped and bounded on phones too (app.css, not in a media block)", () => {
-  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-  const m = /#ask-modal\.info #ask-body\s*\{([^{}]*)\}/.exec(app);
-  assert.ok(m, "app.css has an info body rule");
-  assert.match(m[1], /font:[^;]*var\(--font-mono/);
-  assert.match(m[1], /white-space:\s*pre\s*;/);
-  assert.match(m[1], /overflow:\s*auto/);
-  assert.match(m[1], /max-height:\s*calc\(100dvh - \d+px\)/);
+test("desktop.css does not bound the info body by the viewport", () => {
+  const r = rulesFor("#ask-modal.info #ask-body").join(" ");
+  assert.ok(!/100dvh|100vh/.test(r), "viewport bound would ignore the dialog's 88vh cap");
 });

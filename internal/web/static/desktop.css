@@ -665,13 +665,11 @@
   /* --- keyboard shortcuts dialog (read-only ask dialog) ----------------------- */
   #ask-modal.info { width: 560px; max-width: 92vw; }
   #ask-modal.info #ask-cancel { display: none; }
-  /* The help text is ~33 lines and #ask-modal is overflow:hidden, so the body
-     scrolls on its own. 180px reserves the dialog's real chrome (measured from
-     the rules below: title ~41, body padding 22, body margins 16, actions row
-     ~64, borders 2 = ~145) plus ~35px of air so a two-line title still fits and
-     the Close row never leaves a short viewport. Info only: other ask dialogs
-     are short and keep their natural height. */
-  #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; overflow-y: auto; max-height: calc(100dvh - 180px); }
+  /* The help text is ~33 lines; #ask-modal is overflow:hidden. The height bound
+     (the dialog's own 88vh cap, passed down through .dlg-body to #ask-body,
+     which scrolls) is in app.css so phones get it too. Here only the desktop
+     font. */
+  #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; }
 
   /* --- pane views: Activity / Access (spec 5.7, 5.8; ea-3.png, sa-1.png) ---- */
   /* div.pane-view covers the agent's half of the pane body, below the header
