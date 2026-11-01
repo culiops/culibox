@@ -746,6 +746,10 @@ func (b *Broker) recordDenied(r Row) {
 // for the audit row: it names no id and no path.
 const storeLockedMsg = "agent-box store is locked — ask the operator to unlock it"
 
+// maxUnavailableLen bounds the Keychain-failure message (reason + fix, which
+// may carry a store path) in the reply and the audit row.
+const maxUnavailableLen = 600
+
 // StoreLockedFor reports whether session sid's last read of the encrypted store
 // was refused because it is locked. The next read that succeeds clears it.
 func (b *Broker) StoreLockedFor(sid string) bool {

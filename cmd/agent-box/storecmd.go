@@ -56,7 +56,11 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 			return 0
 		}
 		fmt.Fprintln(out, "store: initialized")
-		if s.Locked {
+		if ue := s.Unavailable; ue != nil {
+			// Not "locked": there is no passphrase to type. Reason, then the fix.
+			fmt.Fprintf(out, "state: %s: %s\n", unavailableState(ue.Kind), strings.TrimRight(ue.Reason, ". "))
+			fmt.Fprintf(out, "fix: %s\n", ue.Fix())
+		} else if s.Locked {
 			fmt.Fprintln(out, "state: locked")
 		} else {
 			fmt.Fprintln(out, "state: unlocked")
@@ -225,6 +229,17 @@ func refsText(refs []string) string {
 	return strings.Join(refs, ", ")
 }
 
+// unavailableState is the status line head for each UnavailableKind.
+func unavailableState(k secretstore.UnavailableKind) string {
+	switch k {
+	case secretstore.KindKeyLost:
+		return "key lost"
+	case secretstore.KindStoreUnreadable:
+		return "store unreadable"
+	}
+	return "keychain access failed"
+}
+
 // storeErrText is the message for a store error. The store's errors carry no
 // value, passphrase or path; the two states with a next step say what it is.
 func storeErrText(err error) string {
@@ -235,6 +250,9 @@ func storeErrText(err error) string {
 		return "the store already exists (to change the passphrase run: agent-box store passwd)"
 	case errors.Is(err, secretstore.ErrBadPassphrase):
 		return "wrong passphrase"
+	case errors.Is(err, secretstore.ErrKeeperUnavailable):
+		// Its own message already carries the reason and the fix.
+		return err.Error()
 	}
 	return err.Error()
 }

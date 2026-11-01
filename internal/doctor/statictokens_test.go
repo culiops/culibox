@@ -117,3 +117,16 @@ func TestDoctorStaticTokenStoreLockedWarns(t *testing.T) {
 		t.Fatalf("locked store token: %s", dump(got))
 	}
 }
+
+// A Keychain failure under a store-backed token is a FAIL carrying the fix,
+// never the "store locked" WARN: unlocking is not what fixes it.
+func TestDoctorStaticTokenStoreUnavailableFails(t *testing.T) {
+	c := config.Config{StaticTokens: []config.StaticToken{
+		{Name: "graf", Value: config.KeyRef{Type: "store", ID: "graf"}, Egress: []config.TokenEgress{{Host: "api.example.com"}}},
+	}}
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	got := checkStaticTokens(c, defaultResolver(stubStore{err: ue}))
+	if len(got) != 1 || got[0].Status != Fail || !strings.Contains(got[0].Detail, ue.Fix()) || strings.Contains(got[0].Detail, "store locked") {
+		t.Fatalf("unavailable store token: %s", dump(got))
+	}
+}

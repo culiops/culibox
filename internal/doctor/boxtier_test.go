@@ -171,6 +171,12 @@ func TestClaudeBoxTokenStoreSource(t *testing.T) {
 	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
 		t.Fatalf("a store source with no store: %+v", r)
 	}
+	// A Keychain failure is a FAIL with the fix: neither "locked" nor "/login".
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	if r := ClaudeBoxToken(c, stubStore{err: ue}); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
+		strings.Contains(r.Detail, "locked") || strings.Contains(r.Detail, "/login") {
+		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
+	}
 }
 
 // fakeDocker is a docker that records its argv and answers `ps` with one

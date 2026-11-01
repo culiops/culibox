@@ -35,6 +35,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
@@ -2011,6 +2012,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 					if errors.Is(err, credref.ErrLocked) {
 						// A key in the locked store: say so (423), not a containment failure.
 						return nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, spec.Agent)
+					}
+					var ue *secretstore.UnavailableError
+					if errors.As(err, &ue) {
+						// The Keychain did not give the key: 503 with the fix, not a containment failure.
+						return nil, fmt.Errorf("%w: %w (GitHub App key, profile %q)", launcher.ErrStoreUnavailable, ue, spec.Agent)
 					}
 					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}

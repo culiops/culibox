@@ -40,9 +40,10 @@ type StoreProbe interface {
 type Presence int
 
 const (
-	Absent       Presence = iota // no source has it
-	Present                      // a source has it
-	StoredLocked                 // the store has it (or is locked) and cannot be read now
+	Absent            Presence = iota // no source has it
+	Present                           // a source has it
+	StoredLocked                      // the store has it (or is locked) and cannot be read now
+	StoredUnavailable                 // the store has it but its key could not be read from the Keychain
 )
 
 type step struct {
@@ -136,7 +137,11 @@ func (c *Chain) Check(name string) (Presence, error) {
 			if !slices.ContainsFunc(ents, func(e secretstore.Entry) bool { return e.ID == name }) {
 				continue
 			}
-			if c.probe.Status().Locked {
+			st := c.probe.Status()
+			if st.Unavailable != nil {
+				return StoredUnavailable, nil
+			}
+			if st.Locked {
 				return StoredLocked, nil
 			}
 			return Present, nil
@@ -150,6 +155,8 @@ func (c *Chain) Check(name string) (Presence, error) {
 			continue
 		case errors.Is(err, credref.ErrLocked):
 			return StoredLocked, nil
+		case errors.Is(err, secretstore.ErrKeeperUnavailable):
+			return StoredUnavailable, nil
 		case err != nil:
 			return Absent, err
 		}

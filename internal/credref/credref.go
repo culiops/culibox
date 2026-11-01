@@ -94,7 +94,8 @@ func (d Default) Resolve(ref config.KeyRef) ([]byte, error) {
 }
 
 // GetStore reads a store value's raw bytes. Errors keep the store's sentinels
-// (errors.Is ErrLocked / secretstore.ErrNoSuchValue) and name the id, never the
+// (errors.Is ErrLocked / secretstore.ErrKeeperUnavailable are passed through
+// unwrapped; others name the id) and never the
 // bytes. A nil store is ErrStoreNotConfigured.
 func GetStore(s StoreGetter, id string) ([]byte, error) {
 	if s == nil {
@@ -102,7 +103,8 @@ func GetStore(s StoreGetter, id string) ([]byte, error) {
 	}
 	b, err := s.Get(id)
 	if err != nil {
-		if errors.Is(err, ErrLocked) {
+		if errors.Is(err, ErrLocked) || errors.Is(err, secretstore.ErrKeeperUnavailable) {
+			// The message is fixed and carries its fix: no store id wrapped round it.
 			return nil, err
 		}
 		return nil, fmt.Errorf("store %s: %w", id, err)

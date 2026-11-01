@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -361,5 +362,58 @@ func TestPlaintextCopies(t *testing.T) {
 	if !strings.Contains(buf.String(), "store: plaintext copy of CLAUDE_CODE_OAUTH_TOKEN is still in the daemon environment") ||
 		strings.Contains(buf.String(), "plain\n") {
 		t.Fatalf("log = %q", buf.String())
+	}
+}
+
+// A Keychain failure is its own state with its fix, in all three kinds, and
+// never reads as "locked".
+func TestRunStoreStatusUnavailable(t *testing.T) {
+	r := newStoreRun(t, false)
+	if code, out := r.run("init", "", ""); code != 0 {
+		t.Fatalf("init = %d %q", code, out)
+	}
+	k := r.k.(*secretstore.FakeKeeper)
+
+	k.FailLoad(errors.New("User interaction is not allowed"))
+	code, out := r.run("status", "", "")
+	if code != 0 || !strings.Contains(out, "state: keychain access failed: User interaction is not allowed\n") ||
+		!strings.Contains(out, "fix: Unlock the login keychain") || strings.Contains(out, "locked\n") || strings.Contains(out, "state: unlocked") {
+		t.Fatalf("access status = %d %q", code, out)
+	}
+
+	k.FailLoad(nil)
+	if err := k.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	code, out = r.run("status", "", "")
+	if code != 0 || !strings.Contains(out, "state: key lost: no Keychain item for this store\n") ||
+		!strings.Contains(out, "fix: The key for this store is gone") || !strings.Contains(out, r.cfg.DataDir) ||
+		!strings.Contains(out, "agent-box store init") {
+		t.Fatalf("key_lost status = %d %q", code, out)
+	}
+
+	// store_unreadable: the recipient file exists but the store dir cannot be opened.
+	r2 := newStoreRun(t, false)
+	if code, out := r2.run("init", "", ""); code != 0 {
+		t.Fatalf("init = %d %q", code, out)
+	}
+	storeDir := filepath.Join(r2.cfg.DataDir, "store")
+	if err := os.Chmod(storeDir, 0o755); err != nil { // openRoot refuses a store dir that is not 0700
+		t.Fatal(err)
+	}
+	code, out = r2.run("status", "", "")
+	if code != 0 || !strings.Contains(out, "state: store unreadable: ") || !strings.Contains(out, "fix: agent-box cannot read its store directory") ||
+		strings.Contains(out, "Keychain") {
+		t.Fatalf("store_unreadable status = %d %q", code, out)
+	}
+}
+
+// storeErrText shows an unavailable store's own message (it carries the fix),
+// and never mistakes it for "not initialized".
+func TestStoreErrTextUnavailable(t *testing.T) {
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindKeyLost, Reason: "x", StoreDir: "/d/store"}
+	got := storeErrText(fmt.Errorf("wrap: %w", ue))
+	if strings.Contains(got, "not initialized") || !strings.Contains(got, ue.Fix()) {
+		t.Fatalf("storeErrText = %q", got)
 	}
 }

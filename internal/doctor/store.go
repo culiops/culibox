@@ -89,6 +89,11 @@ func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 		return []Result{{Fail, ck, `store not initialized: the configuration reads it (run "agent-box store init")`}}
 	}
 	var out []Result
+	if s.Unavailable != nil {
+		// Not a lock: there is no passphrase to type. The message carries the reason
+		// and the fix, so nothing else about the store can be said.
+		return []Result{{Fail, ck, s.Unavailable.Error()}}
+	}
 	if s.Locked {
 		out = append(out, Result{Warn, ck, `store locked (unlock with "agent-box store unlock")`})
 	} else if s.ExpiresAt.IsZero() {

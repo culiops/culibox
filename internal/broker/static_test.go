@@ -16,6 +16,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 const staticSecret = "tok-SECRET-1234"
@@ -348,3 +349,31 @@ func TestStoreLockedFlagNotSetForGoneSession(t *testing.T) {
 type resolverFunc func(config.KeyRef) ([]byte, error)
 
 func (f resolverFunc) Resolve(r config.KeyRef) ([]byte, error) { return f(r) }
+
+func unavailableAccess() *secretstore.UnavailableError {
+	return &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "User interaction is not allowed"}
+}
+
+// A Keychain failure is its own outcome: the box gets the fix (503), the audit
+// row says store_unavailable, and the session is NOT flagged as store-locked
+// (nobody can type a passphrase).
+func TestStaticUnavailableStore(t *testing.T) {
+	b, fr, rec, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry())})
+	ue := unavailableAccess()
+	fr.err = fmt.Errorf("store value grafana-prod: %w", ue)
+	w := staticCall(b, tokA("claude-3"), grafanaBody)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), ue.Fix()) || strings.Contains(w.Body.String(), "grafana-prod") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreUnavailable || !strings.Contains(rec.rows[0].Error, ue.Fix()) ||
+		rec.rows[0].Provider != ProviderStatic {
+		t.Fatalf("rows: %+v", rec.rows)
+	}
+	if b.StoreLockedFor("claude-3") {
+		t.Fatal("an unavailable Keychain must not flag the session store-locked")
+	}
+	fr.err = nil
+	if w := staticCall(b, tokA("claude-3"), grafanaBody); w.Code != 200 {
+		t.Fatalf("after fix: %d %s", w.Code, w.Body)
+	}
+}
