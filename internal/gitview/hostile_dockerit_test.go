@@ -22,6 +22,14 @@ import (
 // hostileVectors are the config keys a hostile .git/config can use to make git
 // run a command. Each one touches its own marker, so a failure names the vector.
 //
+// Which of these can fire at all under the current guards (measured with
+// writable mounts, see TestHostileConfigControl): filter.x.clean always, since
+// git has no flag to stop it and it legitimately runs inside the container
+// (spec S1); core.fsmonitor only if -c core.fsmonitor=false is dropped. The rest
+// (core.pager, core.sshCommand, filter.x.smudge, diff.external, diff.x.textconv)
+// are belt and braces: nothing in status or diff reaches them today, so a
+// passing run says little about them beyond "still contained".
+//
 // filter.x.process is kept apart: it is a long-running filter that must speak
 // git's pkt-line handshake, so a bare `touch` makes git die ("the remote end
 // hung up") and the whole status fails. That is a harmless "unavailable", but it
@@ -57,11 +65,11 @@ func hostileDocker(t *testing.T) (clone.ExecDocker, string) {
 	}
 	bin, err := box.LookDocker("")
 	if err != nil {
-		t.Skipf("docker is unavailable: %v", err)
+		t.Fatalf("AB_GITVIEW_IMAGE is set but docker is unavailable: %v", err)
 	}
 	d := clone.ExecDocker{Bin: bin}
 	if err := exec.Command(bin, "image", "inspect", image).Run(); err != nil {
-		t.Skipf("image %s is not present locally (the runner uses --pull=never): %v", image, err)
+		t.Fatalf("AB_GITVIEW_IMAGE is set but image %s is not present locally (the runner uses --pull=never): %v", image, err)
 	}
 	return d, image
 }
@@ -228,8 +236,12 @@ func TestHostileConfigControl(t *testing.T) {
 	r.Diff(ctx, tg, "new.txt", true)
 	m := markers(t, dir)
 	t.Logf("with writable mounts the hostile config left: %v", m)
-	if len(m) == 0 {
-		t.Fatal("no hostile command ran even with writable mounts: the marker check above proves nothing")
+	// filter.x.clean is the one vector that legitimately fires inside the
+	// container (spec S1). Any other marker means an in-container guard
+	// (-c core.fsmonitor=false, --no-ext-diff, --no-textconv, --no-pager,
+	// core.attributesFile) regressed. No marker at all means the control is inert.
+	if want := []string{"MARKER_filter.x.clean"}; !slices.Equal(m, want) {
+		t.Fatalf("markers with writable mounts = %v, want exactly %v", m, want)
 	}
 }
 
