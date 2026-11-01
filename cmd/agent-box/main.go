@@ -778,6 +778,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		BoxRuntime:       boxRuntime,
 		CloneUnavailable: cloneUnavailableReason(runtime.GOOS, h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
+		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

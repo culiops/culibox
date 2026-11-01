@@ -32,6 +32,7 @@ class ViewerTab {
     this.lastContent = null; // last rendered text, to skip no-op re-renders
     this.version = null;    // sha256 of the last-read text, the save's base_version
     this.editing = false;   // true while a CodeMirror editor replaces the read view
+    this.readOnly = false;  // the server marked the file read-only (scratch folder, #50)
     this.cm = null;         // the live CodeMirror instance, only while editing
     this.baseVersion = "";  // version this edit started from (what conflict is checked against)
     // Why Copy has nothing to give, or null once there is text. lastContent
@@ -89,6 +90,7 @@ class ViewerTab {
         edit.title = "Edit this file";
         edit.onclick = () => this.enterEdit();
         this.toolbar.append(edit);
+        this.editBtn = edit; // hidden once a read says the file is read-only
       }
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
@@ -240,6 +242,12 @@ class ViewerTab {
     }
     if (!poll) this.setStatus("loading…");
     const res = await fsRead(this.path, this.box ? boxFileURL(this.box, this.path) : undefined);
+    // Only a successful read answers the question; a dropped poll keeps the
+    // last known answer rather than bringing back an Edit that cannot save.
+    if (res.ok) {
+      this.readOnly = readOnlyFrom(res);
+      if (this.editBtn) this.editBtn.hidden = this.readOnly;
+    }
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
       // A FAILED poll changes nothing. The screen still holds the text it had,
@@ -338,7 +346,7 @@ class ViewerTab {
   // those non-editable; "empty" is the one refusal reason that is still editable,
   // since Step 1 above seeds an empty buffer with a real version).
   enterEdit() {
-    if (this.editing || this.box) return; // a box file is read-only (no button either; this guards a stray caller)
+    if (this.editing || this.box || this.readOnly) return; // a box file is read-only (no button either; this guards a stray caller)
     if (this.copyRefusal && this.copyRefusal !== "empty") return; // image/binary/loading/error stay non-editable
     // The vendor bundle can fail to reach the browser (blocked, offline, a
     // hiccup loading /vendor/codemirror.min.js). Checked before any state

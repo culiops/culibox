@@ -369,3 +369,10 @@ test("setUsage re-syncs the tree exactly when the agent's worktree changes", () 
     delete global.syncFocusedTree;
   }
 });
+
+// #50: a box-only click says what IS shared, not just "no".
+test("box-only click toast says only /tmp/playwright-mcp is shared", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/terminal-tab.js"), "utf8");
+  assert.ok(src.includes('showToast("This file is inside the box only — just /tmp/playwright-mcp is shared out")'));
+  assert.ok(!src.includes("This file is only inside the box"));
+});

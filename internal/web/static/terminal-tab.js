@@ -454,7 +454,7 @@ class TerminalTab {
     // reference to it fails lint.sh's cross-script check until that script exists.
     // A top-level function declaration in a classic script IS a window property.
     else if (c.kind === "box") { if (typeof window.openBoxFile === "function") window.openBoxFile(this.id, c.path); }
-    else if (typeof showToast === "function") showToast("This file is only inside the box");
+    else if (typeof showToast === "function") showToast("This file is inside the box only — just /tmp/playwright-mcp is shared out");
   }
   resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }
 

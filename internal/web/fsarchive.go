@@ -170,13 +170,13 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	}
 	root, err := os.OpenRoot(t.Root)
 	if err != nil {
-		writeOpenErr(w, err)
+		writeOpenErr(w, err, t)
 		return
 	}
 	defer root.Close()
 	info, err := root.Stat(t.Rel)
 	if err != nil {
-		writeOpenErr(w, err)
+		writeOpenErr(w, err, t)
 		return
 	}
 	if !info.IsDir() {

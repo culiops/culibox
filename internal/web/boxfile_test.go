@@ -122,7 +122,7 @@ func TestBoxfileRefusesOutsideAllowlist(t *testing.T) {
 		if rec.Code != 403 {
 			t.Fatalf("path %q: code %d, want 403 (%s)", p, rec.Code, rec.Body)
 		}
-		if e := errBody(t, rec); e != "only inside the box" {
+		if e := errBody(t, rec); e != msgBoxOnly {
 			t.Fatalf("path %q: error %q", p, e)
 		}
 	}

@@ -24,6 +24,11 @@ type fsTarget struct {
 	Rel    string // below Root, "." for Root; host: fully resolved; strict: unresolved remainder
 	Abs    string // filepath.Join(Root, Rel), returned to the client
 	Strict bool
+	// ReadOnly is set once the walk touched a scratch root (the folder itself, a
+	// path under it, or a link through it), wherever links led afterwards. Every
+	// mutation refuses it, so a scratch path can never be used to write — not
+	// into the scratch folder and not into $HOME through a link in it.
+	ReadOnly bool
 }
 
 // fileKey is a directory's identity. Tree membership is decided by identity, not
@@ -62,6 +67,9 @@ type fsPolicy struct {
 	rhome     string
 	denied    map[fileKey]struct{}
 	contained map[fileKey]struct{}
+	// scratch is the accepted Claude Code temp folders (claude-<uid>), identity
+	// to resolved path. Readable, never writable.
+	scratch map[fileKey]string
 	// guarded is every kept denied or contained root plus all of its ancestors.
 	// Removing or renaming one of those directories would change what the policy
 	// sees (a renamed workspace is no longer contained, a renamed data dir no
@@ -73,12 +81,18 @@ type fsPolicy struct {
 // skipped. A contained entry that is $HOME, an ancestor of $HOME, or that holds a
 // denied tree (or is one) is ignored: treating it as a workspace root would make
 // everything under it strict, or would serve the denied tree through os.Root.
-func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
+//
+// scratch lists candidate Claude Code temp folders; each is checked here, per
+// request, because Claude Code creates the folder lazily after the server
+// started. One is kept only if scratchRoot accepts it and it is not $HOME, not
+// inside $HOME (already served), not an ancestor of $HOME or of a denied tree.
+func newFsPolicy(home string, trees BoxTrees, scratch ...string) (fsPolicy, error) {
 	rhome, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		return fsPolicy{}, err
 	}
-	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{}, guarded: map[fileKey]struct{}{}}
+	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{},
+		scratch: map[fileKey]string{}, guarded: map[fileKey]struct{}{}}
 
 	forbidden := map[fileKey]struct{}{}
 	addSelfAndAncestors := func(dir string) {
@@ -130,6 +144,23 @@ func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
 			rc = c
 		}
 		addGuarded(p.guarded, rc)
+	}
+	for _, c := range scratch {
+		real, k, ok := scratchRoot(c)
+		if !ok {
+			continue
+		}
+		if _, bad := forbidden[k]; bad {
+			continue
+		}
+		if _, bad := p.denied[k]; bad {
+			continue
+		}
+		if p.underHome(real) {
+			continue
+		}
+		p.scratch[k] = real
+		addGuarded(p.guarded, real)
 	}
 	return p, nil
 }
@@ -183,7 +214,7 @@ func (s *Server) fsPolicy() (fsPolicy, error) {
 	if s.BoxTrees != nil {
 		trees = s.BoxTrees()
 	}
-	return newFsPolicy(s.Home, trees)
+	return newFsPolicy(s.Home, trees, s.ScratchDirs...)
 }
 
 // resolveFs resolves one request path against the server's current boxed trees.
@@ -203,16 +234,17 @@ const maxLinkHops = 40
 // box-planted link out of a box-writable tree to any host file it names.
 //
 // Outside the boxed trees, links are host-owned and followed as before, and the
-// final path must be under $HOME. The moment the walk stands on a denied tree it
-// fails with errOutsideHome. The moment it stands on a contained root W — whether
+// final path must be under $HOME or a scratch root (served ReadOnly). The moment the walk stands on a denied tree it
+// fails with errDenied. The moment it stands on a contained root W — whether
 // the request named W or a host link's target led into it — it stops: whatever
 // is left, including components still pending from that link's target, is
 // returned unresolved as Rel for os.Root(W) to resolve. The first contained root
 // met is the outermost one, so nested roots are opened through the outer root.
 //
 // Errors: errBadPath (empty, relative, too many links), os.ErrNotExist (a missing
-// component, or a non-directory with components after it), errOutsideHome
-// (outside $HOME, denied, or a remainder that climbs out of W).
+// component, or a non-directory with components after it), errDenied (a denied
+// tree), errOutsideHome (outside $HOME and every scratch root, or a remainder
+// that climbs out of W).
 func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	if req == "" || !filepath.IsAbs(req) {
 		return fsTarget{}, errBadPath
@@ -226,19 +258,31 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	}
 	pending := strings.Split(clean[1:], "/")
 	hops := 0
+	readOnly := false
+	// passed holds the scratch roots the walk stood on, by identity. Only
+	// those may claim the final path: a path STRING under a root proves
+	// nothing if another directory was moved into that path after the snapshot.
+	var passed map[string]bool
 	for {
 		if _, ok := p.denied[curKey]; ok {
-			return fsTarget{}, errOutsideHome
+			return fsTarget{}, errDenied
+		}
+		if root, ok := p.scratch[curKey]; ok {
+			readOnly = true
+			if passed == nil {
+				passed = map[string]bool{}
+			}
+			passed[root] = true
 		}
 		if _, ok := p.contained[curKey]; ok {
 			rel := filepath.Clean(filepath.Join(pending...))
 			if rel != "." && !filepath.IsLocal(rel) {
 				return fsTarget{}, errOutsideHome
 			}
-			if !p.underHome(cur) {
+			if s, inScratch := p.underScratch(cur); !p.underHome(cur) && !(inScratch && passed[s]) {
 				return fsTarget{}, errOutsideHome
 			}
-			return fsTarget{Root: cur, Rel: rel, Abs: filepath.Join(cur, rel), Strict: true}, nil
+			return fsTarget{Root: cur, Rel: rel, Abs: filepath.Join(cur, rel), Strict: true, ReadOnly: readOnly}, nil
 		}
 		if len(pending) == 0 {
 			break
@@ -290,14 +334,19 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 			return fsTarget{}, err
 		}
 	}
+	root := p.rhome
 	if !p.underHome(cur) {
-		return fsTarget{}, errOutsideHome
+		s, ok := p.underScratch(cur)
+		if !ok || !passed[s] {
+			return fsTarget{}, errOutsideHome
+		}
+		root, readOnly = s, true
 	}
-	rel, err := filepath.Rel(p.rhome, cur)
+	rel, err := filepath.Rel(root, cur)
 	if err != nil {
 		return fsTarget{}, errOutsideHome
 	}
-	return fsTarget{Root: p.rhome, Rel: rel, Abs: cur, Strict: false}, nil
+	return fsTarget{Root: root, Rel: rel, Abs: cur, Strict: false, ReadOnly: readOnly}, nil
 }
 
 func (p fsPolicy) underHome(path string) bool {

@@ -100,7 +100,7 @@ func (s *Server) handleFsWrite(w http.ResponseWriter, r *http.Request) {
 		cur, err := readRootFile(root, rel)
 		if err != nil {
 			if errors.Is(err, errNotRegular) {
-				writeErr(w, http.StatusForbidden, "forbidden")
+				writeErr(w, http.StatusForbidden, msgNotReg)
 				return
 			}
 			writeErr(w, http.StatusInternalServerError, "read error")

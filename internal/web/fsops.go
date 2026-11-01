@@ -125,7 +125,16 @@ func (s *Server) openParent(dir string) (string, *os.Root, string, error) {
 func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
 	t, err := p.resolve(dir)
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return "", nil, "", errPermWrite
+		}
 		return "", nil, "", err
+	}
+	// Every mutation reaches its directory through here, so this one check is
+	// what keeps the scratch folder read-only — and what keeps a link through
+	// it from being used to write anywhere else.
+	if t.ReadOnly {
+		return "", nil, "", errReadOnly
 	}
 	root, err := os.OpenRoot(t.Root)
 	if err != nil {
@@ -137,10 +146,13 @@ func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
 		switch {
 		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 			return "", nil, "", os.ErrNotExist
+		case errors.Is(err, os.ErrPermission):
+			return "", nil, "", errPermWrite
+		case t.Strict:
+			// os.Root refused a link that leaves the workspace, or a swap.
+			return "", nil, "", errLinkEscape
 		default:
-			// A link that leaves the root, a permission, a swap: the caller
-			// learns only "forbidden", as writeOpenErr does for reads.
-			return "", nil, "", errOutsideHome
+			return "", nil, "", errBlocked
 		}
 	}
 	if !fi.IsDir() {
@@ -235,7 +247,7 @@ func (s *Server) handleFsRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pol.guardsTree(fi) {
-		writeErr(w, http.StatusForbidden, "forbidden")
+		writeErr(w, http.StatusForbidden, msgProtected)
 		return
 	}
 	// The same gate delete uses. Without it the two entries in one ⋯ menu compose
@@ -386,7 +398,7 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pol.guardsTree(info) {
-		writeErr(w, http.StatusForbidden, "forbidden")
+		writeErr(w, http.StatusForbidden, msgProtected)
 		return
 	}
 	// A symlink is removed as a link whatever it points at, so it must never take

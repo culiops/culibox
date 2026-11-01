@@ -17,6 +17,11 @@ import (
 var (
 	errBadPath     = errors.New("bad path")
 	errOutsideHome = errors.New("outside home")
+	errDenied      = errors.New("denied tree") // agent-box's own data dir / box state
+	errReadOnly    = errors.New("read only")   // a mutation under a scratch root
+	errLinkEscape  = errors.New("link escapes the workspace")
+	errBlocked     = errors.New("blocked")
+	errPermWrite   = errors.New("no permission (mutation)")
 )
 
 // imageExt maps a lowercase extension to the MIME type served raw for <img>.
@@ -49,23 +54,45 @@ func writeFsErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, errNotDir):
 		writeErr(w, http.StatusBadRequest, "not a directory")
 	case errors.Is(err, errOutsideHome):
-		writeErr(w, http.StatusForbidden, "forbidden")
+		writeErr(w, http.StatusForbidden, msgOutside)
+	case errors.Is(err, errDenied):
+		writeErr(w, http.StatusForbidden, msgDenied)
+	case errors.Is(err, errReadOnly):
+		writeErr(w, http.StatusForbidden, msgReadOnly)
+	case errors.Is(err, errLinkEscape):
+		writeErr(w, http.StatusForbidden, msgEscape)
+	case errors.Is(err, errBlocked):
+		writeErr(w, http.StatusForbidden, msgBlocked)
+	case errors.Is(err, errPermWrite):
+		writeErr(w, http.StatusForbidden, msgPermWrite)
+	case errors.Is(err, os.ErrPermission):
+		// A root-owned directory mid-path (Docker leaves them in scratch
+		// folders) fails the resolver's Lstat: a refusal, never a 500.
+		writeErr(w, http.StatusForbidden, msgPerm)
 	default:
 		writeErr(w, http.StatusInternalServerError, "error")
 	}
 }
 
-// writeOpenErr maps an error from opening a target through its os.Root. A
-// missing path is 404; everything else is 403, because the open can only fail
-// for a reason the caller must not learn more about than "no": a link that
-// leaves the root, a permission, a swap raced in by a box. It is never a 500
-// that would invite a retry.
-func writeOpenErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, os.ErrNotExist) {
+// writeOpenErr maps an error from opening t through its os.Root. A missing
+// path is 404; everything else is 403 with the reason, never a 500 that would
+// invite a retry. A permission and a socket (ENXIO; EOPNOTSUPP on darwin) are
+// told apart; any other failure inside a boxed workspace is os.Root refusing a
+// link that leaves it (or a swap raced in by the box), and a failure through a
+// host root says only "blocked" rather than claim a reason nobody checked.
+func writeOpenErr(w http.ResponseWriter, err error, t fsTarget) {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		writeErr(w, http.StatusNotFound, "not found")
-		return
+	case errors.Is(err, os.ErrPermission):
+		writeErr(w, http.StatusForbidden, msgPerm)
+	case errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.EOPNOTSUPP):
+		writeErr(w, http.StatusForbidden, msgNotReg)
+	case t.Strict:
+		writeErr(w, http.StatusForbidden, msgEscape)
+	default:
+		writeErr(w, http.StatusForbidden, msgBlocked)
 	}
-	writeErr(w, http.StatusForbidden, "forbidden")
 }
 
 // openFsTarget opens t for reading through its root. Strict targets carry an
@@ -93,7 +120,7 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 	}
 	root, err := os.OpenRoot(t.Root)
 	if err != nil {
-		writeOpenErr(w, err)
+		writeOpenErr(w, err, t)
 		return
 	}
 	defer root.Close()
@@ -103,7 +130,7 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "not a directory")
 			return
 		}
-		writeOpenErr(w, err)
+		writeOpenErr(w, err, t)
 		return
 	}
 	defer d.Close()
@@ -139,6 +166,8 @@ type fsRead struct {
 	Size    int64  `json:"size"`
 	Content string `json:"content,omitempty"`
 	Version string `json:"version,omitempty"` // sha256 of Content; text only, for edit locking
+	// ReadOnly: the file is served but can never be saved (scratch folder, box).
+	ReadOnly bool `json:"readonly,omitempty"`
 }
 
 // handleFsRead serves GET /api/fs/read?path=<abs-file>. Images are streamed raw
@@ -152,7 +181,7 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := openFsTarget(t, 0)
 	if err != nil {
-		writeOpenErr(w, err)
+		writeOpenErr(w, err, t)
 		return
 	}
 	defer f.Close()
@@ -168,10 +197,10 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	// A FIFO, socket or device is never a preview: reading a FIFO waits for a
 	// writer a box can simply never provide. This applies to host paths too.
 	if !info.Mode().IsRegular() {
-		writeErr(w, http.StatusForbidden, "forbidden")
+		writeErr(w, http.StatusForbidden, msgNotReg)
 		return
 	}
-	serveFsFile(w, r, f, info, filepath.Base(t.Abs))
+	serveFsFile(w, r, f, info, filepath.Base(t.Abs), t.ReadOnly)
 }
 
 // serveFsFile writes the response for an already-opened regular file: raw
@@ -179,7 +208,8 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 // the shared tail of /api/fs/read and the box file endpoint, so the two cannot
 // drift. name is the file's base name (it picks the extension and the download
 // filename); the caller has already authorised and opened f and closes it.
-func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.FileInfo, name string) {
+// readOnly marks the JSON preview so the viewer offers no Edit.
+func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.FileInfo, name string, readOnly bool) {
 	ext := strings.ToLower(filepath.Ext(name))
 
 	// download=1 is a byte pipe, not a preview: it deliberately bypasses both
@@ -210,7 +240,7 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 	head := make([]byte, 8000)
 	n, _ := io.ReadFull(f, head)
 	if isBinary(head[:n]) {
-		writeJSON(w, http.StatusOK, fsRead{Kind: "binary", Size: info.Size()})
+		writeJSON(w, http.StatusOK, fsRead{Kind: "binary", Size: info.Size(), ReadOnly: readOnly})
 		return
 	}
 	if info.Size() > maxTextBytes {
@@ -228,7 +258,7 @@ func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.Fil
 	}
 	writeJSON(w, http.StatusOK, fsRead{
 		Kind: "text", Lang: strings.TrimPrefix(ext, "."), Size: info.Size(),
-		Content: string(content), Version: hashText(content),
+		Content: string(content), Version: hashText(content), ReadOnly: readOnly,
 	})
 }
 

@@ -93,6 +93,13 @@ function copyResultMessage(plan, name, ok) {
   return { text: say, error: true };
 }
 
+// readOnlyFrom reports whether a /api/fs/read answer marks the file read-only
+// (the Claude scratch folder, #50): it is shown, but a save is always refused,
+// so the viewer offers no Edit. Only a successful read can say so.
+function readOnlyFrom(res) {
+  return !!(res && res.ok && res.data && res.data.readonly === true);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { IMAGE_EXTS, extOf, countLines, copyContentPlan, copyResultMessage };
+  module.exports = { IMAGE_EXTS, extOf, countLines, copyContentPlan, copyResultMessage, readOnlyFrom };
 }
