@@ -545,7 +545,7 @@ test("credTableRows token: name with label, env with hosts, status, used by; a m
   assert.deepStrictEqual([credTableRows(g2)[0].cells[2].text, credTableRows(g2)[0].cells[2].cls], ["Missing", "missing"]);
 });
 
-test("table mode keys on the as-page class, and the card path never looks at it", () => {
+test("table mode needs the as-page class and room in #creds-body; the card path never looks at it", () => {
   const fs = require("node:fs");
   const src = fs.readFileSync(require("node:path").join(__dirname, "..", "static", "credentials.js"), "utf8");
   const body = (name) => {
@@ -553,8 +553,11 @@ test("table mode keys on the as-page class, and the card path never looks at it"
     assert.ok(i >= 0, name);
     return src.slice(i, src.indexOf("\n}\n", i));
   };
-  assert.ok(/as-page/.test(body("credTableMode")));
-  assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "table mode is not width-based");
+  assert.ok(/as-page/.test(body("credPageMode")));
+  assert.ok(/credPageMode\(\)/.test(body("credTableMode")));
+  // The room is the body's own width (the sidebar is draggable), never the window's.
+  assert.ok(/creds-body/.test(body("credTableMode")) && /CRED_TABLE_MIN_WIDTH/.test(body("credTableMode")));
+  assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "not keyed on the window width");
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
 });

@@ -201,3 +201,44 @@ test("table headers: the empty actions column has a visually hidden label", () =
   assert.ok(last.querySelector(".sr-only"), "the label is hidden from sight, not from a screen reader");
   assert.strictEqual(ths.filter((t) => t.textContent === "").length, 0, "no header cell is left without a name");
 });
+
+// --- tables or cards -----------------------------------------------------------
+
+test("credTableMode: the page draws tables once #creds-body is wide enough, cards below", () => {
+  const { CRED_TABLE_MIN_WIDTH } = require("../static/credentials.js");
+  assert.ok(CRED_TABLE_MIN_WIDTH > 0);
+  assert.strictEqual(page({ width: CRED_TABLE_MIN_WIDTH }).box.credTableMode(), true);
+  assert.strictEqual(page({ width: CRED_TABLE_MIN_WIDTH - 1 }).box.credTableMode(), false);
+});
+
+test("credTableMode: a modal (not the page) keeps cards at any width", () => {
+  assert.strictEqual(page({ asPage: false, width: 2000 }).box.credTableMode(), false);
+});
+
+test("credTableMode: an unmeasured body (0 wide: the tab is hidden) keeps tables, as before", () => {
+  assert.strictEqual(page({ width: 0 }).box.credTableMode(), true);
+});
+
+test("a narrow page paints cards, a wide page paints tables, from the same view", () => {
+  const view = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [tok("sentry-prod")], values: [], legacy_secrets: [], invalid: [] };
+  const paint = (width) => {
+    const p = page({ width });
+    const body = p.byId["creds-body"];
+    p.box.renderCredentials(view);
+    return body;
+  };
+  const wide = paint(900), narrow = paint(500);
+  assert.strictEqual(wide.querySelectorAll("table").length > 0, true);
+  assert.strictEqual(wide.querySelectorAll(".ent").length, 0);
+  assert.strictEqual(narrow.querySelectorAll("table").length, 0);
+  assert.strictEqual(narrow.querySelectorAll(".ent").length > 0, true);
+  assert.strictEqual(narrow.querySelectorAll(".cstrip").length, 1, "the store strip is the page's quiet one in both");
+  assert.strictEqual(wide.querySelectorAll(".cstrip").length, 1);
+});
+
+test("a modal keeps its own amber strip", () => {
+  const p = page({ asPage: false, width: 900 });
+  p.box.renderCredentials({ store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [tok("sentry-prod")], values: [], legacy_secrets: [], invalid: [] });
+  assert.strictEqual(p.byId["creds-body"].querySelectorAll(".cstrip").length, 0);
+  assert.strictEqual(p.byId["creds-body"].querySelectorAll(".strip").length, 1);
+});

@@ -172,6 +172,16 @@ function credDeleteText(kind, e) {
 // tag, seed, title}: `kind` "st" or "pv" is a status / probe verdict coloured by
 // `cls`; `tag` is the PROD badge. The actions column is not here: it is DOM.
 
+// CRED_TABLE_MIN_WIDTH: the narrowest #creds-body (px) a table is drawn in; below
+// it the page draws the cards the modal draws. Measured, not chosen: the AWS table
+// does not wrap its names, so it is the widest at 667px, and #creds-body is 667px
+// when the viewport is 1190px with the default 290px sidebar. Narrower than that
+// the section (overflow: hidden) clips its Edit and Delete; the token tables
+// (table-layout: fixed) break "release-bot" and put Used by under Edit at about
+// 1000px. 700 leaves a little room for a longer account name. It is the body's
+// width, not the viewport's, because the sidebar is dragged between 200 and 560px.
+const CRED_TABLE_MIN_WIDTH = 700;
+
 const CRED_TABLE_HEADS = {
   aws: ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""],
   github: ["App", "Client ID · key", "Status", "Used by", ""],
@@ -787,6 +797,7 @@ if (typeof module !== "undefined" && module.exports) {
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
     GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
+    CRED_TABLE_MIN_WIDTH,
   };
 }
 
@@ -987,13 +998,23 @@ const CRED_EMPTY = {
   values: "No stored values.",
 };
 
-// credTableMode: the desktop Settings page draws tables where the modal draws
-// cards. Keyed on the dialog being a page, not on the width, so a mobile modal
-// resized wide keeps its cards.
-function credTableMode() {
+// credPageMode: the Settings dialog is the desktop page, not a modal.
+function credPageMode() {
   if (typeof document === "undefined") return false;
   const m = document.getElementById("settings-modal");
   return !!m && m.classList.contains("as-page");
+}
+
+// credTableMode: the desktop Settings page draws tables where the modal draws
+// cards, once the page has the room for them. A mobile modal resized wide keeps
+// its cards (the dialog must be a page). Read when the screen is painted: a
+// window dragged across the threshold repaints on the next load, as tables did.
+// A body that is not measurable (0 wide, the tab is hidden) keeps tables.
+function credTableMode() {
+  if (!credPageMode()) return false;
+  const body = document.getElementById("creds-body");
+  const w = body ? body.clientWidth : 0;
+  return !(w > 0) || w >= CRED_TABLE_MIN_WIDTH;
 }
 
 // credEntryHost: where an entry's inline confirmation goes. A card is its own
@@ -1155,8 +1176,8 @@ function credSection(g) {
 function credStrip(view) {
   const st = view.store || {};
   const locked = st.initialized && st.locked && st.platform !== "darwin";
-  // On the desktop page the strip is quiet (amber only when it needs you).
-  const strip = credEl("div", credTableMode() ? "strip cstrip" + (locked || !st.initialized ? " need" : "") : "strip");
+  // On the desktop page the strip is quiet (amber only when it needs you), in cards as in tables.
+  const strip = credEl("div", credPageMode() ? "strip cstrip" + (locked || !st.initialized ? " need" : "") : "strip");
   if (!st.initialized) {
     strip.appendChild(credEl("span", "st notset", "Not set up"));
     strip.appendChild(credEl("div", "txt", "There is no encrypted store yet. Without one, tokens can only come from the daemon's environment or a file."));

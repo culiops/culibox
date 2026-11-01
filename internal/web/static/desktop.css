@@ -1104,7 +1104,11 @@
      nothing else go with them. */
   #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
   #page-host > #settings-modal.as-page > .dbd.pad { padding: 22px 28px; }
-  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: 56px; gap: 10px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--panel); }
+  /* A footer wraps rather than overflowing the page: its buttons are one
+     unbreakable row 280-380px wide, more than the panel has below ~1040px (the
+     panel is the window minus the 290px sidebar and the 170px nav), and the
+     overflow pushed Save past the window edge. A one-line footer is unchanged: 56px, centred. */
+  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 10px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--panel); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
   #page-host > #settings-modal.as-page > .dft .btn {
@@ -1125,6 +1129,13 @@
      scrolls under the footer and keeps room for it at the bottom. */
   #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
   #page-host > #settings-modal.as-page > #foot-manage { position: relative; z-index: 1; margin-left: 200px; }
+  /* The 200px starts the footer at the form column. When the dialog itself (the
+     container: measured, 747px is the narrowest that holds the one-line footer past
+     that margin) is narrower, the footer takes the whole panel. */
+  #page-host > #settings-modal.as-page { container-type: inline-size; }
+  @container (max-width: 750px) {
+    #page-host > #settings-modal.as-page > #foot-manage { margin-left: 0; }
+  }
   #page-host > #settings-modal.as-page > #foot-manage #pf-delete { order: 1; }
   #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate { order: 2; }
   #page-host > #settings-modal.as-page > #foot-manage .grow { order: 3; }
@@ -1170,6 +1181,16 @@
        scroller, so scroll-into-view "nearest" (setDialogError) would count a
        line under it as visible. 72px = footer 56px + 16px clearance. */
     scroll-padding-bottom: 72px;
+  }
+  /* Full-width, the footer also sits over the list's foot; and below 550px (the one
+     line no longer fits, 377px of buttons) it takes two lines, so the form leaves
+     room under it too. */
+  @container (max-width: 750px) {
+    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 66px; }
+  }
+  @container (max-width: 550px) {
+    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 106px; }
+    #page-host > #settings-modal.as-page #manage .ped { padding-bottom: 116px; scroll-padding-bottom: 104px; }
   }
   #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
   #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
