@@ -261,7 +261,7 @@ function paletteCommands(mac) {
   for (const id of ["activity-view", "access-view", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: palReg().shortcutHint("sidebar.toggle", mac), run: () => togglePane("sessions") });
   for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
-  cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
+  cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot({ fresh: true }) });
   cmds.push({ kind: "view", label: "Increase font size", hint: palReg().shortcutHint("zoom.in", mac), run: () => zoomFocused(+fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Decrease font size", hint: palReg().shortcutHint("zoom.out", mac), run: () => zoomFocused(-fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Reset font size", hint: palReg().shortcutHint("zoom.reset", mac), run: () => resetZoomFocused() });

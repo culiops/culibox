@@ -17,6 +17,7 @@ import (
 type fakeGit struct {
 	mu       sync.Mutex
 	statuses []gitview.Target
+	fresh    []bool // per Status/StatusFresh call: was it fresh
 	diffs    []fakeDiffCall
 	st       gitview.Status
 	diff     gitview.Diff
@@ -28,10 +29,19 @@ type fakeDiffCall struct {
 	Untracked bool
 }
 
-func (f *fakeGit) Status(_ context.Context, t gitview.Target) gitview.Status {
+func (f *fakeGit) Status(ctx context.Context, t gitview.Target) gitview.Status {
+	return f.status(t, false)
+}
+
+func (f *fakeGit) StatusFresh(ctx context.Context, t gitview.Target) gitview.Status {
+	return f.status(t, true)
+}
+
+func (f *fakeGit) status(t gitview.Target, fresh bool) gitview.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statuses = append(f.statuses, t)
+	f.fresh = append(f.fresh, fresh)
 	st := f.st
 	if st.State == "" {
 		st = gitview.Status{State: "ok", Entries: []gitview.Entry{}}
@@ -568,5 +578,76 @@ func TestGitTargetRootOnlyForBoxed(t *testing.T) {
 	}
 	if len(g.diffs) != 2 || g.diffs[0].T != hostT || g.diffs[1].T != boxT {
 		t.Fatalf("diff targets = %+v", g.diffs)
+	}
+}
+
+func TestGitStatusFreshFlagSelectsFreshRun(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	b, _ := json.Marshal(map[string]any{"path": repo, "fresh": true})
+	decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", string(b)))
+	decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(repo)))
+	if len(g.fresh) != 2 || !g.fresh[0] || g.fresh[1] {
+		t.Fatalf("fresh flags = %v, want [true false]", g.fresh)
+	}
+}
+
+func TestGitDiffUsesPlainStatus(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "a.txt"))
+	decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "a.txt"))))
+	if len(g.fresh) != 1 || g.fresh[0] {
+		t.Fatalf("diff's status call fresh flags = %v, want [false] (reuse the tree's result)", g.fresh)
+	}
+}
+
+func TestGitMissingImageReasonIsFixed(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "a.txt"))
+	g.st = gitview.Status{State: "unavailable", Reason: gitview.ReasonNoImage, Entries: []gitview.Entry{}}
+	st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(repo)))
+	if st.State != "unavailable" || st.Reason != msgGitNoImage {
+		t.Fatalf("status = %+v, want %q", st, msgGitNoImage)
+	}
+	d := decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "a.txt"))))
+	if d.State != "unavailable" || d.Reason != msgGitNoImage {
+		t.Fatalf("diff after status = %+v", d)
+	}
+	g.st = gitview.Status{State: "ok", Entries: []gitview.Entry{}}
+	g.diff = gitview.Diff{State: "unavailable", Reason: gitview.ReasonNoImage}
+	d = decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "a.txt"))))
+	if d.State != "unavailable" || d.Reason != msgGitNoImage {
+		t.Fatalf("diff = %+v, want %q", d, msgGitNoImage)
+	}
+}
+
+func TestGitDiffTooManyEmptyIsUnknownNotUnchanged(t *testing.T) {
+	s, h, g := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustWrite(t, filepath.Join(repo, "new.txt"))
+	g.st = gitview.Status{State: "toomany", Entries: []gitview.Entry{}}
+	g.diff = gitview.Diff{State: "ok", Kind: "unchanged", Diff: ""}
+	d := decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "new.txt"))))
+	if d.State != "unavailable" || d.Reason != msgGitTooMany {
+		t.Fatalf("diff = %+v, want unavailable %q", d, msgGitTooMany)
+	}
+	// A tracked file's HEAD diff is real and is still shown.
+	g.diff = gitview.Diff{State: "ok", Kind: "text", Diff: "@@ -1 +1 @@\n-a\n+b\n"}
+	d = decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "new.txt"))))
+	if d.State != "ok" || d.Kind != "text" || d.Reason != "" {
+		t.Fatalf("tracked diff under toomany = %+v", d)
+	}
+	// With a complete status an empty diff stays "unchanged".
+	g.st = gitview.Status{State: "ok", Entries: []gitview.Entry{}}
+	g.diff = gitview.Diff{State: "ok", Kind: "unchanged"}
+	d = decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(repo, "new.txt"))))
+	if d.State != "ok" || d.Kind != "unchanged" {
+		t.Fatalf("ok-status empty diff = %+v", d)
 	}
 }

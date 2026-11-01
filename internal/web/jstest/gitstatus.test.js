@@ -193,3 +193,36 @@ test("gitStatusRefreshSoon: debounces to one request after 1 s", async (t) => {
     assert.equal(calls.length, 1);
   } finally { delete global.ftRoot; }
 });
+
+test("gitStatusLoad: fresh is sent only when asked for", async () => {
+  g.gitStatusReset();
+  const calls = deferredFetch();
+  g.gitStatusLoad("/r", "s1");
+  g.gitStatusLoad("/r", "s1", { fresh: true });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { path: "/r" });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { path: "/r", fresh: true });
+});
+
+test("gitStatusRefreshSoon: the debounced request is fresh, unless every caller opted out", async (t) => {
+  g.gitStatusReset();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls = deferredFetch();
+  global.ftRoot = () => "/r";
+  try {
+    g.gitStatusRefreshSoon();
+    t.mock.timers.tick(1000);
+    assert.equal(JSON.parse(calls[0].init.body).fresh, true);
+    g.gitStatusRefreshSoon({ fresh: false });
+    t.mock.timers.tick(1000);
+    assert.equal(JSON.parse(calls[1].init.body).fresh, undefined);
+    // one fresh caller in the window makes the whole window fresh
+    g.gitStatusRefreshSoon({ fresh: false });
+    g.gitStatusRefreshSoon();
+    t.mock.timers.tick(1000);
+    assert.equal(JSON.parse(calls[2].init.body).fresh, true);
+    // and the flag does not leak into the next window
+    g.gitStatusRefreshSoon({ fresh: false });
+    t.mock.timers.tick(1000);
+    assert.equal(JSON.parse(calls[3].init.body).fresh, undefined);
+  } finally { delete global.ftRoot; }
+});

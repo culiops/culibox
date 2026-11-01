@@ -31,6 +31,12 @@ const (
 	removeTimeout  = 10 * time.Second
 )
 
+// ReasonNoImage is the reason of an unavailable result when docker has no
+// local copy of the box image (the run uses --pull=never). It is a fixed
+// string, not docker's stderr, so a caller can recognise it and tell the user
+// what to do.
+const ReasonNoImage = "box image not present locally"
+
 // Status is the tree's change set for one repository. State is one of ok,
 // notrepo, toomany, unavailable; Entries is never nil.
 type Status struct {
@@ -75,13 +81,24 @@ type Runner struct {
 type cached struct {
 	st       Status
 	at       time.Time // when the run finished
+	started  time.Time // when the run launched its container (see flight)
 	lastUsed time.Time
 }
 
 // flight is one status run that every concurrent caller for a Top waits on.
+// started is when its container launched (guarded by Runner.mu); until then
+// the run has read nothing, so even a fresh request may still join it.
 type flight struct {
-	done chan struct{}
-	st   Status
+	done       chan struct{}
+	st         Status
+	started    time.Time
+	hasStarted bool
+}
+
+// readsAfter reports whether the flight's result reflects the disk at or after
+// t: it has not launched yet, or it launched at or after t.
+func (f *flight) readsAfter(t time.Time) bool {
+	return !f.hasStarted || !f.started.Before(t)
 }
 
 func orDur(d, def time.Duration) time.Duration {
@@ -113,6 +130,22 @@ func (r *Runner) semaphore() chan struct{} {
 // one container run, and a finished result is reused for Reuse. A refused
 // target, a docker failure or a timeout is State "unavailable".
 func (r *Runner) Status(ctx context.Context, t Target) Status {
+	return r.status(ctx, t, false)
+}
+
+// StatusFresh is Status for a caller that has just changed something on disk:
+// it never takes the reuse cache, and joins a run already in flight only if
+// that run's container launched at or after this call (or has not launched
+// yet), since an earlier run may have read the tree before the change. Fresh
+// callers still share one new run among themselves, and the run still takes one
+// of the MaxParallel slots. A fresh call that arrives after another fresh run
+// launched starts its own: a run is only shared by requests that precede its
+// launch.
+func (r *Runner) StatusFresh(ctx context.Context, t Target) Status {
+	return r.status(ctx, t, true)
+}
+
+func (r *Runner) status(ctx context.Context, t Target, fresh bool) Status {
 	if why := t.Unsafe(); why != "" {
 		return unavailableStatus(t, why)
 	}
@@ -120,18 +153,20 @@ func (r *Runner) Status(ctx context.Context, t Target) Status {
 	now := r.now()
 	r.mu.Lock()
 	r.sweepLocked(now)
-	if c := r.cache[key]; c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
+	if c := r.cache[key]; !fresh && c != nil && now.Sub(c.at) < orDur(r.Reuse, defaultReuse) {
 		c.lastUsed = now
 		st := cloneStatus(c.st)
 		r.mu.Unlock()
 		return st
 	}
 	f := r.flights[key]
-	if f == nil {
+	if f == nil || (fresh && !f.readsAfter(now)) {
 		f = &flight{done: make(chan struct{})}
 		if r.flights == nil {
 			r.flights = map[string]*flight{}
 		}
+		// A newer flight replaces an older one still running: later callers
+		// join the newest, and the older one only answers its own waiters.
 		r.flights[key] = f
 		// The run belongs to the flight, not to the caller that started it: its
 		// own context, so one caller leaving does not fail the others.
@@ -162,20 +197,28 @@ func (r *Runner) sweepLocked(now time.Time) {
 }
 
 func (r *Runner) runStatus(t Target, key string, f *flight) {
-	st := r.doStatus(t)
+	st := r.doStatus(t, f)
 	now := r.now()
 	r.mu.Lock()
+	if !f.hasStarted { // never got a slot
+		f.started, f.hasStarted = now, true
+	}
 	if r.cache == nil {
 		r.cache = map[string]*cached{}
 	}
-	r.cache[key] = &cached{st: st, at: now, lastUsed: now}
-	delete(r.flights, key)
+	// A slower, older run must not replace the result of a newer one.
+	if c := r.cache[key]; c == nil || !c.started.After(f.started) {
+		r.cache[key] = &cached{st: st, at: now, started: f.started, lastUsed: now}
+	}
+	if r.flights[key] == f {
+		delete(r.flights, key)
+	}
 	r.mu.Unlock()
 	f.st = st
 	close(f.done)
 }
 
-func (r *Runner) doStatus(t Target) Status {
+func (r *Runner) doStatus(t Target, f *flight) Status {
 	ctx, cancel := context.WithTimeout(context.Background(), orDur(r.Timeout, defaultTimeout))
 	defer cancel()
 	release, err := r.acquire(ctx)
@@ -183,6 +226,9 @@ func (r *Runner) doStatus(t Target) Status {
 		return unavailableStatus(t, "timed out waiting for a free git container")
 	}
 	defer release()
+	r.mu.Lock()
+	f.started, f.hasStarted = r.now(), true
+	r.mu.Unlock()
 	name := newName()
 	out := &capBuffer{max: maxStatusBytes}
 	err = r.Docker.RunStream(ctx, StatusArgs(t, r.Image, name, r.UID, r.GID), out)
@@ -229,8 +275,12 @@ func (r *Runner) Diff(ctx context.Context, t Target, rel string, untracked bool)
 	name := newName()
 	out := &capBuffer{max: maxDiffBytes}
 	err = r.Docker.RunStream(ctx, DiffArgs(t, r.Image, name, r.UID, r.GID, rel, untracked), out)
-	if err != nil {
-		// As in doStatus: remove the container on every error, result or not.
+	// Exit 1 of --no-index with output is git saying "the files differ": the
+	// container has already exited and --rm removes it, so a docker rm -f is
+	// pure overhead. Every other error (a cap hit, a timeout, a real failure)
+	// may leave the container running, so it is removed.
+	differs := untracked && exitCode(err) == 1 && len(out.b) > 0 && !out.hit
+	if err != nil && !differs {
 		r.remove(name)
 	}
 	if err != nil && !errors.Is(err, errCapped) && !(untracked && exitCode(err) == 1) {
@@ -291,6 +341,9 @@ func failReason(ctx context.Context, err error) string {
 }
 
 func failReasonText(s string) string {
+	if strings.Contains(s, "No such image") || strings.Contains(s, "Unable to find image") {
+		return ReasonNoImage
+	}
 	s = strings.ToValidUTF8(strings.TrimSpace(s), "")
 	if rs := []rune(s); len(rs) > maxReasonRunes {
 		s = string(rs[len(rs)-maxReasonRunes:])

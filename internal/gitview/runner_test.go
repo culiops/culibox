@@ -405,8 +405,8 @@ func TestDiffUntrackedExitOneIsSuccess(t *testing.T) {
 	if d.State != "ok" || d.Kind != "text" || d.Diff != out {
 		t.Fatalf("untracked exit 1: %+v", d)
 	}
-	if len(f.removed) != 1 {
-		t.Fatalf("exit 1 of --no-index: Remove calls %q, want 1 (harmless, but uniform)", f.removed)
+	if len(f.removed) != 0 {
+		t.Fatalf("exit 1 of --no-index with output: Remove calls %q, want none (--rm cleans up)", f.removed)
 	}
 	// The same exit on a tracked diff is a failure, and so is any other code.
 	if d := r.Diff(context.Background(), tgt, "a.go", false); d.State != "unavailable" {
@@ -473,5 +473,186 @@ func TestStatusKeyedByTopAndCommon(t *testing.T) {
 	r.Status(context.Background(), b)
 	if n := f.callCount(); n != 2 {
 		t.Fatalf("repeat of each: %d runs, want 2 (both cached)", n)
+	}
+}
+
+// waitCalls blocks until the fake docker has been called n times.
+func waitCalls(t *testing.T, f *fakeDocker, n int) {
+	t.Helper()
+	for i := 0; i < 400; i++ {
+		if f.callCount() >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("docker called %d times, want %d", f.callCount(), n)
+}
+
+func TestStatusFreshIgnoresReuseWindow(t *testing.T) {
+	f := &fakeDocker{run: okStatus()}
+	c := newClock()
+	r := newRunner(f, c)
+	r.Status(context.Background(), tgt)
+	c.add(100 * time.Millisecond) // well inside the 2 s reuse window
+	r.Status(context.Background(), tgt)
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("plain call in the window: %d runs, want 1", n)
+	}
+	if st := r.StatusFresh(context.Background(), tgt); st.State != "ok" {
+		t.Fatalf("fresh status = %+v", st)
+	}
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("fresh call in the window: %d runs, want 2", n)
+	}
+	// Its result is cached for later plain callers.
+	r.Status(context.Background(), tgt)
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("plain call after a fresh run: %d runs, want 2", n)
+	}
+}
+
+func TestStatusFreshDoesNotJoinEarlierRun(t *testing.T) {
+	release := make(chan struct{})
+	var phase atomic.Int32
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		if phase.Add(1) == 1 {
+			<-release // the early run reads the tree "before the mutation"
+			_, err := io.WriteString(w, "? old.txt\x00")
+			return err
+		}
+		_, err := io.WriteString(w, "? new.txt\x00")
+		return err
+	}}
+	c := newClock()
+	r := newRunner(f, c)
+	plain := make(chan Status)
+	go func() { plain <- r.Status(context.Background(), tgt) }()
+	waitCalls(t, f, 1)
+	c.add(10 * time.Millisecond) // the mutation, then the fresh request
+	fresh := r.StatusFresh(context.Background(), tgt)
+	if n := f.callCount(); n != 2 {
+		t.Fatalf("fresh joined the earlier run: %d runs, want 2", n)
+	}
+	if len(fresh.Entries) != 1 || fresh.Entries[0].P != "new.txt" {
+		t.Fatalf("fresh got %+v, want the second run's result", fresh.Entries)
+	}
+	close(release)
+	if st := <-plain; len(st.Entries) != 1 || st.Entries[0].P != "old.txt" {
+		t.Fatalf("plain caller got %+v", st.Entries)
+	}
+	// The older run finishing last must not replace the newer result in the cache.
+	if st := r.Status(context.Background(), tgt); st.Entries[0].P != "new.txt" {
+		t.Fatalf("cache holds %+v, want the newer run", st.Entries)
+	}
+}
+
+func TestStatusFreshSharesOneNewRun(t *testing.T) {
+	release := make(chan struct{})
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		<-release
+		return okStatus()(ctx, a, w)
+	}}
+	r := newRunner(f, newClock())
+	var wg sync.WaitGroup
+	res := make([]Status, 6)
+	for i := range res {
+		wg.Add(1)
+		go func() { defer wg.Done(); res[i] = r.StatusFresh(context.Background(), tgt) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("concurrent fresh calls: %d runs, want 1", n)
+	}
+	for i, s := range res {
+		if s.State != "ok" || len(s.Entries) != 2 {
+			t.Fatalf("caller %d got %+v", i, s)
+		}
+	}
+}
+
+func TestStatusFreshJoinsRunStartedAtOrAfterRequest(t *testing.T) {
+	release := make(chan struct{})
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		<-release
+		return okStatus()(ctx, a, w)
+	}}
+	r := newRunner(f, newClock())
+	plain := make(chan Status)
+	go func() { plain <- r.Status(context.Background(), tgt) }()
+	waitCalls(t, f, 1)
+	fresh := make(chan Status)
+	go func() { fresh <- r.StatusFresh(context.Background(), tgt) }() // same instant on the fake clock
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-plain
+	<-fresh
+	if n := f.callCount(); n != 1 {
+		t.Fatalf("fresh request at the run's start instant: %d runs, want 1", n)
+	}
+}
+
+func TestStatusFreshRespectsParallelCap(t *testing.T) {
+	var cur, peak atomic.Int32
+	f := &fakeDocker{run: func(ctx context.Context, a []string, w io.Writer) error {
+		n := cur.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(60 * time.Millisecond)
+		cur.Add(-1)
+		return okStatus()(ctx, a, w)
+	}}
+	c := newClock()
+	r := newRunner(f, c)
+	r.MaxParallel = 1
+	done := make(chan Status)
+	go func() { done <- r.Status(context.Background(), tgt) }()
+	waitCalls(t, f, 1)
+	c.add(time.Millisecond)
+	if st := r.StatusFresh(context.Background(), tgt); st.State != "ok" {
+		t.Fatalf("fresh = %+v", st)
+	}
+	<-done
+	if p := peak.Load(); p != 1 || f.callCount() != 2 {
+		t.Fatalf("peak = %d runs = %d, want 1 and 2", p, f.callCount())
+	}
+}
+
+func TestDiffUntrackedExitOneKeepsRemoveWhenNoOutputOrCapped(t *testing.T) {
+	// Exit 1 without output is not "the files differ": remove as before.
+	f := &fakeDocker{run: func(context.Context, []string, io.Writer) error { return exitErr(t, 1) }}
+	newRunner(f, newClock()).Diff(context.Background(), tgt, "new.txt", true)
+	if len(f.removed) != 1 {
+		t.Fatalf("exit 1 without output: Remove calls %q, want 1", f.removed)
+	}
+	// A cap hit is removed too: the container may still be running.
+	f = &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := w.Write(bytes.Repeat([]byte("x"), maxDiffBytes+1))
+		return fmt.Errorf("docker run: %w", err)
+	}}
+	d := newRunner(f, newClock()).Diff(context.Background(), tgt, "new.txt", true)
+	if !d.Truncated || len(f.removed) != 1 {
+		t.Fatalf("capped untracked diff: truncated=%v removed=%q", d.Truncated, f.removed)
+	}
+}
+
+func TestMissingImageIsAFixedReason(t *testing.T) {
+	for _, stderr := range []string{
+		"docker run: exit status 125: Unable to find image 'img:1' locally\ndocker: Error response from daemon: pull access denied",
+		"docker run: exit status 125: docker: Error response from daemon: No such image: img:1.",
+	} {
+		f := &fakeDocker{run: func(context.Context, []string, io.Writer) error { return errors.New(stderr) }}
+		r := newRunner(f, newClock())
+		if st := r.Status(context.Background(), tgt); st.State != "unavailable" || st.Reason != ReasonNoImage {
+			t.Fatalf("status = %+v for %q", st, stderr)
+		}
+		if d := r.Diff(context.Background(), tgt, "a.go", false); d.State != "unavailable" || d.Reason != ReasonNoImage {
+			t.Fatalf("diff = %+v for %q", d, stderr)
+		}
 	}
 }

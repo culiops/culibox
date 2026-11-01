@@ -17,6 +17,7 @@ import (
 // the Server means no box runtime: both endpoints answer "unavailable".
 type GitView interface {
 	Status(context.Context, gitview.Target) gitview.Status
+	StatusFresh(context.Context, gitview.Target) gitview.Status
 	Diff(context.Context, gitview.Target, string, bool) gitview.Diff
 }
 
@@ -28,6 +29,8 @@ const (
 	msgGitOutside      = "repository is outside the viewable tree"
 	msgGitNotAvailable = "Git status is not available for this folder"
 	msgGitTimeout      = "Git took too long"
+	msgGitNoImage      = "Git status needs the box image (start a boxed session once)"
+	msgGitTooMany      = "Too many changes to tell what changed in this file"
 )
 
 var (
@@ -39,6 +42,10 @@ var (
 // gitBody is the body of both endpoints.
 type gitBody struct {
 	Path string `json:"path"`
+	// Fresh (status only) asks for a result read after this request arrived,
+	// not a reused or already-running one: a client sets it when it has just
+	// changed something on disk.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // gitTarget decides which host directories a git container may mount for the
@@ -138,21 +145,24 @@ func (p fsPolicy) holdsDenied(dir string) bool {
 
 // decodeGitBody applies the POST + CSRF guard, bounds and decodes the body,
 // and requires an absolute path. It writes the response itself on failure.
-func decodeGitBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+func decodeGitBody(w http.ResponseWriter, r *http.Request) (gitBody, bool) {
 	var body gitBody
 	if !decodeOpBody(w, r, &body) {
-		return "", false
+		return gitBody{}, false
 	}
 	if !filepath.IsAbs(body.Path) {
 		writeErr(w, http.StatusBadRequest, "bad path")
-		return "", false
+		return gitBody{}, false
 	}
-	return body.Path, true
+	return body, true
 }
 
-// gitReason maps the runner's reason to a fixed message; a timeout is told
-// apart, everything else is "not available".
+// gitReason maps the runner's reason to a fixed message; a timeout and a
+// missing box image are told apart, everything else is "not available".
 func gitReason(raw string) string {
+	if strings.Contains(raw, gitview.ReasonNoImage) {
+		return msgGitNoImage
+	}
 	if strings.Contains(raw, "timed out") {
 		return msgGitTimeout
 	}
@@ -182,10 +192,11 @@ func unavailableGitDiff(reason string) gitview.Diff {
 // handleGitStatus is POST /api/git/status {"path": abs}: the change set of the
 // checkout holding path. ok/notrepo/toomany/unavailable are all 200.
 func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
-	path, ok := decodeGitBody(w, r)
+	body, ok := decodeGitBody(w, r)
 	if !ok {
 		return
 	}
+	path := body.Path
 	if s.Git == nil {
 		writeJSON(w, http.StatusOK, unavailableGitStatus(msgGitNoRuntime))
 		return
@@ -204,7 +215,12 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	// st is this request's own copy (Status returns a value with cloned
 	// entries), so RootRel never reaches the runner's shared cache.
-	st := s.Git.Status(r.Context(), t)
+	var st gitview.Status
+	if body.Fresh {
+		st = s.Git.StatusFresh(r.Context(), t)
+	} else {
+		st = s.Git.Status(r.Context(), t)
+	}
 	st.RootRel = rootRel(t.Top, abs)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
@@ -221,10 +237,11 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 // handleGitDiff is POST /api/git/diff {"path": abs file}: one file's diff
 // against HEAD, or against nothing when the file is untracked.
 func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
-	path, ok := decodeGitBody(w, r)
+	body, ok := decodeGitBody(w, r)
 	if !ok {
 		return
 	}
+	path := body.Path
 	if s.Git == nil {
 		writeJSON(w, http.StatusOK, unavailableGitDiff(msgGitNoRuntime))
 		return
@@ -254,14 +271,19 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	rel = filepath.ToSlash(rel)
 
+	// A plain Status: right after the tree painted it is the reused result (2 s),
+	// and past that it is one single-flighted run, not one per click.
 	st := s.Git.Status(r.Context(), t)
 	untracked := false
+	tooMany := false
 	switch st.State {
 	case "ok":
 		untracked = untrackedIn(st, rel)
 	case "toomany":
-		// No entries to look in: diff against HEAD; an untracked file reads
-		// as unchanged rather than failing.
+		// No entries to look in, so whether the file is untracked is unknown.
+		// Diff against HEAD: a tracked change shows; an empty answer could be
+		// an untracked file, so it is reported as unknown, not "no changes".
+		tooMany = true
 	default:
 		log.Printf("git diff %q: status: %q", t.Top, st.Reason)
 		writeJSON(w, http.StatusOK, unavailableGitDiff(gitReason(st.Reason)))
@@ -271,6 +293,8 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 	if d.State != "ok" {
 		log.Printf("git diff %q: %q", t.Top, d.Reason)
 		d = unavailableGitDiff(gitReason(d.Reason))
+	} else if tooMany && d.Kind == "unchanged" {
+		d = unavailableGitDiff(msgGitTooMany)
 	} else {
 		d.Reason = ""
 	}

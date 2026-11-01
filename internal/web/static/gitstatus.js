@@ -62,19 +62,24 @@ function gitMarks(status, root) {
 let gitSeq = 0;          // a reply is dropped unless it is the newest ask
 let gitState = null;     // {root, sid, status, marks} of the last reply that landed
 let gitTimer = null;
+let gitTimerFresh = false; // any refreshSoon in the pending window asked for fresh
 const GIT_DEBOUNCE_MS = 1000;
 
 function gitStatusReset() {
   gitSeq++;
   gitState = null;
   if (gitTimer) { clearTimeout(gitTimer); gitTimer = null; }
+  gitTimerFresh = false;
 }
 
 // gitStatusLoad asks for the tree root's status and paints the answer. A root
 // change drops the old marks at once; a re-ask of the same root keeps them on
 // screen until the reply lands, so a refresh does not flicker. A failed request
-// keeps whatever was shown.
-async function gitStatusLoad(root, sid) {
+// keeps whatever was shown. opts.fresh asks the server for a result read after
+// this request, not a reused or already-running one: send it when something was
+// just changed on disk (a save, an upload, a file op, a finished turn, the
+// refresh button), and not for the plain load that follows a tree paint.
+async function gitStatusLoad(root, sid, opts) {
   if (!root) return null;
   const seq = ++gitSeq;
   if (gitState && gitState.root !== root) { gitState = null; gitPaintTree(); }
@@ -83,7 +88,7 @@ async function gitStatusLoad(root, sid) {
     const res = await fetch("/api/git/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: root }),
+      body: JSON.stringify(opts && opts.fresh ? { path: root, fresh: true } : { path: root }),
     });
     if (res.ok) status = await res.json();
   } catch (_) { /* offline: keep the marks */ }
@@ -102,13 +107,18 @@ function gitStatusTreeSid() {
 }
 
 // gitStatusRefreshSoon: the one entry point for "something may have changed".
-// Debounced, and never a timer poll.
-function gitStatusRefreshSoon() {
+// Debounced, and never a timer poll. Every caller is a reaction to a change, so
+// it asks for a fresh result; the debounced request is fresh if any caller in
+// its window was (opts.fresh === false opts out).
+function gitStatusRefreshSoon(opts) {
   if (gitTimer) clearTimeout(gitTimer);
+  if (!opts || opts.fresh !== false) gitTimerFresh = true;
   gitTimer = setTimeout(() => {
     gitTimer = null;
+    const fresh = gitTimerFresh;
+    gitTimerFresh = false;
     const root = typeof ftRoot === "function" ? ftRoot() : "";
-    if (root) gitStatusLoad(root, gitStatusTreeSid());
+    if (root) gitStatusLoad(root, gitStatusTreeSid(), { fresh });
   }, GIT_DEBOUNCE_MS);
 }
 
