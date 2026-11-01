@@ -19,24 +19,28 @@ type altCandidate struct {
 }
 
 // handleFsAlternates serves GET /api/fs/alternates?base=<abs dir>&rel=<relative>:
-// where rel (a path an agent printed relative to base) exists in the live linked
-// worktrees under <repo>/.claude/worktrees, newest first. A subagent working in
-// a worktree prints paths relative to the main checkout; the file tree joins
-// them onto base and finds nothing.
+// where rel (a path an agent printed relative to base) exists in the OTHER
+// checkouts of base's repository: the main checkout and the live linked
+// worktrees under <repo>/.claude/worktrees, newest first. A path printed in one
+// checkout is clicked in another (a subagent works in a worktree and prints
+// paths relative to the main checkout, or the agent moves between them), joins
+// onto the wrong tree and finds nothing. The main checkout's candidate has
+// worktree "".
 //
-// Only a missing or malformed parameter is a 400. Every other refusal or failure
-// is 200 with an empty list, so the answer never reveals which paths exist
-// outside the viewable tree. Nothing here runs git: the lookups are bounded
-// stats and one non-blocking open per candidate.
+// Only a missing or relative base is a 400. Every other refusal or failure
+// (absolute, empty or climbing rel included) is 200 with an empty list, so the
+// answer never reveals which paths exist outside the viewable tree. Nothing
+// here runs git: the lookups are bounded stats and one non-blocking open per
+// candidate.
 func (s *Server) handleFsAlternates(w http.ResponseWriter, r *http.Request) {
 	base := r.URL.Query().Get("base")
 	rel := r.URL.Query().Get("rel")
-	if !filepath.IsAbs(base) || rel == "" || filepath.IsAbs(rel) {
+	if !filepath.IsAbs(base) {
 		writeErr(w, http.StatusBadRequest, "bad path")
 		return
 	}
 	out := []altCandidate{}
-	if c := filepath.Clean(rel); c != "." && filepath.IsLocal(c) {
+	if c := filepath.Clean(rel); rel != "" && !filepath.IsAbs(rel) && c != "." && filepath.IsLocal(c) {
 		if got, ok := s.altCandidates(base, c); ok {
 			out = got
 		}
@@ -63,33 +67,44 @@ func (s *Server) altCandidates(base, rel string) ([]altCandidate, bool) {
 		return nil, false
 	}
 	repo, ok := gitrepo.Locate(abs)
-	// A main checkout only: inside a linked worktree the path already resolves
-	// there, and a submodule's common dir is not named .git.
-	if !ok || repo.Linked || filepath.Base(repo.Common) != ".git" {
+	// A common dir not named .git is a submodule's: not a checkout family.
+	if !ok || filepath.Base(repo.Common) != ".git" {
 		return nil, false
 	}
 	root := filepath.Dir(repo.Common)
-	if !p.inGitTree(req, root) || !p.inGitTree(req, repo.Common) {
-		return nil, false
+	for _, x := range []string{repo.Top, root, repo.Common} {
+		if !p.inGitTree(req, x) {
+			return nil, false
+		}
 	}
-	sub, err := filepath.Rel(root, abs)
-	if err != nil || !(sub == "." || filepath.IsLocal(sub)) {
+	prefix, err := filepath.Rel(repo.Top, abs)
+	if err != nil || !(prefix == "." || filepath.IsLocal(prefix)) {
 		return nil, false
 	}
 
-	out := []altCandidate{}
+	// The other checkouts: the main root (shown as ""), then the live linked
+	// worktrees. The checkout base lies in is never offered.
+	type checkout struct{ dir, name string }
+	cks := []checkout{{root, ""}}
 	for _, wt := range gitrepo.LinkedWorktrees(root, repo.Common, maxAltWorktrees) {
-		// LinkedWorktrees follows a linked .claude or .claude/worktrees; a
-		// worktree reached through any link is not served.
-		if r, err := filepath.EvalSymlinks(wt); err != nil || r != wt {
+		cks = append(cks, checkout{wt, filepath.Base(wt)})
+	}
+	out := []altCandidate{}
+	for _, ck := range cks {
+		if ck.dir == repo.Top {
 			continue
 		}
-		cand := filepath.Join(wt, sub, rel)
-		if r, err := filepath.Rel(wt, cand); err != nil || !filepath.IsLocal(r) {
+		// LinkedWorktrees follows a linked .claude or .claude/worktrees; a
+		// checkout reached through any link is not served.
+		if r, err := filepath.EvalSymlinks(ck.dir); err != nil || r != ck.dir {
+			continue
+		}
+		cand := filepath.Join(ck.dir, prefix, rel)
+		if r, err := filepath.Rel(ck.dir, cand); err != nil || !filepath.IsLocal(r) {
 			continue
 		}
 		if mt, ok := p.altFile(req, cand); ok {
-			out = append(out, altCandidate{Path: cand, Worktree: filepath.Base(wt), Mtime: mt})
+			out = append(out, altCandidate{Path: cand, Worktree: ck.name, Mtime: mt})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

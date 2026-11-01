@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 	"testing"
 	"time"
@@ -110,15 +111,30 @@ func TestLinkedWorktreesFilters(t *testing.T) {
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("LinkedWorktrees = %v, want %v", got, want)
 	}
-	// entries scan in name order: a, b, gone, link, ...; max=1 scans only "a"
-	if got := LinkedWorktrees(root, common, 1); len(got) != 1 || got[0] != want[0] {
-		t.Fatalf("max=1: %v", got)
-	}
 	if got := LinkedWorktrees(root, common, 0); len(got) != 0 {
 		t.Fatalf("max=0: %v", got)
 	}
 	if got := LinkedWorktrees(t.TempDir(), common, 64); len(got) != 0 {
 		t.Fatalf("no .claude/worktrees: %v", got)
+	}
+}
+
+// The directory read itself is bounded: with many valid entries, max caps how
+// many come back, and the result is sorted.
+func TestLinkedWorktreesBoundsTheRead(t *testing.T) {
+	root := t.TempDir()
+	common := filepath.Join(root, ".git")
+	wts := filepath.Join(root, ".claude", "worktrees")
+	for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+		mkdir(t, filepath.Join(common, "worktrees", n))
+		write(t, filepath.Join(wts, n, ".git"), "gitdir: "+filepath.Join(common, "worktrees", n)+"\n")
+	}
+	got := LinkedWorktrees(root, common, 3)
+	if len(got) != 3 || !sort.StringsAreSorted(got) {
+		t.Fatalf("max=3: %v", got)
+	}
+	if got := LinkedWorktrees(root, common, 100); len(got) != 6 {
+		t.Fatalf("max=100: %v", got)
 	}
 }
 

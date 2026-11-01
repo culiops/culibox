@@ -128,13 +128,82 @@ func TestAltTieBreaksByPath(t *testing.T) {
 	}
 }
 
-func TestAltBaseInsideWorktree(t *testing.T) {
+func TestAltBaseInWorktreeFindsMainOnly(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	wts := altRepo(t, repo, "a")
+	f := filepath.Join(repo, "docs", "superpowers", "plan.md") // gitignored: main only
+	mustWrite(t, f)
+	got := altGet(t, s, wts[0], "docs/superpowers/plan.md")
+	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "" || got[0].Mtime == 0 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAltBaseInWorktreeSubdirAppliesPrefix(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	wts := altRepo(t, repo, "a")
+	mustMkdirAll(t, filepath.Join(wts[0], "internal"))
+	f := filepath.Join(repo, "internal", "bundle", "gc.go")
+	mustWrite(t, f)
+	got := altGet(t, s, filepath.Join(wts[0], "internal"), "bundle/gc.go")
+	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAltBaseInWorktreeMainAndSibling(t *testing.T) {
 	s, h, _ := hostGitServer(t)
 	repo := filepath.Join(h, "repo")
 	wts := altRepo(t, repo, "a", "b")
-	mustWrite(t, filepath.Join(wts[1], "f.txt"))
-	mustWrite(t, filepath.Join(wts[0], "f.txt"))
-	if got := altGet(t, s, wts[0], "f.txt"); len(got) != 0 {
+	now := time.Now()
+	mf, bf, af := filepath.Join(repo, "f.txt"), filepath.Join(wts[1], "f.txt"), filepath.Join(wts[0], "f.txt")
+	for f, d := range map[string]time.Duration{mf: -2 * time.Hour, bf: -1 * time.Hour, af: 0} {
+		mustWrite(t, f)
+		os.Chtimes(f, now.Add(d), now.Add(d))
+	}
+	got := altGet(t, s, wts[0], "f.txt")
+	// a is the base's own checkout and is never listed.
+	if len(got) != 2 || got[0].Path != bf || got[0].Worktree != "b" || got[1].Path != mf || got[1].Worktree != "" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAltBaseInMainNeverListsMain(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	altRepo(t, repo, "a")
+	mustWrite(t, filepath.Join(repo, "f.txt"))
+	if got := altGet(t, s, repo, "f.txt"); len(got) != 0 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAltBaseInOutOfTreeWorktreeFindsMain(t *testing.T) {
+	// A linked worktree that lives beside the repo, not under .claude/worktrees.
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	altRepo(t, repo)
+	gd := filepath.Join(repo, ".git", "worktrees", "x")
+	mustMkdirAll(t, gd)
+	wt := filepath.Join(h, "wt")
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+gd+"\n")
+	f := filepath.Join(repo, "f.txt")
+	mustWrite(t, f)
+	got := altGet(t, s, wt, "f.txt")
+	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAltBoxedBaseInWorktreeFindsMain(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	wts := altRepo(t, ws, "a")
+	f := filepath.Join(ws, "docs", "p.md")
+	mustWrite(t, f)
+	got := altGet(t, s, wts[0], "docs/p.md")
+	if len(got) != 1 || got[0].Path != f || got[0].Worktree != "" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -143,24 +212,19 @@ func TestAltRejectsDotDot(t *testing.T) {
 	s, h, _ := hostGitServer(t)
 	repo := filepath.Join(h, "repo")
 	altRepo(t, repo, "a")
-	for _, rel := range []string{"../../etc/passwd", "a/../../x", "/etc/passwd", ""} {
-		if rel == "" || rel[0] == '/' {
-			if rr := altReq(s, repo, rel); rr.Code != http.StatusBadRequest && rr.Code != http.StatusOK {
-				t.Fatalf("rel %q: code %d", rel, rr.Code)
-			}
-			continue
-		}
-		if got := altGet(t, s, repo, rel); len(got) != 0 {
-			t.Fatalf("rel %q: got %+v", rel, got)
+	for _, rel := range []string{"../../etc/passwd", "a/../../x", "/etc/passwd", "", "."} {
+		rr := altReq(s, repo, rel)
+		if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != `{"candidates":[]}` {
+			t.Fatalf("rel %q: code %d body %s", rel, rr.Code, rr.Body)
 		}
 	}
-	// A real file reachable only by climbing out of the worktree is not served.
-	wts := altRepo(t, filepath.Join(h, "r2"), "w")
-	mustWrite(t, filepath.Join(h, "r2", ".claude", "secret.txt"))
-	if got := altGet(t, s, filepath.Join(h, "r2"), "../secret.txt"); len(got) != 0 {
+	// A real file reachable only by climbing out of the checkout is not served.
+	r2 := filepath.Join(h, "r2")
+	altRepo(t, r2, "w")
+	mustWrite(t, filepath.Join(r2, ".claude", "secret.txt"))
+	if got := altGet(t, s, r2, "../secret.txt"); len(got) != 0 {
 		t.Fatalf("got %+v", got)
 	}
-	_ = wts
 }
 
 func TestAltSkipsDirCandidate(t *testing.T) {
@@ -180,12 +244,12 @@ func TestAltSkipsFifoWithoutBlocking(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(wts[0], "p"), 0o644); err != nil {
 		t.Skip(err)
 	}
-	done := make(chan []altCand, 1)
-	go func() { done <- altGet(t, s, repo, "p") }()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- altReq(s, repo, "p") }()
 	select {
-	case got := <-done:
-		if len(got) != 0 {
-			t.Fatalf("got %+v", got)
+	case rr := <-done:
+		if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != `{"candidates":[]}` {
+			t.Fatalf("code %d body %s", rr.Code, rr.Body)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("blocked on a FIFO")
@@ -252,7 +316,7 @@ func TestAltBadParams(t *testing.T) {
 	s, h, _ := hostGitServer(t)
 	repo := filepath.Join(h, "repo")
 	altRepo(t, repo, "a")
-	for _, c := range [][2]string{{"", "f"}, {"relative/dir", "f"}, {repo, ""}} {
+	for _, c := range [][2]string{{"", "f"}, {"relative/dir", "f"}} {
 		if rr := altReq(s, c[0], c[1]); rr.Code != http.StatusBadRequest {
 			t.Fatalf("%v: code %d, want 400", c, rr.Code)
 		}

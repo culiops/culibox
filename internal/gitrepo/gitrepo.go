@@ -70,21 +70,26 @@ func CheckoutOf(dir string) (common, wtRoot string, ok bool) {
 
 // LinkedWorktrees lists the live linked worktrees of the repository whose common
 // git dir is common, as absolute dirs root/.claude/worktrees/<name>, sorted by
-// name. At most max directory entries are scanned. An entry counts only if it is
+// name. At most max directory entries are READ (the directory is opened and read
+// with ReadDir(max), in directory order, so a directory of millions of entries
+// costs max of them, not all); the entries read are then sorted. An entry counts only if it is
 // a real directory (Lstat: a symlink never is), its .git is a regular file naming
 // a gitdir directly under common/worktrees, and that gitdir exists.
 func LinkedWorktrees(root, common string, max int) []string {
+	if max <= 0 {
+		return nil
+	}
 	base := filepath.Join(root, ".claude", "worktrees")
-	ents, err := os.ReadDir(base)
+	d, err := os.Open(base)
 	if err != nil {
 		return nil
 	}
+	defer d.Close()
+	// A short read or an error mid-read still leaves the entries read so far.
+	ents, _ := d.ReadDir(max)
 	wtParent := filepath.Join(common, "worktrees")
 	var out []string
-	for i, e := range ents {
-		if i >= max {
-			break
-		}
+	for _, e := range ents {
 		dir := filepath.Join(base, e.Name())
 		if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 			continue
