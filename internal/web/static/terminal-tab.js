@@ -430,8 +430,12 @@ class TerminalTab {
     // Where the agent works NOW (a worktree it entered), for resolvePath and the
     // file tree. Not in the render key: the tab strip does not show it. The
     // tree follows it, so a move re-syncs the tree (treeFollowTarget keys on it;
-    // only the focused tab's change can re-root anything).
-    const ac = (u && u.cwd) || "";
+    // only the focused tab's change can re-root anything). A 204 (u null: no
+    // usage line in the transcript tail, e.g. right after /clear) says nothing
+    // about where the agent is, so it keeps the last known place; leaving a
+    // worktree arrives as usage with an empty cwd.
+    if (!u) return;
+    const ac = u.cwd || "";
     if (ac !== this.agentCwd) {
       this.agentCwd = ac;
       if (typeof syncFocusedTree === "function") syncFocusedTree();

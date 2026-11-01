@@ -5744,7 +5744,8 @@ function runSessionAction(action, s) {
       // The agent's live worktree when it entered one, as drawerRootTree does.
       const t = terminalTabFor(s.id);
       const live = t ? treeFollowTarget(t) : null;
-      syncTreeToRoot((live && live.root) || s.cwd).catch(() => {});
+      const root = (live && live.root) || s.cwd;
+      if (root && rootableCwd(root)) syncTreeToRoot(root).catch(() => {});
       setMobileScreen("files");
     },
     // Desktop: the Activity view, whose right column carries Context by tool.
