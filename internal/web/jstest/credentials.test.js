@@ -9,7 +9,7 @@ const {
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
   awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
-  GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP,
+  GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -842,4 +842,31 @@ test("GH_APP_HELP walks through creating the App with read or write choices", ()
   assert.ok(!all.includes("Administration: Read"));
   assert.strictEqual(GH_APP_HELP[0], "On github.com: Settings \u203a Developer settings \u203a GitHub Apps \u203a New GitHub App. Untick Webhook \u203a Active.");
   assert.strictEqual(GH_APP_HELP[2], "Create it, then Install App on the account that owns the repos and choose Only select repositories.");
+});
+
+test("credDeleteText: a store value only 'stays in the store' when it is there", () => {
+  const stays = "stays in the encrypted store";
+  const tok = (status, value_kind) => credDeleteText("token", { name: "t", status, value_kind });
+  const app = (status, key_ref_kind) => credDeleteText("github", { name: "a", status, key_ref_kind });
+  assert.ok(tok("ok", "store").includes(stays));
+  assert.ok(tok("stored_locked", "store").includes(stays), "locked is not missing");
+  assert.ok(!tok("missing", "store").includes(stays));
+  assert.match(tok("missing", "store"), /already missing/);
+  assert.ok(tok("ok", "env").includes("is not touched"));
+  assert.ok(app("ok", "store").includes(stays));
+  assert.ok(!app("missing", "store").includes(stays));
+  assert.match(app("missing", "store"), /already missing/);
+  assert.ok(app("ok", "file").includes("file is not touched"));
+  assert.ok(tok("ok", "store").startsWith("Delete the token t?"));
+  assert.ok(app("ok", "file").startsWith("Delete the GitHub App a?"));
+});
+
+// A full-width row must span the real columns. Under table-layout: fixed a larger
+// colSpan adds phantom grid columns, which starved the unsized Used by column to
+// 2px (it wrapped one letter per line) as soon as a delete confirm opened.
+test("credColumnCount: the cells of the entry's own row, with a safe floor", () => {
+  const tbodyWith = (n) => ({ rows: [{ cells: { length: n } }] });
+  assert.strictEqual(credColumnCount(tbodyWith(5)), 5);
+  assert.strictEqual(credColumnCount(tbodyWith(6)), 6);
+  assert.strictEqual(credColumnCount({ rows: [] }), 1);
 });
