@@ -560,6 +560,7 @@
       cursor: pointer;
     }
     #ft-menu button:hover { background: var(--sel); }
+    #ft-menu button:disabled { color: var(--muted); cursor: not-allowed; background: none; }
     /* The header reveals a path the tree had to truncate, so it WRAPS inside
        #ft-menu's existing 320px bound rather than ellipsising — truncating a
        path in the one element whose job is to un-truncate it defeats it. */
@@ -908,6 +909,10 @@
     #filetree { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-tree); }
     .ft-node { display: flex; align-items: center; gap: .55ch; padding: .11lh .55ch; white-space: nowrap; cursor: pointer; color: var(--fg); }
     .ft-node:hover { background: var(--surface-2); }
+    /* The row Reveal in tree landed on: the --sel wash (the same one menu hover uses)
+       plus a 3px accent bar, so the mark does not rest on the wash alone. */
+    .ft-node.ft-sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+    .ft-node.ft-sel:focus { outline: none; }
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* 2ch, not em: the tree is character-aligned, so the icon must occupy whole
@@ -1909,6 +1914,9 @@
        measured: --muted on --bg 7.37:1, on a target row 6.34:1 (AA text needs 4.5). */
     .vl-n { flex: none; box-sizing: content-box; width: calc(var(--vl-digits, 3) * 1ch); padding: 0 1ch 0 12px; text-align: right; color: var(--muted); border-right: 1px solid var(--border); -webkit-user-select: none; user-select: none; }
     .vl-c { flex: 1 0 auto; padding: 0 12px 0 1ch; }
+    /* A click on the number opens the path:line menu (viewer-tab.js onLineNumClick). */
+    .vl-n { cursor: pointer; }
+    .vl-n:hover { color: var(--fg); }
     /* The line a terminal link or Go to line asked for. The 8% wash is the most the
        accent can tint --bg while the dimmest highlight token (.hljs-comment #8b949e)
        stays at 4.59:1 (18% gave 3.71, 12% gave 4.23); the 3px bar carries the mark

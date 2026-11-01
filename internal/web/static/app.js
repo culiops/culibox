@@ -177,6 +177,30 @@ function openDrawer(kind, sessionId, opts) {
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
+// revealInTree shows a viewer's file in the tree: the Files drawer on desktop
+// (the viewer's own session: the drawer's for a drawer viewer, the pane's
+// terminal for a pane viewer, none otherwise), the Files screen on mobile. Then
+// ftReveal expands down to the row. false (with a toast) when it cannot.
+async function revealInTree(viewer) {
+  const can = revealable(viewer, window.HOME_DIR || "");
+  if (!can.ok) { showToast(can.title, { error: true }); return false; }
+  if (mobileActive(window.innerWidth)) {
+    setMobileScreen("files");
+  } else {
+    let sid = null;
+    if (drawerViewerTab() === viewer) sid = drawerState.sessionId;
+    else {
+      const cell = cells.find((c) => c.tabs.includes(viewer));
+      const t = cell ? cellTerminal(cell) : null;
+      sid = t ? t.id : null;
+    }
+    openDrawer("files", sid);
+  }
+  const ok = await ftReveal(viewer.path);
+  if (!ok) showToast("Could not show that file in the tree", { error: true });
+  return ok;
+}
+
 // closeDrawerFor: close the drawer if it is showing `kind` (any, if undefined)
 // for `sessionId` (any, if undefined).
 function closeDrawerFor(sessionId, kind) {

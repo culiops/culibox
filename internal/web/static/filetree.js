@@ -111,6 +111,8 @@ let ftExpanded = new Set();     // absolute dir paths the user has opened; see t
 // `set` null = no marks (mobile, or the drawer is not showing Files): the span
 // is only ever added while the drawer owns file clicks.
 const ftRowPaths = new WeakMap();
+// A directory row's expand control and state, for ftReveal (see setOpen).
+const ftRowOpeners = new WeakMap();
 function ftMarkRow(row, path, set) {
   const have = row.querySelector(":scope > .ft-chg");
   if (!set || !set.has(path)) { if (have) have.remove(); return; }
@@ -217,8 +219,12 @@ async function ftRenderDir(path, container, prefix) {
         row.after(childBox);
         await ftRenderDir(full, childBox, b.childPrefix);
       };
-      row.onclick = async () => {
-        open = !open;
+      // setOpen is the one expand/collapse path: the click toggles it, and
+      // ftReveal drives it through ftRowOpeners to open the ancestors of a file,
+      // so a revealed folder is persisted (treestate) exactly like a clicked one.
+      const setOpen = async (want) => {
+        if (want === open) return;
+        open = want;
         icon.textContent = iconFor(ent.name, true, open);
         if (open) {
           // Persist BEFORE the await: a second click that closes the row toggles
@@ -232,6 +238,8 @@ async function ftRenderDir(path, container, prefix) {
           if (childBox) { childBox.remove(); childBox = null; }
         }
       };
+      row.onclick = () => setOpen(!open);
+      ftRowOpeners.set(row, { setOpen, isOpen: () => open });
       // Each directory row is its own drop target and stops propagation, so it
       // wins over the whole-tree zone underneath it.
       if (typeof makeDropZone === "function") {
@@ -277,9 +285,12 @@ async function ftRenderDir(path, container, prefix) {
 // arrives and re-roots, and ftRenderDir appends after its own await, so painting
 // straight into the tree let a superseded load leave its rows behind (the tree
 // showed home while the picker said the session's directory).
+let ftLoading = Promise.resolve(); // settles when the newest ftLoadRoot has finished its render, so ftReveal can wait for it
 async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
+  let release;
+  ftLoading = new Promise((r) => { release = r; });
   const box = document.createElement("div");
   // The whole render happens in an off-DOM box, so the pending lines
   // ftRenderDir paints there are never seen. This one sits in the live tree,
@@ -289,6 +300,8 @@ async function ftLoadRoot() {
     await ftRenderDir(ftRoot(), box);
   } finally {
     done();
+    // Waiters resume in a later microtask, after the swap below has run.
+    release();
   }
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
@@ -308,8 +321,7 @@ async function ftLoadRoot() {
 // the absolute path and "Copy relative path" copies a third, different string,
 // so no single header could match all of them.
 function openRowMenu(anchor, path, name, isDir) {
-  const menu = document.getElementById("ft-menu");
-  if (!menu) return;
+  if (!document.getElementById("ft-menu")) return;
   const nodes = [];
 
   const head = document.createElement("div");
@@ -352,12 +364,23 @@ function openRowMenu(anchor, path, name, isDir) {
     b.onclick = () => { closeRowMenu(); it[1](); };
     nodes.push(b);
   }
+  ftShowMenu(anchor, nodes);
+}
+
+// ftShowMenu fills #ft-menu with `nodes` and places it under `anchor` (above it
+// when there is no room). Shared by the row menu and the viewer's line-number
+// menu so both look and behave alike; closeRowMenu closes either.
+// `alignLeft` lines the menu's left edge up with the anchor's (a gutter number
+// sits at the left of its pane); the default right-aligns to a trailing ⋯.
+function ftShowMenu(anchor, nodes, alignLeft) {
+  const menu = document.getElementById("ft-menu");
+  if (!menu) return;
   menu.replaceChildren(...nodes);
 
   menu.classList.add("open"); // must be visible before it can be measured
   const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
-  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, alignLeft ? r.left : r.right - w)) + "px";
   // Rows sit anywhere in the viewport, unlike the spawn menu's header anchor, so
   // a menu opened near the bottom must flip above its row instead of clipping.
   // The path header makes this menu taller and its height variable, so the
@@ -389,13 +412,16 @@ function insertPathAtPrompt(path) {
 // the same reason insertTextAtPrompt refuses one menu item up: a path may
 // legally contain a raw control character (e.g. a newline in a Linux filename),
 // and pasting that into a terminal would submit whatever line it landed on.
-function copyPath(text) {
+// `refocus` (optional) says where focus goes afterwards; the default is the
+// terminal, which is right for the tree. The viewer passes its own reader.
+function copyPath(text, refocus) {
   if (UNSAFE_TEXT.test(text)) {
     showToast("That path was NOT copied: it contains control characters", { error: true });
+    if (refocus) refocus();
     return;
   }
   copyText(text, (ok) => {
-    focusTerminal(); // the textarea fallback stole focus; shared with insertPathAtPrompt above
+    (refocus || focusTerminal)(); // the textarea fallback stole focus; shared with insertPathAtPrompt above
     showToast(ok ? "Copied " + text : "Could not copy " + text + " to the clipboard", { error: !ok });
   });
 }
@@ -628,6 +654,59 @@ async function syncTreeToRoot(root, key) {
   // pretending the ordering is guaranteed.
   dpClose();
   await ftLoadRoot();
+}
+
+// ftRowFor finds the live row for an absolute path, or null while it is not
+// rendered (its parent is collapsed, or still loading).
+function ftRowFor(path) {
+  if (!ftTreeEl) return null;
+  for (const row of ftTreeEl.querySelectorAll(".ft-node")) if (ftRowPaths.get(row) === path) return row;
+  return null;
+}
+
+// ftSettled waits until no root load is in flight. A load can start while we
+// wait (the drawer re-roots as it opens), so it loops until the newest one has
+// finished.
+async function ftSettled() {
+  let p;
+  do { p = ftLoading; try { await p; } catch (_) {} } while (p !== ftLoading);
+}
+
+// ftReveal shows `path` in the tree: re-root at the file's directory when it is
+// outside the current root (the root treeFollowTarget picks for a viewer; never
+// one it refuses), open each ancestor in turn through the tree's own expand path
+// (each level loads asynchronously, and the next row does not exist until it has
+// finished), then select the file's row and bring it into view. Resolves true
+// when the row was found. A newer root load part-way (ftGen moved) abandons it.
+async function ftReveal(path) {
+  if (!ftRootSel || !ftTreeEl || !path) return false;
+  await ftSettled();
+  if (ancestorsBetween(ftRoot(), path) === null) {
+    const target = treeFollowTarget({ kind: "viewer", path, box: "" });
+    if (!target) return false;
+    // No follow key: this is an explicit pick, so the tree resumes following
+    // focus at the next change (syncTreeToRoot clears the guard).
+    await syncTreeToRoot(target.root);
+  }
+  await ftSettled();
+  const gen = ftGen;
+  const chain = ancestorsBetween(ftRoot(), path);
+  if (chain === null) return false;
+  for (const dir of chain) {
+    const row = ftRowFor(dir);
+    const op = row && ftRowOpeners.get(row);
+    if (!op) return false;
+    await op.setOpen(true);
+    if (gen !== ftGen) return false;
+  }
+  const file = ftRowFor(path);
+  if (!file) return false;
+  for (const old of ftTreeEl.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
+  file.classList.add("ft-sel");
+  file.tabIndex = -1;
+  file.scrollIntoView({ block: "nearest" });
+  file.focus({ preventScroll: true });
+  return true;
 }
 
 async function initFileTree() {

@@ -153,6 +153,13 @@ class ViewerTab {
     // Find / Go to line. The bar sits BETWEEN the toolbar and the scroller (not
     // inside it), so content.replaceChildren (every render) never removes it, and
     // a later toolbar swap does not have to know about it.
+    // One delegated listener for every line number (a file can have 50k rows).
+    // Stopping the click keeps filetree.js's document-level closer from shutting
+    // the menu it just opened.
+    this.content.addEventListener("click", (e) => this.onLineNumClick(e));
+    this.content.addEventListener("scroll", () => {
+      if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // fixed-position: it would leave its number behind
+    }, { passive: true });
     this.isImage = IMAGE_EXTS.has(ext0);
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
@@ -230,6 +237,85 @@ class ViewerTab {
     const f = () => { if (this.content.isConnected) this.content.focus({ preventScroll: true }); };
     if (this.content.isConnected) f();
     else requestAnimationFrame(f);
+  }
+
+  // --- path actions ----------------------------------------------------------
+  // The line-number menu below and Task 7's Path ▾ menu both go through these.
+
+  // insertCandidate: the terminal an insert would go to. The Files drawer's
+  // viewer uses the drawer's session (as drawerInsertPath does, not whichever
+  // terminal holds focus); a pane viewer uses the terminal its cell is about.
+  // insertTargetFor then applies the box rule.
+  insertCandidate() {
+    if (typeof drawerViewerTab === "function" && drawerViewerTab() === this) {
+      return drawerState.sessionId ? terminalTabFor(drawerState.sessionId) : null;
+    }
+    const cell = cells.find((c) => c.tabs.includes(this));
+    return cell ? cellTerminal(cell) : null;
+  }
+
+  // copyPath("abs"|"rel", line?): copies the absolute path (with :line when
+  // given) or the path relative to the tree's root, with copyPath's toast.
+  copyPath(kind, line) {
+    let text;
+    if (kind === "rel") {
+      const rel = relativeAvail(this, ftRoot());
+      if (!rel.ok) { showToast(rel.title, { error: true }); return; }
+      text = rel.text;
+    } else {
+      const pl = pathLineText(this.path, line);
+      text = pl.ok ? pl.text : this.path + (line ? ":" + line : ""); // copyPath refuses it, naming why
+    }
+    copyPath(text, () => this.focusReader());
+  }
+
+  // insertPath(line?): types the shell-quoted path (or path:line) and a space at
+  // the target's prompt, never a newline.
+  insertPath(line) {
+    const target = insertTargetFor(this, this.insertCandidate());
+    if (!target.ok) { showToast(target.title, { error: true }); return; }
+    const pl = pathLineText(this.path, line);
+    const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
+    if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
+    showToast(
+      res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
+      res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
+      "That session is not connected, so the path was not inserted",
+      { error: true });
+    this.focusReader();
+  }
+
+  // revealInTree: app.js opens the tree (drawer, or the Files screen on mobile)
+  // and ftReveal expands down to this file.
+  revealInTree() { return revealInTree(this); }
+
+  // onLineNumClick opens the path:line menu for the number that was clicked.
+  onLineNumClick(e) {
+    const num = e.target.closest && e.target.closest(".vl-n");
+    if (!num || !this.content.contains(num)) return;
+    const line = Number(num.parentElement.dataset.n);
+    if (!line) return;
+    e.stopPropagation();
+    this.openLineMenu(num, line);
+  }
+
+  openLineMenu(anchor, line) {
+    const label = "path:" + line;
+    const head = document.createElement("div");
+    head.className = "ft-menu-path";
+    head.textContent = shortPath(this.path) + ":" + line;
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy " + label;
+    copy.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.copyPath("abs", line); };
+    const ins = document.createElement("button");
+    ins.type = "button";
+    ins.textContent = "Insert " + label + " at prompt";
+    const target = insertTargetFor(this, this.insertCandidate());
+    if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
+    else { ins.disabled = true; ins.title = target.title; }
+    this.lineMenuOpen = true;
+    ftShowMenu(anchor, [head, copy, ins], true);
   }
 
   title() { return this.name; }
