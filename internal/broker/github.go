@@ -491,8 +491,8 @@ func (b *Broker) ghMintFailed(w http.ResponseWriter, base Row, sid, owner string
 		b.ghFail(w, base, OutcomeStoreLocked, http.StatusServiceUnavailable, storeLockedMsg, storeLockedMsg)
 		b.storeWasLocked(sid)
 	case errors.As(err, &ue): // the App key is in the store and the Keychain failed
-		msg := sanitizeN(ue.Error(), maxUnavailableLen)
-		b.ghFail(w, base, OutcomeStoreUnavailable, http.StatusServiceUnavailable, msg, msg)
+		b.ghFail(w, base, OutcomeStoreUnavailable, http.StatusServiceUnavailable,
+			boxUnavailableMsg(ue.Kind), sanitizeN(ue.Error(), maxUnavailableLen))
 	case errors.Is(err, ghapp.ErrNotInstalled):
 		msg := "install the GitHub App on " + owner
 		b.ghFail(w, base, OutcomeNotInstalled, http.StatusForbidden, msg, msg)

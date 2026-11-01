@@ -136,19 +136,18 @@ func (b *Broker) storeLockedReply(w http.ResponseWriter, base Row, sid string) {
 }
 
 // storeUnavailableReply refuses a read of a store whose key the Keychain did not
-// give: a store_unavailable row and the UnavailableError's own message (reason +
-// fix, no store id) to the box. The session is NOT flagged store-locked: there is
+// give: a store_unavailable row (full UnavailableError text, host side) and a
+// fixed path-free message per kind to the box (boxUnavailableMsg). The session is NOT flagged store-locked: there is
 // no passphrase to type. It reports whether err was such a failure.
 func (b *Broker) storeUnavailableReply(w http.ResponseWriter, base Row, err error) bool {
 	var ue *secretstore.UnavailableError
 	if !errors.As(err, &ue) {
 		return false
 	}
-	msg := sanitizeN(ue.Error(), maxUnavailableLen)
 	row := base
-	row.Outcome, row.Error = OutcomeStoreUnavailable, msg
+	row.Outcome, row.Error = OutcomeStoreUnavailable, sanitizeN(ue.Error(), maxUnavailableLen)
 	b.recordDenied(row)
-	replyErr(w, http.StatusServiceUnavailable, msg)
+	replyErr(w, http.StatusServiceUnavailable, boxUnavailableMsg(ue.Kind))
 	return true
 }
 

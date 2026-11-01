@@ -902,33 +902,31 @@ func TestGitHubAppMintLockedStore(t *testing.T) {
 }
 
 func TestGitHubPATUnavailableStore(t *testing.T) {
-	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
-	ue := unavailableAccess()
-	fr.err = fmt.Errorf("store value acme-pat: %w", ue)
-	w := ghCall(b, tokA("s"), patBody)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), ue.Fix()) || strings.Contains(w.Body.String(), "acme-pat") {
-		t.Fatalf("status %d body %s", w.Code, w.Body)
-	}
-	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreUnavailable || rec.rows[0].Entry != "gh-pat-acme" {
-		t.Fatalf("rows %+v", rec.rows)
-	}
-	if b.StoreLockedFor("s") {
-		t.Fatal("an unavailable Keychain must not flag the session store-locked")
+	for _, ue := range unavailableKinds() {
+		b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+		fr.err = fmt.Errorf("store value acme-pat: %w", ue)
+		w := ghCall(b, tokA("s"), patBody)
+		if strings.Contains(w.Body.String(), "acme-pat") || len(rec.rows) != 1 || rec.rows[0].Entry != "gh-pat-acme" {
+			t.Fatalf("%s: %d %s %+v", ue.Kind, w.Code, w.Body, rec.rows)
+		}
+		assertBoxUnavailable(t, w, rec.rows[0], ue)
+		if b.StoreLockedFor("s") {
+			t.Fatal("an unavailable Keychain must not flag the session store-locked")
+		}
 	}
 }
 
 func TestGitHubAppMintUnavailableStore(t *testing.T) {
-	b, fg, rec, _ := ghSetup(t, map[string]SessionView{"claude-3": ghLive()})
-	ue := unavailableAccess()
-	fg.err = fmt.Errorf("github app key: %w", ue)
-	w := ghCall(b, tokA("claude-3"), ghBody)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), ue.Fix()) || strings.Contains(w.Body.String(), "github app key") {
-		t.Fatalf("status %d body %s", w.Code, w.Body)
-	}
-	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreUnavailable || rec.rows[0].Provider != ProviderGitHub {
-		t.Fatalf("rows %+v", rec.rows)
-	}
-	if b.StoreLockedFor("claude-3") {
-		t.Fatal("an unavailable Keychain must not flag the session store-locked")
+	for _, ue := range unavailableKinds() {
+		b, fg, rec, _ := ghSetup(t, map[string]SessionView{"claude-3": ghLive()})
+		fg.err = fmt.Errorf("github app key: %w", ue)
+		w := ghCall(b, tokA("claude-3"), ghBody)
+		if strings.Contains(w.Body.String(), "github app key") || len(rec.rows) != 1 || rec.rows[0].Provider != ProviderGitHub {
+			t.Fatalf("%s: %d %s %+v", ue.Kind, w.Code, w.Body, rec.rows)
+		}
+		assertBoxUnavailable(t, w, rec.rows[0], ue)
+		if b.StoreLockedFor("claude-3") {
+			t.Fatal("an unavailable Keychain must not flag the session store-locked")
+		}
 	}
 }

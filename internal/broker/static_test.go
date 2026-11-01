@@ -350,30 +350,68 @@ type resolverFunc func(config.KeyRef) ([]byte, error)
 
 func (f resolverFunc) Resolve(r config.KeyRef) ([]byte, error) { return f(r) }
 
-func unavailableAccess() *secretstore.UnavailableError {
-	return &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "User interaction is not allowed"}
+// unavailableKinds is every kind, with a StoreDir that must never reach the box.
+const hostStoreDir = "/home/operator/.local/share/agent-box/store"
+
+func unavailableKinds() []*secretstore.UnavailableError {
+	return []*secretstore.UnavailableError{
+		{Kind: secretstore.KindAccess, Reason: "User interaction is not allowed", StoreDir: hostStoreDir},
+		{Kind: secretstore.KindKeyLost, Reason: "no Keychain item for this store", StoreDir: hostStoreDir},
+		{Kind: secretstore.KindStoreUnreadable, Reason: "open " + hostStoreDir + ": permission denied", StoreDir: hostStoreDir},
+	}
 }
 
-// A Keychain failure is its own outcome: the box gets the fix (503), the audit
-// row says store_unavailable, and the session is NOT flagged as store-locked
-// (nobody can type a passphrase).
+// assertBoxUnavailable checks the box reply is the fixed per-kind text with no
+// host path or reason, and that the audit row (host side) has the full text.
+func assertBoxUnavailable(t *testing.T, w *httptest.ResponseRecorder, row Row, ue *secretstore.UnavailableError) {
+	t.Helper()
+	body := w.Body.String()
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(body, boxUnavailableMsg(ue.Kind)) {
+		t.Fatalf("%s: status %d body %s", ue.Kind, w.Code, body)
+	}
+	for _, leak := range []string{hostStoreDir, "/home/", ue.Reason, ue.Fix()} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("%s: box reply leaks %q: %s", ue.Kind, leak, body)
+		}
+	}
+	if row.Outcome != OutcomeStoreUnavailable || row.Error != strings.Join(strings.Fields(ue.Error()), " ") {
+		t.Fatalf("%s: audit row %+v, want the full text %q", ue.Kind, row, ue.Error())
+	}
+	if ue.Kind != secretstore.KindAccess && !strings.Contains(row.Error, hostStoreDir) {
+		t.Fatalf("%s: the host-side row should keep the store dir: %q", ue.Kind, row.Error)
+	}
+}
+
+func TestBoxUnavailableMsgIsPathFreeAndTotal(t *testing.T) {
+	for _, k := range []secretstore.UnavailableKind{secretstore.KindAccess, secretstore.KindKeyLost, secretstore.KindStoreUnreadable, "weird"} {
+		m := boxUnavailableMsg(k)
+		if m == "" || strings.Contains(m, "/") {
+			t.Errorf("%q: %q", k, m)
+		}
+	}
+	if boxUnavailableMsg("weird") != boxUnavailableMsg(secretstore.KindStoreUnreadable) {
+		t.Error("an unknown kind must get the store_unreadable text")
+	}
+}
+
+// A Keychain failure is its own outcome: the box gets a fixed path-free message
+// (503), the audit row says store_unavailable with the full text, and the
+// session is NOT flagged as store-locked (nobody can type a passphrase).
 func TestStaticUnavailableStore(t *testing.T) {
-	b, fr, rec, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry())})
-	ue := unavailableAccess()
-	fr.err = fmt.Errorf("store value grafana-prod: %w", ue)
-	w := staticCall(b, tokA("claude-3"), grafanaBody)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), ue.Fix()) || strings.Contains(w.Body.String(), "grafana-prod") {
-		t.Fatalf("status %d: %s", w.Code, w.Body)
-	}
-	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreUnavailable || !strings.Contains(rec.rows[0].Error, ue.Fix()) ||
-		rec.rows[0].Provider != ProviderStatic {
-		t.Fatalf("rows: %+v", rec.rows)
-	}
-	if b.StoreLockedFor("claude-3") {
-		t.Fatal("an unavailable Keychain must not flag the session store-locked")
-	}
-	fr.err = nil
-	if w := staticCall(b, tokA("claude-3"), grafanaBody); w.Code != 200 {
-		t.Fatalf("after fix: %d %s", w.Code, w.Body)
+	for _, ue := range unavailableKinds() {
+		b, fr, rec, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry())})
+		fr.err = fmt.Errorf("store value grafana-prod: %w", ue)
+		w := staticCall(b, tokA("claude-3"), grafanaBody)
+		if strings.Contains(w.Body.String(), "grafana-prod") || len(rec.rows) != 1 || rec.rows[0].Provider != ProviderStatic {
+			t.Fatalf("%s: %d %s %+v", ue.Kind, w.Code, w.Body, rec.rows)
+		}
+		assertBoxUnavailable(t, w, rec.rows[0], ue)
+		if b.StoreLockedFor("claude-3") {
+			t.Fatal("an unavailable Keychain must not flag the session store-locked")
+		}
+		fr.err = nil
+		if w := staticCall(b, tokA("claude-3"), grafanaBody); w.Code != 200 {
+			t.Fatalf("after fix: %d %s", w.Code, w.Body)
+		}
 	}
 }
