@@ -41,7 +41,7 @@ function deskGroups(sessions) {
   return deskDep("sessionGroups")(sessions, (s) => (needs(s) ? "waiting" : s.activity));
 }
 
-// jumpOrder: the list Alt+1..9 and the palette's first nine index into. On
+// jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
 // desktop that is the sidebar's visible order; mobile has no such list on
 // screen and keeps the API order. Nested shells are left out of both: the
 // numbers (and the rail dots) are for agents.
@@ -52,7 +52,7 @@ function jumpOrder(sessions, mobile) {
   return mobile ? agents : deskOrder(deskGroups(agents));
 }
 
-// deskOrder: the groups flattened in the order the sidebar shows them. Alt+1..9
+// deskOrder: the groups flattened in the order the sidebar shows them. Mod+1…9
 // and the palette's first nine rows both index into this, so what you see is
 // what the number means.
 function deskOrder(groups) {

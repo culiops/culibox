@@ -664,7 +664,6 @@
 
   /* --- keyboard shortcuts dialog (read-only ask dialog) ----------------------- */
   #ask-modal.info { width: 560px; max-width: 92vw; }
-  #ask-modal.info #ask-cancel { display: none; }
   /* The help text is ~33 lines; #ask-modal is overflow:hidden. The height bound
      (the dialog's own 88vh cap, passed down through .dlg-body to #ask-body,
      which scrolls) is in app.css so phones get it too. Here only the desktop

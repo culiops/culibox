@@ -82,7 +82,7 @@ test("rowSubline: a connection-level SSO expiry reads SSO expired, never a bare 
   assert.equal(ask.view, undefined);
 });
 
-test("jumpOrder: Alt+1..9 and the palette follow the sidebar order on desktop, the API order on mobile", () => {
+test("jumpOrder: Mod+1…9 and the palette follow the sidebar order on desktop, the API order on mobile", () => {
   const { jumpTarget } = require("../static/sessionrow.js");
   const list = [idle, working, waiting];
   assert.equal(jumpTarget(1, d.jumpOrder(list, false)).id, "w", "the needs-you session is 1");
@@ -91,7 +91,7 @@ test("jumpOrder: Alt+1..9 and the palette follow the sidebar order on desktop, t
   assert.deepEqual(d.jumpOrder(null, false), []);
 });
 
-test("jumpOrder skips nested shells, so Alt+1..9 and the rail target agents only", () => {
+test("jumpOrder skips nested shells, so Mod+1…9 and the rail target agents only", () => {
   const shell = { id: "sh", name: "sh", activity: "working", parent_id: "i", created: "2026-10-27T09:00:00Z" };
   const list = [idle, shell, working, waiting];
   assert.deepEqual(d.jumpOrder(list, false).map((s) => s.id), ["w", "r", "i"]);

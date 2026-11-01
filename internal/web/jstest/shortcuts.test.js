@@ -97,6 +97,24 @@ test("shortcutFor: Ctrl+/ reaches terminal, editor and inputs but not a dialog",
   assert.strictEqual(SC.shortcutFor(e, false, ctxWith("dialogOpen")), null);
 });
 
+// QWERTZ (German) layouts put the main-row "-" on the physical Slash key:
+// e.code is "Slash" and e.key is "-". help.open matches by code, zoom.out by key,
+// and shortcutFor returns the first match, so zoom.* must precede help.open in
+// SHORTCUTS or Ctrl+- opens help instead of zooming out. Help stays reachable
+// on QWERTZ through Ctrl+Shift+7 (key "/") and "?".
+test("shortcutFor: on QWERTZ the Slash key's \"-\" zooms out, it does not open help", () => {
+  assert.strictEqual(SC.shortcutFor(ev("Slash", "-", { ctrl: true }), false, NONE), "zoom.out");
+  assert.strictEqual(SC.shortcutFor(ev("Slash", "-", { meta: true }), true, NONE), "zoom.out");
+  assert.strictEqual(SC.shortcutFor(ev("Digit7", "/", { ctrl: true, shift: true }), false, NONE), "help.open");
+});
+
+test("SHORTCUTS: every zoom.* entry precedes help.open (QWERTZ code/key overlap)", () => {
+  const at = (id) => SC.SHORTCUTS.findIndex((s) => s.id === id);
+  const help = at("help.open");
+  assert.ok(help >= 0);
+  for (const id of ["zoom.in", "zoom.out", "zoom.reset"]) assert.ok(at(id) >= 0 && at(id) < help, id + " must come before help.open");
+});
+
 test("shortcutFor: palette, files.goto, shell.below", () => {
   const k = ev("KeyK", "K", { ctrl: true, shift: true });
   assert.strictEqual(SC.shortcutFor(k, false, ctxWith("dialogOpen")), "palette.open");
@@ -280,7 +298,7 @@ test("helpRows", () => {
     }
   }
   const off = SC.helpRows(false);
-  assert.strictEqual(off.find((r) => r.label === "Paste").keys, "Ctrl+V / Ctrl+Shift+V");
+  assert.strictEqual(off.find((r) => r.label === "Paste").keys, "Ctrl+V, Ctrl+Shift+V");
   assert.strictEqual(off.find((r) => r.label === "Select text when the agent holds the mouse").keys, "Shift+drag");
   assert.strictEqual(SC.helpRows(true).find((r) => r.label === "Move and pick in lists").keys, "↑ ↓ ↵");
 });

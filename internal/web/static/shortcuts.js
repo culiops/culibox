@@ -43,6 +43,19 @@ const SHORTCUTS = [
   { id: "palette.open.alt", label: "Command palette (fallback)", group: "General", scope: "global", status: "bound",
     chords: [{ ctrl: true, shift: true, code: "Space" }],
     allow: scAllow(1, 1, 0, 1, 1) },
+  // zoom.* MUST stay above help.open: shortcutFor returns the first match. On
+  // QWERTZ layouts the main-row "-" is e.code "Slash" with e.key "-", which
+  // help.open's code match would claim before zoom.out's key match. Help stays
+  // reachable there through Ctrl+Shift+7 (key "/") and "?".
+  { id: "zoom.in", label: "Zoom in", group: "General", scope: "global", status: "bound",
+    chords: [{ mod: true, shiftAny: true, keys: ["=", "+"] }],
+    allow: scAllow(1, 0, 0, 0, 0) },
+  { id: "zoom.out", label: "Zoom out", group: "General", scope: "global", status: "bound",
+    chords: [{ mod: true, shiftAny: true, keys: ["-"] }],
+    allow: scAllow(1, 0, 0, 0, 0) },
+  { id: "zoom.reset", label: "Reset zoom", group: "General", scope: "global", status: "bound",
+    chords: [{ mod: true, shiftAny: true, keys: ["0"] }],
+    allow: scAllow(1, 0, 0, 0, 0) },
   { id: "help.open", label: "Keyboard shortcuts", group: "General", scope: "global", status: "bound",
     chords: [
       { mod: true, shiftAny: true, code: "Slash", keys: ["/"] },
@@ -67,15 +80,6 @@ const SHORTCUTS = [
   { id: "files.goto", label: "Go to file", group: "Editor & files", scope: "global", status: "bound",
     chords: [{ mod: true, code: "KeyP" }],
     allow: scAllow(0, 1, 1, 0, 0) },
-  { id: "zoom.in", label: "Zoom in", group: "General", scope: "global", status: "bound",
-    chords: [{ mod: true, shiftAny: true, keys: ["=", "+"] }],
-    allow: scAllow(1, 0, 0, 0, 0) },
-  { id: "zoom.out", label: "Zoom out", group: "General", scope: "global", status: "bound",
-    chords: [{ mod: true, shiftAny: true, keys: ["-"] }],
-    allow: scAllow(1, 0, 0, 0, 0) },
-  { id: "zoom.reset", label: "Reset zoom", group: "General", scope: "global", status: "bound",
-    chords: [{ mod: true, shiftAny: true, keys: ["0"] }],
-    allow: scAllow(1, 0, 0, 0, 0) },
   { id: "term.copy", label: "Copy selection", group: "Terminal", scope: "terminal", status: "bound",
     chords: [{ mod: true, code: "KeyC", on: "mac" }, { mod: true, shift: true, code: "KeyC" }] },
   { id: "term.paste", label: "Paste", group: "Terminal", scope: "terminal", status: "bound",
@@ -233,7 +237,7 @@ function helpRows(mac) {
     if (s.status === "reserved") continue;
     const keys = s.status === "help-only"
       ? s.text[mac ? "mac" : "other"]
-      : scPrimary(s, mac).map((c) => renderChord(c, mac)).join(" / ");
+      : scPrimary(s, mac).map((c) => renderChord(c, mac)).join(", ");
     rows.push({ group: s.group, keys, label: s.label });
   }
   for (const s of SHORTCUTS) {

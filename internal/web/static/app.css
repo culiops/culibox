@@ -1214,6 +1214,7 @@
     #ask-modal.info .dlg-body { display: flex; flex-direction: column; overflow: hidden; }
     #ask-modal.info #ask-body { flex: 1 1 auto; min-height: 0; margin-bottom: 0; font: 12px/1.7 var(--font-mono, ui-monospace, Menlo, monospace); white-space: pre; overflow-wrap: normal; overflow: auto; }
     #ask-modal.info .ask-actions { flex: none; }
+    #ask-modal.info #ask-cancel { display: none; }
     #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }

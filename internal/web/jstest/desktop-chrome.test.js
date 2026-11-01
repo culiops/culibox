@@ -140,6 +140,13 @@ test("the info ask body is bounded by the dialog's own cap, on every width (app.
   assert.match(rule("#ask-modal.info .ask-actions"), /flex:\s*none/);
 });
 
+test("the help dialog hides Cancel at every width (app.css, not only the desktop media query)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const m = /#ask-modal\.info #ask-cancel\s*\{([^{}]*)\}/.exec(app);
+  assert.ok(m, "app.css has #ask-modal.info #ask-cancel");
+  assert.match(m[1], /display:\s*none/);
+});
+
 test("desktop.css does not bound the info body by the viewport", () => {
   const r = rulesFor("#ask-modal.info #ask-body").join(" ");
   assert.ok(!/100dvh|100vh/.test(r), "viewport bound would ignore the dialog's 88vh cap");

@@ -351,7 +351,7 @@ class TerminalTab {
     });
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      const act = termKeyAction(e, IS_MAC, !!this.term.getSelection());
+      const act = termKeyAction(e, IS_MAC, this.term.hasSelection());
       if (act === "copy") {
         e.preventDefault();
         copyText(this.term.getSelection(), () => this.term.focus());

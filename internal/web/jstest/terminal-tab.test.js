@@ -426,3 +426,16 @@ test("termKeyAction: AltGr and IME composition never copy or paste", () => {
   assert.strictEqual(termKeyAction(gm, false, true), "pass");
   assert.strictEqual(termKeyAction(kev("KeyC", { ctrlKey: true, shiftKey: true, isComposing: true }), false, true), "pass");
 });
+
+// The key handler runs on EVERY keydown. getSelection() builds the whole
+// selection string; hasSelection() is a cheap boolean. Only the copy branch
+// needs the text.
+test("the terminal key handler asks hasSelection(), and reads getSelection() only to copy", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/terminal-tab.js"), "utf8");
+  const m = /attachCustomKeyEventHandler\(\(e\) => \{([\s\S]*?)\n    \}\);/.exec(src);
+  assert.ok(m, "key handler found");
+  const body = m[1];
+  assert.match(body, /termKeyAction\(e, IS_MAC, this\.term\.hasSelection\(\)\)/);
+  assert.strictEqual((body.match(/getSelection\(\)/g) || []).length, 1, "getSelection once, in the copy branch");
+  assert.ok(body.indexOf("getSelection()") > body.indexOf('act === "copy"'));
+});
