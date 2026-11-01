@@ -574,6 +574,23 @@ test("desktop creds table: status wraps at word boundaries only", () => {
   assert.doesNotMatch(rule[1], /nowrap|anywhere/);
 });
 
+// A card on the desktop page has the room of #creds-body, not of the window: at 701px
+// that is 178px, and the two-column card (info | Edit Delete) left the info 18px. The
+// phone's single-column card rule is applied to the page by a container query on the
+// same element the table/card switch measures.
+test("desktop creds cards stack when #creds-body is narrow, keyed on the body not the window", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  assert.match(css, /#creds-body\s*\{[^}]*container-type:\s*inline-size/);
+  const q = /@container\s*\(max-width:\s*(\d+)px\)\s*\{([^@]*?\n\s*\})/g;
+  let found = null, m;
+  while ((m = q.exec(css))) if (/#creds \.ent \{[^}]*grid-template-columns:\s*1fr/.test(m[2])) found = m;
+  assert.ok(found, "a @container rule stacks #creds .ent");
+  const width = Number(found[1]);
+  assert.ok(width > 227 && width < 700, "above the measured two-column floor (227px), below the table switch (700px)");
+  assert.match(found[2], /#creds \.ent-act \{[^}]*align-self:\s*stretch/);
+  assert.match(found[2], /#creds \.ent-act \.btn \{[^}]*flex:\s*1/);
+});
+
 // The fixed-layout tables size every column as a share of the table: a px
 // column left Used by 0px wide in a ~1000px window.
 test("desktop creds table: fixed-layout column widths are percentages", () => {

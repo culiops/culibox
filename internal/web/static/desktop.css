@@ -1391,6 +1391,17 @@
   #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
   #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
   #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
+  /* The card's room is #creds-body (the window minus the sidebar, the nav and the
+     padding), which is 178px at 701px. app.css stacks a card in one column only for a
+     window of 700px or less, so between 701 and about 745 the info column was 18px next
+     to Edit and Delete. The same three rules, keyed on the body like the table/card
+     switch is: the two-column card measured clean down to a 227px body, 300px leaves room. */
+  #page-host > #settings-modal.as-page #creds-body { container-type: inline-size; }
+  @container (max-width: 300px) {
+    #page-host > #settings-modal.as-page #creds .ent { grid-template-columns: 1fr; padding: 12px; }
+    #page-host > #settings-modal.as-page #creds .ent-act { align-self: stretch; }
+    #page-host > #settings-modal.as-page #creds .ent-act .btn { flex: 1; }
+  }
 
   /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
   /* Colour roles: red = elevation rows and refused/denied/write outcomes only,
