@@ -13,8 +13,7 @@ import (
 // A Linux box sits on an --internal docker network: it has no route off the
 // bridge, but the bridge's gateway IP is this host, and the kernel delivers a
 // connection to that IP to any socket bound to the wildcard address. So a box
-// can open raw TCP to every wildcard listener here, without passing the egress
-// proxy. Measured from a box on 2026-11-01: 0.0.0.0 and [::] listeners answer;
+// may open raw TCP to a wildcard listener here, without passing the egress proxy. Measured from a box on 2026-11-01: 0.0.0.0 and [::] listeners answer;
 // 127.0.0.1, a socket bound to one other address, and the host's other
 // addresses do not. A socket bound to the gateway IP itself does answer, but
 // that network is created lazily, so this check looks only at wildcards. /proc
@@ -59,7 +58,7 @@ func isWildcardHex(addr string) bool {
 		addr == "0000000000000000FFFF000000000000"
 }
 
-// CheckHostListeners reports the host services a Linux box can reach directly.
+// CheckHostListeners reports the host services a Linux box may reach directly.
 // It only describes: there is no root here to change the firewall with.
 func CheckHostListeners() Result { return checkHostListeners(os.ReadFile) }
 
