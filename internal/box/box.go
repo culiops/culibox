@@ -245,8 +245,8 @@ type Options struct {
 	// sweep skips instead of reaping on a failed list. nil = assume reachable.
 	Reachable func(ctx context.Context) bool
 	// EgressAll fences every box: it joins Egress.Network and is checked by
-	// Egress.Verify instead of Options.Verify (Linux). false: only bound boxes
-	// are fenced (darwin), and an unbound box keeps the default network.
+	// Egress.Verify instead of Options.Verify (both OSes since #69). false: only
+	// bound boxes are fenced, and an unbound box keeps the default network.
 	EgressAll bool
 	// GuardInPlace binds the workspace root's .git, .claude/, CLAUDE.md,
 	// CLAUDE.local.md, AGENTS.md, .mcp.json and an in-workspace core.hooksPath

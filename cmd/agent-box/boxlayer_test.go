@@ -195,13 +195,15 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 	}
 }
 
-func TestBoxLayerOptionsFenceLinuxOnly(t *testing.T) {
+func TestBoxLayerOptionsFenceEveryBox(t *testing.T) {
 	cfg := config.Config{DockerBin: "/bin/sh"}
 	if o := (&boxLayer{goos: "linux"}).options(cfg); !o.EgressAll || !o.GuardInPlace {
 		t.Errorf("linux must fence and guard every box: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
 	}
-	if o := (&boxLayer{goos: "darwin"}).options(cfg); o.EgressAll || o.GuardInPlace {
-		t.Errorf("darwin keeps its default network: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
+	// #69: darwin fences every box too (option (c) relay); the in-place guard
+	// stays Linux-only (#68).
+	if o := (&boxLayer{goos: "darwin"}).options(cfg); !o.EgressAll || o.GuardInPlace {
+		t.Errorf("darwin must fence every box but not guard in place: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
 	}
 }
 

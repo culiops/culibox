@@ -53,7 +53,7 @@ func RelayName(instance string) string {
 // provisioning writes. Option (a) VMs and VMs provisioned before the egress
 // rules existed end up here.
 func errRulesMissing(why string) error {
-	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); run `agent-box box setup -recreate`", why)
+	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes; run `agent-box box setup -recreate`", why)
 }
 
 // CheckInputRules verifies that the first four rules of `iptables -S INPUT`

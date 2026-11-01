@@ -134,9 +134,10 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		CPUs:       cfg.BoxCPUs,
 		ExtraCA:    extra,
 		ExtraCAErr: extraErr,
-		// Linux: every box sits on the egress network and has its guard files
-		// read-only in place. darwin keeps its default network and Verify.
-		EgressAll:    l.goos == "linux",
+		// Both OSes: every box sits on the egress network (darwin through the
+		// option (c) relay, since #69). Only Linux has its guard files
+		// read-only in place (#68).
+		EgressAll:    true,
 		GuardInPlace: l.goos == "linux",
 	}
 	if l.vm != nil {
@@ -259,7 +260,7 @@ func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, n
 	}
 }
 
-// recreateHint is appended to a darwin refusal of a bound box when the VM's
+// recreateHint is appended to a darwin refusal of a boxed spawn when the VM's
 // provision config has drifted: a VM provisioned before the egress subnet rules
 // existed fails the probe with a message that does not say what to do. Only the
 // text changes; the refusal itself is unchanged. Empty off darwin and when the
