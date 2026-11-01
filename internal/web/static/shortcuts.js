@@ -9,8 +9,8 @@
 //  - A page CAN cancel Ctrl/Cmd+digit tab-select in Chrome and Firefox: the
 //    Chromium IsReservedCommandOrKey list does not include it. Only
 //    Ctrl/Cmd+T/N/W (and Shift variants) are out of reach.
-//  - Chrome on Linux binds Alt+1...9 to tab selection, which is why Alt+digit
-//    is a legacy chord only, scheduled for removal.
+//  - Chrome on Linux binds Alt+1...9 to tab selection, which is why session
+//    jump is Ctrl/Cmd+digit and never Alt+digit.
 //  - xterm.js sends bytes for Ctrl+3...8 only (Esc ^\ ^] ^^ ^_ DEL). It sends
 //    nothing for Ctrl+1, 2, 9, 0, nothing for Ctrl+= - 0, and nothing for
 //    Ctrl+/ in the vendored build. Upstream master maps Ctrl+/ to 0x1F: an
@@ -26,19 +26,14 @@ function isMacPlatform(nav) {
 
 const IS_MAC = typeof navigator !== "undefined" && isMacPlatform(navigator);
 
-const SC_REMOVE_IN = "v0.17.0";
-
 // scAllow(terminal, editor, input, dialog, page): 1/0 flags, in the R1 table's column order.
 function scAllow(terminal, editor, input, dialog, page) {
   return { terminal: !!terminal, editor: !!editor, input: !!input, dialog: !!dialog, page: !!page };
 }
 
-const SC_LEGACY = (chord) => ({ chord, removeIn: SC_REMOVE_IN });
-
 const SHORTCUTS = [
   { id: "palette.open", label: "Command palette", group: "General", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyK" }],
-    legacy: [SC_LEGACY({ mod: true, code: "KeyK", on: "mac" })],
     allow: scAllow(1, 1, 0, 1, 1) },
   { id: "palette.open.alt", label: "Command palette (fallback)", group: "General", scope: "global", status: "bound",
     chords: [{ ctrl: true, shift: true, code: "Space" }],
@@ -64,15 +59,12 @@ const SHORTCUTS = [
     allow: scAllow(1, 1, 1, 0, 1) },
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyB" }],
-    legacy: [SC_LEGACY({ mod: true, code: "KeyB", on: "mac" }), SC_LEGACY({ mod: true, alt: true, code: "KeyS" })],
     allow: scAllow(1, 0, 0, 0, 1) },
   { id: "files.toggle", label: "Files drawer", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyE" }],
-    legacy: [SC_LEGACY({ mod: true, alt: true, code: "KeyF" })],
     allow: scAllow(1, 0, 0, 0, 1) },
   { id: "session.jump", label: "Jump to session 1–9", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, codes: "Digit1-9" }],
-    legacy: [SC_LEGACY({ alt: true, codes: "Digit1-9", on: "other" })],
     allow: scAllow(1, 0, 0, 0, 1) },
   { id: "shell.below", label: "+ Shell below", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ ctrl: true, shift: true, code: "Backquote" }],
@@ -100,13 +92,11 @@ const SHORTCUTS = [
     chords: [], text: { mac: "Esc", other: "Esc" } },
   { id: "ui.lists", label: "Move and pick in lists", group: "General", scope: "global", status: "help-only",
     chords: [], text: { mac: "↑ ↓ ↵", other: "↑ ↓ Enter" } },
-  { id: "viewer.find", label: "Find in file", group: "Editor & files", scope: "viewer", status: "reserved",
+  { id: "viewer.find", label: "Find in file", group: "Editor & files", scope: "viewer", status: "bound",
     chords: [{ mod: true, code: "KeyF" }] },
-  { id: "viewer.gotoLine", label: "Go to line", group: "Editor & files", scope: "viewer", status: "reserved",
+  { id: "viewer.gotoLine", label: "Go to line", group: "Editor & files", scope: "viewer", status: "bound",
     chords: [{ ctrl: true, code: "KeyG" }] },
 ];
-
-const SC_OLD_KEYS = "Old keys (removed in " + SC_REMOVE_IN + ")";
 
 function scEntry(id) {
   return SHORTCUTS.find((s) => s.id === id) || null;
@@ -154,12 +144,8 @@ function scPrimary(entry, mac) {
   return entry.chords.filter((c) => scOnHere(c, mac));
 }
 
-function scLegacy(entry, mac) {
-  return (entry.legacy || []).map((l) => l.chord).filter((c) => scOnHere(c, mac));
-}
-
 function activeChords(entry, mac) {
-  return scPrimary(entry, mac).concat(scLegacy(entry, mac));
+  return scPrimary(entry, mac);
 }
 
 function shortcutHint(id, mac) {
@@ -240,15 +226,12 @@ function helpRows(mac) {
       : scPrimary(s, mac).map((c) => renderChord(c, mac)).join(", ");
     rows.push({ group: s.group, keys, label: s.label });
   }
-  for (const s of SHORTCUTS) {
-    for (const c of scLegacy(s, mac)) rows.push({ group: SC_OLD_KEYS, keys: renderChord(c, mac), label: s.label });
-  }
   return rows;
 }
 
 // The order the help screen lists its groups in. A group not named here (none
 // today) follows these, in the order its first row appears.
-const SC_GROUP_ORDER = ["General", "Sessions & panes", "Terminal", "Editor & files", SC_OLD_KEYS];
+const SC_GROUP_ORDER = ["General", "Sessions & panes", "Terminal", "Editor & files"];
 
 function helpText(rows, runtimeLabel) {
   const w = Math.max(0, ...rows.map((r) => r.keys.length));

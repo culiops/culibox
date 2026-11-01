@@ -3,6 +3,8 @@
 // IMAGE_EXTS and extOf live in copyfile.js: the copy paths need them too, and a
 // pure module there is reachable from `node --test`, which this file is not.
 const MD_EXTS = new Set(["md", "markdown"]);
+// Rows per block in a big file's read view (renderCode, .vl-chunk in app.css).
+const VT_CHUNK = 500;
 
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
@@ -49,6 +51,20 @@ class ViewerTab {
     // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
     // may close itself when its file turns out to be gone (see load).
     this.restored = !!(opts && opts.restored);
+    // The line (and column) a terminal link such as `x.go:12:5` asked for; the
+    // first render consumes it (revealLine). null when the file was opened plainly.
+    this.pendingLine = opts && Number.isInteger(opts.line) && opts.line > 0
+      ? { line: opts.line, col: Number.isInteger(opts.col) && opts.col > 0 ? opts.col : undefined }
+      : null;
+    // Read-view bookkeeping for revealLine: whether the pane shows numbered source
+    // lines (not markdown / an image / a message), the line `.vl-target` marks, the
+    // text that was last rendered (a changed text drops the mark), and a reveal
+    // that is waiting for the element to be in the document.
+    this.hasLines = false;
+    this.lineCount = 0;
+    this.targetLine = null;
+    this.renderedText = null;
+    this.scrollToTarget = false;
     this.firstLoad = true;
     this.applying = false;  // true while applyScroll's own assignment is echoing back
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
@@ -58,60 +74,11 @@ class ViewerTab {
 
     this.el = document.createElement("div");
     this.el.className = "tab-body viewer-body";
-    this.toolbar = document.createElement("div");
-    this.toolbar.className = "viewer-tools";
-    const reload = document.createElement("button");
-    reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
-    reload.onclick = () => this.load();
-    this.toolbar.append(reload);
-    // Download works for files this viewer refuses to render: binaries and
-    // anything over the 2 MiB preview cap, which are exactly the ones worth
-    // fetching, so the button is never conditional on the render succeeding.
-    const dl = document.createElement("button");
-    dl.className = "viewer-reload";
-    dl.textContent = "⤓";
-    dl.title = "Download this file";
-    dl.onclick = () => this.download();
-    this.toolbar.append(dl);
-    // A word, not a glyph: a button's accessible name comes from its text
-    // content before its title, and an unprobed codepoint ships as a tofu box no
-    // test catches. `viewer-auto` is the existing text-button style.
-    if (!IMAGE_EXTS.has(ext0)) { // an image has no text to copy and nothing to poll
-      const cp = document.createElement("button");
-      cp.className = "viewer-auto";
-      cp.textContent = "Copy";
-      cp.title = "Copy this file's contents";
-      cp.onclick = () => this.copyContents(cp);
-      this.toolbar.append(cp);
-      if (!this.box) { // a box file is read-only: the host cannot write into the box
-        const edit = document.createElement("button");
-        edit.className = "viewer-auto";
-        edit.textContent = "Edit";
-        edit.title = "Edit this file";
-        edit.onclick = () => this.enterEdit();
-        this.toolbar.append(edit);
-        this.editBtn = edit; // hidden once a read says the file is read-only
-      }
-      const auto = document.createElement("button");
-      auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
-      auto.onclick = () => this.toggleAuto();
-      this.autoBtn = auto; // toggleAuto keeps its "on" state, whoever toggles
-      this.toolbar.append(auto);
-    }
-    if (this.zoomVar) { // text viewers only: images have nothing to size
-      const zout = document.createElement("button");
-      zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (" + shortcutHint("zoom.out", IS_MAC) + ")";
-      zout.onclick = () => this.fontStep(-1);
-      const zin = document.createElement("button");
-      zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (" + shortcutHint("zoom.in", IS_MAC) + ")";
-      zin.onclick = () => this.fontStep(+1);
-      this.toolbar.append(zout, zin);
-    }
-    const pathLbl = document.createElement("span");
-    pathLbl.className = "viewer-path"; pathLbl.textContent = path; pathLbl.title = path;
-    this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
+    // Focusable so a file the user just opened takes the keyboard (arrows, PgDn,
+    // Space scroll it) instead of leaving it in the terminal they clicked in.
+    this.content.tabIndex = 0;
     // Three things have to be excluded here, because scrollTop cannot say which
     // of them moved it — only this listener knows:
     //
@@ -131,14 +98,190 @@ class ViewerTab {
       this.scroll = this.content.scrollTop;
       markLayoutUnsaved(); // scrolling schedules no layout write; pagehide needs to know
     }, { passive: true });
-    this.el.append(this.toolbar, this.content);
+    // Find / Go to line. The bar sits BETWEEN the toolbar and the scroller (not
+    // inside it), so content.replaceChildren (every render) never removes it, and
+    // a later toolbar swap does not have to know about it.
+    // One delegated listener for every line number (a file can have 50k rows).
+    // Stopping the click keeps filetree.js's document-level closer from shutting
+    // the menu it just opened.
+    this.content.addEventListener("click", (e) => this.onLineNumClick(e));
+    this.content.addEventListener("scroll", () => {
+      if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // fixed-position: it would leave its number behind
+    }, { passive: true });
+    this.isImage = IMAGE_EXTS.has(ext0);
+    this.find = new ViewerFind(this);
+    this.findBar = this.find.el;
+    // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
+    // for the Files drawer: its extra button and its shorter path label.
+    this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
+    this.toolbar = this.toolbarApi.el;
+    this.el.append(this.toolbar, this.findBar, this.content);
+    // Bubble phase, on the viewer's own element: it fires for the read scroller,
+    // the find bar and CodeMirror's textarea, and never for a terminal or the
+    // rest of the page, so Mod+F / Ctrl+G stay the browser's and readline's there.
+    // (The global dispatcher in app.js handles only scope "global" entries.)
+    this.el.addEventListener("keydown", (e) => this.onViewerKey(e));
     this.load();
+  }
+
+  // onViewerKey takes the viewer-scoped keys. A key the viewer cannot act on (an
+  // image, rendered markdown for Go to line) is left alone, so the browser's find
+  // still works on that page.
+  onViewerKey(e) {
+    let mode = null;
+    if (shortcutMatches("viewer.find", e, IS_MAC)) mode = "find";
+    else if (shortcutMatches("viewer.gotoLine", e, IS_MAC)) mode = "line";
+    if (mode && this.openFind(mode)) { e.preventDefault(); e.stopPropagation(); return; }
+    // Esc closes an open find bar from the reader or the editor too, not only from
+    // inside the bar. preventDefault keeps a maximized drawer open (app.js leaves a
+    // used Escape alone). With the bar closed Esc is not ours and passes through.
+    if (e.key === "Escape" && !mode && this.find.isOpen) { e.preventDefault(); e.stopPropagation(); this.find.close(); }
+  }
+
+  // openFind shows the find bar in "find" or "line" (Go to line) mode and says
+  // whether it could. Find works on text (code, markdown, the editor); Go to line
+  // needs numbered lines: the code view or the editor.
+  openFind(mode) {
+    if (mode === "line") {
+      if (!(this.editing && this.cm) && !this.hasLines) return false;
+    } else if (this.isImage) return false;
+    this.find.open(mode);
+    return true;
+  }
+
+  closeFind() { this.find.close(); }
+
+  // lineTotal: how many lines Go to line accepts (the same count revealLine clamps to).
+  lineTotal() { return this.editing && this.cm ? countSourceLines(this.cm.getValue()) : this.lineCount; }
+
+  // revealRange brings a find match into view: its row about a third down the
+  // pane when it is off-screen, and the match itself sideways when the lines are
+  // not wrapped. `row` is the match's .vl row (or markdown block).
+  revealRange(range, row) {
+    this.markTarget(null); // a find navigation ends the open-at-line mark (spec D2)
+    const c = this.content;
+    if (!c.isConnected || !row) return;
+    const cr = c.getBoundingClientRect();
+    const rr = row.getBoundingClientRect();
+    if (rr.top < cr.top || rr.bottom > cr.bottom) {
+      this.setScrollTop(Math.max(0, Math.round(rr.top - cr.top + c.scrollTop - c.clientHeight / 3)));
+    }
+    const m = range.getBoundingClientRect();
+    if (m.width) {
+      const cr2 = c.getBoundingClientRect();
+      if (m.right > cr2.right - 8 || m.left < cr2.left + 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
+    }
+  }
+
+  // setScrollTop moves the scroller and records where it settled, without the
+  // echoing scroll event being read as the reader's (see the scroll listener).
+  setScrollTop(y) {
+    this.applying = true;
+    this.content.scrollTop = y;
+    this.scroll = this.content.scrollTop;
+    requestAnimationFrame(() => { this.applying = false; });
+    markLayoutUnsaved();
+  }
+
+  // findRefresh reruns an open find after the view changed under it (a render).
+  findRefresh() { if (this.find.isOpen) this.find.refresh(true); }
+
+  // focusReader puts keyboard focus on the scroller. Only user-initiated opens
+  // call it (openFile / openBoxFile); a layout restore must not steal focus. A
+  // freshly built tab may not be in the document yet (a maximized other pane keeps
+  // its cell detached), so when detached it retries once on the next frame.
+  focusReader() {
+    // Edit mode keeps the editor's focus (spec D8b): a link or tree open of a file
+    // being edited must leave the caret where revealLine put it.
+    if (this.editing && this.cm) { this.cm.focus(); return; }
+    const f = () => { if (this.content.isConnected) this.content.focus({ preventScroll: true }); };
+    if (this.content.isConnected) f();
+    else requestAnimationFrame(f);
+  }
+
+  // --- path actions ----------------------------------------------------------
+  // The line-number menu below and Task 7's Path ▾ menu both go through these.
+
+  // insertCandidate: the terminal an insert would go to. The Files drawer's
+  // viewer uses the drawer's session (not whichever
+  // terminal holds focus); a pane viewer uses the terminal its cell is about.
+  // insertTargetFor then applies the box rule.
+  insertCandidate() {
+    if (typeof drawerViewerTab === "function" && drawerViewerTab() === this) {
+      return drawerState.sessionId ? terminalTabFor(drawerState.sessionId) : null;
+    }
+    const cell = cells.find((c) => c.tabs.includes(this));
+    return cell ? cellTerminal(cell) : null;
+  }
+
+  // copyPath("abs"|"rel", line?): copies the absolute path (with :line when
+  // given) or the path relative to the tree's root, with copyPath's toast.
+  copyPath(kind, line) {
+    let text;
+    if (kind === "rel") {
+      const rel = relativeAvail(this, ftRoot());
+      if (!rel.ok) { showToast(rel.title, { error: true }); return; }
+      text = rel.text;
+    } else {
+      const pl = pathLineText(this.path, line);
+      text = pl.ok ? pl.text : this.path + (line ? ":" + line : ""); // copyPath refuses it, naming why
+    }
+    copyPath(text, () => this.focusReader());
+  }
+
+  // insertPath(line?): types the shell-quoted path (or path:line) and a space at
+  // the target's prompt, never a newline.
+  insertPath(line) {
+    const target = insertTargetFor(this, this.insertCandidate());
+    if (!target.ok) { showToast(target.title, { error: true }); return; }
+    const pl = pathLineText(this.path, line);
+    const res = pl.ok ? insertTextAtPrompt(target.term, shellQuote(pl.text) + " ") : { ok: false, reason: pl.reason };
+    if (res.ok) { if (target.term.term) target.term.term.focus(); return; }
+    showToast(
+      res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
+      res.reason === "noterm" ? "This session has no terminal open here, so the path was not inserted" :
+      "That session is not connected, so the path was not inserted",
+      { error: true });
+    this.focusReader();
+  }
+
+  // revealInTree: app.js opens the tree (drawer, or the Files screen on mobile)
+  // and ftReveal expands down to this file.
+  revealInTree() { return revealInTree(this); }
+
+  // onLineNumClick opens the path:line menu for the number that was clicked.
+  onLineNumClick(e) {
+    const num = e.target.closest && e.target.closest(".vl-n");
+    if (!num || !this.content.contains(num)) return;
+    const line = Number(num.parentElement.dataset.n);
+    if (!line) return;
+    e.stopPropagation();
+    this.openLineMenu(num, line);
+  }
+
+  openLineMenu(anchor, line) {
+    const label = "path:" + line;
+    const head = document.createElement("div");
+    head.className = "ft-menu-path";
+    head.textContent = shortPath(this.path) + ":" + line;
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy " + label;
+    copy.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.copyPath("abs", line); };
+    const ins = document.createElement("button");
+    ins.type = "button";
+    ins.textContent = "Insert " + label + " at prompt";
+    const target = insertTargetFor(this, this.insertCandidate());
+    if (target.ok) ins.onclick = () => { this.lineMenuOpen = false; closeRowMenu(); this.insertPath(line); };
+    else { ins.disabled = true; ins.title = target.title; }
+    this.lineMenuOpen = true;
+    ftShowMenu(anchor, [head, copy, ins], true);
   }
 
   title() { return this.name; }
   status() { return this.statusText; }
   onShow() {}
-  onHide() {}
+  onHide() { this.toolbarApi.closeMenus(); } // a menu belongs to the pane that is on screen
   // onAttach: the element was just (re)inserted, so the browser has reset the
   // scroller to the top. Idempotent and NON-CONSUMING — it never clears
   // this.scroll and never reads the applied value back — because it also fires
@@ -146,7 +289,10 @@ class ViewerTab {
   // tab in a cell that is out of the document while another pane is maximized,
   // where assigning scrollTop is a silent no-op and the next real attach is
   // what has to restore.
-  onAttach() { this.applyScroll(); }
+  onAttach() {
+    this.applyScroll();
+    if (this.scrollToTarget) this.scrollTargetIntoView(); // a reveal that came while detached
+  }
   // `applying` is cleared on the next frame, not synchronously: a scroll event
   // caused by this assignment is dispatched during that frame's scroll steps,
   // which run BEFORE animation-frame callbacks. Clearing it any sooner would
@@ -157,9 +303,13 @@ class ViewerTab {
     this.content.scrollTop = this.scroll;
     requestAnimationFrame(() => { this.applying = false; });
   }
-  dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
-  // The toolbar buttons' actions as methods, so a host that hides this toolbar
-  // (the desktop Files drawer has its own header) can offer the same ones.
+  dispose() {
+    if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
+    this.toolbarApi.closeMenus();
+    if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // its buttons would act on a closed viewer
+    this.find.close(true); // frees the document-wide highlight names if this bar held them
+  }
+  // The toolbar's actions as methods (viewertoolbar.js calls these).
   reload() { return this.load(); }
   download() {
     downloadPath(this.path, false, this.box ? boxFileURL(this.box, this.path, true) : undefined);
@@ -168,10 +318,9 @@ class ViewerTab {
   fontStep(d) { this.zoom(d * fontPrefs.STEP); }
   toggleAuto() {
     this.auto = !this.auto;
-    if (this.autoBtn) this.autoBtn.classList.toggle("on", this.auto);
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
-    this.onUpdate?.();
+    this.changed();
   }
   // Live zoom (transient): override the pane-local CSS var so only this viewer's
   // text resizes; the var lives on this.el, an ancestor of the rendered content,
@@ -187,7 +336,10 @@ class ViewerTab {
     this.fontPx = null;
     this.el.style.removeProperty(this.zoomVar);
   }
-  setStatus(t) { this.statusText = t; this.onUpdate?.(); }
+  setStatus(t) { this.statusText = t; this.changed(); }
+  // changed repaints the toolbar and tells the host (a pane's tab bar, the
+  // drawer header). Call it whenever something the toolbar shows moved.
+  changed() { this.toolbarApi?.paint(); this.onUpdate?.(); }
 
   // showingMsg tracks whether the pane holds a MESSAGE rather than the file, so
   // load() can tell "nothing changed, skip the re-render" from "the text is the
@@ -198,6 +350,8 @@ class ViewerTab {
     d.textContent = text;
     this.content.replaceChildren(d);
     this.showingMsg = true;
+    this.hasLines = false;
+    this.findRefresh();
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
@@ -245,8 +399,8 @@ class ViewerTab {
     // Only a successful read answers the question; a dropped poll keeps the
     // last known answer rather than bringing back an Edit that cannot save.
     if (res.ok) {
-      this.readOnly = readOnlyFrom(res);
-      if (this.editBtn) this.editBtn.hidden = this.readOnly;
+      const ro = readOnlyFrom(res);
+      if (ro !== this.readOnly) { this.readOnly = ro; this.changed(); } // Edit follows readOnly
     }
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
@@ -259,6 +413,7 @@ class ViewerTab {
       // the most ordinary thing that happens to it, and silently keeping the old
       // text would have Copy hand over content the file no longer has.
       if (poll && !res.ok) return;
+      this.pendingLine = null; // there is no line to show in a message
       this.copyRefusal = plan.reason;
       if (plan.reason === "empty") {
         // A successful read of a file with nothing in it is not an error.
@@ -315,6 +470,67 @@ class ViewerTab {
     // (the listener keeps it so), and this is also the path that lands a
     // restored offset, since the first read completes long after the attach.
     this.applyScroll();
+    // A terminal link asked for a line: it wins over the restored scroll.
+    if (this.pendingLine) {
+      const p = this.pendingLine;
+      this.pendingLine = null;
+      this.revealLine(p.line, p.col);
+    }
+  }
+
+  // revealLine shows the 1-based `line` (and, in the editor, column `col`) of
+  // this file: the read view marks the line and scrolls it about a third of the
+  // way down; edit mode moves the cursor there. A line past the end is clamped to
+  // the last one, with a toast saying so. Markdown is rendered, not numbered, so
+  // it says that instead; an image, a binary or a message has no lines (no-op).
+  revealLine(line, col) {
+    if (this.editing && this.cm) {
+      // The same count as the read view: CodeMirror's lineCount() adds the empty
+      // line after a trailing newline, which is not a line of the file.
+      const total = countSourceLines(this.cm.getValue());
+      const c = clampLine(line, total);
+      if (c.clamped) showToast(linesOnlyText(this.name, total));
+      this.cm.setCursor({ line: c.line - 1, ch: (col > 0 ? col : 1) - 1 });
+      this.cm.scrollIntoView(null, 100);
+      this.cm.focus();
+      return;
+    }
+    if (this.copyRefusal === "loading") { // the first read has not landed: ask again then
+      this.pendingLine = { line, col };
+      return;
+    }
+    if (!this.hasLines) {
+      if (this.copyRefusal === null && MD_EXTS.has(extOf(this.path))) {
+        showToast("Line numbers apply to source files — markdown opens rendered");
+      }
+      return;
+    }
+    const c = clampLine(line, this.lineCount);
+    if (c.clamped) showToast(linesOnlyText(this.name, this.lineCount));
+    this.markTarget(c.line);
+    this.scrollToTarget = true;
+    if (this.content.isConnected) this.scrollTargetIntoView();
+  }
+
+  // markTarget moves the .vl-target mark to line n (1-based), or removes it.
+  markTarget(n) {
+    this.targetLine = n;
+    const old = this.content.querySelector(".vl-target");
+    if (old) old.classList.remove("vl-target");
+    const row = n && this.content.querySelector('.vl[data-n="' + n + '"]');
+    if (row) row.classList.add("vl-target");
+  }
+
+  // scrollTargetIntoView puts the marked line about a third of the way down the
+  // pane. this.scroll takes the value the browser settled on (it clamps near the
+  // end), and `applying` keeps the echoing scroll event from being read as a
+  // reader's scroll.
+  scrollTargetIntoView() {
+    const el = this.targetLine && this.content.querySelector(".vl-target");
+    if (!el || !this.content.isConnected) return;
+    this.scrollToTarget = false;
+    const top = el.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop;
+    this.setScrollTop(Math.max(0, Math.round(top - this.content.clientHeight / 3)));
   }
 
   // Copies exactly what is on screen — the raw source this viewer fetched, which
@@ -379,6 +595,7 @@ class ViewerTab {
       value: this.lastContent || "",
       mode: mode,
       lineNumbers: true,
+      lineWrapping: viewerPrefs.getWrap(),
       autofocus: true,
     });
     // Returning false stops CodeMirror's own key handling from also inserting
@@ -387,31 +604,23 @@ class ViewerTab {
     for (const k of cmKeys("editor.save", IS_MAC)) saveKeys[k] = () => { this.save(false); return false; };
     this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
+    this.findRefresh(); // an open find now searches the buffer
     // A fresh edit: a "saved" left from the last one says nothing about this
-    // buffer. setStatus also tells a host header to show Cancel · Save.
+    // buffer. (setStatus repaints the toolbar: Save · Cancel replace Edit.)
     this.setStatus("");
   }
 
-  // renderEditBar builds the action row above the editor: Save · Cancel, plus a
-  // status/conflict message that showConflict() fills in and adds Reload /
-  // Overwrite anyway to. It is appended as holder's sibling inside `content`
-  // (not inside holder itself) so CodeMirror's own sizing is undisturbed.
+  // renderEditBar builds the message row above the editor: Save and Cancel live
+  // in the toolbar. The row stays empty (and hidden, app.css) until showConflict()
+  // fills it with the conflict message and adds Reload / Overwrite anyway. It is
+  // prepended inside `content` (not inside holder itself) so CodeMirror's own
+  // sizing is undisturbed.
   renderEditBar() {
     const bar = document.createElement("div");
     bar.className = "viewer-editbar";
-    const save = document.createElement("button");
-    save.className = "viewer-auto viewer-save";
-    save.textContent = "Save";
-    save.title = "Save (" + shortcutHint("editor.save", IS_MAC) + ")";
-    save.onclick = () => this.save(false);
-    const cancel = document.createElement("button");
-    cancel.className = "viewer-auto viewer-cancel";
-    cancel.textContent = "Cancel";
-    cancel.title = "Discard changes and return to the read view";
-    cancel.onclick = () => this.cancelEdit();
     const msg = document.createElement("span");
     msg.className = "viewer-edit-msg";
-    bar.append(save, cancel, msg);
+    bar.append(msg);
     this.editBar = bar;
     this.editMsg = msg;
     this.conflictBtns = null;
@@ -466,12 +675,13 @@ class ViewerTab {
   // re-fetches from disk — the one path that also recovers from a Reload after
   // a conflict, since the disk copy is exactly what a fresh load() shows.
   exitEdit(savedText) {
+    this.find.leaveEdit(); // the editor's marks go with the editor
     this.editing = false;
     this.cm = null;
     this.editBar = null;
     this.editMsg = null;
     this.conflictBtns = null;
-    this.onUpdate?.(); // back to the read view's actions
+    this.changed(); // back to the read view's actions
     if (typeof savedText === "string") {
       this.lastContent = savedText;
       this.renderCode(savedText, this.lang);
@@ -495,19 +705,58 @@ class ViewerTab {
 
   renderCode(text, lang) {
     this.showingMsg = false;
-    const pre = document.createElement("pre");
-    const code = document.createElement("code");
     let html;
     try {
       html = (window.hljs && hljs.getLanguage(lang))
         ? hljs.highlight(text, { language: lang }).value
         : (window.hljs ? hljs.highlightAuto(text).value : escapeHtml(text));
     } catch (_) { html = escapeHtml(text); }
-    code.className = "hljs";
-    code.innerHTML = html;
-    pre.className = "viewer-pre";
-    pre.append(code);
+    // One div per source line: a number (textContent, aria-hidden, not selectable)
+    // and the highlighted code (hljs output only, which escapes the file's own
+    // markup). The container carries hljs, the class its theme colours by.
+    const lines = splitHighlightedLines(html);
+    const pre = document.createElement("pre");
+    pre.className = "viewer-pre hljs";
+    pre.style.setProperty("--vl-digits", String(Math.max(3, String(lines.length).length)));
+    const frag = document.createDocumentFragment();
+    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
+    // browser until it nears the viewport (content-visibility, app.css).
+    const chunked = lines.length > VT_CHUNK * 2;
+    let chunk = null;
+    for (let i = 0; i < lines.length; i++) {
+      const row = document.createElement("div");
+      row.className = "vl";
+      row.dataset.n = String(i + 1);
+      const num = document.createElement("span");
+      num.className = "vl-n";
+      num.setAttribute("aria-hidden", "true");
+      num.textContent = String(i + 1);
+      const code = document.createElement("span");
+      code.className = "vl-c";
+      code.innerHTML = lines[i];
+      row.append(num, code);
+      if (chunked) {
+        if (i % VT_CHUNK === 0) {
+          chunk = document.createElement("div");
+          chunk.className = "vl-chunk";
+          // The last block is shorter: say so, or its skipped height is overstated.
+          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, lines.length - i)));
+          frag.append(chunk);
+        }
+        chunk.append(row);
+      } else frag.append(row);
+    }
+    pre.append(frag);
     this.content.replaceChildren(pre);
+    this.lineCount = lines.length;
+    this.hasLines = true;
+    // The mark belongs to the text it was set on: a changed file drops it, an
+    // unchanged one (the same text rendered again) keeps it.
+    if (this.renderedText !== text) this.targetLine = null;
+    this.renderedText = text;
+    if (this.targetLine && this.targetLine <= this.lineCount) this.markTarget(this.targetLine);
+    else this.targetLine = null;
+    this.findRefresh();
   }
 
   renderMarkdown(text) {
@@ -545,7 +794,74 @@ class ViewerTab {
     wrap.className = "md-body";
     wrap.appendChild(frag);
     this.content.replaceChildren(wrap);
+    this.hasLines = false;
+    this.findRefresh();
   }
+
+  // --- wrap lines (D9) -------------------------------------------------------
+  // The read view wraps by the viewer-wrap class on <html> (CSS only, no re-render);
+  // an editor wraps by CodeMirror's lineWrapping option. wrapAnchor() is called
+  // BEFORE the preference flips and returns the function that, called after,
+  // puts the reader back on the same line: a wrapped row is taller, so the same
+  // pixel offset would be somewhere else in the file.
+  wrapAnchor() {
+    const none = () => {};
+    if (this.editing && this.cm) {
+      const cm = this.cm;
+      const top = cm.getScrollInfo().top;
+      const line = cm.lineAtHeight(top, "local");
+      const off = top - cm.heightAtLine(line, "local");
+      return () => cm.scrollTo(null, cm.heightAtLine(line, "local") + off);
+    }
+    // A hidden tab has no layout to measure, so it keeps its pixel scroll offset
+    // (which may map to a different line once wrapping changes row heights).
+    if (!this.hasLines || !this.content.isConnected) return none;
+    const row = this.firstVisibleRow();
+    if (!row) return none;
+    const n = row.dataset.n;
+    const off = row.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
+    return () => {
+      const r = this.content.querySelector('.vl[data-n="' + n + '"]');
+      if (!r) return;
+      const top = r.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop - off;
+      this.setScrollTop(Math.max(0, Math.round(top)));
+    };
+  }
+
+  // firstVisibleRow: the first .vl whose bottom edge is below the scroller's top.
+  // In a chunked file the chunks are found first (a handful of boxes), so only
+  // one block of rows is measured, not every row of a 50,000-line file.
+  firstVisibleRow() {
+    const top = this.content.getBoundingClientRect().top;
+    let scope = this.content;
+    const chunks = this.content.querySelectorAll(".vl-chunk");
+    if (chunks.length) {
+      scope = chunks[chunks.length - 1];
+      for (const ch of chunks) if (ch.getBoundingClientRect().bottom > top) { scope = ch; break; }
+    }
+    for (const r of scope.querySelectorAll(".vl")) if (r.getBoundingClientRect().bottom > top) return r;
+    return null;
+  }
+
+  // applyWrap brings this viewer's editor (if any) in line with the preference.
+  // The read view needs nothing: it follows the root class.
+  applyWrap() {
+    if (!this.cm) return;
+    this.cm.setOption("lineWrapping", viewerPrefs.getWrap());
+    this.cm.refresh();
+  }
+
+  // allViewers: every live viewer, in every pane plus the Files drawer's.
+  static allViewers() {
+    const all = [];
+    eachViewer((vt) => all.push(vt));
+    const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
+    if (dv && !all.includes(dv)) all.push(dv);
+    return all;
+  }
+
+  // applyWrapAll: bring every live viewer's editor in line with the preference.
+  static applyWrapAll() { for (const vt of ViewerTab.allViewers()) vt.applyWrap(); }
 
   renderImage() {
     this.showingMsg = false;
@@ -555,7 +871,23 @@ class ViewerTab {
     img.onerror = () => this.msg("could not load image", "err");
     img.src = this.box ? boxFileURL(this.box, this.path) : "/api/fs/read?path=" + encodeURIComponent(this.path);
     this.content.replaceChildren(img);
+    this.hasLines = false;
   }
+}
+
+function isViewerWrap() { return viewerPrefs.getWrap(); }
+
+// toggleViewerWrap flips "Wrap lines" for every open viewer, read and edit, and
+// remembers it for this browser. Each viewer's first visible line is noted
+// before the flip and scrolled back to after it, so the reader keeps their place.
+function toggleViewerWrap() {
+  const restores = ViewerTab.allViewers().map((vt) => vt.wrapAnchor());
+  const on = !viewerPrefs.getWrap();
+  viewerPrefs.setWrap(on);
+  document.documentElement.classList.toggle("viewer-wrap", on);
+  ViewerTab.applyWrapAll();
+  for (const restore of restores) restore();
+  return on;
 }
 
 function escapeHtml(s) {

@@ -396,7 +396,7 @@ class TerminalTab {
             text: l.text,
             activate: () => {
               if (l.kind === "url") openTerminalUrl(l.text);
-              else this.openClickedPath(l.text);
+              else this.openClickedPath(l.text, { line: l.line, col: l.col });
             },
           }));
           cb(links.length ? links : undefined);
@@ -448,13 +448,14 @@ class TerminalTab {
 
   // openClickedPath: a boxed session's paths are the box's, so a click opens a
   // host file, a box-viewer file, or says there is nothing to open.
-  openClickedPath(tok) {
+  // opts = {line?, col?} from a `path:12:5` link, forwarded to the viewer.
+  openClickedPath(tok, opts) {
     const c = classifyTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR, this.runtime === "box");
-    if (c.kind === "host") openFile(c.path);
+    if (c.kind === "host") openFile(c.path, opts);
     // Looked up on window: openBoxFile lives in a later-loaded script, and a bare
     // reference to it fails lint.sh's cross-script check until that script exists.
     // A top-level function declaration in a classic script IS a window property.
-    else if (c.kind === "box") { if (typeof window.openBoxFile === "function") window.openBoxFile(this.id, c.path); }
+    else if (c.kind === "box") { if (typeof window.openBoxFile === "function") window.openBoxFile(this.id, c.path, opts); }
     else if (typeof showToast === "function") showToast("This file is inside the box only — just /tmp/playwright-mcp is shared out");
   }
   resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }

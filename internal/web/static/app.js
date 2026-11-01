@@ -177,6 +177,30 @@ function openDrawer(kind, sessionId, opts) {
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
+// revealInTree shows a viewer's file in the tree: the Files drawer on desktop
+// (the viewer's own session: the drawer's for a drawer viewer, the pane's
+// terminal for a pane viewer, none otherwise), the Files screen on mobile. Then
+// ftReveal expands down to the row. false (with a toast) when it cannot.
+async function revealInTree(viewer) {
+  const can = revealable(viewer, window.HOME_DIR || "");
+  if (!can.ok) { showToast(can.title, { error: true }); return false; }
+  if (mobileActive(window.innerWidth)) {
+    setMobileScreen("files");
+  } else {
+    let sid = null;
+    if (drawerViewerTab() === viewer) sid = drawerState.sessionId;
+    else {
+      const cell = cells.find((c) => c.tabs.includes(viewer));
+      const t = cell ? cellTerminal(cell) : null;
+      sid = t ? t.id : null;
+    }
+    openDrawer("files", sid);
+  }
+  const ok = await ftReveal(viewer.path);
+  if (!ok) showToast("Could not show that file in the tree", { error: true });
+  return ok;
+}
+
 // closeDrawerFor: close the drawer if it is showing `kind` (any, if undefined)
 // for `sessionId` (any, if undefined).
 function closeDrawerFor(sessionId, kind) {
@@ -523,22 +547,22 @@ wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
 $("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
 // Escape restores a maximized drawer (maxEscapeRestores decides). On the
-// document, not the drawer: a tree row click leaves focus on body. Neither menu
-// takes focus when it opens (focus stays on its ⋯), so an open one is checked
-// by state, and a closer that ran first (filesdrawer.js loads earlier; the page
-// host) marks the press used with preventDefault. Not a capture listener: its
+// document, not the drawer: a tree row click leaves focus on body. The viewer
+// toolbar's menus (viewertoolbar.js, which loads earlier) take focus when they
+// open, so an open one is also checked by state (vtMenuOpen), and they mark the
+// press used with preventDefault when they close on it. The tree's row menu
+// takes no focus, so its open state is checked too. Not a capture listener: its
 // preventDefault would stop the page host closing a page.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const dr = $("drawer");
   const t = e.target;
-  const dm = $("drawer-menu");
   const rm = $("ft-menu");
   const restore = maxEscapeRestores({
     max: !!dr && dr.dataset.max === "1",
     where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
     owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
-    menuOpen: !!((dm && !dm.hidden) || (rm && rm.classList.contains("open"))),
+    menuOpen: !!(vtMenuOpen() || (rm && rm.classList.contains("open"))),
     prevented: e.defaultPrevented,
   });
   if (!restore) return;
@@ -6672,8 +6696,8 @@ bindShortcut("files.toggle", (e, ctx) => {
 // Ctrl/Cmd+digit, not Alt/Option+digit. A page CAN cancel Ctrl/Cmd+digit in
 // Chrome and Firefox (only Ctrl/Cmd+T/N/W are out of reach), while Chrome on
 // Linux binds Alt+1..9 to tab selection. Option+digit was dropped on macOS
-// because it types [ ] { } | # on German and UK layouts. The sources and the
-// remaining legacy Alt+digit are in the shortcuts.js header.
+// because it types [ ] { } | # on German and UK layouts. The sources are in the
+// shortcuts.js header.
 bindShortcut("session.jump", (e, ctx) => {
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return false;

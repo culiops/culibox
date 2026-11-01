@@ -66,7 +66,6 @@ test("chordMatches: shiftAny, keys, codes and on", () => {
 
 test("renderChord", () => {
   const first = (id) => entry(id).chords[0];
-  const legacy = (id, i = 0) => entry(id).legacy[i].chord;
   const both = (chord, mac, other) => {
     assert.strictEqual(SC.renderChord(chord, true), mac);
     assert.strictEqual(SC.renderChord(chord, false), other);
@@ -74,7 +73,7 @@ test("renderChord", () => {
   both(first("palette.open"), "⇧⌘K", "Ctrl+Shift+K");
   both(first("shell.below"), "⌃⇧`", "Ctrl+Shift+`");
   both(first("session.jump"), "⌘1…9", "Ctrl+1…9");
-  both(legacy("files.toggle"), "⌥⌘F", "Ctrl+Alt+F");
+  both(first("files.toggle"), "⇧⌘E", "Ctrl+Shift+E");
   both(first("palette.insert"), "⌘↵", "Ctrl+↵");
   both(first("zoom.in"), "⌘=", "Ctrl+=");
   both(first("help.open"), "⌘/", "Ctrl+/");
@@ -129,7 +128,7 @@ test("shortcutFor: palette, files.goto, shell.below", () => {
 });
 
 // The palette opens on Ctrl+Shift+K off mac and Cmd+Shift+K on mac. Ctrl+K is
-// readline's kill-line and Cmd+K stays only as a legacy mac alias. Ctrl+Shift+K
+// readline's kill-line, so it is not a palette chord. Ctrl+Shift+K
 // is a magnet for other apps' system-wide hotkeys (Notion took it on a Windows
 // machine), so Ctrl+Shift+Space is a second way in on every platform.
 test("shortcutFor: the palette opens on its chords on both platforms", () => {
@@ -138,7 +137,6 @@ test("shortcutFor: the palette opens on its chords on both platforms", () => {
   assert.strictEqual(SC.shortcutFor(sp, true, NONE), "palette.open.alt");
   assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true }), false, NONE), "palette.open");
   assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { meta: true, shift: true }), true, NONE), "palette.open");
-  assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { meta: true }), true, NONE), "palette.open");
 });
 
 test("shortcutFor: Ctrl+Shift+K is not the palette on mac, and plain keys never are", () => {
@@ -157,16 +155,11 @@ test("shortcutFor: Alt, AltGr or the other platform modifier disqualify a palett
   assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { meta: true, ctrl: true }), true, NONE), null);
 });
 
-test("shortcutFor: platform-specific and legacy chords", () => {
-  const alt5 = ev("Digit5", "5", { alt: true });
-  assert.strictEqual(SC.shortcutFor(alt5, true, NONE), null);
-  assert.strictEqual(SC.shortcutFor(alt5, false, NONE), "session.jump");
-  assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { meta: true }), true, NONE), "palette.open");
+test("shortcutFor: platform-specific chords", () => {
   assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { ctrl: true }), false, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyB", "b", { meta: true }), true, NONE), "sidebar.toggle");
   assert.strictEqual(SC.shortcutFor(ev("KeyB", "b", { ctrl: true }), false, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyS", "s", { ctrl: true, alt: true }), false, NONE), "sidebar.toggle");
-  assert.strictEqual(SC.shortcutFor(ev("KeyS", "s", { ctrl: true, alt: true, altGr: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyB", "B", { meta: true, shift: true }), true, NONE), "sidebar.toggle");
+  assert.strictEqual(SC.shortcutFor(ev("KeyB", "B", { ctrl: true, shift: true }), false, NONE), "sidebar.toggle");
 });
 
 test("shortcutFor: Ctrl+Shift+- stays free for readline undo", () => {
@@ -210,7 +203,6 @@ const TERMINAL_OK = new Set([
   "help.open", // Ctrl+/ sends nothing in the vendored xterm (upstream maps 0x1F: upgrade hazard)
   "term.paste", // Ctrl+V is the browser paste: documented trade-off
 ]);
-const LEGACY_TERMINAL_OK = new Set(["session.jump", "sidebar.toggle", "files.toggle"]);
 
 test("terminal invariant", () => {
   for (const s of SC.SHORTCUTS) {
@@ -219,25 +211,18 @@ test("terminal invariant", () => {
     if (!reach) continue;
     for (const mac of [true, false]) {
       const prim = s.chords.filter((c) => !c.on || (c.on === "mac") === mac);
-      const leg = (s.legacy || []).map((l) => l.chord).filter((c) => !c.on || (c.on === "mac") === mac);
-      for (const [list, okSet] of [[prim, TERMINAL_OK], [leg, LEGACY_TERMINAL_OK]]) {
-        for (const c of list) {
-          if (c.allow && c.allow.terminal === false) continue;
-          const label = `${s.id} ${SC.renderChord(c, mac)} mac=${mac}`;
-          if (mac) {
-            const altOnly = c.alt && !c.mod && !c.ctrl;
-            assert.ok(!altOnly, `${label} is Alt-only on mac`);
-          } else {
-            assert.ok(c.shift || okSet.has(s.id), `${label} has no Shift and is not whitelisted`);
-          }
+      for (const c of prim) {
+        if (c.allow && c.allow.terminal === false) continue;
+        const label = `${s.id} ${SC.renderChord(c, mac)} mac=${mac}`;
+        if (mac) {
+          const altOnly = c.alt && !c.mod && !c.ctrl;
+          assert.ok(!altOnly, `${label} is Alt-only on mac`);
+        } else {
+          assert.ok(c.shift || TERMINAL_OK.has(s.id), `${label} has no Shift and is not whitelisted`);
         }
       }
     }
   }
-});
-
-test("every legacy chord is removed in v0.17.0", () => {
-  for (const s of SC.SHORTCUTS) for (const l of s.legacy || []) assert.strictEqual(l.removeIn, "v0.17.0", s.id);
 });
 
 test("no two ids render the same chord in overlapping scopes", () => {
@@ -258,14 +243,41 @@ test("no two ids render the same chord in overlapping scopes", () => {
   }
 });
 
-test("reserved entries render but never dispatch", () => {
+test("viewer.find and viewer.gotoLine are bound, listed in help, and never global", () => {
+  for (const id of ["viewer.find", "viewer.gotoLine"]) {
+    assert.strictEqual(entry(id).status, "bound", id);
+    assert.strictEqual(entry(id).scope, "viewer", id);
+  }
   assert.strictEqual(SC.renderChord(entry("viewer.find").chords[0], true), "⌘F");
   assert.strictEqual(SC.renderChord(entry("viewer.find").chords[0], false), "Ctrl+F");
   assert.strictEqual(SC.renderChord(entry("viewer.gotoLine").chords[0], true), "⌃G");
   assert.strictEqual(SC.renderChord(entry("viewer.gotoLine").chords[0], false), "Ctrl+G");
-  assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { ctrl: true }), false, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), true, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { meta: true }), true, NONE), null);
+  for (const [mac, find, goto] of [[true, "⌘F", "⌃G"], [false, "Ctrl+F", "Ctrl+G"]]) {
+    const rows = SC.helpRows(mac);
+    const f = rows.find((r) => r.label === "Find in file");
+    const g = rows.find((r) => r.label === "Go to line");
+    assert.ok(f && g, "listed, mac=" + mac);
+    assert.strictEqual(f.group, "Editor & files");
+    assert.strictEqual(g.group, "Editor & files");
+    assert.strictEqual(f.keys, find);
+    assert.strictEqual(g.keys, goto);
+  }
+  // Never global: not in any context, so the terminal keeps readline's Ctrl+G
+  // and the browser keeps its own find outside a viewer.
+  const ctxs = [NONE, { inTerminal: true }, { inEditor: true }, { inInput: true }, { dialogOpen: true }, { pageOpen: true }];
+  for (const ctx of ctxs) {
+    assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { ctrl: true }), false, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), true, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), false, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { meta: true }), true, ctx), null);
+  }
+  // The viewer's own listener matches them.
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { meta: true }), true), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { ctrl: true }), false), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { ctrl: true }), true), false);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { ctrl: true }), true), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { ctrl: true }), false), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { meta: true }), true), false);
 });
 
 test("shortcutHint, jumpHint, shortcutMatches", () => {
@@ -280,17 +292,12 @@ test("shortcutHint, jumpHint, shortcutMatches", () => {
 });
 
 test("helpRows", () => {
-  const OLD = "Old keys (removed in v0.17.0)";
   for (const mac of [true, false]) {
     const rows = SC.helpRows(mac);
     const labels = rows.map((r) => r.label);
     for (const s of SC.SHORTCUTS) {
       if (s.status === "reserved") assert.ok(!labels.includes(s.label), `reserved ${s.id} listed`);
-      else assert.ok(rows.some((r) => r.label === s.label && r.group !== OLD), `${s.id} missing`);
-      for (const l of s.legacy || []) {
-        if (l.chord.on && (l.chord.on === "mac") !== mac) continue;
-        assert.ok(rows.some((r) => r.group === OLD && r.keys === SC.renderChord(l.chord, mac)), `${s.id} legacy missing`);
-      }
+      else assert.ok(rows.some((r) => r.label === s.label), `${s.id} missing`);
     }
     for (const r of rows) {
       if (mac) assert.ok(!r.keys.includes("Ctrl+"), r.keys);
@@ -306,7 +313,7 @@ test("helpRows", () => {
 test("helpText", () => {
   const rows = SC.helpRows(false);
   const text = SC.helpText(rows, "sysbox");
-  const groups = ["General", "Sessions & panes", "Terminal", "Editor & files", "Old keys (removed in v0.17.0)"];
+  const groups = ["General", "Sessions & panes", "Terminal", "Editor & files"];
   const lines = text.split("\n");
   for (const g of groups) assert.ok(lines.includes(g), g);
   assert.ok(text.endsWith("\n\nRuntime: sysbox"));
@@ -319,7 +326,7 @@ test("helpText", () => {
 });
 
 test("helpText emits the groups in a fixed order, each row under its own heading", () => {
-  const order = ["General", "Sessions & panes", "Terminal", "Editor & files", "Old keys (removed in v0.17.0)"];
+  const order = ["General", "Sessions & panes", "Terminal", "Editor & files"];
   for (const mac of [true, false]) {
     const rows = SC.helpRows(mac);
     // Reversed so the order cannot come from the registry's row order.
@@ -429,4 +436,22 @@ test("ctx: every field is a strict boolean", () => {
   const ctx = shortcutContext(focusEl("TEXTAREA", { inCM: true }), 3, 1, "y");
   assert.deepStrictEqual(Object.keys(ctx).sort(), ["dialogOpen", "inEditor", "inInput", "inTerminal", "mobile", "pageOpen"]);
   for (const v of Object.values(ctx)) assert.strictEqual(typeof v, "boolean");
+});
+
+test("#58: the v0.16 legacy chords no longer match anything", () => {
+  const k = (o) => ({ ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, key: "", code: "", ...o });
+  assert.equal(SC.shortcutFor(k({ altKey: true, code: "Digit1", key: "1" }), false, NONE), null);      // Win/Linux Alt+1
+  assert.equal(SC.shortcutFor(k({ metaKey: true, code: "KeyK", key: "k" }), true, NONE), null);         // mac Cmd+K
+  assert.equal(SC.shortcutFor(k({ metaKey: true, code: "KeyB", key: "b" }), true, NONE), null);         // mac Cmd+B
+  assert.equal(SC.shortcutFor(k({ ctrlKey: true, altKey: true, code: "KeyS", key: "s" }), false, NONE), null);
+  assert.equal(SC.shortcutFor(k({ metaKey: true, altKey: true, code: "KeyS", key: "s" }), true, NONE), null);
+  assert.equal(SC.shortcutFor(k({ ctrlKey: true, altKey: true, code: "KeyF", key: "f" }), false, NONE), null);
+});
+
+test("#58: help has no Old keys group; the permanent fallback stays", () => {
+  for (const mac of [true, false]) {
+    assert.ok(!SC.helpRows(mac).some((r) => /Old keys/.test(r.group)));
+    assert.ok(SC.helpRows(mac).some((r) => r.label === "Command palette (fallback)"));
+  }
+  assert.ok(!SC.SHORTCUTS.some((s) => "legacy" in s));
 });
