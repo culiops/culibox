@@ -34,9 +34,13 @@ const (
 // Status is the tree's change set for one repository. State is one of ok,
 // notrepo, toomany, unavailable; Entries is never nil.
 type Status struct {
-	State   string  `json:"state"`
-	Reason  string  `json:"reason,omitempty"`
-	Top     string  `json:"top,omitempty"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	Top    string `json:"top,omitempty"`
+	// RootRel is where the requested tree root sits inside Top (slash form,
+	// "." for Top itself). The web handler sets it per request; the runner
+	// and its cache, shared by every root of one checkout, leave it empty.
+	RootRel string  `json:"rootRel"`
 	NoHead  bool    `json:"noHead,omitempty"`
 	Entries []Entry `json:"entries"`
 }
@@ -142,9 +146,10 @@ func (r *Runner) Status(ctx context.Context, t Target) Status {
 	}
 }
 
-// key identifies a repository for the cache and single-flight: Top and Common,
-// since two resolutions of one Top may name different common git dirs.
-func (t Target) key() string { return t.Top + "\x00" + t.Common }
+// key identifies a repository for the cache and single-flight: Root, Top and
+// Common, since two resolutions of one Top may name different common git dirs
+// and a boxed target mounts differently from a host one.
+func (t Target) key() string { return t.Root + "\x00" + t.Top + "\x00" + t.Common }
 
 // sweepLocked drops cache entries nothing has asked for within Idle.
 func (r *Runner) sweepLocked(now time.Time) {

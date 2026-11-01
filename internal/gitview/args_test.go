@@ -13,7 +13,7 @@ func prefix(mounts ...string) []string {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "512m",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.gitstatus=1",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
-		"-e", "GIT_CONFIG_GLOBAL=/dev/null", "-e", "GIT_ATTR_NOSYSTEM=1",
+		"-e", "GIT_CONFIG_GLOBAL=/dev/null", "-e", "GIT_ATTR_NOSYSTEM=1", "-e", "GIT_LITERAL_PATHSPECS=1",
 	}
 	for _, m := range mounts {
 		a = append(a, "--mount", "type=bind,src="+m+",dst="+m+",readonly")
@@ -46,6 +46,9 @@ func TestStatusArgsGolden(t *testing.T) {
 		{"common empty", Target{Top: "/w/repo"}, []string{"/w/repo"}},
 		{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}},
 		{"sibling sharing a string prefix", Target{Top: "/w/repo", Common: "/w/repo2/.git"}, []string{"/w/repo", "/w/repo2/.git"}},
+		// A boxed workspace: only its root is mounted, whatever Top and Common are.
+		{"root only", Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w"}},
+		{"root is top", Target{Root: "/w", Top: "/w", Common: "/w/.git"}, []string{"/w"}},
 	}
 	for _, c := range cases {
 		got := StatusArgs(c.t, "img", "n", uid, gid)
@@ -71,6 +74,13 @@ func TestDiffArgsGolden(t *testing.T) {
 	w = want([]string{"/w/wt", "/w/main/.git"}, "/w/wt", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--", "/dev/null", "x.txt")
 	if !slices.Equal(got, w) {
 		t.Errorf("untracked:\n got %q\nwant %q", got, w)
+	}
+
+	boxed := Target{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"}
+	got = DiffArgs(boxed, "img", "n", uid, gid, "*.go", false)
+	w = want([]string{"/w"}, "/w/wt", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", "*.go")
+	if !slices.Equal(got, w) {
+		t.Errorf("boxed:\n got %q\nwant %q", got, w)
 	}
 
 	// A path that looks like an option stays after "--".
@@ -112,6 +122,14 @@ func TestTargetUnsafe(t *testing.T) {
 		{Top: "/w/repo", Common: "/m/\"x/.git"},
 		{Top: "/w/repo", Common: "m/.git"},
 		{Top: "/w/repo", Common: "/m//.git"},
+		// Root: must be absolute, clean, mount-safe, and hold Top and Common.
+		{Root: "w", Top: "w/repo"},
+		{Root: "/w/", Top: "/w/repo"},
+		{Root: "/w,x", Top: "/w,x/repo"},
+		{Root: "/w", Top: "/v/repo"},
+		{Root: "/w", Top: "/w2/repo"},
+		{Root: "/w", Top: "/w/repo", Common: "/v/.git"},
+		{Root: "/w", Top: "/w/repo", Common: "/w2/.git"},
 	}
 	for _, b := range bad {
 		if why := b.Unsafe(); why == "" {
@@ -123,10 +141,34 @@ func TestTargetUnsafe(t *testing.T) {
 		{Top: "/w/my repo", Common: "/w/my repo/.git"},
 		{Top: "/w/wt", Common: "/w/main/.git"},
 		{Top: "/w/ünï"},
+		{Root: "/w", Top: "/w", Common: "/w/.git"},
+		{Root: "/w", Top: "/w/wt", Common: "/w/main/.git"},
 	}
 	for _, g := range good {
 		if why := g.Unsafe(); why != "" {
 			t.Errorf("%+v refused: %s", g, why)
 		}
+	}
+}
+
+func TestLiteralPathspecs(t *testing.T) {
+	// A file named "*.go" or ":(top)*" must name only itself, never a pattern.
+	for _, a := range [][]string{
+		StatusArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2),
+		DiffArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, ":(top)*", false),
+		DiffArgs(Target{Top: "/w/repo"}, "img", "n", 1, 2, "*.go", true),
+	} {
+		i := slices.Index(a, "GIT_LITERAL_PATHSPECS=1")
+		if i < 1 || a[i-1] != "-e" || i > slices.Index(a, "--entrypoint") {
+			t.Errorf("no -e GIT_LITERAL_PATHSPECS=1 before the image: %q", a)
+		}
+	}
+}
+
+func TestTargetKeyIncludesRoot(t *testing.T) {
+	a := Target{Top: "/w/repo", Common: "/w/repo/.git"}
+	b := Target{Root: "/w", Top: "/w/repo", Common: "/w/repo/.git"}
+	if a.key() == b.key() {
+		t.Fatal("a boxed and a host target share a cache key")
 	}
 }

@@ -50,8 +50,11 @@ type gitBody struct {
 // tree, see inGitTree). Top and Common from the checkout must each be free of
 // links, pass the fs policy in that same tree, and not hold a denied tree:
 // mounted whole, such a directory would carry agent-box's data dir or box
-// state into the container. Any refusal is errGitOutside; no .git is
-// errGitNotRepo; a path docker cannot take as a --mount value is errGitUnsafe.
+// state into the container. For a boxed request Target.Root is the contained
+// root, the only mount: agent-box chose it and the box cannot swap it, while
+// Top and Common inside it could be swapped for links after these checks. Any
+// refusal is errGitOutside; no .git is errGitNotRepo; a path docker cannot
+// take as a --mount value is errGitUnsafe.
 func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error) {
 	p, err := s.fsPolicy()
 	if err != nil {
@@ -83,12 +86,22 @@ func (s *Server) gitTarget(path string) (t gitview.Target, abs string, err error
 	if !ok {
 		return gitview.Target{}, "", errGitNotRepo
 	}
+	// Locate walks up from dir, so dir is within Top; rootRel relies on it.
+	if rel, err := filepath.Rel(repo.Top, dir); err != nil || !(rel == "." || filepath.IsLocal(rel)) {
+		return gitview.Target{}, "", errGitOutside
+	}
 	for _, x := range []string{repo.Top, repo.Common} {
 		if !p.inGitTree(req, x) || p.holdsDenied(x) {
 			return gitview.Target{}, "", errGitOutside
 		}
 	}
 	t = gitview.Target{Top: repo.Top, Common: repo.Common}
+	if req.Strict {
+		if r, err := filepath.EvalSymlinks(req.Root); err != nil || r != req.Root {
+			return gitview.Target{}, "", errGitOutside
+		}
+		t.Root = req.Root
+	}
 	if t.Unsafe() != "" {
 		return gitview.Target{}, "", errGitUnsafe
 	}
@@ -177,7 +190,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, unavailableGitStatus(msgGitNoRuntime))
 		return
 	}
-	t, _, err := s.gitTarget(path)
+	t, abs, err := s.gitTarget(path)
 	switch {
 	case errors.Is(err, errGitNotRepo):
 		writeJSON(w, http.StatusOK, gitview.Status{State: "notrepo", Entries: []gitview.Entry{}})
@@ -189,7 +202,10 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		writeFsErr(w, err)
 		return
 	}
+	// st is this request's own copy (Status returns a value with cloned
+	// entries), so RootRel never reaches the runner's shared cache.
 	st := s.Git.Status(r.Context(), t)
+	st.RootRel = rootRel(t.Top, abs)
 	if st.State == "unavailable" {
 		log.Printf("git status %q: %q", t.Top, st.Reason)
 		st.Reason = gitReason(st.Reason)
@@ -259,6 +275,21 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		d.Reason = ""
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// rootRel is where the request's resolved dir (abs, or its parent for a file)
+// sits inside top, slash-separated, "." for top itself. gitrepo.Locate walked
+// up from that dir to top, so it always lies within top.
+func rootRel(top, abs string) string {
+	dir := abs
+	if fi, err := os.Lstat(abs); err == nil && !fi.IsDir() {
+		dir = filepath.Dir(abs)
+	}
+	rel, err := filepath.Rel(top, dir)
+	if err != nil || !(rel == "." || filepath.IsLocal(rel)) {
+		return "."
+	}
+	return filepath.ToSlash(rel)
 }
 
 // untrackedIn reports whether rel (slash-separated, relative to Top) is

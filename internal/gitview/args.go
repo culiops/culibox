@@ -19,8 +19,12 @@ const Label = "io.culiops.agent-box.gitstatus"
 const tmpDir = "/tmp"
 
 // Target is one repository: Top is the checkout top-level, Common the common
-// git dir (the same as Top/.git unless Top is a linked worktree).
-type Target struct{ Top, Common string }
+// git dir (the same as Top/.git unless Top is a linked worktree). Root, when
+// set, is a boxed workspace root holding both: it is the only mount, so a link
+// the box plants inside (even one swapped in after the caller's checks)
+// resolves in the container's namespace, never on the host. Empty Root (a host
+// checkout) mounts Top, plus Common when it lies outside Top.
+type Target struct{ Root, Top, Common string }
 
 // Unsafe names why t cannot be mounted, or "" when it can. Top and Common come
 // from an agent-shaped checkout, and docker parses --mount as CSV, so a path
@@ -29,9 +33,9 @@ type Target struct{ Top, Common string }
 // StatusArgs or DiffArgs and treat a refusal as state "unavailable"; the
 // builders do not check, they only build.
 func (t Target) Unsafe() string {
-	for _, p := range []struct{ name, v string }{{"checkout", t.Top}, {"git dir", t.Common}} {
-		if p.v == "" && p.name == "git dir" {
-			continue // no separate common dir to mount
+	for _, p := range []struct{ name, v string }{{"workspace", t.Root}, {"checkout", t.Top}, {"git dir", t.Common}} {
+		if p.v == "" && p.name != "checkout" {
+			continue // no workspace root / no separate common dir
 		}
 		switch {
 		case !filepath.IsAbs(p.v):
@@ -43,11 +47,23 @@ func (t Target) Unsafe() string {
 			return p.name + ": " + why
 		}
 	}
+	if t.Root != "" {
+		if !within(t.Root, t.Top) {
+			return "checkout is outside the workspace"
+		}
+		if t.Common != "" && !within(t.Root, t.Common) {
+			return "git dir is outside the workspace"
+		}
+	}
 	return ""
 }
 
-// mounts are the read-only bind mounts: Top, plus Common when it lies outside Top.
+// mounts are the read-only bind mounts: Root alone when set; else Top, plus
+// Common when it lies outside Top.
 func (t Target) mounts() []string {
+	if t.Root != "" {
+		return []string{t.Root}
+	}
 	m := []string{t.Top}
 	if t.Common != "" && !within(t.Top, t.Common) {
 		m = append(m, t.Common)
@@ -74,6 +90,8 @@ func argv(t Target, image, name string, uid, gid int, sub ...string) []string {
 		"--label", Label + "=1",
 		"-e", "HOME=" + tmpDir, "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
 		"-e", "GIT_CONFIG_GLOBAL=/dev/null", "-e", "GIT_ATTR_NOSYSTEM=1",
+		// A file named "*.go" or ":(top)*" names itself, never a pattern.
+		"-e", "GIT_LITERAL_PATHSPECS=1",
 	}
 	for _, m := range t.mounts() {
 		a = append(a, "--mount", "type=bind,src="+m+",dst="+m+",readonly")

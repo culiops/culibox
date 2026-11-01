@@ -295,8 +295,9 @@ func TestGitStatusBoxedOK(t *testing.T) {
 	mainRepo(t, ws)
 	mustMkdirAll(t, filepath.Join(ws, "sub"))
 	st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(filepath.Join(ws, "sub"))))
-	want := gitview.Target{Top: ws, Common: filepath.Join(ws, ".git")}
-	if st.State != "ok" || len(g.statuses) != 1 || g.statuses[0] != want {
+	// Boxed: the contained root is the only mount (Target.Root).
+	want := gitview.Target{Root: ws, Top: ws, Common: filepath.Join(ws, ".git")}
+	if st.State != "ok" || st.RootRel != "sub" || len(g.statuses) != 1 || g.statuses[0] != want {
 		t.Fatalf("status = %+v targets = %+v", st, g.statuses)
 	}
 }
@@ -505,4 +506,67 @@ func TestGitStatusHostCommonInsideBoxedRoot(t *testing.T) {
 	wt := filepath.Join(h, "wt")
 	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(ws, ".git", "worktrees", "w")+"\n")
 	wantRefused(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(wt)), g, msgGitOutside)
+}
+
+func TestGitStatusRootRel(t *testing.T) {
+	s, h, _ := hostGitServer(t)
+	repo := filepath.Join(h, "repo")
+	mainRepo(t, repo)
+	mustMkdirAll(t, filepath.Join(repo, "sub", "deeper"))
+	mustSymlink(t, filepath.Join(repo, "sub"), filepath.Join(h, "alias"))
+	for _, c := range []struct{ req, want string }{
+		{repo, "."},
+		{filepath.Join(repo, "sub"), "sub"},
+		{filepath.Join(repo, "sub", "deeper"), "sub/deeper"},
+		// An alias of top/sub: Top stays the resolved checkout, rootRel says
+		// where the shown tree sits in it.
+		{filepath.Join(h, "alias"), "sub"},
+	} {
+		st := decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(c.req)))
+		if st.Top != repo || st.RootRel != c.want {
+			t.Fatalf("%s: top %q rootRel %q, want %q %q", c.req, st.Top, st.RootRel, repo, c.want)
+		}
+	}
+	// The JSON always carries rootRel, even for a refusal.
+	rr := gitPost(s.handleGitStatus, "/api/git/status", pathBody(repo))
+	if !strings.Contains(rr.Body.String(), `"rootRel":"."`) {
+		t.Fatalf("body %s", rr.Body)
+	}
+	s.Git = nil
+	rr = gitPost(s.handleGitStatus, "/api/git/status", pathBody(repo))
+	if !strings.Contains(rr.Body.String(), `"rootRel"`) {
+		t.Fatalf("rootRel missing from %s", rr.Body)
+	}
+}
+
+func TestGitTargetRootOnlyForBoxed(t *testing.T) {
+	// Host request: Root empty (Top/Common mounts). Boxed request: Root is the
+	// contained root, for status and diff alike.
+	s, h, ws := boxedServer(t)
+	g := &fakeGit{}
+	s.Git = g
+	s.BoxTrees = func() BoxTrees { return BoxTrees{Contained: []string{ws}} }
+	host := filepath.Join(h, "hostrepo")
+	mainRepo(t, host)
+	mustWrite(t, filepath.Join(host, "a.txt"))
+	wt := filepath.Join(ws, "wt")
+	mainRepo(t, filepath.Join(ws, "main"))
+	mustMkdirAll(t, filepath.Join(ws, "main", ".git", "worktrees", "w"))
+	mustWrite(t, filepath.Join(wt, ".git"), "gitdir: "+filepath.Join(ws, "main", ".git", "worktrees", "w")+"\n")
+	mustWrite(t, filepath.Join(wt, "b.txt"))
+
+	decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(host)))
+	decodeStatus(t, gitPost(s.handleGitStatus, "/api/git/status", pathBody(wt)))
+	decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(host, "a.txt"))))
+	decodeDiff(t, gitPost(s.handleGitDiff, "/api/git/diff", pathBody(filepath.Join(wt, "b.txt"))))
+
+	hostT := gitview.Target{Top: host, Common: filepath.Join(host, ".git")}
+	boxT := gitview.Target{Root: ws, Top: wt, Common: filepath.Join(ws, "main", ".git")}
+	if len(g.statuses) != 4 || g.statuses[0] != hostT || g.statuses[1] != boxT ||
+		g.statuses[2] != hostT || g.statuses[3] != boxT {
+		t.Fatalf("status targets = %+v", g.statuses)
+	}
+	if len(g.diffs) != 2 || g.diffs[0].T != hostT || g.diffs[1].T != boxT {
+		t.Fatalf("diff targets = %+v", g.diffs)
+	}
 }
