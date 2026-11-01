@@ -1270,13 +1270,12 @@ function hintShortcuts() {
 }
 
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
-// desktop). The rows are built from the same facts the old status bar showed,
-// plus the box runtime; the text goes in through textContent in askDialog.
+// desktop, Mod+/ and ?, Settings, About). The rows come from the registry
+// (shortcuts.js) plus the box runtime; the text goes in through textContent in askDialog.
 function showShortcuts() {
-  const mac = IS_MAC;
   return askDialog({
     title: "Keyboard shortcuts",
-    body: shortcutText(shortcutRows(mac, boxRuntime)),
+    body: helpText(helpRows(IS_MAC), tierRuntimeLabel(boxRuntime)),
     confirmLabel: "Close",
     info: true,
   });
@@ -4164,6 +4163,10 @@ $("pf-aws-confirm-go").addEventListener("click", () => convertPfAws(!$("pf-aws-a
 $("pf-aws-ack-cb").addEventListener("change", syncEditorActions);
 $("pf-aws-remove").addEventListener("click", () => { pfAwsRemoved = true; paintPfAws(); syncEditorActions(); $("pf-aws-undo").focus(); });
 $("pf-aws-undo").addEventListener("click", () => { pfAwsRemoved = false; paintPfAws(); syncEditorActions(); $("pf-aws-remove").focus(); });
+// The Keyboard shortcuts buttons in Appearance and About open the help screen.
+// (#bug-open is wired in bugreport.js; these two belong to the shortcuts feature.)
+$("kbd-open-settings").onclick = () => showShortcuts();
+$("kbd-open-about").onclick = () => showShortcuts();
 // The "none defined" hints and the picker's pointer open the Credentials tab on
 // the group they are about.
 for (const a of document.querySelectorAll("#settings-modal a[data-creds-group]")) {

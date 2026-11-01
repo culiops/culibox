@@ -300,6 +300,24 @@ test("helpText", () => {
   assert.ok(!SC.helpText(rows).includes("Runtime:"));
 });
 
+test("helpText emits the groups in a fixed order, each row under its own heading", () => {
+  const order = ["General", "Sessions & panes", "Terminal", "Editor & files", "Old keys (removed in v0.17.0)"];
+  for (const mac of [true, false]) {
+    const rows = SC.helpRows(mac);
+    // Reversed so the order cannot come from the registry's row order.
+    const lines = SC.helpText(rows.slice().reverse()).split("\n");
+    const at = order.map((g) => lines.indexOf(g));
+    for (const i of at) assert.ok(i >= 0);
+    for (let i = 1; i < at.length; i++) assert.ok(at[i - 1] < at[i], order[i] + " out of order");
+    const w = Math.max(...rows.map((r) => r.keys.length));
+    for (const r of rows) {
+      const gi = order.indexOf(r.group);
+      const li = lines.indexOf(r.keys.padEnd(w) + "  " + r.label);
+      assert.ok(li > at[gi] && (gi === order.length - 1 || li < at[gi + 1]), r.label + " not under " + r.group);
+    }
+  }
+});
+
 test("dispatchShortcut", () => {
   SC._resetShortcutBindings();
   const ran = [];

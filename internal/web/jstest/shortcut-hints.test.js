@@ -25,9 +25,8 @@ function stripComments(src) {
 // such as shellCmd out of it.
 const KEY_LITERAL = /["'`][^"'`\n]*(Ctrl\+|Ctrl |Ctrl[/-]|\bCmd\b|Shift\+|Alt\+|⌘|⌥|\^⇧|\^↵|\\u2318|\\u2325)/;
 
-// Files the scan skips. shortcuts.js is the registry itself. deskshell.js
-// still carries shortcutRows until Task 6 deletes it; Task 6 removes it here.
-const SCAN_SKIP = new Set(["shortcuts.js", "deskshell.js"]);
+// Files the scan skips. shortcuts.js is the registry itself.
+const SCAN_SKIP = new Set(["shortcuts.js"]);
 
 // Strings that match KEY_LITERAL but are not key hints. Keyed "file: trimmed
 // line", each with the reason. Empty today: add an entry only with a reason.
@@ -109,4 +108,31 @@ test("emptyHint splits the palette.open rendering into key caps", () => {
   assert.deepEqual(caps(true), ["⇧", "⌘", "K"]);
   assert.deepEqual(caps(false), ["Ctrl", "Shift", "K"]);
   assert.match(bodyOf(read("app.js"), "emptyHint"), /shortcutHint\("palette\.open", IS_MAC\)/);
+});
+
+test("showShortcuts builds its body from the registry and never touches innerHTML", () => {
+  const body = stripComments(bodyOf(read("app.js"), "showShortcuts"));
+  assert.match(body, /helpRows\(/);
+  assert.match(body, /helpText\(/);
+  assert.match(body, /tierRuntimeLabel\(boxRuntime\)/);
+  assert.ok(!/innerHTML/.test(body), "help body must go in through textContent");
+});
+
+test("Settings and About each carry a Keyboard shortcuts button wired to showShortcuts", () => {
+  const html = read("index.html");
+  assert.match(html, /<button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts<\/button>/);
+  assert.match(html, /<button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts<\/button>/);
+  assert.ok(html.indexOf("kbd-open-settings") < html.indexOf('id="tokens"'), "settings button belongs to the Appearance panel");
+  assert.ok(html.indexOf("kbd-open-about") < html.indexOf("bug-open"), "about button comes before the bug-report paragraph");
+  const app = read("app.js");
+  for (const id of ["kbd-open-settings", "kbd-open-about"]) {
+    assert.match(app, new RegExp('\\$\\("' + id + '"\\)\\.onclick = \\(\\) => showShortcuts\\(\\)'), id + " not wired");
+  }
+});
+
+test("deskshell.js no longer owns a shortcut list", () => {
+  const d = require("../static/deskshell.js");
+  assert.equal(d.shortcutRows, undefined);
+  assert.equal(d.shortcutText, undefined);
+  assert.ok(!/function shortcut(Rows|Text)\b/.test(read("deskshell.js")));
 });

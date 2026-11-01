@@ -242,9 +242,13 @@ function helpRows(mac) {
   return rows;
 }
 
+// The order the help screen lists its groups in. A group not named here (none
+// today) follows these, in the order its first row appears.
+const SC_GROUP_ORDER = ["General", "Sessions & panes", "Terminal", "Editor & files", SC_OLD_KEYS];
+
 function helpText(rows, runtimeLabel) {
   const w = Math.max(0, ...rows.map((r) => r.keys.length));
-  const groups = [];
+  const groups = SC_GROUP_ORDER.filter((g) => rows.some((r) => r.group === g));
   for (const r of rows) if (!groups.includes(r.group)) groups.push(r.group);
   const blocks = groups.map((g) => [g].concat(
     rows.filter((r) => r.group === g).map((r) => r.keys.padEnd(w) + "  " + r.label),
