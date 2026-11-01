@@ -20,8 +20,18 @@ function stripComments(src) {
     .join("\n");
 }
 
-// A key literal inside quotes: "Ctrl+, "Ctrl , "Alt+, or a glyph used as a key.
-const KEY_LITERAL = /["'`][^"'`\n]*(Ctrl\+|Ctrl |Alt\+|⌘|⌥|\^⇧|\^↵|\\u2318|\\u2325)/;
+// A key literal inside quotes: "Ctrl+", "Ctrl ", "Ctrl/" or "Ctrl-" (Ctrl/Cmd-S),
+// "Cmd", "Shift+", "Alt+", or a glyph used as a key. \bCmd\b keeps identifiers
+// such as shellCmd out of it.
+const KEY_LITERAL = /["'`][^"'`\n]*(Ctrl\+|Ctrl |Ctrl[/-]|\bCmd\b|Shift\+|Alt\+|⌘|⌥|\^⇧|\^↵|\\u2318|\\u2325)/;
+
+// Files the scan skips. shortcuts.js is the registry itself. deskshell.js
+// still carries shortcutRows until Task 6 deletes it; Task 6 removes it here.
+const SCAN_SKIP = new Set(["shortcuts.js", "deskshell.js"]);
+
+// Strings that match KEY_LITERAL but are not key hints. Keyed "file: trimmed
+// line", each with the reason. Empty today: add an entry only with a reason.
+const NOT_A_HINT = {};
 
 function bodyOf(src, name) {
   const m = new RegExp("(async )?function " + name + "\\s*\\(").exec(src);
@@ -35,13 +45,20 @@ function bodyOf(src, name) {
   throw new Error("unbalanced braces in " + name);
 }
 
-test("no key is spelled as a literal in palette, viewer-tab, filesdrawer, spawnpanel or spawnform", () => {
-  for (const f of ["palette.js", "viewer-tab.js", "filesdrawer.js", "spawnpanel.js", "spawnform.js"]) {
-    const lines = stripComments(read(f)).split("\n");
-    lines.forEach((l, i) => {
+test("no key is spelled as a literal in any static script", () => {
+  const files = fs.readdirSync(STATIC).filter((n) => n.endsWith(".js") && !SCAN_SKIP.has(n));
+  assert.ok(files.includes("tabs.js") && files.includes("palette.js"), "scan list looks wrong");
+  for (const f of files) {
+    stripComments(read(f)).split("\n").forEach((l, i) => {
+      if (NOT_A_HINT[f + ": " + l.trim()]) return;
       assert.ok(!KEY_LITERAL.test(l), f + ":" + (i + 1) + " spells a key: " + l.trim());
     });
   }
+});
+
+test("the shell-below titles in tabs.js come from the registry", () => {
+  const tabs = read("tabs.js");
+  assert.equal((tabs.match(/shortcutHint\("shell\.below", IS_MAC\)/g) || []).length, 2);
 });
 
 test("no key is spelled as a literal in the app.js hint functions", () => {

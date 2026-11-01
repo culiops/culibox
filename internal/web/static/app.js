@@ -1259,15 +1259,14 @@ function onTerminalSwipe(dir) {
 // shipped once when an earlier IIFE called it at parse time; caught in
 // review, since app.js isn't executed under node --test).
 function hintShortcuts() {
-  const mac = IS_MAC;
   // Reuse tier.js's own runtime label (the same string the sidebar's tier
   // badge tooltip uses) rather than re-deriving "runc"/"sysbox" here.
   const runc = tierRuntimeLabel(boxRuntime);
   // Every chord named here is rendered from the registry (shortcuts.js), so the
   // bar cannot drift from the keys that work. The session jump is Mod+digit
   // (Cmd on macOS, Ctrl elsewhere), shown as the 1-9 range.
-  return `${runc} · ${shortcutHint("palette.open", mac)} palette · ${shortcutHint("sidebar.toggle", mac)} sidebar`
-    + ` · ${jumpHint(1, mac)}-9 session · ${shortcutHint("help.open", mac)} shortcuts`;
+  return `${runc} · ${shortcutHint("palette.open", IS_MAC)} palette · ${shortcutHint("sidebar.toggle", IS_MAC)} sidebar`
+    + ` · ${jumpHint(1, IS_MAC)}-9 session · ${shortcutHint("help.open", IS_MAC)} shortcuts`;
 }
 
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
@@ -5582,7 +5581,6 @@ function initSpawnControl() {
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
-  const mac = IS_MAC;
   $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   const foot = $("spawn-foot-hint");
   if (foot) foot.textContent = shortcutHint("spawn.submit", IS_MAC) + " to spawn";
@@ -5590,7 +5588,7 @@ function initSpawnControl() {
   // the selects). A button keeps its own Enter. The submit handler spawns only
   // when the workspace field shows the directory in use.
   $("spawn").addEventListener("keydown", (e) => {
-    if (!isSubmitHotkey(e, mac)) return;
+    if (!isSubmitHotkey(e, IS_MAC)) return;
     if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
     e.preventDefault();
     $("spawn").requestSubmit();

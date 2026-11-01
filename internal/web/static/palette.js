@@ -93,9 +93,8 @@ function palPaintModHint() {
   const hint = document.getElementById("pal-insert-hint");
   const sep = document.getElementById("pal-mod-sep");
   if (!hint) return;
-  const mac = IS_MAC;
   const it = palItems[palSel];
-  hint.textContent = it ? palModHint(it.kind, mac) : "";
+  hint.textContent = it ? palModHint(it.kind, IS_MAC) : "";
   hint.hidden = hint.textContent === "";
   if (sep) sep.hidden = hint.hidden;
 }
@@ -180,10 +179,9 @@ function paletteShellSpawn(mac, desktop, spawn) {
   ];
 }
 
-// mac is computed once by the caller (palRefresh) and threaded through here
-// and into paletteSessions(), instead of adding another copy of this regex
-// alongside the ones already in app.js (twice) and palette.js's shortcut-hint
-// block below.
+// mac is read once by the caller (palRefresh) from IS_MAC (shortcuts.js) and
+// threaded through here and into paletteSessions(), so the pure builders take
+// it as a parameter and tests can inject either platform.
 // One "New session · X" entry per profile. The hint stays empty on both
 // layouts (v0.3.0): ProfileView.bin is for the spawn dialog, and an absolute
 // shell path is no use as a right-aligned palette hint.
@@ -508,12 +506,11 @@ function initPalette() {
   const d = document.getElementById("palette");
   const inp = document.getElementById("pal-input");
   if (!d || !inp) return;
-  const mac = IS_MAC;
-  const combo = shortcutHint("palette.open", mac);
+  const combo = shortcutHint("palette.open", IS_MAC);
   // The fallback is written next to the primary everywhere the combo appears:
   // when another app has grabbed the primary system-wide, the user needs to be
   // told a second one exists: they cannot guess it.
-  const combos = combo + " or " + shortcutHint("palette.open.alt", mac);
+  const combos = combo + " or " + shortcutHint("palette.open.alt", IS_MAC);
 
   const openBtn = document.getElementById("palette-open");
   if (openBtn) {
@@ -542,13 +539,13 @@ function initPalette() {
   inp.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); palSelect(palSel + 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); palSelect(palSel - 1); }
-    else if (isInsertHotkey(e, mac) && palItems[palSel] && palItems[palSel].runNewPane) {
+    else if (isInsertHotkey(e, IS_MAC) && palItems[palSel] && palItems[palSel].runNewPane) {
       e.preventDefault();
       const it = palItems[palSel];
       closePalette();
       it.runNewPane();
     }
-    else if (isInsertHotkey(e, mac) && palItems[palSel] && palItems[palSel].path) {
+    else if (isInsertHotkey(e, IS_MAC) && palItems[palSel] && palItems[palSel].path) {
       e.preventDefault();
       const p = palItems[palSel].path;
       closePalette(); // see the copy button: a modal dialog makes the rest of the page inert
