@@ -202,6 +202,113 @@ test("table headers: the empty actions column has a visually hidden label", () =
   assert.strictEqual(ths.filter((t) => t.textContent === "").length, 0, "no header cell is left without a name");
 });
 
+// --- AWS connections and GitHub Apps: the same confirm, their own paths ------------
+
+const aws = (name, over) => ({ kind: "aws", name, account_id: "226198813800", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", mode: "assume", status: "ok", source: "web", prod: false, used_by: [], base: { state: "none_found" }, elevate: null, ...over });
+const ghApp = (name, over) => ({ kind: "github", name, client_id: "Iv23liAbCdEf0123", key_ref_kind: "store", status: "ok", source: "web", used_by: [], ...over });
+
+// A table of `entries` for `key` ("aws" or "github"), the tbody of the one named `name`,
+// and the Delete button on its row.
+function entryTable(p, key, entries, name) {
+  const table = p.box.credTable({ key, title: key, entries });
+  const tb = table.querySelectorAll("tbody").find((t) => t.rows[0].cells[0].textContent.startsWith(name));
+  assert.ok(tb, "no row for " + name);
+  const del = tb.rows[0].querySelectorAll("button").find((b) => b.textContent === "Delete");
+  return { table, tb, del };
+}
+const press = (tb, label, not) => tb.querySelectorAll("button").find((b) => b.textContent === label && b !== not);
+const settle = () => new Promise((r) => setImmediate(r));
+
+test("AWS table: Delete puts the confirmation in a row under the entry, naming the connection", () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "aws", [aws("sandbox-agent")], "sandbox-agent");
+  del.onclick();
+  const x = tb.querySelector("tr.ctab-x");
+  assert.ok(x && x.querySelector(".confirm"));
+  assert.strictEqual(x.cells[0].colSpan, tb.rows[0].cells.length);
+  assert.match(x.querySelector(".confirm").textContent, /^Delete the connection sandbox-agent\?/);
+});
+
+test("AWS table: Cancel removes the confirm box and the row that held it", () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "aws", [aws("sandbox-agent")], "sandbox-agent");
+  del.onclick();
+  press(tb, "Cancel").onclick();
+  assert.strictEqual(tb.querySelectorAll(".confirm").length, 0);
+  assert.strictEqual(tb.querySelectorAll("tr.ctab-x").length, 0, "no empty tr.ctab-x is left behind");
+  assert.strictEqual(tb.rows.length, 1);
+  assert.strictEqual(p.calls.length, 0, "Cancel sends nothing");
+  del.onclick();
+  assert.strictEqual(tb.querySelectorAll(".confirm").length, 1, "and it can be opened again");
+});
+
+test("AWS table: Cancel keeps the write warning that shares the row", () => {
+  const p = page();
+  const writes = aws("prod-writer", { base: { state: "writes", actions: ["s3:PutObject"] } });
+  const { tb, del } = entryTable(p, "aws", [writes], "prod-writer");
+  assert.match(tb.querySelector("tr.ctab-x").textContent, /Allowed here: s3:PutObject/);
+  del.onclick();
+  press(tb, "Cancel").onclick();
+  assert.strictEqual(tb.querySelectorAll(".confirm").length, 0);
+  assert.strictEqual(tb.querySelectorAll("tr.ctab-x").length, 1, "the warning's row stays");
+  assert.match(tb.querySelector("tr.ctab-x").textContent, /Allowed here: s3:PutObject/);
+});
+
+test("AWS table: Delete sends DELETE to that connection's path, then reloads", async () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "aws", [aws("other-one"), aws("sandbox agent/1")], "sandbox agent/1");
+  del.onclick();
+  const go = press(tb, "Delete", del);
+  go.onclick();
+  await settle();
+  assert.deepStrictEqual(p.calls, [{ path: "/api/credentials/aws/sandbox%20agent%2F1", method: "DELETE" }]);
+  assert.strictEqual(p.box.reloaded, 1);
+  assert.strictEqual(go.disabled, true);
+});
+
+test("AWS table: a refused Delete keeps the confirmation, shows why, and re-enables the button", async () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "aws", [aws("sandbox-agent")], "sandbox-agent");
+  p.box.apiFail = Object.assign(new Error("in use"), { code: "in_use", body: { used_by: ["ops"] } });
+  del.onclick();
+  const go = press(tb, "Delete", del);
+  go.onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.strictEqual(go.disabled, false);
+  assert.match(tb.querySelector(".confirm").querySelector(".ent-err").textContent, /Used by profile ops/);
+  assert.strictEqual(tb.querySelectorAll("tr.ctab-x").length, 1);
+});
+
+test("GitHub App table: Delete sends DELETE to the GitHub Apps path, not the tokens one", async () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "github", [ghApp("release-bot"), ghApp("culibox agents")], "culibox agents");
+  del.onclick();
+  assert.match(tb.querySelector(".confirm").textContent, /^Delete the GitHub App culibox agents\?/);
+  press(tb, "Delete", del).onclick();
+  await settle();
+  assert.deepStrictEqual(p.calls, [{ path: "/api/credentials/github-apps/culibox%20agents", method: "DELETE" }]);
+  assert.strictEqual(p.box.reloaded, 1);
+});
+
+test("GitHub App table: Cancel removes the box and its row, and sends nothing", () => {
+  const p = page();
+  const { tb, del } = entryTable(p, "github", [ghApp("release-bot")], "release-bot");
+  del.onclick();
+  press(tb, "Cancel").onclick();
+  assert.strictEqual(tb.querySelectorAll("tr.ctab-x").length, 0);
+  assert.strictEqual(p.calls.length, 0);
+});
+
+test("a token's Delete goes to the tokens path (each kind has its own)", async () => {
+  const p = page();
+  const { tb, del } = tokenTable(p, [tok("sentry-prod")]);
+  del.onclick();
+  press(tb, "Delete", del).onclick();
+  await settle();
+  assert.deepStrictEqual(p.calls, [{ path: "/api/credentials/tokens/sentry-prod", method: "DELETE" }]);
+});
+
 // --- tables or cards -----------------------------------------------------------
 
 test("credTableMode: the page draws tables once #creds-body is wide enough, cards below", () => {

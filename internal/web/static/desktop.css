@@ -1182,13 +1182,15 @@
        line under it as visible. 72px = footer 56px + 16px clearance. */
     scroll-padding-bottom: 72px;
   }
-  /* Full-width, the footer also sits over the list's foot; and below 550px (the one
-     line no longer fits, 377px of buttons) it takes two lines, so the form leaves
-     room under it too. */
+  /* Full-width, the footer also sits over the list's foot; and while the dialog is
+     narrower than 559px (measured, Discard showing: the buttons are 316px, with 30px
+     of gaps, 40px of padding and the 170px nav) the one line no longer fits and the
+     footer takes two, 89px, so the form leaves room under it too. 580px is that width
+     plus room for a font that renders the buttons a little wider. */
   @container (max-width: 750px) {
     #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 66px; }
   }
-  @container (max-width: 550px) {
+  @container (max-width: 580px) {
     #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 106px; }
     #page-host > #settings-modal.as-page #manage .ped { padding-bottom: 116px; scroll-padding-bottom: 104px; }
   }

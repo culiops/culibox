@@ -2240,7 +2240,7 @@ function awsDelete(entry, reload, btn) {
     }
     reload();
   });
-  btns.append(del, awsBtn("Cancel", "", () => box.remove()));
+  btns.append(del, awsBtn("Cancel", "", () => credDismissConfirm(box)));
   box.append(err, btns);
   card.appendChild(box);
 }
