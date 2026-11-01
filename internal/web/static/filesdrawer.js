@@ -116,14 +116,20 @@ function drawerSessionCwd(sid) {
 
 // drawerShowFile: a tree row was clicked while the drawer owns file clicks.
 // Resolves false when the user kept a dirty buffer instead.
-async function drawerShowFile(path) {
+// opts = {view?}: "changes" (a tree badge's click) opens the file's diff vs HEAD,
+// whether the file is already in the column or about to be mounted.
+async function drawerShowFile(path, opts) {
   if (!path) return false;
   if (typeof normalizePath === "function") path = normalizePath(path);
+  const changes = !!opts && opts.view === "changes";
   const v = drawerViewer;
-  if (v && v.path === path && drawerViewerSid === drawerState.sessionId) return true;
+  if (v && v.path === path && drawerViewerSid === drawerState.sessionId) {
+    if (changes) v.showChanges(); // refuses (with a toast) while the file is being edited
+    return true;
+  }
   if (!(await drawerConfirmLeave())) return false;
   drawerParkViewer(); // remembers the file being left, for this session
-  drawerMountViewer(drawerState.sessionId, path, { scroll: 0 });
+  drawerMountViewer(drawerState.sessionId, path, changes ? { scroll: 0, view: "changes" } : { scroll: 0 });
   return true;
 }
 
@@ -470,9 +476,9 @@ const drawerToolbarHost = {
 function drawerOpenInPane() {
   const v = drawerViewer;
   if (!v || v.editing) return;
-  const path = v.path, scroll = v.scroll;
+  const path = v.path, scroll = v.scroll, changes = !!v.changes;
   drawerClearViewer();
-  openFile(path);
+  openFile(path, changes ? { view: "changes" } : undefined); // "at the same place" includes the diff
   for (const c of cells) {
     const t = c.tabs.find((x) => x.kind === "viewer" && !x.box && x.path === path);
     if (t) { t.scroll = scroll; t.applyScroll(); break; }

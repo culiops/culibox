@@ -5,6 +5,10 @@
 const MD_EXTS = new Set(["md", "markdown"]);
 // Rows per block in a big file's read view (renderCode, .vl-chunk in app.css).
 const VT_CHUNK = 500;
+// A diff over this many characters is shown without syntax highlighting: the
+// highlighter runs on the main thread and two passes over a 2 MiB diff would
+// freeze the pane. (Measured; see the task report.)
+const VD_HL_MAX = 400000;
 
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
@@ -109,6 +113,13 @@ class ViewerTab {
       if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // fixed-position: it would leave its number behind
     }, { passive: true });
     this.isImage = IMAGE_EXTS.has(ext0);
+    // Changes mode: the pane shows this file's diff vs HEAD instead of the file
+    // (spec 5.2). Only a host text file has one. opts.view === "changes" opens
+    // straight into it (a tree badge's click, openFile / drawerShowFile).
+    this.changes = !!(opts && opts.view === "changes") && !this.isImage && !this.box;
+    if (this.changes) this.pendingLine = null; // a diff has no line to reveal
+    this.diffSeq = 0;       // guards loadDiff against a toggle or reload that overtook it
+    this.fileScroll = 0;    // where the file was read, kept while the diff is up
     this.find = new ViewerFind(this);
     this.findBar = this.find.el;
     // The one shared toolbar (viewertoolbar.js). opts.host carries what differs
@@ -143,7 +154,7 @@ class ViewerTab {
   // needs numbered lines: the code view or the editor.
   openFind(mode) {
     if (mode === "line") {
-      if (!(this.editing && this.cm) && !this.hasLines) return false;
+      if (!(this.editing && this.cm) && (!this.hasLines || this.changes)) return false;
     } else if (this.isImage) return false;
     this.find.open(mode);
     return true;
@@ -317,6 +328,7 @@ class ViewerTab {
   copy(btn) { this.copyContents(btn || null); }
   fontStep(d) { this.zoom(d * fontPrefs.STEP); }
   toggleAuto() {
+    if (this.changes) return; // the diff is not re-read on a timer: each read starts a container
     this.auto = !this.auto;
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
@@ -354,6 +366,193 @@ class ViewerTab {
     this.findRefresh();
   }
 
+  // --- Changes vs HEAD (spec 5.2) ---------------------------------------------
+
+  // toggleChanges flips this tab between the file and its diff vs HEAD.
+  toggleChanges() { return this.changes ? this.leaveChanges() : this.showChanges(); }
+
+  // showChanges puts the diff on screen (or re-reads it when it already is: a
+  // badge click after the file changed again). Says whether it could.
+  showChanges() {
+    if (this.isImage || this.box) return false;
+    if (this.editing) { showToast("Save or cancel your edit first"); return false; }
+    if (!this.changes) {
+      this.changes = true;
+      this.pendingLine = null;
+      if (this.auto) this.toggleAutoOff();
+      this.fileScroll = this.scroll;
+      this.scroll = 0;
+      this.resetForOtherView();
+    }
+    this.loadDiff();
+    return true;
+  }
+
+  // leaveChanges goes back to the file, re-read from disk.
+  leaveChanges() {
+    if (!this.changes) return;
+    this.changes = false;
+    this.diffSeq++; // a diff still in flight must not paint over the file
+    this.scroll = this.fileScroll;
+    this.resetForOtherView();
+    this.load();
+  }
+
+  toggleAutoOff() {
+    this.auto = false;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  // resetForOtherView forgets what the other view showed, so nothing (Copy, the
+  // unchanged-text check in load, the line mark) reads the wrong text.
+  resetForOtherView() {
+    this.lastContent = null;
+    this.renderedText = null;
+    this.copyRefusal = "loading";
+    this.targetLine = null;
+    this.changed();
+  }
+
+  // loadDiff fetches this file's diff vs HEAD and renders it (or the sentence for
+  // a state that has no rows). The server answers 200 for every git outcome, in
+  // `state`/`kind`; a non-OK status is the request itself failing.
+  async loadDiff(poll) {
+    if (poll || !this.changes || this.editing) return;
+    const seq = ++this.diffSeq;
+    this.setStatus("loading…");
+    const res = await fsPost("/api/git/diff", { path: this.path });
+    if (seq !== this.diffSeq || !this.changes) return; // overtaken: a newer read or the file view owns the pane
+    this.setStatus("");
+    const d = res.ok && res.data ? res.data : null;
+    if (!d) {
+      this.diffMessage(res.status ? "Could not read the changes (HTTP " + res.status + ")" : "Could not reach the server", "err", "unreadable");
+    } else if (d.state === "notrepo") {
+      this.diffMessage("This file is not in a git repository", "", "unreadable");
+    } else if (d.state !== "ok") {
+      this.diffMessage("Changes are unavailable" + (d.reason ? ": " + d.reason : ""), "", "unreadable");
+    } else if (d.kind === "unchanged") {
+      this.diffMessage("No changes vs HEAD", "", "empty", true);
+    } else if (d.kind === "binary") {
+      this.diffMessage("Binary file, no text diff to show", "", "binary");
+    } else {
+      const rows = parseUnifiedDiff(d.diff);
+      if (!rows.length) this.diffMessage("No changes vs HEAD", "", "empty", true);
+      else this.renderDiff(rows, d.diff, !!d.truncated);
+    }
+    this.applyScroll();
+  }
+
+  // diffHeader: the strip that says what the pane shows, so a screenshot is
+  // unambiguous, plus the banner when the server cut the diff short.
+  diffHeader(truncated) {
+    const bar = document.createElement("div");
+    bar.className = "vd-bar";
+    const h = document.createElement("span");
+    h.className = "vd-title";
+    h.textContent = "Changes vs HEAD";
+    bar.append(h);
+    if (truncated) {
+      const t = document.createElement("span");
+      t.className = "vd-trunc";
+      t.textContent = "Diff cut at 2 MiB: only the start is shown";
+      bar.append(t);
+    }
+    return bar;
+  }
+
+  // diffMessage shows a state with no rows under the header. `refusal` is the
+  // copyRefusal that fits it; `back` adds the button to the file.
+  diffMessage(text, cls, refusal, back) {
+    const d = document.createElement("div");
+    d.className = "viewer-msg" + (cls ? " " + cls : "");
+    d.append(text);
+    if (back) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "viewer-auto vd-back";
+      b.textContent = "Show file";
+      b.onclick = () => this.leaveChanges();
+      d.append(" ", b);
+    }
+    this.content.replaceChildren(this.diffHeader(false), d);
+    this.showingMsg = true;
+    this.hasLines = false;
+    this.lastContent = null;
+    this.copyRefusal = refusal;
+    this.findRefresh();
+  }
+
+  // renderDiff draws the rows through the read view's machinery: .vl rows, the
+  // gutter, the 500-row blocks. The gutter is the NEW-file line (blank on a removed
+  // row), so the line-number menu still points at a real line; a sign column says
+  // + or − so colour is not the only cue. Code is highlighted in the file's
+  // language (two streams, old side and new side: viewerdiff.js diffRowHtml).
+  renderDiff(rows, text, truncated) {
+    this.showingMsg = false;
+    const lang = this.lang || extOf(this.path);
+    const hl = window.hljs && lang && hljs.getLanguage(lang) && text.length <= VD_HL_MAX
+      ? (src) => hljs.highlight(src, { language: lang }).value
+      : null;
+    const html = diffRowHtml(rows, hl, escapeHtml);
+    const maxLine = diffMaxLine(rows);
+    const pre = this.buildPre(rows.length, Math.max(3, String(maxLine).length), (i) => {
+      const r = rows[i];
+      const row = document.createElement("div");
+      row.className = "vl vd-" + r.t;
+      row.dataset.i = String(i);
+      if (r.n !== null) row.dataset.n = String(r.n);
+      const num = document.createElement("span");
+      num.className = "vl-n";
+      num.setAttribute("aria-hidden", "true");
+      num.textContent = r.n === null ? "" : String(r.n);
+      const sign = document.createElement("span");
+      sign.className = "vd-sign";
+      sign.textContent = diffSign(r.t);
+      const code = document.createElement("span");
+      code.className = "vl-c";
+      code.innerHTML = html[i];
+      row.append(num, sign, code);
+      return row;
+    });
+    this.content.replaceChildren(this.diffHeader(truncated), pre);
+    this.lineCount = maxLine;
+    this.hasLines = true;
+    this.targetLine = null;
+    this.renderedText = null;
+    this.lastContent = text;
+    this.copyRefusal = null;
+    this.findRefresh();
+  }
+
+  // buildPre makes the .viewer-pre of `count` rows, each made by makeRow(i), laid
+  // out in VT_CHUNK-row blocks when there are many (renderCode and renderDiff).
+  buildPre(count, digits, makeRow) {
+    const pre = document.createElement("pre");
+    pre.className = "viewer-pre hljs";
+    pre.style.setProperty("--vl-digits", String(digits));
+    const frag = document.createDocumentFragment();
+    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
+    // browser until it nears the viewport (content-visibility, app.css).
+    const chunked = count > VT_CHUNK * 2;
+    let chunk = null;
+    for (let i = 0; i < count; i++) {
+      const row = makeRow(i);
+      if (chunked) {
+        if (i % VT_CHUNK === 0) {
+          chunk = document.createElement("div");
+          chunk.className = "vl-chunk";
+          // The last block is shorter: say so, or its skipped height is overstated.
+          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, count - i)));
+          frag.append(chunk);
+        }
+        chunk.append(row);
+      } else frag.append(row);
+    }
+    pre.append(frag);
+    return pre;
+  }
+
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
   // churn and skips the re-render when the content is unchanged. Scroll is no
   // longer its business: every render path ends in applyScroll().
@@ -380,6 +579,7 @@ class ViewerTab {
       this.exitEdit();
       return;
     }
+    if (this.changes) return this.loadDiff(poll); // Reload in Changes mode re-reads the diff
     // Claimed synchronously so an auto-reload tick that overlaps the first read
     // cannot also count as "first".
     const first = this.firstLoad;
@@ -495,6 +695,7 @@ class ViewerTab {
       this.cm.focus();
       return;
     }
+    if (this.changes) return; // a diff's gutter is not the file's line numbers: nothing to reveal
     if (this.copyRefusal === "loading") { // the first read has not landed: ask again then
       this.pendingLine = { line, col };
       return;
@@ -563,6 +764,7 @@ class ViewerTab {
   // since Step 1 above seeds an empty buffer with a real version).
   enterEdit() {
     if (this.editing || this.box || this.readOnly) return; // a box file is read-only (no button either; this guards a stray caller)
+    if (this.changes) return; // a diff is read-only too
     if (this.copyRefusal && this.copyRefusal !== "empty") return; // image/binary/loading/error stay non-editable
     // The vendor bundle can fail to reach the browser (blocked, offline, a
     // hiccup loading /vendor/codemirror.min.js). Checked before any state
@@ -716,15 +918,7 @@ class ViewerTab {
     // and the highlighted code (hljs output only, which escapes the file's own
     // markup). The container carries hljs, the class its theme colours by.
     const lines = splitHighlightedLines(html);
-    const pre = document.createElement("pre");
-    pre.className = "viewer-pre hljs";
-    pre.style.setProperty("--vl-digits", String(Math.max(3, String(lines.length).length)));
-    const frag = document.createDocumentFragment();
-    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
-    // browser until it nears the viewport (content-visibility, app.css).
-    const chunked = lines.length > VT_CHUNK * 2;
-    let chunk = null;
-    for (let i = 0; i < lines.length; i++) {
+    const pre = this.buildPre(lines.length, Math.max(3, String(lines.length).length), (i) => {
       const row = document.createElement("div");
       row.className = "vl";
       row.dataset.n = String(i + 1);
@@ -736,18 +930,8 @@ class ViewerTab {
       code.className = "vl-c";
       code.innerHTML = lines[i];
       row.append(num, code);
-      if (chunked) {
-        if (i % VT_CHUNK === 0) {
-          chunk = document.createElement("div");
-          chunk.className = "vl-chunk";
-          // The last block is shorter: say so, or its skipped height is overstated.
-          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, lines.length - i)));
-          frag.append(chunk);
-        }
-        chunk.append(row);
-      } else frag.append(row);
-    }
-    pre.append(frag);
+      return row;
+    });
     this.content.replaceChildren(pre);
     this.lineCount = lines.length;
     this.hasLines = true;
@@ -819,10 +1003,11 @@ class ViewerTab {
     if (!this.hasLines || !this.content.isConnected) return none;
     const row = this.firstVisibleRow();
     if (!row) return none;
-    const n = row.dataset.n;
+    // A diff row may have no line number (a removed line); its index always exists.
+    const sel = row.dataset.i !== undefined ? '.vl[data-i="' + row.dataset.i + '"]' : '.vl[data-n="' + row.dataset.n + '"]';
     const off = row.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
     return () => {
-      const r = this.content.querySelector('.vl[data-n="' + n + '"]');
+      const r = this.content.querySelector(sel);
       if (!r) return;
       const top = r.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop - off;
       this.setScrollTop(Math.max(0, Math.round(top)));

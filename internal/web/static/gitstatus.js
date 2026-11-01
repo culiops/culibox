@@ -192,7 +192,7 @@ function gitMarkRow(row, path) {
 }
 
 // gitOpenChanges opens the file where a row click would, asking for its Changes
-// view. The viewer ignores the option until the diff view exists.
+// view (viewer-tab.js showChanges).
 function gitOpenChanges(path) {
   const opts = { view: "changes" };
   if (typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerShowFile === "function") drawerShowFile(path, opts);
@@ -201,6 +201,10 @@ function gitOpenChanges(path) {
 
 function gitPaintTree() {
   if (typeof document === "undefined") return;
+  // An open viewer's Changes button follows the same marks: repaint the toolbars.
+  if (typeof ViewerTab !== "undefined" && ViewerTab.allViewers) {
+    for (const v of ViewerTab.allViewers()) if (v.toolbarApi) v.toolbarApi.paint();
+  }
   if (typeof ftTreeEl !== "undefined" && ftTreeEl && typeof ftRowPaths !== "undefined") {
     for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
       const p = ftRowPaths.get(row);

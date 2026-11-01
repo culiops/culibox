@@ -17,6 +17,8 @@
 // the tooltip and, on a disabled control, the reason.
 //
 // s = {path, image, box, readOnly, editing, dirty, markdown, auto, wrap,
+//      gitChanged,       // git says this file is M/A/U/C (gitstatus.js): Changes can be offered
+//      changes,          // the diff vs HEAD is on screen instead of the file
 //      lines,            // are there numbered lines to jump to (read view or editor)
 //      insert, reveal, rel, // {ok, title} from viewerpath.js; a boolean is accepted
 //      extras: [{key, label, title}],   // host buttons, between Find and ⋯
@@ -37,14 +39,20 @@ function viewerToolbarModel(s) {
     if (pressed !== undefined) e.pressed = pressed;
     return e;
   };
+  const changes = !!s.changes;
   const m = {};
 
-  m.edit = ent(!editing && !image && !s.box && !s.readOnly, true, "Edit", "Edit this file");
+  m.edit = ent(!editing && !image && !s.box && !s.readOnly && !changes, true, "Edit", "Edit this file");
   m.save = ent(editing, true, "Save", "Save" + hint("save"));
   m.cancel = ent(editing, true, "Cancel", "Discard changes and return to the read view");
-  m.copy = ent(true, !image, "Copy", image ? "An image has no text to copy" : "Copy this file's contents");
+  m.copy = ent(true, !image, "Copy", image ? "An image has no text to copy" : changes ? "Copy this diff" : "Copy this file's contents");
   m.path = ent(true, true, "Path ▾", "Copy, insert or reveal this file's path");
   m.find = ent(true, !image, "Find", image ? "An image has no text to search" : "Find in this file" + hint("find"));
+  // Changes toggles the file and its diff vs HEAD. Offered for a git-changed file,
+  // and kept while the diff is up even if the mark has gone (a revert), so the way
+  // back to the file never disappears. Never over an image or the editor.
+  m.changes = ent((!!s.gitChanged || changes) && !image && !editing, true, "Changes",
+    changes ? "Back to the file" : "Show what changed vs HEAD", changes);
   for (const x of Array.isArray(s.extras) ? s.extras : []) {
     if (!x || !x.key) continue;
     m[x.key] = ent(!editing, !editing, x.label || x.key, editing ? "Save or cancel your edit first" : (x.title || x.label || x.key));
@@ -59,12 +67,14 @@ function viewerToolbarModel(s) {
   const SAVE_FIRST = "Save or cancel your edits first";
   m.reload = ent(true, !dirtyEdit, "Reload", dirtyEdit ? SAVE_FIRST : "Re-read this file from disk");
   m.download = ent(true, true, "Download", "Download this file");
-  m.follow = ent(true, !image && !dirtyEdit, "Follow file",
-    image ? "An image is not re-read automatically" : dirtyEdit ? SAVE_FIRST : "Re-read the file every 2 seconds while it is open", !!s.auto);
+  const NOT_IN_CHANGES = "Not available while showing changes";
+  m.follow = ent(true, !image && !dirtyEdit && !changes, "Follow file",
+    image ? "An image is not re-read automatically" : changes ? NOT_IN_CHANGES : dirtyEdit ? SAVE_FIRST : "Re-read the file every 2 seconds while it is open", !!s.auto);
   m.wrap = ent(true, !image, "Wrap lines", image ? "An image has no lines to wrap" : "Wrap long lines (remembered in this browser)", !!s.wrap);
   const noLines = s.lines === false;
-  m.gotoLine = ent(true, !image && !s.markdown && !noLines, "Go to line…",
+  m.gotoLine = ent(true, !image && !s.markdown && !noLines && !changes, "Go to line…",
     image ? "An image has no lines" :
+    changes ? NOT_IN_CHANGES :
     s.markdown ? "Markdown is shown rendered — no line numbers" :
     noLines ? "There are no numbered lines to go to" : "Go to a line number" + hint("gotoLine"));
   m.smaller = ent(true, !image, "A−", image ? "An image has no text to resize" : "Smaller text" + hint("zoomOut"));
@@ -78,6 +88,7 @@ function viewerToolbarModel(s) {
 // the glyph-only buttons get a spoken one.
 const VT_ARIA = {
   path: "Path actions", more: "More file actions", smaller: "Smaller text", bigger: "Bigger text",
+  changes: "Changes vs HEAD", // the visible word "Changes" is inside the name (label-in-name)
 };
 const VT_PATH_ITEMS = ["pathAbs", "pathRel", "pathInsert", "reveal"];
 const VT_MORE_ITEMS = ["reload", "download", "follow", "wrap", "gotoLine"];
@@ -131,7 +142,7 @@ function buildViewerToolbar(viewer, host) {
   };
   const btns = {};
   const act = {}; // key -> handler; a disabled control does nothing
-  const rowKeys = ["edit", "save", "cancel", "copy", "path", "find", ...extras.map((x) => x.key), "more"];
+  const rowKeys = ["edit", "save", "cancel", "copy", "path", "find", "changes", ...extras.map((x) => x.key), "more"];
   for (const k of rowKeys) {
     btns[k] = mkBtn(k, k === "save" ? "pri" : "");
     el.append(btns[k]);
@@ -154,6 +165,7 @@ function buildViewerToolbar(viewer, host) {
   act.cancel = () => viewer.cancelEdit();
   act.copy = () => viewer.copy(btns.copy);
   act.find = () => viewer.openFind("find");
+  act.changes = () => viewer.toggleChanges();
   for (const x of extras) act[x.key] = () => x.run();
 
   // --- menus -----------------------------------------------------------------
@@ -281,7 +293,8 @@ function buildViewerToolbar(viewer, host) {
     b.setAttribute("aria-disabled", e.enabled ? "false" : "true");
     b.classList.toggle("vt-off", !e.enabled);
     if (e.pressed !== undefined) {
-      b.setAttribute("aria-checked", e.pressed ? "true" : "false");
+      // A menu item is a checkbox (aria-checked); a toolbar button is a toggle (aria-pressed).
+      b.setAttribute(b.getAttribute("role") ? "aria-checked" : "aria-pressed", e.pressed ? "true" : "false");
       b.classList.toggle("on", e.pressed);
     }
   };
@@ -299,6 +312,8 @@ function buildViewerToolbar(viewer, host) {
       markdown: MD_EXTS.has(extOf(viewer.path)),
       auto: !!viewer.auto,
       wrap: isViewerWrap(),
+      gitChanged: typeof gitStatusCodeFor === "function" && "MAUC".includes(gitStatusCodeFor(viewer.path) || "-") && !viewer.box,
+      changes: !!viewer.changes,
       lines: !!viewer.hasLines || !!(viewer.editing && viewer.cm),
       insert: insertTargetFor(viewer, viewer.insertCandidate()),
       reveal: revealable(viewer, home),

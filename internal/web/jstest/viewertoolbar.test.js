@@ -11,14 +11,14 @@ const base = (over) => Object.assign({
 }, over);
 const shownOf = (m) => Object.fromEntries(Object.entries(m).map(([k, e]) => [k, e.shown]));
 const enabledOf = (m) => Object.fromEntries(Object.entries(m).map(([k, e]) => [k, e.enabled]));
-const ALL = ["edit", "save", "cancel", "copy", "path", "find", "more", "pathAbs", "pathRel", "pathInsert", "reveal",
+const ALL = ["edit", "save", "cancel", "copy", "path", "find", "changes", "more", "pathAbs", "pathRel", "pathInsert", "reveal",
   "reload", "download", "follow", "wrap", "gotoLine", "smaller", "bigger"];
 
 test("host text file, read mode: every control shown and enabled, with the founder's labels", () => {
   const m = viewerToolbarModel(base());
   assert.deepEqual(Object.keys(m), ALL);
   assert.deepEqual(shownOf(m), {
-    edit: true, save: false, cancel: false, copy: true, path: true, find: true, more: true,
+    edit: true, save: false, cancel: false, copy: true, path: true, find: true, changes: false, more: true,
     pathAbs: true, pathRel: true, pathInsert: true, reveal: true,
     reload: true, download: true, follow: true, wrap: true, gotoLine: true, smaller: true, bigger: true,
   });
@@ -170,6 +170,7 @@ test("every entry has a non-empty title and label, in every state", () => {
   const states = [
     base(), base({ editing: true, dirty: true }), base({ box: true, rel: false, reveal: false }),
     base({ readOnly: true }), base({ image: true }), base({ markdown: true, lines: false }),
+    base({ gitChanged: true }), base({ gitChanged: true, changes: true }),
     base({ extras: [{ key: "x", label: "X", title: "do x" }], editing: true }), base({ insert: false }),
   ];
   for (const s of states) {
@@ -185,4 +186,52 @@ test("every entry has a non-empty title and label, in every state", () => {
 test("the model reads no globals and tolerates missing input", () => {
   assert.doesNotThrow(() => viewerToolbarModel());
   assert.doesNotThrow(() => viewerToolbarModel({}));
+});
+
+test("Changes: shown only for a git-changed file in read mode, never for an image or while editing", () => {
+  assert.equal(viewerToolbarModel(base()).changes.shown, false);
+  assert.equal(viewerToolbarModel(base({ gitChanged: false })).changes.shown, false);
+  const m = viewerToolbarModel(base({ gitChanged: true }));
+  assert.equal(m.changes.shown, true);
+  assert.equal(m.changes.enabled, true);
+  assert.equal(m.changes.label, "Changes");
+  assert.equal(m.changes.title, "Show what changed vs HEAD");
+  assert.equal(m.changes.pressed, false);
+  assert.equal(viewerToolbarModel(base({ gitChanged: true, editing: true })).changes.shown, false);
+  assert.equal(viewerToolbarModel(base({ gitChanged: true, image: true })).changes.shown, false);
+});
+
+test("Changes: stays shown and pressed while the diff is on screen, even if the git mark has gone", () => {
+  // R1: after a revert the mark drops; the user still needs the way back to the file.
+  const m = viewerToolbarModel(base({ gitChanged: false, changes: true }));
+  assert.equal(m.changes.shown, true);
+  assert.equal(m.changes.pressed, true);
+  assert.equal(m.changes.title, "Back to the file");
+  // ...but never over an image or an editor.
+  assert.equal(viewerToolbarModel(base({ changes: true, image: true })).changes.shown, false);
+  assert.equal(viewerToolbarModel(base({ changes: true, editing: true })).changes.shown, false);
+});
+
+test("Changes mode: Edit is gone, Follow is off with the reason, Go to line is off, Copy says it copies the diff", () => {
+  const m = viewerToolbarModel(base({ gitChanged: true, changes: true, lines: false }));
+  assert.equal(m.edit.shown, false);
+  assert.equal(m.follow.enabled, false);
+  assert.equal(m.follow.title, "Not available while showing changes");
+  assert.equal(m.gotoLine.enabled, false);
+  assert.equal(m.gotoLine.title, "Not available while showing changes");
+  assert.equal(m.copy.title, "Copy this diff");
+  // Find, Wrap, Reload, Download, sizes keep working.
+  for (const k of ["find", "wrap", "reload", "download", "smaller", "bigger", "pathAbs"]) assert.equal(m[k].enabled, true, k);
+  // Outside Changes mode the same file has all of them.
+  const f = viewerToolbarModel(base({ gitChanged: true }));
+  assert.equal(f.edit.shown, true);
+  assert.equal(f.follow.enabled, true);
+  assert.equal(f.copy.title, "Copy this file's contents");
+});
+
+test("Changes sits between Find and the host extras", () => {
+  const extras = [{ key: "x", label: "X", title: "x" }];
+  const keys = Object.keys(viewerToolbarModel(base({ extras })));
+  assert.ok(keys.indexOf("find") < keys.indexOf("changes"));
+  assert.ok(keys.indexOf("changes") < keys.indexOf("x"));
 });

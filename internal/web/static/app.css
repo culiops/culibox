@@ -1923,6 +1923,8 @@
     .vt-btn:hover:not(.vt-off), .vt-btn[aria-expanded="true"] { border-color: var(--accent); }
     .vt-btn:focus-visible, .vt-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
     .vt-btn.vt-off { opacity: .45; cursor: default; }
+    /* A pressed toggle (Changes): an accent ring on the border, plus bold, so it is not hue alone. */
+    .vt-btn.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
     .vt-btn.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
     .vt-more { padding: 1px 10px; font-size: 14px; line-height: 1; }
     .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2001,6 +2003,29 @@
        (accent on --bg 7.8:1, over the 3:1 a graphic needs) carries the mark. */
     .vl-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
     .vl-target .vl-n { color: var(--fg); background: color-mix(in srgb, var(--accent) 5%, var(--bg)); box-shadow: inset 3px 0 0 var(--accent); }
+    /* Changes vs HEAD (viewer-tab.js renderDiff): the same .vl rows with a sign column
+       (.vd-sign) between the number and the code. Added rows tint --ok, removed rows
+       --danger (never amber: that is needs-you). The row wash is 7% over --bg; the
+       gutter and sign cells are a stronger 14% so the stripe reads at a glance, and
+       the + / − sign says it without colour. Measured, WCAG (graphite / Mocha):
+       code text #c9d1d9 on the 7% wash 11.29 / 9.05 worst (ok) ; the dimmest syntax
+       token (.hljs-comment #8b949e) 5.67 / 4.54 (it fails 4.5 at 8% in Mocha, which
+       is why the wash is 7%); the number (--muted) on the 14% gutter 4.87 / 5.22;
+       the sign (--fg) on it 12.3 / 8.0 ; hunk and meta text (--muted) on --panel
+       5.79 / 5.65 and on --bg above 6. */
+    .vd-sign { position: sticky; left: calc(var(--vl-digits, 3) * 1ch + 1ch + 12px + 1px); z-index: 1; flex: none; box-sizing: border-box; width: 2ch; text-align: center; font-weight: 700; color: var(--fg); -webkit-user-select: none; user-select: none; }
+    .viewer-wrap .vd-sign { position: static; }
+    .vd-add { background: color-mix(in srgb, var(--ok) 7%, var(--bg)); }
+    .vd-del { background: color-mix(in srgb, var(--danger) 7%, var(--bg)); }
+    .vd-add .vl-n, .vd-add .vd-sign { background: color-mix(in srgb, var(--ok) 14%, var(--bg)); }
+    .vd-del .vl-n, .vd-del .vd-sign { background: color-mix(in srgb, var(--danger) 14%, var(--bg)); }
+    .vd-hunk, .vd-hunk .vl-n { background: var(--panel); }
+    .vd-hunk .vl-c, .vd-meta .vl-c { color: var(--muted); }
+    .vd-meta .vl-n, .vd-hunk .vl-n, .vd-del .vl-n { cursor: default; }
+    .vd-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+    .vd-title { font-weight: 600; color: var(--fg); }
+    .vd-trunc { color: var(--fg); }
+    .vd-back { margin-left: 6px; }
     /* Find in file / Go to line (viewerfind.js). The bar sits between the toolbar and
        the scroller. Colours, measured against the code text (Catppuccin Mocha / the
        desktop graphite palette): every match is --fg on a 35% --accent wash over --bg
