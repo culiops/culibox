@@ -5,15 +5,22 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
+	"github.com/culiops/agent-box/internal/proxyline"
 )
 
 // SockBoxDir is where the socket directory is mounted (read-only) inside a box.
 const SockBoxDir = "/opt/agentbox-sock"
+
+// proxyHeaderTimeout bounds how long a darwin connection may take to send its
+// PROXY line; the relay writes it before any other byte.
+const proxyHeaderTimeout = 5 * time.Second
 
 // Endpoint is how boxes reach the broker on this OS.
 type Endpoint struct {
@@ -29,7 +36,11 @@ type Endpoint struct {
 // (session.go calls BoxFor under bs.Any()), and on darwin every bound box sits
 // on the internal egress network, where host.lima.internal does not resolve:
 // the relay on the network's gateway forwards the broker port to the Mac's
-// loopback, so boxes are handed the gateway address. The token guards it.
+// loopback, so boxes are handed the gateway address. The relay prepends a PROXY
+// line naming the box, and the listener refuses any connection without one that
+// names an address inside the box subnet (not the gateway): anything else on the
+// Mac that dials the loopback port is closed unanswered, and RemoteAddr is the
+// box's address, as on Linux. The token guards the rest.
 func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 	if goos == "darwin" {
 		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -37,9 +48,24 @@ func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 			return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
 		}
 		p := l.Addr().(*net.TCPAddr).Port
+		l = proxyline.Wrap(l, inBoxSubnet(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
 		return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
 	}
 	return listenUnix(stateRoot)
+}
+
+// inBoxSubnet is "a is inside subnet and is not the gateway", fail-closed on a
+// bad subnet or gateway. A copy of egress.InBoxSubnet (the egress proxy's
+// sourceOK rule): broker does not import egress.
+func inBoxSubnet(subnet netip.Prefix, gw netip.Addr) func(netip.Addr) bool {
+	gw = gw.WithZone("").Unmap()
+	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
+		return func(netip.Addr) bool { return false }
+	}
+	return func(a netip.Addr) bool {
+		a = a.WithZone("").Unmap()
+		return subnet.Contains(a) && a != gw
+	}
 }
 
 func listenUnix(stateRoot string) (Endpoint, error) {

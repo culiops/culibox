@@ -1,14 +1,17 @@
 package broker
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/boxvm"
 )
@@ -123,5 +126,60 @@ func TestListenDarwinLoopbackTCP(t *testing.T) {
 	_, port, _ := net.SplitHostPort(ep.Listener.Addr().String())
 	if want := fmt.Sprintf("http://%s:%s", boxvm.EgressGateway, port); ep.BoxURL != want {
 		t.Fatalf("box URL %q, want %q", ep.BoxURL, want)
+	}
+}
+
+// darwinBroker listens like the Mac does and serves a handler that echoes the
+// peer address it saw.
+func darwinBroker(t *testing.T) string {
+	t.Helper()
+	ep, err := Listen("darwin", t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(r.RemoteAddr)) })}
+	go srv.Serve(ep.Listener)
+	t.Cleanup(func() { srv.Close(); ep.Listener.Close() })
+	return ep.Listener.Addr().String()
+}
+
+func rawGet(t *testing.T, addr, prefix string) (string, error) {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n", prefix)
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b), nil
+}
+
+// On macOS the broker is reachable only through the relay: a PROXY line naming
+// an address inside the box subnet (not the gateway) is required, and it
+// becomes the request's RemoteAddr.
+func TestListenDarwinRequiresHeader(t *testing.T) {
+	addr := darwinBroker(t)
+	body, err := rawGet(t, addr, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n")
+	if err != nil || body != "172.29.72.9:40000" {
+		t.Fatalf("with header: body %q err %v", body, err)
+	}
+	for name, prefix := range map[string]string{
+		"no header":   "",
+		"gateway":     "PROXY TCP4 172.29.72.1 172.29.72.1 40000 9071\r\n",
+		"outside":     "PROXY TCP4 10.1.2.3 172.29.72.1 40000 9071\r\n",
+		"loopback":    "PROXY TCP4 127.0.0.1 172.29.72.1 40000 9071\r\n",
+		"garbage":     "PROXY nonsense\r\n",
+		"unspecified": "PROXY TCP4 0.0.0.0 172.29.72.1 40000 9071\r\n",
+	} {
+		if body, err := rawGet(t, addr, prefix); err == nil {
+			t.Errorf("%s: served %q", name, body)
+		}
 	}
 }

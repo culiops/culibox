@@ -637,3 +637,27 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 		t.Errorf("payload after header = %q, want ping", r.body)
 	}
 }
+
+// preProxyLineRelayScript is the relay script before #71 (no PROXY line).
+const preProxyLineRelayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{const u=net.connect(tp,th);c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+
+// A relay started before the PROXY line existed carries the old config hash, so
+// the next Ready replaces it (the host listeners now refuse its header-less
+// connections). In-flight tunnels drop once when that happens.
+func TestDarwinRelayReplacedWhenScriptChanges(t *testing.T) {
+	r := testRelay(fakeVM{}, nil)
+	old := r.runArgs(gw)
+	n := 0
+	for i, a := range old {
+		if a == relayScript {
+			old[i] = preProxyLineRelayScript
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("relayScript appears %d times in the run argv", n)
+	}
+	if hashArgs(old) == r.configHash(gw) {
+		t.Fatal("the pre-#71 relay has the same config hash as the current one; it would not be replaced")
+	}
+}

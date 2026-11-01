@@ -187,8 +187,9 @@ func New(o Options) *Proxy {
 }
 
 // SetNetwork records the egress network. subnet is refused as a dial target;
-// with checkSource (Linux) a connection is accepted only from inside subnet
-// and not from gw itself, and a principal only from its own box's address.
+// with checkSource a connection is accepted only from inside subnet and not
+// from gw itself, and a principal only from its own box's address. On macOS the
+// address is the one the relay's PROXY line carries (see Service.Ready).
 func (p *Proxy) SetNetwork(subnet netip.Prefix, gw netip.Addr, checkSource bool) {
 	p.mu.Lock()
 	p.subnet, p.gw, p.checkSource = subnet, gw, checkSource
@@ -597,16 +598,27 @@ func (p *Proxy) sourceAllowed(remote string) bool {
 // an invalid or /0 subnet, an invalid or unspecified gateway, a gateway outside
 // the subnet, or an unparsable remote is never ok.
 func sourceOK(remote string, subnet netip.Prefix, gw netip.Addr) bool {
-	gw = gw.WithZone("").Unmap()
-	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
-		return false
-	}
 	ap, err := netip.ParseAddrPort(remote)
 	if err != nil {
 		return false
 	}
-	a := ap.Addr().WithZone("").Unmap()
-	return subnet.Contains(a) && a != gw
+	return InBoxSubnet(subnet, gw)(ap.Addr())
+}
+
+// InBoxSubnet returns the predicate "a is inside subnet and is not the gateway"
+// (the rule behind sourceOK, on a bare address). It fails closed: an invalid or
+// /0 subnet, an invalid or unspecified gateway, or a gateway outside the subnet
+// makes every address not ok. The macOS listeners hand it to proxyline.Wrap to
+// vet the box address a relay claims in its PROXY line.
+func InBoxSubnet(subnet netip.Prefix, gw netip.Addr) func(netip.Addr) bool {
+	gw = gw.WithZone("").Unmap()
+	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
+		return func(netip.Addr) bool { return false }
+	}
+	return func(a netip.Addr) bool {
+		a = a.WithZone("").Unmap()
+		return subnet.Contains(a) && a != gw
+	}
 }
 
 // authenticate checks Proxy-Authorization. On authBad, the returned principal

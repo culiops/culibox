@@ -116,7 +116,7 @@ func TestReadyLinuxBindsGatewayOnlyWithSourceCheck(t *testing.T) {
 	}
 }
 
-func TestReadyDarwinBindsLoopbackOnlyWithoutSourceCheck(t *testing.T) {
+func TestReadyDarwinBindsLoopbackWithSourceCheck(t *testing.T) {
 	f, lr := newFakeDocker(), &listenRec{}
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
 		Want: Want{Subnet: "172.29.72.0/24"}, ProxyHost: "host.lima.internal", NoProxy: "host.lima.internal", Listen: lr.listen})
@@ -134,8 +134,8 @@ func TestReadyDarwinBindsLoopbackOnlyWithoutSourceCheck(t *testing.T) {
 	p := s.Proxy()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.checkSource || p.subnet != netip.MustParsePrefix("172.29.72.0/24") {
-		t.Fatalf("darwin SetNetwork: check=%v subnet=%v", p.checkSource, p.subnet)
+	if !p.checkSource || p.subnet != netip.MustParsePrefix("172.29.72.0/24") || p.gw != netip.MustParseAddr("172.29.72.1") {
+		t.Fatalf("darwin SetNetwork: check=%v subnet=%v gw=%v", p.checkSource, p.subnet, p.gw)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestCloseStopsListenerAndRefusesLaterReady(t *testing.T) {
 }
 
 // End to end on loopback (darwin shape): the proxy serves through the limit
-// listener, and a flood of idle connections cannot take every slot for good.
+// listener (which counts raw connections, before the PROXY line is read), and a flood of idle connections cannot take every slot for good.
 func TestServiceListenerLimitsConnections(t *testing.T) {
 	f := newFakeDocker()
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 0,
@@ -309,7 +309,7 @@ func TestServiceListenerLimitsConnections(t *testing.T) {
 	}
 	defer c3.Close()
 	go func() {
-		fmt.Fprintf(c3, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+		fmt.Fprintf(c3, "PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\nCONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
 		resp, err := http.ReadResponse(bufio.NewReader(c3), nil)
 		if err == nil && resp.StatusCode == 407 {
 			served.Store(true)

@@ -10,9 +10,15 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/proxyline"
 )
+
+// proxyHeaderTimeout bounds how long a darwin connection may take to send its
+// PROXY line; the relay writes it before any other byte.
+const proxyHeaderTimeout = 5 * time.Second
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
 type ServiceOptions struct {
@@ -137,7 +143,10 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, s.o.GOOS == "linux")
+	// The source check is on for both OSes. On macOS every box reaches the proxy
+	// through the relay, so the TCP peer is always loopback; the box address is
+	// the relay's PROXY line, which the wrapper below requires and vets.
+	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("egress: listen %s: %w", addr, err)
@@ -150,7 +159,13 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("egress: listener is bound to %s, not %s; refusing to serve", l.Addr(), addr)
 	}
 	port := int(got.Port())
+	// The raw-connection limit counts before the header is read, so a silent
+	// client cannot hold more than its slot. darwin only: Linux boxes connect
+	// directly from their own address.
 	l = limitListener(l, s.maxConns)
+	if s.o.GOOS == "darwin" {
+		l = proxyline.Wrap(l, InBoxSubnet(n.Subnet, n.Gateway), proxyHeaderTimeout)
+	}
 	host := s.o.ProxyHost
 	if host == "" {
 		host = n.Gateway.String()
