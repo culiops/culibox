@@ -12,14 +12,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 )
@@ -108,7 +112,8 @@ type LockImport struct {
 
 // importsDir is where a bundle's imports are copied: beside the bundle dir, so
 // the dir mounted at BoxBundleDir never holds them. Like the bundle dir it is
-// never removed, so a live box keeps the imports it was created with.
+// removed only by GC, which keeps it for as long as any container mounts it, so
+// a live box keeps the imports it was created with.
 func importsDir(bundleDir string) string { return bundleDir + ".imports" }
 
 func (l Lock) hasDrop(kind, name string) bool {
@@ -158,7 +163,15 @@ type Options struct {
 }
 
 // Manager builds and caches bundles.
-type Manager struct{ opts Options }
+type Manager struct {
+	opts Options
+	// gcMu makes Ensure's look-and-refresh of a dir, the publish of a new one and
+	// GC's look-and-rename exclude each other. See GC. Per root and not per process
+	// on purpose: one Manager exists per root, and one daemon per data dir.
+	gcMu sync.Mutex
+	// touch refreshes a dir's date; os.Chtimes outside a test of its failing.
+	touch func(path string, t time.Time) error
+}
 
 func New(opts Options) (*Manager, error) {
 	if opts.Source == "" {
@@ -170,7 +183,7 @@ func New(opts Options) (*Manager, error) {
 	if opts.Prober == nil {
 		opts.Prober = DenyAllProber{}
 	}
-	return &Manager{opts: opts}, nil
+	return &Manager{opts: opts, touch: func(path string, t time.Time) error { return os.Chtimes(path, t, t) }}, nil
 }
 
 // Imports resolves the files CLAUDE.md imports, fresh from the host. It writes
@@ -228,14 +241,37 @@ func (m *Manager) Ensure() (*Built, error) {
 		return nil, err
 	}
 	dir := filepath.Join(m.opts.Root, hash)
-	var built *Built
-	if lock, ok := readLock(dir); ok && importsPresent(dir, lock) {
-		built = &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}
-	} else if built, err = m.materialize(hash, imageID, dir, mounted, mcp, imports); err != nil {
+	built, err := m.reuse(hash, dir)
+	if err != nil {
 		return nil, err
+	}
+	if built == nil {
+		if built, err = m.materialize(hash, imageID, dir, mounted, mcp, imports); err != nil {
+			return nil, err
+		}
 	}
 	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
 	return built, nil
+}
+
+// reuse returns the existing complete bundle at dir, or nil to build one. Handing
+// it out refreshes its date: the spawn's container does not exist yet, so that
+// date is all that keeps GC away until it does. A date that cannot be written is
+// an error, because the dir would go out unprotected.
+func (m *Manager) reuse(hash, dir string) (*Built, error) {
+	m.gcMu.Lock()
+	defer m.gcMu.Unlock()
+	lock, ok := readLock(dir)
+	if !ok || !importsPresent(dir, lock) {
+		return nil, nil
+	}
+	if err := m.touch(dir, time.Now()); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("bundle: refreshing the date of %s: %w", dir, err)
+	}
+	return &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}, nil
 }
 
 // sourceHash fingerprints only the allowlisted entries, following symlinks so
@@ -254,7 +290,8 @@ func (m *Manager) Ensure() (*Built, error) {
 // box always gets settings and snapshot mounts decided together. A live box that
 // is reused keeps the bundle dir and the snapshot dirs it was created with:
 // reuse compares mount destinations, not host paths, and neither kind of dir is
-// ever removed (no GC), so its settings and its plugins still match each other.
+// removed while a container mounts it (GC never touches a plugin snapshot at all),
+// so its settings and its plugins still match each other.
 // It sees a newer plugin snapshot only once it is recreated.
 func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource, imports ImportSet) (hash, imageID string, err error) {
 	h := sha256.New()
@@ -503,6 +540,9 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, 
 	if _, err := writeJSON(filepath.Join(tmp, lockName), lock); err != nil {
 		return nil, err
 	}
+	// Under gcMu: a pass that read this hash as old must not rename half a publish.
+	m.gcMu.Lock()
+	defer m.gcMu.Unlock()
 	_ = os.RemoveAll(final)
 	if impTmp != "" {
 		_ = os.RemoveAll(importsDir(final))

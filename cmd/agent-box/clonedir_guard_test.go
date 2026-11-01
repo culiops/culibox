@@ -20,6 +20,7 @@ var removeAllSites = map[string]int{
 	"internal/bundle/plugins.go":    2, // bundle staging dirs (a temp tree and a replaced final tree)
 	"internal/bundle/bundle.go":     4, // bundle staging dirs, and the imports temp dir and its replaced final dir
 	"internal/bundle/importsfs.go":  1, // the imports temp dir, under the bundle root
+	"internal/bundle/gc.go":         1, // a condemned bundle or imports dir: a direct child of the bundle root, exact generated name
 	"internal/web/fsops.go":         1, // the file tree's user-confirmed delete (a person's action, not cleanup)
 	"internal/box/boxout.go":        1, // box output dirs under the state root
 	"internal/box/reclaim.go":       2, // a box's home and out dirs under the state root (one statement, two calls)
