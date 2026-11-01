@@ -845,7 +845,7 @@ class Cell {
     spacer.className = "cell-sp";
     const sh = document.createElement("button");
     sh.className = "cell-sh"; sh.textContent = "+sh";
-    sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
+    sh.title = "New shell beside this session, same directory and tier (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     // spawnShellIn disables the button while in flight (and shows a bare "…" if
     // it is slow, to keep the chip its size), so the ignored second click is
@@ -1026,7 +1026,7 @@ class Cell {
     side.append(tabs, sep);
     const sh = el("button", "+ Shell");
     sh.className = "ph-shell";
-    sh.title = "New shell for this session, same directory and tier, docked below by default (Ctrl+Shift+`)";
+    sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     sh.onclick = (e) => {
       e.stopPropagation();

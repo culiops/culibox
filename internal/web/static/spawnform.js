@@ -72,12 +72,12 @@ function spawnPrefill(s) {
   return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", account: v.account || "", options: Object.assign({}, v.options || {}) };
 }
 
-// isSubmitHotkey: Ctrl+Enter (⌘+Enter on mac) in any field of the spawn form
-// spawns; plain Enter stays a newline. AltGr (ctrl+alt off-mac) and an IME
-// committing a candidate are excluded.
+// isSubmitHotkey: spawn.submit in the shortcut registry (Ctrl+Enter, ⌘+Enter on
+// mac) in any field of the spawn form spawns; plain Enter stays a newline.
+// AltGr and an IME committing a candidate are excluded by the registry match.
 function isSubmitHotkey(e, mac) {
-  if (!e || e.key !== "Enter" || e.altKey || e.isComposing) return false;
-  return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
+  const matches = typeof shortcutMatches === "function" ? shortcutMatches : require("./shortcuts.js").shortcutMatches;
+  return !!e && matches("spawn.submit", e, mac);
 }
 
 // PLIST_SEARCH_MIN: the New session profile list gets a search box from this many

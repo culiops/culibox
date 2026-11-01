@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 // classifyTermPath normalises through fsops.js's global, as in the browser.
 global.normalizePath = require("../static/fsops.js").normalizePath;
-const { isBrokenMouseReport, hasSize, resolveTermPath, classifyTermPath } = require("../static/terminal-tab.js");
+const { isBrokenMouseReport, hasSize, resolveTermPath, classifyTermPath, termKeyAction } = require("../static/terminal-tab.js");
 
 test("an SGR mouse report with NaN coordinates is dropped", () => {
   assert.strictEqual(isBrokenMouseReport("\x1b[<0;NaN;NaNm"), true);
@@ -375,4 +375,67 @@ test("box-only click toast says only /tmp/playwright-mcp is shared", () => {
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/terminal-tab.js"), "utf8");
   assert.ok(src.includes('showToast("This file is inside the box only — just /tmp/playwright-mcp is shared out")'));
   assert.ok(!src.includes("This file is only inside the box"));
+});
+
+// --- termKeyAction: what the xterm key handler does with a keydown ---------
+const kev = (code, m) => Object.assign({ type: "keydown", code, key: code.replace(/^Key/, "").toLowerCase(),
+  ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, isComposing: false }, m);
+
+test("termKeyAction: Ctrl+Shift+C off mac copies a selection, else is consumed", () => {
+  const e = kev("KeyC", { ctrlKey: true, shiftKey: true });
+  assert.strictEqual(termKeyAction(e, false, true), "copy");
+  assert.strictEqual(termKeyAction(e, false, false), "consume");
+});
+
+test("termKeyAction: Cmd+C on mac copies a selection, else reaches the PTY", () => {
+  const e = kev("KeyC", { metaKey: true });
+  assert.strictEqual(termKeyAction(e, true, true), "copy");
+  assert.strictEqual(termKeyAction(e, true, false), "pass");
+});
+
+test("termKeyAction: Cmd+Shift+C on mac with a selection copies", () => {
+  assert.strictEqual(termKeyAction(kev("KeyC", { metaKey: true, shiftKey: true }), true, true), "copy");
+});
+
+test("termKeyAction: Ctrl+V pastes off mac and reaches the PTY on mac", () => {
+  const e = kev("KeyV", { ctrlKey: true });
+  assert.strictEqual(termKeyAction(e, false, false), "paste");
+  assert.strictEqual(termKeyAction(e, true, false), "pass");
+});
+
+test("termKeyAction: Ctrl+Shift+V off mac is not swallowed", () => {
+  assert.strictEqual(termKeyAction(kev("KeyV", { ctrlKey: true, shiftKey: true }), false, false), "pass");
+});
+
+test("termKeyAction: TUI keys always reach the PTY", () => {
+  for (const mac of [false, true]) {
+    for (const sel of [false, true]) {
+      assert.strictEqual(termKeyAction(kev("KeyC", { ctrlKey: true }), mac, sel), "pass", "Ctrl+C");
+      assert.strictEqual(termKeyAction(kev("KeyR", { ctrlKey: true }), mac, sel), "pass", "Ctrl+R");
+      assert.strictEqual(termKeyAction(kev("KeyW", { ctrlKey: true }), mac, sel), "pass", "Ctrl+W");
+      assert.strictEqual(termKeyAction(kev("KeyB", { altKey: true }), mac, sel), "pass", "Alt+B");
+      assert.strictEqual(termKeyAction(kev("Escape", { key: "Escape" }), mac, sel), "pass", "Esc");
+    }
+  }
+});
+
+test("termKeyAction: AltGr and IME composition never copy or paste", () => {
+  const ag = kev("KeyV", { ctrlKey: true, altKey: true });
+  assert.strictEqual(termKeyAction(ag, false, true), "pass");
+  const gm = Object.assign(kev("KeyV", { ctrlKey: true }), { getModifierState: (k) => k === "AltGraph" });
+  assert.strictEqual(termKeyAction(gm, false, true), "pass");
+  assert.strictEqual(termKeyAction(kev("KeyC", { ctrlKey: true, shiftKey: true, isComposing: true }), false, true), "pass");
+});
+
+// The key handler runs on EVERY keydown. getSelection() builds the whole
+// selection string; hasSelection() is a cheap boolean. Only the copy branch
+// needs the text.
+test("the terminal key handler asks hasSelection(), and reads getSelection() only to copy", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/terminal-tab.js"), "utf8");
+  const m = /attachCustomKeyEventHandler\(\(e\) => \{([\s\S]*?)\n    \}\);/.exec(src);
+  assert.ok(m, "key handler found");
+  const body = m[1];
+  assert.match(body, /termKeyAction\(e, IS_MAC, this\.term\.hasSelection\(\)\)/);
+  assert.strictEqual((body.match(/getSelection\(\)/g) || []).length, 1, "getSelection once, in the copy branch");
+  assert.ok(body.indexOf("getSelection()") > body.indexOf('act === "copy"'));
 });

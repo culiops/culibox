@@ -1199,6 +1199,22 @@
        one offers no break opportunity. #toast-msg carries it for the same reason. */
     #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     #ask-modal #ask-body:empty { display: none; }
+    /* The read-only Keyboard shortcuts dialog (askDialog info:true), ~33 lines.
+       It is bounded by the dialog's OWN height cap (dialog { max-height: 88vh },
+       and #ask-modal is already a column flex via dialog[box-][open]), never by
+       the viewport: .dlg-body (flex: 1; min-height: 0) shrinks to what is left
+       after the title, and is itself a clipping column in which #ask-body takes
+       the leftover height and scrolls while the actions row (flex: none) keeps
+       its height. So the Close button is always on screen, at any viewport
+       height and at any width (this block is not inside a media query).
+       #ask-body's bottom margin is 0 because flex margins do not collapse as the
+       block ones did: the actions row's own margin-top keeps the old gap.
+       The key column is padded, so monospace and no wrapping (desktop.css sets
+       the same font on desktop). Info only: other ask dialogs are unchanged. */
+    #ask-modal.info .dlg-body { display: flex; flex-direction: column; overflow: hidden; }
+    #ask-modal.info #ask-body { flex: 1 1 auto; min-height: 0; margin-bottom: 0; font: 12px/1.7 var(--font-mono, ui-monospace, Menlo, monospace); white-space: pre; overflow-wrap: normal; overflow: auto; }
+    #ask-modal.info .ask-actions { flex: none; }
+    #ask-modal.info #ask-cancel { display: none; }
     #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }

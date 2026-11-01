@@ -667,9 +667,9 @@ function paintRailMeters() {
   box.hidden = !any;
 }
 
-// Live count of open MODAL dialogs, for shortcutsBlocked (shell.js) and the
+// Live count of open MODAL dialogs, for shortcutContext (shell.js) and the
 // page host's Esc. A desktop page (pagehost.js, `.as-page`) is not one: with
-// Settings open as a page, Alt+1..9 or a layout switch must still work, and
+// Settings open as a page, a session jump (Mod+1..9) or a layout switch must still work, and
 // they close the page on their way.
 const dialogsOpen = () => document.querySelectorAll("dialog[open]:not(.as-page)").length;
 
@@ -1259,28 +1259,23 @@ function onTerminalSwipe(dir) {
 // shipped once when an earlier IIFE called it at parse time; caught in
 // review, since app.js isn't executed under node --test).
 function hintShortcuts() {
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   // Reuse tier.js's own runtime label (the same string the sidebar's tier
   // badge tooltip uses) rather than re-deriving "runc"/"sysbox" here.
   const runc = tierRuntimeLabel(boxRuntime);
-  // Palette and sidebar combos match paletteCommands' own hints (⌘K/⌘B on
-  // macOS, Ctrl+Shift+K/Ctrl+Shift+B elsewhere). Session-jump is genuinely
-  // Option/Alt+digit on every platform (see JUMP_MOD) — paletteCommands
-  // already labels that "⌥" on macOS, so this uses the same symbol rather
-  // than "⌘", which is not the key that actually jumps sessions.
-  return mac
-    ? `${runc} · ⌘K palette · ⌘B sidebar · ⌥1-9 session`
-    : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
+  // Every chord named here is rendered from the registry (shortcuts.js), so the
+  // bar cannot drift from the keys that work. The session jump is Mod+digit
+  // (Cmd on macOS, Ctrl elsewhere), shown as the 1-9 range.
+  return `${runc} · ${shortcutHint("palette.open", IS_MAC)} palette · ${shortcutHint("sidebar.toggle", IS_MAC)} sidebar`
+    + ` · ${jumpHint(1, IS_MAC)}-9 session · ${shortcutHint("help.open", IS_MAC)} shortcuts`;
 }
 
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
-// desktop). The rows are built from the same facts the old status bar showed,
-// plus the box runtime; the text goes in through textContent in askDialog.
+// desktop, Mod+/ and ?, Settings, About). The rows come from the registry
+// (shortcuts.js) plus the box runtime; the text goes in through textContent in askDialog.
 function showShortcuts() {
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   return askDialog({
     title: "Keyboard shortcuts",
-    body: shortcutText(shortcutRows(mac, boxRuntime)),
+    body: helpText(helpRows(IS_MAC), tierRuntimeLabel(boxRuntime)),
     confirmLabel: "Close",
     info: true,
   });
@@ -4168,6 +4163,10 @@ $("pf-aws-confirm-go").addEventListener("click", () => convertPfAws(!$("pf-aws-a
 $("pf-aws-ack-cb").addEventListener("change", syncEditorActions);
 $("pf-aws-remove").addEventListener("click", () => { pfAwsRemoved = true; paintPfAws(); syncEditorActions(); $("pf-aws-undo").focus(); });
 $("pf-aws-undo").addEventListener("click", () => { pfAwsRemoved = false; paintPfAws(); syncEditorActions(); $("pf-aws-remove").focus(); });
+// The Keyboard shortcuts buttons in Appearance and About open the help screen.
+// (#bug-open is wired in bugreport.js; these two belong to the shortcuts feature.)
+$("kbd-open-settings").onclick = () => showShortcuts();
+$("kbd-open-about").onclick = () => showShortcuts();
 // The "none defined" hints and the picker's pointer open the Credentials tab on
 // the group they are about.
 for (const a of document.querySelectorAll("#settings-modal a[data-creds-group]")) {
@@ -5483,9 +5482,10 @@ function emptyKbd(text) { return emptyEl("span", "empst-kbd", text); }
 
 function emptyHint() {
   const hint = emptyEl("div", "empst-hint");
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  // One key cap per glyph on macOS (⇧ ⌘ K), per "+"-separated name elsewhere.
+  const chord = shortcutHint("palette.open", IS_MAC);
   const pal = emptyEl("span");
-  for (const k of mac ? ["\u2318", "K"] : ["Ctrl", "Shift", "K"]) pal.append(emptyKbd(k), " ");
+  for (const k of IS_MAC ? Array.from(chord) : chord.split("+")) pal.append(emptyKbd(k), " ");
   pal.append("command palette");
   hint.append(pal, emptyEl("span", "", "All profiles in New session"));
   return hint;
@@ -5584,15 +5584,14 @@ function initSpawnControl() {
   $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-  $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
+  $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
   const foot = $("spawn-foot-hint");
-  if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
+  if (foot) foot.textContent = shortcutHint("spawn.submit", IS_MAC) + " to spawn";
   // From any field of the form (it bubbles up from the first message, the name,
   // the selects). A button keeps its own Enter. The submit handler spawns only
   // when the workspace field shows the directory in use.
   $("spawn").addEventListener("keydown", (e) => {
-    if (!isSubmitHotkey(e, mac)) return;
+    if (!isSubmitHotkey(e, IS_MAC)) return;
     if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
     e.preventDefault();
     $("spawn").requestSubmit();
@@ -6632,105 +6631,86 @@ setInterval(async () => {
   refreshStore();
 }, 30000);
 
-// Ctrl+Shift+` → + Shell below, in the focused window. Capture phase + stopPropagation
-// for the same reason as the zoom handler below: xterm listens on its textarea and
-// would otherwise swallow the combo while a terminal has focus.
+// The one global keyboard dispatcher. shortcuts.js owns the table (which chord,
+// which scope, which of terminal / editor / input / dialog / page may fire it);
+// shortcutContext (shell.js) says where focus is now; the handlers below say
+// what each binding does. Capture phase + stopPropagation (done by the
+// dispatcher) because xterm listens on its textarea and forwards every
+// combination it does not recognise into the running agent, so a bubbling
+// handler would type the key into the process instead of acting on the app.
 document.addEventListener("keydown", (e) => {
-  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
-  if (e.code !== "Backquote") return; // .code is layout/shift independent
-  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.repeat) return; // swallowed, but a held key must not start a shell per repeat
-  spawnShellIn(focusedCell, "below");
+  dispatchShortcut(e, shortcutContext(document.activeElement, dialogsOpen(), !!currentPage(), mobileActive(window.innerWidth)), IS_MAC);
 }, true);
 
-// Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-'/'_' smaller, '0' reset.
-// Capture phase + stopPropagation so xterm (which listens on its textarea) never
-// sees the combo; preventDefault stops the browser's own page zoom.
-document.addEventListener("keydown", (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-  // A page hides the panes: leave the key to the browser's own zoom.
-  if (typeof currentPage === "function" && currentPage()) return;
-  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
-  let delta = null, doReset = false;
-  if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;
-  else if (e.key === "-") delta = -fontPrefs.STEP; // not "_": Ctrl+_ is readline undo in terminals
-  else if (e.key === "0") doReset = true;
-  else return;
-  if (!(doReset ? resetZoomFocused() : zoomFocused(delta))) return;
-  e.preventDefault();
-  e.stopPropagation();
-}, true);
+// cellVisible: the cell's own element is attached and laid out. On a mobile
+// screen other than the terminal, #grid is display:none but focusedCell still
+// points at a cell nobody can see; acting on it would spawn a shell into, or
+// change the font of, a hidden pane (spec "Hidden panes"). Returning false
+// from a binding hands the key back to the browser.
+function cellVisible(cell) {
+  return !!(cell && cell.el && cell.el.isConnected && cell.el.getClientRects().length > 0);
+}
 
-// Sidebar shortcuts. Capture phase with stopPropagation, not because the
-// palette needs it but because the terminal does: xterm forwards every
-// combination it does not recognise into the running process, so a handler
-// that lets these bubble types them into the agent instead of toggling a pane.
-const SIDEBAR_SHORTCUT_MAC =
-  /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-document.addEventListener("keydown", (e) => {
-  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
-  const mod = e.metaKey || e.ctrlKey;
-  if (!mod) return;
-  const code = e.code;
-  let hit = null;
-  // Desktop has no sessions pane to collapse; the combo is an alias of the
-  // sidebar <-> rail toggle (spec 7 keeps the binding).
-  if (e.altKey && code === "KeyS") hit = mobileActive(window.innerWidth) ? () => togglePane("sessions") : toggleSidebar;
-  else if (e.altKey && code === "KeyF") {
-    // Desktop: the tree lives in the Files drawer, so the combo toggles that
-    // for the focused session; mobile keeps the pane collapse.
-    hit = mobileActive(window.innerWidth) ? () => togglePane("files")
-      : () => toggleDrawer("files", (cellTerminal(focusedCell) || {}).id);
-  }
-  // Toggle sidebar: ⌘B is free on macOS, but the unshifted Ctrl+B belongs to
-  // the shells and TUIs these panes host — backward-char in readline, page-up
-  // in vim, tmux's default prefix — so on every other platform the binding
-  // carries Shift to stay off it, the same reasoning that already keeps
-  // Ctrl+K clear of the command palette.
-  else if (!e.altKey && code === "KeyB" &&
-      (SIDEBAR_SHORTCUT_MAC ? (e.metaKey && !e.ctrlKey && !e.shiftKey)
-                             : (e.ctrlKey && !e.metaKey && e.shiftKey))) hit = toggleSidebar;
-  if (!hit) return;
-  e.preventDefault();
-  e.stopPropagation();
-  hit();
-}, true);
+// Desktop has no sessions pane to collapse; the combo is the sidebar <-> rail
+// toggle (spec 7 keeps the binding), and mobile keeps the pane collapse.
+bindShortcut("sidebar.toggle", (e, ctx) => {
+  if (ctx.mobile) togglePane("sessions"); else toggleSidebar();
+  return true;
+});
 
-// Jump to the Nth session. Capture phase with stopPropagation, like every other
-// global shortcut here, because xterm forwards any combination it does not
-// recognise straight into the running agent: without it, this types a digit into
-// whatever is in the focused pane.
+// Desktop: the tree lives in the Files drawer, so the combo toggles that for
+// the focused session; mobile keeps the pane collapse.
+bindShortcut("files.toggle", (e, ctx) => {
+  if (ctx.mobile) togglePane("files"); else toggleDrawer("files", (cellTerminal(focusedCell) || {}).id);
+  return true;
+});
+
+// Jump to the Nth session. The number addresses the SIDEBAR list, which is the
+// numbered thing on screen. The grid's panes are not a usable index: there can
+// be fewer panes than sessions, and one pane can stack several.
 //
-// The number addresses the SIDEBAR list, which is the numbered thing on screen.
-// The grid's panes are not a usable index — there can be fewer panes than
-// sessions, and one pane can stack several.
-//
-// Alt+digit, not Ctrl/Cmd+digit: Ctrl+1…8 switches browser tabs in Chrome and
-// Firefox on Linux/Windows, and Cmd+1…9 does the same in Chrome, Safari and
-// Firefox on macOS — a page cannot take that back. Alt+digit is free in
-// Chrome/Chromium on Linux/Windows and in Safari, and Option+digit is not a
-// browser accelerator on macOS; its one known conflict is Firefox on
-// Linux/Windows, where Alt+digit also switches tabs.
-const JUMP_MOD = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
-document.addEventListener("keydown", (e) => {
-  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
-  if (!JUMP_MOD(e)) return;
+// Ctrl/Cmd+digit, not Alt/Option+digit. A page CAN cancel Ctrl/Cmd+digit in
+// Chrome and Firefox (only Ctrl/Cmd+T/N/W are out of reach), while Chrome on
+// Linux binds Alt+1..9 to tab selection. Option+digit was dropped on macOS
+// because it types [ ] { } | # on German and UK layouts. The sources and the
+// remaining legacy Alt+digit are in the shortcuts.js header.
+bindShortcut("session.jump", (e, ctx) => {
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
-  if (!m) return;
-  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, mobileActive(window.innerWidth)));
-  e.preventDefault();
-  e.stopPropagation();
+  if (!m) return false;
+  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, ctx.mobile));
   // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four
-  // sessions open must not land somewhere arbitrary. preventDefault/stopPropagation
-  // above still run first, so the digit is swallowed either way, not left to fall
-  // through to the agent.
+  // sessions open must not land somewhere arbitrary. The handler still returns
+  // true, so the digit is swallowed either way and never falls through to the agent.
   if (s) openTerminal(s.id, s.name);
-}, true);
+  return true;
+});
+
+// Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused
+// cell it is not ours: false leaves the key alone. A held key over a visible
+// cell is swallowed (true) so it is not typed into the terminal, but must not
+// start a shell per repeat.
+bindShortcut("shell.below", (e) => {
+  if (!cellVisible(focusedCell)) return false; // before the repeat check: a hidden cell answers the same held or not
+  if (e.repeat) return true;
+  spawnShellIn(focusedCell, "below");
+  return true;
+});
+
+// Live zoom the focused pane: Mod + '='/'+' bigger, '-' smaller, '0' reset (Mod
+// is Cmd on mac, Ctrl elsewhere). A hidden pane is not zoomed: false hands the
+// key back to the browser's own page zoom, as zoomFocused / resetZoomFocused do
+// when the focused tab has nothing to zoom.
+bindShortcut("zoom.in", () => cellVisible(focusedCell) && zoomFocused(+fontPrefs.STEP));
+bindShortcut("zoom.out", () => cellVisible(focusedCell) && zoomFocused(-fontPrefs.STEP)); // key "-" only: Ctrl+_ is readline undo in terminals
+bindShortcut("zoom.reset", () => cellVisible(focusedCell) && resetZoomFocused());
+
+bindShortcut("help.open", () => {
+  showShortcuts();
+  return true;
+});
 
 // zoomFocused / resetZoomFocused are the named zoom path, shared by the keyboard
-// handler above and the command palette. Return false when the focused tab has
+// bindings above and the command palette. Return false when the focused tab has
 // nothing to zoom, so the caller can leave the key event alone.
 function zoomableTab() {
   // A docked shell with the keyboard zooms itself, not the agent beside it.

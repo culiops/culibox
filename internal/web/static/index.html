@@ -38,7 +38,7 @@
       <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
-    <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌘</span></button>
+    <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long"></span><span class="pal-short">⌘</span></button>
     <button id="steer-toggle" type="button" title="Session detail rail" aria-label="Toggle the session detail rail" aria-pressed="false">◧</button>
     <button id="analytics-open" title="Token &amp; prompt analytics" aria-label="Analytics" hidden>▁▃▅</button>
     <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings" class="nf"></button>
@@ -142,7 +142,7 @@
       <div id="drawer-body" class="dr-body">
         <div id="drawer-tree" class="dr-tree">
           <div class="dr-goto">
-            <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file (Ctrl+P)" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
+            <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
             <div id="drawer-goto-list" role="listbox" aria-label="Matching files" hidden></div>
           </div>
           <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
@@ -235,7 +235,7 @@
           <label for="spawn-prompt">First message</label>
           <textarea id="spawn-prompt" rows="3" spellcheck="false"
                     placeholder="First message to the agent (optional)"></textarea>
-          <div class="form-hint" id="spawn-prompt-hint">Ctrl+Enter spawns</div>
+          <div class="form-hint" id="spawn-prompt-hint"></div>
         </div>
         <div id="runtime-row" style="display:none">
           <label>Containment</label>
@@ -269,7 +269,7 @@
         <div class="dlg-err span2" id="spawn-err"></div>
         <div class="spawn-actions span2">
           <span class="spawn-progress" id="spawn-progress" role="status" aria-live="polite" hidden></span>
-          <span id="spawn-foot-hint">Ctrl+Enter to spawn</span>
+          <span id="spawn-foot-hint"></span>
           <button type="button" class="btn gh" data-close="spawn-modal">Cancel</button>
           <button type="submit" class="btn pri">Spawn ⏎</button>
         </div>
@@ -512,6 +512,7 @@
       <p class="hint" id="notify-why"></p>
       <p class="hint">Sizes apply as you change them — the panes behind this
         dialog are already using them. A stored size wins over the default.</p>
+      <p><button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts</button></p>
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
       <p class="hint">An access token lets a client app or CLI connect to this box
@@ -539,6 +540,7 @@
     <div class="dbd pad" id="about" role="tabpanel" hidden>
       <p id="about-version">CuliBox</p>
       <p id="about-runtime"></p>
+      <p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts</button></p>
       <p class="hint">Something not working? Build a report with your version, settings and a health check, with secrets and paths redacted. You review the text before anything leaves this page.</p>
       <p><button type="button" class="btn" id="bug-open">Report a problem</button></p>
     </div>
@@ -756,6 +758,7 @@
   <script src="/deadline.js"></script>
   <script src="/pending.js"></script>
   <script src="/tier.js"></script>
+  <script src="/shortcuts.js"></script>
   <script src="/spawnform.js"></script>
   <script src="/activity.js"></script>
   <script src="/peek.js"></script>

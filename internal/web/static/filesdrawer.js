@@ -441,6 +441,7 @@ function drawerGoFocus() {
 function initDrawerGoto() {
   const input = drawerEl("drawer-goto-in");
   if (!input) return;
+  input.title = "Go to file (" + shortcutHint("files.goto", IS_MAC) + ")";
   input.addEventListener("input", drawerGoInput);
   input.addEventListener("keydown", drawerGoKey);
   // Stop first: a debounce or fetch still pending would re-open the list over
@@ -449,20 +450,10 @@ function initDrawerGoto() {
   input.addEventListener("blur", dismiss);
   input.addEventListener("focus", () => { if (input.value.trim()) drawerGoInput(); });
   window.addEventListener("resize", dismiss);
-  // Capture phase, like the app's other global shortcuts: xterm and
-  // CodeMirror would otherwise see the key first. A terminal keeps its own
-  // Ctrl+P (readline's previous-history); the shortcut works from anywhere else.
-  document.addEventListener("keydown", (e) => {
-    if (e.code !== "KeyP" || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-    // A page hides the drawer: the browser keeps its Ctrl+P (print).
-    if (typeof currentPage === "function" && currentPage()) return;
-    const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains("xterm-helper-textarea")) return;
-    if (typeof dialogsOpen === "function" && dialogsOpen() > 0) return;
-    if (!drawerGoFocus()) return;
-    e.preventDefault();
-    e.stopPropagation();
-  }, true);
+  // Ctrl+P goes through the shortcut dispatcher (app.js), which keeps it off a
+  // terminal (readline's previous-history), a dialog and a page. drawerGoFocus
+  // returns false when there is no tree to search, so the browser keeps its print.
+  bindShortcut("files.goto", () => drawerGoFocus());
 }
 
 // --- header actions ----------------------------------------------------------
@@ -604,7 +595,7 @@ function initFilesDrawer() {
     openInPane: mk("openInPane", "Open in pane", "Open this file in a pane, at the same place"),
     overflow: mk("overflow", "⋯", "More file actions"),
     cancel: mk("cancel", "Cancel", "Discard changes and return to the read view"),
-    save: mk("save", "Save", "Save (Ctrl/Cmd-S)", "pri"),
+    save: mk("save", "Save", "Save (" + shortcutHint("editor.save", IS_MAC) + ")", "pri"),
   };
   drawerActBtns.overflow.setAttribute("aria-label", "More file actions");
   drawerActBtns.overflow.setAttribute("aria-haspopup", "menu");

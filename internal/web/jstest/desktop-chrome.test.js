@@ -111,3 +111,43 @@ test("the Model select is a styled native select that never clips a long id", ()
 test("checkboxes in the New session form use the accent colour", () => {
   assert.ok(rulesFor('#spawn input[type="checkbox"]').some((b) => /accent-color:\s*var\(--accent\)/.test(b)));
 });
+
+// The help dialog is ~33 lines and #ask-modal is overflow:hidden, so the info
+// body must scroll on its own or the Close button falls off a short viewport.
+// The bound is the dialog's OWN height cap (dialog { max-height: 88vh }), not
+// the viewport: .dlg-body becomes a column that clips, #ask-body takes the
+// leftover height and scrolls, and the actions row never shrinks. The same
+// rules live in app.css (global), so desktop and phones get one guarantee.
+test("the info ask body is bounded by the dialog's own cap, on every width (app.css)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => {
+    const m = new RegExp(sel.replace(/[.#]/g, "\\$&") + "\\s*\\{([^{}]*)\\}").exec(app);
+    assert.ok(m, "app.css has " + sel);
+    return m[1];
+  };
+  const wrap = rule("#ask-modal.info .dlg-body");
+  assert.match(wrap, /display:\s*flex/);
+  assert.match(wrap, /flex-direction:\s*column/);
+  assert.match(wrap, /overflow:\s*hidden/);
+  const body = rule("#ask-modal.info #ask-body");
+  assert.match(body, /flex:\s*1 1 auto/);
+  assert.match(body, /min-height:\s*0/);
+  assert.match(body, /overflow:\s*auto/);
+  assert.match(body, /margin-bottom:\s*0/, "flex margins do not collapse; the actions row's own margin spaces it");
+  assert.match(body, /font:[^;]*var\(--font-mono/);
+  assert.match(body, /white-space:\s*pre\s*;/);
+  assert.ok(!/(^|[^-])height:\s*calc\(100/.test(body) && !/100dvh|100vh/.test(body), "no viewport-based bound");
+  assert.match(rule("#ask-modal.info .ask-actions"), /flex:\s*none/);
+});
+
+test("the help dialog hides Cancel at every width (app.css, not only the desktop media query)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const m = /#ask-modal\.info #ask-cancel\s*\{([^{}]*)\}/.exec(app);
+  assert.ok(m, "app.css has #ask-modal.info #ask-cancel");
+  assert.match(m[1], /display:\s*none/);
+});
+
+test("desktop.css does not bound the info body by the viewport", () => {
+  const r = rulesFor("#ask-modal.info #ask-body").join(" ");
+  assert.ok(!/100dvh|100vh/.test(r), "viewport bound would ignore the dialog's 88vh cap");
+});

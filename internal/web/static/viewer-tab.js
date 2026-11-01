@@ -100,10 +100,10 @@ class ViewerTab {
     }
     if (this.zoomVar) { // text viewers only: images have nothing to size
       const zout = document.createElement("button");
-      zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
+      zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (" + shortcutHint("zoom.out", IS_MAC) + ")";
       zout.onclick = () => this.fontStep(-1);
       const zin = document.createElement("button");
-      zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (Ctrl+=)";
+      zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (" + shortcutHint("zoom.in", IS_MAC) + ")";
       zin.onclick = () => this.fontStep(+1);
       this.toolbar.append(zout, zin);
     }
@@ -383,10 +383,9 @@ class ViewerTab {
     });
     // Returning false stops CodeMirror's own key handling from also inserting
     // whatever the browser would (nothing, normally, but this is belt-and-braces).
-    this.cm.setOption("extraKeys", {
-      "Ctrl-S": () => { this.save(false); return false; },
-      "Cmd-S": () => { this.save(false); return false; },
-    });
+    const saveKeys = {};
+    for (const k of cmKeys("editor.save", IS_MAC)) saveKeys[k] = () => { this.save(false); return false; };
+    this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
     // A fresh edit: a "saved" left from the last one says nothing about this
     // buffer. setStatus also tells a host header to show Cancel · Save.
@@ -403,7 +402,7 @@ class ViewerTab {
     const save = document.createElement("button");
     save.className = "viewer-auto viewer-save";
     save.textContent = "Save";
-    save.title = "Save (Ctrl/Cmd-S)";
+    save.title = "Save (" + shortcutHint("editor.save", IS_MAC) + ")";
     save.onclick = () => this.save(false);
     const cancel = document.createElement("button");
     cancel.className = "viewer-auto viewer-cancel";

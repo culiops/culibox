@@ -41,7 +41,7 @@ function deskGroups(sessions) {
   return deskDep("sessionGroups")(sessions, (s) => (needs(s) ? "waiting" : s.activity));
 }
 
-// jumpOrder: the list Alt+1..9 and the palette's first nine index into. On
+// jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
 // desktop that is the sidebar's visible order; mobile has no such list on
 // screen and keeps the API order. Nested shells are left out of both: the
 // numbers (and the rail dots) are for agents.
@@ -52,7 +52,7 @@ function jumpOrder(sessions, mobile) {
   return mobile ? agents : deskOrder(deskGroups(agents));
 }
 
-// deskOrder: the groups flattened in the order the sidebar shows them. Alt+1..9
+// deskOrder: the groups flattened in the order the sidebar shows them. Mod+1…9
 // and the palette's first nine rows both index into this, so what you see is
 // what the number means.
 function deskOrder(groups) {
@@ -321,43 +321,6 @@ function writeRecent(storage, list) {
   } catch (_) { /* a convenience, not state */ }
 }
 
-// shortcutRows: what the "Keyboard shortcuts" dialog lists. Every row names a
-// binding the code really installs (palette.js, app.js, terminal-tab.js,
-// viewer-tab.js, spawnform.js); the last row is the box runtime. The runtime
-// label mirrors tierRuntimeLabel (tier.js), which this file cannot reach in node.
-function shortcutRows(isMac, boxRuntime) {
-  const rt = boxRuntime === "sysbox-runc" ? "sysbox" : boxRuntime || "runc";
-  const alt = isMac ? "⌥" : "Alt+";
-  const mod = isMac ? "⌘" : "Ctrl+";
-  return [
-    { keys: isMac ? "⌘K" : "Ctrl+Shift+K", action: "Command palette" },
-    { keys: "Ctrl+Shift+Space", action: "Command palette" },
-    { keys: isMac ? "⌘Enter" : "Ctrl+Enter", action: "Palette: open in new pane / insert file path" },
-    { keys: alt + "1…9", action: "Jump to session" },
-    { keys: "Ctrl+Shift+`", action: "+ Shell below" },
-    { keys: isMac ? "⌘B" : "Ctrl+Shift+B", action: "Toggle sidebar / rail" },
-    { keys: isMac ? "⌥⌘S" : "Ctrl+Alt+S", action: "Toggle sidebar / rail" },
-    { keys: isMac ? "⌥⌘F" : "Ctrl+Alt+F", action: "Files drawer" },
-    { keys: (isMac ? "⌘" : "Ctrl") + " + / - / 0", action: "Zoom in / out / reset" },
-    { keys: isMac ? "⌘C" : "Ctrl+Shift+C", action: "Terminal: copy selection" },
-    { keys: isMac ? "⌘V" : "Ctrl+V", action: "Terminal: paste" },
-    { keys: isMac ? "⌘S" : "Ctrl+S", action: "Editor: save" },
-    { keys: isMac ? "⌘Enter" : "Ctrl+Enter", action: "New session: spawn" },
-    { keys: "Runtime", action: rt },
-  ];
-}
-
-// shortcutText: the dialog body, one line per row, keys padded to one column
-// (the dialog sets it in monospace).
-function shortcutText(rows) {
-  const list = Array.isArray(rows) ? rows : [];
-  const keyed = list.filter((r) => r.keys !== "Runtime");
-  const w = Math.max(0, ...keyed.map((r) => r.keys.length));
-  const body = keyed.map((r) => r.keys.padEnd(w) + "  " + r.action);
-  const rt = list.find((r) => r.keys === "Runtime");
-  return rt ? body.join("\n") + "\n\nRuntime: " + rt.action : body.join("\n");
-}
-
 // bootFlags: what boot reads from the legacy localStorage keys, decided once so
 // the desktop rules are testable. The keys predate the desktop shell and are not
 // renamed (spec 7): on desktop the rail is never shown (Access is a pane view;
@@ -384,5 +347,5 @@ function paneTitle(name, tab, session, tabCount) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle };
 }
