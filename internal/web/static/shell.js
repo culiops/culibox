@@ -512,26 +512,6 @@ async function askPrompt(opts) {
   return promptValue(r.outcome, r.value);
 }
 
-// shortcutsBlocked answers "should a document-level shortcut stand down".
-//
-// Two reasons, and the second is not obvious: showModal() makes the rest of the
-// page inert to POINTER input, but a keydown from a focused descendant of the
-// dialog still travels to document, and every global handler here listens in the
-// capture phase. So with Settings open and focus on a button or a select, a jump
-// or a zoom combination acted on the app underneath the backdrop.
-//
-// The activeElement half is the pre-existing rule, kept identical: never steal a
-// combination from a real text field, but xterm's own focus target IS a textarea
-// and must not count as one.
-function shortcutsBlocked(activeElement, openDialogCount) {
-  if (openDialogCount > 0) return true;
-  const ae = activeElement;
-  if (!ae) return false;
-  if (ae.tagName === "INPUT") return true;
-  if (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")) return true;
-  return false;
-}
-
 // shortcutContext builds the one ctx object shortcutFor (shortcuts.js) reads, so
 // no handler re-derives "where is focus" on its own. The three focus flags are
 // mutually exclusive: xterm's helper textarea is the terminal, a textarea inside
@@ -580,7 +560,6 @@ if (typeof module !== "undefined" && module.exports) {
     promptValue,
     shouldRefocusTerminal,
     askIsBusy,
-    shortcutsBlocked,
     shortcutContext,
     setDialogError,
   };

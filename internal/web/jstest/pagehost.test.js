@@ -121,15 +121,15 @@ test("base CSS keeps #page-host off on mobile", () => {
 });
 
 test("with a page open, zoom and Ctrl+P stand down to the browser", () => {
-  const guard = /if \(typeof currentPage === "function" && currentPage\(\)\) return;/;
-  const app = read("app.js");
-  const zoom = app.indexOf('if (!(e.ctrlKey || e.metaKey) || e.altKey) return;');
-  assert.ok(zoom >= 0);
-  assert.match(app.slice(zoom, zoom + 300), guard);
-  const fd = read("filesdrawer.js");
-  const p = fd.indexOf('if (e.code !== "KeyP"');
-  assert.ok(p >= 0);
-  assert.match(fd.slice(p, p + 300), guard);
+  // The registry's allow table is what says so now (the per-listener
+  // currentPage() guards are gone); the dispatcher passes ctx.pageOpen.
+  const { shortcutFor } = require("../static/shortcuts.js");
+  const ev = (code, key, mods) => Object.assign({ code, key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }, mods);
+  const ctx = { dialogOpen: false, pageOpen: true, inTerminal: false, inEditor: false, inInput: false, mobile: false };
+  for (const e of [ev("Equal", "="), ev("Minus", "-"), ev("Digit0", "0"), ev("KeyP", "p")]) {
+    assert.strictEqual(shortcutFor(e, false, ctx), null, e.key);
+  }
+  assert.match(read("app.js"), /shortcutContext\(.*!!currentPage\(\)/);
 });
 
 test("classnames HOOKS lists the page-<id> body classes for every PAGE_ID", () => {

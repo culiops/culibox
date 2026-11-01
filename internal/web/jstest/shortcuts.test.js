@@ -1,39 +1,11 @@
-// A global shortcut must not act on the app while a modal is on screen, and
-// must not steal a keystroke aimed at a real text field. showModal() makes the
-// page inert to POINTER input only: a keydown from a focused descendant of the
-// dialog still reaches document in the capture phase.
+// The shortcut registry (shortcuts.js) and the context object (shell.js) that
+// decide whether a global shortcut may act. showModal() makes the page inert to
+// POINTER input only: a keydown from a focused descendant of a dialog still
+// reaches document in the capture phase, so the context must say so.
 const test = require("node:test");
 const assert = require("node:assert");
-const { shortcutsBlocked, shortcutContext } = require("../static/shell.js");
+const { shortcutContext } = require("../static/shell.js");
 const SC = require("../static/shortcuts.js");
-
-const el = (tagName, className) => ({ tagName, classList: { contains: (c) => c === className } });
-
-test("blocked while any dialog is open", () => {
-  assert.strictEqual(shortcutsBlocked(el("BUTTON", ""), 1), true);
-  assert.strictEqual(shortcutsBlocked(el("SELECT", ""), 2), true);
-  assert.strictEqual(shortcutsBlocked(null, 1), true);
-});
-
-test("blocked on a real text field", () => {
-  assert.strictEqual(shortcutsBlocked(el("INPUT", ""), 0), true);
-  assert.strictEqual(shortcutsBlocked(el("TEXTAREA", ""), 0), true);
-});
-
-test("xterm's own textarea is not a real text field", () => {
-  assert.strictEqual(shortcutsBlocked(el("TEXTAREA", "xterm-helper-textarea"), 0), false);
-});
-
-test("open otherwise", () => {
-  assert.strictEqual(shortcutsBlocked(el("BUTTON", ""), 0), false);
-  assert.strictEqual(shortcutsBlocked(el("BODY", ""), 0), false);
-  assert.strictEqual(shortcutsBlocked(null, 0), false);
-});
-
-test("a negative or absent count is treated as none open", () => {
-  assert.strictEqual(shortcutsBlocked(el("BUTTON", ""), undefined), false);
-  assert.strictEqual(shortcutsBlocked(el("BUTTON", ""), 0), false);
-});
 
 // ---- shortcuts.js: the registry and its pure functions ----
 
@@ -136,6 +108,35 @@ test("shortcutFor: palette, files.goto, shell.below", () => {
   const b = ev("Backquote", "~", { ctrl: true, shift: true });
   assert.strictEqual(SC.shortcutFor(b, false, NONE), "shell.below");
   assert.strictEqual(SC.shortcutFor(b, false, ctxWith("pageOpen")), null);
+});
+
+// The palette opens on Ctrl+Shift+K off mac and Cmd+Shift+K on mac. Ctrl+K is
+// readline's kill-line and Cmd+K stays only as a legacy mac alias. Ctrl+Shift+K
+// is a magnet for other apps' system-wide hotkeys (Notion took it on a Windows
+// machine), so Ctrl+Shift+Space is a second way in on every platform.
+test("shortcutFor: the palette opens on its chords on both platforms", () => {
+  const sp = ev("Space", " ", { ctrl: true, shift: true });
+  assert.strictEqual(SC.shortcutFor(sp, false, NONE), "palette.open.alt");
+  assert.strictEqual(SC.shortcutFor(sp, true, NONE), "palette.open.alt");
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true }), false, NONE), "palette.open");
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { meta: true, shift: true }), true, NONE), "palette.open");
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { meta: true }), true, NONE), "palette.open");
+});
+
+test("shortcutFor: Ctrl+Shift+K is not the palette on mac, and plain keys never are", () => {
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true }), true, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { ctrl: true }), true, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("Space", " "), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("Space", " ", { shift: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyJ", "J", { ctrl: true, shift: true }), false, NONE), null);
+});
+
+test("shortcutFor: Alt, AltGr or the other platform modifier disqualify a palette chord", () => {
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true, alt: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true, altGr: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "K", { ctrl: true, shift: true, meta: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("Space", " ", { ctrl: true, shift: true, alt: true }), false, NONE), null);
+  assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { meta: true, ctrl: true }), true, NONE), null);
 });
 
 test("shortcutFor: platform-specific and legacy chords", () => {

@@ -449,20 +449,10 @@ function initDrawerGoto() {
   input.addEventListener("blur", dismiss);
   input.addEventListener("focus", () => { if (input.value.trim()) drawerGoInput(); });
   window.addEventListener("resize", dismiss);
-  // Capture phase, like the app's other global shortcuts: xterm and
-  // CodeMirror would otherwise see the key first. A terminal keeps its own
-  // Ctrl+P (readline's previous-history); the shortcut works from anywhere else.
-  document.addEventListener("keydown", (e) => {
-    if (e.code !== "KeyP" || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-    // A page hides the drawer: the browser keeps its Ctrl+P (print).
-    if (typeof currentPage === "function" && currentPage()) return;
-    const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains("xterm-helper-textarea")) return;
-    if (typeof dialogsOpen === "function" && dialogsOpen() > 0) return;
-    if (!drawerGoFocus()) return;
-    e.preventDefault();
-    e.stopPropagation();
-  }, true);
+  // Ctrl+P goes through the shortcut dispatcher (app.js), which keeps it off a
+  // terminal (readline's previous-history), a dialog and a page. drawerGoFocus
+  // returns false when there is no tree to search, so the browser keeps its print.
+  bindShortcut("files.goto", () => drawerGoFocus());
 }
 
 // --- header actions ----------------------------------------------------------

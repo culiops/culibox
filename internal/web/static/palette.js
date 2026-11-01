@@ -23,28 +23,10 @@ let palAbort = null;
 // real rows the moment a heading is inserted ahead of it.
 let palRowEls = [];
 
-// isPaletteHotkey matches the key events that open the palette.
-//
-// ⌘K is free on macOS, but on every other platform Ctrl+K is readline's
-// kill-to-end-of-line, which the shells and agent TUIs running in these panes
-// actually use, so the non-mac combo is Ctrl+Shift+K, matching the Ctrl+Shift+`
-// convention already used for the quick shell.
-//
-// Ctrl+Shift+Space is accepted everywhere as a second way in. A letter combo is
-// exactly what other desktop apps register as a SYSTEM-WIDE hotkey (Notion took
-// Ctrl+Shift+K on a Windows machine, so Chrome never received the keypress at
-// all: no page can defend against that). Space is a far less popular target,
-// and it carries no meaning inside a terminal either.
-function isPaletteHotkey(e, mac) {
-  if (e.altKey) return false;
-  if (e.ctrlKey && e.shiftKey && !e.metaKey && (e.code === "Space" || (!mac && e.code === "KeyK"))) return true;
-  return !!(mac && e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyK");
-}
-
 // isInsertHotkey matches Ctrl+Enter (⌘+Enter on mac): insert the selected file's
 // path at the focused prompt instead of opening it in a viewer. Plain Enter must
 // stay the open action, so the modifier is the whole distinction. Alt is
-// excluded like in isPaletteHotkey: AltGr (common off-mac) reports as both
+// excluded so AltGr (common off-mac) reports as both
 // ctrlKey and altKey, and without the exclusion AltGr+Enter would insert a path
 // instead of opening the file it looks like it should open.
 function isInsertHotkey(e, mac) {
@@ -575,23 +557,17 @@ function initPalette() {
     if (palAbort) { palAbort.abort(); palAbort = null; }
   });
 
-  // Hotkey: see isPaletteHotkey for which combos and why. The ⌕ header button
-  // is the mouse path, and the guaranteed one when something outside the page
-  // claims a combo: a browser shortcut, or another app's system-wide hotkey.
-  document.addEventListener("keydown", (e) => {
-    if (!isPaletteHotkey(e, mac) || paletteOpen()) return;
-    // Never steal the combo from a real text field (inline rename, path box,
-    // profile editor). xterm's own focus target IS a textarea, so exempt that
-    // one: opening the palette over a terminal is the whole point.
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === "INPUT" ||
-        (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openPalette();
-  }, true);
+  // Hotkeys: the chords and why they are what they are (Ctrl+K is readline's
+  // kill-line, so non-mac needs Shift; Ctrl+Shift+Space is the fallback when
+  // another app owns a letter combo system-wide) live in the shortcuts.js
+  // registry. The ⌕ header button is the mouse path, and the guaranteed one
+  // when something outside the page claims a combo. The registry's allow table
+  // already keeps a real text field out; opening over a terminal is the point.
+  const openFromKey = () => (paletteOpen() ? false : (openPalette(), true));
+  bindShortcut("palette.open", openFromKey);
+  bindShortcut("palette.open.alt", openFromKey);
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
+  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
 }
