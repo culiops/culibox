@@ -773,7 +773,8 @@ class ViewerTab {
       const off = top - cm.heightAtLine(line, "local");
       return () => cm.scrollTo(null, cm.heightAtLine(line, "local") + off);
     }
-    // A hidden tab has no layout to measure; it keeps its pixel offset.
+    // A hidden tab has no layout to measure, so it keeps its pixel scroll offset
+    // (which may map to a different line once wrapping changes row heights).
     if (!this.hasLines || !this.content.isConnected) return none;
     const row = this.firstVisibleRow();
     if (!row) return none;
@@ -810,14 +811,17 @@ class ViewerTab {
     this.cm.refresh();
   }
 
-  // applyWrapAll: every live viewer, in every pane and the Files drawer's.
-  static applyWrapAll() {
+  // allViewers: every live viewer, in every pane plus the Files drawer's.
+  static allViewers() {
     const all = [];
     eachViewer((vt) => all.push(vt));
     const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
     if (dv && !all.includes(dv)) all.push(dv);
-    for (const vt of all) vt.applyWrap();
+    return all;
   }
+
+  // applyWrapAll: bring every live viewer's editor in line with the preference.
+  static applyWrapAll() { for (const vt of ViewerTab.allViewers()) vt.applyWrap(); }
 
   renderImage() {
     this.showingMsg = false;
@@ -837,11 +841,7 @@ function isViewerWrap() { return viewerPrefs.getWrap(); }
 // remembers it for this browser. Each viewer's first visible line is noted
 // before the flip and scrolled back to after it, so the reader keeps their place.
 function toggleViewerWrap() {
-  const all = [];
-  eachViewer((vt) => all.push(vt));
-  const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
-  if (dv && !all.includes(dv)) all.push(dv);
-  const restores = all.map((vt) => vt.wrapAnchor());
+  const restores = ViewerTab.allViewers().map((vt) => vt.wrapAnchor());
   const on = !viewerPrefs.getWrap();
   viewerPrefs.setWrap(on);
   document.documentElement.classList.toggle("viewer-wrap", on);
