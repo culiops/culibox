@@ -48,15 +48,21 @@ func (k *keychainKeeper) Save(identity string, _ time.Duration) error {
 }
 
 func (k *keychainKeeper) Load() (string, time.Time, error) {
-	var out bytes.Buffer
+	var out, errb bytes.Buffer
 	cmd := exec.Command(securityBin, "find-generic-password", "-s", keychainService, "-a", k.account, "-w")
 	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	var ee *exec.ExitError
 	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == keychainNotFound {
 			return "", time.Time{}, ErrNotInitialized
 		}
-		return "", time.Time{}, errors.New("keychain read failed")
+		code := -1
+		if ee != nil {
+			code = ee.ExitCode()
+		}
+		// Only stderr feeds the reason; stdout is the key.
+		return "", time.Time{}, errors.New(keychainReason(errb.Bytes(), code))
 	}
 	ident := strings.TrimSpace(out.String())
 	if ident == "" {

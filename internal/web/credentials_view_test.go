@@ -26,6 +26,11 @@ type viewBody struct {
 		ExpiresAt      *time.Time `json:"expires_at"`
 		Platform       string     `json:"platform"`
 		PassphraseMode bool       `json:"passphrase_mode"`
+		Unavailable    *struct {
+			Kind   string `json:"kind"`
+			Reason string `json:"reason"`
+			Fix    string `json:"fix"`
+		} `json:"unavailable"`
 	} `json:"store"`
 	AWS []struct {
 		Name          string   `json:"name"`
@@ -222,6 +227,17 @@ func TestViewStatuses(t *testing.T) {
 	want["store-ok"] = "stored_locked"
 	check("locked", want)
 
+	// A Keychain failure: the value is there but unreadable, and it is not "locked".
+	v.st.st.Locked = false
+	v.st.st.Unavailable = &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	want["store-ok"] = "stored_unavailable"
+	check("unavailable", want)
+	if b, _ := v.get(t); b.Store.Locked || b.Store.Unavailable == nil || b.Store.Unavailable.Kind != "access" ||
+		b.Store.Unavailable.Reason != "denied" || b.Store.Unavailable.Fix == "" {
+		t.Errorf("store body = %+v", b.Store)
+	}
+	v.st.st.Unavailable = nil
+
 	// A store that was never created holds nothing.
 	v.st.st = secretstore.Status{Platform: "linux"}
 	v.cm.vals = notInitVals{}
@@ -363,7 +379,7 @@ func TestViewValuesReferencedBy(t *testing.T) {
 
 func TestViewLegacySecrets(t *testing.T) {
 	profiles := []config.AgentConfig{
-		{Name: "a", Bin: "claude", Secrets: []string{"two", "one", "locked"}},
+		{Name: "a", Bin: "claude", Secrets: []string{"two", "one", "locked", "unavail"}},
 		{Name: "b", Bin: "claude", Secrets: []string{"one", "broken"}},
 	}
 	v := newViewFix(t, config.Config{}, profiles)
@@ -373,6 +389,8 @@ func TestViewLegacySecrets(t *testing.T) {
 			return secretchain.Present, nil
 		case "locked":
 			return secretchain.StoredLocked, nil
+		case "unavail":
+			return secretchain.StoredUnavailable, nil
 		case "broken":
 			return secretchain.Absent, errors.New("read /home/x/secret: permission denied")
 		}
@@ -383,7 +401,7 @@ func TestViewLegacySecrets(t *testing.T) {
 	for _, s := range b.LegacySecrets {
 		got = append(got, s.Name+"="+s.Status)
 	}
-	if want := "broken=invalid,locked=stored_locked,one=ok,two=missing"; strings.Join(got, ",") != want {
+	if want := "broken=invalid,locked=stored_locked,one=ok,two=missing,unavail=stored_unavailable"; strings.Join(got, ",") != want {
 		t.Fatalf("legacy_secrets = %v, want %s", got, want)
 	}
 	if strings.Contains(raw, "/home/x") {

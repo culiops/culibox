@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/secretchain"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a
@@ -28,7 +29,9 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	const check = "boxed claude token"
 	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
-	var locked []string // agents whose credential failed only because the store is locked
+	var locked []string   // agents whose credential failed only because the store is locked
+	var unavailable error // the first Keychain failure met for an agent that found no other credential
+	var unavailableAgents []string
 	boxed := 0
 	for _, a := range c.Agents {
 		if filepath.Base(a.Bin) != "claude" || c.RuntimeFor(a) != config.RuntimeBox {
@@ -36,6 +39,7 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 		}
 		boxed++
 		found, isLocked := false, false
+		var unavail error
 		for _, name := range a.Secrets {
 			if name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "ANTHROPIC_API_KEY" {
 				continue
@@ -47,11 +51,20 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 					found = true
 				case errors.Is(err, credref.ErrLocked):
 					isLocked = true
+				case errors.Is(err, secretstore.ErrKeeperUnavailable) && unavail == nil:
+					unavail = err
 				}
 			}
 		}
 		switch {
 		case found:
+		case unavail != nil:
+			// A Keychain failure is neither "locked" nor "missing": the token is
+			// stored but unreadable, and the fix is the Keychain's.
+			unavailableAgents = append(unavailableAgents, a.Name)
+			if unavailable == nil {
+				unavailable = unavail
+			}
 		case isLocked:
 			locked = append(locked, a.Name)
 		default:
@@ -61,6 +74,9 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	switch {
 	case boxed == 0:
 		return Result{Pass, check, "no boxed claude agent in config.json"}
+	case len(unavailableAgents) > 0:
+		return Result{Fail, check, "agent(s) " + strings.Join(unavailableAgents, ", ") +
+			": the Claude token is in the store, but " + unavailable.Error()}
 	case len(locked) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
 			`: the Claude token is in the store, which is locked — unlock it ("agent-box store unlock")`}

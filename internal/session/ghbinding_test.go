@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // ghLauncher adds GitHub bindings to awsLauncher: profile "gh" is GitHub-only,
@@ -358,5 +359,29 @@ func TestKilledGitHubSessionIsForgottenByTheBroker(t *testing.T) {
 	}
 	if !hooks.forgotten(s.ID) {
 		t.Fatal("a GitHub-bound session's broker state was not forgotten")
+	}
+}
+
+// A GitHub App key behind a failing Keychain refuses the spawn as
+// ErrStoreUnavailable (503 store_unavailable), not as a locked store (423) and
+// not as a containment failure.
+func TestSpawnGitHubCheckUnavailableStore(t *testing.T) {
+	m, _, hooks, eg := ghManager(t, config.RuntimeBox)
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	hooks.checkErr = fmt.Errorf("GitHub App %q: %w", "main", ue)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "gh", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("spawn survived an unavailable Keychain")
+	}
+	var got *secretstore.UnavailableError
+	if !errors.Is(err, launcher.ErrStoreUnavailable) || !errors.As(err, &got) {
+		t.Fatalf("err = %v, want ErrStoreUnavailable wrapping the UnavailableError", err)
+	}
+	if errors.Is(err, launcher.ErrStoreLocked) || errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("not a locked store nor a containment failure: %v", err)
+	}
+	if eg.spawnCalls() != 0 || len(m.List()) != 0 {
+		t.Fatalf("refusal left state: egress=%d sessions=%d", eg.spawnCalls(), len(m.List()))
 	}
 }

@@ -349,3 +349,57 @@ test("a modal keeps its own amber strip", () => {
   assert.strictEqual(p.byId["creds-body"].querySelectorAll(".cstrip").length, 0);
   assert.strictEqual(p.byId["creds-body"].querySelectorAll(".strip").length, 1);
 });
+
+// --- the store strip on macOS: a Keychain failure shows its fix, never an unlock form (#65) ---
+
+const kcStore = (over) => ({ initialized: true, locked: false, platform: "darwin", passphrase_mode: false, ...over });
+const unavailable = (kind) => ({ kind, reason: "The Keychain would not give the key.", fix: "Open Keychain Access and allow agent-box." });
+const stripOf = (p, store) => p.box.credStrip({ store });
+const btnTexts = (n) => n.querySelectorAll("button").map((b) => b.textContent);
+
+test("strip, darwin store unavailable: Keychain chip, the server's reason and fix, no unlock form, no Lock now", () => {
+  for (const kind of ["access", "key_lost", "store_unreadable"]) {
+    const p = page();
+    const wrap = stripOf(p, kcStore({ unavailable: unavailable(kind) }));
+    const strip = wrap.querySelector(".strip");
+    const chip = strip.querySelector(".st");
+    assert.strictEqual(chip.textContent, "Keychain", kind);
+    assert.ok(chip.className.split(/\s+/).includes("locked"), kind + ": amber chip class");
+    assert.ok(strip.className.split(/\s+/).includes("need"), kind + ": the strip asks for attention");
+    assert.match(strip.textContent, /The Keychain would not give the key\. Open Keychain Access and allow agent-box\./, kind);
+    assert.ok(strip.textContent.includes(p.box.storeUnavailableLabel(kind)), kind + ": the kind label");
+    assert.strictEqual(wrap.querySelectorAll(".storeslot").length, 0, kind + ": no unlock slot");
+    assert.strictEqual(wrap.querySelectorAll("input").length, 0, kind + ": no passphrase field");
+    assert.deepEqual(btnTexts(wrap), [], kind + ": no Lock now, no Unlock, no Create");
+  }
+});
+
+test("strip, darwin store unavailable and not initialized: still no Create button (never offer to overwrite)", () => {
+  const p = page();
+  const wrap = stripOf(p, kcStore({ initialized: false, unavailable: unavailable("key_lost") }));
+  assert.deepEqual(btnTexts(wrap), []);
+  assert.match(wrap.textContent, /Open Keychain Access/);
+});
+
+test("strip, healthy darwin Keychain: unchanged, no Lock now", () => {
+  const p = page();
+  const wrap = stripOf(p, kcStore());
+  const strip = wrap.querySelector(".strip");
+  assert.strictEqual(strip.querySelector(".st").textContent, "Keychain");
+  assert.ok(strip.querySelector(".st").className.split(/\s+/).includes("ready"));
+  assert.match(strip.textContent, /Keychain \(macOS\)/);
+  assert.deepEqual(btnTexts(wrap), []);
+});
+
+test("strip, Linux: locked shows the unlock form, unlocked shows Lock now (unchanged)", () => {
+  const p = page();
+  const locked = stripOf(p, { initialized: true, locked: true, platform: "linux", passphrase_mode: true });
+  assert.strictEqual(locked.querySelector(".st").textContent, "Locked");
+  assert.strictEqual(locked.querySelectorAll(".storeslot").length, 1);
+  assert.deepEqual(btnTexts(locked), ["Unlock"]);
+  const open = stripOf(p, { initialized: true, locked: false, platform: "linux", passphrase_mode: true });
+  assert.strictEqual(open.querySelector(".st").textContent, "Unlocked");
+  assert.deepEqual(btnTexts(open), ["Lock now"]);
+  const none = stripOf(p, { initialized: false, locked: false, platform: "linux" });
+  assert.deepEqual(btnTexts(none), ["Create the encrypted store"]);
+});

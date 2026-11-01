@@ -122,6 +122,17 @@ test("spawnRefusedLocked: only a 423 carrying the store_locked code", () => {
   assert.strictEqual(spawnRefusedLocked(423, ""), false);
   assert.strictEqual(spawnRefusedLocked(400, "store_locked"), false);
   assert.strictEqual(spawnRefusedLocked(undefined, undefined), false);
+  // A Keychain failure is never an unlock prompt: there is nothing to type.
+  assert.strictEqual(spawnRefusedLocked(503, "store_unavailable"), false);
+});
+
+test("spawnRefusedUnavailable: only a 503 carrying the store_unavailable code", () => {
+  const { spawnRefusedUnavailable } = require("../static/spawnform.js");
+  assert.strictEqual(spawnRefusedUnavailable(503, "store_unavailable"), true);
+  assert.strictEqual(spawnRefusedUnavailable(503, ""), false);
+  assert.strictEqual(spawnRefusedUnavailable(423, "store_locked"), false);
+  assert.strictEqual(spawnRefusedUnavailable(400, "store_unavailable"), false);
+  assert.strictEqual(spawnRefusedUnavailable(undefined, undefined), false);
 });
 
 // #36: a spawn in flight says so, with how long it has waited; a boxed spawn

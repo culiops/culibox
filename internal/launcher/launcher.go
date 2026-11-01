@@ -22,6 +22,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // SpawnSpec is the request to launch an agent.
@@ -198,13 +199,24 @@ var (
 	// be shown to the caller; the secret name is appended only to wrapped
 	// errors, which go to the server log, never the response.
 	ErrStoreLocked = errors.New(`store is locked — unlock it in the UI or with "agent-box store unlock"`)
+	// ErrStoreUnavailable refuses a spawn whose secrets live in a store whose
+	// key the macOS Keychain did not hand over. Not a lock: there is no
+	// passphrase to type. Wrapped errors also carry the secretstore
+	// UnavailableError, whose message holds the fix.
+	ErrStoreUnavailable = errors.New("the macOS Keychain did not give agent-box the store key")
 )
 
 // storeLocked returns the ErrStoreLocked (naming the secret, for the log) to
-// use when a resolve error means "the store is locked", else nil.
+// use when a resolve error means "the store is locked", else nil. A Keychain
+// failure is ErrStoreUnavailable wrapping the UnavailableError (also naming the
+// secret, for the log): never a lock, so the caller never offers an unlock.
 func storeLocked(name string, err error) error {
 	if errors.Is(err, credref.ErrLocked) {
 		return fmt.Errorf("%w (%s)", ErrStoreLocked, name)
+	}
+	var ue *secretstore.UnavailableError
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%w: %w (%s)", ErrStoreUnavailable, ue, name)
 	}
 	return nil
 }

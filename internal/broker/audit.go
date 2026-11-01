@@ -46,6 +46,10 @@ const (
 
 	// The encrypted store is locked: a token or key read from it was refused.
 	OutcomeStoreLocked Outcome = "store_locked"
+
+	// The store key could not be read from the macOS Keychain: not a lock, so
+	// nothing to unlock; the reply carries the fix.
+	OutcomeStoreUnavailable Outcome = "store_unavailable"
 )
 
 // Credential providers, as stored in Row.Provider.

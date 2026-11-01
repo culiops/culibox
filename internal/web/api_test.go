@@ -13,6 +13,7 @@ import (
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 )
 
@@ -1230,5 +1231,29 @@ func TestSpawnBodyCannotSetParentID(t *testing.T) {
 	}
 	if svc.spawnedParentID != "" {
 		t.Fatalf("spec.ParentID = %q, want empty", svc.spawnedParentID)
+	}
+}
+
+// A Keychain failure is 503 store_unavailable with the fix, never 423: the
+// spawn dialog must show the message, not the unlock form. The wrapped secret
+// name stays in the server log.
+func TestSpawnStoreUnavailableIs503(t *testing.T) {
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "User interaction is not allowed"}
+	wrapped := fmt.Errorf("%w: %w (DB_PASSWORD)", launcher.ErrStoreUnavailable, ue)
+	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code %d want 503", rec.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got["code"] != "store_unavailable" || got["error"] != ue.Error() || !strings.Contains(got["error"], ue.Fix()) {
+		t.Fatalf("body = %v", got)
+	}
+	if strings.Contains(rec.Body.String(), "DB_PASSWORD") {
+		t.Fatal("the secret name leaked into the response")
 	}
 }

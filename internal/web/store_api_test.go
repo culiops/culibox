@@ -373,3 +373,45 @@ func TestStoreRoutesOnlyWithAStore(t *testing.T) {
 		t.Fatalf("without a store the route must not exist (SPA fallback 404): %d %s", w.Code, w.Body)
 	}
 }
+
+// A Keychain failure rides along in the store status with its kind, reason and
+// fix; the fix is always present so the UI never has to invent one.
+func TestStoreStatusUnavailable(t *testing.T) {
+	srv, fs, _ := storeSrv()
+	fs.st.Locked = false
+	fs.st.Unavailable = &secretstore.UnavailableError{Kind: secretstore.KindKeyLost, Reason: "no Keychain item for this store", StoreDir: "/data/store"}
+	w := do(srv.handleStore, storeReq("GET", "/api/store", "", "", credCookie))
+	var got struct {
+		Locked      bool `json:"locked"`
+		Unavailable *struct {
+			Kind   string `json:"kind"`
+			Reason string `json:"reason"`
+			Fix    string `json:"fix"`
+		} `json:"unavailable"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Locked || got.Unavailable == nil || got.Unavailable.Kind != "key_lost" ||
+		got.Unavailable.Reason != "no Keychain item for this store" || !strings.Contains(got.Unavailable.Fix, "/data/store") {
+		t.Fatalf("body %s", w.Body)
+	}
+	// Healthy: the field is absent, not null.
+	fs.st.Unavailable = nil
+	w = do(srv.handleStore, storeReq("GET", "/api/store", "", "", credCookie))
+	if strings.Contains(w.Body.String(), "unavailable") {
+		t.Fatalf("healthy body has an unavailable field: %s", w.Body)
+	}
+}
+
+// An unlock that hits an unavailable key says so (503 + the fix), not a
+// generic 500.
+func TestStoreUnlockUnavailable(t *testing.T) {
+	srv, fs, _ := storeSrv()
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	fs.unlockErr = ue
+	w := do(srv.handleStoreUnlock, storeReq("POST", "/api/store/unlock", `{"passphrase":"abcdefghijkl"}`, "http://"+host, credCookie))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), ue.Fix()) || !strings.Contains(w.Body.String(), "store_unavailable") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
