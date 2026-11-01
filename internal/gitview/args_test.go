@@ -1,0 +1,97 @@
+package gitview
+
+import (
+	"fmt"
+	"os"
+	"slices"
+	"testing"
+)
+
+func prefix(mounts ...string) []string {
+	a := []string{
+		"run", "--rm", "--init", "--name", "n", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "512m",
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.gitstatus=1",
+		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
+	}
+	for _, m := range mounts {
+		a = append(a, "--mount", "type=bind,src="+m+",dst="+m+",readonly")
+	}
+	return a
+}
+
+func gitFlags(top string) []string {
+	return []string{"-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "safe.directory=*"}
+}
+
+func want(mounts []string, top string, sub ...string) []string {
+	w := prefix(mounts...)
+	w = append(w, "--entrypoint", "git", "img")
+	w = append(w, gitFlags(top)...)
+	return append(w, sub...)
+}
+
+var statusSub = []string{"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all"}
+
+func TestStatusArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	cases := []struct {
+		name   string
+		t      Target
+		mounts []string
+	}{
+		{"common inside top", Target{Top: "/w/repo", Common: "/w/repo/.git"}, []string{"/w/repo"}},
+		{"common equals top", Target{Top: "/w/repo", Common: "/w/repo"}, []string{"/w/repo"}},
+		{"common empty", Target{Top: "/w/repo"}, []string{"/w/repo"}},
+		{"common outside top", Target{Top: "/w/wt", Common: "/w/main/.git"}, []string{"/w/wt", "/w/main/.git"}},
+		{"sibling sharing a string prefix", Target{Top: "/w/repo", Common: "/w/repo2/.git"}, []string{"/w/repo", "/w/repo2/.git"}},
+	}
+	for _, c := range cases {
+		got := StatusArgs(c.t, "img", "n", uid, gid)
+		w := want(c.mounts, c.t.Top, statusSub...)
+		if !slices.Equal(got, w) {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, w)
+		}
+	}
+}
+
+func TestDiffArgsGolden(t *testing.T) {
+	uid, gid := os.Getuid(), os.Getgid()
+	in := Target{Top: "/w/repo", Common: "/w/repo/.git"}
+	out := Target{Top: "/w/wt", Common: "/w/main/.git"}
+
+	got := DiffArgs(in, "img", "n", uid, gid, "src/a b.go", false)
+	w := want([]string{"/w/repo"}, "/w/repo", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--", "src/a b.go")
+	if !slices.Equal(got, w) {
+		t.Errorf("tracked:\n got %q\nwant %q", got, w)
+	}
+
+	got = DiffArgs(out, "img", "n", uid, gid, "x.txt", true)
+	w = want([]string{"/w/wt", "/w/main/.git"}, "/w/wt", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--", "/dev/null", "x.txt")
+	if !slices.Equal(got, w) {
+		t.Errorf("untracked:\n got %q\nwant %q", got, w)
+	}
+
+	// A path that looks like an option stays after "--".
+	got = DiffArgs(in, "img", "n", uid, gid, "--output=/x", false)
+	if got[len(got)-2] != "--" || got[len(got)-1] != "--output=/x" {
+		t.Errorf("rel not after --: %q", got)
+	}
+}
+
+func TestMountsAreReadOnly(t *testing.T) {
+	got := StatusArgs(Target{Top: "/a", Common: "/b/.git"}, "img", "n", 1, 2)
+	n := 0
+	for i, a := range got {
+		if a == "--mount" {
+			n++
+			m := got[i+1]
+			if len(m) < 9 || m[len(m)-9:] != ",readonly" {
+				t.Errorf("mount %q not read-only", m)
+			}
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d mounts, want 2", n)
+	}
+}
