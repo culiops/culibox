@@ -415,7 +415,12 @@ class TerminalTab {
   // needWhy: why the tab reads "waiting" when the agent is not ("sso"), else "".
   needWhy() { return this.needWhyState || ""; }
   setActivity(a, why = "") {
-    if (a !== this.activityState || why !== this.needWhy()) { this.activityState = a; this.needWhyState = why; this.onUpdate?.(); }
+    if (a !== this.activityState || why !== this.needWhy()) {
+      const prev = this.activityState;
+      this.activityState = a; this.needWhyState = why; this.onUpdate?.();
+      // A finished turn is when "what did the agent change?" is worth asking.
+      if (typeof gitStatusOnActivity === "function") gitStatusOnActivity(this, prev, a);
+    }
   }
   // setAwsSig: the strip draws the session's AWS chip from the session list, not
   // from the tab, so it only learns of a grant/drop through this.

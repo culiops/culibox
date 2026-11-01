@@ -526,7 +526,9 @@
      level, so a uniform squeeze keeps the │ columns aligned across rows. */
   #drawer .ft-branch { letter-spacing: -.25ch; }
   /* A file (or a folder above one) the agent changed: a dot after the name. */
-  #drawer .ft-chg { flex: none; color: var(--accent); font-size: 8px; line-height: 1; padding: 0 4px; }
+  /* Demoted behind the git badge (gitstatus.js): smaller, after it, and alone on
+     a file git has no mark for (edited then reverted, or outside a repo). */
+  #drawer .ft-chg { flex: none; color: var(--accent); font-size: 6px; line-height: 1; padding: 0 3px; }
   /* "The agent may change this file again": neutral with an accent edge, never
      amber or red (D23). Shown wherever a desktop viewer edits. */
   .edit-warn {

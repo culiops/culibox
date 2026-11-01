@@ -936,6 +936,7 @@
        download included, would be unreachable on a phone. */
     @media (hover: none) {
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
+      button.ft-git { padding: 4px 6px; }
       /* Touch targets, at every width rather than only the narrow breakpoint:
          a tablet has no hover either. Desktop keeps its denser header.
          HEIGHT ONLY, deliberately. These buttons are 29-40px wide already, so a
@@ -945,6 +946,25 @@
       header button { min-height: 36px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
+    /* Git marks (gitstatus.js): a one-letter badge after the name, a dot on a folder
+       with changes below it. Never amber. Colours are tokens, and each measured
+       against the tree background (--bg and --panel, plus the hover wash):
+         Graphite  M --accent 7.44  A/U --ok 9.07  D/C --danger 5.97  (on --panel)
+         Mocha     M --accent 5.97  A/U --ok 8.46  D/C --danger 5.43  (on --panel)
+       Worst case over --bg/--panel/hover: 5.28 (Mocha M), 4.80 (Mocha D/C).
+       The selected row's wash is darker for the text on it, where Mocha M/D and
+       Graphite D fall under 4.5, so those marks lean toward --fg there. The
+       badge never shrinks: .ft-name (min-width:0) ellipsizes first. */
+    .ft-git { flex: none; min-width: 1.4ch; padding: 0 2px; border: 0; background: none; font: 700 11px/1 ui-monospace, Menlo, monospace; text-align: center; }
+    button.ft-git { cursor: pointer; }
+    button.ft-git:hover { text-decoration: underline; }
+    .ft-git-dot { flex: none; font-size: 8px; line-height: 1; padding: 0 4px; }
+    .ft-git-m { color: var(--accent); }
+    .ft-git-a, .ft-git-u { color: var(--ok); }
+    .ft-git-d, .ft-git-c { color: var(--danger); }
+    .ft-node.ft-sel .ft-git-m { color: color-mix(in srgb, var(--accent) 50%, var(--fg)); }
+    .ft-node.ft-sel .ft-git-a, .ft-node.ft-sel .ft-git-u { color: color-mix(in srgb, var(--ok) 50%, var(--fg)); }
+    .ft-node.ft-sel .ft-git-d, .ft-node.ft-sel .ft-git-c { color: color-mix(in srgb, var(--danger) 50%, var(--fg)); }
     /* Same treatment as the header controls: these sit 40px below them, so a
        muted pair next to a lifted pair reads as "one of these is disabled". */
     #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }

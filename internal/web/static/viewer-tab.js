@@ -660,6 +660,7 @@ class ViewerTab {
       this.baseVersion = decision.version || "";
       this.version = this.baseVersion;
       this.setStatus("saved");
+      if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon(); // the file's git mark may have changed
       this.exitEdit(content); // back to read view showing the saved text
     } else if (decision.outcome === "conflict") {
       this.baseVersion = decision.currentVersion || this.baseVersion;

@@ -120,9 +120,11 @@ function ftMarkRow(row, path, set) {
   const dot = document.createElement("span");
   dot.className = "ft-chg";
   dot.textContent = "\u25CF";
-  dot.title = "changed by the agent";
-  const name = row.querySelector(":scope > .ft-name");
-  if (name) name.after(dot); else row.append(dot);
+  dot.title = "edited by this session's agent";
+  // After the git badge (gitstatus.js) when there is one: the badge is the
+  // fact, this dot is the lesser hint, and it stays alone where git has no mark.
+  const anchor = row.querySelector(":scope > .ft-git, :scope > .ft-git-dot") || row.querySelector(":scope > .ft-name");
+  if (anchor) anchor.after(dot); else row.append(dot);
 }
 function ftPaintChanged(set) {
   if (!ftTreeEl) return;
@@ -202,6 +204,9 @@ async function ftRenderDir(path, container, prefix) {
     row.append(more);
     ftRowPaths.set(row, full);
     ftMarkRow(row, full, chg);
+    // Marks from the status already held: a folder opened later, or a re-list
+    // while a refresh is in flight, paints at once instead of waiting.
+    if (typeof gitMarkRow === "function") gitMarkRow(row, full);
     // Appended BEFORE the directory branch, not after it: auto-open below calls
     // row.after(childBox), and ChildNode.after() is a silent no-op while the node
     // has no parent — so an orphaned row would render its restored subtree into a
@@ -248,6 +253,7 @@ async function ftRenderDir(path, container, prefix) {
             if (!open || !childBox) return;
             childBox.replaceChildren();
             ftRenderDir(full, childBox, b.childPrefix);
+            if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon();
           },
         });
       }
@@ -305,6 +311,8 @@ async function ftLoadRoot() {
   }
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
+  // The listing is on screen; now ask what git says about it (badges follow).
+  if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null);
   // A refresh asks again what the agent has changed since (Files drawer only).
   if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
 }
