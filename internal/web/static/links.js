@@ -32,9 +32,10 @@ const LINK_DIR_TAIL_RE = /[\w.\-]*\//y;
 // appended to LINK_PATH_RE for the same reason as LINK_DIR_TAIL_RE: the path
 // regex's backtracking cost stays what it was. Numbers are 1..9999999 so a port,
 // a timestamp or a PID is not read as a line. The lookahead rejects `:12abc` and
-// `:3.5`; when it rejects the col, the engine backtracks to the line alone, which
-// is what makes `src/a.go:12:func x` link as line 12.
-const LINK_LINE_RE = /:([1-9]\d{0,6})(?::([1-9]\d{0,6}))?(?![\w.])/y;
+// `:3.5` but lets a sentence-ending period through
+// (`a.go:12.`). When it rejects the col, the engine backtracks to the line alone,
+// which is what makes `src/a.go:12:func x` link as line 12.
+const LINK_LINE_RE = /:([1-9]\d{0,6})(?::([1-9]\d{0,6}))?(?!\w|\.\w)/y;
 
 const LINK_TRAILING_PUNCT = ".,;:!?";
 const LINK_CLOSERS = { ")": "(", "]": "[", "}": "{" };

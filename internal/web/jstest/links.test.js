@@ -404,6 +404,12 @@ test("suffix: trailing prose punctuation", () => {
   assert.deepStrictEqual(paths("(see a/b.go:7)."), [["a/b.go", 7, undefined, "a/b.go:7"]]);
 });
 
+test("suffix: sentence-ending period", () => {
+  assert.deepStrictEqual(paths("error in a/b.go:12."), [["a/b.go", 12, undefined, "a/b.go:12"]]);
+  assert.deepStrictEqual(paths("error in a/b.go:12:5."), [["a/b.go", 12, 5, "a/b.go:12:5"]]);
+  assert.deepStrictEqual(paths("a/b.go:3.5"), [["a/b.go", undefined, undefined, "a/b.go"]]);
+});
+
 test("suffix: a URL still wins", () => {
   assert.deepStrictEqual(paths("https://x.dev/a/b.go:12"), []);
 });
