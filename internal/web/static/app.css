@@ -1930,6 +1930,14 @@
     .viewer-auto { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-auto:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-content { flex: 1; min-height: 0; overflow: auto; }
+    /* The scroller takes focus on an open (tabindex=0). The global ring sits outside the
+       box, where the pane's overflow clipped it to a stray line under the toolbar: draw
+       it inside instead. */
+    .viewer-content:focus-visible { outline-offset: -2px; }
+    /* On the phone the focused pane always wears the 2px pane frame (.cell.focus); a
+       second ring just inside it would read as a double border. (On the desktop the
+       frame is a 1px line, or absent with one pane, so the ring stays.) */
+    @media (max-width: 700px) { .cell.focus .viewer-content:focus-visible { outline: none; } }
     /* The read view: one .vl row per source line, a number (.vl-n) beside the code
        (.vl-c). The pre carries .hljs (the highlight theme colours by it) but not
        its background, which stays the pane's. It is as wide as its longest line
@@ -1938,18 +1946,17 @@
     .viewer-pre { margin: 0; padding: 10px 0; box-sizing: border-box; width: max-content; min-width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); line-height: 1.55; white-space: pre; }
     .viewer-pre.hljs { background: none; }
     .vl { display: flex; }
-    /* Gutter width follows the digit count of the last line (--vl-digits, >= 3). Colours,
-       measured: --muted on --bg 7.37:1, on a target row 6.34:1 (AA text needs 4.5). */
-    .vl-n { flex: none; box-sizing: content-box; width: calc(var(--vl-digits, 3) * 1ch); padding: 0 1ch 0 12px; text-align: right; color: var(--muted); border-right: 1px solid var(--border); -webkit-user-select: none; user-select: none; }
+    /* Gutter width follows the digit count of the last line (--vl-digits, >= 3). The
+       gutter is sticky-left (spec D3) so the numbers stay put when a long line is
+       scrolled sideways; that needs an OPAQUE background (the code scrolls under it),
+       the pane's own --bg. Wrapped, nothing scrolls sideways and it just sits in its
+       column. Colours, measured: --muted on --bg 6.18:1 graphite / 7.37 Mocha (AA text
+       needs 4.5). A click on the number opens the path:line menu (viewer-tab.js
+       onLineNumClick). */
+    .vl-n { position: sticky; left: 0; z-index: 1; flex: none; box-sizing: content-box; width: calc(var(--vl-digits, 3) * 1ch); padding: 0 1ch 0 12px; text-align: right; color: var(--muted); background: var(--bg); border-right: 1px solid var(--border); cursor: pointer; -webkit-user-select: none; user-select: none; }
+    .viewer-wrap .vl-n { position: static; }
     .vl-c { flex: 1 0 auto; padding: 0 12px 0 1ch; }
-    /* A click on the number opens the path:line menu (viewer-tab.js onLineNumClick). */
-    .vl-n { cursor: pointer; }
     .vl-n:hover { color: var(--fg); }
-    /* The line a terminal link or Go to line asked for. The 8% wash is the most the
-       accent can tint --bg while the dimmest highlight token (.hljs-comment #8b949e)
-       stays at 4.59:1 (18% gave 3.71, 12% gave 4.23); the 3px bar carries the mark
-       for anyone the wash does not reach (accent on --bg 7.8:1, over the 3:1 a
-       graphic needs). */
     /* A file over 1000 lines is laid out in 500-row blocks; the browser skips the ones far
        from the viewport. Every row is one line high (nothing wraps), so the stand-in height
        for a skipped block is exact. Without the `auto` keyword on purpose: auto remembers
@@ -1965,8 +1972,15 @@
     .viewer-wrap .viewer-pre { width: auto; min-width: 0; white-space: pre-wrap; }
     .viewer-wrap .vl-c { flex: 1 1 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     .viewer-wrap .vl-chunk { content-visibility: visible; }
-    .vl-target { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
-    .vl-target .vl-n { color: var(--fg); }
+    /* The line a terminal link or Go to line asked for: a 5% accent wash over the row
+       and a 3px accent bar on its gutter cell. The gutter cell is opaque (sticky), so
+       it carries its own copy of the wash (the same mix over --bg) and owns the bar;
+       a bar on the row would be painted under it. The wash costs every highlight
+       token some contrast, so it is kept light: 5% leaves the dimmest token that
+       matters (.hljs-comment #8b949e) at 5.87:1 graphite / 4.87 Mocha, and the bar
+       (accent on --bg 7.8:1, over the 3:1 a graphic needs) carries the mark. */
+    .vl-target { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+    .vl-target .vl-n { color: var(--fg); background: color-mix(in srgb, var(--accent) 5%, var(--bg)); box-shadow: inset 3px 0 0 var(--accent); }
     /* Find in file / Go to line (viewerfind.js). The bar sits between the toolbar and
        the scroller. Colours, measured against the code text (Catppuccin Mocha / the
        desktop graphite palette): every match is --fg on a 35% --accent wash over --bg
