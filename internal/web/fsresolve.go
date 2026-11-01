@@ -259,19 +259,27 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	pending := strings.Split(clean[1:], "/")
 	hops := 0
 	readOnly := false
+	// passed holds the scratch roots the walk stood on, by identity. Only
+	// those may claim the final path: a path STRING under a root proves
+	// nothing if another directory was moved into that path after the snapshot.
+	var passed map[string]bool
 	for {
 		if _, ok := p.denied[curKey]; ok {
 			return fsTarget{}, errDenied
 		}
-		if _, ok := p.scratch[curKey]; ok {
+		if root, ok := p.scratch[curKey]; ok {
 			readOnly = true
+			if passed == nil {
+				passed = map[string]bool{}
+			}
+			passed[root] = true
 		}
 		if _, ok := p.contained[curKey]; ok {
 			rel := filepath.Clean(filepath.Join(pending...))
 			if rel != "." && !filepath.IsLocal(rel) {
 				return fsTarget{}, errOutsideHome
 			}
-			if _, inScratch := p.underScratch(cur); !p.underHome(cur) && !inScratch {
+			if s, inScratch := p.underScratch(cur); !p.underHome(cur) && !(inScratch && passed[s]) {
 				return fsTarget{}, errOutsideHome
 			}
 			return fsTarget{Root: cur, Rel: rel, Abs: filepath.Join(cur, rel), Strict: true, ReadOnly: readOnly}, nil
@@ -329,7 +337,7 @@ func (p fsPolicy) resolve(req string) (fsTarget, error) {
 	root := p.rhome
 	if !p.underHome(cur) {
 		s, ok := p.underScratch(cur)
-		if !ok {
+		if !ok || !passed[s] {
 			return fsTarget{}, errOutsideHome
 		}
 		root, readOnly = s, true

@@ -287,6 +287,22 @@ func TestScratch_SwapAfterResolveRefusedByRoot(t *testing.T) {
 	}
 }
 
+// The policy holds the scratch root by identity. A different directory moved
+// into the same path after the snapshot is not that root, so a path string
+// that still matches must not be served.
+func TestScratch_SwappedRootDirIsNotTrusted(t *testing.T) {
+	_, scratch, _, pol := scratchFixture(t)
+	if err := os.Rename(scratch, scratch+".old"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(scratch + ".old") })
+	mustWrite(t, filepath.Join(scratch, "planted.txt"))
+	mustChmod(t, scratch, 0o700)
+	if _, err := pol.resolve(filepath.Join(scratch, "planted.txt")); !errors.Is(err, errOutsideHome) {
+		t.Fatalf("err = %v, want errOutsideHome", err)
+	}
+}
+
 func TestScratch_HardlinkIsSameUserFile(t *testing.T) {
 	home, scratch, _, pol := scratchFixture(t)
 	mustWrite(t, filepath.Join(home, "x"), "same-user")
