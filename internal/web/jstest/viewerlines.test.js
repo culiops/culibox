@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { splitHighlightedLines, countSourceLines, clampLine } = require("../static/viewerlines.js");
+const { splitHighlightedLines, countSourceLines, clampLine, linesOnlyText } = require("../static/viewerlines.js");
 
 test("split: plain", () => {
   assert.deepEqual(splitHighlightedLines("a\nb"), ["a", "b"]);
@@ -69,4 +69,10 @@ test("clampLine", () => {
   assert.deepEqual(clampLine(5, 10), { line: 5, clamped: false });
   assert.deepEqual(clampLine(10, 10), { line: 10, clamped: false });
   assert.deepEqual(clampLine(3, 0), { line: 1, clamped: true });
+});
+
+test("linesOnlyText: singular for 1, plural otherwise", () => {
+  assert.equal(linesOnlyText("a.go", 1), "a.go has only 1 line");
+  assert.equal(linesOnlyText("a.go", 2), "a.go has only 2 lines");
+  assert.equal(linesOnlyText("a.go", 0), "a.go has only 0 lines");
 });

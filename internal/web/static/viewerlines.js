@@ -58,6 +58,11 @@ function clampLine(n, total) {
   return { line, clamped: line !== n };
 }
 
+// linesOnlyText is the toast for a line past the end of the file.
+function linesOnlyText(name, n) {
+  return name + " has only " + n + (n === 1 ? " line" : " lines");
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { splitHighlightedLines, countSourceLines, clampLine };
+  module.exports = { splitHighlightedLines, countSourceLines, clampLine, linesOnlyText };
 }

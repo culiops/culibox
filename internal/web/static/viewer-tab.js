@@ -364,8 +364,11 @@ class ViewerTab {
   // it says that instead; an image, a binary or a message has no lines (no-op).
   revealLine(line, col) {
     if (this.editing && this.cm) {
-      const c = clampLine(line, this.cm.lineCount());
-      if (c.clamped) showToast(this.name + " has only " + this.cm.lineCount() + " lines");
+      // The same count as the read view: CodeMirror's lineCount() adds the empty
+      // line after a trailing newline, which is not a line of the file.
+      const total = countSourceLines(this.cm.getValue());
+      const c = clampLine(line, total);
+      if (c.clamped) showToast(linesOnlyText(this.name, total));
       this.cm.setCursor({ line: c.line - 1, ch: (col > 0 ? col : 1) - 1 });
       this.cm.scrollIntoView(null, 100);
       this.cm.focus();
@@ -382,7 +385,7 @@ class ViewerTab {
       return;
     }
     const c = clampLine(line, this.lineCount);
-    if (c.clamped) showToast(this.name + " has only " + this.lineCount + " lines");
+    if (c.clamped) showToast(linesOnlyText(this.name, this.lineCount));
     this.markTarget(c.line);
     this.scrollToTarget = true;
     if (this.content.isConnected) this.scrollTargetIntoView();
