@@ -279,3 +279,29 @@ func TestLayerVersionByArnIsNotAnIAMAction(t *testing.T) {
 		t.Error("catalog changed: revisit the lambda layer SecretReturning entries")
 	}
 }
+
+// Reads whose reply really carries a secret under a name the screen words do
+// not match. Each must be denied whenever a residual pattern covers it.
+func TestSecretReturningCatchesRealSecretReads(t *testing.T) {
+	for _, a := range []string{
+		"acm:exportcertificate",
+		"amplify:getapp", "amplify:getbranch", "amplify:listapps", "amplify:listbranches",
+		"codepipeline:getjobdetails", "codepipeline:getthirdpartyjobdetails",
+		"finspace:getkxconnectionstring",
+		"glue:getconnection", "glue:getconnections",
+		"mediapackage:describechannel", "mediapackage:listchannels",
+		"kinesisvideo:geticeserverconfig",
+		"directconnect:describevirtualinterfaces",
+		"chime:getbot", "chime:listbots", "chime:getattendee",
+		"chime:listattendees", "directconnect:describerouterconfiguration",
+	} {
+		service, _, _ := strings.Cut(a, ":")
+		mustDeny, unknown := MintingScreen([]string{service + ":*"})
+		if len(unknown) != 0 {
+			t.Errorf("%s: pattern unknown to the catalog: %v", a, unknown)
+		}
+		if !slices.ContainsFunc(mustDeny, func(d string) bool { return strings.EqualFold(d, a) }) {
+			t.Errorf("%s is not in mustDeny under %s:*", a, service)
+		}
+	}
+}

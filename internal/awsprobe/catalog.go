@@ -109,19 +109,54 @@ func screened(action string) bool {
 // (lowercased action -> reason). MintingScreen puts each in mustDeny whenever a
 // residual pattern covers it, regardless of the name screen and HarmlessMinting.
 //
-// Known limit: secrets stored in configuration are NOT screened. Lambda
-// environment variables, EC2 user data and launch-template data, CloudFront
-// origin custom headers and SSM parameters are plain data to the catalog; the
-// gate's descriptive data-read step reports them and nothing here denies them.
+// Added by hand, on purpose, and not complete. The SDK models' sensitive trait
+// was measured as a source (2026-11-01, botocore 1.34): it flags over 600 read
+// actions, mostly noise (NextToken, tag keys, a CloudFront Comment), and misses
+// glue:GetConnection, whose password sits in a plain map. An action goes here when
+// AWS's docs or model say its reply carries the secret, or, labelled as inferred
+// in its reason, when that follows from what the reply is.
+//
+// Known limit: not listed, because a deny would remove a core read and no live
+// call has shown a value. redshift:DescribeClusters and the rds Describe calls
+// document PendingModifiedValues.MasterUserPassword as a response field, which
+// may be masked (unverified). ec2:DescribeVpnConnections models
+// TunnelOptions.PreSharedKey as sensitive (unverified). fsx documents
+// FsxAdminPassword as always redacted in responses. dms and datasync model a
+// Password shared with their write APIs (unverified).
+//
+// Known limit: secrets a user put in configuration are NOT screened. Lambda
+// environment variables (lambda:GetFunctionConfiguration, lambda:ListFunctions),
+// EC2 user data and launch-template data, CloudFront origin custom headers and
+// SSM parameters are plain data to the catalog; the gate's descriptive
+// data-read step reports them and nothing here denies them.
 var SecretReturning = map[string]string{
-	"lambda:getfunction":                 "Code.Location in the response is a presigned URL to the function's code package",
-	"lambda:getlayerversion":             "Content.Location in the response is a presigned URL to the layer archive",
-	"cognito-idp:describeuserpoolclient": "the response includes the app client's ClientSecret",
-	"apigateway:get":                     "GET /apikeys?includeValues=true returns API key values",
-	"sts:assumerole":                     "mints temporary credentials for the assumed role",
-	"sts:assumerolewithsaml":             "mints temporary credentials from a SAML assertion",
-	"sts:assumerolewithwebidentity":      "mints temporary credentials from a web identity token",
-	"sts:assumeroot":                     "mints temporary root credentials for a member account",
+	"lambda:getfunction":                        "Code.Location in the response is a presigned URL to the function's code package",
+	"lambda:getlayerversion":                    "Content.Location in the response is a presigned URL to the layer archive",
+	"cognito-idp:describeuserpoolclient":        "the response includes the app client's ClientSecret",
+	"apigateway:get":                            "GET /apikeys?includeValues=true returns API key values",
+	"acm:exportcertificate":                     "PrivateKey in the response is the certificate's private key, under a passphrase the caller chooses",
+	"amplify:getapp":                            "basicAuthCredentials in the response is the app's basic-auth username and password",
+	"amplify:getbranch":                         "basicAuthCredentials in the response is the branch's basic-auth username and password",
+	"amplify:listapps":                          "basicAuthCredentials in the response is each app's basic-auth username and password",
+	"amplify:listbranches":                      "basicAuthCredentials in the response is each branch's basic-auth username and password",
+	"codepipeline:getjobdetails":                "artifactCredentials in the response are temporary AWS credentials for the artifact store",
+	"codepipeline:getthirdpartyjobdetails":      "artifactCredentials in the response are temporary AWS credentials for the artifact store",
+	"finspace:getkxconnectionstring":            "signedConnectionString in the response is a signed connection string to the kdb cluster",
+	"glue:getconnection":                        "ConnectionProperties in the response holds the connection's password unless the caller sets HidePassword",
+	"glue:getconnections":                       "ConnectionProperties in the response holds each connection's password unless the caller sets HidePassword",
+	"chime:getattendee":                         "JoinToken in the response is the attendee's meeting join token",
+	"chime:listattendees":                       "JoinToken in the response is each attendee's meeting join token",
+	"directconnect:describerouterconfiguration": "customerRouterConfig is the generated router configuration, which holds the BGP authentication key (inferred from what it configures, not from a live call)",
+	"chime:getbot":                              "SecurityToken in the response is the bot's token",
+	"chime:listbots":                            "SecurityToken in the response is each bot's token",
+	"directconnect:describevirtualinterfaces":   "authKey in the response is the BGP authentication key",
+	"kinesisvideo:geticeserverconfig":           "the response carries TURN server usernames and passwords",
+	"mediapackage:describechannel":              "HlsIngest.IngestEndpoints in the response carry the ingest username and password",
+	"mediapackage:listchannels":                 "HlsIngest.IngestEndpoints in the response carry each channel's ingest username and password",
+	"sts:assumerole":                            "mints temporary credentials for the assumed role",
+	"sts:assumerolewithsaml":                    "mints temporary credentials from a SAML assertion",
+	"sts:assumerolewithwebidentity":             "mints temporary credentials from a web identity token",
+	"sts:assumeroot":                            "mints temporary root credentials for a member account",
 }
 
 // RetiredServices lists service prefixes AWS has retired and removed from the

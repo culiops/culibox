@@ -1,11 +1,15 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +25,7 @@ type gateCall struct {
 	creds           Creds
 	region, account string
 	budget          time.Duration // the ctx deadline left when the gate was called
+	source          string
 }
 
 // fakeGate returns its results in order, then Unverified (error). With
@@ -37,7 +42,7 @@ type fakeGate struct {
 
 func (g *fakeGate) callCount() int { g.mu.Lock(); defer g.mu.Unlock(); return len(g.calls) }
 
-func (g *fakeGate) fn(ctx context.Context, c Creds, region, account string) awsprobe.GateResult {
+func (g *fakeGate) fn(ctx context.Context, c Creds, region, account, source string) awsprobe.GateResult {
 	if g.release != nil {
 		g.entered <- struct{}{}
 		<-g.release
@@ -51,7 +56,7 @@ func (g *fakeGate) fn(ctx context.Context, c Creds, region, account string) awsp
 	if d, ok := ctx.Deadline(); ok {
 		budget = time.Until(d)
 	}
-	g.calls = append(g.calls, gateCall{c, region, account, budget})
+	g.calls = append(g.calls, gateCall{c, region, account, budget, source})
 	if len(g.results) == 0 {
 		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonError}
 	}
@@ -106,6 +111,9 @@ func TestServeSSODirectGatesEveryMint(t *testing.T) {
 		r.SourceIdentity != "" || r.AccountID != "123456789012" || !r.Expires.Equal(now.Add(time.Hour)) ||
 		r.ScopeHash != ssoDirectBinding().Hash() {
 		t.Fatalf("minted row %+v", rec.rows)
+	}
+	if len(g.calls) != 1 || g.calls[0].source != "sso-ro" {
+		t.Fatalf("gate did not get the binding's source profile: %+v", g.calls)
 	}
 	if len(g.calls) != 1 || g.calls[0].account != "123456789012" || g.calls[0].region != "ap-southeast-1" ||
 		g.calls[0].creds.AccessKeyID != "ASIAFAKE" || g.calls[0].budget <= 0 || g.calls[0].budget > 15*time.Second {
@@ -323,7 +331,7 @@ func TestCheckSSODirect(t *testing.T) {
 	b, fm, rec, now := ssoDirectSetup(t, g)
 	res, exp := b.CheckSSODirect(context.Background(), bnd)
 	if res.State != awsprobe.GateReadOnly || !exp.Equal(now.Add(time.Hour)) || len(g.calls) != 1 ||
-		g.calls[0].account != "123456789012" || g.calls[0].budget > 15*time.Second {
+		g.calls[0].account != "123456789012" || g.calls[0].source != "sso-ro" || g.calls[0].budget > 15*time.Second {
 		t.Fatalf("read-only: %+v %v %+v", res, exp, g.calls)
 	}
 	if r := lastRow(rec); r.Outcome != OutcomeProbeMinted || r.Mode != config.AWSModeSSODirect || r.RoleARN != ssoRoleARN ||
@@ -579,5 +587,27 @@ func TestHooksCheckSSODirect(t *testing.T) {
 	}
 	if fm.callCount() != n {
 		t.Fatalf("a non-sso_direct key fetched credentials (%d mints)", fm.callCount()-n)
+	}
+}
+
+// The real gate hands the binding's source profile to the AWS client: a CA bundle
+// that exists only on that profile fails the config load, before any network.
+func TestIAMGatePassesTheSourceProfile(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "config")
+	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") + "\n"
+	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", conf)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CA_BUNDLE", "")
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	res := IAMGate(context.Background(), Creds{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "eu-west-1", "123456789012", "src")
+	if res.State != awsprobe.GateUnverified || !strings.Contains(logged.String(), "load AWS config") {
+		t.Fatalf("state %v, log %q", res.State, logged.String())
 	}
 }
