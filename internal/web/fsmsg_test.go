@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -114,6 +115,30 @@ func TestFsErr_SocketNotRegular(t *testing.T) {
 	defer l.Close()
 	rec := fsGet(s.handleFsRead, "/api/fs/read", p)
 	wantRefusal(t, 403, msgNotReg, rec.Code, errBody(t, rec))
+}
+
+func TestFsErr_ProtectedFolderRenameAndDelete(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	rec := httptest.NewRecorder()
+	s.handleFsRename(rec, opReq(t, "/api/fs/rename", opJSON(map[string]string{"path": ws, "name": "ws2"})))
+	wantRefusal(t, 403, msgProtected, rec.Code, errBody(t, rec))
+	rec = httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", opJSON(map[string]any{"path": ws, "recursive": true, "entries": 1})))
+	wantRefusal(t, 403, msgProtected, rec.Code, errBody(t, rec))
+}
+
+func TestFsErr_PermissionOnMutationSaysChange(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores mode bits")
+	}
+	s, home, _ := scratchServer(t)
+	locked := filepath.Join(home, "locked")
+	mustMkdirAll(t, filepath.Join(locked, "sub"))
+	mustChmod(t, locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	rec := httptest.NewRecorder()
+	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", opJSON(map[string]string{"dir": filepath.Join(locked, "sub"), "name": "n"})))
+	wantRefusal(t, 403, msgPermWrite, rec.Code, errBody(t, rec))
 }
 
 func TestFsRead_ScratchTextCarriesReadonly(t *testing.T) {

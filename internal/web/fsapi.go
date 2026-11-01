@@ -21,6 +21,7 @@ var (
 	errReadOnly    = errors.New("read only")   // a mutation under a scratch root
 	errLinkEscape  = errors.New("link escapes the workspace")
 	errBlocked     = errors.New("blocked")
+	errPermWrite   = errors.New("no permission (mutation)")
 )
 
 // imageExt maps a lowercase extension to the MIME type served raw for <img>.
@@ -62,6 +63,8 @@ func writeFsErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusForbidden, msgEscape)
 	case errors.Is(err, errBlocked):
 		writeErr(w, http.StatusForbidden, msgBlocked)
+	case errors.Is(err, errPermWrite):
+		writeErr(w, http.StatusForbidden, msgPermWrite)
 	case errors.Is(err, os.ErrPermission):
 		// A root-owned directory mid-path (Docker leaves them in scratch
 		// folders) fails the resolver's Lstat: a refusal, never a 500.
