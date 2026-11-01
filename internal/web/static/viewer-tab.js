@@ -131,7 +131,11 @@ class ViewerTab {
     let mode = null;
     if (shortcutMatches("viewer.find", e, IS_MAC)) mode = "find";
     else if (shortcutMatches("viewer.gotoLine", e, IS_MAC)) mode = "line";
-    if (mode && this.openFind(mode)) { e.preventDefault(); e.stopPropagation(); }
+    if (mode && this.openFind(mode)) { e.preventDefault(); e.stopPropagation(); return; }
+    // Esc closes an open find bar from the reader or the editor too, not only from
+    // inside the bar. preventDefault keeps a maximized drawer open (app.js leaves a
+    // used Escape alone). With the bar closed Esc is not ours and passes through.
+    if (e.key === "Escape" && !mode && this.find.isOpen) { e.preventDefault(); e.stopPropagation(); this.find.close(); }
   }
 
   // openFind shows the find bar in "find" or "line" (Go to line) mode and says
@@ -154,6 +158,7 @@ class ViewerTab {
   // pane when it is off-screen, and the match itself sideways when the lines are
   // not wrapped. `row` is the match's .vl row (or markdown block).
   revealRange(range, row) {
+    this.markTarget(null); // a find navigation ends the open-at-line mark (spec D2)
     const c = this.content;
     if (!c.isConnected || !row) return;
     const cr = c.getBoundingClientRect();
@@ -186,6 +191,9 @@ class ViewerTab {
   // freshly built tab may not be in the document yet (a maximized other pane keeps
   // its cell detached), so when detached it retries once on the next frame.
   focusReader() {
+    // Edit mode keeps the editor's focus (spec D8b): a link or tree open of a file
+    // being edited must leave the caret where revealLine put it.
+    if (this.editing && this.cm) { this.cm.focus(); return; }
     const f = () => { if (this.content.isConnected) this.content.focus({ preventScroll: true }); };
     if (this.content.isConnected) f();
     else requestAnimationFrame(f);
@@ -298,6 +306,7 @@ class ViewerTab {
   dispose() {
     if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
     this.toolbarApi.closeMenus();
+    if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // its buttons would act on a closed viewer
     this.find.close(true); // frees the document-wide highlight names if this bar held them
   }
   // The toolbar's actions as methods (viewertoolbar.js calls these).

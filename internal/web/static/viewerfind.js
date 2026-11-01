@@ -79,15 +79,24 @@ function vfLocate(segments, offset, isEnd) {
   return vfLocatePrefix(vfPrefix(segments), offset, !!isEnd);
 }
 
-// vfLineSubmit decides what Enter (or Go) does in line mode. A whole number goes
-// to that line (revealLine clamps and toasts a line past the end); anything else
-// (empty, letters, "3x") leaves the bar open for another try. `total` is accepted
-// so the clamp can move here without changing callers.
-function vfLineSubmit(raw, total) {
-  void total;
+// vfLineSubmit decides what Enter (or Go) does in line mode. A whole number from 1
+// up goes to that line (revealLine clamps and toasts a line past the end); anything
+// else (empty, letters, "3x", 0 or a negative number, which is not "past the end")
+// leaves the bar open for another try.
+function vfLineSubmit(raw) {
   const m = /^\s*([+-]?\d+)\s*$/.exec(String(raw == null ? "" : raw));
   if (!m) return { action: "stay" };
-  return { action: "go", line: parseInt(m[1], 10) };
+  const line = parseInt(m[1], 10);
+  return line >= 1 ? { action: "go", line } : { action: "stay" };
+}
+
+// vfAnchorStart: where a first search begins, as a joined-text offset: the start
+// of the group whose row is the reader's place (the target line, else the first
+// visible row), or 0 when that row is unknown or not part of the search.
+function vfAnchorStart(groups, row) {
+  if (!row) return 0;
+  for (const g of groups) if (g.row === row) return g.start;
+  return 0;
 }
 
 function vfCountLabel(cur, total, capped) {
@@ -214,7 +223,21 @@ class VFRead {
     return this.cur + 1;
   }
 
-  anchor() { return this.cur >= 0 ? this.starts[this.cur] : 0; }
+  // anchor: where the next search starts. Once a match is current it is that match
+  // (typing more narrows in place). A fresh search starts where the reader is:
+  // the line a link or Go to line landed on, else the first visible row.
+  anchor() {
+    if (this.cur >= 0) return this.starts[this.cur];
+    if (!this.collect()) return 0;
+    const v = this.v;
+    let row = v.targetLine ? v.content.querySelector(".vl-target") : null;
+    if (!row && v.hasLines) row = v.firstVisibleRow();
+    if (!row && !v.hasLines) { // rendered markdown: its first block still on screen
+      const top = v.content.getBoundingClientRect().top;
+      for (const g of this.groups) if (g.row.getBoundingClientRect().bottom > top) { row = g.row; break; }
+    }
+    return vfAnchorStart(this.groups, row);
+  }
 
   paint(quiet) {
     const cur = this.ranges[this.cur];
@@ -510,7 +533,7 @@ class ViewerFind {
   // submitLine goes to the line and closes the bar, focus back on the reader or
   // the editor. A non-number keeps the bar and refocuses the input.
   submitLine() {
-    const d = vfLineSubmit(this.input.value, this.v.lineTotal());
+    const d = vfLineSubmit(this.input.value);
     if (d.action !== "go") { this.input.focus(); return; }
     this.v.revealLine(d.line);
     this.close(true); // noFocus: focus is placed explicitly below
@@ -559,5 +582,5 @@ class ViewerFind {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { vfFold, vfFindAll, vfPrefix, vfLocate, vfLocatePrefix, vfCountLabel, vfLineSubmit };
+  module.exports = { vfFold, vfFindAll, vfPrefix, vfLocate, vfLocatePrefix, vfCountLabel, vfLineSubmit, vfAnchorStart };
 }

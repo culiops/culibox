@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { vfFold, vfFindAll, vfLocate, vfCountLabel, vfLineSubmit } = require("../static/viewerfind.js");
+const { vfFold, vfFindAll, vfLocate, vfCountLabel, vfLineSubmit, vfAnchorStart } = require("../static/viewerfind.js");
 
 test("matcher: case-insensitive, non-overlapping, ordered", () => {
   assert.deepEqual(vfFindAll("aXa xa", "xa", 10), { hits: [[1, 3], [4, 6]], capped: false });
@@ -62,8 +62,23 @@ test("go to line: a number goes, anything else stays open", () => {
   assert.deepEqual(vfLineSubmit("42", 100), { action: "go", line: 42 });
   assert.deepEqual(vfLineSubmit(" 7 ", 100), { action: "go", line: 7 });
   assert.deepEqual(vfLineSubmit("9999", 100), { action: "go", line: 9999 }); // revealLine clamps and toasts
-  assert.deepEqual(vfLineSubmit("0", 100), { action: "go", line: 0 });
+  assert.deepEqual(vfLineSubmit("1"), { action: "go", line: 1 });
+  // Below 1 is not "past the end": the bar stays open rather than toast "only N lines".
+  for (const low of ["0", "-5", "-1", "+0", "00"]) {
+    assert.deepEqual(vfLineSubmit(low), { action: "stay" }, low);
+  }
   for (const bad of ["", "  ", "abc", "3x", "1.5", null, undefined]) {
     assert.deepEqual(vfLineSubmit(bad, 100), { action: "stay" }, String(bad));
   }
+});
+
+test("find anchor: the offset of the group that holds the reader's row", () => {
+  const a = { row: "A", start: 0 }, b = { row: "B", start: 12 }, c = { row: "C", start: 30 };
+  assert.equal(vfAnchorStart([a, b, c], "B"), 12);
+  assert.equal(vfAnchorStart([a, b, c], "A"), 0);
+  assert.equal(vfAnchorStart([a, b, c], "C"), 30);
+  // No row (nothing visible, image) or a row that is not searched: the top.
+  assert.equal(vfAnchorStart([a, b, c], null), 0);
+  assert.equal(vfAnchorStart([a, b, c], "Z"), 0);
+  assert.equal(vfAnchorStart([], "B"), 0);
 });

@@ -47,7 +47,7 @@ function viewerToolbarModel(s) {
   m.find = ent(true, !image, "Find", image ? "An image has no text to search" : "Find in this file" + hint("find"));
   for (const x of Array.isArray(s.extras) ? s.extras : []) {
     if (!x || !x.key) continue;
-    m[x.key] = ent(true, !editing, x.label || x.key, editing ? "Save or cancel your edit first" : (x.title || x.label || x.key));
+    m[x.key] = ent(!editing, !editing, x.label || x.key, editing ? "Save or cancel your edit first" : (x.title || x.label || x.key));
   }
   m.more = ent(true, true, "⋯", "More: reload, download, follow, wrap, go to line, text size");
 

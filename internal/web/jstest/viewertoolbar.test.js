@@ -147,8 +147,10 @@ test("extras sit on the primary row after Find and before the overflow button", 
   assert.equal(m.openInPane.enabled, true);
   assert.equal(m.openInPane.title, extras[0].title);
   assert.equal(viewerToolbarModel(base()).openInPane, undefined);
-  // While editing the file would leave its edit behind: off, and it says why.
+  // While editing the file would leave its edit behind: the button is not shown at
+  // all (the narrow drawer row would wrap), and if it were it would say why.
   const ed = viewerToolbarModel(base({ extras, editing: true }));
+  assert.equal(ed.openInPane.shown, false);
   assert.equal(ed.openInPane.enabled, false);
   assert.match(ed.openInPane.title, /Save or cancel/);
 });
