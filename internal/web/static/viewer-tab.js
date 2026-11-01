@@ -427,24 +427,14 @@ class ViewerTab {
     const res = await fsPost("/api/git/diff", { path: this.path });
     // Overtaken: a newer diff read, or a switch back to the file, owns the pane.
     if (seq !== this.diffSeq || !viewReplyPaints(vseq, this.viewSeq, true, this.changes)) return;
-    this.setStatus("");
-    const d = res.ok && res.data ? res.data : null;
-    if (!d) {
-      this.diffMessage(res.status ? "Could not read the changes (HTTP " + res.status + ")" : "Could not reach the server", "err", "unreadable");
-    } else if (d.state === "notrepo") {
-      this.diffMessage("This file is not in a git repository", "", "unreadable");
-    } else if (d.state !== "ok") {
-      this.diffMessage("Changes are unavailable" + (d.reason ? ": " + d.reason : ""), "", "unreadable");
-    } else if (d.kind === "unchanged") {
-      this.diffMessage("No changes vs HEAD", "", "empty", true);
-    } else if (d.kind === "binary") {
-      this.diffMessage("Binary file, no text diff to show", "", "binary");
-    } else {
-      const rows = parseUnifiedDiff(d.diff);
-      if (!rows.length) this.diffMessage("No changes vs HEAD", "", "empty", true);
-      else this.renderDiff(rows, d.diff, !!d.truncated);
-    }
+    const o = diffOutcome(res);
+    if (o.view === "msg") this.diffMessage(o.text, o.cls, o.refusal, o.back);
+    else this.renderDiff(o.rows, o.diff, o.truncated);
     this.applyScroll();
+    // Last, after the render has set copyRefusal: setStatus repaints the toolbar,
+    // and Copy's enabled state reads copyRefusal (a repaint before it left Copy
+    // disabled as "still loading").
+    this.setStatus("");
   }
 
   // diffHeader: the strip that says what the pane shows, so a screenshot is

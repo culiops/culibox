@@ -476,12 +476,18 @@ const drawerToolbarHost = {
 function drawerOpenInPane() {
   const v = drawerViewer;
   if (!v || v.editing) return;
-  const path = v.path, scroll = v.scroll, changes = !!v.changes;
+  const path = v.path, scroll = v.scroll, changes = !!v.changes, fileScroll = v.fileScroll;
   drawerClearViewer();
   openFile(path, changes ? { view: "changes" } : undefined); // "at the same place" includes the diff
   for (const c of cells) {
     const t = c.tabs.find((x) => x.kind === "viewer" && !x.box && x.path === path);
-    if (t) { t.scroll = scroll; t.applyScroll(); break; }
+    if (t) {
+      t.scroll = scroll;
+      // The file's own offset comes along, so Show file / Changes off lands where it was read.
+      if (t.changes && Number.isFinite(fileScroll)) t.fileScroll = fileScroll;
+      t.applyScroll();
+      break;
+    }
   }
 }
 

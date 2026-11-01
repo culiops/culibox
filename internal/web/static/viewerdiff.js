@@ -124,6 +124,24 @@ function viewReplyPaints(startSeq, nowSeq, startChanges, nowChanges) {
   return startSeq === nowSeq && !!startChanges === !!nowChanges;
 }
 
+// diffOutcome(res) -> what loadDiff shows for the answer of POST /api/git/diff.
+// res = {ok, status, data}. Either {view:"rows", rows, diff, truncated, refusal:null}
+// or {view:"msg", text, cls, refusal, back}: one sentence under the header, the
+// copyRefusal that fits it (so Copy's state matches what is on screen) and whether
+// it offers the way back to the file.
+function diffOutcome(res) {
+  const msg = (text, cls, refusal, back) => ({ view: "msg", text, cls, refusal, back: !!back });
+  const d = res && res.ok && res.data ? res.data : null;
+  if (!d) return msg(res && res.status ? "Could not read the changes (HTTP " + res.status + ")" : "Could not reach the server", "err", "unreadable");
+  if (d.state === "notrepo") return msg("This file is not in a git repository", "", "unreadable");
+  if (d.state !== "ok") return msg("Changes are unavailable" + (d.reason ? ": " + d.reason : ""), "", "unreadable");
+  if (d.kind === "unchanged") return msg("No changes vs HEAD", "", "empty", true);
+  if (d.kind === "binary") return msg("Binary file, no text diff to show", "", "binary");
+  const rows = parseUnifiedDiff(d.diff);
+  if (!rows.length) return msg("No changes vs HEAD", "", "empty", true);
+  return { view: "rows", rows, diff: d.diff, truncated: !!d.truncated, refusal: null };
+}
+
 // diffCopyBlock: why Copy has no diff to give, or "" when it has. `refusal` is the
 // viewer's copyRefusal while the diff is on screen (null = there is text).
 function diffCopyBlock(refusal) {
@@ -136,5 +154,5 @@ function diffCopyBlock(refusal) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parseUnifiedDiff, diffSign, diffMaxLine, diffRowHtml, viewReplyPaints, diffCopyBlock };
+  module.exports = { parseUnifiedDiff, diffSign, diffMaxLine, diffRowHtml, viewReplyPaints, diffCopyBlock, diffOutcome };
 }

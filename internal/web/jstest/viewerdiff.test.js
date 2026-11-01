@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { parseUnifiedDiff, diffSign, diffRowHtml, diffMaxLine, viewReplyPaints, diffCopyBlock } = require("../static/viewerdiff.js");
+const { parseUnifiedDiff, diffSign, diffRowHtml, diffMaxLine, viewReplyPaints, diffCopyBlock, diffOutcome } = require("../static/viewerdiff.js");
 
 const TWO_HUNKS = [
   "diff --git a/a.go b/a.go",
@@ -166,4 +166,39 @@ test("diffCopyBlock: a reason for every state with no diff text, empty when ther
   assert.match(diffCopyBlock("empty"), /no changes/);
   assert.match(diffCopyBlock("binary"), /binary/);
   assert.match(diffCopyBlock("unreadable"), /could not be read/);
+});
+
+// The outcome of a diff read, per kind/state: what shows, and the copyRefusal that
+// goes with it (Copy's enabled state is diffCopyBlock(refusal), so the two must agree).
+const ok = (data) => ({ ok: true, status: 200, data: Object.assign({ state: "ok", kind: "text", diff: "", truncated: false }, data) });
+
+test("diffOutcome: text rows leave Copy enabled (refusal null), truncated is carried", () => {
+  const o = diffOutcome(ok({ diff: "@@ -1 +1 @@\n-a\n+b\n", truncated: true }));
+  assert.equal(o.view, "rows");
+  assert.equal(o.rows.length, 3);
+  assert.equal(o.truncated, true);
+  assert.equal(o.refusal, null);
+  assert.equal(diffCopyBlock(o.refusal), "");
+});
+
+test("diffOutcome: every message state names its refusal, so Copy is disabled with a reason", () => {
+  const cases = [
+    [ok({ kind: "unchanged" }), "empty", true, /No changes vs HEAD/],
+    [ok({ kind: "text", diff: "" }), "empty", true, /No changes vs HEAD/],
+    [ok({ kind: "binary" }), "binary", false, /Binary/],
+    [{ ok: true, status: 200, data: { state: "notrepo" } }, "unreadable", false, /not in a git repository/],
+    [{ ok: true, status: 200, data: { state: "unavailable", reason: "git timed out" } }, "unreadable", false, /unavailable: git timed out/],
+    [{ ok: true, status: 200, data: { state: "unavailable" } }, "unreadable", false, /^Changes are unavailable$/],
+    [{ ok: false, status: 500, data: null }, "unreadable", false, /HTTP 500/],
+    [{ ok: false, status: 0, data: null }, "unreadable", false, /reach the server/],
+  ];
+  for (const [res, refusal, back, text] of cases) {
+    const o = diffOutcome(res);
+    assert.equal(o.view, "msg");
+    assert.equal(o.refusal, refusal);
+    assert.equal(o.back, back);
+    assert.match(o.text, text);
+    assert.notEqual(diffCopyBlock(o.refusal), "", "Copy is disabled with a reason");
+  }
+  assert.equal(diffOutcome({ ok: false, status: 500, data: null }).cls, "err");
 });
