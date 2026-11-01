@@ -72,6 +72,13 @@ func TestParseStatusRenameConsumesOrig(t *testing.T) {
 	}
 }
 
+func TestParseStatusMalformedRenameDoesNotEatNext(t *testing.T) {
+	got, _, _ := ParseStatus(rec("2 R. short", one(".M", "valid")), 100)
+	if len(got) != 1 || got[0].P != "valid" {
+		t.Errorf("got %+v", got)
+	}
+}
+
 func TestParseStatusOddNames(t *testing.T) {
 	names := []string{"with space.txt", "dir/ünï côde ✓.go", "new\nline.txt", "tab\there.txt", "trail space ", "a  b"}
 	for _, n := range names {
@@ -90,7 +97,7 @@ func TestParseStatusOddNames(t *testing.T) {
 }
 
 func TestParseStatusHostile(t *testing.T) {
-	bad := []string{"/etc/passwd", "a/../../x", "..", "../x", "a/..", "", strings.Repeat("a", 5000)}
+	bad := []string{"/etc/passwd", "a/../../x", "..", "../x", "bad\xffutf8", "a/..", "", strings.Repeat("a", 5000)}
 	for _, n := range bad {
 		for _, r := range []string{one(".M", n), "? " + n} {
 			got, _, many := ParseStatus(rec(r), 100)

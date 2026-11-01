@@ -13,6 +13,7 @@ func prefix(mounts ...string) []string {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "512m",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.gitstatus=1",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
+		"-e", "GIT_CONFIG_GLOBAL=/dev/null", "-e", "GIT_ATTR_NOSYSTEM=1",
 	}
 	for _, m := range mounts {
 		a = append(a, "--mount", "type=bind,src="+m+",dst="+m+",readonly")
@@ -21,7 +22,7 @@ func prefix(mounts ...string) []string {
 }
 
 func gitFlags(top string) []string {
-	return []string{"-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "safe.directory=*"}
+	return []string{"--no-pager", "-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.attributesFile=/dev/null", "-c", "safe.directory=*"}
 }
 
 func want(mounts []string, top string, sub ...string) []string {
@@ -93,5 +94,39 @@ func TestMountsAreReadOnly(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("%d mounts, want 2", n)
+	}
+}
+
+func TestTargetUnsafe(t *testing.T) {
+	bad := []Target{
+		{Top: "/w/a,b"},
+		{Top: "/w/a\"b"},
+		{Top: "/w/a\nb"},
+		{Top: "/w/a\x00b"},
+		{Top: "/w/a\xffb"},
+		{Top: "w/repo"},
+		{Top: ""},
+		{Top: "/w/repo/"},
+		{Top: "/w/../repo"},
+		{Top: "/w/repo", Common: "/m/x,volume-opt=y/.git"},
+		{Top: "/w/repo", Common: "/m/\"x/.git"},
+		{Top: "/w/repo", Common: "m/.git"},
+		{Top: "/w/repo", Common: "/m//.git"},
+	}
+	for _, b := range bad {
+		if why := b.Unsafe(); why == "" {
+			t.Errorf("%+v not refused", b)
+		}
+	}
+	good := []Target{
+		{Top: "/w/repo"},
+		{Top: "/w/my repo", Common: "/w/my repo/.git"},
+		{Top: "/w/wt", Common: "/w/main/.git"},
+		{Top: "/w/ünï"},
+	}
+	for _, g := range good {
+		if why := g.Unsafe(); why != "" {
+			t.Errorf("%+v refused: %s", g, why)
+		}
 	}
 }

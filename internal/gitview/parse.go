@@ -3,6 +3,7 @@ package gitview
 import (
 	"bytes"
 	"strings"
+	"unicode/utf8"
 )
 
 // maxPath is the longest path ParseStatus accepts, in bytes.
@@ -17,7 +18,7 @@ type Entry struct {
 
 // ParseStatus parses `git status --porcelain=v2 -z --branch` output. The input
 // is untrusted: records that are malformed, or whose path is empty, absolute,
-// over 4096 bytes or has a ".." segment, are dropped. At most max entries are
+// over 4096 bytes, not valid UTF-8 or has a ".." segment, are dropped. At most max entries are
 // returned; one more sets tooMany. noHead is true when the repo has no commits.
 func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool) {
 	recs := bytes.Split(b, []byte{0})
@@ -48,9 +49,11 @@ func ParseStatus(b []byte, max int) (entries []Entry, noHead bool, tooMany bool)
 			}
 		case strings.HasPrefix(r, "2 "):
 			// A rename or copy: --no-renames should prevent it. Keep its path as
-			// a modification and consume the origPath record that follows.
-			i++
-			if f := strings.SplitN(r, " ", 10); len(f) == 10 {
+			// a modification and consume the origPath record that follows, but
+			// only when this record is well formed: a malformed one is not known
+			// to be followed by an origPath, so the next record is parsed as itself.
+			if f := strings.SplitN(r, " ", 10); len(f) == 10 && len(f[1]) == 2 {
+				i++
 				if !add(f[9], "M") {
 					return
 				}
@@ -87,7 +90,7 @@ func code(xy string) string {
 }
 
 func safePath(p string) bool {
-	if p == "" || len(p) > maxPath || strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) {
+	if p == "" || len(p) > maxPath || strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) || !utf8.ValidString(p) {
 		return false
 	}
 	for _, seg := range strings.Split(p, "/") {

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // Label marks the throwaway containers so they can be found and reaped.
@@ -19,6 +21,30 @@ const tmpDir = "/tmp"
 // Target is one repository: Top is the checkout top-level, Common the common
 // git dir (the same as Top/.git unless Top is a linked worktree).
 type Target struct{ Top, Common string }
+
+// Unsafe names why t cannot be mounted, or "" when it can. Top and Common come
+// from an agent-shaped checkout, and docker parses --mount as CSV, so a path
+// holding a comma or quote could add mount options of its own. Both must be
+// absolute and clean, and pass box.MountUnsafe. Callers MUST check it before
+// StatusArgs or DiffArgs and treat a refusal as state "unavailable"; the
+// builders do not check, they only build.
+func (t Target) Unsafe() string {
+	for _, p := range []struct{ name, v string }{{"checkout", t.Top}, {"git dir", t.Common}} {
+		if p.v == "" && p.name == "git dir" {
+			continue // no separate common dir to mount
+		}
+		switch {
+		case !filepath.IsAbs(p.v):
+			return p.name + " path is not absolute"
+		case filepath.Clean(p.v) != p.v:
+			return p.name + " path is not clean"
+		}
+		if why := box.MountUnsafe(p.v); why != "" {
+			return p.name + ": " + why
+		}
+	}
+	return ""
+}
 
 // mounts are the read-only bind mounts: Top, plus Common when it lies outside Top.
 func (t Target) mounts() []string {
@@ -47,16 +73,19 @@ func argv(t Target, image, name string, uid, gid int, sub ...string) []string {
 		"--user", fmt.Sprintf("%d:%d", uid, gid),
 		"--label", Label + "=1",
 		"-e", "HOME=" + tmpDir, "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_OPTIONAL_LOCKS=0",
+		"-e", "GIT_CONFIG_GLOBAL=/dev/null", "-e", "GIT_ATTR_NOSYSTEM=1",
 	}
 	for _, m := range t.mounts() {
 		a = append(a, "--mount", "type=bind,src="+m+",dst="+m+",readonly")
 	}
 	a = append(a, "--entrypoint", "git", image,
-		"-C", t.Top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "safe.directory=*")
+		"--no-pager", "-C", t.Top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "core.attributesFile=/dev/null", "-c", "safe.directory=*")
 	return append(a, sub...)
 }
 
-// StatusArgs is the argv of the status container.
+// StatusArgs is the argv of the status container. The caller MUST have checked
+// t.Unsafe() == "" first.
 func StatusArgs(t Target, image, name string, uid, gid int) []string {
 	return argv(t, image, name, uid, gid,
 		"status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal", "--no-renames", "--ignore-submodules=all")
@@ -65,7 +94,7 @@ func StatusArgs(t Target, image, name string, uid, gid int) []string {
 // DiffArgs is the argv of the diff container for one file, rel being its path
 // relative to t.Top. Tracked files diff against HEAD (staged and unstaged);
 // untracked ones diff against /dev/null so the whole file reads as added.
-// rel follows "--" so it can never be taken for an option.
+// The caller MUST have checked t.Unsafe() == "" first. rel follows "--" so it can never be taken for an option.
 func DiffArgs(t Target, image, name string, uid, gid int, rel string, untracked bool) []string {
 	if untracked {
 		return argv(t, image, name, uid, gid,
