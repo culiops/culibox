@@ -495,7 +495,7 @@ func TestTimelineBoxSymlinkRefused(t *testing.T) {
 	}
 }
 
-func TestBoundTranscriptRefusesHeuristic(t *testing.T) {
+func TestBoundTranscriptNamesNoPathUnvalidated(t *testing.T) {
 	m, home := newLocatorManager(t)
 	tlWrite(t, home, "aaaa-1", tlYou(t, 0, "from A"))
 	tlWrite(t, home, "bbbb-2", tlYou(t, 0, "from B"))
@@ -504,10 +504,10 @@ func TestBoundTranscriptRefusesHeuristic(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := m.sessions["s1"]
-	s.status = statusExited // exited: locate runs the cwd+mtime heuristic
+	s.status = statusExited // exited: no registry, and a newer sibling's file sits in the dir
 
-	if l := m.locate("s1"); l.path == "" {
-		t.Fatal("precondition: the heuristic should pick a sibling's file here")
+	if l := m.locate("s1"); l.path != "" {
+		t.Fatalf("locate must not pick a file by cwd+mtime, got %q", l.path)
 	}
 	if _, ok := m.boundTranscript("s1"); ok {
 		t.Error("bound without a claudeSessionID")

@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -53,43 +52,6 @@ func isAgentBin(bin string) bool {
 		return true
 	}
 	return false
-}
-
-// transcriptPath finds the newest *.jsonl for cwd under <claudeDir>/projects/<slug>/
-// whose mtime >= created; falls back to the newest overall. ok=false if none.
-// claudeDir is the .claude directory itself (the default ~/.claude, an agent
-// account's config dir, or a box's per-box .claude), not a home.
-func transcriptPath(cwd, claudeDir string, created time.Time) (string, bool) {
-	dir := filepath.Join(claudeDir, "projects", projectSlug(cwd))
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return "", false
-	}
-	var best, newest string
-	var bestT, newestT time.Time
-	for _, e := range ents {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		fi, err := e.Info()
-		if err != nil {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		if fi.ModTime().After(newestT) {
-			newestT, newest = fi.ModTime(), p
-		}
-		if !fi.ModTime().Before(created) && fi.ModTime().After(bestT) {
-			bestT, best = fi.ModTime(), p
-		}
-	}
-	if best != "" {
-		return best, true
-	}
-	if newest != "" {
-		return newest, true
-	}
-	return "", false
 }
 
 // parseUsageTail scans a byte tail from the end for the last assistant message
@@ -178,27 +140,22 @@ func contextMax(model string) (int, bool) {
 	return 0, false
 }
 
-// transcriptPathIn is transcriptPath for a boxed session. It never trusts what
-// is in the box dir, and unlike the host heuristic it never guesses across
-// sessions:
-//   - sid known: only <sid>.jsonl under projects/<slug(c)>/ for each cwd form c.
-//     Not found means no transcript. The registry is skipped for an exited
-//     session, so this is what keeps a fresh or exited session from showing
-//     another session's file from the same box.
-//   - sid unknown: the newest regular *.jsonl whose mtime is not before
-//     created (a file older than the session cannot be its own), and whose stem
-//     is not the conversation id of another session in the same box (exclude):
-//     a busy sibling's transcript is newer than a fresh session's Created. There
-//     is no "newest overall" fallback.
+// transcriptPathIn finds a boxed session's transcript by its conversation id.
+// It never trusts what is in the box dir, and it never guesses across sessions:
+// only <sid>.jsonl under projects/<slug(c)>/ for each cwd form c, and sid must
+// be a valid session id. Not found means no transcript. The registry is
+// skipped for an exited session, so this is what keeps a fresh or exited
+// session from showing another session's file from the same box. It stats at
+// most two paths per cwd form and never lists a directory.
 //
 // cwds are the session's spawn-dir forms (cwdFormsOf): the box runs claude with
 // -w <resolved>, so the slug may be of the symlink-resolved path. One os.Root
-// on boxDir serves the whole call; candidates are ranked with root.Lstat
-// (confined, no final-symlink follow, never blocks, never DirEntry.Info), and
-// only the winner is opened later, through boxread (openTranscript), which
-// re-checks it with fstat. The returned path is absolute under boxDir.
-func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[string]bool, created time.Time) (string, bool) {
-	if sid != "" && !sessionIDRe.MatchString(sid) {
+// on boxDir serves the whole call; both checks use root.Lstat (confined, no
+// final-symlink follow, never blocks), and the winner is opened later, through
+// boxread (openTranscript), which re-checks it with fstat. The returned path
+// is absolute under boxDir.
+func transcriptPathIn(boxDir string, cwds []string, sid string) (string, bool) {
+	if !sessionIDRe.MatchString(sid) {
 		return "", false
 	}
 	root, err := os.OpenRoot(boxDir)
@@ -206,8 +163,6 @@ func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[stri
 		return "", false
 	}
 	defer root.Close()
-	var best string
-	var bestT time.Time
 	for _, c := range cwds {
 		relDir := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)))
 		// A slug dir that is itself a symlink (even one staying inside the box)
@@ -215,39 +170,12 @@ func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[stri
 		if fi, err := root.Lstat(relDir); err != nil || !fi.IsDir() {
 			continue
 		}
-		if sid != "" {
-			rel := filepath.Join(relDir, sid+".jsonl")
-			if fi, err := root.Lstat(rel); err == nil && fi.Mode().IsRegular() {
-				return filepath.Join(boxDir, rel), true
-			}
-			continue
-		}
-		d, err := root.OpenFile(relDir, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			continue
-		}
-		ents, err := d.ReadDir(4096)
-		d.Close()
-		if err != nil && len(ents) == 0 {
-			continue
-		}
-		for _, e := range ents {
-			name := e.Name()
-			stem, isJSONL := strings.CutSuffix(name, ".jsonl")
-			if e.IsDir() || !isJSONL || !sessionIDRe.MatchString(stem) || exclude[stem] {
-				continue
-			}
-			rel := filepath.Join(relDir, name)
-			fi, err := root.Lstat(rel)
-			if err != nil || !fi.Mode().IsRegular() || fi.ModTime().Before(created) {
-				continue
-			}
-			if fi.ModTime().After(bestT) {
-				bestT, best = fi.ModTime(), filepath.Join(boxDir, rel)
-			}
+		rel := filepath.Join(relDir, sid+".jsonl")
+		if fi, err := root.Lstat(rel); err == nil && fi.Mode().IsRegular() {
+			return filepath.Join(boxDir, rel), true
 		}
 	}
-	return best, best != ""
+	return "", false
 }
 
 // UsageFor reads the latest transcript usage for a claude session. ok=false for

@@ -47,8 +47,8 @@ func boxRegPath(bd string, pid int) string {
 // boxedRegManager: s1 and s2 are claude sessions in the shared box "box-1", cwd
 // /work/proj. Transcripts A (older, s1's) and B (newer, s2's) live in the box's
 // .claude; home pidfiles say s1=39, s2=40; registry files 39/40 name A/B. The
-// heuristic fallback therefore hands B to everybody, so a valid registry is told
-// apart from a fallback by s1 reading "from A".
+// newest transcript is B, so a valid registry is told apart from a guess by s1
+// reading "from A".
 func boxedRegManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 	m, _ := newLocatorManager(t)
@@ -152,7 +152,7 @@ func TestBoxedLocateNotesSessionID(t *testing.T) {
 }
 
 // Review Focus 1: a box adopted after an upgrade has no home pidfile.
-func TestBoxedLocateFallsBackWithoutPidfile(t *testing.T) {
+func TestBoxedLocateNamesNoPathWithoutPidfile(t *testing.T) {
 	m, bd := boxedRegManager(t)
 	if err := os.Remove(boxPidPath(bd, "s1")); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestBoxedLocateFallsBackWithoutPidfile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("reg=%+v with no pidfile", l.reg)
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
+	wantUnbound(t, m, "s1")
 	if _, _, blocked := m.peekAndBlocked("s1"); blocked {
 		t.Error("blocked without a registry")
 	}
@@ -181,7 +181,7 @@ func TestBoxedLocateIgnoresKeyFileOnly(t *testing.T) {
 	if _, _, blocked := m.peekAndBlocked("s1"); blocked {
 		t.Error("blocked from a key file")
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
+	wantUnbound(t, m, "s1")
 }
 
 func TestBoxedLocateExitedSkipsRegistry(t *testing.T) {
@@ -192,7 +192,7 @@ func TestBoxedLocateExitedSkipsRegistry(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("exited session used the registry; reg=%+v", l.reg)
 	}
-	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
+	wantUnbound(t, m, "s1")
 }
 
 // A validated entry is trusted as is: its transcript missing means "no
@@ -300,8 +300,8 @@ func TestBoxCwdMatchesIsLexical(t *testing.T) {
 }
 
 // The security core: everything the box writes is hostile. Each row must fall
-// back silently to the heuristic (s1 reads "from B"), never use the registry,
-// and never block on a FIFO.
+// leave s1 unbound (no path, no read), never use the registry, and never block
+// on a FIFO.
 func TestBoxedRegistryForgeries(t *testing.T) {
 	now := time.Now()
 	pid := func(bd string) string { return boxPidPath(bd, "s1") }
@@ -431,8 +431,8 @@ func TestBoxedRegistryForgeries(t *testing.T) {
 			if ok {
 				t.Errorf("peek=%q read a transcript for a session with only a forged registry; it is unbound", p.Text)
 			}
-			if got := filepath.Base(l.path); got != "bbbb-2.jsonl" {
-				t.Errorf("locate heuristic path=%q want bbbb-2.jsonl", got)
+			if l.path != "" {
+				t.Errorf("locate path=%q, want none: a forged registry must not trigger a project-dir scan", l.path)
 			}
 			if got := m.sessions["s1"].claudeSID(); got != "" {
 				t.Errorf("claudeSID=%q noted from a forged entry", got)

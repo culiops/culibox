@@ -72,7 +72,7 @@ func boxCwdMatches(regCwd string, cwds []string) bool {
 // the wrapper-written home pidfile names the in-box pid, and
 // .claude/sessions/<pid>.json is that process's entry. Everything is box-written
 // and so hostile; every read goes through boxread, and any surprise is ok=false
-// (the caller falls back to the mtime heuristic, silently).
+// (the session is silently left unbound).
 //
 // Freshness instead of procStart: the registry file must not be older than the
 // pidfile, which rejects a <pid>.json left by an earlier container whose claude

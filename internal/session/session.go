@@ -1407,7 +1407,7 @@ type Manager struct {
 
 	// procStart reads a pid's starttime for the registry's pid-reuse guard.
 	// NewManager sets procStartOf; a nil value (struct-literal test managers)
-	// disables the registry path, falling back to the heuristic.
+	// disables the registry path, leaving the session unbound.
 	procStart procStartFunc
 }
 

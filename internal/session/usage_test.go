@@ -78,24 +78,6 @@ func TestContextMaxCurrentModels(t *testing.T) {
 	}
 }
 
-func TestTranscriptPath_newestAfterCreated(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, ".claude", "projects", "-x")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := filepath.Join(dir, "old.jsonl")
-	os.WriteFile(old, []byte("{}"), 0o644)
-	os.Chtimes(old, time.Unix(1000, 0), time.Unix(1000, 0))
-	newf := filepath.Join(dir, "new.jsonl")
-	os.WriteFile(newf, []byte("{}"), 0o644)
-	os.Chtimes(newf, time.Unix(9000, 0), time.Unix(9000, 0))
-	got, ok := transcriptPath("/x", filepath.Join(home, ".claude"), time.Unix(5000, 0))
-	if !ok || got != newf {
-		t.Fatalf("got %q ok=%v want %q", got, ok, newf)
-	}
-}
-
 func TestIsClaudeBin(t *testing.T) {
 	for _, c := range []struct {
 		bin  string
@@ -251,22 +233,5 @@ func TestWorktreeRootRejectsSubmoduleOfAWorktree(t *testing.T) {
 	os.WriteFile(filepath.Join(d, ".git"), []byte("gitdir: /m/.git/worktrees/wt/modules/sub\n"), 0o644)
 	if r, ok := worktreeRoot(d); ok {
 		t.Fatalf("submodule of a worktree taken as a worktree root %q", r)
-	}
-}
-
-func TestTranscriptPathUsesClaudeDir(t *testing.T) {
-	cd := t.TempDir() // an account config dir, not a home
-	cwd := "/work/proj"
-	dir := filepath.Join(cd, "projects", projectSlug(cwd))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(dir, "s.jsonl")
-	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := transcriptPath(cwd, cd, time.Now().Add(-time.Hour))
-	if !ok || got != p {
-		t.Fatalf("transcriptPath = %q %v, want %q", got, ok, p)
 	}
 }
