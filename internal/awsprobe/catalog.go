@@ -109,19 +109,43 @@ func screened(action string) bool {
 // (lowercased action -> reason). MintingScreen puts each in mustDeny whenever a
 // residual pattern covers it, regardless of the name screen and HarmlessMinting.
 //
-// Known limit: secrets stored in configuration are NOT screened. Lambda
-// environment variables, EC2 user data and launch-template data, CloudFront
-// origin custom headers and SSM parameters are plain data to the catalog; the
-// gate's descriptive data-read step reports them and nothing here denies them.
+// Added by hand, on purpose. The SDK models' sensitive trait was measured as a
+// source (2026-11-01, botocore 1.34): it flags 591 read actions, mostly noise
+// (NextToken, tag keys, a CloudFront Comment), and misses glue:GetConnection,
+// whose password sits in a plain map. An action goes here when its reply is
+// documented to carry the secret.
+//
+// Known limit: fields the models mark secret but that are shared with the
+// create and modify APIs (redshift:DescribeClusters and rds MasterUserPassword,
+// fsx FsxAdminPassword, dms and datasync Password) are not listed: nothing
+// shows a read returns them, and a deny would remove a core read.
+//
+// Known limit: secrets a user put in configuration are NOT screened. Lambda
+// environment variables (lambda:GetFunctionConfiguration, lambda:ListFunctions),
+// EC2 user data and launch-template data, CloudFront origin custom headers and
+// SSM parameters are plain data to the catalog; the gate's descriptive
+// data-read step reports them and nothing here denies them.
 var SecretReturning = map[string]string{
-	"lambda:getfunction":                 "Code.Location in the response is a presigned URL to the function's code package",
-	"lambda:getlayerversion":             "Content.Location in the response is a presigned URL to the layer archive",
-	"cognito-idp:describeuserpoolclient": "the response includes the app client's ClientSecret",
-	"apigateway:get":                     "GET /apikeys?includeValues=true returns API key values",
-	"sts:assumerole":                     "mints temporary credentials for the assumed role",
-	"sts:assumerolewithsaml":             "mints temporary credentials from a SAML assertion",
-	"sts:assumerolewithwebidentity":      "mints temporary credentials from a web identity token",
-	"sts:assumeroot":                     "mints temporary root credentials for a member account",
+	"lambda:getfunction":                   "Code.Location in the response is a presigned URL to the function's code package",
+	"lambda:getlayerversion":               "Content.Location in the response is a presigned URL to the layer archive",
+	"cognito-idp:describeuserpoolclient":   "the response includes the app client's ClientSecret",
+	"apigateway:get":                       "GET /apikeys?includeValues=true returns API key values",
+	"acm:exportcertificate":                "PrivateKey in the response is the certificate's private key, under a passphrase the caller chooses",
+	"amplify:getapp":                       "basicAuthCredentials in the response is the app's basic-auth username and password",
+	"amplify:getbranch":                    "basicAuthCredentials in the response is the branch's basic-auth username and password",
+	"amplify:listapps":                     "basicAuthCredentials in the response is each app's basic-auth username and password",
+	"amplify:listbranches":                 "basicAuthCredentials in the response is each branch's basic-auth username and password",
+	"codepipeline:getjobdetails":           "artifactCredentials in the response are temporary AWS credentials for the artifact store",
+	"codepipeline:getthirdpartyjobdetails": "artifactCredentials in the response are temporary AWS credentials for the artifact store",
+	"finspace:getkxconnectionstring":       "signedConnectionString in the response is a signed connection string to the kdb cluster",
+	"glue:getconnection":                   "ConnectionProperties in the response holds the connection's password unless the caller sets HidePassword",
+	"glue:getconnections":                  "ConnectionProperties in the response holds each connection's password unless the caller sets HidePassword",
+	"mediapackage:describechannel":         "HlsIngest.IngestEndpoints in the response carry the ingest username and password",
+	"mediapackage:listchannels":            "HlsIngest.IngestEndpoints in the response carry each channel's ingest username and password",
+	"sts:assumerole":                       "mints temporary credentials for the assumed role",
+	"sts:assumerolewithsaml":               "mints temporary credentials from a SAML assertion",
+	"sts:assumerolewithwebidentity":        "mints temporary credentials from a web identity token",
+	"sts:assumeroot":                       "mints temporary root credentials for a member account",
 }
 
 // RetiredServices lists service prefixes AWS has retired and removed from the

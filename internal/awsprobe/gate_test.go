@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -850,7 +851,7 @@ func TestNewIAMGate(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_PROFILE", "")
-	api, err := NewIAMGate(context.Background(), aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "ap-southeast-1")
+	api, err := NewIAMGate(context.Background(), aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "ap-southeast-1", "")
 	g, ok := api.(iamGate)
 	if err != nil || !ok || g.iam == nil || g.sts == nil {
 		t.Fatalf("NewIAMGate = %#v, %v", api, err)
@@ -871,12 +872,59 @@ func TestNewIAMGateLoadsTheDefaultConfig(t *testing.T) {
 	t.Setenv("AWS_PROFILE", "")
 	t.Setenv("AWS_MAX_ATTEMPTS", "7")
 	creds := aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}
-	cfg, err := gateConfig(context.Background(), creds, "eu-west-1")
+	cfg, err := gateConfig(context.Background(), creds, "eu-west-1", "")
 	if err != nil || cfg.RetryMaxAttempts != 7 || cfg.Region != "eu-west-1" {
 		t.Fatalf("cfg retry=%d region=%q err=%v", cfg.RetryMaxAttempts, cfg.Region, err)
 	}
 	t.Setenv("AWS_CA_BUNDLE", filepath.Join(dir, "no-such-bundle.pem"))
-	if _, err := NewIAMGate(context.Background(), creds, "eu-west-1"); err == nil {
+	if _, err := NewIAMGate(context.Background(), creds, "eu-west-1", ""); err == nil {
 		t.Fatal("a missing AWS_CA_BUNDLE was not read: the gate ignores the host's CA settings")
+	}
+}
+
+// The gate reads the binding's source profile, so a setting on that profile
+// reaches it, as it reaches the SSO and STS clients. A missing bundle file is
+// how the load shows the setting was read.
+func TestGateConfigUsesTheSourceProfile(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "config")
+	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") + "\n[profile plain]\nmax_attempts = 5\n"
+	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", conf)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_MAX_ATTEMPTS", "")
+	t.Setenv("AWS_CA_BUNDLE", "")
+	creds := aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}
+	if _, err := gateConfig(context.Background(), creds, "eu-west-1", "src"); err == nil {
+		t.Fatal("ca_bundle on the source profile was not read")
+	}
+	cfg, err := gateConfig(context.Background(), creds, "eu-west-1", "plain")
+	if err != nil || cfg.RetryMaxAttempts != 5 {
+		t.Fatalf("retry=%d err=%v, want the source profile's max_attempts", cfg.RetryMaxAttempts, err)
+	}
+	got, err := cfg.Credentials.Retrieve(context.Background())
+	if err != nil || got.AccessKeyID != "AK" {
+		t.Fatalf("creds = %q, %v: the static credentials must win", got.AccessKeyID, err)
+	}
+}
+
+// A daemon AWS_PROFILE naming a profile that does not exist must not break a
+// gate whose own source profile is fine.
+func TestGateConfigIgnoresABogusEnvProfile(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "config")
+	if err := os.WriteFile(conf, []byte("[profile src]\nregion = eu-west-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", conf)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_PROFILE", "no-such-profile")
+	t.Setenv("AWS_CA_BUNDLE", "")
+	creds := aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}
+	if _, err := gateConfig(context.Background(), creds, "eu-west-1", "src"); err != nil {
+		t.Fatalf("a bogus AWS_PROFILE broke the gate: %v", err)
 	}
 }

@@ -16,7 +16,7 @@ import (
 // GateFunc runs the sso_direct read-only gate on freshly fetched permission-set
 // credentials c, for the profile's region and sso_account_id. Only a
 // GateReadOnly result lets c leave the host. ctx carries the time budget.
-type GateFunc func(ctx context.Context, c Creds, region, account string) awsprobe.GateResult
+type GateFunc func(ctx context.Context, c Creds, region, account, sourceProfile string) awsprobe.GateResult
 
 const (
 	// ssoGateTimeout bounds one gate run (the gate sets no budget of its own).
@@ -195,7 +195,7 @@ func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBind
 	}
 
 	gctx, cancel := context.WithTimeout(context.Background(), ssoGateTimeout)
-	res := gate(gctx, c, bnd.Region, account)
+	res := gate(gctx, c, bnd.Region, account, bnd.SourceProfile)
 	cancel()
 	row.RoleARN = res.RoleARN
 	if !gatePassed(res) {
@@ -333,7 +333,7 @@ func (b *Broker) checkSSODirect(ctx context.Context, bnd config.AWSBinding, scop
 		row.Error = "unverified (error): " + sanitize(accErr.Error())
 	default:
 		gctx, cancel := context.WithTimeout(ctx, ssoGateTimeout)
-		res = gate(gctx, c, bnd.Region, account)
+		res = gate(gctx, c, bnd.Region, account, bnd.SourceProfile)
 		cancel()
 		row.RoleARN = res.RoleARN
 		if !gatePassed(res) {

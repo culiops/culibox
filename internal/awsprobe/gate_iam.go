@@ -41,23 +41,27 @@ type iamGate struct {
 // NewIAMGate is the SDK-backed GateAPI, calling AWS with the permission set's
 // own credentials. Errors are returned wrapped, never swallowed, so Gate can
 // classify them; a missing field in a reply is an error. The client config is
-// the SDK's default load (host shared files, AWS_CA_BUNDLE / ca_bundle, retry
-// settings) with only the credentials and region fixed, so the gate reaches
-// AWS the way every other host-side client does. A config that cannot load
-// is an error, which the caller treats as unverified.
-func NewIAMGate(ctx context.Context, creds aws.Credentials, region string) (GateAPI, error) {
-	cfg, err := gateConfig(ctx, creds, region)
+// the SDK's load of the binding's source profile (host shared files, ca_bundle,
+// retry settings), the same profile the broker's SSO and STS clients read, with
+// only the credentials and region fixed. A config that cannot load is an error,
+// which the caller treats as unverified.
+func NewIAMGate(ctx context.Context, creds aws.Credentials, region, sourceProfile string) (GateAPI, error) {
+	cfg, err := gateConfig(ctx, creds, region, sourceProfile)
 	if err != nil {
 		return nil, err
 	}
 	return iamGate{iam: iam.NewFromConfig(cfg), sts: sts.NewFromConfig(cfg)}, nil
 }
 
-// gateConfig loads the default config with creds as a static provider (it
-// wins over any environment or profile credentials) and region.
-func gateConfig(ctx context.Context, creds aws.Credentials, region string) (aws.Config, error) {
+// gateConfig loads sourceProfile with creds as a static provider (it wins over
+// any environment or profile credentials) and region. Naming the profile also
+// stops a daemon AWS_PROFILE that names a missing profile from failing the load.
+func gateConfig(ctx context.Context, creds aws.Credentials, region, sourceProfile string) (aws.Config, error) {
 	opts := append(awshost.LoadOpts(), awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken)))
+	if sourceProfile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(sourceProfile))
+	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("load AWS config for the gate: %w", err)

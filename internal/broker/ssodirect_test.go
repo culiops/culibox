@@ -37,7 +37,7 @@ type fakeGate struct {
 
 func (g *fakeGate) callCount() int { g.mu.Lock(); defer g.mu.Unlock(); return len(g.calls) }
 
-func (g *fakeGate) fn(ctx context.Context, c Creds, region, account string) awsprobe.GateResult {
+func (g *fakeGate) fn(ctx context.Context, c Creds, region, account, source string) awsprobe.GateResult {
 	if g.release != nil {
 		g.entered <- struct{}{}
 		<-g.release
