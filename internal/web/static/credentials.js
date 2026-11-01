@@ -148,6 +148,24 @@ function credRoleName(arn) {
   return i >= 0 ? s.slice(i + 6) : s;
 }
 
+// credDeleteText: the confirm line for deleting a token or a GitHub App. It says
+// what happens to the secret behind the entry, so a store value that does not
+// exist must not be promised to stay.
+function credDeleteText(kind, e) {
+  const app = kind === "github";
+  const head = (app ? "Delete the GitHub App " : "Delete the token ") + e.name + "? ";
+  const inStore = (app ? e.key_ref_kind : e.value_kind) === "store";
+  if (inStore && e.status === "missing") {
+    // The view also reports "missing" when the store could not be listed.
+    return head + (e.error ? "The store could not be read. Any value in it stays." : "Its store value is already missing.");
+  }
+  // A failed merge reads "invalid" whether or not the value exists.
+  if (inStore && e.status === "invalid") return head + "Any value in the store stays; delete it under Stored values if you no longer need it.";
+  const what = app ? "The private key " : "The value ";
+  if (inStore) return head + what + "stays in the encrypted store; delete it under Stored values if you no longer need it.";
+  return head + what + (app ? "file is not touched." : "is not touched.");
+}
+
 // --- the desktop page's tables (pure: the DOM is built in credTable) ---------------
 //
 // One table per provider group. A cell is {text, sub, cls, kind, mono, subMono,
@@ -768,7 +786,7 @@ if (typeof module !== "undefined" && module.exports) {
     awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
-    GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP,
+    GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
   };
 }
 
@@ -987,12 +1005,21 @@ function credEntryHost(btn) {
   return tb ? credEntryExtra(tb) : null;
 }
 
+// credColumnCount: the columns of the table a tbody belongs to, read from its own
+// row because a broken entry's extra row is built before the tbody is attached.
+// A larger colSpan is not harmless: under table-layout: fixed it adds phantom
+// grid columns, which starve the unsized Used by column to a couple of pixels.
+function credColumnCount(tb) {
+  const row = tb.rows[0];
+  return row ? row.cells.length : 1;
+}
+
 function credEntryExtra(tb) {
   let x = tb.querySelector(".ctab-ex");
   if (!x) {
     const tr = credEl("tr", "ctab-x");
     const td = credEl("td");
-    td.colSpan = 99;
+    td.colSpan = credColumnCount(tb);
     x = credEl("div", "ctab-ex");
     td.appendChild(x);
     tr.appendChild(td);
@@ -2849,14 +2876,14 @@ function credConfirmDelete(host, text, path, noun, reload) {
     add: (g) => credTokenAdd(g),
     edit: (e) => credTokenEdit(e),
     delete: (e, reload, btn) => credConfirmDelete(credEntryHost(btn),
-      "Delete the token " + e.name + "? The value " + (e.value_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "is not touched."),
+      credDeleteText("token", e),
       "/api/credentials/tokens/" + encodeURIComponent(e.name), "token", reload),
   };
   credActionHandlers.github = {
     add: () => credGitHubChoose(),
     edit: (e) => credAppForm(e),
     delete: (e, reload, btn) => credConfirmDelete(credEntryHost(btn),
-      "Delete the GitHub App " + e.name + "? The private key " + (e.key_ref_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "file is not touched."),
+      credDeleteText("github", e),
       "/api/credentials/github-apps/" + encodeURIComponent(e.name), "GitHub App", reload),
   };
   credActionHandlers.value = {
