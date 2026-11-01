@@ -2053,6 +2053,18 @@
     @media (max-width: 700px) { .vf-input { font-size: 16px; } .vf-btn { min-height: 32px; min-width: 36px; } }
     .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
     .viewer-msg.err { color: var(--danger); }
+    /* #53: the note over a file opened from another checkout, and the in-pane list
+       when several checkouts hold it. --fg on --panel: the same pair the toolbar uses. */
+    .viewer-altnote { flex: 0 0 auto; padding: 4px 12px; font-size: 12px; color: var(--fg); background: var(--panel); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+    .viewer-altnote[hidden] { display: none; }
+    .viewer-altnote code { font-weight: 600; }
+    .viewer-alts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .viewer-alts-title { color: var(--fg); font-size: 14px; font-weight: 600; }
+    .viewer-alts-sub { overflow-wrap: anywhere; }
+    .viewer-alt { display: flex; align-items: baseline; gap: 10px; max-width: 100%; min-height: 36px; padding: 6px 12px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font-size: 13px; text-align: left; cursor: pointer; }
+    .viewer-alt:hover { border-color: var(--accent); }
+    .viewer-alt-name { overflow-wrap: anywhere; }
+    .viewer-alt-ago { color: var(--muted); font-size: 12px; white-space: nowrap; }
     .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }
     .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: var(--bg); }
     /* edit mode (CodeMirror 5) */

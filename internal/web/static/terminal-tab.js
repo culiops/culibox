@@ -456,7 +456,12 @@ class TerminalTab {
   // opts = {line?, col?} from a `path:12:5` link, forwarded to the viewer.
   openClickedPath(tok, opts) {
     const c = classifyTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR, this.runtime === "box");
-    if (c.kind === "host") openFile(c.path, opts);
+    if (c.kind === "host") {
+      // #53: a relative token may name a file that lives in another checkout of
+      // the repo (see termAlt). Built into a copy: the caller's opts are theirs.
+      const alt = termAlt(tok, this.cwd, this.agentCwd);
+      openFile(c.path, alt ? { ...opts, alt } : opts);
+    }
     // Looked up on window: openBoxFile lives in a later-loaded script, and a bare
     // reference to it fails lint.sh's cross-script check until that script exists.
     // A top-level function declaration in a classic script IS a window property.
@@ -763,6 +768,23 @@ function resolveTermPath(tok, cwd, agentCwd, home) {
   if (tok.startsWith("~/")) return home ? home + tok.slice(1) : tok; // ~/foo → <home>/foo
   const base = (agentCwd || cwd || "").replace(/\/$/, "");
   return base ? base + "/" + tok.replace(/^\.\//, "") : tok;
+}
+
+// termAlt: what the viewer needs to look for a clicked relative token in the
+// repo's OTHER checkouts when the first read is a 404 (#53): {base, rel}, where
+// base is the directory the token was actually resolved against (agentCwd, else
+// the spawn cwd, exactly as resolveTermPath picked it) and rel is the token
+// without a leading `./` or a `:line:col` suffix. Whichever checkout holds the
+// file depends on where the agent stood when it printed the path, which the click
+// cannot know, so every relative token gets it, whether or not agentCwd is set.
+// null for an absolute or `~/` token (nothing to re-base) and when no cwd is
+// known (the endpoint needs an absolute base).
+function termAlt(tok, cwd, agentCwd) {
+  if (tok.startsWith("/") || tok.startsWith("~/")) return null;
+  const base = (agentCwd || cwd || "").replace(/\/+$/, "");
+  if (!base.startsWith("/")) return null;
+  const rel = tok.replace(/^\.\//, "").replace(/:\d+(?::\d+)?$/, "");
+  return rel ? { base, rel } : null;
 }
 
 // BOX_HOME / BOX_OUT_DIR are the box's own paths (Dockerfile: user "agent",

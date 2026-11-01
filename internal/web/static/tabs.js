@@ -1869,6 +1869,7 @@ function openFile(path, opts) {
   const cell = focusedCellOrCreate();
   const vopts = {};
   if (opts && opts.line) { vopts.line = opts.line; vopts.col = opts.col; }
+  if (opts && opts.alt) vopts.alt = opts.alt; // a relative terminal link: viewer-tab.js looks in other checkouts on a 404 (#53)
   if (opts && opts.view === "changes") vopts.view = "changes"; // straight into the diff vs HEAD (a tree badge's click)
   const nt = new ViewerTab(path, Object.keys(vopts).length ? vopts : undefined);
   cell.addTab(nt);
@@ -1879,6 +1880,30 @@ function openFile(path, opts) {
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
   if (typeof renderMobileChips === "function") renderMobileChips();
   nt.focusReader();
+}
+
+// repointViewer moves a viewer tab to another file (#53: a terminal link that
+// was not found here but exists in another checkout). The tab's name, key and
+// path change in place, so its position, focus and the line the link asked for
+// stay. Says whether it did: when another tab already shows `path`, that one is
+// focused at the same line and `tab` closes instead (a path is a tab's identity;
+// two on one path would be stored twice and collapse at the next boot) —
+// returns false then, and the caller must not touch `tab` again.
+function repointViewer(tab, path, line) {
+  if (typeof normalizePath === "function") path = normalizePath(path);
+  const dup = cells.some((c) => c.tabs.some((t) => t !== tab && t.kind === "viewer" && !t.box && t.path === path));
+  if (dup) {
+    closeTabEverywhere(tab);
+    openFile(path, line ? { line: line.line, col: line.col } : undefined);
+    return false;
+  }
+  tab.path = path;
+  tab.id = "view:" + path;
+  tab.name = path.split("/").pop() || path;
+  tab.changed(); // the toolbar's path label and the tab strip
+  if (typeof scheduleSaveLayout === "function") scheduleSaveLayout();
+  if (typeof syncFocusedTree === "function") syncFocusedTree();
+  return true;
 }
 
 // openBoxFile opens (or focuses) a read-only viewer for a file inside a

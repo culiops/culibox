@@ -76,6 +76,44 @@ function revealable(viewer, home) {
   return { ok: true };
 }
 
+// alternatesOutcome: what the viewer does with GET /api/fs/alternates after a 404
+// (#53). `list` is the response's `candidates` (newest first, worktree "" = the
+// main checkout). none: today's "not found". one: re-point the tab. pick: the
+// in-pane list. Entries with no string path are dropped (agent-shaped data, never
+// trusted), the order is re-established by mtime (stable: ties keep the server's
+// order, a missing mtime sorts last) and the list is capped at the server's 64.
+const VP_ALT_MAX = 64;
+function alternatesOutcome(list) {
+  const items = (Array.isArray(list) ? list : [])
+    .filter((c) => c && typeof c.path === "string" && c.path)
+    .map((c) => ({ path: c.path, worktree: typeof c.worktree === "string" ? c.worktree : "", mtime: Number.isFinite(c.mtime) ? c.mtime : 0 }));
+  if (items.length === 0) return { kind: "none" };
+  if (items.length === 1) return { kind: "one", path: items[0].path, worktree: items[0].worktree };
+  const sorted = items
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => b.it.mtime - a.it.mtime || a.i - b.i)
+    .map((x) => x.it);
+  return { kind: "pick", items: sorted.slice(0, VP_ALT_MAX) };
+}
+
+// altNote: the one-line note over a file opened from another checkout. The name is
+// split out so the DOM half can put it in <code>; both parts go in via textContent.
+function altNote(worktree) {
+  if (!worktree) return { pre: "Opened from the main checkout \u2014 not found in this worktree.", name: "", post: "" };
+  return { pre: "Opened from worktree ", name: worktree, post: " \u2014 not found here." };
+}
+
+// agoText: a coarse "5 min ago" for a unix mtime (seconds), given the clock `now`
+// (seconds). "" for an unknown mtime; a future one (clock skew) reads as just now.
+function agoText(mtime, now) {
+  if (!Number.isFinite(mtime) || mtime <= 0) return "";
+  const s = now - mtime;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return Math.floor(s / 86400) + " d ago";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { ancestorsBetween, pathLineText, relativePath, relativeAvail, insertTargetFor, revealable };
+  module.exports = { ancestorsBetween, pathLineText, relativePath, relativeAvail, insertTargetFor, revealable, alternatesOutcome, altNote, agoText };
 }

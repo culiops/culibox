@@ -55,6 +55,13 @@ class ViewerTab {
     // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
     // may close itself when its file turns out to be gone (see load).
     this.restored = !!(opts && opts.restored);
+    // #53: {base, rel} when this tab came from a relative terminal token. If the
+    // first read is a 404, the file may live in another checkout of the repo
+    // (findAlternates). Never persisted: a restored tab has none. altPending is
+    // true while that lookup is in flight (a poll must not paint over it).
+    this.alt = opts && opts.alt && typeof opts.alt.base === "string" && typeof opts.alt.rel === "string" ? opts.alt : null;
+    this.altPending = false;
+    this.disposed = false;
     // The line (and column) a terminal link such as `x.go:12:5` asked for; the
     // first render consumes it (revealLine). null when the file was opened plainly.
     this.pendingLine = opts && Number.isInteger(opts.line) && opts.line > 0
@@ -127,7 +134,12 @@ class ViewerTab {
     // for the Files drawer: its extra button and its shorter path label.
     this.toolbarApi = buildViewerToolbar(this, opts && opts.host);
     this.toolbar = this.toolbarApi.el;
-    this.el.append(this.toolbar, this.findBar, this.content);
+    // The one-line note over a file opened from another checkout (altOpened). Like
+    // the find bar it sits outside the scroller, so no render ever removes it.
+    this.noteEl = document.createElement("div");
+    this.noteEl.className = "viewer-altnote";
+    this.noteEl.hidden = true;
+    this.el.append(this.toolbar, this.findBar, this.noteEl, this.content);
     // Bubble phase, on the viewer's own element: it fires for the read scroller,
     // the find bar and CodeMirror's textarea, and never for a terminal or the
     // rest of the page, so Mod+F / Ctrl+G stay the browser's and readline's there.
@@ -316,6 +328,7 @@ class ViewerTab {
     requestAnimationFrame(() => { this.applying = false; });
   }
   dispose() {
+    this.disposed = true; // a lookup still in flight must not touch a closed tab
     if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
     this.toolbarApi.closeMenus();
     if (this.lineMenuOpen) { this.lineMenuOpen = false; closeRowMenu(); } // its buttons would act on a closed viewer
@@ -595,6 +608,16 @@ class ViewerTab {
     // shows the diff now, and this reply would paint the file over it and overwrite
     // lastContent / copyRefusal.
     if (!viewReplyPaints(vseq, this.viewSeq, false, this.changes)) return;
+    // A fallback lookup is in flight: its answer owns the pane (a poll tick that
+    // lands now would paint "not found" over it, or re-run the lookup).
+    if (this.altPending) return;
+    // The alternates lookup is for the FIRST read only: a file that is deleted
+    // later is a deletion, not a path that was never here. Consumed either way.
+    const alt = first ? this.alt : null;
+    this.alt = null;
+    // The message paths below drop pendingLine; a fallback to another checkout
+    // still wants the line the link asked for.
+    const altLine = alt ? this.pendingLine : null;
     // Only a successful read answers the question; a dropped poll keeps the
     // last known answer rather than bringing back an Edit that cannot save.
     if (res.ok) {
@@ -643,13 +666,11 @@ class ViewerTab {
         // so a restored image of a deleted file keeps its "could not load
         // image" message and is closed by hand.
         if (first && this.restored && res.status === 404) { closeTabEverywhere(this); return; }
-        // The server's own sentence, not the clipboard's. This pane is the
-        // RENDER failure surface: a 5 MB log opened here must read "file too
-        // large to preview", not "too large to copy — use Download instead".
-        this.msg(
-          (res.data && res.data.error) || (res.status ? "HTTP " + res.status : "could not reach the server"),
-          "err");
-        this.setStatus("error");
+        // #53: a relative terminal link that is not here may be in another
+        // checkout. A restored tab never has `alt`, so the auto-close above is
+        // never pre-empted by a lookup, and a tab with `alt` is never restored.
+        if (alt && res.status === 404 && !this.box) { this.findAlternates(alt, vseq, res, altLine); return; }
+        this.showReadError(res);
       }
       return;
     }
@@ -675,6 +696,100 @@ class ViewerTab {
       this.pendingLine = null;
       this.revealLine(p.line, p.col);
     }
+  }
+
+  // showReadError paints a failed read. The server's own sentence, not the
+  // clipboard's. This pane is the RENDER failure surface: a 5 MB log opened here
+  // must read "file too large to preview", not "too large to copy — use Download
+  // instead".
+  showReadError(res) {
+    this.msg(
+      (res.data && res.data.error) || (res.status ? "HTTP " + res.status : "could not reach the server"),
+      "err");
+    this.setStatus("error");
+  }
+
+  // findAlternates (#53): the first read of a relative terminal link was a 404.
+  // Look for the same repo-relative path in the repo's other checkouts. None: the
+  // ordinary not-found. One: open it, with a note saying where from. Several: an
+  // in-pane list to choose from. `res` is the failed read, for the none case.
+  async findAlternates(alt, vseq, res, line) {
+    this.altPending = true;
+    const list = await fsAlternates(alt.base, alt.rel);
+    this.altPending = false;
+    // Closed, or the pane moved on (Changes was clicked): nothing here is ours to paint.
+    if (this.disposed || !viewReplyPaints(vseq, this.viewSeq, false, this.changes)) return;
+    const o = alternatesOutcome(list);
+    if (o.kind === "one") { this.openAlternate(o.path, o.worktree, line); return; }
+    if (o.kind === "pick") { this.renderAltPick(o.items, alt, line); return; }
+    this.showReadError(res);
+  }
+
+  // openAlternate re-points this tab at a file in another checkout and reads it.
+  // `line` ({line, col} or null) is what the link asked for: it goes back into
+  // pendingLine, which the read consumes. A tab already showing that file wins
+  // and this one closes (two tabs on one path would be stored twice and collapse
+  // at the next boot); repointViewer opens it at the same line.
+  openAlternate(path, worktree, line) {
+    if (typeof repointViewer === "function" && !repointViewer(this, path, line)) return;
+    this.pendingLine = line || null;
+    this.setAltNote(worktree);
+    this.setStatus("loading…");
+    this.load();
+  }
+
+  // setAltNote shows where the file was opened from; null clears it. Text only:
+  // the worktree name comes from a directory name on disk.
+  setAltNote(worktree) {
+    if (worktree === null) { this.noteEl.hidden = true; this.noteEl.replaceChildren(); return; }
+    const n = altNote(worktree);
+    this.noteEl.replaceChildren(n.pre);
+    if (n.name) {
+      const code = document.createElement("code");
+      code.textContent = n.name;
+      this.noteEl.append(code, n.post);
+    }
+    this.noteEl.hidden = false;
+  }
+
+  // renderAltPick: several other checkouts hold the file. A list in the pane, not
+  // a modal: it works on a phone and cannot collide with #ask-modal's single slot.
+  renderAltPick(items, alt, line) {
+    const box = document.createElement("div");
+    box.className = "viewer-msg viewer-alts";
+    const h = document.createElement("div");
+    h.className = "viewer-alts-title";
+    h.textContent = "This file exists in " + items.length + " places";
+    const sub = document.createElement("div");
+    sub.className = "viewer-alts-sub";
+    sub.textContent = alt.rel + " was not found here. Pick the copy to open:";
+    box.append(h, sub);
+    const now = Date.now() / 1000;
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "viewer-alt";
+      b.title = it.path;
+      const name = document.createElement("span");
+      name.className = "viewer-alt-name";
+      name.textContent = it.worktree || "main checkout";
+      b.append(name);
+      const ago = agoText(it.mtime, now);
+      if (ago) {
+        const t = document.createElement("span");
+        t.className = "viewer-alt-ago";
+        t.textContent = ago;
+        b.append(t);
+      }
+      b.onclick = () => this.openAlternate(it.path, it.worktree, line);
+      box.append(b);
+    }
+    this.content.replaceChildren(box);
+    this.showingMsg = true;
+    this.hasLines = false;
+    this.lastContent = null;
+    this.findRefresh();
+    this.setStatus("");
   }
 
   // revealLine shows the 1-based `line` (and, in the editor, column `col`) of

@@ -439,3 +439,52 @@ test("the terminal key handler asks hasSelection(), and reads getSelection() onl
   assert.strictEqual((body.match(/getSelection\(\)/g) || []).length, 1, "getSelection once, in the copy branch");
   assert.ok(body.indexOf("getSelection()") > body.indexOf('act === "copy"'));
 });
+
+// #53: a relative token carries {base, rel} so the viewer can look for the file
+// in the repo's OTHER checkouts when the first read is a 404. Whether the file
+// is in the main checkout or a worktree depends on where the agent was when it
+// printed the path, which the click cannot know: the lookup is symmetric, so
+// every relative host token gets it, with or without a live agentCwd.
+function clickWith(tok, cwd, agentCwd, opts, boxed) {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const tab = Object.create(TerminalTab.prototype);
+  tab.cwd = cwd; tab.agentCwd = agentCwd; tab.runtime = boxed ? "box" : "";
+  const calls = [];
+  global.window = { HOME_DIR: "/h" };
+  global.openFile = (p, o) => calls.push([p, o]);
+  try { tab.openClickedPath(tok, opts); } finally { delete global.openFile; delete global.window; }
+  return calls;
+}
+
+test("a relative token passes alt with no agentCwd: base is the spawn cwd", () => {
+  const calls = clickWith("./docs/a.md", "/r/", "", { line: 3, col: 2 });
+  assert.deepStrictEqual(calls, [["/r/docs/a.md", { line: 3, col: 2, alt: { base: "/r", rel: "docs/a.md" } }]]);
+});
+
+test("a relative token passes alt with agentCwd set: base is the agent's live cwd", () => {
+  const calls = clickWith("docs/a.md", "/r", "/r/.claude/worktrees/w", undefined);
+  assert.deepStrictEqual(calls, [["/r/.claude/worktrees/w/docs/a.md", { alt: { base: "/r/.claude/worktrees/w", rel: "docs/a.md" } }]]);
+});
+
+test("a :line:col suffix left on the token is not part of rel", () => {
+  const calls = clickWith("src/a.go:12:5", "/r", "", undefined);
+  assert.strictEqual(calls[0][1].alt.rel, "src/a.go");
+});
+
+test("absolute and home tokens carry no alt, and the caller's opts are not mutated", () => {
+  assert.deepStrictEqual(clickWith("/etc/x", "/r", "", { line: 1 }), [["/etc/x", { line: 1 }]]);
+  assert.deepStrictEqual(clickWith("~/x.md", "/r", "/r/w", undefined), [["/h/x.md", undefined]]);
+  const o = { line: 4 };
+  clickWith("a.md", "/r", "", o);
+  assert.deepStrictEqual(o, { line: 4 });
+});
+
+test("a relative token with no cwd at all has no base to look up from", () => {
+  const calls = clickWith("a.md", "", "", undefined);
+  assert.deepStrictEqual(calls, [["a.md", undefined]]);
+});
+
+test("a boxed session's workspace-relative token also carries alt", () => {
+  const calls = clickWith("docs/a.md", "/home/u/repo", "", undefined, true);
+  assert.deepStrictEqual(calls, [["/home/u/repo/docs/a.md", { alt: { base: "/home/u/repo", rel: "docs/a.md" } }]]);
+});
