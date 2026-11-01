@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { vfFold, vfFindAll, vfLocate, vfCountLabel } = require("../static/viewerfind.js");
+const { vfFold, vfFindAll, vfLocate, vfCountLabel, vfLineSubmit } = require("../static/viewerfind.js");
 
 test("matcher: case-insensitive, non-overlapping, ordered", () => {
   assert.deepEqual(vfFindAll("aXa xa", "xa", 10), { hits: [[1, 3], [4, 6]], capped: false });
@@ -56,4 +56,14 @@ test("count label", () => {
   assert.equal(vfCountLabel(0, 0, false), "No results");
   assert.equal(vfCountLabel(3, 17, false), "3 of 17");
   assert.equal(vfCountLabel(3, 10000, true), "3 of 10000+");
+});
+
+test("go to line: a number goes, anything else stays open", () => {
+  assert.deepEqual(vfLineSubmit("42", 100), { action: "go", line: 42 });
+  assert.deepEqual(vfLineSubmit(" 7 ", 100), { action: "go", line: 7 });
+  assert.deepEqual(vfLineSubmit("9999", 100), { action: "go", line: 9999 }); // revealLine clamps and toasts
+  assert.deepEqual(vfLineSubmit("0", 100), { action: "go", line: 0 });
+  for (const bad of ["", "  ", "abc", "3x", "1.5", null, undefined]) {
+    assert.deepEqual(vfLineSubmit(bad, 100), { action: "stay" }, String(bad));
+  }
 });

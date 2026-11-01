@@ -205,8 +205,7 @@ class ViewerTab {
     const m = range.getBoundingClientRect();
     if (m.width) {
       const cr2 = c.getBoundingClientRect();
-      if (m.right > cr2.right - 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
-      else if (m.left < cr2.left + 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
+      if (m.right > cr2.right - 8 || m.left < cr2.left + 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
     }
   }
 

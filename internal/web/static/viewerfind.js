@@ -79,6 +79,17 @@ function vfLocate(segments, offset, isEnd) {
   return vfLocatePrefix(vfPrefix(segments), offset, !!isEnd);
 }
 
+// vfLineSubmit decides what Enter (or Go) does in line mode. A whole number goes
+// to that line (revealLine clamps and toasts a line past the end); anything else
+// (empty, letters, "3x") leaves the bar open for another try. `total` is accepted
+// so the clamp can move here without changing callers.
+function vfLineSubmit(raw, total) {
+  void total;
+  const m = /^\s*([+-]?\d+)\s*$/.exec(String(raw == null ? "" : raw));
+  if (!m) return { action: "stay" };
+  return { action: "go", line: parseInt(m[1], 10) };
+}
+
 function vfCountLabel(cur, total, capped) {
   if (!total) return "No results";
   return cur + " of " + total + (capped ? "+" : "");
@@ -193,7 +204,13 @@ class VFRead {
     if (!this.ranges.length) return 0;
     const n = this.ranges.length;
     this.cur = (this.cur + dir + n) % n;
-    this.paint(false);
+    if (this.painted && VFRead.supported()) {
+      // Only the current match moved: the all-matches highlight stays as it is.
+      const now = new Highlight(this.ranges[this.cur]);
+      now.priority = 1;
+      CSS.highlights.set("vf-cur", now);
+      this.v.revealRange(this.ranges[this.cur], this.rows[this.cur]);
+    } else this.paint(false);
     return this.cur + 1;
   }
 
@@ -490,10 +507,15 @@ class ViewerFind {
     this.paintCount({ cur, total: this.engine.total(), capped: this.engine.capped });
   }
 
+  // submitLine goes to the line and closes the bar, focus back on the reader or
+  // the editor. A non-number keeps the bar and refocuses the input.
   submitLine() {
-    const n = parseInt(this.input.value, 10);
-    if (!Number.isFinite(n)) { this.input.focus(); return; }
-    this.v.revealLine(n);
+    const d = vfLineSubmit(this.input.value, this.v.lineTotal());
+    if (d.action !== "go") { this.input.focus(); return; }
+    this.v.revealLine(d.line);
+    this.close(true); // noFocus: focus is placed explicitly below
+    if (this.v.editing && this.v.cm) this.v.cm.focus();
+    else this.v.focusReader();
   }
 
   onKey(e) {
@@ -537,5 +559,5 @@ class ViewerFind {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { vfFold, vfFindAll, vfPrefix, vfLocate, vfLocatePrefix, vfCountLabel };
+  module.exports = { vfFold, vfFindAll, vfPrefix, vfLocate, vfLocatePrefix, vfCountLabel, vfLineSubmit };
 }
