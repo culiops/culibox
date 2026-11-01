@@ -118,9 +118,9 @@ func warnBridgeBoxes(ctx context.Context, d egress.Docker, instance, network str
 // startEgress builds the egress proxy: the persisted HMAC secret (its own file,
 // not the broker's), the audit store, and the lazy network + listener service.
 // Nothing listens yet unless the egress network already exists (a restored
-// daemon: live bound sessions must keep working); otherwise the first bound
+// daemon: live fenced sessions must keep working); otherwise the first fenced
 // spawn creates it. A failure here is not fatal for the daemon: without egress
-// control bound profiles refuse to spawn, which is the fail-closed state.
+// control fenced boxes refuse to spawn, which is the fail-closed state.
 func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string,
 	get func(id string) (*session.Session, bool)) (*egressService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "egress.secret"))
@@ -159,16 +159,16 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 		}
 	}
 
-	// Spec correction 10: an existing network means bound sessions may be
-	// running, so the listener comes up now. Otherwise the first bound spawn
+	// Spec correction 10: an existing network means fenced sessions may be
+	// running, so the listener comes up now. Otherwise the first fenced spawn
 	// creates the network.
 	ctx, cancel := context.WithTimeout(context.Background(), bootReadyTimeout)
 	defer cancel()
-	// darwin: with the VM stopped there is no docker to ask and no bound session
-	// running; the first bound spawn's Ready runs after prepare started the VM.
+	// darwin: with the VM stopped there is no docker to ask and no fenced session
+	// running; the first fenced spawn's Ready runs after prepare started the VM.
 	if !layer.vmStopped(ctx) && svc.Exists(ctx) {
 		if _, err := svc.Ready(ctx); err != nil {
-			log.Printf("egress: network %s exists but the proxy could not start (%v); bound sessions are refused until it can", svc.Network(), err)
+			log.Printf("egress: network %s exists but the proxy could not start (%v); fenced sessions are refused until it can", svc.Network(), err)
 		}
 	}
 	return &egressService{

@@ -196,13 +196,13 @@ func (r *Relay) remove(ctx context.Context) error {
 
 // Ensure makes the relay run for gateway gw, or returns an error and leaves no
 // relay behind. The INPUT rules are checked live first, every time: they are
-// what keeps an unbound box off the relay, so a VM without them gets no relay.
+// what keeps an unfenced box off the relay, so a VM without them gets no relay.
 //
 // Rules read and wrong: the relay is removed. Rules that could not be read
 // (colima ssh error, timeout): this Ready is refused but a running relay is
 // left alone. The relay only ever started after the rules were verified this
 // boot; a VM reboot or dockerd restart stops it (no restart policy); and a
-// transient ssh failure must not cut every live bound session's proxy and
+// transient ssh failure must not cut every live fenced session's proxy and
 // broker.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {

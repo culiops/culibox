@@ -108,6 +108,9 @@ type boxFacts struct {
 	ProbeRan    bool
 	UserContext error    // boxvm.CheckUserDockerContext result
 	Stopped     []string // this instance's boxes that are not running
+	// ProvisionDrifted: the drift includes the provision script (the egress
+	// INPUT rules), so every boxed spawn is refused until the VM is recreated.
+	ProvisionDrifted bool
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -159,7 +162,9 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.ColimaVer != "" && !boxvm.VersionAtLeast(f.ColimaVer, 0, 8) {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
-	if f.Drifted {
+	if f.Drifted && f.ProvisionDrifted {
+		out = append(out, Result{Fail, "box VM config", "this VM predates egress control for all boxes; run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
+	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
 	out = append(out, userCtx)
@@ -222,6 +227,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)
 	f.SocketErr = vc.CheckSocketPaths()
 	f.SetUp, f.Drifted = vm.SetUp(), vm.Drifted()
+	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
 	if !f.SetUp {
 		return f
 	}

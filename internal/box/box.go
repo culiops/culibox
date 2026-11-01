@@ -901,8 +901,9 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			if !fenced {
 				return m.refuseUnverified(ctx, name, err)
 			}
-			// A fenced box from before egress control (a bound one from M3a, or
-			// on Linux any box from before EgressAll) fails the probe on its
+			// A fenced box from before egress control (a bound one from M3a, any box
+			// on macOS from before egress control for all boxes, or on Linux any box
+			// from before EgressAll) fails the probe on its
 			// first spawn after the upgrade. With sessions still running in it,
 			// removing it would kill them: refuse the spawn and leave it be.
 			m.unverify(name)

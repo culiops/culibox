@@ -57,12 +57,13 @@ func (k *keychainKeeper) Load() (string, time.Time, error) {
 		if errors.As(err, &ee) && ee.ExitCode() == keychainNotFound {
 			return "", time.Time{}, ErrNotInitialized
 		}
-		code := -1
-		if ee != nil {
-			code = ee.ExitCode()
+		if ee == nil {
+			// security never ran (missing, not executable): there is no exit
+			// status or stderr to report.
+			return "", time.Time{}, errors.New(keychainStartReason(securityBin, err))
 		}
 		// Only stderr feeds the reason; stdout is the key.
-		return "", time.Time{}, errors.New(keychainReason(errb.Bytes(), code))
+		return "", time.Time{}, errors.New(keychainReason(errb.Bytes(), ee.ExitCode()))
 	}
 	ident := strings.TrimSpace(out.String())
 	if ident == "" {

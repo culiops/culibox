@@ -225,9 +225,9 @@ func (l *boxLayer) egressExec(name string) egress.ExecInput {
 	}
 }
 
-// egressVerify is box.Egress.Verify: it proves a bound box is contained by the
+// egressVerify is box.Egress.Verify: it proves a fenced box is contained by the
 // egress network and allowlist, by running the probe inside the real container
-// against the live proxy. It runs instead of verify for bound boxes. Fail
+// against the live proxy. It runs instead of verify for every fenced box (every box on macOS). Fail
 // closed: a proxy that cannot start or a probe that cannot run is a refusal.
 //
 // darwin adds the loopback check after the egress probe. The network is
@@ -235,7 +235,7 @@ func (l *boxLayer) egressExec(name string) egress.ExecInput {
 // the probe's DIRECT/DNS legs prove the VM rules only for the paths they try;
 // the loopback check proves the Mac's loopback services stay unreachable
 // through the gateway. It runs second because the probe's
-// ALLOW 200 is its positive control (a bound box's DNS is closed, so the plain
+// ALLOW 200 is its positive control (a fenced box's DNS is closed, so the plain
 // check's DNS control cannot be used); a probe that fails never reaches it.
 func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, name string) error {
 	return func(ctx context.Context, name string) error {

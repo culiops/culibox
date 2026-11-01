@@ -143,28 +143,20 @@ access on a Mac:
 
 These limits are the same as on Linux and are not configurable.
 
-**Token binding.** The relay prepends a one-line header (PROXY protocol v1)
-naming the box's own address on every connection it forwards. The proxy and
-the broker on your Mac accept a connection only when that header is present and
-names an address inside the box subnet other than the gateway, so a box's
-proxy token works only from that box, as on Linux. Residual risk: a process on
-your Mac running as your user can connect to `127.0.0.1` and write that header
-itself. It already runs as you, inside your trust boundary, so this is not an
-additional exposure.
-
 - After upgrading, run `agent-box box setup -recreate` once. The rules live in
   the VM's provisioning, so an existing VM has none until it is recreated, and
   from this version that applies to every box, not only bound ones;
-  `agent-box doctor` warns "box VM config changed since setup" until you do.
+  `agent-box doctor` fails "this VM predates egress control for all boxes" and
+  every boxed spawn is refused until you do.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards.
-- The bound network uses the fixed subnet `172.29.72.0/24` inside the VM. An
+- The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
   `docker network rm`. After an upgrade, run `agent-box box setup -recreate`
   instead: it deletes the VM, so its networks and rules come back fresh. Then
   restart CuliBox.
-- The relay container has no restart policy. After a VM restart the next bound
+- The relay container has no restart policy. After a VM restart the next boxed
   session checks the firewall rules and starts it again, so that spawn can be
   a little slower than later ones.
 - A box left from an older build, on the default network, is removed and
@@ -177,6 +169,17 @@ additional exposure.
 - Denials show in the steer rail's egress row for the session ("N denied since
   start") and, with host and time, in the `egress_audit` table of `audit.db` in
   the data directory.
+
+### Token binding
+
+The relay prepends a one-line header (PROXY protocol v1)
+naming the box's own address on every connection it forwards. The proxy and
+the broker on your Mac accept a connection only when that header is present and
+names an address inside the box subnet other than the gateway, so a box's
+proxy token works only from that box, as on Linux. Residual risk: a process on
+your Mac running as your user can connect to `127.0.0.1` and write that header
+itself. It already runs as you, inside your trust boundary, so this is not an
+additional exposure.
 
 ## Behind a TLS-inspecting proxy
 

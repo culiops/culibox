@@ -57,6 +57,8 @@ func TestBoxTierRows(t *testing.T) {
 		{"stopped", func(f *boxFacts) { f.Status.Running = false; f.ProbeRan = false }, Pass, "first boxed spawn"},
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
+		{"provision drift fails with the egress reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
+			`this VM predates egress control for all boxes; run "agent-box box setup -recreate"`},
 		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},

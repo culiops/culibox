@@ -113,7 +113,9 @@ func unavailableBody(ue *secretstore.UnavailableError) *storeUnavailableBody {
 }
 
 // storeStatusBody is the GET /api/store answer: state and counts, never a
-// value, an id or a path.
+// value or an id. The one place a path can appear is unavailable.fix, which
+// names the store directory for key_lost / store_unreadable; the endpoint is
+// operator-only, by design.
 type storeStatusBody struct {
 	Initialized     bool                  `json:"initialized"`
 	Locked          bool                  `json:"locked"`
@@ -218,7 +220,8 @@ func (s *Server) handleStoreUnlock(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, secretstore.ErrKeeperUnavailable):
 		writeStoreUnavailable(w, err)
 	default:
-		// The error text is not shown: it can name a path.
+		// The error text is not shown: it can name a path. (Only the typed
+		// Keychain failure above carries a path, deliberately, in its fix.)
 		writeErr(w, http.StatusInternalServerError, "could not unlock the store")
 	}
 }

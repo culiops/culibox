@@ -12,6 +12,12 @@ const maxKeychainReason = 200
 // 200 characters. Empty falls back to the exit code. Only stderr is passed in;
 // stdout (the key) is never read on an error path. Untagged so it is testable
 // on every platform.
+// keychainStartReason is the reason when security(1) could not be started at
+// all: the start error, sanitized the same way as keychainReason.
+func keychainStartReason(bin string, err error) string {
+	return keychainReason([]byte("could not run "+bin+": "+err.Error()), -1)
+}
+
 func keychainReason(stderr []byte, exitCode int) string {
 	line := string(stderr)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {

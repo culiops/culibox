@@ -1,6 +1,7 @@
 package secretstore
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,12 @@ func TestKeychainReason(t *testing.T) {
 	got := keychainReason([]byte("\x1b[31mbad\n"), 1)
 	if strings.ContainsRune(got, 0x1b) || got == "" {
 		t.Fatalf("control byte kept or empty: %q", got)
+	}
+	// security never started: the reason names the binary and the start error,
+	// sanitized like any other.
+	start := keychainStartReason("/usr/bin/security", errors.New("fork/exec /usr/bin/security: permission denied\x1b[0m"))
+	if want := "could not run /usr/bin/security: fork/exec /usr/bin/security: permission denied[0m"; start != want {
+		t.Fatalf("start reason %q, want %q", start, want)
 	}
 	for _, r := range keychainReason([]byte("a\x00b\x07c\x7fd\xffe\n"), 1) {
 		if r < 0x20 || r > 0x7e {
