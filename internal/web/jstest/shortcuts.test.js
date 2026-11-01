@@ -243,14 +243,41 @@ test("no two ids render the same chord in overlapping scopes", () => {
   }
 });
 
-test("reserved entries render but never dispatch", () => {
+test("viewer.find and viewer.gotoLine are bound, listed in help, and never global", () => {
+  for (const id of ["viewer.find", "viewer.gotoLine"]) {
+    assert.strictEqual(entry(id).status, "bound", id);
+    assert.strictEqual(entry(id).scope, "viewer", id);
+  }
   assert.strictEqual(SC.renderChord(entry("viewer.find").chords[0], true), "⌘F");
   assert.strictEqual(SC.renderChord(entry("viewer.find").chords[0], false), "Ctrl+F");
   assert.strictEqual(SC.renderChord(entry("viewer.gotoLine").chords[0], true), "⌃G");
   assert.strictEqual(SC.renderChord(entry("viewer.gotoLine").chords[0], false), "Ctrl+G");
-  assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { ctrl: true }), false, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), true, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { meta: true }), true, NONE), null);
+  for (const [mac, find, goto] of [[true, "⌘F", "⌃G"], [false, "Ctrl+F", "Ctrl+G"]]) {
+    const rows = SC.helpRows(mac);
+    const f = rows.find((r) => r.label === "Find in file");
+    const g = rows.find((r) => r.label === "Go to line");
+    assert.ok(f && g, "listed, mac=" + mac);
+    assert.strictEqual(f.group, "Editor & files");
+    assert.strictEqual(g.group, "Editor & files");
+    assert.strictEqual(f.keys, find);
+    assert.strictEqual(g.keys, goto);
+  }
+  // Never global: not in any context, so the terminal keeps readline's Ctrl+G
+  // and the browser keeps its own find outside a viewer.
+  const ctxs = [NONE, { inTerminal: true }, { inEditor: true }, { inInput: true }, { dialogOpen: true }, { pageOpen: true }];
+  for (const ctx of ctxs) {
+    assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { ctrl: true }), false, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), true, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyG", "g", { ctrl: true }), false, ctx), null);
+    assert.strictEqual(SC.shortcutFor(ev("KeyF", "f", { meta: true }), true, ctx), null);
+  }
+  // The viewer's own listener matches them.
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { meta: true }), true), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { ctrl: true }), false), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.find", ev("KeyF", "f", { ctrl: true }), true), false);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { ctrl: true }), true), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { ctrl: true }), false), true);
+  assert.strictEqual(SC.shortcutMatches("viewer.gotoLine", ev("KeyG", "g", { meta: true }), true), false);
 });
 
 test("shortcutHint, jumpHint, shortcutMatches", () => {

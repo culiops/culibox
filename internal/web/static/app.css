@@ -1921,6 +1921,29 @@
     .vl-chunk { content-visibility: auto; contain-intrinsic-height: calc(var(--vl-rows, 500) * 1.55 * var(--fs-code)); }
     .vl-target { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
     .vl-target .vl-n { color: var(--fg); }
+    /* Find in file / Go to line (viewerfind.js). The bar sits between the toolbar and
+       the scroller. Colours, measured against the code text (Catppuccin Mocha / the
+       desktop graphite palette): every match is --fg on a 35% --accent wash over --bg
+       (5.37 / 7.92 : 1; AA text needs 4.5); the current match is --bg on solid --accent
+       (7.79 / 7.95 : 1), 4.11 / 4.55 : 1 against the other matches' wash, so the two
+       differ in lightness and not only in hue. ::highlight() paints text colour too,
+       so the syntax colours inside a match give way to these two. The "no results"
+       red is --danger on --panel (5.43 / 5.97). */
+    .vf-bar { display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, var(--panel)); flex: 0 0 auto; }
+    .vf-bar[hidden] { display: none; }
+    .vf-input { flex: 1 1 120px; min-width: 0; max-width: 360px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 2px 6px; font: inherit; font-size: 12px; }
+    .vf-input:focus { outline: none; border-color: var(--accent); }
+    .vf-count { font-size: 11px; color: var(--muted); white-space: nowrap; min-width: 8ch; }
+    .vf-btn { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; min-width: 26px; }
+    .vf-btn:hover { color: var(--fg); border-color: var(--accent); }
+    .vf-btn[hidden], .vf-count[hidden] { display: none; }
+    .vf-bar.vf-none .vf-input { border-color: var(--danger); }
+    .vf-bar.vf-none .vf-count { color: var(--danger); }
+    ::highlight(vf-all) { background-color: color-mix(in srgb, var(--accent) 35%, var(--bg)); color: var(--fg); }
+    ::highlight(vf-cur) { background-color: var(--accent); color: var(--bg); }
+    .CodeMirror.cm-s-default span.cm-find, .CodeMirror.cm-s-default span.cm-find span { background: color-mix(in srgb, var(--accent) 35%, var(--bg)); color: var(--fg); }
+    .CodeMirror.cm-s-default span.cm-find-cur, .CodeMirror.cm-s-default span.cm-find-cur span { background: var(--accent); color: var(--bg); }
+    @media (max-width: 700px) { .vf-input { font-size: 16px; } .vf-btn { min-height: 32px; min-width: 36px; } }
     .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
     .viewer-msg.err { color: var(--danger); }
     .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }

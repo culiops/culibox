@@ -150,9 +150,78 @@ class ViewerTab {
       this.scroll = this.content.scrollTop;
       markLayoutUnsaved(); // scrolling schedules no layout write; pagehide needs to know
     }, { passive: true });
-    this.el.append(this.toolbar, this.content);
+    // Find / Go to line. The bar sits BETWEEN the toolbar and the scroller (not
+    // inside it), so content.replaceChildren (every render) never removes it, and
+    // a later toolbar swap does not have to know about it.
+    this.isImage = IMAGE_EXTS.has(ext0);
+    this.find = new ViewerFind(this);
+    this.findBar = this.find.el;
+    this.el.append(this.toolbar, this.findBar, this.content);
+    // Bubble phase, on the viewer's own element: it fires for the read scroller,
+    // the find bar and CodeMirror's textarea, and never for a terminal or the
+    // rest of the page, so Mod+F / Ctrl+G stay the browser's and readline's there.
+    // (The global dispatcher in app.js handles only scope "global" entries.)
+    this.el.addEventListener("keydown", (e) => this.onViewerKey(e));
     this.load();
   }
+
+  // onViewerKey takes the viewer-scoped keys. A key the viewer cannot act on (an
+  // image, rendered markdown for Go to line) is left alone, so the browser's find
+  // still works on that page.
+  onViewerKey(e) {
+    let mode = null;
+    if (shortcutMatches("viewer.find", e, IS_MAC)) mode = "find";
+    else if (shortcutMatches("viewer.gotoLine", e, IS_MAC)) mode = "line";
+    if (mode && this.openFind(mode)) { e.preventDefault(); e.stopPropagation(); }
+  }
+
+  // openFind shows the find bar in "find" or "line" (Go to line) mode and says
+  // whether it could. Find works on text (code, markdown, the editor); Go to line
+  // needs numbered lines: the code view or the editor.
+  openFind(mode) {
+    if (mode === "line") {
+      if (!(this.editing && this.cm) && !this.hasLines) return false;
+    } else if (this.isImage) return false;
+    this.find.open(mode);
+    return true;
+  }
+
+  closeFind() { this.find.close(); }
+
+  // lineTotal: how many lines Go to line accepts (the same count revealLine clamps to).
+  lineTotal() { return this.editing && this.cm ? countSourceLines(this.cm.getValue()) : this.lineCount; }
+
+  // revealRange brings a find match into view: its row about a third down the
+  // pane when it is off-screen, and the match itself sideways when the lines are
+  // not wrapped. `row` is the match's .vl row (or markdown block).
+  revealRange(range, row) {
+    const c = this.content;
+    if (!c.isConnected || !row) return;
+    const cr = c.getBoundingClientRect();
+    const rr = row.getBoundingClientRect();
+    if (rr.top < cr.top || rr.bottom > cr.bottom) {
+      this.setScrollTop(Math.max(0, Math.round(rr.top - cr.top + c.scrollTop - c.clientHeight / 3)));
+    }
+    const m = range.getBoundingClientRect();
+    if (m.width) {
+      const cr2 = c.getBoundingClientRect();
+      if (m.right > cr2.right - 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
+      else if (m.left < cr2.left + 8) c.scrollLeft += Math.round(m.left - cr2.left - c.clientWidth / 3);
+    }
+  }
+
+  // setScrollTop moves the scroller and records where it settled, without the
+  // echoing scroll event being read as the reader's (see the scroll listener).
+  setScrollTop(y) {
+    this.applying = true;
+    this.content.scrollTop = y;
+    this.scroll = this.content.scrollTop;
+    requestAnimationFrame(() => { this.applying = false; });
+    markLayoutUnsaved();
+  }
+
+  // findRefresh reruns an open find after the view changed under it (a render).
+  findRefresh() { if (this.find.isOpen) this.find.refresh(true); }
 
   // focusReader puts keyboard focus on the scroller. Only user-initiated opens
   // call it (openFile / openBoxFile); a layout restore must not steal focus. A
@@ -189,7 +258,10 @@ class ViewerTab {
     this.content.scrollTop = this.scroll;
     requestAnimationFrame(() => { this.applying = false; });
   }
-  dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
+  dispose() {
+    if (this.timer) clearInterval(this.timer); // stop polling on close (no leak)
+    this.find.close(true); // frees the document-wide highlight names if this bar held them
+  }
   // The toolbar buttons' actions as methods, so a host that hides this toolbar
   // (the desktop Files drawer has its own header) can offer the same ones.
   reload() { return this.load(); }
@@ -231,6 +303,7 @@ class ViewerTab {
     this.content.replaceChildren(d);
     this.showingMsg = true;
     this.hasLines = false;
+    this.findRefresh();
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
@@ -409,11 +482,7 @@ class ViewerTab {
     if (!el || !this.content.isConnected) return;
     this.scrollToTarget = false;
     const top = el.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop;
-    this.applying = true;
-    this.content.scrollTop = Math.max(0, Math.round(top - this.content.clientHeight / 3));
-    this.scroll = this.content.scrollTop;
-    requestAnimationFrame(() => { this.applying = false; });
-    markLayoutUnsaved();
+    this.setScrollTop(Math.max(0, Math.round(top - this.content.clientHeight / 3)));
   }
 
   // Copies exactly what is on screen — the raw source this viewer fetched, which
@@ -486,6 +555,7 @@ class ViewerTab {
     for (const k of cmKeys("editor.save", IS_MAC)) saveKeys[k] = () => { this.save(false); return false; };
     this.cm.setOption("extraKeys", saveKeys);
     this.renderEditBar();
+    this.findRefresh(); // an open find now searches the buffer
     // A fresh edit: a "saved" left from the last one says nothing about this
     // buffer. setStatus also tells a host header to show Cancel · Save.
     this.setStatus("");
@@ -565,6 +635,7 @@ class ViewerTab {
   // re-fetches from disk — the one path that also recovers from a Reload after
   // a conflict, since the disk copy is exactly what a fresh load() shows.
   exitEdit(savedText) {
+    this.find.leaveEdit(); // the editor's marks go with the editor
     this.editing = false;
     this.cm = null;
     this.editBar = null;
@@ -645,6 +716,7 @@ class ViewerTab {
     this.renderedText = text;
     if (this.targetLine && this.targetLine <= this.lineCount) this.markTarget(this.targetLine);
     else this.targetLine = null;
+    this.findRefresh();
   }
 
   renderMarkdown(text) {
@@ -683,6 +755,7 @@ class ViewerTab {
     wrap.appendChild(frag);
     this.content.replaceChildren(wrap);
     this.hasLines = false;
+    this.findRefresh();
   }
 
   renderImage() {

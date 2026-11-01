@@ -92,9 +92,9 @@ const SHORTCUTS = [
     chords: [], text: { mac: "Esc", other: "Esc" } },
   { id: "ui.lists", label: "Move and pick in lists", group: "General", scope: "global", status: "help-only",
     chords: [], text: { mac: "↑ ↓ ↵", other: "↑ ↓ Enter" } },
-  { id: "viewer.find", label: "Find in file", group: "Editor & files", scope: "viewer", status: "reserved",
+  { id: "viewer.find", label: "Find in file", group: "Editor & files", scope: "viewer", status: "bound",
     chords: [{ mod: true, code: "KeyF" }] },
-  { id: "viewer.gotoLine", label: "Go to line", group: "Editor & files", scope: "viewer", status: "reserved",
+  { id: "viewer.gotoLine", label: "Go to line", group: "Editor & files", scope: "viewer", status: "bound",
     chords: [{ ctrl: true, code: "KeyG" }] },
 ];
 
