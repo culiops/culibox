@@ -1,8 +1,11 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -322,5 +325,117 @@ func mustChmod(t *testing.T, p string, m os.FileMode) {
 	t.Helper()
 	if err := os.Chmod(p, m); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// roState lists every path under dir with its content (files) or "/" (dirs),
+// so a refused mutation can be checked to have changed nothing at all.
+func roState(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if fi.IsDir() {
+			m[p] = "/"
+		} else if b, err := os.ReadFile(p); err == nil {
+			m[p] = string(b)
+		} else {
+			m[p] = "?"
+		}
+		return nil
+	})
+	return m
+}
+
+func roFixture(t *testing.T) (s *Server, home, scratch string) {
+	t.Helper()
+	s, home, scratch = scratchServer(t)
+	mustWrite(t, filepath.Join(scratch, "f.txt"), "orig")
+	mustWrite(t, filepath.Join(scratch, "a", "b.txt"), "b")
+	mustWrite(t, filepath.Join(home, "p", "a.txt"), "home")
+	return s, home, scratch
+}
+
+func wantReadOnly(t *testing.T, rec *httptest.ResponseRecorder, before, after map[string]string) {
+	t.Helper()
+	if rec.Code != http.StatusForbidden || errBody(t, rec) != msgReadOnly {
+		t.Fatalf("got %d %s, want 403 %q", rec.Code, rec.Body, msgReadOnly)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("file system changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+func opJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestReadOnly_Write(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	before := roState(t, scratch)
+	rec := writeReq(t, s, opJSON(map[string]any{"path": filepath.Join(scratch, "f.txt"), "content": "x", "overwrite": true}))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_WriteThroughHomeLinkIntoScratch(t *testing.T) {
+	s, home, scratch := roFixture(t)
+	mustSymlink(t, scratch, filepath.Join(home, "s"))
+	before := roState(t, scratch)
+	rec := writeReq(t, s, opJSON(map[string]any{"path": filepath.Join(home, "s", "f.txt"), "content": "x", "overwrite": true}))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_WriteThroughScratchLinkIntoHome(t *testing.T) {
+	s, home, scratch := roFixture(t)
+	mustSymlink(t, filepath.Join(home, "p"), filepath.Join(scratch, "h"))
+	before := roState(t, home)
+	rec := writeReq(t, s, opJSON(map[string]any{"path": filepath.Join(scratch, "h", "a.txt"), "content": "x", "overwrite": true}))
+	wantReadOnly(t, rec, before, roState(t, home))
+}
+
+func TestReadOnly_Mkdir(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	before := roState(t, scratch)
+	rec := httptest.NewRecorder()
+	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", opJSON(map[string]string{"dir": scratch, "name": "n"})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_Rename(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	before := roState(t, scratch)
+	rec := httptest.NewRecorder()
+	s.handleFsRename(rec, opReq(t, "/api/fs/rename", opJSON(map[string]string{"path": filepath.Join(scratch, "f.txt"), "name": "g.txt"})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_Delete(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	before := roState(t, scratch)
+	rec := httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", opJSON(map[string]any{"path": filepath.Join(scratch, "f.txt")})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+	rec = httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", opJSON(map[string]any{"path": filepath.Join(scratch, "a"), "recursive": true, "entries": 1})))
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_Upload(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	s.MaxUploadBytes = 1 << 20
+	before := roState(t, scratch)
+	req := uploadReq(t, scratch, [][2]string{{"u.txt", "u"}})
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	s.handleFsUpload(rec, req)
+	wantReadOnly(t, rec, before, roState(t, scratch))
+}
+
+func TestReadOnly_HomeMutationsStillWork(t *testing.T) {
+	s, home, _ := roFixture(t)
+	rec := httptest.NewRecorder()
+	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", opJSON(map[string]string{"dir": home, "name": "n"})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mkdir in home: %d %s", rec.Code, rec.Body)
 	}
 }

@@ -127,6 +127,12 @@ func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
 	if err != nil {
 		return "", nil, "", err
 	}
+	// Every mutation reaches its directory through here, so this one check is
+	// what keeps the scratch folder read-only — and what keeps a link through
+	// it from being used to write anywhere else.
+	if t.ReadOnly {
+		return "", nil, "", errReadOnly
+	}
 	root, err := os.OpenRoot(t.Root)
 	if err != nil {
 		return "", nil, "", err
