@@ -110,10 +110,11 @@ func screened(action string) bool {
 // residual pattern covers it, regardless of the name screen and HarmlessMinting.
 //
 // Added by hand, on purpose, and not complete. The SDK models' sensitive trait
-// was measured as a source (2026-11-01, botocore 1.34): it flags roughly 600 read
+// was measured as a source (2026-11-01, botocore 1.34): it flags over 600 read
 // actions, mostly noise (NextToken, tag keys, a CloudFront Comment), and misses
 // glue:GetConnection, whose password sits in a plain map. An action goes here when
-// AWS's docs or model say its reply carries the secret.
+// AWS's docs or model say its reply carries the secret, or, labelled as inferred
+// in its reason, when that follows from what the reply is.
 //
 // Known limit: not listed, because a deny would remove a core read and no live
 // call has shown a value. redshift:DescribeClusters and the rds Describe calls

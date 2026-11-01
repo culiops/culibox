@@ -889,8 +889,8 @@ func TestGateConfigUsesTheSourceProfile(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "config")
 	marker := filepath.Join(dir, "credential-process-ran")
-	// plain also carries every way a profile can name its own credentials: the
-	// static ones must still win, and the credential_process must never run.
+	// plain names a credential_process and assume a role_arn: the static
+	// credentials must still win over both, and the process must never run.
 	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") +
 		"\n[profile plain]\nmax_attempts = 5\ncredential_process = /usr/bin/touch " + marker + "\n" +
 		"[profile assume]\nrole_arn = arn:aws:iam::123456789012:role/x\ncredential_source = Environment\n"
@@ -905,6 +905,9 @@ func TestGateConfigUsesTheSourceProfile(t *testing.T) {
 	creds := aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}
 	if _, err := gateConfig(context.Background(), creds, "eu-west-1", "src"); err == nil {
 		t.Fatal("ca_bundle on the source profile was not read")
+	}
+	if _, err := NewIAMGate(context.Background(), creds, "eu-west-1", "src"); err == nil {
+		t.Fatal("NewIAMGate did not pass the source profile on")
 	}
 	cfg, err := gateConfig(context.Background(), creds, "eu-west-1", "plain")
 	if err != nil || cfg.RetryMaxAttempts != 5 {

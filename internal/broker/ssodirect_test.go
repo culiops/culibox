@@ -1,11 +1,15 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -583,5 +587,27 @@ func TestHooksCheckSSODirect(t *testing.T) {
 	}
 	if fm.callCount() != n {
 		t.Fatalf("a non-sso_direct key fetched credentials (%d mints)", fm.callCount()-n)
+	}
+}
+
+// The real gate hands the binding's source profile to the AWS client: a CA bundle
+// that exists only on that profile fails the config load, before any network.
+func TestIAMGatePassesTheSourceProfile(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "config")
+	body := "[profile src]\nca_bundle = " + filepath.Join(dir, "no-such-bundle.pem") + "\n"
+	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", conf)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CA_BUNDLE", "")
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	res := IAMGate(context.Background(), Creds{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "eu-west-1", "123456789012", "src")
+	if res.State != awsprobe.GateUnverified || !strings.Contains(logged.String(), "load AWS config") {
+		t.Fatalf("state %v, log %q", res.State, logged.String())
 	}
 }
