@@ -164,7 +164,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	// directly from their own address.
 	l = limitListener(l, s.maxConns)
 	if s.o.GOOS == "darwin" {
-		l = proxyline.Wrap(l, InBoxSubnet(n.Subnet, n.Gateway), proxyHeaderTimeout)
+		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(n.Subnet, n.Gateway), proxyHeaderTimeout)
 	}
 	host := s.o.ProxyHost
 	if host == "" {

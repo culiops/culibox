@@ -18,6 +18,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/hostmatch"
+	"github.com/culiops/agent-box/internal/proxyline"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
@@ -602,23 +603,7 @@ func sourceOK(remote string, subnet netip.Prefix, gw netip.Addr) bool {
 	if err != nil {
 		return false
 	}
-	return InBoxSubnet(subnet, gw)(ap.Addr())
-}
-
-// InBoxSubnet returns the predicate "a is inside subnet and is not the gateway"
-// (the rule behind sourceOK, on a bare address). It fails closed: an invalid or
-// /0 subnet, an invalid or unspecified gateway, or a gateway outside the subnet
-// makes every address not ok. The macOS listeners hand it to proxyline.Wrap to
-// vet the box address a relay claims in its PROXY line.
-func InBoxSubnet(subnet netip.Prefix, gw netip.Addr) func(netip.Addr) bool {
-	gw = gw.WithZone("").Unmap()
-	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
-		return func(netip.Addr) bool { return false }
-	}
-	return func(a netip.Addr) bool {
-		a = a.WithZone("").Unmap()
-		return subnet.Contains(a) && a != gw
-	}
+	return proxyline.InSubnetNotGateway(subnet, gw)(ap.Addr())
 }
 
 // authenticate checks Proxy-Authorization. On authBad, the returned principal

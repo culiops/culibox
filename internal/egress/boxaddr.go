@@ -114,10 +114,9 @@ func (p *Proxy) boxSourceOK(ctx context.Context, box string, src netip.Addr) boo
 	}
 }
 
-// boxSourceAllowed applies boxSourceOK when the source check is on (Linux,
-// where each box has its own address on the egress network). Without it every
-// connection arrives from the same forwarded address and there is nothing to
-// bind to.
+// boxSourceAllowed applies boxSourceOK when the source check is on (both OSes:
+// on macOS the relay's PROXY line makes RemoteAddr the box's own address on the
+// egress network). Without the check there is no box address to bind to.
 func (p *Proxy) boxSourceAllowed(ctx context.Context, box, remote string) bool {
 	p.mu.Lock()
 	check := p.checkSource

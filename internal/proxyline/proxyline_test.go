@@ -428,3 +428,39 @@ func TestWrapTimeoutKeepsNetErrorTimeout(t *testing.T) {
 		t.Fatalf("err = %v, want ErrHeader that is also a net.Error timeout", err)
 	}
 }
+
+func TestInSubnetNotGateway(t *testing.T) {
+	sub := netip.MustParsePrefix("172.29.72.0/24")
+	gw := netip.MustParseAddr("172.29.72.1")
+	cases := []struct {
+		name   string
+		subnet netip.Prefix
+		gw     netip.Addr
+		addr   string
+		want   bool
+	}{
+		{"box address", sub, gw, "172.29.72.5", true},
+		{"gateway", sub, gw, "172.29.72.1", false},
+		{"outside subnet", sub, gw, "172.29.73.5", false},
+		{"loopback", sub, gw, "127.0.0.1", false},
+		{"v4-mapped box address", sub, gw, "::ffff:172.29.72.5", true},
+		{"v4-mapped gateway", sub, gw, "::ffff:172.29.72.1", false},
+		{"v4-mapped outside", sub, gw, "::ffff:10.0.0.1", false},
+		{"invalid address", sub, gw, "", false},
+		{"zero-bit subnet", netip.MustParsePrefix("0.0.0.0/0"), gw, "172.29.72.5", false},
+		{"invalid subnet", netip.Prefix{}, gw, "172.29.72.5", false},
+		{"invalid gateway", sub, netip.Addr{}, "172.29.72.5", false},
+		{"unspecified gateway", sub, netip.MustParseAddr("0.0.0.0"), "172.29.72.5", false},
+		{"gateway outside subnet", sub, netip.MustParseAddr("10.0.0.1"), "172.29.72.5", false},
+		{"v4-mapped gateway form is unmapped", sub, netip.MustParseAddr("::ffff:172.29.72.1"), "172.29.72.1", false},
+	}
+	for _, c := range cases {
+		var a netip.Addr
+		if c.addr != "" {
+			a = netip.MustParseAddr(c.addr)
+		}
+		if got := InSubnetNotGateway(c.subnet, c.gw)(a); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}

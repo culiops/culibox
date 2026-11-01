@@ -25,6 +25,22 @@ import (
 // malformed, from a disallowed source, or sent by a non-loopback peer.
 var ErrHeader = errors.New("proxyline: missing or invalid PROXY header")
 
+// InSubnetNotGateway returns the predicate "a is inside subnet and is not the
+// gateway": the rule for an address a relay claims as the box behind it. It
+// fails closed: an invalid or /0 subnet, an invalid or unspecified gateway, or
+// a gateway outside the subnet makes every address not ok. IPv4-mapped IPv6
+// forms are compared as plain IPv4.
+func InSubnetNotGateway(subnet netip.Prefix, gw netip.Addr) func(netip.Addr) bool {
+	gw = gw.WithZone("").Unmap()
+	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
+		return func(netip.Addr) bool { return false }
+	}
+	return func(a netip.Addr) bool {
+		a = a.WithZone("").Unmap()
+		return subnet.Contains(a) && a != gw
+	}
+}
+
 // maxLine is the longest legal PROXY v1 line including the trailing CRLF
 // (107 bytes per the protocol specification).
 const maxLine = 107

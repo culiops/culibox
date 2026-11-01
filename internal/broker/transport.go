@@ -48,24 +48,10 @@ func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 			return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
 		}
 		p := l.Addr().(*net.TCPAddr).Port
-		l = proxyline.Wrap(l, inBoxSubnet(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
+		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
 		return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
 	}
 	return listenUnix(stateRoot)
-}
-
-// inBoxSubnet is "a is inside subnet and is not the gateway", fail-closed on a
-// bad subnet or gateway. A copy of egress.InBoxSubnet (the egress proxy's
-// sourceOK rule): broker does not import egress.
-func inBoxSubnet(subnet netip.Prefix, gw netip.Addr) func(netip.Addr) bool {
-	gw = gw.WithZone("").Unmap()
-	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
-		return func(netip.Addr) bool { return false }
-	}
-	return func(a netip.Addr) bool {
-		a = a.WithZone("").Unmap()
-		return subnet.Contains(a) && a != gw
-	}
 }
 
 func listenUnix(stateRoot string) (Endpoint, error) {
