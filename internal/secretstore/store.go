@@ -476,7 +476,7 @@ func (s *Store) keeperIdentity() (*age.X25519Identity, time.Time, error) {
 	root, err := s.openRoot(false)
 	if err != nil {
 		if !s.k.NeedsPassphrase() {
-			return nil, time.Time{}, s.unavailable(KindAccess, err.Error())
+			return nil, time.Time{}, s.unavailable(KindStoreUnreadable, err.Error())
 		}
 		return nil, time.Time{}, ErrLocked
 	}
@@ -517,7 +517,7 @@ func (s *Store) keeperIdentityFor(root *os.Root) (*age.X25519Identity, time.Time
 	rcpt, err := readRecipient(root)
 	if err != nil {
 		if noPass {
-			return nil, time.Time{}, s.unavailable(KindAccess, err.Error())
+			return nil, time.Time{}, s.unavailable(KindStoreUnreadable, err.Error())
 		}
 		return nil, time.Time{}, err
 	}

@@ -62,7 +62,7 @@ func (k *keychainKeeper) Load() (string, time.Time, error) {
 			code = ee.ExitCode()
 		}
 		// Only stderr feeds the reason; stdout is the key.
-		return "", time.Time{}, fmt.Errorf("keychain read failed: %s", keychainReason(errb.Bytes(), code))
+		return "", time.Time{}, errors.New(keychainReason(errb.Bytes(), code))
 	}
 	ident := strings.TrimSpace(out.String())
 	if ident == "" {

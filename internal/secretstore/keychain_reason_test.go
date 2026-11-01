@@ -18,6 +18,7 @@ func TestKeychainReason(t *testing.T) {
 		{"empty stderr", "", 51, "security exited 51"},
 		{"blank first line only", "\n\n", 7, "security exited 7"},
 		{"first line only", "first\nsecond\n", 1, "first"},
+		{"truncated without trailing space", strings.Repeat("x", 199) + " yyy\n", 1, strings.Repeat("x", 199)},
 		{"truncated", long, 1, strings.Repeat("x", 200)},
 	}
 	for _, c := range cases {

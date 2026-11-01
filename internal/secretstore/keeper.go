@@ -3,6 +3,7 @@ package secretstore
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,9 @@ const (
 	// store (item missing, malformed, or another store's). Nothing stored can
 	// be decrypted again.
 	KindKeyLost UnavailableKind = "key_lost"
+	// KindStoreUnreadable: the store directory or its recipient file could not
+	// be read. Not a Keychain problem; Reason is the OS error.
+	KindStoreUnreadable UnavailableKind = "store_unreadable"
 )
 
 // UnavailableError is a passphrase-less keeper failing to yield the store key.
@@ -49,13 +53,20 @@ type UnavailableError struct {
 
 // Error is the user-facing message, fix included.
 func (e *UnavailableError) Error() string {
-	return fmt.Sprintf("%s: %s. %s", ErrKeeperUnavailable.Error(), e.Reason, e.Fix())
+	head := ErrKeeperUnavailable.Error()
+	if e.Kind == KindStoreUnreadable {
+		head = "the store could not be read"
+	}
+	return fmt.Sprintf("%s: %s. %s", head, strings.TrimRight(e.Reason, ". "), e.Fix())
 }
 
 func (e *UnavailableError) Is(target error) bool { return target == ErrKeeperUnavailable }
 
 // Fix is what the operator does about it.
 func (e *UnavailableError) Fix() string {
+	if e.Kind == KindStoreUnreadable {
+		return fmt.Sprintf("agent-box cannot read its store directory %s: check that it exists and that your user can read it, then retry.", e.StoreDir)
+	}
 	if e.Kind == KindKeyLost {
 		return fmt.Sprintf(`The key for this store is gone, so its stored values cannot be decrypted. To start over: remove %s, run "agent-box store init", then add your tokens again.`, e.StoreDir)
 	}

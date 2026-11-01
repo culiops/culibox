@@ -26,7 +26,7 @@ func keychainReason(stderr []byte, exitCode int) string {
 	}
 	out := strings.TrimSpace(b.String())
 	if len(out) > maxKeychainReason {
-		out = out[:maxKeychainReason]
+		out = strings.TrimRight(out[:maxKeychainReason], " ")
 	}
 	if out == "" {
 		return fmt.Sprintf("security exited %d", exitCode)

@@ -653,7 +653,7 @@ func initMac(t *testing.T) (*Store, *FakeKeeper, string) {
 
 func TestPassphraselessAccessFailure(t *testing.T) {
 	s, k, _ := initMac(t)
-	k.FailLoad(errors.New("keychain read failed: User interaction is not allowed."))
+	k.FailLoad(errors.New("User interaction is not allowed."))
 	st := s.Status()
 	if st.Locked {
 		t.Fatal("a Keychain failure must never be reported as locked")
@@ -746,6 +746,13 @@ func TestUnavailableErrorFix(t *testing.T) {
 	if !errors.Is(a, ErrKeeperUnavailable) || errors.Is(a, ErrLocked) {
 		t.Fatal("Is")
 	}
+	dot := &UnavailableError{Kind: KindAccess, Reason: "User interaction is not allowed.", StoreDir: "/d/store"}
+	if strings.Contains(dot.Error(), "..") || !strings.Contains(dot.Error(), "User interaction is not allowed. Unlock") {
+		t.Fatalf("double period / lost reason: %q", dot.Error())
+	}
+	if strings.Count(dot.Error(), "keychain read failed") != 0 {
+		t.Fatalf("repeated phrase: %q", dot.Error())
+	}
 	if !strings.Contains(a.Error(), "r") || !strings.Contains(a.Error(), a.Fix()) {
 		t.Fatalf("Error %q", a.Error())
 	}
@@ -767,4 +774,43 @@ func TestPassphraseKeeperUnchanged(t *testing.T) {
 	if _, err := s.Get("a"); !errors.Is(err, ErrLocked) || errors.Is(err, ErrKeeperUnavailable) {
 		t.Fatalf("get: %v", err)
 	}
+}
+
+func TestPassphraselessUnreadableStoreDir(t *testing.T) {
+	check := func(t *testing.T, s *Store, dir string) {
+		t.Helper()
+		st := s.Status()
+		if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindStoreUnreadable {
+			t.Fatalf("status %+v / %+v", st, st.Unavailable)
+		}
+		if st.Unavailable.Reason == "" {
+			t.Fatal("empty reason")
+		}
+		fix := st.Unavailable.Fix()
+		if !strings.Contains(fix, filepath.Join(dir, "store")) || strings.Contains(strings.ToLower(st.Unavailable.Error()), "keychain") {
+			t.Fatalf("fix/error %q / %q", fix, st.Unavailable.Error())
+		}
+		if !errors.Is(st.Unavailable, ErrKeeperUnavailable) || errors.Is(st.Unavailable, ErrLocked) {
+			t.Fatal("Is")
+		}
+	}
+	t.Run("recipient file unreadable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads any file")
+		}
+		s, _, dir := initMac(t)
+		rf := filepath.Join(dir, "store", "recipient")
+		if err := os.Chmod(rf, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(rf, 0o600) })
+		check(t, s, dir)
+	})
+	t.Run("store dir open to others", func(t *testing.T) {
+		s, _, dir := initMac(t)
+		if err := os.Chmod(filepath.Join(dir, "store"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check(t, s, dir)
+	})
 }
