@@ -19,7 +19,48 @@ var (
 	ErrTooLarge       = errors.New("value is too large")
 	// ErrCaseCollision matches a CaseCollisionError under errors.Is.
 	ErrCaseCollision = errors.New("id differs only in case from an existing value")
+	// ErrKeeperUnavailable matches an UnavailableError under errors.Is: a
+	// passphrase-less keeper (the macOS Keychain) could not give up this
+	// store's key. It is never ErrLocked: there is no passphrase to type.
+	ErrKeeperUnavailable = errors.New("the store key could not be read from the macOS Keychain")
 )
+
+// UnavailableKind says which fix applies to an UnavailableError.
+type UnavailableKind string
+
+const (
+	// KindAccess: the Keychain refused or could not be read (locked, Deny on
+	// the ACL prompt, no interaction allowed). Retrying after a fix works.
+	KindAccess UnavailableKind = "access"
+	// KindKeyLost: the Keychain answered but holds no usable key for this
+	// store (item missing, malformed, or another store's). Nothing stored can
+	// be decrypted again.
+	KindKeyLost UnavailableKind = "key_lost"
+)
+
+// UnavailableError is a passphrase-less keeper failing to yield the store key.
+// Reason is short and printable (never a key); StoreDir is the directory to
+// remove when the key is lost.
+type UnavailableError struct {
+	Kind     UnavailableKind
+	Reason   string
+	StoreDir string
+}
+
+// Error is the user-facing message, fix included.
+func (e *UnavailableError) Error() string {
+	return fmt.Sprintf("%s: %s. %s", ErrKeeperUnavailable.Error(), e.Reason, e.Fix())
+}
+
+func (e *UnavailableError) Is(target error) bool { return target == ErrKeeperUnavailable }
+
+// Fix is what the operator does about it.
+func (e *UnavailableError) Fix() string {
+	if e.Kind == KindKeyLost {
+		return fmt.Sprintf(`The key for this store is gone, so its stored values cannot be decrypted. To start over: remove %s, run "agent-box store init", then add your tokens again.`, e.StoreDir)
+	}
+	return "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about agent-box, then retry."
+}
 
 // Keeper holds the unlocked master identity outside the process: the kernel
 // user keyring on Linux, the login Keychain on macOS. The Store never caches

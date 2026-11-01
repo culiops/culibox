@@ -51,6 +51,9 @@ type Status struct {
 	Values         int
 	Platform       string
 	PassphraseMode bool
+	// Unavailable is set (and Locked is not) when a passphrase-less keeper
+	// cannot give up this store's key. Nil when fine.
+	Unavailable *UnavailableError
 }
 
 // Entry names one stored value. Updated is the file's modification time.
@@ -170,7 +173,12 @@ func (s *Store) Status() Status {
 	}
 	st.Initialized = true
 	if _, exp, err := s.keeperIdentity(); err != nil {
-		st.Locked = true
+		var ue *UnavailableError
+		if errors.As(err, &ue) {
+			st.Unavailable = ue
+		} else {
+			st.Locked = true
+		}
 	} else {
 		st.ExpiresAt = exp
 	}
@@ -467,29 +475,56 @@ func (s *Store) openIdentity(passphrase []byte) (string, error) {
 func (s *Store) keeperIdentity() (*age.X25519Identity, time.Time, error) {
 	root, err := s.openRoot(false)
 	if err != nil {
+		if !s.k.NeedsPassphrase() {
+			return nil, time.Time{}, s.unavailable(KindAccess, err.Error())
+		}
 		return nil, time.Time{}, ErrLocked
 	}
 	defer root.Close()
 	return s.keeperIdentityFor(root)
 }
 
+// unavailable builds the error a passphrase-less keeper reports in place of
+// ErrLocked.
+func (s *Store) unavailable(kind UnavailableKind, reason string) *UnavailableError {
+	return &UnavailableError{Kind: kind, Reason: reason, StoreDir: s.dir}
+}
+
 // keeperIdentityFor loads the identity from the keeper and checks it against
 // the recipient file. An identity that is not this store's (a stale entry from
-// an earlier store in the same data dir) counts as locked.
+// an earlier store in the same data dir) counts as locked. A passphrase-less
+// keeper never yields ErrLocked: every failure is an UnavailableError, either
+// KindAccess (the read failed) or KindKeyLost (no usable key for this store).
 func (s *Store) keeperIdentityFor(root *os.Root) (*age.X25519Identity, time.Time, error) {
+	noPass := !s.k.NeedsPassphrase()
 	ident, exp, err := s.k.Load()
 	if err != nil {
+		if noPass {
+			if errors.Is(err, ErrNotInitialized) {
+				return nil, time.Time{}, s.unavailable(KindKeyLost, "no Keychain item for this store")
+			}
+			return nil, time.Time{}, s.unavailable(KindAccess, err.Error())
+		}
 		return nil, time.Time{}, err
 	}
 	x, err := age.ParseX25519Identity(strings.TrimSpace(ident))
 	if err != nil {
+		if noPass {
+			return nil, time.Time{}, s.unavailable(KindKeyLost, "the Keychain item is malformed")
+		}
 		return nil, time.Time{}, errors.New("master key is malformed")
 	}
 	rcpt, err := readRecipient(root)
 	if err != nil {
+		if noPass {
+			return nil, time.Time{}, s.unavailable(KindAccess, err.Error())
+		}
 		return nil, time.Time{}, err
 	}
 	if x.Recipient().String() != rcpt.String() {
+		if noPass {
+			return nil, time.Time{}, s.unavailable(KindKeyLost, "the Keychain item belongs to a different store")
+		}
 		return nil, time.Time{}, ErrLocked
 	}
 	return x, exp, nil

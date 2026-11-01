@@ -637,3 +637,134 @@ func TestSetSameIdUpdatesAndDistinctIdsCoexist(t *testing.T) {
 		t.Fatalf("distinct ids coexist: %v", l)
 	}
 }
+
+// initMac initialises a passphrase-less store (macOS shape).
+func initMac(t *testing.T) (*Store, *FakeKeeper, string) {
+	t.Helper()
+	s, k, _, dir := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	return s, k, dir
+}
+
+func TestPassphraselessAccessFailure(t *testing.T) {
+	s, k, _ := initMac(t)
+	k.FailLoad(errors.New("keychain read failed: User interaction is not allowed."))
+	st := s.Status()
+	if st.Locked {
+		t.Fatal("a Keychain failure must never be reported as locked")
+	}
+	if st.Unavailable == nil || st.Unavailable.Kind != KindAccess {
+		t.Fatalf("unavailable = %+v", st.Unavailable)
+	}
+	if !strings.Contains(st.Unavailable.Reason, "User interaction is not allowed.") {
+		t.Fatalf("reason %q", st.Unavailable.Reason)
+	}
+	_, err := s.Get("a")
+	if !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+	var ue *UnavailableError
+	if !errors.As(err, &ue) || ue.Kind != KindAccess || !strings.Contains(ue.Fix(), "Unlock the login keychain") {
+		t.Fatalf("typed error: %+v", ue)
+	}
+	// Recovery: the same store reads again once the keychain does.
+	k.FailLoad(nil)
+	if got, err := s.Get("a"); err != nil || string(got) != "v" {
+		t.Fatalf("after recovery: %q %v", got, err)
+	}
+	if u := s.Status().Unavailable; u != nil {
+		t.Fatalf("still unavailable: %+v", u)
+	}
+}
+
+func TestPassphraselessMissingItemIsKeyLost(t *testing.T) {
+	s, k, dir := initMac(t)
+	if err := k.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Status()
+	if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindKeyLost {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if st.Unavailable.Reason != "no Keychain item for this store" {
+		t.Fatalf("reason %q", st.Unavailable.Reason)
+	}
+	msg := st.Unavailable.Error()
+	if !strings.Contains(msg, filepath.Join(dir, "store")) || !strings.Contains(msg, "agent-box store init") {
+		t.Fatalf("message lacks the manual steps: %q", msg)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestPassphraselessMalformedKeyIsKeyLost(t *testing.T) {
+	s, k, _ := initMac(t)
+	if err := k.Save("NOT-A-KEY", 0); err != nil {
+		t.Fatal(err)
+	}
+	u := s.Status().Unavailable
+	if u == nil || u.Kind != KindKeyLost || u.Reason != "the Keychain item is malformed" {
+		t.Fatalf("unavailable %+v", u)
+	}
+}
+
+func TestPassphraselessMismatchIsKeyLost(t *testing.T) {
+	s, k, _ := initMac(t)
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Save(other.String(), 0); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Status()
+	if st.Locked || st.Unavailable == nil || st.Unavailable.Kind != KindKeyLost ||
+		st.Unavailable.Reason != "the Keychain item belongs to a different store" {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrKeeperUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestUnavailableErrorFix(t *testing.T) {
+	a := &UnavailableError{Kind: KindAccess, Reason: "r", StoreDir: "/d/store"}
+	if a.Fix() != "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about agent-box, then retry." {
+		t.Fatalf("access fix %q", a.Fix())
+	}
+	l := &UnavailableError{Kind: KindKeyLost, Reason: "r", StoreDir: "/d/store"}
+	want := `The key for this store is gone, so its stored values cannot be decrypted. To start over: remove /d/store, run "agent-box store init", then add your tokens again.`
+	if l.Fix() != want {
+		t.Fatalf("key-lost fix %q", l.Fix())
+	}
+	if !errors.Is(a, ErrKeeperUnavailable) || errors.Is(a, ErrLocked) {
+		t.Fatal("Is")
+	}
+	if !strings.Contains(a.Error(), "r") || !strings.Contains(a.Error(), a.Fix()) {
+		t.Fatalf("Error %q", a.Error())
+	}
+}
+
+func TestPassphraseKeeperUnchanged(t *testing.T) {
+	s, k, _, _ := initLinux(t)
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	k.SetNow(func() time.Time { return time.Now().Add(2 * time.Hour) })
+	st := s.Status()
+	if !st.Locked || st.Unavailable != nil {
+		t.Fatalf("status %+v / %+v", st, st.Unavailable)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrLocked) || errors.Is(err, ErrKeeperUnavailable) {
+		t.Fatalf("get: %v", err)
+	}
+}
