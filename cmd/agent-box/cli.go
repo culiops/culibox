@@ -181,6 +181,8 @@ type shutdownSteps struct {
 	// StopRetention cancels the egress audit pruning job and waits for it, so
 	// StopEgress does not close the audit store under a delete. Nil when none runs.
 	StopRetention func()
+	// StopBundleGC cancels the config-bundle GC and waits for it. Nil when none runs.
+	StopBundleGC func()
 	// StopEgress stops the egress proxy (waiting for every tunnel to be audited)
 	// and closes its audit store. Nil when egress control is not running. It runs
 	// before the broker: a tunnel in flight is not worth keeping once we drain.
@@ -205,6 +207,9 @@ func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...
 	s.StopAnalytics()
 	if s.StopRetention != nil {
 		s.StopRetention()
+	}
+	if s.StopBundleGC != nil {
+		s.StopBundleGC()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
