@@ -16,7 +16,11 @@ import (
 // can open raw TCP to every wildcard listener here, without passing the egress
 // proxy. Measured from a box on 2026-11-01: 0.0.0.0 and [::] listeners answer;
 // 127.0.0.1, a socket bound to one other address, and the host's other
-// addresses do not. macOS is out of scope: there the gateway is the VM.
+// addresses do not. A socket bound to the gateway IP itself does answer, but
+// that network is created lazily, so this check looks only at wildcards. /proc
+// cannot tell a reachable wildcard from a Docker-published port (DNAT sends it to
+// the container's network, and the box times out) or an IPv6-only socket, hence
+// "may". macOS is out of scope: there a bound box's gateway is the VM.
 const (
 	hostListenersCheck = "host listeners"
 	tcpListenState     = "0A"
@@ -63,8 +67,8 @@ func checkHostListeners(read func(string) ([]byte, error)) Result {
 	var tables [4][]byte
 	for i, name := range []string{"tcp", "tcp6", "udp", "udp6"} {
 		b, err := read("/proc/net/" + name)
-		// Only tcp is certain to exist: a kernel can lack IPv6, or UDP diagnostics.
-		if err != nil && (name == "tcp" || !errors.Is(err, fs.ErrNotExist)) {
+		// Only the v6 tables can be absent, on a kernel without IPv6.
+		if err != nil && (i%2 == 0 || !errors.Is(err, fs.ErrNotExist)) {
 			return Result{Warn, hostListenersCheck, fmt.Sprintf("could not read the listening sockets (%v), so what a box can reach on this host is unknown", err)}
 		}
 		tables[i] = b
@@ -80,7 +84,7 @@ func checkHostListeners(read func(string) ([]byte, error)) Result {
 		return Result{Pass, hostListenersCheck, "no TCP or UDP service listens on all addresses"}
 	}
 	return Result{Warn, hostListenersCheck, fmt.Sprintf(
-		"a box can connect directly to %s on this host, because they listen on all addresses. The egress proxy does not see these connections. Bind a service to 127.0.0.1 if a box must not reach it",
+		"%s listen on all addresses, so a box may reach them directly, unseen by the egress proxy. Docker-published ports and IPv6-only sockets are listed too, though a box usually cannot reach them, and outbound-only UDP sockets can appear. Bind a service to 127.0.0.1 if a box must not reach it",
 		strings.Join(parts, " and "))}
 }
 

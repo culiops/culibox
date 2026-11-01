@@ -13,7 +13,7 @@ const procTCPHeader = "  sl  local_address rem_address   st tx_queue rx_queue tr
 const procTCP = procTCPHeader +
 	"   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1\n" + // 0.0.0.0:22
 	"   1: 0100007F:0CEA 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 2 1\n" + // 127.0.0.1:3306
-	"   2: 7976644B:2328 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 3 1\n" + // a specific IP
+	"   2: 010200C0:2328 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 3 1\n" + // a specific IP
 	"   3: 00000000:0BB8 0100007F:D431 01 00000000:00000000 00:00000000 00000000 0 0 4 1\n" // established, port 3000
 
 const procTCP6 = procTCPHeader +
@@ -52,7 +52,9 @@ func fakeProc(tcp, tcp6 string) func(string) ([]byte, error) {
 				return nil, os.ErrNotExist // an IPv6-less kernel has no such file
 			}
 			return []byte(tcp6), nil
-		case "/proc/net/udp", "/proc/net/udp6":
+		case "/proc/net/udp":
+			return []byte(procTCPHeader), nil
+		case "/proc/net/udp6":
 			return nil, os.ErrNotExist
 		}
 		return nil, errors.New("unexpected path " + p)
@@ -64,7 +66,7 @@ func TestCheckHostListenersWarnsWithPortsAndFix(t *testing.T) {
 	if r.Status != Warn {
 		t.Fatalf("status = %s, want WARN: %s", r.Status, r.Detail)
 	}
-	for _, want := range []string{"22, 8080, 8081", "127.0.0.1"} {
+	for _, want := range []string{"22, 8080, 8081", "127.0.0.1", "may reach", "Docker-published"} {
 		if !strings.Contains(r.Detail, want) {
 			t.Errorf("detail lacks %q: %s", want, r.Detail)
 		}
@@ -107,5 +109,27 @@ func TestCheckHostListenersUnreadableIsNotAPass(t *testing.T) {
 	r := checkHostListeners(func(string) ([]byte, error) { return nil, os.ErrPermission })
 	if r.Status != Warn {
 		t.Fatalf("status = %s, want WARN: %s", r.Status, r.Detail)
+	}
+}
+
+// Only the IPv6 tables can be legitimately absent. A pass with UDP unread would
+// claim something nobody looked at.
+func TestCheckHostListenersMissingUDPTableIsNotAPass(t *testing.T) {
+	read := func(p string) ([]byte, error) {
+		if p == "/proc/net/tcp" {
+			return []byte(procTCPHeader), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if r := checkHostListeners(read); r.Status != Warn {
+		t.Fatalf("status = %s, want WARN: %s", r.Status, r.Detail)
+	}
+}
+
+// The wording must not state reachability as fact: a Docker-published port or an
+// IPv6-only socket is listed but measured unreachable from a box.
+func TestCheckHostListenersDoesNotClaimCertainReach(t *testing.T) {
+	if r := checkHostListeners(fakeProc(procTCP, procTCP6)); strings.Contains(r.Detail, "a box can connect") {
+		t.Fatalf("overclaims: %s", r.Detail)
 	}
 }
