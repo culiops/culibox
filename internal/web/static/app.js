@@ -6672,8 +6672,8 @@ bindShortcut("files.toggle", (e, ctx) => {
 // Ctrl/Cmd+digit, not Alt/Option+digit. A page CAN cancel Ctrl/Cmd+digit in
 // Chrome and Firefox (only Ctrl/Cmd+T/N/W are out of reach), while Chrome on
 // Linux binds Alt+1..9 to tab selection. Option+digit was dropped on macOS
-// because it types [ ] { } | # on German and UK layouts. The sources and the
-// remaining legacy Alt+digit are in the shortcuts.js header.
+// because it types [ ] { } | # on German and UK layouts. The sources are in the
+// shortcuts.js header.
 bindShortcut("session.jump", (e, ctx) => {
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return false;
