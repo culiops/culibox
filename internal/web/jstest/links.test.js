@@ -56,6 +56,30 @@ test("file paths still tokenize exactly as before", () => {
   assert.deepStrictEqual(kinds("in internal/web/api.go"), ["path:internal/web/api.go"]);
 });
 
+// Claude Code keeps worktrees under <repo>/.claude/worktrees/. A dot-directory
+// segment is not a file extension: cutting the token there linked
+// `/repo/.claude/worktrees/t49` as `/repo/.claude`, a directory, which is what
+// Claude Code prints on every EnterWorktree (#49).
+test("a dot-directory segment never ends a path token", () => {
+  assert.deepStrictEqual(kinds("/home/u/r/.claude/worktrees/t49"), []);
+  assert.deepStrictEqual(kinds("~/r/.claude/worktrees/t49"), []);
+  assert.deepStrictEqual(kinds("/r/.claude/worktrees/x/Makefile"), []);
+  assert.deepStrictEqual(kinds("node_modules/.bin/eslint"), []);
+});
+
+test("a file inside a worktree still links in full", () => {
+  assert.deepStrictEqual(
+    kinds("/home/u/r/.claude/worktrees/t49/src/a.go"),
+    ["path:/home/u/r/.claude/worktrees/t49/src/a.go"],
+  );
+  assert.deepStrictEqual(
+    kinds(".claude/worktrees/x/web/app.js:12"),
+    ["path:.claude/worktrees/x/web/app.js"],
+  );
+  assert.deepStrictEqual(kinds("see ~/.claude/settings.json"), ["path:~/.claude/settings.json"]);
+  assert.deepStrictEqual(kinds("v1.2/notes.md and a.tar.gz/"), ["path:v1.2/notes.md"]);
+});
+
 test("a mixed line resolves every token, in order", () => {
   assert.deepStrictEqual(
     kinds("./a.go and https://culiops.dev/b.html and ~/c.md"),
@@ -288,6 +312,16 @@ test("trimUrl stays fast on a pathological run of closers", () => {
   assert.strictEqual(trimUrl(s), "https://a.dev/");
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.ok(ms < 500, "trimUrl took " + ms.toFixed(1) + "ms, expected linear (<500ms)");
+});
+
+// The dot-directory rule must not cost a re-scan per backtrack step: written as a
+// lookahead inside LINK_PATH_RE it took 15s on this line.
+test("the dot-directory rule stays fast on a crafted line", () => {
+  const s = "a/" + ".b/".repeat(20000);
+  const t0 = process.hrtime.bigint();
+  assert.deepStrictEqual(scanLinks(s), []);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 500, "scanLinks took " + ms.toFixed(1) + "ms, expected <500ms");
 });
 
 test("a scheme with no host is not a link", () => {

@@ -338,3 +338,34 @@ test("classifyTermPath: boxed, traversal out of the out dir is not box", () => {
 test("classifyTermPath: a sibling dir sharing the cwd prefix is not the workspace", () => {
   assert.strictEqual(classifyTermPath("/tmp/ab-xyz/a.go", "/tmp/ab-x", "", "/h", true).kind, "boxonly");
 });
+
+// The usage poll is the only thing that learns the agent entered (or left) a
+// git worktree. When agentCwd moves, the tree has to hear about it: until the
+// next focus change it would otherwise keep listing the main checkout (#49).
+test("setUsage re-syncs the tree exactly when the agent's worktree changes", () => {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const tab = Object.create(TerminalTab.prototype);
+  tab.agentCwd = "";
+  let syncs = 0;
+  global.syncFocusedTree = () => { syncs++; };
+  try {
+    const WT = "/home/u/repo/.claude/worktrees/t49";
+    tab.setUsage({ contextTokens: 1, model: "m", effort: "low", cwd: WT });
+    assert.strictEqual(tab.agentCwd, WT);
+    assert.strictEqual(syncs, 1, "entering a worktree re-syncs");
+    tab.setUsage({ contextTokens: 2, model: "m", effort: "low", cwd: WT });
+    assert.strictEqual(syncs, 1, "a poll that only moves the numbers does not");
+    // A 204 (no usage line in the transcript tail: right after /clear, or after
+    // a tool result over 256 KiB) says nothing about where the agent is. Taking
+    // it as "left the worktree" flipped the tree to the main checkout and back,
+    // dropping a root the user picked by hand.
+    tab.setUsage(null);
+    assert.strictEqual(tab.agentCwd, WT, "a 204 keeps the last known worktree");
+    assert.strictEqual(syncs, 1, "and does not re-sync");
+    tab.setUsage({ contextTokens: 3, model: "m", effort: "low", cwd: "" });
+    assert.strictEqual(tab.agentCwd, "");
+    assert.strictEqual(syncs, 2, "leaving it re-syncs");
+  } finally {
+    delete global.syncFocusedTree;
+  }
+});

@@ -244,18 +244,21 @@ function applyDrawer(next, opts) {
 // manual root change since then leaves the key in place), and no key also
 // clears the guard, so the tree resumes following focus at the next change.
 // Without a usable terminal cwd: the session's recorded cwd; with no session,
-// whatever the focused tab resolves to.
+// whatever the focused tab resolves to. The terminal's root and key come from
+// treeFollowTarget, so an agent inside a git worktree roots the tree at that
+// worktree, both here and in syncFocusedTree (#49).
 function drawerRootTree(sessionId, explicit) {
   const t = sessionId ? terminalTabFor(sessionId) : null;
   const s = sessionId ? (lastSessions || []).find((x) => x.id === sessionId) : null;
+  const live = t ? treeFollowTarget(t) : null; // null: not rootable (outside $HOME) or unresolved
   // A cwd /api/fs/list refuses (outside $HOME) is never a root: the tree would
   // be replaced by one "forbidden" line, and the mobile Files screen shares it.
   // Such a session leaves the tree where it is, the same as syncFocusedTree.
   if (explicit) {
-    const cwd = (s && s.cwd) || (t && t.cwd) || "";
+    const cwd = (live && live.root) || (s && s.cwd) || "";
     if (cwd && rootableCwd(cwd)) { syncTreeToRoot(cwd).catch(() => {}); return; }
   }
-  if (t && t.cwd && rootableCwd(t.cwd)) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
+  if (live) { syncTreeToRoot(live.root, live.key).catch(() => {}); return; }
   if (s && s.cwd && rootableCwd(s.cwd)) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
   syncFocusedTree();
 }
@@ -5738,7 +5741,11 @@ function runSessionAction(action, s) {
     // the same keyless re-root.
     files: () => {
       if (!mobileActive(window.innerWidth)) { openDrawer("files", s.id, { explicitRoot: true }); return; }
-      syncTreeToRoot(s.cwd).catch(() => {});
+      // The agent's live worktree when it entered one, as drawerRootTree does.
+      const t = terminalTabFor(s.id);
+      const live = t ? treeFollowTarget(t) : null;
+      const root = (live && live.root) || s.cwd;
+      if (root && rootableCwd(root)) syncTreeToRoot(root).catch(() => {});
       setMobileScreen("files");
     },
     // Desktop: the Activity view, whose right column carries Context by tool.
