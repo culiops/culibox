@@ -3,6 +3,8 @@
 // IMAGE_EXTS and extOf live in copyfile.js: the copy paths need them too, and a
 // pure module there is reachable from `node --test`, which this file is not.
 const MD_EXTS = new Set(["md", "markdown"]);
+// Rows per block in a big file's read view (renderCode, .vl-chunk in app.css).
+const VT_CHUNK = 500;
 
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
@@ -54,6 +56,15 @@ class ViewerTab {
     this.pendingLine = opts && Number.isInteger(opts.line) && opts.line > 0
       ? { line: opts.line, col: Number.isInteger(opts.col) && opts.col > 0 ? opts.col : undefined }
       : null;
+    // Read-view bookkeeping for revealLine: whether the pane shows numbered source
+    // lines (not markdown / an image / a message), the line `.vl-target` marks, the
+    // text that was last rendered (a changed text drops the mark), and a reveal
+    // that is waiting for the element to be in the document.
+    this.hasLines = false;
+    this.lineCount = 0;
+    this.targetLine = null;
+    this.renderedText = null;
+    this.scrollToTarget = false;
     this.firstLoad = true;
     this.applying = false;  // true while applyScroll's own assignment is echoing back
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
@@ -164,7 +175,10 @@ class ViewerTab {
   // tab in a cell that is out of the document while another pane is maximized,
   // where assigning scrollTop is a silent no-op and the next real attach is
   // what has to restore.
-  onAttach() { this.applyScroll(); }
+  onAttach() {
+    this.applyScroll();
+    if (this.scrollToTarget) this.scrollTargetIntoView(); // a reveal that came while detached
+  }
   // `applying` is cleared on the next frame, not synchronously: a scroll event
   // caused by this assignment is dispatched during that frame's scroll steps,
   // which run BEFORE animation-frame callbacks. Clearing it any sooner would
@@ -216,6 +230,7 @@ class ViewerTab {
     d.textContent = text;
     this.content.replaceChildren(d);
     this.showingMsg = true;
+    this.hasLines = false;
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
@@ -277,6 +292,7 @@ class ViewerTab {
       // the most ordinary thing that happens to it, and silently keeping the old
       // text would have Copy hand over content the file no longer has.
       if (poll && !res.ok) return;
+      this.pendingLine = null; // there is no line to show in a message
       this.copyRefusal = plan.reason;
       if (plan.reason === "empty") {
         // A successful read of a file with nothing in it is not an error.
@@ -333,6 +349,68 @@ class ViewerTab {
     // (the listener keeps it so), and this is also the path that lands a
     // restored offset, since the first read completes long after the attach.
     this.applyScroll();
+    // A terminal link asked for a line: it wins over the restored scroll.
+    if (this.pendingLine) {
+      const p = this.pendingLine;
+      this.pendingLine = null;
+      this.revealLine(p.line, p.col);
+    }
+  }
+
+  // revealLine shows the 1-based `line` (and, in the editor, column `col`) of
+  // this file: the read view marks the line and scrolls it about a third of the
+  // way down; edit mode moves the cursor there. A line past the end is clamped to
+  // the last one, with a toast saying so. Markdown is rendered, not numbered, so
+  // it says that instead; an image, a binary or a message has no lines (no-op).
+  revealLine(line, col) {
+    if (this.editing && this.cm) {
+      const c = clampLine(line, this.cm.lineCount());
+      if (c.clamped) showToast(this.name + " has only " + this.cm.lineCount() + " lines");
+      this.cm.setCursor({ line: c.line - 1, ch: (col > 0 ? col : 1) - 1 });
+      this.cm.scrollIntoView(null, 100);
+      this.cm.focus();
+      return;
+    }
+    if (this.copyRefusal === "loading") { // the first read has not landed: ask again then
+      this.pendingLine = { line, col };
+      return;
+    }
+    if (!this.hasLines) {
+      if (this.copyRefusal === null && MD_EXTS.has(extOf(this.path))) {
+        showToast("Line numbers apply to source files — markdown opens rendered");
+      }
+      return;
+    }
+    const c = clampLine(line, this.lineCount);
+    if (c.clamped) showToast(this.name + " has only " + this.lineCount + " lines");
+    this.markTarget(c.line);
+    this.scrollToTarget = true;
+    if (this.content.isConnected) this.scrollTargetIntoView();
+  }
+
+  // markTarget moves the .vl-target mark to line n (1-based), or removes it.
+  markTarget(n) {
+    this.targetLine = n;
+    const old = this.content.querySelector(".vl-target");
+    if (old) old.classList.remove("vl-target");
+    const row = n && this.content.querySelector('.vl[data-n="' + n + '"]');
+    if (row) row.classList.add("vl-target");
+  }
+
+  // scrollTargetIntoView puts the marked line about a third of the way down the
+  // pane. this.scroll takes the value the browser settled on (it clamps near the
+  // end), and `applying` keeps the echoing scroll event from being read as a
+  // reader's scroll.
+  scrollTargetIntoView() {
+    const el = this.targetLine && this.content.querySelector(".vl-target");
+    if (!el || !this.content.isConnected) return;
+    this.scrollToTarget = false;
+    const top = el.getBoundingClientRect().top - this.content.getBoundingClientRect().top + this.content.scrollTop;
+    this.applying = true;
+    this.content.scrollTop = Math.max(0, Math.round(top - this.content.clientHeight / 3));
+    this.scroll = this.content.scrollTop;
+    requestAnimationFrame(() => { this.applying = false; });
+    markLayoutUnsaved();
   }
 
   // Copies exactly what is on screen — the raw source this viewer fetched, which
@@ -513,19 +591,57 @@ class ViewerTab {
 
   renderCode(text, lang) {
     this.showingMsg = false;
-    const pre = document.createElement("pre");
-    const code = document.createElement("code");
     let html;
     try {
       html = (window.hljs && hljs.getLanguage(lang))
         ? hljs.highlight(text, { language: lang }).value
         : (window.hljs ? hljs.highlightAuto(text).value : escapeHtml(text));
     } catch (_) { html = escapeHtml(text); }
-    code.className = "hljs";
-    code.innerHTML = html;
-    pre.className = "viewer-pre";
-    pre.append(code);
+    // One div per source line: a number (textContent, aria-hidden, not selectable)
+    // and the highlighted code (hljs output only, which escapes the file's own
+    // markup). The container carries hljs, the class its theme colours by.
+    const lines = splitHighlightedLines(html);
+    const pre = document.createElement("pre");
+    pre.className = "viewer-pre hljs";
+    pre.style.setProperty("--vl-digits", String(Math.max(3, String(lines.length).length)));
+    const frag = document.createDocumentFragment();
+    // A big file is laid out in blocks of VT_CHUNK rows, each skipped by the
+    // browser until it nears the viewport (content-visibility, app.css).
+    const chunked = lines.length > VT_CHUNK * 2;
+    let chunk = null;
+    for (let i = 0; i < lines.length; i++) {
+      const row = document.createElement("div");
+      row.className = "vl";
+      row.dataset.n = String(i + 1);
+      const num = document.createElement("span");
+      num.className = "vl-n";
+      num.setAttribute("aria-hidden", "true");
+      num.textContent = String(i + 1);
+      const code = document.createElement("span");
+      code.className = "vl-c";
+      code.innerHTML = lines[i];
+      row.append(num, code);
+      if (chunked) {
+        if (i % VT_CHUNK === 0) {
+          chunk = document.createElement("div");
+          chunk.className = "vl-chunk";
+          // The last block is shorter: say so, or its skipped height is overstated.
+          chunk.style.setProperty("--vl-rows", String(Math.min(VT_CHUNK, lines.length - i)));
+          frag.append(chunk);
+        }
+        chunk.append(row);
+      } else frag.append(row);
+    }
+    pre.append(frag);
     this.content.replaceChildren(pre);
+    this.lineCount = lines.length;
+    this.hasLines = true;
+    // The mark belongs to the text it was set on: a changed file drops it, an
+    // unchanged one (the same text rendered again) keeps it.
+    if (this.renderedText !== text) this.targetLine = null;
+    this.renderedText = text;
+    if (this.targetLine && this.targetLine <= this.lineCount) this.markTarget(this.targetLine);
+    else this.targetLine = null;
   }
 
   renderMarkdown(text) {
@@ -563,6 +679,7 @@ class ViewerTab {
     wrap.className = "md-body";
     wrap.appendChild(frag);
     this.content.replaceChildren(wrap);
+    this.hasLines = false;
   }
 
   renderImage() {
@@ -573,6 +690,7 @@ class ViewerTab {
     img.onerror = () => this.msg("could not load image", "err");
     img.src = this.box ? boxFileURL(this.box, this.path) : "/api/fs/read?path=" + encodeURIComponent(this.path);
     this.content.replaceChildren(img);
+    this.hasLines = false;
   }
 }
 

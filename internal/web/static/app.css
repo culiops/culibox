@@ -1897,8 +1897,30 @@
     .viewer-zoom:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .viewer-content { flex: 1; min-height: 0; overflow: auto; }
-    .viewer-pre { margin: 0; padding: 10px 12px; }
-    .viewer-pre code { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); line-height: 1.55; background: none; }
+    /* The read view: one .vl row per source line, a number (.vl-n) beside the code
+       (.vl-c). The pre carries .hljs (the highlight theme colours by it) but not
+       its background, which stays the pane's. It is as wide as its longest line
+       (never narrower than the pane) so a row's background reaches the end of a
+       line you scrolled sideways to. */
+    .viewer-pre { margin: 0; padding: 10px 0; box-sizing: border-box; width: max-content; min-width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); line-height: 1.55; white-space: pre; }
+    .viewer-pre.hljs { background: none; }
+    .vl { display: flex; }
+    /* Gutter width follows the digit count of the last line (--vl-digits, >= 3). Colours,
+       measured: --muted on --bg 7.37:1, on a target row 6.34:1 (AA text needs 4.5). */
+    .vl-n { flex: none; box-sizing: content-box; width: calc(var(--vl-digits, 3) * 1ch); padding: 0 1ch 0 12px; text-align: right; color: var(--muted); border-right: 1px solid var(--border); -webkit-user-select: none; user-select: none; }
+    .vl-c { flex: 1 0 auto; padding: 0 12px 0 1ch; }
+    /* The line a terminal link or Go to line asked for. The 8% wash is the most the
+       accent can tint --bg while the dimmest highlight token (.hljs-comment #8b949e)
+       stays at 4.59:1 (18% gave 3.71, 12% gave 4.23); the 3px bar carries the mark
+       for anyone the wash does not reach (accent on --bg 7.8:1, over the 3:1 a
+       graphic needs). */
+    /* A file over 1000 lines is laid out in 500-row blocks; the browser skips the ones far
+       from the viewport. Every row is one line high (nothing wraps), so the stand-in height
+       for a skipped block is exact. Without the `auto` keyword on purpose: auto remembers
+       the height from when the block last rendered, which a text-size change makes wrong. */
+    .vl-chunk { content-visibility: auto; contain-intrinsic-height: calc(var(--vl-rows, 500) * 1.55 * var(--fs-code)); }
+    .vl-target { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+    .vl-target .vl-n { color: var(--fg); }
     .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
     .viewer-msg.err { color: var(--danger); }
     .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }
