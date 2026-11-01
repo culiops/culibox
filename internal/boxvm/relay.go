@@ -13,13 +13,17 @@ import (
 )
 
 // relayScript is the whole relay: one TCP listener per (listen port, target
-// host, target port) triple on the bind address, piped straight through. It
+// host, target port) triple on the bind address, piped through. Every
+// upstream connection first carries a PROXY v1 line ("PROXY TCP4 <box-ip>
+// <bind> <box-port> <listen-port>\r\n") naming the box that connected, so the
+// host listeners can tell boxes apart: the relay itself makes every box arrive
+// from loopback (#71). A peer that is not a plain IPv4 address is dropped. It
 // prints "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a
 // listen error, which is all Ensure reads (never a dial: the INPUT rules also
 // drop the VM's own connections to the gateway). Run as
 // `node -e <script> BIND LPORT THOST TPORT ...`, where argv.slice(1) is the
-// arguments after the script (measured on the Mac). Verbatim from the spike.
-const relayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{const u=net.connect(tp,th);c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+// arguments after the script (measured on the Mac).
+const relayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write("PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
 
 const (
 	relayLabel       = "io.culiops.agent-box.relay"
