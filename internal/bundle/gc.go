@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,29 +33,33 @@ type MountLister interface {
 	MountSources(ctx context.Context) ([]string, error)
 }
 
-// GCRemoved is one bundle a pass removed. The package reports rather than logs,
+// GCRemoved is one bundle (with its imports) or plugin snapshot a pass removed. The package reports rather than logs,
 // like box.ReclaimState, so every decision is tested without a daemon.
 type GCRemoved struct {
-	Hash  string
+	Name  string
 	Age   time.Duration
 	Bytes int64
 }
 
 // GCReport is what a pass did. Removed and Swept are real removals; the counts
-// after them are bundles it looked at and kept.
+// after them are bundles and snapshots it looked at and kept.
 type GCReport struct {
 	Removed []GCRemoved
 	Swept   int // leftovers of an earlier pass that were removed
-	// InUse is old bundles a container mounts. Current is old bundles the source
-	// still hashes to. TooYoung is unmounted bundles newer than GCMinAge.
+	// InUse is old ones a container mounts. Current is old ones the source still
+	// hashes or fingerprints to. TooYoung is unmounted ones newer than GCMinAge.
 	InUse, Current, TooYoung int
 	// Held is condemned dirs kept because a container names them.
 	Held int
+	// SnapshotsUnsure is old or condemned snapshots kept because the host plugin
+	// set could not be read, so the current ones are unknown.
+	SnapshotsUnsure int
 }
 
-// gcPair is a bundle dir and its imports dir, which live and die together.
+// gcPair is what lives and dies together: a bundle dir and its imports dir, or a
+// plugin snapshot alone.
 type gcPair struct {
-	hash     string
+	key      string
 	names    []string // those of the pair that exist: bundle first, so its lock goes first
 	youngest time.Time
 }
@@ -65,19 +70,27 @@ type gcScan struct {
 	leftovers  []string // condemned names from an earlier pass
 	current    int
 	tooYoung   int
+	unsure     int
 }
 
-// GC removes the bundle dirs and imports dirs no container mounts and no spawn
-// has taken for GCMinAge, and reports what it did. Only a real directory under
-// the exact name of a bundle or its imports is ever considered; the plugin
-// snapshots, session-mcp and anything else in the root are not its business.
+// GC removes the bundle dirs, imports dirs and plugin snapshots no container
+// mounts and no spawn has taken for GCMinAge, and reports what it did. Only a real
+// directory under the exact name of one of those is ever considered; session-mcp
+// and anything else in the root are not its business.
 //
 // It removes nothing when it cannot be sure: the current hash unknown or docker
-// unreadable, in any way, ends the pass before anything is touched.
+// unreadable, in any way, ends the pass before anything is touched. A host plugin
+// set that cannot be read leaves the current snapshots unknown, so that pass
+// removes no snapshot and says so.
+//
+// No bundle dir names a snapshot, in its lock or anywhere else: it holds only the
+// verdict that plugins are mounted, and every Ensure picks the snapshots afresh
+// from the host's fingerprint, republishing one that is gone. So a kept bundle
+// holds no snapshot alive, and only containers and the current fingerprint do.
 //
 // A pair is removed only when all of these hold, in order:
 //
-//  1. the source does not hash to it now,
+//  1. the source does not hash or fingerprint to it now,
 //  2. it is older than GCMinAge,
 //  3. no container in the first listing mounts it,
 //  4. it is still older than GCMinAge, read again with gcMu held, in the same
@@ -104,16 +117,24 @@ func (m *Manager) GC(ctx context.Context, mounts MountLister) (GCReport, error) 
 	if err != nil {
 		return rep, fmt.Errorf("bundle: gc: current hash unknown, removing nothing: %w", err)
 	}
-	scan, err := m.scanGC(current, time.Now())
+	snapshots, snapshotsErr := m.currentSnapshots()
+	if snapshotsErr == nil {
+		maps.Copy(current, snapshots)
+	}
+	scan, err := m.scanGC(current, snapshotsErr == nil, time.Now())
 	if errors.Is(err, fs.ErrNotExist) {
 		return rep, nil // no bundle was ever built
 	}
 	if err != nil {
 		return rep, fmt.Errorf("bundle: gc: %w", err)
 	}
-	rep.Current, rep.TooYoung = scan.current, scan.tooYoung
+	rep.Current, rep.TooYoung, rep.SnapshotsUnsure = scan.current, scan.tooYoung, scan.unsure
+	var errs []error
+	if snapshotsErr != nil && scan.unsure > 0 {
+		errs = append(errs, fmt.Errorf("bundle: gc: host plugin set unknown, removing no snapshot: %w", snapshotsErr))
+	}
 	if len(scan.candidates) == 0 && len(scan.leftovers) == 0 {
-		return rep, nil
+		return rep, errors.Join(errs...)
 	}
 	sources, err := mounts.MountSources(ctx)
 	if err != nil {
@@ -126,12 +147,11 @@ func (m *Manager) GC(ctx context.Context, mounts MountLister) (GCReport, error) 
 	defer root.Close()
 	refs := m.referenced(sources)
 
-	var errs []error
 	for _, name := range scan.leftovers {
 		if ctx.Err() != nil {
 			break
 		}
-		if refs[hashOf(name)] {
+		if refs[keyOf(name)] {
 			rep.Held++
 			continue
 		}
@@ -145,7 +165,7 @@ func (m *Manager) GC(ctx context.Context, mounts MountLister) (GCReport, error) 
 	var condemned []GCRemoved
 	var pairs []gcPair
 	for _, p := range scan.candidates {
-		if refs[p.hash] {
+		if refs[p.key] {
 			rep.InUse++
 			continue
 		}
@@ -162,7 +182,7 @@ func (m *Manager) GC(ctx context.Context, mounts MountLister) (GCReport, error) 
 			rep.TooYoung++
 			continue
 		}
-		condemned = append(condemned, GCRemoved{Hash: p.hash, Age: age, Bytes: size})
+		condemned = append(condemned, GCRemoved{Name: p.key, Age: age, Bytes: size})
 		pairs = append(pairs, p)
 	}
 	if len(pairs) == 0 {
@@ -181,7 +201,7 @@ func (m *Manager) GC(ctx context.Context, mounts MountLister) (GCReport, error) 
 	}
 	refs = m.referenced(sources)
 	for i, p := range pairs {
-		if refs[p.hash] {
+		if refs[p.key] {
 			rep.InUse++
 			back, err := m.restore(root, p)
 			if err != nil {
@@ -227,9 +247,34 @@ func (m *Manager) currentHashes() (map[string]bool, error) {
 	return out, nil
 }
 
+// currentSnapshots is the snapshot names the host plugin set fingerprints to now,
+// read without publishing anything. A set the verdict refuses or that cannot be
+// walked is an error rather than "none": it may be a passing state, and the next
+// spawn would then want what was removed. No plugins at all is a real none.
+func (m *Manager) currentSnapshots() (map[string]bool, error) {
+	pdir, fi, verdict, ok := pluginGate(m.opts.Source)
+	if !ok {
+		if len(verdict.drops) > 0 {
+			return nil, fmt.Errorf("%s %s", verdict.drops[0].Name, verdict.drops[0].Reason)
+		}
+		return nil, nil
+	}
+	src, states, err := fingerprintSlots(pdir, fi, m.opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+	out := map[string]bool{}
+	for _, st := range states {
+		out[filepath.Base(st.final)] = true
+	}
+	return out, nil
+}
+
 // scanGC reads the root and sorts what it finds. It writes nothing. An entry that
 // cannot be read, or a pair with a half that is not a real directory, is kept.
-func (m *Manager) scanGC(current map[string]bool, now time.Time) (gcScan, error) {
+// With snapshotsKnown false no snapshot is a candidate or a leftover to sweep.
+func (m *Manager) scanGC(current map[string]bool, snapshotsKnown bool, now time.Time) (gcScan, error) {
 	var scan gcScan
 	entries, err := os.ReadDir(m.opts.Root)
 	if err != nil {
@@ -241,12 +286,17 @@ func (m *Manager) scanGC(current map[string]bool, now time.Time) (gcScan, error)
 	for _, e := range entries {
 		name := e.Name()
 		if rest, marked := strings.CutPrefix(name, gcPrefix); marked {
-			if hashOf(rest) != "" && !strings.HasPrefix(rest, gcPrefix) && e.Type().IsDir() {
-				scan.leftovers = append(scan.leftovers, name)
+			if keyOf(rest) == "" || strings.HasPrefix(rest, gcPrefix) || !e.Type().IsDir() {
+				continue
 			}
+			if isSnapshotName(rest) && !snapshotsKnown {
+				scan.unsure++
+				continue
+			}
+			scan.leftovers = append(scan.leftovers, name)
 			continue
 		}
-		hash := hashOf(name)
+		hash := keyOf(name)
 		if hash == "" {
 			continue
 		}
@@ -261,7 +311,7 @@ func (m *Manager) scanGC(current map[string]bool, now time.Time) (gcScan, error)
 		}
 		p := pairs[hash]
 		if p == nil {
-			p = &gcPair{hash: hash}
+			p = &gcPair{key: hash}
 			pairs[hash] = p
 			order = append(order, hash)
 		}
@@ -282,6 +332,8 @@ func (m *Manager) scanGC(current map[string]bool, now time.Time) (gcScan, error)
 			scan.tooYoung++
 		case current[hash]:
 			scan.current++
+		case isSnapshotName(hash) && !snapshotsKnown:
+			scan.unsure++
 		default:
 			scan.candidates = append(scan.candidates, *p)
 		}
@@ -345,9 +397,10 @@ func (m *Manager) restore(root *os.Root, p gcPair) (back bool, err error) {
 	return back, err
 }
 
-// referenced is the set of hashes some source is the dir of, or lies inside it:
-// the layout mounts files in the bundle and import files one at a time. Paths are
-// compared whole, because another instance's root holds the same hash names.
+// referenced is the set of keys some source is the dir of, or lies inside it: the
+// layout mounts files in the bundle, import files one at a time and a snapshot's
+// entries. Paths are compared whole, because another instance's root holds the
+// same names.
 // Each side is compared as spelled and with its links resolved, since docker
 // keeps the path it was given.
 func (m *Manager) referenced(sources []string) map[string]bool {
@@ -363,7 +416,7 @@ func (m *Manager) referenced(sources []string) map[string]bool {
 				continue
 			}
 			first, _, _ := strings.Cut(rest, string(filepath.Separator))
-			if h := hashOf(strings.TrimPrefix(first, gcPrefix)); h != "" {
+			if h := keyOf(strings.TrimPrefix(first, gcPrefix)); h != "" {
 				refs[h] = true
 			}
 		}
@@ -377,16 +430,34 @@ func (m *Manager) referenced(sources []string) map[string]bool {
 	return refs
 }
 
-// hashOf returns the hash a bundle or imports dir name belongs to, or "" when the
-// name is neither. Exact on purpose: only what this package generates is ever
-// deleted.
-func hashOf(name string) string {
-	h := strings.TrimPrefix(name, gcPrefix)
-	h = strings.TrimSuffix(h, importsSuffix)
-	if len(h) != hashLen || strings.Trim(h, "0123456789abcdef") != "" {
+// keyOf returns the key a bundle, imports or snapshot dir name belongs to, marked
+// or not: the hash for a bundle and its imports, the name for a snapshot. It
+// returns "" when the name is none of those. Exact on purpose: only what this
+// package generates is ever deleted.
+func keyOf(name string) string {
+	name = strings.TrimPrefix(name, gcPrefix)
+	if isSnapshotName(name) {
+		return name
+	}
+	h := strings.TrimSuffix(name, importsSuffix)
+	if !isHash(h) {
 		return ""
 	}
 	return h
+}
+
+// isSnapshotName matches only what slotState.name produces: plugins-<slot>-<token>.
+func isSnapshotName(name string) bool {
+	for _, sl := range pluginSlots {
+		if rest, ok := strings.CutPrefix(name, "plugins-"+sl.name+"-"); ok {
+			return isHash(rest)
+		}
+	}
+	return false
+}
+
+func isHash(s string) bool {
+	return len(s) == hashLen && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 func (m *Manager) pairBytes(p gcPair) int64 {

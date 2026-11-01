@@ -938,7 +938,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// spawn path and the boot path; shutdown cancels it.
 	stopBundleGC := func() {}
 	if layer != nil && bundles != nil {
-		stopBundleGC = runBundleGC(func(ctx context.Context) { layer.bundleGCPass(ctx, bundles) }, bundleGCEvery)
+		stopBundleGC = layer.startBundleGC(func(ctx context.Context) { layer.bundleGCPass(ctx, bundles) }, log.Printf)
 	}
 
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its

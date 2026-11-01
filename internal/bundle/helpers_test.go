@@ -1,6 +1,8 @@
 package bundle
 
 import (
+	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,6 +47,11 @@ func (f fakeProber) Resolves(cmds []string) map[string]bool {
 		out[c] = f[c]
 	}
 	return out
+}
+
+// testGuard is a guard no GC shares.
+func testGuard() snapshotGuard {
+	return snapshotGuard{mu: &sync.Mutex{}, touch: func(p string, t time.Time) error { return os.Chtimes(p, t, t) }}
 }
 
 func timeoutAfter(sec int) <-chan time.Time { return time.After(time.Duration(sec) * time.Second) }

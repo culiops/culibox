@@ -74,7 +74,7 @@ func TestLogBundleGC(t *testing.T) {
 		t.Fatalf("a pass that did nothing logged %q", lines)
 	}
 
-	logBundleGC(bundle.GCReport{Removed: []bundle.GCRemoved{{Hash: "abc", Age: 72 * time.Hour, Bytes: 3 << 20}}, Swept: 2}, nil, logf)
+	logBundleGC(bundle.GCReport{Removed: []bundle.GCRemoved{{Name: "abc", Age: 72 * time.Hour, Bytes: 3 << 20}}, Swept: 2}, nil, logf)
 	all := strings.Join(lines, "\n")
 	for _, want := range []string{"abc", "3 days", "3 MiB", "2 leftover"} {
 		if !strings.Contains(all, want) {
@@ -101,5 +101,37 @@ func TestAwaitShutdownStopsBundleGC(t *testing.T) {
 	}, func(string, ...any) {})
 	if !stopped {
 		t.Fatal("shutdown left the bundle GC running")
+	}
+}
+
+// The mount-source spelling on the colima VM is unverified, and a wrong spelling
+// reads as "not mounted": nothing may be removed there until it is checked.
+func TestBundleGCDoesNotRunOnDarwin(t *testing.T) {
+	var lines []string
+	logf := func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+	passed := make(chan struct{}, 1)
+	pass := func(context.Context) { passed <- struct{}{} }
+
+	stop := (&boxLayer{goos: "darwin"}).startBundleGC(pass, logf)
+	stop()
+	select {
+	case <-passed:
+		t.Fatal("a GC pass ran on darwin")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "darwin") {
+		t.Fatalf("lines = %q", lines)
+	}
+
+	lines = nil
+	stop = (&boxLayer{goos: "linux"}).startBundleGC(pass, logf)
+	defer stop()
+	select {
+	case <-passed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no GC pass on linux")
+	}
+	if len(lines) != 0 {
+		t.Fatalf("lines = %q", lines)
 	}
 }

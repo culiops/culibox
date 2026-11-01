@@ -165,8 +165,8 @@ type Options struct {
 // Manager builds and caches bundles.
 type Manager struct {
 	opts Options
-	// gcMu makes Ensure's look-and-refresh of a dir, the publish of a new one and
-	// GC's look-and-rename exclude each other. See GC. Per root and not per process
+	// gcMu makes Ensure's look-and-refresh of a bundle or snapshot, the publish of
+	// a new one and GC's look-and-rename exclude each other. See GC. Per root and not per process
 	// on purpose: one Manager exists per root, and one daemon per data dir.
 	gcMu sync.Mutex
 	// touch refreshes a dir's date; os.Chtimes outside a test of its failing.
@@ -232,7 +232,7 @@ var homeCredentialPaths = []string{".aws", ".config/gh", ".kube", ".gnupg", ".ne
 func (m *Manager) Ensure() (*Built, error) {
 	// Decided once per Ensure so the hash, the settings and the mounts agree
 	// even if the host plugin dir changes mid-call.
-	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
+	ps := pluginSnapshot(m.opts.Source, m.opts.Root, m.snapshotGuard())
 	mounted := len(ps.mounts) > 0
 	mcp := readMCPSource(m.opts.MCPFile)
 	imports := m.Imports()
@@ -252,6 +252,11 @@ func (m *Manager) Ensure() (*Built, error) {
 	}
 	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
 	return built, nil
+}
+
+// snapshotGuard is this Manager's lock and touch, for the plugin snapshots.
+func (m *Manager) snapshotGuard() snapshotGuard {
+	return snapshotGuard{mu: &m.gcMu, touch: m.touch}
 }
 
 // reuse returns the existing complete bundle at dir, or nil to build one. Handing
@@ -290,8 +295,8 @@ func (m *Manager) reuse(hash, dir string) (*Built, error) {
 // box always gets settings and snapshot mounts decided together. A live box that
 // is reused keeps the bundle dir and the snapshot dirs it was created with:
 // reuse compares mount destinations, not host paths, and neither kind of dir is
-// removed while a container mounts it (GC never touches a plugin snapshot at all),
-// so its settings and its plugins still match each other.
+// removed while a container mounts it, so its settings and its plugins still
+// match each other.
 // It sees a newer plugin snapshot only once it is recreated.
 func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource, imports ImportSet) (hash, imageID string, err error) {
 	h := sha256.New()

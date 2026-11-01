@@ -41,12 +41,20 @@ func runBundleGC(pass func(context.Context), every time.Duration) (stop func()) 
 	}
 }
 
-// bundleGCPass is one bounded pass. Silent while the VM is stopped, like the
-// reclaim pass: no box can be read then, and that must not log once a day.
-func (l *boxLayer) bundleGCPass(ctx context.Context, bundles *bundle.Manager) {
-	if l.vmStopped(ctx) {
-		return
+// startBundleGC starts the GC where it is known to be safe. It matches a dir to a
+// container by the mount source docker reports. That spelling is verified on Linux
+// only: on the colima VM a different one would read as "not mounted" and remove a
+// dir a box is using. So no pass runs there, whichever other OS appears either.
+func (l *boxLayer) startBundleGC(pass func(context.Context), logf func(string, ...any)) (stop func()) {
+	if l.goos != "linux" {
+		logf("bundle gc: off on %s until its docker mount path spelling is verified; old bundles and plugin snapshots stay", l.goos)
+		return func() {}
 	}
+	return runBundleGC(pass, bundleGCEvery)
+}
+
+// bundleGCPass is one bounded pass.
+func (l *boxLayer) bundleGCPass(ctx context.Context, bundles *bundle.Manager) {
 	ctx, cancel := context.WithTimeout(ctx, vmStartPassTimeout)
 	defer cancel()
 	rep, err := bundles.GC(ctx, l.cli)
@@ -57,7 +65,7 @@ func (l *boxLayer) bundleGCPass(ctx context.Context, bundles *bundle.Manager) {
 // silent, which is every day but a few.
 func logBundleGC(rep bundle.GCReport, err error, logf func(string, ...any)) {
 	for _, r := range rep.Removed {
-		logf("bundle gc: removed %s: unused for %d days, %d MiB freed", r.Hash, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
+		logf("bundle gc: removed %s: unused for %d days, %d MiB freed", r.Name, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
 	}
 	if rep.Swept > 0 {
 		logf("bundle gc: removed %d leftover(s) of an earlier pass", rep.Swept)

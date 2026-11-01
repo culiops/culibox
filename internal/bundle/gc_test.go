@@ -212,7 +212,7 @@ func TestGCRemovesUnusedOldBundleWithItsImports(t *testing.T) {
 	g.mk(hashA+".imports", longAgo)
 	rep := g.mustGC()
 	g.wantGone(hashA, hashA+".imports", gcPrefix+hashA, gcPrefix+hashA+".imports")
-	if len(rep.Removed) != 1 || rep.Removed[0].Hash != hashA || rep.Removed[0].Bytes == 0 {
+	if len(rep.Removed) != 1 || rep.Removed[0].Name != hashA || rep.Removed[0].Bytes == 0 {
 		t.Fatalf("report = %+v", rep)
 	}
 }
@@ -727,11 +727,12 @@ func TestGCSweepsLeftoverImportsToo(t *testing.T) {
 func TestGCLeavesUnknownNamesAlone(t *testing.T) {
 	g := newGCFixture(t)
 	names := []string{
-		"plugins-cache-0123456789abcdef", "plugins-json-0123456789abcdef", "plugins-marketplaces-0123456789abcdef",
+		"plugins-other-0123456789abcdef", "plugins-cache-0123", "plugins-cache-0123456789abcdeg", "plugins-cache-0123456789abcdef0",
+		"plugins-cache-0123456789abcdef.bak", "plugins-cache-0123456789abcdef.imports", "PLUGINS-cache-0123456789abcdef", "plugins-cache-",
 		sessionMCPDir, ".tmp-123", ".tmp-imp-123",
 		"aaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaa", "AAAAAAAAAAAAAAAA", "gggggggggggggggg",
 		hashA + ".imports.bak", hashA + ".bak", hashA + ".IMPORTS", ".imports",
-		gcPrefix, gcPrefix + "nothex", gcPrefix + "plugins-cache-0123456789abcdef", gcPrefix + gcPrefix + hashA,
+		gcPrefix, gcPrefix + "nothex", gcPrefix + "plugins-other-0123456789abcdef", gcPrefix + gcPrefix + hashA,
 		gcPrefix + hashA + ".bak",
 	}
 	for _, n := range names {
@@ -750,7 +751,8 @@ func TestGCLeavesSymlinksAlone(t *testing.T) {
 	if err := os.Chtimes(outside, longAgo, longAgo); err != nil {
 		t.Fatal(err)
 	}
-	names := []string{hashA, hashB + ".imports", gcPrefix + "cccccccccccccccc", gcPrefix + "dddddddddddddddd.imports"}
+	names := []string{hashA, hashB + ".imports", gcPrefix + "cccccccccccccccc", gcPrefix + "dddddddddddddddd.imports",
+		snapCache, gcPrefix + snapJSON}
 	for _, n := range names {
 		if err := os.Symlink(outside, g.path(n)); err != nil {
 			t.Fatal(err)
@@ -856,4 +858,354 @@ func TestGCMissingRootIsNotAnError(t *testing.T) {
 	if _, err := g.gc(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+const (
+	snapCache = "plugins-cache-cccccccccccccccc"
+	snapJSON  = "plugins-json-dddddddddddddddd"
+	snapMkt   = "plugins-marketplaces-eeeeeeeeeeeeeeee"
+)
+
+func TestGCRemovesUnreferencedOldSnapshots(t *testing.T) {
+	g := newGCFixture(t)
+	for _, n := range []string{snapCache, snapJSON, snapMkt} {
+		g.mk(n, longAgo)
+	}
+	rep := g.mustGC()
+	g.wantGone(snapCache, snapJSON, snapMkt, gcPrefix+snapCache)
+	if len(rep.Removed) != 3 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+func TestGCKeepsYoungSnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	g.mk(snapCache, time.Now().Add(-GCMinAge+time.Hour))
+	g.mustGC()
+	g.wantKept(snapCache)
+}
+
+// A live box keeps the snapshot dirs it was created with: its mount names the
+// entry inside the snapshot.
+func TestGCKeepsSnapshotMountedByContainer(t *testing.T) {
+	for _, state := range []string{"running", "stopped"} {
+		t.Run(state, func(t *testing.T) {
+			g := newGCFixture(t)
+			g.mk(snapCache, longAgo)
+			g.mk(snapJSON, longAgo)
+			g.store.add(state, filepath.Join(g.path(snapCache), "cache"))
+			g.mustGC()
+			g.wantKept(snapCache)
+			g.wantGone(snapJSON)
+		})
+	}
+}
+
+func TestGCRecheckRestoresASnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	g.mk(snapCache, longAgo)
+	l := &hookedLister{inner: g.store.client(), before: func(call int) error {
+		if call == 2 {
+			g.wantGone(snapCache)
+			g.wantKept(gcPrefix + snapCache)
+			g.store.add("running", filepath.Join(g.path(snapCache), "cache"))
+		}
+		return nil
+	}}
+	if _, err := g.m.GC(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	g.wantKept(snapCache)
+	g.wantGone(gcPrefix + snapCache)
+}
+
+func TestGCSweepsSnapshotLeftover(t *testing.T) {
+	g := newGCFixture(t)
+	g.mk(gcPrefix+snapCache, time.Now())
+	rep := g.mustGC()
+	g.wantGone(gcPrefix + snapCache)
+	if rep.Swept != 1 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// The snapshots the host plugin set fingerprints to now are what the next spawn
+// takes. Removing one only costs a recopy, on the spawn path, so they are kept.
+func TestGCKeepsCurrentSnapshotsHoweverOld(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	ps := pluginSnapshot(g.src, g.root, g.m.snapshotGuard())
+	names := snapshotDirs(t, ps)
+	if len(names) != 3 {
+		t.Fatalf("snapshots = %v", names)
+	}
+	for _, n := range names {
+		g.date(n, longAgo)
+	}
+	rep := g.mustGC()
+	g.wantKept(names...)
+	if rep.Current != 3 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// snapshotDirs is the distinct snapshot dirs a verdict mounts, as root children.
+func snapshotDirs(t *testing.T, ps pluginSet) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range ps.mounts {
+		n := filepath.Base(filepath.Dir(m.Host))
+		if !isSnapshotName(n) {
+			t.Fatalf("mount %s is not in a snapshot dir", m.Host)
+		}
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// A hash dir never names a snapshot: not in its lock and not in any file. The
+// lock and the settings carry the verdict only, so this pins that nothing else
+// grows a dependency GC would have to honour.
+func TestHashDirNamesNoSnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	b, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.pluginMounts) == 0 {
+		t.Fatal("want plugins mounted")
+	}
+	err = filepath.WalkDir(b.Dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(raw), "plugins-json-") || strings.Contains(string(raw), "plugins-cache-") ||
+			strings.Contains(string(raw), "plugins-marketplaces-") {
+			t.Errorf("%s names a snapshot", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The proof that a kept hash dir does not need a snapshot GC removed: a spawn on
+// it takes the snapshots the host fingerprints to now, publishing them if they
+// are gone, and every mount it gets exists.
+func TestEnsureOnKeptHashDirSurvivesItsSnapshotsBeingRemoved(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	first, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := snapshotDirs(t, pluginSet{mounts: first.pluginMounts})
+	for _, n := range old {
+		g.date(n, longAgo)
+	}
+	// The host set changes without the verdict changing: same hash, new snapshots.
+	writePluginFile(t, g.src, "cache/changed.md", "new")
+	writePluginFile(t, g.src, "marketplaces/changed.md", "new")
+	writePluginFile(t, g.src, "known_marketplaces.json", "{}")
+
+	g.mustGC()
+	g.wantGone(old...)
+	g.wantKept(first.Hash)
+
+	again, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Reused || again.Hash != first.Hash {
+		t.Fatalf("want a reuse of %s, got %+v", first.Hash, again)
+	}
+	if len(again.pluginMounts) != len(first.pluginMounts) {
+		t.Fatalf("mounts = %v", again.pluginMounts)
+	}
+	for _, m := range again.pluginMounts {
+		if _, err := os.Lstat(m.Host); err != nil {
+			t.Errorf("mount source gone: %v", err)
+		}
+	}
+}
+
+// The same when the plugins have gone from the host altogether: the verdict
+// flips, so the hash does, and no mount names a removed snapshot.
+func TestEnsureAfterPluginsLeftTheHostMountsNoSnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	first, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := snapshotDirs(t, pluginSet{mounts: first.pluginMounts})
+	for _, n := range old {
+		g.date(n, longAgo)
+	}
+	if err := os.RemoveAll(filepath.Join(g.src, "plugins")); err != nil {
+		t.Fatal(err)
+	}
+	g.mustGC()
+	g.wantGone(old...)
+	again, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Hash == first.Hash || len(again.pluginMounts) != 0 {
+		t.Fatalf("got %+v", again)
+	}
+}
+
+// Without the host fingerprint the current snapshots are unknown, so that pass
+// removes no snapshot, and leaves hash dirs to their own rules.
+func TestGCUnreadableHostPluginSetRemovesNoSnapshot(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores modes")
+	}
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	cache := filepath.Join(g.src, "plugins", "cache")
+	if err := os.Chmod(cache, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o755) })
+	g.mk(snapCache, longAgo)
+	g.mk(gcPrefix+snapJSON, longAgo)
+	g.mk(hashA, longAgo)
+	rep, err := g.gc()
+	if err == nil {
+		t.Fatal("want the unknown plugin set reported")
+	}
+	g.wantKept(snapCache, gcPrefix+snapJSON)
+	g.wantGone(hashA)
+	if rep.SnapshotsUnsure != 2 {
+		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// A plugin set the verdict refuses could be a transient state, so the same holds.
+func TestGCIncompleteHostPluginSetRemovesNoSnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	if err := os.RemoveAll(filepath.Join(g.src, "plugins", "marketplaces")); err != nil {
+		t.Fatal(err)
+	}
+	g.mk(snapCache, longAgo)
+	if _, err := g.gc(); err == nil {
+		t.Fatal("want the unknown plugin set reported")
+	}
+	g.wantKept(snapCache)
+}
+
+// A docker failure holds for snapshots as for everything else.
+func TestGCDockerFailureRemovesNoSnapshot(t *testing.T) {
+	g := newGCFixture(t)
+	g.mk(snapCache, longAgo)
+	g.store.flag("fail-ps")
+	if _, err := g.gc(); err == nil {
+		t.Fatal("want the failure reported")
+	}
+	g.wantKept(snapCache)
+}
+
+// Reuse refreshes the marker, and the source of the dates is the shared lock.
+func TestSnapshotReuseRefreshesAgeSoItSurvives(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	first, err := g.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := snapshotDirs(t, pluginSet{mounts: first.pluginMounts})
+	for _, n := range names {
+		g.date(n, longAgo)
+	}
+	if _, err := g.m.Ensure(); err != nil { // the reuse
+		t.Fatal(err)
+	}
+	// No longer current, so only the refreshed date can save them.
+	writePluginFile(t, g.src, "cache/changed.md", "new")
+	writePluginFile(t, g.src, "marketplaces/changed.md", "new")
+	writePluginFile(t, g.src, "known_marketplaces.json", "{}")
+	g.mustGC()
+	g.wantKept(names...)
+}
+
+func TestSnapshotReuseWaitsForTheGCLock(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	pluginSnapshot(g.src, g.root, g.m.snapshotGuard())
+	g.m.gcMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pluginSnapshot(g.src, g.root, g.m.snapshotGuard())
+	}()
+	select {
+	case <-done:
+		g.m.gcMu.Unlock()
+		t.Fatal("a snapshot was reused while the GC held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	g.m.gcMu.Unlock()
+	<-done
+}
+
+// A snapshot whose date cannot be refreshed is not handed out: the set is
+// refused, as for any other snapshot failure.
+func TestSnapshotReuseFailsWhenTheAgeCannotBeRefreshed(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	guard := g.m.snapshotGuard()
+	pluginSnapshot(g.src, g.root, guard)
+	guard.touch = func(string, time.Time) error { return os.ErrPermission }
+	ps := pluginSnapshot(g.src, g.root, guard)
+	if len(ps.mounts) != 0 || len(ps.drops) == 0 {
+		t.Fatalf("verdict = %+v", ps)
+	}
+}
+
+// One that went between the marker read and the touch is copied again.
+func TestSnapshotReuseRecopiesWhenTheDirVanished(t *testing.T) {
+	g := newGCFixture(t)
+	pluginTree(t, g.src)
+	guard := g.m.snapshotGuard()
+	first := pluginSnapshot(g.src, g.root, guard)
+	names := snapshotDirs(t, first)
+	guard.touch = func(p string, _ time.Time) error {
+		if err := os.RemoveAll(p); err != nil {
+			t.Fatal(err)
+		}
+		return os.ErrNotExist
+	}
+	ps := pluginSnapshot(g.src, g.root, guard)
+	if len(ps.mounts) == 0 {
+		t.Fatalf("verdict = %+v", ps)
+	}
+	g.wantKept(names...)
+}
+
+func TestGCRereadsASnapshotsAgeBeforeCondemning(t *testing.T) {
+	g := newGCFixture(t)
+	g.mk(snapCache, longAgo)
+	l := &hookedLister{inner: g.store.client(), before: func(call int) error {
+		if call == 1 {
+			g.date(snapCache, time.Now())
+		}
+		return nil
+	}}
+	if _, err := g.m.GC(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	g.wantKept(snapCache)
 }
