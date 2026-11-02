@@ -139,7 +139,7 @@ access on a Mac:
 - A tool must honour `HTTPS_PROXY` (CuliBox sets it, and `NODE_USE_ENV_PROXY=1`
   for Node). A tool that ignores it cannot connect.
 - Private and internal addresses are refused unless a binding's `egress` entry
-  opts in for one exact host (see the README, "Self-hosted services").
+  opts in for one exact host (see [Self-hosted services](STATIC-TOKENS.md#self-hosted-services)).
 
 These limits are the same as on Linux and are not configurable.
 
