@@ -32,6 +32,7 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
 | `static_tokens` | none | Long-lived token entries (a Grafana, Sentry or Atlassian token, a GitHub personal access token) that a boxed profile can pick by name. See [Static tokens for agents](STATIC-TOKENS.md). Read at daemon start only: a change needs a restart. |
 | `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](AWS.md#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |
+| `replies_enabled` | `false` | Lets the needs-you card answer permission prompts and send a one-line reply. Claude Code sessions only. Restart to apply. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
 `box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.

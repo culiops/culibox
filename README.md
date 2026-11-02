@@ -46,7 +46,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 **Cloud access, audit and secrets**
 
-- **AWS credential broker.** Per-session credentials that last 15 minutes, minted from your SSO session through a read-only role and narrowed further. The box never sees your SSO session. One session can reach several accounts, and a write role can be granted for a fixed window. The opt-in SSO-direct mode is the exception: its credentials keep your SSO role's expiry (hours, not minutes), are not revoked when the session ends, and CloudTrail shows you. See [AWS access](docs/AWS.md).
+- **AWS credential broker.** Per-session credentials that last 15 minutes, minted from your SSO session through a role you create to be read-only, and narrowed further. The box never sees your SSO session. One session can reach several accounts, and a write role can be granted for a fixed window. The opt-in SSO-direct mode is the exception: its credentials keep your SSO role's expiry (hours, not minutes), are not revoked when the session ends, and CloudTrail shows you. See [AWS access](docs/AWS.md).
 - **GitHub access.** One-hour GitHub App tokens scoped to the repos you list, read-only by default. See [GitHub access](docs/GITHUB.md).
 - **Static tokens.** Grafana, Sentry, Atlassian or a GitHub personal access token, handed to one command at a time, with egress opened only to that service's hosts. The agent can read a bound token, and it is long-lived and not revoked when the session ends. See [Static tokens](docs/STATIC-TOKENS.md).
 - **Audit.** CloudTrail records the agent session rather than you (not in SSO-direct mode), and every mint, refusal and token fetch is written to a local audit log, never the value.
@@ -89,7 +89,7 @@ It prints a login URL with a one-time token. Open it in a browser on the same ma
 ./agent-box box setup
 ```
 
-`box setup` tags every build with its date (for example `culiops/agent-box:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/agent-box@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/agent-box:base`) and run `box setup`. Pin by digest, never by `:base`.
+`box setup` tags every build with its date (for example `culiops/agent-box:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/agent-box@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/agent-box:base`) and run `box setup`: it pulls the image for your daemon's architecture instead of building it. Pin by digest, never by `:base`.
 
 Then put this in `~/.local/share/agent-box/config.json` and run `./agent-box serve` again:
 
