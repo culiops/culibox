@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 const writeRole = "arn:aws:iam::123456789012:role/agentbox-agent-write"

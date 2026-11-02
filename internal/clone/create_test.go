@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 type call struct {

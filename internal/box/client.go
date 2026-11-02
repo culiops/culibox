@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // CLIClient drives the real docker CLI. It is deliberately thin: every decision

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // m3aSchema is the audit schema as M3a/M3c shipped it (before the elevated

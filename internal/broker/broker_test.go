@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/config"
 )
 
 type fakeMinter struct {

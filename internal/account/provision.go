@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/statusline"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/statusline"
 )
 
 const (

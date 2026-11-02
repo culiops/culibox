@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 type mockBuilder struct {

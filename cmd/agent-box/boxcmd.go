@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // runBox serves `agent-box box …`. It never touches a running daemon's state

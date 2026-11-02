@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/clone"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/clone"
 )
 
 // hostileVectors are the config keys a hostile .git/config can use to make git

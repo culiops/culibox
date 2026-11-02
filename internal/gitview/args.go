@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // Label marks the throwaway containers so they can be found and reaped.

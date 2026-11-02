@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // swapLauncher is a cloneLauncher whose profile can change after spawn.

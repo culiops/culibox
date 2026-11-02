@@ -341,7 +341,7 @@ function awsRoleARN(accountId, text) {
 }
 
 // AWS_AGENT_ROLE_DOC: how to create the agent role a binding should pick.
-const AWS_AGENT_ROLE_DOC = "https://github.com/culiops/agent-box/blob/main/docs/aws/agent-role/README.md";
+const AWS_AGENT_ROLE_DOC = "https://github.com/culiops/culibox/blob/main/docs/aws/agent-role/README.md";
 
 // awsIsAgentRole: the agent role from docs/aws/agent-role is named agentbox-*
 // (IAM role names ignore case).

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/statusline"
+	"github.com/culiops/culibox/internal/statusline"
 )
 
 const sampleStatusInput = `{"model":{"display_name":"Opus 5.5"},"workspace":{"current_dir":"/work/proj"},"cwd":"/elsewhere","effort":{"level":"high"},"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":1000},"seven_day":{"used_percentage":7,"resets_at":2000}}}`

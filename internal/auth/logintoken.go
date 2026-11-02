@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // LoginTokenFile holds the generated login secret in token mode.

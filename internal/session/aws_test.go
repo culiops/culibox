@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // awsLauncher is a tieredLauncher whose profile "aws" carries an AWS binding

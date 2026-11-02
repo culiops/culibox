@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/proxyline"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 const goodRules = `-P INPUT ACCEPT

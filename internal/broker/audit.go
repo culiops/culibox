@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/secretstore"
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite"
 )
 

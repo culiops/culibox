@@ -7,12 +7,12 @@ import (
 	"log"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/egress"
+	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 // verifyTimeout bounds the containment probe of a new box. The spawn holds the

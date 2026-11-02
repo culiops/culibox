@@ -10,9 +10,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/mask"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/mask"
+	"github.com/culiops/culibox/internal/session"
 )
 
 const (

@@ -16,10 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/hostmatch"
-	"github.com/culiops/agent-box/internal/proxyline"
-	"github.com/culiops/agent-box/internal/sesstoken"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/hostmatch"
+	"github.com/culiops/culibox/internal/proxyline"
+	"github.com/culiops/culibox/internal/sesstoken"
 )
 
 const (

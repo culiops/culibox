@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 var probeAt = time.Date(2026, 10, 20, 1, 2, 3, 0, time.UTC)

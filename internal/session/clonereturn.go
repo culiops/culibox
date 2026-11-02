@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // What started a return: the session's agent exiting, the next spawn of the

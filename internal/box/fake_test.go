@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // fakeClient records docker calls so every unit test runs without a daemon.

@@ -10,9 +10,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // ProbeTarget is what a base-role probe needs from a binding.

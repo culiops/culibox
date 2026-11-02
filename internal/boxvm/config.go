@@ -15,8 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // Profile is the colima profile name. Short on purpose: lima puts sockets under

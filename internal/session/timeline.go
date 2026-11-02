@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/boxread"
-	"github.com/culiops/agent-box/internal/mask"
+	"github.com/culiops/culibox/internal/boxread"
+	"github.com/culiops/culibox/internal/mask"
 )
 
 const (

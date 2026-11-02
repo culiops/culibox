@@ -13,8 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
 
-	"github.com/culiops/agent-box/internal/awshost"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awshost"
+	"github.com/culiops/culibox/internal/config"
 )
 
 const mintTimeout = 20 * time.Second

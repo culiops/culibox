@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // Drop kinds and the fixed reasons the plugin and bundle paths record. The

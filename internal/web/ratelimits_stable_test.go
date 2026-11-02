@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // With no host default snapshot and several boxes, the box key does not include

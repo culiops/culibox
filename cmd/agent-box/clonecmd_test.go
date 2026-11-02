@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/clone"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func TestParseCloneFetch(t *testing.T) {

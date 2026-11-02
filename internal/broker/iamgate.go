@@ -7,7 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
+	"github.com/culiops/culibox/internal/awsprobe"
 )
 
 // IAMGate is the real sso_direct read-only gate (a GateFunc): the IAM and STS

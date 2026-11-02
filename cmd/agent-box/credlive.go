@@ -4,11 +4,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/ghapp"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/storerefs"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/storerefs"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // tokenSet is the broker's view of which static_tokens entries are defined. It

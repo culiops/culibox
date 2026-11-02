@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // Container labels. Instance keeps the DEV and PROD daemons from adopting or

@@ -13,11 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/store"
 )
 
 type fakeStore struct{ m map[string]config.AgentConfig }

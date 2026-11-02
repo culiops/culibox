@@ -7,11 +7,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxedws"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/session"
 )
 
 func TestBoxTreesFunc(t *testing.T) {

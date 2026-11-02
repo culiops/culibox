@@ -5,11 +5,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/ssologin"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/ssologin"
 )
 
 // ManagerService adapts *session.Manager to the Info-based SessionService the

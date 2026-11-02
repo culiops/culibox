@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // The return path (spec §6.4, D9). Code leaves a clone only as a git bundle

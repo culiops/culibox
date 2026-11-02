@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
 )
 
 // setupProbeTimeout bounds box setup's containment probe (a throwaway box).

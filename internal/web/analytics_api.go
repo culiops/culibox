@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/culiops/agent-box/internal/analytics"
+	"github.com/culiops/culibox/internal/analytics"
 )
 
 // Analytics endpoints. All are registered only when s.Analytics != nil (the

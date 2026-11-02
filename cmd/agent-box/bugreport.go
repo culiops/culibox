@@ -5,10 +5,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/culiops/agent-box/internal/bugreport"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
-	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/culibox/internal/bugreport"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
+	"github.com/culiops/culibox/internal/store"
 )
 
 // runBugReport writes the redacted bundle to out and the issue link plus a

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/culibox/internal/auth"
 )
 
 func tokenServer(t *testing.T) *Server {

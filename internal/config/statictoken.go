@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/hostmatch"
+	"github.com/culiops/culibox/internal/hostmatch"
 )
 
 // TokenEgress is one destination a static token's boxes may reach. Host is an

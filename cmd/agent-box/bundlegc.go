@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/culibox/internal/bundle"
 )
 
 // bundleGCEvery is how often the daemon looks for old config bundles; the first

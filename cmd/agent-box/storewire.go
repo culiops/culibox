@@ -5,8 +5,8 @@ import (
 	"log"
 	"sync"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // lazyAudit is the store's audit Recorder. It opens audit.db on the first

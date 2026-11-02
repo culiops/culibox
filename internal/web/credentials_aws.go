@@ -16,14 +16,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awshost"
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/ssologin"
+	"github.com/culiops/culibox/internal/awshost"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/ssologin"
 )
 
 // RoleRef is one IAM role as the roles list returns it. SSOTrust is a hint

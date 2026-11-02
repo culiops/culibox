@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/statusline"
+	"github.com/culiops/culibox/internal/statusline"
 )
 
 const bundleStatusLineCommand = "AGENTBOX_STATUSLINE_DELEGATE_FILE=/opt/agent-bundle/statusline-delegate /opt/agent-bundle/statusline-ratelimits.sh"

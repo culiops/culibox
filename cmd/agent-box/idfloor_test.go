@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 func TestAuditIDFloorReadsEveryAuditTable(t *testing.T) {

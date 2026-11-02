@@ -6,11 +6,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/ghapp"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/store"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/store"
+	"github.com/culiops/culibox/internal/web"
 )
 
 type noResolver struct{}

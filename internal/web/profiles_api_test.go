@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func TestProfilesAPI_CreateListDelete(t *testing.T) {

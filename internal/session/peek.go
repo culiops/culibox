@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/culiops/agent-box/internal/mask"
+	"github.com/culiops/culibox/internal/mask"
 )
 
 var (

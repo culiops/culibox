@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
 )
 
 // WhatHappenedMarker is where the UI substitutes the reporter's own text.
@@ -26,7 +26,7 @@ const WhatHappenedMarker = "<!-- what-happened -->"
 
 const (
 	header         = "agent-box bug report v1"
-	issueBase      = "https://github.com/culiops/agent-box/issues/new"
+	issueBase      = "https://github.com/culiops/culibox/issues/new"
 	securityFooter = "Security problems: do NOT file a public issue — report privately to the maintainer."
 	pasteBelow     = "full report: paste below"
 	maxURLLen      = 7000

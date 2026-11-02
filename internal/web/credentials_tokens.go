@@ -10,10 +10,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
-	"github.com/culiops/agent-box/internal/credtemplates"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/credtemplates"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // These routes are the first the web has that accept secret values. A value

@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // MaxValueBytes bounds a referenced value: one limit for files and the store.

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/mask"
+	"github.com/culiops/culibox/internal/mask"
 )
 
 // inheritedSettingsKeys are the only settings.json keys an InheritPersonal

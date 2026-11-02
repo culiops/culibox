@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
 )
 
 // A value used only by a web-defined entry must show up as referenced in the

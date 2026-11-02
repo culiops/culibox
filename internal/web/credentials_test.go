@@ -12,12 +12,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // fakeVals is an in-memory CredValues.

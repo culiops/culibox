@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/gitview"
+	"github.com/culiops/culibox/internal/gitview"
 )
 
 // fakeGit records every Target it is handed and answers with canned results.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
 )
 
 func baseInput() Input {
@@ -140,7 +140,7 @@ func TestIssueURL(t *testing.T) {
 		{Status: doctor.Warn, Check: "port", Detail: "in use"},
 	}
 	u := IssueURL(in)
-	const base = "https://github.com/culiops/agent-box/issues/new?"
+	const base = "https://github.com/culiops/culibox/issues/new?"
 	if !strings.HasPrefix(u, base) {
 		t.Fatalf("url = %q", u)
 	}

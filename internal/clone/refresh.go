@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // The spawn-time refresh (spec: clone refresh). A throwaway container with no

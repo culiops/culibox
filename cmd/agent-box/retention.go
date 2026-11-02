@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 // retentionEvery is how often the daemon prunes; the first run is at start.

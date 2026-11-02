@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/ghapp"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/ghapp"
 )
 
 type fakeGH struct {

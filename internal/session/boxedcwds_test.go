@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // BoxedCwds feeds the fs API's per-request containment view, so it must name

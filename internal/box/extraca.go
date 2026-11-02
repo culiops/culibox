@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 const (

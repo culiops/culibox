@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 func claudeSIDOf(s *Session) string { return s.claudeSID() }

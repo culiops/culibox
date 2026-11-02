@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // maxContextPaths bounds context_paths: each entry is one more bind mount and

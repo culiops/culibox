@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/culibox/internal/doctor"
 )
 
 // redactor holds everything that identifies this machine or its owner, built

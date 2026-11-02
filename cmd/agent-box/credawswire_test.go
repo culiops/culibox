@@ -16,11 +16,11 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/smithy-go"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/ssologin"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/ssologin"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // recMinter records every mint and hands out a throwaway credential. It also

@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"slices"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // DefaultAllow returns, as a fresh slice, every bound box's allowlist before

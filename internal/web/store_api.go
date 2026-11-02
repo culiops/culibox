@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // StoreService is the encrypted store as the web layer sees it

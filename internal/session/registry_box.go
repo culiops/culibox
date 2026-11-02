@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 const (

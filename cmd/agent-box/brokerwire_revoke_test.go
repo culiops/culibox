@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/ghapp"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // stopMinter mints fixed tokens and, on Revoke, records whether the broker's

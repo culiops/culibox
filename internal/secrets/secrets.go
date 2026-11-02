@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // Resolver resolves a secret name to its value.

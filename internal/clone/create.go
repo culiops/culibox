@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // maxGitConfig bounds the .git/config read when checking an existing clone.

@@ -12,14 +12,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/store"
 )
 
 // ProfileOption is one option a profile exposes, for the spawn-form UI. It

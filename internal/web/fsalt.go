@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/culiops/agent-box/internal/gitrepo"
+	"github.com/culiops/culibox/internal/gitrepo"
 )
 
 // maxAltWorktrees bounds the directory entries scanned for linked worktrees.

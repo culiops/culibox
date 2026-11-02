@@ -27,16 +27,16 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/sesstoken"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/sesstoken"
 )
 
 // Env composition (base policy, Claude-marker stripping, secret injection) lives

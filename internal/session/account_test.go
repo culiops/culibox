@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // acctLauncher is a tieredLauncher that also answers AccountFor.

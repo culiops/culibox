@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/session"
 )
 
 func TestAWSStatusGitHubOnlySession(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // RateLimitWindow is one rolling usage window (Claude's 5-hour or 7-day).

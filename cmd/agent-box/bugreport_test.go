@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
 )
 
 // The report is the product: a FAIL in doctor must not turn into a non-zero

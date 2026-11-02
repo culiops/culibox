@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // TestEffectiveAWSOnlyUnchanged pins the pre-change result: an AWS-only (or

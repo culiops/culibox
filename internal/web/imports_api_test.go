@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func importsServer(f func() bundle.ImportSet) *Server {

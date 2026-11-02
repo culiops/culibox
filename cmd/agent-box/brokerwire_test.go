@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
 )
 
 const wireNonce = "0123456789abcdef0123456789abcdef"

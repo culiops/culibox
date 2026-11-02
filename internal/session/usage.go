@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/gitrepo"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/gitrepo"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // Usage is a per-session snapshot read from the agent's JSONL transcript.

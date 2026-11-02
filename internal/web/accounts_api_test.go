@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
 )
 
 func acctServer(t *testing.T) (*Server, *mockSvc, string) {

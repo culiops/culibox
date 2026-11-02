@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // peekCacheHas reports whether id still holds a cached transcript parse.

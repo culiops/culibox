@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // fakeDocker writes a shell script standing in for docker: it logs its argv and

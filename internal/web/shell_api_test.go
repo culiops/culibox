@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // shellReq builds POST /api/sessions/{id}/shell as the given credential kind;

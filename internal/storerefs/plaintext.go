@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // StoreIDs lists the ids in the store. Satisfied by *secretstore.Store.

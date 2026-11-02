@@ -1,6 +1,6 @@
 package session
 
-import "github.com/culiops/agent-box/internal/box"
+import "github.com/culiops/culibox/internal/box"
 
 // BoxOutputDir is the host directory a boxed session's Playwright output is
 // bind-mounted from (box.OutputDir). ok is false for an unknown id, a host

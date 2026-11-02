@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // sessionMeta is the metadata abduco cannot recover on its own. The agent name
