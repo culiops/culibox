@@ -1562,7 +1562,7 @@ func TestFetchSeedsWithHeadOnABoxBranch(t *testing.T) {
 
 // Accepted residual, documented, not a goal: a host commit that was pruned
 // (gc --prune=now, BFG...) and that no commit-map names is indistinguishable from
-// a box-made commit once the box sends it again. The README says the same.
+// a box-made commit once the box sends it again. docs/CLONE-MODE.md says the same.
 func TestFetchAcceptsPrunedRewrittenCommitWithoutCommitMap_AcceptedResidual(t *testing.T) {
 	x := newFetchFx(t)
 	y := x.hostRewrittenAway()

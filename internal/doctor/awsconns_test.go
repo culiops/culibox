@@ -201,7 +201,7 @@ func TestDoctorBaseRoleLines(t *testing.T) {
 	rs := checkAWSConns(context.Background(), c, nil, nil, f, fp.probe)
 	got := byCheck(rs)
 	want := map[string][2]string{
-		"aws-connection w base role": {Warn, `base role agent-w can write (s3:PutObject, ec2:RunInstances); read-only must come from the role — see README "Several AWS accounts in one session"`},
+		"aws-connection w base role": {Warn, `base role agent-w can write (s3:PutObject, ec2:RunInstances); read-only must come from the role — see docs/AWS.md "Several AWS accounts in one session"`},
 		"aws-connection n base role": {Pass, "base role agent-n: no broad write grant found (scoped grants are not detected)"},
 		"aws-connection u base role": {Warn, "could not check base role agent-u: role cannot simulate itself (grant the role iam:SimulatePrincipalPolicy on itself)"},
 	}

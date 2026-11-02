@@ -245,7 +245,7 @@ func baseRoleResult(check, roleARN string, res awsprobe.Result) Result {
 	switch res.State {
 	case awsprobe.Writes:
 		return Result{Warn, check, "base role " + role + " can write (" + strings.Join(res.Actions, ", ") +
-			`); read-only must come from the role — see README "Several AWS accounts in one session"`}
+			`); read-only must come from the role — see docs/AWS.md "Several AWS accounts in one session"`}
 	case awsprobe.NoneFound:
 		return Result{Pass, check, "base role " + role + ": no broad write grant found (scoped grants are not detected)"}
 	}
