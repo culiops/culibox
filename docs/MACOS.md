@@ -181,6 +181,16 @@ your Mac running as your user can connect to `127.0.0.1` and write that header
 itself. It already runs as you, inside your trust boundary, so this is not an
 additional exposure.
 
+Not yet bound to the box: the credential broker's own session token, on macOS
+and on Linux. On macOS the broker checks only that a request comes from the box
+subnet; on Linux every bound box reaches it over the same socket. Neither checks
+that the request comes from the box the token was issued to. Another box that
+gets hold of a bound box's broker token (on Linux any bound box, on macOS any
+box) can therefore ask the broker for that session's credentials (AWS role sessions, GitHub installation tokens, static
+tokens). The exposure stays between boxes of one CuliBox, under one user; it is
+not reachable from outside. Until it is fixed, do not run a profile you do not
+trust next to a bound profile whose credentials are broader than its own.
+
 ## Behind a TLS-inspecting proxy
 
 Some company networks (for example Zscaler or Netskope) decrypt HTTPS and
