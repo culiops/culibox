@@ -12,16 +12,16 @@ import (
 	"slices"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/ghapp"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/ssologin"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/ssologin"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // The broker is the only implementation of session.BrokerHooks.

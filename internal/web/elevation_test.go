@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/ssologin"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/ssologin"
 )
 
 type fakeElev struct {

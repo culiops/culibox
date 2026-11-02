@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 var tokenShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)

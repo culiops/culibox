@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func tok(name string, v config.KeyRef) config.StaticToken {

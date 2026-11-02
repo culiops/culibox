@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auditlog"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/auditlog"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 // auditFixture is a temp audit.db seeded through the real writers, read back

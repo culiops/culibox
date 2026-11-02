@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // The daemon's one store serves a `store` static-token reference through the

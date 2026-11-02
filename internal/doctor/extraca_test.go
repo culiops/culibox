@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func writeCA(t *testing.T, cn string, notBefore, notAfter time.Time) string {

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // fakeTokenBroker is a unix-socket broker that answers /v1/github/token with a

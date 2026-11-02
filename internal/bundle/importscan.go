@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // importNameGlobs are lowercase base-name globs that mark a file as a secret

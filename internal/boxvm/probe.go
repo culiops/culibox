@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // ExecFunc runs `node -e <script>` inside a box and returns its stdout.

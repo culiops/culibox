@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/sesstoken"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/sesstoken"
 )
 
 func testHooks(t *testing.T) Hooks {

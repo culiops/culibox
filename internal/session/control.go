@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/boxread"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/boxread"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // Operator control actions: restart an exited session, interrupt a running

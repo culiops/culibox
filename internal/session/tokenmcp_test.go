@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // mcpLauncher is tokLauncher with an argv that carries the spawn's extra args

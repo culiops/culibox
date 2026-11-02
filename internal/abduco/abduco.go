@@ -27,7 +27,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/culiops/agent-box/internal/procinfo"
+	"github.com/culiops/culibox/internal/procinfo"
 )
 
 // ErrNotFound means the session was never created / has no usable pidfile.

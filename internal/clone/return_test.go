@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func TestListArgs(t *testing.T) {

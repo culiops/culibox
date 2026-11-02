@@ -11,13 +11,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/clone"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/extraca"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/extraca"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/store"
 )
 
 // cloneFetch and cloneBackends are swappable so the command is testable without

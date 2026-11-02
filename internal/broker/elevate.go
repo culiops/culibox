@@ -9,8 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // The credential kind recorded on an approval row. Only these labels are ever

@@ -13,10 +13,10 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/storerefs"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/storerefs"
 )
 
 func TestParseStore(t *testing.T) {

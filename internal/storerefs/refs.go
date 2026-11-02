@@ -6,9 +6,9 @@ package storerefs
 import (
 	"sort"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // HasSource reports whether secret_sources names the store.

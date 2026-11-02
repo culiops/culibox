@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/config"
 )
 
 type fakeAccounts map[string]account.Resolved

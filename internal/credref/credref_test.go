@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 const fakeSecret = "tok-SECRET-1234"

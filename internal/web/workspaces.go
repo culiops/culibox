@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // Workspace is a selectable working directory (home + its subfolders).

@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // testCASet loads one freshly generated CA through the real extraca.Load, so

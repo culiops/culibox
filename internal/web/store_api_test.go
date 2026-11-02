@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 type fakeSecretStore struct {

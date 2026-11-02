@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/procinfo"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/procinfo"
 )
 
 func input(t *testing.T) Input {

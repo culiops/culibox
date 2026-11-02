@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/statusline"
+	"github.com/culiops/culibox/internal/statusline"
 )
 
 func readJSON(t *testing.T, p string) map[string]any {

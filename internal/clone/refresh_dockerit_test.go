@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // citRefreshEnv is a host repo whose branch is main, a clone of it and a base

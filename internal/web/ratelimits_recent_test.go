@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // A stale snapshot (an idle or dead box) in the lexically smaller box must not

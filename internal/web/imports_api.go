@@ -3,7 +3,7 @@ package web
 import (
 	"net/http"
 
-	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/culibox/internal/bundle"
 )
 
 // handleBundleImports serves GET /api/bundle/imports: the CLAUDE.md import

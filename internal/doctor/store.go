@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/storerefs"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/storerefs"
 )
 
 // StoreFor opens the encrypted store under dataDir for a config that reads from

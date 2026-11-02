@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/culibox/internal/bundle"
 )
 
 func TestRunBundleGCPassesAtStartAndOnEachTick(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/gitrepo"
-	"github.com/culiops/agent-box/internal/gitview"
+	"github.com/culiops/culibox/internal/gitrepo"
+	"github.com/culiops/culibox/internal/gitview"
 )
 
 // GitView runs git status and diff for the file tree (gitview.Runner). Nil on

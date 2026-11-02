@@ -14,7 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // importRe matches an @-import: "@" at line start or after whitespace, then a

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 // seeder writes rows into one audit.db through the real writers (credential,

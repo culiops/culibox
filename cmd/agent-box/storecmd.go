@@ -14,9 +14,9 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/storerefs"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/storerefs"
 )
 
 // newKeeper builds the master-key keeper for a data dir; swapped in tests.

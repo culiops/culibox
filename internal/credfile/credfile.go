@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // File is the on-disk shape of credentials.json.

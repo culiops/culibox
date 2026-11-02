@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/culibox/internal/broker"
 )
 
 func TestAuditRoundTripAndCoexistsWithBroker(t *testing.T) {

@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // BoxFile is one file a boxed session wrote, as read from its box home.

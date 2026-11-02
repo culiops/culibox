@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/clone"
-	"github.com/culiops/agent-box/internal/gitview"
+	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/gitview"
 )
 
 func TestGitViewForNilLayer(t *testing.T) {

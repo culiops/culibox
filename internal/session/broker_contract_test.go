@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/culibox/internal/broker"
 )
 
 // The broker adapter is the only implementation of BrokerHooks; this is the one

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 func openRetentionAudit(t *testing.T, oldRows int) *egress.Audit {

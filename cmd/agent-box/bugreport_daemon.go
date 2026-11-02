@@ -6,11 +6,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/culiops/agent-box/internal/bugreport"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/bugreport"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // bugReportTimeout bounds the doctor run behind Settings -> About -> Report a

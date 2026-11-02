@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/netip"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 )
 
 // checkStaticTokens reports one line per static_tokens entry: whether its value

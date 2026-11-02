@@ -10,7 +10,7 @@ import (
 
 	"github.com/aws/smithy-go"
 
-	"github.com/culiops/agent-box/internal/awsscope"
+	"github.com/culiops/culibox/internal/awsscope"
 )
 
 // GateState is the outcome of the sso_direct read-only gate. Only GateReadOnly

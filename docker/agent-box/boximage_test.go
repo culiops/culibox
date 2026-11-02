@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 func TestHashIsStableAndShort(t *testing.T) {
@@ -916,7 +916,7 @@ func TestDockerfileTflintAWSDefaultIsAHomeFallback(t *testing.T) {
 // The label links the public ghcr package to this repository.
 func TestDockerfileSourceLabel(t *testing.T) {
 	df := string(dockerfile)
-	const label = `LABEL org.opencontainers.image.source="https://github.com/culiops/agent-box"`
+	const label = `LABEL org.opencontainers.image.source="https://github.com/culiops/culibox"`
 	i := strings.Index(df, label)
 	if i < 0 {
 		t.Fatalf("Dockerfile lacks %s", label)

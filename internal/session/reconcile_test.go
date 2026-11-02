@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 func writeSidecar(t *testing.T, dir string, m map[string]sessionMeta) string {

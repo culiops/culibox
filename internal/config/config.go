@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // Base env policies for a spawned agent.

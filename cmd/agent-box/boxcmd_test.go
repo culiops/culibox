@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
+	boximage "github.com/culiops/culibox/docker/agent-box"
 )
 
 var setupNow = time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)

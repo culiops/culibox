@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secrets"
 )
 
 // TestManager_CleanBaseContainsSecrets is the end-to-end containment proof: a

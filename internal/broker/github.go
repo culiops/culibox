@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/ghapp"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // ghRefreshMargin: a cached GitHub token is reused only while more than this

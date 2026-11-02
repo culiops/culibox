@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 // devnullSession is a Session whose PTY is /dev/null: Write succeeds and goes

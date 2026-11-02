@@ -24,17 +24,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/abduco"
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/procinfo"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/store"
-	"github.com/culiops/agent-box/internal/storerefs"
+	"github.com/culiops/culibox/internal/abduco"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/procinfo"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/store"
+	"github.com/culiops/culibox/internal/storerefs"
 )
 
 const (

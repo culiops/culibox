@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // TokKey identifies a token/prompt rollup bucket. Prompts have no model of their

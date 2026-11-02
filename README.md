@@ -61,7 +61,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 Build:
 
 ```sh
-git clone https://github.com/culiops/agent-box.git
+git clone https://github.com/culiops/culibox.git
 cd agent-box
 go build -ldflags "-X main.version=$(scripts/version.sh)" -o agent-box ./cmd/agent-box
 ```

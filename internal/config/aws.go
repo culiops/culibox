@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"slices"
 
-	"github.com/culiops/agent-box/internal/awsscope"
-	"github.com/culiops/agent-box/internal/hostmatch"
+	"github.com/culiops/culibox/internal/awsscope"
+	"github.com/culiops/culibox/internal/hostmatch"
 )
 
 // AWSBinding gives a boxed profile AWS access through the credential broker.

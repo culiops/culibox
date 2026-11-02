@@ -11,12 +11,12 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // SessionService is the subset of session.Manager the API needs (Info-based so

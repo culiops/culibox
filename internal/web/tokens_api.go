@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/culibox/internal/auth"
 )
 
 // handleTokens lists (GET) or creates (POST) access tokens. Both require a

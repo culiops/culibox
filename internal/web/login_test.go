@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/culibox/internal/auth"
 )
 
 func loginServer(t *testing.T) *Server {

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/statusline"
+	"github.com/culiops/culibox/internal/statusline"
 )
 
 // boxStatusLineCommand runs the bundled script, pointing it at the bundled

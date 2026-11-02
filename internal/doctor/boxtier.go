@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/secretchain"
-	"github.com/culiops/agent-box/internal/secretstore"
+	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/secretchain"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a

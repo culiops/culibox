@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 func providerForTest(t *testing.T) *Provider {

@@ -8,9 +8,9 @@ import (
 	"io"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/extraca"
+	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // hintRoot dials the failing host for the interception hint. A var so the

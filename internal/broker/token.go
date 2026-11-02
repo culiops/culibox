@@ -3,7 +3,7 @@
 // user's SSO session, which can mint every permission set the user has.
 package broker
 
-import "github.com/culiops/agent-box/internal/sesstoken"
+import "github.com/culiops/culibox/internal/sesstoken"
 
 // NewNonce returns a fresh per-spawn nonce: 16 random bytes as 32 lowercase hex
 // chars. Session ids are reused (<agent>-<n>, counters reset on restart), so the

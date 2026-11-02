@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/culiops/agent-box/internal/clone"
-	"github.com/culiops/agent-box/internal/gitview"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/gitview"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // gitViewFor is the file tree's git runner: git in throwaway containers on the

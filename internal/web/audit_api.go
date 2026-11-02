@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auditlog"
+	"github.com/culiops/culibox/internal/auditlog"
 )
 
 // AuditReader is the read side of audit.db (auditlog.Reader). Nil on the

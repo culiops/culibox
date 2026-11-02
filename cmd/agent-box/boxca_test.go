@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	boximage "github.com/culiops/agent-box/docker/agent-box"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/extraca"
+	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 // writeTestCA writes a self-signed CA valid from notBefore to notAfter and

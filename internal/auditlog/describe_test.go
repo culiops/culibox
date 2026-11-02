@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
 )
 
 // TestDescribe pins the exact What strings by writing real rows through the

@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/culiops/agent-box/internal/account"
-	"github.com/culiops/agent-box/internal/analytics"
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/secretchain"
-	"github.com/culiops/agent-box/internal/secretstore"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/analytics"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/bundle"
+	"github.com/culiops/culibox/internal/secretchain"
+	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/session"
 )
 
 //go:embed static

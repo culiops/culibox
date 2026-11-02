@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func grafanaServer() EntryServer {

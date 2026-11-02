@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/hostmatch"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/hostmatch"
 )
 
 // Option is one choice of a select field.

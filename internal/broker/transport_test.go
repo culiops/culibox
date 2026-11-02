@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/boxvm"
+	"github.com/culiops/culibox/internal/boxvm"
 )
 
 func TestListenLinuxUnixSocket(t *testing.T) {

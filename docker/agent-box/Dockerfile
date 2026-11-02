@@ -72,7 +72,7 @@ RUN set -eu; \
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 
 # Links the published ghcr package to this repository.
-LABEL org.opencontainers.image.source="https://github.com/culiops/agent-box"
+LABEL org.opencontainers.image.source="https://github.com/culiops/culibox"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep jq less procps curl unzip \

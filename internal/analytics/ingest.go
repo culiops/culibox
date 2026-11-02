@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // IngestStats summarises one ingest pass for logging / the API response.

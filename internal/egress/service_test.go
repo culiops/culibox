@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/sesstoken"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/sesstoken"
 )
 
 // addrListener is a listener that never accepts but reports the address it was asked for.

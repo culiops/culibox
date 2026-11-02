@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
-	"github.com/culiops/agent-box/internal/secrets"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/secrets"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // resolver is what Chain resolves non-store sources through; secrets.New's result satisfies it.

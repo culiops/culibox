@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // auditIDFloor is the highest session number per agent that any audit row

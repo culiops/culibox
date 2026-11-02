@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // importsManager builds a Manager over <tmp>/home/.claude whose CLAUDE.md imports

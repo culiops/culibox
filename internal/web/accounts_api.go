@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/culibox/internal/account"
 )
 
 type accountView struct {

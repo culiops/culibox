@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/extraca"
+	"github.com/culiops/culibox/internal/extraca"
 )
 
 func writeTemp(t *testing.T, content string) string {

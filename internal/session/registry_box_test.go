@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 // regBoxJSON is a registry entry as Claude Code writes it in the box. procStart

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // GateFunc runs the sso_direct read-only gate on freshly fetched permission-set

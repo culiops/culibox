@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // issueCookie ensures s has a Session and returns a valid session cookie for it.

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 // sample is a valid set of fields for each template.

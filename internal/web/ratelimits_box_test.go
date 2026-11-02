@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/session"
 )
 
 func boxRL(updated int64, five, seven float64, resets int64) []byte {

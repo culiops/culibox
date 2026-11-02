@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/doctor"
-	"github.com/culiops/agent-box/internal/egress"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
+	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // The egress service is the only implementation of session.EgressHooks.

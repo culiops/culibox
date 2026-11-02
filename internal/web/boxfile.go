@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // handleBoxFile serves GET /api/sessions/{sid}/boxfile?path=<abs box path>.

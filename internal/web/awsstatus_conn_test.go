@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/egress"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/ssologin"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/ssologin"
 )
 
 // statusKeys marshals a status reply and returns its object keys, sorted, at

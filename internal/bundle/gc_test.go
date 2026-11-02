@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/culibox/internal/box"
 )
 
 const (

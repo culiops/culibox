@@ -9,8 +9,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/session"
 )
 
 type catBuilder struct{}

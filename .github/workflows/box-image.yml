@@ -166,7 +166,7 @@ jobs:
           refs=()
           for d in "${files[@]}"; do refs+=("${IMAGE}@sha256:${d}"); done
           docker buildx imagetools create \
-            --annotation "index:org.opencontainers.image.source=https://github.com/culiops/agent-box" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/culiops/culibox" \
             -t "${IMAGE}:$(date -u +%F)-${GITHUB_SHA::7}" \
             -t "${IMAGE}:base" \
             "${refs[@]}"

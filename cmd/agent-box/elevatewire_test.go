@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/broker"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/ssologin"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/ssologin"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // noMinter stands in for the STS minter: it fails every mint locally, so no

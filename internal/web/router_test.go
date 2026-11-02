@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/culibox/internal/auth"
 )
 
 func routedServer(t *testing.T) (*Server, string) {

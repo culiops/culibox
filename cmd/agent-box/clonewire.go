@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/clone"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/clone"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
 )
 
 // cloneDirsFile is the durable record of every directory agent-box has made (or

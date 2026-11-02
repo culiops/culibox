@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/culiops/agent-box/internal/clone"
+	"github.com/culiops/culibox/internal/clone"
 )
 
 const (

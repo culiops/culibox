@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // maxAttributionBytes bounds how much of one transcript AttributionFor reads. A

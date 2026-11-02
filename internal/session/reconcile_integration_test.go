@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/culibox/internal/abduco"
 )
 
 // TestReconcile_RealAbduco is the restart-survival proof against real abduco: a

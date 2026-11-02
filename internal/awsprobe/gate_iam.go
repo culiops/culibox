@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
-	"github.com/culiops/agent-box/internal/awshost"
+	"github.com/culiops/culibox/internal/awshost"
 )
 
 // simulateBatch caps the ActionNames of one SimulatePrincipalPolicy request.

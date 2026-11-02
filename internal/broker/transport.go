@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxvm"
-	"github.com/culiops/agent-box/internal/proxyline"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 // SockBoxDir is where the socket directory is mounted (read-only) inside a box.

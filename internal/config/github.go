@@ -13,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/hostmatch"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/hostmatch"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // KeyRef says where a secret's bytes live: a file on the host or an

@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/awsprobe"
+	"github.com/culiops/culibox/internal/awsprobe"
 )
 
 // The reason texts are written out in three places: awsprobe.ReasonText (the

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
 )
 
 // credState is what loading the web-defined credentials file left behind: where

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func bugServer(f func(ctx context.Context) (string, string, error)) *Server {

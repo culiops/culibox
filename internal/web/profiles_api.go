@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credfile"
-	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/store"
 )
 
 // handleProfiles serves GET (list views) and POST (create a runtime profile).

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/boxread"
+	"github.com/culiops/culibox/internal/boxread"
 )
 
 // tlBase is the fixture clock; tlT(n) is n ms after it as the RFC3339 stamp a

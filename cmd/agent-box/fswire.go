@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/culiops/agent-box/internal/box"
-	"github.com/culiops/agent-box/internal/boxedws"
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/session"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxedws"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
+	"github.com/culiops/culibox/internal/web"
 )
 
 // boxTreesFunc builds the fs API's per-request view of the host trees a box can

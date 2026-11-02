@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/boxread"
-	"github.com/culiops/agent-box/internal/procinfo"
+	"github.com/culiops/culibox/internal/boxread"
+	"github.com/culiops/culibox/internal/procinfo"
 )
 
 // PidResolver is implemented by persistence backends that know the agent's own

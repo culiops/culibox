@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credtemplates"
-	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credtemplates"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 const (

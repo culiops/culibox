@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/culibox/internal/config"
 )
 
 func claudeLauncher(t *testing.T, cfg config.AgentConfig, defs []config.OptionDef) *AgentLauncher {

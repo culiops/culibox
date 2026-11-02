@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/web"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/web"
 )
 
 func TestParseArgs(t *testing.T) {

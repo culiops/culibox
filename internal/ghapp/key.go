@@ -9,8 +9,8 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 )
 
 // maxKeyBytes bounds the key file read; a 4096-bit PEM key is about 3.3 KB.
