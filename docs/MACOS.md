@@ -128,7 +128,7 @@ agent-box refuses to start a boxed session and tells you that this VM predates
 egress control for all boxes and to run `agent-box box setup -recreate`; it
 checks them again on every boxed spawn.
 
-Egress control for every macOS box is new and has not yet been verified on a Mac.
+Egress control for every macOS box was verified on a Mac (macOS 14, colima 0.8.1) on 2026-11-02: bound and unbound boxes are fenced, a proxy token is refused from any other box, and direct, DNS and Mac loopback connections are blocked.
 
 What this means for an unbound profile, which used to have normal outbound
 access on a Mac:

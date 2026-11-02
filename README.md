@@ -315,7 +315,7 @@ Set `imports_off: true` on the profile, or untick "Give the box the files my CLA
 
 ## GitHub access for agents
 
-A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux; that is new and not yet verified on a Mac, and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#every-box)).
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux (the allowlist is verified on a Mac; minting GitHub tokens there is not yet), and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#every-box)).
 
 **1. Create the GitHub App.** The in-app guide (the **How to create the App** guide in Settings › Credentials › Add GitHub › GitHub App) lists the permissions to tick. Give it read access, and add write on Contents, Pull requests and Issues only if agents should push and open PRs. Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
@@ -370,7 +370,7 @@ The box image must include `gh`: use an image built from this version (tag `2026
 
 ## Static tokens for agents
 
-Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (new, not yet verified on a Mac; see [docs/MACOS.md](docs/MACOS.md#every-box)).
+Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist is verified on a Mac; the token wrapper there is not yet; see [docs/MACOS.md](docs/MACOS.md#every-box)).
 
 **What this does and does not protect against**
 
@@ -472,7 +472,7 @@ When you create the token on GitHub, make it a fine-grained one: only the repos 
 
 ## Several AWS accounts in one session
 
-A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (new, not yet verified on a Mac; see [docs/MACOS.md](docs/MACOS.md#every-box)).
+A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (the allowlist is verified on a Mac; AWS credentials through the broker there are not yet; see [docs/MACOS.md](docs/MACOS.md#every-box)).
 
 **1. Define the connections.** Declare them next to `static_tokens` and restart CuliBox:
 
@@ -647,7 +647,7 @@ CuliBox starts shells and agents on your machine, so authentication is never opt
 
 - The `host` tier is not contained. A host session is you, with an agent.
 - The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- On Linux, boxes reach other networks only through CuliBox's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. The exception is the host itself: a box may reach a host service listening on all addresses directly, through its network gateway, and the proxy does not see that (see Services on this host). A public IP that is NAT'd to the host but not on one of its interfaces is not known to CuliBox. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. On macOS every box gets this treatment, bound or not, through a relay in the VM (see [docs/MACOS.md](docs/MACOS.md#every-box)); it is new and not yet verified on a Mac.
+- On Linux, boxes reach other networks only through CuliBox's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. The exception is the host itself: a box may reach a host service listening on all addresses directly, through its network gateway, and the proxy does not see that (see Services on this host). A public IP that is NAT'd to the host but not on one of its interfaces is not known to CuliBox. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. On macOS every box gets this treatment, bound or not, through a relay in the VM (see [docs/MACOS.md](docs/MACOS.md#every-box)); verified on a Mac on 2026-11-02.
 - A box started in place sees the workspace root's `.git`, `.claude/` and any top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, so it cannot commit there or edit them. Repos with submodules, or whose git config sets `core.worktree` or `core.bare` to anything but false, are refused. When `core.hooksPath` is nested (for example `.husky/_`), the whole top-level directory that holds it (`.husky/`) is read-only in the box.
 - Those guards cover top-level names only, and block direct writes to them only. They do not make a workspace safe to hand back to the host:
   - The same names in subdirectories are writable: a box can edit an existing `sub/CLAUDE.md`, `sub/.mcp.json` or `sub/.claude/settings.json` (hooks), and a host session started in `sub/` loads them.
@@ -672,7 +672,7 @@ Only one CuliBox can serve a data root at a time.
 
 ## Roadmap
 
-- Verify the egress allowlist for every macOS box on a Mac (built, not yet run there).
+- Verify on a Mac what is built but not yet run there: credentials minted through the broker (AWS, GitHub, static tokens) and the Keychain failure states.
 
 ## Development
 
