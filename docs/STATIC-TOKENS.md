@@ -2,12 +2,14 @@
 
 Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (the allowlist is verified on a Mac; the token wrapper there is not yet; see [docs/MACOS.md](MACOS.md#every-box)).
 
-### What this does and does not protect against
+## What this does and does not protect against
 
 - **The agent can read a bound token.** It can run `agentbox-env grafana-prod -- env`, read the child's environment, or call the broker socket itself.
 - What it prevents is accidental exposure: the token is not inherited by every process and MCP server in the box, does not show up in `env` dumps and is not pasted into transcripts. You also get an audit row per fetch, an egress lock and scoping to the hosts you list.
 - It does not stop a deliberate read, and the token outlives the session. The UI says so next to the picker: *"The agent can read this token. It is long-lived and is not revoked when the session ends."*
 - **Egress is per session, not per process.** Once an entry is bound, every process in the box can reach that entry's hosts, not only the `agentbox-env` child.
+
+## Set up
 
 **1. Define the entry.** Put the token in a file owned by the user that runs CuliBox, a regular file (not a symlink) with mode `0600` or tighter, or in the daemon's own environment. Then declare the entry in `config.json` and restart CuliBox:
 
@@ -41,7 +43,7 @@ Some services have no short-lived credential to mint: Grafana service-account to
 
 A profile binds at most 16 entries, with no duplicates, and each must be defined. A name that would set a variable the profile already sets (in `env`, `secrets` or an option's env) is refused. A bound session's box is keyed by its token entries, so changing an entry gives the profile a new box.
 
-### How the agent uses it
+## How the agent uses it
 
 ```sh
 agentbox-env grafana-prod -- sh -c 'curl -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" ...'
@@ -91,7 +93,7 @@ When you create the token on GitHub, make it a fine-grained one: only the repos 
 
 **Audit.** Every fetch writes a row to `audit.db` (session, profile, entry name, outcome) before the value leaves, never the value; if the row cannot be written, no token is returned. That is one row per `agentbox-env` call and per `git` or `gh` call with a PAT owner. There is no pruning yet, so the table grows with use; plan for it.
 
-### Limits and operations
+## Limits and operations
 
 - A running session keeps the entry it was spawned with, even across a daemon restart. Deleting an entry stops its fetches but not its egress; kill the session to cut an agent off.
 - `static_tokens` is read at daemon start only: adding, removing or editing an entry needs a restart. The token itself is read at each fetch, so rotating a token file takes effect with no restart. An `env` reference is the daemon's environment, so changing it needs a restart too.

@@ -1,14 +1,14 @@
 # CLAUDE.md imports in boxed sessions
 
-A boxed Claude gets your `CLAUDE.md` (see Config bundle above). If that file `@`-imports other files (`@docs/style.md`, `@~/notes/team.md`), a box that got only the `CLAUDE.md` would show those lines pointing at nothing. So CuliBox also gives the box the files it imports, read-only. This is on by default for a boxed profile that uses your personal config, and each profile can turn it off.
+A boxed Claude gets your `CLAUDE.md` (see Config bundle in [Features › Contain](FEATURES.md#contain)). If that file `@`-imports other files (`@docs/style.md`, `@~/notes/team.md`), a box that got only the `CLAUDE.md` would show those lines pointing at nothing. So CuliBox also gives the box the files it imports, read-only. This is on by default for a boxed profile that uses your personal config, and each profile can turn it off.
 
-### What is followed
+## What is followed
 
 - Imports are found the way Claude Code finds them: a path relative to the importing file, `~/...`, or an absolute path under your home. Up to four hops are followed.
 - An `@` inside a code span, a fenced code block or an HTML comment is not an import, and neither is a quoted path. A file that does not exist is skipped without a message.
 - **Imports inside an imported file are followed only when that file is inside your `~/.claude` folder** (the config folder the bundle is built from). A file imported from anywhere else is still given to the box, but its own imports are not followed, and if it has any the profile editor lists it as left out. The reason: a box can rewrite files it can see, such as one in its workspace, and a new `@` line there would otherwise pull one of your secrets into the next box.
 
-### Where files land in the box
+## Where files land in the box
 
 - `~` maps to `/home/agent`, so `@~/notes/team.md` is at `/home/agent/notes/team.md`. An absolute path keeps its spelling.
 - A relative import lands beside the file that imports it. From your `CLAUDE.md`, which the box has at `/home/agent/.claude/CLAUDE.md`, `@docs/style.md` lands at `/home/agent/.claude/docs/style.md`.
@@ -29,11 +29,11 @@ A boxed Claude gets your `CLAUDE.md` (see Config bundle above). If that file `@`
 
 - A file whose name looks like a secret (`secrets.zsh`, `*_key`, `*token*`, `*password*`, `.env*`, `*.pem` and the like), or one that has a line that looks like a credential (an API token, a private key header, `export NAME=value` for a secret-looking name). The editor names the file and line, never the value. The box can read and send what it is given: edit the file, or turn imports off.
 
-### Turning it off
+## Turning it off
 
 Set `imports_off: true` on the profile, or untick "Give the box the files my CLAUDE.md imports" under "What it can touch" in the profile editor. A profile with imports off and one with imports on never share a box. Host-tier profiles are not affected, and an agent account that does not use your personal config gets no imports.
 
-### Lifecycle
+## Lifecycle
 
 - An edited import reaches a running box only when the box is recreated, like the rest of the bundle. A changed file gives the next spawn a new bundle.
 - `bundle.lock` stays readable in the box even with imports off. It shows the paths and hashes of the files that would have been imported, not their contents, and lists the import spellings that were refused, with the reason.

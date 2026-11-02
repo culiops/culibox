@@ -33,9 +33,9 @@ The key is never copied into a box. CuliBox reads the key file once per daemon r
 | `permissions` | Optional. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`, all `"read"`; `statuses` can be added. `contents`, `pull_requests` and `issues` may be `"write"`; every other key is `"read"` only, and any other value is refused. |
 | `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
 
-The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` above).
+The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` in the [quick start](../README.md#quick-start)).
 
-### How the agent uses it
+## How the agent uses it
 
 - `git` over HTTPS to `github.com` asks the broker for a token through a credential helper. Nothing is stored and no token is in the environment.
 - `gh` is a thin wrapper that fetches a token for the repo's owner and sets `GH_TOKEN` only on the real `gh` process it starts. In a clone-mode box, `GH_REPO` is set from the host repo's `origin` when that repo is in the binding, because the box's own `origin` is a host path.
@@ -46,7 +46,7 @@ The box image must include `gh`: use an image built from this version (tag `2026
 
 **Egress.** A GitHub-bound box may also reach `api.github.com`, `codeload.github.com`, `results-receiver.actions.githubusercontent.com` and `productionresultssa<N>.blob.core.windows.net` (the Actions log shards `productionresultssa0` to `productionresultssa199` except 22, never `*.blob.core.windows.net`), plus the binding's `egress_allow`. `github.com` is already in the default allowlist.
 
-### What this does and does not protect against
+## What this does and does not protect against
 
 - **The agent can read the token while it runs.** It can run `git credential fill`, read the `gh` child's environment, or call the broker socket itself. The helper design prevents accidental exposure only: the token is not inherited by every child process or MCP server, does not show up in `env` dumps and is not pasted into transcripts. It does not stop a deliberate read.
 - The real controls are the one-hour lifetime, the repo and permission scope, the egress lock, the per-mint audit and revocation when the session ends.

@@ -80,7 +80,7 @@ The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a r
 
 ## SSO role directly (opt-in)
 
-The recommended way to give an agent AWS access is the **agent role** described above: a role you create (see [docs/aws/agent-role](aws/agent-role/README.md)), assumed for 15 minutes at a time with a session policy that narrows it, and recorded in CloudTrail as the agent session. That stays the default.
+The recommended way to give an agent AWS access is the **agent role**: a role you create (see [docs/aws/agent-role](aws/agent-role/README.md)), assumed for 15 minutes at a time with a session policy that narrows it, and recorded in CloudTrail as the agent session. That stays the default.
 
 In some accounts you cannot create that role. For those, a binding can opt in to **`"mode": "sso_direct"`** (in the credentials screen, "SSO role directly" next to "Agent role (recommended)"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and CuliBox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
 

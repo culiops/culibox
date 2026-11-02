@@ -28,7 +28,7 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 - A directory with such files in it, scanned two levels deep (5000 entries, 20 names). `.gitignore` does not matter: the box reads whatever is on disk.
 - A path that overlaps the workspace of another boxed in-place profile: that box can write what this one reads.
 
-### Lifecycle
+## Lifecycle
 
 - The list is part of the box's identity. Changing it gives the profile a new box, with a fresh box home, rather than reusing the old one. Boxed sessions started in the old box cannot be resumed from the new one, and Claude's first-run onboarding may run again.
 - You cannot add a path to a running box. List partner repos up front, then start a session that uses the new list.
@@ -37,6 +37,6 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 - A socket or symlink that appears **after** the box starts is not caught: the mounts were made earlier and are not re-checked. Treat a listed directory as one that other tools on your machine can still change.
 - Each spawn logs one line with the session id, the profile and the mounted paths.
 
-### Known limits
+## Known limits
 
 - On macOS the identity comparison is not made: inode numbers seen through the box VM's file share do not match the host's. A path that is swapped for a symlink between the last check and the box starting (for example by another box that can write its parent) is mounted as the link's target. Do not list a path inside a directory another box can write.

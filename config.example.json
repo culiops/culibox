@@ -33,7 +33,7 @@
   "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
   "bundle_source": "",
 
-  "comment_static_tokens": "A long-lived token a boxed profile may pick by name (profile field 'tokens'). The value is a file (0600, owned by you) or an env var of the daemon, never inline. config_env is NOT secret. egress lists the exact hosts the entry's boxes may reach. Read at daemon start only: a change needs a restart. See README, 'Static tokens for agents'.",
+  "comment_static_tokens": "A long-lived token a boxed profile may pick by name (profile field 'tokens'). The value is a file (0600, owned by you) or an env var of the daemon, never inline. config_env is NOT secret. egress lists the exact hosts the entry's boxes may reach. Read at daemon start only: a change needs a restart. See docs/STATIC-TOKENS.md.",
   "static_tokens": [
     {
       "name": "grafana-example",

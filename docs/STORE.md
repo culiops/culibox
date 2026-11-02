@@ -2,7 +2,7 @@
 
 CuliBox can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
 
-### What it protects against, and what it does not
+## What it protects against, and what it does not
 
 - **It protects against a disk snapshot or backup** taken by your hosting provider or a backup job: the values in the store are unreadable without the passphrase (Linux) or the login Keychain item (macOS).
 - **It does not hide values from agents.** While the store is unlocked, any process running as your user, a host-tier agent included, can read the master key and so every value. Boxed agents cannot. A value still reaches the box the way it always did (env for a declared secret, `agentbox-env` for a static token, the git helper for GitHub).

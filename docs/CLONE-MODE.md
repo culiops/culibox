@@ -13,7 +13,7 @@ The profile's `default_cwd` is the clone's directory. The two must not overlap: 
 
 In the web UI, pick **Work on a private copy** in Settings › Profiles: the folder field is `clone_of`, **Copy lives in** is `default_cwd`, and **Read-only paths** is `clone_share`.
 
-### What the box gets
+## What the box gets
 
 | In the box | Mode | What it is |
 |---|---|---|
@@ -29,7 +29,7 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 **Shares are read-only, and readable.** There is no writable share: a `:rw` suffix is refused by name, and so is any other `:`. A share path must be relative and clean, cannot be `.git`, cannot nest inside another share, and no part of its path may be a symlink. The box can read everything you share and has internet egress, so never share secrets. CuliBox warns for names like `.env*`, `*.pem`, `*.key` and `config*.json`, but it does not stop you. A shared `CLAUDE.md` is readable in the box but is **not** loaded as project instructions: boxed Claude runs with `--setting-sources user`. Tell the agent to read it first, or put box guidance in your user-level `CLAUDE.md`. Files the box writes for you (plans, notes) go in a directory inside the clone, such as `docs/handover/box/`, that your `.gitignore` excludes; they never travel in a fetch.
 
-### Bringing code home
+## Bringing code home
 
 Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
 
@@ -52,7 +52,7 @@ Commit subjects are printed with control characters replaced, because a box wrot
 
 **Keeping the clone current.** At each spawn of an existing clone, CuliBox fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history CuliBox cannot verify, such as a clone made before this tracking existed. `clone fetch`, and auto-return, also refuse a branch that carries a commit your repo still holds but no branch or tag there reaches any more. It cannot see a commit that has since been pruned (by any means) and was never a recorded base tip, unless the latest `git filter-repo` `commit-map` names it (a second filter-repo run overwrites that map), nor a commit that was already behind a `box/*` branch when the record was first seeded. `-allow-old-history` overrides these after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
 
-### Refusals
+## Refusals
 
 - A host-tier session is refused anywhere inside a clone, including a subdirectory or a path that does not exist yet. The box wrote those files, and host-tier tools would trust them. A host-tier session at `clone_of` or at a share source is fine.
 - CuliBox records every directory it has used as a clone in `<data dir>/clone-dirs`, one path per line. A recorded directory stays box-owned even after its profile is edited or deleted. Deleting the directory does not release it. To release one, remove its line from `<data dir>/clone-dirs`. An unreadable record refuses every host-tier spawn until it is fixed.
@@ -60,7 +60,7 @@ Commit subjects are printed with control characters replaced, because a box wrot
 - A `clone_of` that is inside another profile's clone, or inside a recorded clone directory, is refused when you save the profile, when you spawn it and in `clone fetch`: the owning box could have planted git hooks there.
 - Changing `clone_of`, `default_cwd` or `clone_share` gives the profile a new box rather than reusing the old one.
 
-### Known limits
+## Known limits
 
 - Never put `clone_of` inside a boxed workspace (or any other directory a box can write): a box could plant git hooks in that repo, and the host runs git there during `clone fetch`. CuliBox refuses a `clone_of` that is inside a clone or a recorded clone directory, and runs its own git calls with hooks disabled, but it cannot see every directory a box can write.
 - Never run a host-tier agent session in a directory above the clones (for example your home). Claude Code lazily loads nested `CLAUDE.md` and `.claude/` files from any subdirectory it reads, so files a box wrote under a clone could steer a host agent. Keep clones outside every tree where host sessions run.
