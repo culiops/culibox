@@ -100,6 +100,9 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 // user's call, so the save stands.
 func saveWarnings(s *Server, p config.AgentConfig) []string {
 	warnings := append(config.ShareWarnings(p.CloneShare), s.Profiles.ContextWarnings(p)...)
+	if w := p.EgressWarning(); w != "" {
+		warnings = append(warnings, w)
+	}
 	for _, w := range warnings {
 		log.Printf("profile %q: %s", p.Name, w)
 	}

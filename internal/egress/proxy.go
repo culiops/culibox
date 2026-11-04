@@ -58,6 +58,13 @@ type SessionView struct {
 	GitHub      *config.GitHubBinding
 	Tokens      []config.StaticToken
 	PATs        []config.StaticToken
+	// EgressAllow and EgressOpen are the profile's network policy, copied at
+	// spawn. They matter only for a bound session: EgressAllow joins its
+	// allowlist, EgressOpen puts it in open mode (any public host on 443; the
+	// port, private-address and host-address checks still apply). An unbound
+	// session is open already.
+	EgressAllow []string
+	EgressOpen  bool
 }
 
 // Lookup resolves a session id; ok is false for an unknown session. It is asked
@@ -320,7 +327,7 @@ type principal struct {
 	sid    string // MAC-verified session id; "" for a probe principal
 	box    string
 	allow  []string
-	open   bool   // open mode: no binding at all, so no allowlist
+	open   bool   // open mode: unbound, or a bound profile with egress_open; no allowlist
 	github bool   // GitHub-bound: GitHub's Actions-log shard hosts are allowed
 	key    string // cap and throttle key
 	probe  *probePrincipal
@@ -328,7 +335,8 @@ type principal struct {
 	epoch  uint64 // p.epoch[sid] when authenticated
 	// ports maps an exact entry host to the extra (non-443) TLS ports its
 	// entries declare; private lists the (exact host, cidr) exceptions. Both
-	// are built once at authenticate; open and probe principals have neither.
+	// are built once at authenticate. An unbound open principal has neither; a
+	// bound open one keeps its token-entry ports and private exceptions; probes have none.
 	ports   map[string]map[int]bool
 	private []privateRule
 }
@@ -444,7 +452,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		row.Host = name
 	}
 	// 443 is fine for every allowed host; any other port only for the exact
-	// host of a token entry that declares it. Open mode and probes have none.
+	// host of a token entry that declares it. Unbound open principals and probes have none; a bound open one keeps
+	// its token-entry ports.
 	if portN != 443 && !pr.ports[name][portN] {
 		p.refuse(w, http.StatusMethodNotAllowed, row, OutcomeBadMethod, pr.key)
 		return
@@ -648,13 +657,16 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		return bad, authBad
 	}
 	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs}
+	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs, EgressAllow: v.EgressAllow}
 	if !bs.Any() {
 		pr.open = true
 	} else {
 		pr.allow = Effective(bs)
 		pr.github = v.GitHub != nil
 		pr.ports, pr.private = entryRules(v.Tokens, v.PATs)
+		// Open mode for a bound session skips only the host allowlist: the
+		// port check and the private-address filtering run for every principal.
+		pr.open = v.EgressOpen
 	}
 	return pr, authOK
 }

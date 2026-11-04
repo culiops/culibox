@@ -84,9 +84,13 @@ type sessionMeta struct {
 	// Tokens and PATs are the static-token entries the session was spawned
 	// with, as the launcher cloned them (the value reference, never the value).
 	// Records from before N3 lack both and read as none.
-	Tokens      []config.StaticToken `json:"tokens,omitempty"`
-	PATs        []config.StaticToken `json:"pats,omitempty"`
-	BrokerNonce string               `json:"aws_nonce,omitempty"`
+	Tokens []config.StaticToken `json:"tokens,omitempty"`
+	PATs   []config.StaticToken `json:"pats,omitempty"`
+	// EgressAllow and EgressOpen are the profile's network policy as spawned;
+	// a record from before them restores with none.
+	EgressAllow []string `json:"egress_allow,omitempty"`
+	EgressOpen  bool     `json:"egress_open,omitempty"`
+	BrokerNonce string   `json:"aws_nonce,omitempty"`
 	// EgressNonce is the spawn's egress-token nonce (any boxed session with
 	// egress). Records from before A1 lack it; restore backfills BrokerNonce.
 	EgressNonce string `json:"egress_nonce,omitempty"`

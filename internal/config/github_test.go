@@ -503,3 +503,82 @@ func TestGitHubCanPushAndRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateProfileEgressAllow(t *testing.T) {
+	base := func() AgentConfig { return AgentConfig{Name: "p", Bin: "claude", Runtime: RuntimeBox} }
+	a := base()
+	a.EgressAllow = []string{"*.example.com", "pkg.dev"}
+	if err := ValidateProfile(a, nil); err != nil {
+		t.Fatalf("valid policy refused: %v", err)
+	}
+	a.EgressAllow = []string{"https://x"}
+	if err := ValidateProfile(a, nil); err == nil || !strings.Contains(err.Error(), "egress_allow[0]") {
+		t.Fatalf("https://x: err = %v, want egress_allow[0]", err)
+	}
+	a.EgressAllow = nil
+	for i := 0; i < maxEgressAllow+1; i++ {
+		a.EgressAllow = append(a.EgressAllow, fmt.Sprintf("h%d.example.com", i))
+	}
+	if err := ValidateProfile(a, nil); err == nil || !strings.Contains(err.Error(), "egress_allow") {
+		t.Fatalf("too many entries: err = %v", err)
+	}
+	for _, mut := range []func(*AgentConfig){
+		func(a *AgentConfig) { a.EgressAllow = []string{"a.example"} },
+		func(a *AgentConfig) { a.EgressOpen = true },
+	} {
+		h := base()
+		h.Runtime = RuntimeHost
+		mut(&h)
+		if err := ValidateProfile(h, nil); err == nil || !strings.Contains(err.Error(), "egress_allow and egress_open need runtime: box") {
+			t.Fatalf("host runtime: err = %v", err)
+		}
+	}
+}
+
+func TestBindingsHashEgressPolicy(t *testing.T) {
+	mk := func() Bindings { return Bindings{GitHub: goodGitHub()} }
+	plain := mk().Hash()
+	zero := mk()
+	zero.EgressAllow = []string{}
+	if zero.Hash() != plain {
+		t.Fatal("an unset policy must keep today's hash")
+	}
+	one := mk()
+	one.EgressAllow = []string{"a.example"}
+	if one.Hash() == plain {
+		t.Fatal("egress_allow must change the hash")
+	}
+	ab, ba := mk(), mk()
+	ab.EgressAllow = []string{"a", "b"}
+	ba.EgressAllow = []string{"b", "a"}
+	if ab.Hash() != ba.Hash() {
+		t.Fatal("egress_allow order must not change the hash")
+	}
+	if got := ba.EgressAllow[0]; got != "b" {
+		t.Fatalf("Hash reordered the caller's slice: %q", got)
+	}
+	open := mk()
+	open.EgressOpen = true
+	if open.Hash() == plain || open.Hash() == one.Hash() {
+		t.Fatal("egress_open must differ from unset and from egress_allow")
+	}
+	none := Bindings{EgressAllow: []string{"a.example"}, EgressOpen: true}
+	if none.Any() {
+		t.Fatal("an egress policy alone must not make a session bound")
+	}
+}
+
+func TestEgressWarning(t *testing.T) {
+	a := AgentConfig{Name: "p", Bin: "claude", Runtime: RuntimeBox}
+	if a.EgressWarning() != "" {
+		t.Fatal("no policy: no warning")
+	}
+	a.EgressOpen = true
+	if !strings.Contains(a.EgressWarning(), "without one the box already reaches any public host") {
+		t.Fatalf("unbound with policy: %q", a.EgressWarning())
+	}
+	a.Tokens = []string{"t"}
+	if a.EgressWarning() != "" {
+		t.Fatal("bound: no warning")
+	}
+}

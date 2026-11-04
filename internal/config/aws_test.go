@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -402,5 +403,33 @@ func TestModeKeepsOldHashes(t *testing.T) {
 	sso.Mode = AWSModeSSODirect
 	if sso.Hash() == plain.Hash() {
 		t.Fatal("sso_direct and assume_role bindings with otherwise equal fields must hash differently")
+	}
+}
+
+// The config-file path must enforce the same egress policy rules as
+// ValidateProfile: an explicit box runtime, valid patterns, a bounded list.
+func TestConfigValidateChecksAgentEgressPolicy(t *testing.T) {
+	cfg := func(a AgentConfig) Config {
+		return Config{BindAddr: "127.0.0.1:0", PasswordEnv: "X", Agents: []AgentConfig{a}}
+	}
+	good := AgentConfig{Name: "c", Bin: "claude", Runtime: RuntimeBox, EgressAllow: []string{"pkg.example.com"}, EgressOpen: true}
+	if err := cfg(good).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	host := good
+	host.Runtime = RuntimeHost
+	badURL := good
+	badURL.EgressAllow = []string{"https://x"}
+	comma := good
+	comma.EgressAllow = []string{"a.example.com,b.example.com"}
+	many := good
+	many.EgressAllow = make([]string, maxEgressAllow+1)
+	for i := range many.EgressAllow {
+		many.EgressAllow[i] = fmt.Sprintf("h%d.example.com", i)
+	}
+	for name, a := range map[string]AgentConfig{"host runtime": host, "url entry": badURL, "comma entry": comma, "too many": many} {
+		if err := cfg(a).Validate(); err == nil || !strings.Contains(err.Error(), `agent "c"`) {
+			t.Errorf("%s accepted in config file: %v", name, err)
+		}
 	}
 }

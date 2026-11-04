@@ -891,3 +891,19 @@ func TestProfileViewCarriesTheInlineSSODirectMode(t *testing.T) {
 		t.Errorf("an assume_role inline binding must not emit mode: %s", raw)
 	}
 }
+
+func TestProfileViewNetworkReflectsEgressOpen(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "closed", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"t"}},
+		{Name: "open", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"t"}, EgressOpen: true},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.SetEgressAll(true)
+	got := map[string]string{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v.Network
+	}
+	if got["closed"] != "allowlist" || got["open"] != "open" {
+		t.Fatalf("networks = %v, want closed=allowlist open=open", got)
+	}
+}

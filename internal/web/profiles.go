@@ -438,7 +438,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			Tokens:        slices.Clone(a.Tokens),
 			// A boxed spawn has egress when it is bound or egress is mandatory
 			// (the needEgress rule of Manager.Spawn); the host tier never has it.
-			Network:        session.EgressMode(rt == config.RuntimeBox && (bound || m.egressAll), bound),
+			Network:        session.EgressMode(rt == config.RuntimeBox && (bound || m.egressAll), bound && !a.EgressOpen),
 			AWSConnections: slices.Clone(a.AWSConnections),
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,

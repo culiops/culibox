@@ -391,8 +391,8 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 //   o.view       the saved ProfileView of this profile, or null for a draft
 //   o.claude     the form's binary is claude (spawnform.js isClaudeBinName)
 //   o.egressAll  every boxed spawn goes through the egress proxy
-// Network mirrors session.EgressMode: bound = allowlist, unbound = open only
-// when egress is mandatory. The inline AWS binding is not edited here, so its
+// Network mirrors session.EgressMode: bound = allowlist (open when the form
+// sets egress_open), unbound = open only when egress is mandatory. The inline AWS binding is not edited here, so its
 // name and flags come from the saved view while the form still carries it.
 function pfTouchProfile(form, o) {
   const f = form || {};
@@ -414,7 +414,7 @@ function pfTouchProfile(form, o) {
   if (tokens.length) out.tokens = tokens;
   if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
   const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
-  out.network = bound ? "allowlist" : x.egressAll === true ? "open" : "";
+  out.network = bound ? (f.egress_open === true ? "open" : "allowlist") : x.egressAll === true ? "open" : "";
   return out;
 }
 
@@ -426,6 +426,30 @@ function autoReturnToSend(checked) {
   return checked ? {} : { clone_no_auto_return: true };
 }
 
+// egressAllowFromText: the Network textarea as a host list. Split on newlines
+// and commas, trim, drop blanks and repeats (first order kept). Anything else is
+// sent as typed: the server's validator refuses a bad host with its own message.
+function egressAllowFromText(text) {
+  const out = [];
+  for (const s of String(text || "").split(/[\r\n,]+/)) {
+    const h = s.trim();
+    if (h && !out.includes(h)) out.push(h);
+  }
+  return out;
+}
+function egressAllowToText(list) { return (list || []).join("\n"); }
+// egressToSend: the egress keys of a save body. Only a visible Network block
+// (runtime box) sends them, since the server refuses both on the host tier;
+// each key only when set, so a profile without them stays as it was.
+function egressToSend(visible, text, open) {
+  const out = {};
+  if (!visible) return out;
+  const allow = egressAllowFromText(text);
+  if (allow.length) out.egress_allow = allow;
+  if (open) out.egress_open = true;
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend };
 }

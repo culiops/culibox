@@ -142,6 +142,27 @@ type AgentConfig struct {
 	// ImportsOff: a boxed claude gets the files the bundled CLAUDE.md @-imports
 	// unless this is set. No effect on the host tier, which reads them directly.
 	ImportsOff bool `json:"imports_off,omitempty"`
+
+	// EgressAllow adds hosts (exact or "*.suffix") to the allowlist of a bound
+	// box; EgressOpen opens it to any public host on 443. Neither has an effect
+	// without a credential binding: an unbound box is already open.
+	EgressAllow []string `json:"egress_allow,omitempty"`
+	EgressOpen  bool     `json:"egress_open,omitempty"`
+}
+
+// EgressWarningText is the warning for an egress policy on an unbound profile.
+const EgressWarningText = "egress_allow and egress_open apply only to a profile with a credential binding; without one the box already reaches any public host"
+
+// EgressWarning is non-empty when the profile sets an egress policy but has no
+// credential binding for it to apply to.
+func (a AgentConfig) EgressWarning() string {
+	if len(a.EgressAllow) == 0 && !a.EgressOpen {
+		return ""
+	}
+	if a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0 {
+		return ""
+	}
+	return EgressWarningText
 }
 
 // RuntimePolicy returns the effective tier, defaulting to box. An empty value
@@ -511,6 +532,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		if err := validateGitHub(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
+		if err := validateEgressPolicy(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
 		if err := validateClone(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
@@ -659,6 +683,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateTokens(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateEgressPolicy(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateClone(a); err != nil {
