@@ -106,9 +106,9 @@ type Server struct {
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.
 	Accounts *account.Store
-	// SecretOK reports whether a secret NAME resolves (never its value); it only
-	// feeds an account's login_state.
-	SecretOK func(name string) bool
+	// AccountTokenState reports whether an account's token resolves now (one of
+	// launcher.Token*; never the value); it only feeds an account's login_state.
+	AccountTokenState func(a account.Account) string
 
 	// Store is the encrypted store behind /api/store. Nil → the routes are not
 	// registered. Never a typed nil: the daemon leaves it unset without a store.

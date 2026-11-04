@@ -1014,3 +1014,20 @@ func TestWriteCredErrUnavailable(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }
+
+// An account's own pasted token is read straight from the store with no store
+// secret_source, so its value is in use: removing it while the account still
+// points at it is refused, and allowed once the account lets go.
+func TestOwnAccountTokenValueInUseWithoutStoreSource(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil, account.Account{Name: "work", Provider: "claude", TokenSecret: "ACCT_WORK_TOKEN"})
+	if err := f.cm.SetValue("ACCT_WORK_TOKEN", []byte("sk-ant-oat01-x")); err != nil {
+		t.Fatal(err)
+	}
+	var inUse ErrCredInUse
+	if err := f.cm.RemoveValue("ACCT_WORK_TOKEN"); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{"accounts/work.token_secret"}) {
+		t.Fatalf("remove while linked: %v", err)
+	}
+	if !f.vals.has("ACCT_WORK_TOKEN") {
+		t.Fatal("value removed despite refusal")
+	}
+}

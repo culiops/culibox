@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/culiops/culibox/internal/account"
+	"github.com/culiops/culibox/internal/launcher"
 )
 
 type accountView struct {
@@ -17,16 +18,26 @@ type accountView struct {
 	TokenSecret     string `json:"token_secret,omitempty"`
 	InheritPersonal bool   `json:"inherit_personal,omitempty"`
 	Default         bool   `json:"default,omitempty"`
-	LoginState      string `json:"login_state"` // token | logged_in | unknown
-	ConfigDir       string `json:"config_dir"`  // ~-relative for display
+	// token | token_locked | token_missing | logged_in | unknown. A set token wins
+	// over a login: the launcher injects it, and Claude Code prefers it.
+	LoginState string `json:"login_state"`
+	ConfigDir  string `json:"config_dir"` // ~-relative for display
 }
 
 func (s *Server) accountView(r account.Resolved) accountView {
 	v := accountView{Name: r.Name, Provider: r.Provider, TokenSecret: r.TokenSecret,
 		InheritPersonal: r.InheritPersonal, Default: r.IsDefault, LoginState: "unknown", ConfigDir: tildePath(s.Home, r.ConfigDir)}
+	tok := ""
+	if r.TokenSecret != "" && s.AccountTokenState != nil {
+		tok = s.AccountTokenState(r.Account)
+	}
 	switch {
-	case r.TokenSecret != "" && s.SecretOK != nil && s.SecretOK(r.TokenSecret):
+	case tok == launcher.TokenOK:
 		v.LoginState = "token"
+	case tok == launcher.TokenLocked:
+		v.LoginState = "token_locked"
+	case tok == launcher.TokenMissing:
+		v.LoginState = "token_missing"
 	case fileExistsWeb(filepath.Join(r.ConfigDir, ".credentials.json")):
 		v.LoginState = "logged_in"
 	}

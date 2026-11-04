@@ -363,6 +363,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	defer accts.Close()
 	lnch.SetAccounts(accts)
+	// An account's own pasted token is read straight from the store even when
+	// secret_sources has no store source (account.OwnsStoreToken).
+	acctTokenStore, err := secretchain.New([]config.SecretSource{{Type: "store"}}, vstore)
+	if err != nil {
+		log.Fatalf("secrets: %v", err)
+	}
+	lnch.SetAccountTokenStore(acctTokenStore)
 	var acctList []account.Account
 	for _, r := range accts.List() {
 		if !r.IsDefault {
@@ -784,16 +791,26 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		RateLimitsFile: rateLimitsFile,
 		BoxFiles:       mgr.BoxFiles,
 
-		Accounts: accts,
-		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
+		Accounts:          accts,
+		AccountTokenState: lnch.AccountTokenState,
 		// The credentials screen's legacy-secret status: presence only, no value.
 		SecretCheck: resolver.Check,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.
-		Store:                vstore,
-		StoreAudit:           storeAudit,
-		StoreInUse:           live.InUse,
+		Store:      vstore,
+		StoreAudit: storeAudit,
+		StoreInUse: func() bool {
+			if live.InUse() {
+				return true
+			}
+			list := accts.List()
+			own := make([]account.Account, 0, len(list))
+			for _, r := range list {
+				own = append(own, r.Account)
+			}
+			return storerefs.AccountTokensStored(own, vstore)
+		},
 		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
 		StorePlaintextCopies: ptCopies,
 		SeccompProbe:         seccompProbe,
