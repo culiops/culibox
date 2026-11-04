@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { needsYou, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const { needsYou, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -53,29 +53,60 @@ test("faviconHref flips to the amber-dot icon while anything needs you", () => {
 
 const W = (id) => ({ id, activity: "waiting" });
 const B = (id) => ({ id, activity: "working" });
+// seeded: the state after a first poll that saw nothing waiting.
+const seeded = (now = 0) => needsTransitions(null, [], now).next;
 
 test("the first poll after load only seeds — no notification for already-waiting sessions", () => {
-  const r = needsTransitions(null, [W("a"), B("b")]);
+  const r = needsTransitions(null, [W("a"), B("b")], 0);
   assert.deepEqual(r.fired, []);
-  assert.deepEqual([...r.next], ["a"]);
+  assert.deepEqual([...r.next.ids], ["a"]);
 });
 
 test("a session that becomes waiting fires exactly once", () => {
-  let r = needsTransitions(new Set(), [W("a")]);
+  let r = needsTransitions(seeded(), [W("a")], 3000);
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
-  r = needsTransitions(r.next, [W("a")]);
+  r = needsTransitions(r.next, [W("a")], 6000);
   assert.deepEqual(r.fired, []);
 });
 
-test("waiting -> working -> waiting fires again", () => {
-  let r = needsTransitions(new Set(["a"]), [B("a")]);
+test("waiting -> sustained working -> waiting fires again", () => {
+  let r = needsTransitions(null, [W("a")], 0);
+  r = needsTransitions(r.next, [B("a")], 3000);
   assert.deepEqual(r.fired, []);
-  r = needsTransitions(r.next, [W("a")]);
+  for (let t = 6000; t < 3000 + NEEDS_REARM_MS; t += 3000) r = needsTransitions(r.next, [B("a")], t);
+  r = needsTransitions(r.next, [W("a")], 3000 + NEEDS_REARM_MS);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+});
+
+test("one waiting period fires once even if a working blip lands in between (#77)", () => {
+  let r = needsTransitions(seeded(), [W("a")], 3000);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+  // A false "working" (a repaint read as work) is visible for 7-13 s.
+  for (const t of [6000, 9000, 12000, 15000]) r = needsTransitions(r.next, [B("a")], t);
+  r = needsTransitions(r.next, [W("a")], 18000);
+  assert.deepEqual(r.fired, []);
+  // ...and a second short blip right after is absorbed the same way.
+  r = needsTransitions(r.next, [B("a")], 21000);
+  r = needsTransitions(r.next, [W("a")], 24000);
+  assert.deepEqual(r.fired, []);
+});
+
+test("the hysteresis is per session: another session's first wait still fires", () => {
+  let r = needsTransitions(seeded(), [W("a"), B("b")], 3000);
+  r = needsTransitions(r.next, [B("a"), B("b")], 6000);
+  r = needsTransitions(r.next, [W("a"), W("b")], 9000);
+  assert.deepEqual(r.fired.map((s) => s.id), ["b"]);
+});
+
+test("a session that leaves the list forgets its waiting period", () => {
+  let r = needsTransitions(seeded(), [W("a")], 3000);
+  r = needsTransitions(r.next, [], 6000);
+  r = needsTransitions(r.next, [W("a")], 9000);
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
 });
 
 test("idle, done and unknown states never fire", () => {
-  const r = needsTransitions(new Set(), [{ id: "a", activity: "idle" }, { id: "b", activity: "done" }, { id: "c" }]);
+  const r = needsTransitions(seeded(), [{ id: "a", activity: "idle" }, { id: "b", activity: "done" }, { id: "c" }], 3000);
   assert.deepEqual(r.fired, []);
 });
 
@@ -112,19 +143,19 @@ test("notifyPoll: a call before the first successful list does not seed prevIds"
   // Simulates initEnv's title refresh firing before /api/sessions has ever
   // resolved: loaded=false must hand prevIds back untouched (no seeding off
   // the empty lastSessions placeholder) and must never report a transition.
-  let r = notifyPoll(false, null, []);
+  let r = notifyPoll(false, null, [], 0);
   assert.deepEqual(r, { next: null, fired: [] });
-  r = notifyPoll(false, null, [W("a")]); // even if a stray list were passed
+  r = notifyPoll(false, null, [W("a")], 0); // even if a stray list were passed
   assert.deepEqual(r, { next: null, fired: [] });
   // Once the real list lands (loaded flips true), the real first poll still
   // seeds normally — nothing was consumed by the not-loaded calls above.
-  r = notifyPoll(true, r.next, [W("a"), B("b")]);
+  r = notifyPoll(true, r.next, [W("a"), B("b")], 3000);
   assert.deepEqual(r.fired, []);
-  assert.deepEqual([...r.next], ["a"]);
+  assert.deepEqual([...r.next.ids], ["a"]);
 });
 
 test("notifyPoll: once loaded, behaves exactly like needsTransitions", () => {
-  const r = notifyPoll(true, new Set(), [W("a")]);
+  const r = notifyPoll(true, seeded(), [W("a")], 3000);
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
 });
 
@@ -233,9 +264,9 @@ test("an SSO need: needs you, labelled, its own card, its own notification text"
   assert.deepStrictEqual(cardContent(s), { text: "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.",
     sso: true, ask: false, reply: false, enableReplies: false });
   assert.strictEqual(notifyBody(s), "AWS sign-in expired");
-  const first = needsTransitions(null, [s]);
-  assert.deepStrictEqual([...first.next], ["aws-1"]);
-  const t = needsTransitions(new Set(), [s]);
+  const first = needsTransitions(null, [s], 0);
+  assert.deepStrictEqual([...first.next.ids], ["aws-1"]);
+  const t = needsTransitions(seeded(), [s], 3000);
   assert.deepStrictEqual(t.fired.map((x) => x.id), ["aws-1"]);
   assert.strictEqual(staleExpanded(s, undefined), false);
   assert.strictEqual(staleExpanded({ ...s, need: undefined }, undefined), true); // sign-in done and agent running: stale

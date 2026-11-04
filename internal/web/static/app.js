@@ -3111,7 +3111,7 @@ function signalAttention() {
 let attnPrev = null;
 let sessionsLoaded = false;
 function notifyTransitions() {
-  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions);
+  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions, Date.now());
   attnPrev = t.next;
   if (!t.fired.length || !notifyWanted()) return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
