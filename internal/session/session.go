@@ -1413,6 +1413,12 @@ type Manager struct {
 	peekMu    sync.Mutex
 	peekCache map[string]peekEntry
 
+	// usageMu guards usageWide, UsageFor's cache of the widened (multi-MB)
+	// transcript read, one entry per session, dropped by peekForget. Separate
+	// from m.mu for the same reason as peekMu.
+	usageMu   sync.Mutex
+	usageWide map[string]usageWideEntry
+
 	// timelineMu guards timelines, the per-session incremental activity
 	// parses (timeline_cache.go). Like peekMu it is separate from m.mu and
 	// never taken while m.mu is held.

@@ -33,7 +33,7 @@ function usageTitle(u) {
   const parts = [];
   if (u.model) parts.push(u.model);
   if (u.effort) parts.push(u.effort);
-  parts.push(withCommas(u.contextTokens) + " tokens");
+  parts.push(withCommas(u.contextTokens) + " tokens" + (u.postCompact ? " (after compact)" : ""));
   return parts.join(" · ");
 }
 
@@ -84,5 +84,5 @@ function meterModel(label, win, nowSec) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
+  module.exports = { withCommas, fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
 }
