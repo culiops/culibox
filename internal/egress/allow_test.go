@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/hostmatch"
 )
 
 // TestEffectiveAWSOnlyUnchanged pins the pre-change result: an AWS-only (or
@@ -17,13 +18,16 @@ func TestEffectiveAWSOnlyUnchanged(t *testing.T) {
 		"registry.terraform.io",
 		"releases.hashicorp.com",
 		"github.com",
+		"proxy.golang.org",
+		"sum.golang.org",
+		"registry.npmjs.org",
 		"extra.example.org",
 	}
 	if got := Effective(config.Bindings{AWS: bound()}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Effective(aws) = %q, want %q", got, want)
 	}
-	if got := Effective(config.Bindings{}); !reflect.DeepEqual(got, want[:5]) {
-		t.Fatalf("Effective(config.Bindings{}) = %q, want %q", got, want[:5])
+	if got := Effective(config.Bindings{}); !reflect.DeepEqual(got, want[:8]) {
+		t.Fatalf("Effective(config.Bindings{}) = %q, want %q", got, want[:8])
 	}
 }
 
@@ -145,5 +149,17 @@ func TestEffectiveLegacyUnchanged(t *testing.T) {
 	}
 	if got := Effective(config.Bindings{AWSConns: []config.AWSConnection{}}); !reflect.DeepEqual(got, DefaultAllow()) {
 		t.Fatalf("empty connections changed the list: %v", got)
+	}
+}
+
+func TestDefaultAllowToolchainRegistries(t *testing.T) {
+	d := DefaultAllow()
+	for _, h := range []string{"proxy.golang.org", "sum.golang.org", "registry.npmjs.org"} {
+		if !slices.Contains(d, h) {
+			t.Errorf("DefaultAllow() lacks %s: %v", h, d)
+		}
+	}
+	if hostmatch.Match(d, "evil.npmjs.org") {
+		t.Error("evil.npmjs.org matched: the registries must be exact hosts")
 	}
 }

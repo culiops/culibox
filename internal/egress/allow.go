@@ -11,8 +11,15 @@ import (
 // its binding's own egress_allow: the set measured in spec §7.1 (2026-10-17)
 // under the env the session wiring sets. Claude's API, the AWS APIs (S3
 // included; see spec §9), terraform init's registry and provider downloads, and
-// GitHub, where the registry's modules and git's ls-remote go. A function, not
-// a variable, so no caller can change the policy by writing to it.
+// GitHub, where the registry's modules and git's ls-remote go. Added
+// 2026-11-04: the Go and npm registries (proxy.golang.org, sum.golang.org,
+// registry.npmjs.org), exact hosts only. Measured from prd-3: curl -sI
+// https://proxy.golang.org/github.com/creack/pty/@v/v1.1.24.zip answers
+// HTTP/2 200 with no redirect, and curl -sI
+// https://registry.npmjs.org/eslint/-/eslint-9.0.0.tgz answers HTTP/2 200.
+// Accepted risk (founder's choice): proxy.golang.org fetches any public module
+// path on request, so it is an exfiltration channel for every bound box. A
+// function, not a variable, so no caller can change the policy by writing to it.
 func DefaultAllow() []string {
 	return []string{
 		"api.anthropic.com",
@@ -20,6 +27,9 @@ func DefaultAllow() []string {
 		"registry.terraform.io",
 		"releases.hashicorp.com",
 		"github.com",
+		"proxy.golang.org",
+		"sum.golang.org",
+		"registry.npmjs.org",
 	}
 }
 

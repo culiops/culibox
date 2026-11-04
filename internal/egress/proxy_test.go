@@ -1024,9 +1024,9 @@ func TestSourceCheck(t *testing.T) {
 }
 
 func TestDefaultAllowMatchesSpec(t *testing.T) {
-	want := []string{"api.anthropic.com", "*.amazonaws.com", "registry.terraform.io", "releases.hashicorp.com", "github.com"}
+	want := []string{"api.anthropic.com", "*.amazonaws.com", "registry.terraform.io", "releases.hashicorp.com", "github.com", "proxy.golang.org", "sum.golang.org", "registry.npmjs.org"}
 	if got := DefaultAllow(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("DefaultAllow() = %q, want spec §7.1's %q", got, want)
+		t.Fatalf("DefaultAllow() = %q, want spec §7.1 plus the 2026-11-04 registries %q", got, want)
 	}
 	for _, p := range DefaultAllow() {
 		if err := hostmatch.ValidPattern(p); err != nil {
@@ -1347,12 +1347,12 @@ func TestHostAddrsRefusedInBoundModeToo(t *testing.T) {
 	if st, _ := h.p.Stats("s1"); st.Denied != 1 {
 		t.Fatalf("stats = %+v, want the refusal counted", st)
 	}
-	code, _ = h.connect(t, "registry.npmjs.org:443", "s1", h.tok("s1", nonceA))
+	code, _ = h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
 	if code != 403 {
 		t.Fatalf("bound is not open: status %d", code)
 	}
 	// Refused by the allowlist (denied), not by the address check.
-	if rows := h.waitRows(t, 2); len(rows) != 2 || rows[1].Outcome != OutcomeDenied || rows[1].Host != "registry.npmjs.org" {
+	if rows := h.waitRows(t, 2); len(rows) != 2 || rows[1].Outcome != OutcomeDenied || rows[1].Host != "example.com" {
 		t.Fatalf("rows = %+v", rows)
 	}
 	if len(h.dials()) != 0 {
@@ -1363,7 +1363,7 @@ func TestHostAddrsRefusedInBoundModeToo(t *testing.T) {
 func TestBoundModeUnallowlistedStaysDenied(t *testing.T) {
 	h := newHarness(t, nil)
 	h.p.SetHostAddrs([]netip.Addr{hostAddr})
-	code, _ := h.connect(t, "registry.npmjs.org:443", "s1", h.tok("s1", nonceA))
+	code, _ := h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
 	if code != 403 {
 		t.Fatalf("status %d", code)
 	}
