@@ -18,8 +18,14 @@ import (
 // HTTP/2 200 with no redirect, and curl -sI
 // https://registry.npmjs.org/eslint/-/eslint-9.0.0.tgz answers HTTP/2 200.
 // Accepted risk (founder's choice): proxy.golang.org fetches any public module
-// path on request, so it is an exfiltration channel for every bound box. A
-// function, not a variable, so no caller can change the policy by writing to it.
+// path on request, so it is an exfiltration channel for every bound box.
+// Larger zips redirect: .../modernc.org/sqlite/@v/v1.56.0.zip answers 302 to
+// storage.googleapis.com (measured in a box, 2026-11-04). That host is left out
+// on purpose (founder 2026-11-04): it serves every Google Cloud Storage bucket,
+// and anyone can create one and write to it, so it would be a bulk exfiltration
+// channel (www.googleapis.com serves the same upload API and stays out too). A
+// profile that needs those modules adds it with egress_allow. A function, not
+// a variable, so no caller can change the policy by writing to it.
 func DefaultAllow() []string {
 	return []string{
 		"api.anthropic.com",
