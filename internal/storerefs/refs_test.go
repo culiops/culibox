@@ -6,6 +6,7 @@ import (
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 func fullConfig() config.Config {
@@ -109,5 +110,55 @@ func TestClaimsCountNamesWithoutStoreSource(t *testing.T) {
 	cfg.SecretSources = []config.SecretSource{{Type: "store"}}
 	if s := Claims(cfg, accts); !reflect.DeepEqual(s, Refs(cfg, accts)) {
 		t.Fatalf("with a store source Claims = %v, Refs = %v", s, Refs(cfg, accts))
+	}
+}
+
+// An account's own pasted token (account.TokenID) is read straight from the
+// store even without a store secret_source, so it is a store reference then
+// too: the value cannot be removed while the account still uses it.
+func TestRefsOwnAccountTokenWithoutStoreSource(t *testing.T) {
+	cfg := config.Config{SecretSources: []config.SecretSource{{Type: "env"}}}
+	accts := []account.Account{
+		{Name: "client-a", Provider: "claude", TokenSecret: "ACCT_CLIENT_A_TOKEN"},
+		{Name: "work", Provider: "claude", TokenSecret: "ACCT_OTHER_TOKEN"}, // not its own id
+	}
+	got := Refs(cfg, accts)
+	want := map[string][]string{"ACCT_CLIENT_A_TOKEN": {"accounts/client-a.token_secret"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Refs = %v, want %v", got, want)
+	}
+}
+
+type fakeIDs []string
+
+func (f fakeIDs) List() ([]secretstore.Entry, error) {
+	out := make([]secretstore.Entry, len(f))
+	for i, id := range f {
+		out[i] = secretstore.Entry{ID: id}
+	}
+	return out, nil
+}
+
+type failIDs struct{}
+
+func (failIDs) List() ([]secretstore.Entry, error) { return nil, secretstore.ErrNotInitialized }
+
+func TestAccountTokensStored(t *testing.T) {
+	own := []account.Account{{Name: "work", Provider: "claude", TokenSecret: "ACCT_WORK_TOKEN"}}
+	if !AccountTokensStored(own, fakeIDs{"x", "ACCT_WORK_TOKEN"}) {
+		t.Fatal("a stored own token must count")
+	}
+	if !AccountTokensStored(own, fakeIDs{"acct_work_token"}) {
+		t.Fatal("a case-folded twin is the same file on macOS: it must count")
+	}
+	if AccountTokensStored(own, fakeIDs{"x"}) {
+		t.Fatal("an own token not in the store must not count")
+	}
+	foreign := []account.Account{{Name: "work", Provider: "claude", TokenSecret: "GH_KEY"}}
+	if AccountTokensStored(foreign, fakeIDs{"GH_KEY"}) {
+		t.Fatal("a foreign token_secret is not the store fallback's business")
+	}
+	if AccountTokensStored(own, failIDs{}) || AccountTokensStored(nil, fakeIDs{"ACCT_WORK_TOKEN"}) {
+		t.Fatal("no store or no accounts: false")
 	}
 }

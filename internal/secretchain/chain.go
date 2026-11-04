@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/secrets"
@@ -163,4 +164,19 @@ func (c *Chain) Check(name string) (Presence, error) {
 		return Present, nil
 	}
 	return Absent, nil
+}
+
+// AccountTokenPresence is Check for an agent account's token: the
+// secret_sources chain first, then, only for the account's own pasted token
+// (account.OwnsStoreToken), the store-only chain. Like Check it never
+// decrypts when the store can answer by id. store may be nil.
+func AccountTokenPresence(chain, store *Chain, a account.Account) (Presence, error) {
+	if a.TokenSecret == "" {
+		return Absent, nil
+	}
+	p, err := chain.Check(a.TokenSecret)
+	if err != nil || p != Absent || store == nil || !a.OwnsStoreToken() {
+		return p, err
+	}
+	return store.Check(a.TokenSecret)
 }

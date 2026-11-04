@@ -2833,8 +2833,8 @@ function credValueForm(replaceId) {
   h.appendChild(credEl("span", "grow", replace ? "Replace " + replaceId : "Set a value"));
   const grid = credEl("div", "frow");
   const idf = credField(uid + "-id", "Id", {
-    value: replaceId || "", readonly: replace, max: 64, full: true, placeholder: "e.g. claude-account-token",
-    hint: replace ? "" : "Letters, digits, - and _. A token or GitHub App you add on this screen names its own value; this is for values something else reads, such as an agent account's token.",
+    value: replaceId || "", readonly: replace, max: 64, full: true, placeholder: "e.g. MY_SERVICE_TOKEN",
+    hint: replace ? "" : "Letters, digits, - and _. A token or GitHub App you add on this screen names its own value; this is for values something else reads, such as a profile secret. An agent account's token is pasted on the Agent accounts tab.",
   });
   const valHost = credEl("div", "fcol full");
   grid.append(idf.col, valHost);

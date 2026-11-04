@@ -87,3 +87,39 @@ func TestIsAuthEnvCoversProviderRouting(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenID(t *testing.T) {
+	cases := map[string]string{
+		"work":                             "ACCT_WORK_TOKEN",
+		"client-a":                         "ACCT_CLIENT_A_TOKEN",
+		"0x":                               "ACCT_0X_TOKEN",
+		"abcdefghijklmnopqrstuvwxyz012345": "ACCT_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345_TOKEN",
+	}
+	for name, want := range cases {
+		got := TokenID(name)
+		if got != want {
+			t.Errorf("TokenID(%q) = %q, want %q", name, got, want)
+		}
+		// The id must pass both rules it meets: a token_secret name (env name)
+		// and a store id.
+		if err := (Account{Name: name, Provider: ProviderClaude, TokenSecret: got}).Validate(); err != nil {
+			t.Errorf("TokenID(%q) = %q fails account validation: %v", name, got, err)
+		}
+	}
+}
+
+func TestOwnsStoreToken(t *testing.T) {
+	if !(Account{Name: "client-a", TokenSecret: "ACCT_CLIENT_A_TOKEN"}).OwnsStoreToken() {
+		t.Fatal("an account's own token id must count as owned")
+	}
+	for _, a := range []Account{
+		{Name: "work"},                                     // no token
+		{Name: "work", TokenSecret: "WORK_TOK"},            // a secret_sources name
+		{Name: "work", TokenSecret: "ACCT_OTHER_TOKEN"},    // another account's id
+		{Name: Default, TokenSecret: "ACCT_DEFAULT_TOKEN"}, // never the default account
+	} {
+		if a.OwnsStoreToken() {
+			t.Errorf("%+v: OwnsStoreToken = true, want false", a)
+		}
+	}
+}

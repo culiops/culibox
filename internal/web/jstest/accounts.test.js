@@ -94,3 +94,50 @@ test("acctLoginText names each state", () => {
   assert.equal(acctLoginText("weird"), "weird");
   assert.equal(acctLoginText(undefined), "login unknown");
 });
+
+const { acctTokenId, acctTokenOwned, acctTokenMode } = require("../static/accounts.js");
+
+test("acctTokenId mirrors account.TokenID", () => {
+  assert.equal(acctTokenId("work"), "ACCT_WORK_TOKEN");
+  assert.equal(acctTokenId("client-a"), "ACCT_CLIENT_A_TOKEN");
+  assert.equal(acctTokenId("0x"), "ACCT_0X_TOKEN");
+});
+
+test("acctTokenOwned: only the account's own id is ours to delete", () => {
+  assert.equal(acctTokenOwned({ name: "client-a", token_secret: "ACCT_CLIENT_A_TOKEN" }), true);
+  assert.equal(acctTokenOwned({ name: "work", token_secret: "WORK_TOK" }), false);
+  assert.equal(acctTokenOwned({ name: "work", token_secret: "ACCT_OTHER_TOKEN" }), false);
+  assert.equal(acctTokenOwned({ name: "work" }), false);
+  assert.equal(acctTokenOwned(null), false);
+});
+
+test("acctTokenMode: set wins, then the store gate, then paste", () => {
+  const ready = { initialized: true, locked: true };
+  assert.equal(acctTokenMode({ name: "w", token_secret: "ACCT_W_TOKEN" }, null), "set");
+  assert.equal(acctTokenMode({ name: "w" }, ready), "paste"); // a locked store still takes a value
+  assert.equal(acctTokenMode({ name: "w" }, { initialized: false }), "store");
+  assert.equal(acctTokenMode({ name: "w" }, null), "store");
+});
+
+test("acctLoginText covers the token states", () => {
+  assert.equal(acctLoginText("token"), "token");
+  assert.equal(acctLoginText("token_locked"), "token (store locked)");
+  assert.equal(acctLoginText("token_missing"), "token not found");
+  assert.equal(acctLoginText("logged_in"), "logged in");
+});
+
+const { acctTokenStateText, acctCanToken } = require("../static/accounts.js");
+
+test("acctTokenStateText never repeats the word token and names the fix", () => {
+  assert.equal(acctTokenStateText("token", "ACCT_W_TOKEN"), "Token saved");
+  assert.match(acctTokenStateText("token_locked"), /unlock the store/);
+  assert.match(acctTokenStateText("token_unavailable"), /Keychain/);
+  assert.equal(acctTokenStateText("token_missing", "WORK_TOK"), "Token not found (WORK_TOK)");
+  assert.equal(acctLoginText("token_unavailable"), "token (Keychain unavailable)");
+});
+
+test("acctCanToken: claude only", () => {
+  assert.equal(acctCanToken({ provider: "claude" }), true);
+  assert.equal(acctCanToken({ provider: "codex" }), false);
+  assert.equal(acctCanToken(null), false);
+});

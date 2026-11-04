@@ -5,6 +5,7 @@ package storerefs
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
@@ -44,8 +45,10 @@ func InUse(cfg config.Config) bool {
 // "github_apps/<name>", "static_tokens/<name>", "agents/<agent>.secrets",
 // "accounts/<account>.token_secret". Secret NAMES (agent secrets and account
 // token_secret) count as store ids only when a store secret_source exists,
-// because only then does a name resolve to the value with that id. Names that
-// are not valid store ids are skipped. Values are never read.
+// because only then does a name resolve to the value with that id; an
+// account's own pasted token (account.OwnsStoreToken) always counts, since the
+// launcher reads it straight from the store. Names that are not valid store
+// ids are skipped. Values are never read.
 func Refs(cfg config.Config, accts []account.Account) map[string][]string {
 	return refs(cfg, SecretNameRefs(cfg, accts))
 }
@@ -82,13 +85,46 @@ func refs(cfg config.Config, names map[string][]string) map[string][]string {
 
 // SecretNameRefs maps each secret name that a store secret_source could serve
 // (an agent's secrets entry, an account's token_secret) to the entries that
-// declare it. Empty when no store source exists. Names that are not valid
-// store ids are skipped.
+// declare it. Without a store source only an account's own pasted token
+// (account.OwnsStoreToken) is mapped: the launcher reads that one straight
+// from the store. Names that are not valid store ids are skipped.
 func SecretNameRefs(cfg config.Config, accts []account.Account) map[string][]string {
 	if !HasSource(cfg) {
-		return map[string][]string{}
+		out := map[string][]string{}
+		for _, a := range accts {
+			if a.OwnsStoreToken() {
+				out[a.TokenSecret] = append(out[a.TokenSecret], "accounts/"+a.Name+".token_secret")
+			}
+		}
+		return out
 	}
 	return secretNames(cfg, accts)
+}
+
+// AccountTokensStored reports whether the store holds any account's own pasted
+// token: such a store is in use even when the config never names it.
+func AccountTokensStored(accts []account.Account, st StoreIDs) bool {
+	own := map[string]bool{}
+	for _, a := range accts {
+		if a.OwnsStoreToken() {
+			own[a.TokenSecret] = true // TokenID is already upper-case
+		}
+	}
+	if len(own) == 0 || st == nil {
+		return false
+	}
+	ents, err := st.List()
+	if err != nil {
+		return false
+	}
+	for _, e := range ents {
+		// Upper-cased: on a case-insensitive macOS volume a value written as
+		// acct_work_token is the same file the launcher reads.
+		if own[strings.ToUpper(e.ID)] {
+			return true
+		}
+	}
+	return false
 }
 
 func secretNames(cfg config.Config, accts []account.Account) map[string][]string {

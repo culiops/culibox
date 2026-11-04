@@ -157,6 +157,10 @@ type AgentLauncher struct {
 	defaultRuntime string
 	// accounts resolves agent accounts; nil means only the default exists.
 	accounts AccountResolver
+	// acctTokenStore reads the encrypted store directly, for an account's own
+	// pasted token (account.OwnsStoreToken) when secret_sources has no store
+	// source. nil: no fallback.
+	acctTokenStore SecretResolver
 	// daemonSecretEnv names daemon-only variables (without the AB_ prefix) that
 	// never reach a session through an inherited base.
 	daemonSecretEnv map[string]bool
@@ -226,6 +230,32 @@ func (l *AgentLauncher) SetAccounts(r AccountResolver) {
 	l.mu.Lock()
 	l.accounts = r
 	l.mu.Unlock()
+}
+
+// SetAccountTokenStore installs the store-only resolver behind an account's own
+// pasted token (see acctTokenStore). Call at boot.
+func (l *AgentLauncher) SetAccountTokenStore(r SecretResolver) {
+	l.mu.Lock()
+	l.acctTokenStore = r
+	l.mu.Unlock()
+}
+
+// resolveAccountToken resolves an account's token_secret: the secret_sources
+// chain first (config order is honoured), then, only for the account's own
+// TokenID, the encrypted store directly. A chain error is returned as is, so a
+// locked store source is never masked by the fallback.
+func (l *AgentLauncher) resolveAccountToken(a account.Account) (string, bool, error) {
+	v, ok, err := l.secrets.Resolve(a.TokenSecret)
+	if err != nil || ok {
+		return v, ok, err
+	}
+	l.mu.RLock()
+	st := l.acctTokenStore
+	l.mu.RUnlock()
+	if st == nil || !a.OwnsStoreToken() {
+		return "", false, nil
+	}
+	return st.Resolve(a.TokenSecret)
 }
 
 // AccountFor resolves which account a spawn runs under: the spawn override,
@@ -771,7 +801,7 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 			env["CLAUDE_CONFIG_DIR"] = acct.ConfigDir
 		}
 		if acct.TokenSecret != "" {
-			v, ok, err := l.secrets.Resolve(acct.TokenSecret)
+			v, ok, err := l.resolveAccountToken(acct.Account)
 			if err != nil {
 				if locked := storeLocked(acct.TokenSecret, err); locked != nil {
 					return nil, nil, locked
@@ -779,6 +809,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 				return nil, nil, fmt.Errorf("launcher: account %q: resolving token secret %s: %w", acct.Name, acct.TokenSecret, err)
 			}
 			if !ok {
+				if acct.OwnsStoreToken() { // a pasted token needs no secret_sources entry
+					return nil, nil, fmt.Errorf("launcher: account %q: no token is saved for it (paste one in Settings → Agent accounts)", acct.Name)
+				}
 				return nil, nil, fmt.Errorf("launcher: account %q: token secret %s is not resolvable (check secret_sources)", acct.Name, acct.TokenSecret)
 			}
 			env[account.TokenEnv] = v

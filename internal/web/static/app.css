@@ -1646,6 +1646,11 @@
     /* Phone width: the label takes its own full-width line, so Log in / Delete
        sit on the line below rather than squeezing the wrapping text. */
     @media (max-width: 700px) { .acct-actions label { flex: 1 1 100%; } }
+    /* The token line: state + Replace/Remove, or the paste field + Save. The
+       field takes the free width and wraps under itself at phone width. */
+    .acct-token { display: flex; gap: 1ch; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+    .acct-token input.fld { flex: 1 1 24ch; min-width: 0; width: auto; box-sizing: border-box; }
+    .acct-token .acct-token-state, .acct-token .hint { flex: 1 1 auto; min-width: 0; margin: 0; }
     #foot-accounts .fld { width: auto; }
     /* --- font sizes (now a settings tab) ---------------------------------- */
     /* One row per surface: a fixed label column so the four steppers line up,

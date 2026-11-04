@@ -110,6 +110,23 @@ type Account struct {
 	InheritPersonal bool   `json:"inherit_personal,omitempty"`
 }
 
+// TokenID is the store id the Settings screen keeps an account's pasted token
+// under: ACCT_<NAME>_TOKEN, upper-cased with '-' as '_'. A valid account name
+// always gives an id that is both a valid env name (token_secret) and a valid
+// store id.
+func TokenID(name string) string {
+	return "ACCT_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_TOKEN"
+}
+
+// OwnsStoreToken reports whether the account's token_secret is its own
+// TokenID. Only such a token is read straight from the encrypted store when no
+// store secret_source is configured: an account can never be pointed at
+// another store value (a GitHub App key, another account's token) and have it
+// injected into an agent's environment.
+func (a Account) OwnsStoreToken() bool {
+	return a.Name != Default && a.TokenSecret != "" && a.TokenSecret == TokenID(a.Name)
+}
+
 // Resolved is an account plus where it lives on this host.
 type Resolved struct {
 	Account
