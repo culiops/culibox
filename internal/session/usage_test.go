@@ -367,6 +367,34 @@ func TestReadTailIsBoundedWhenTheFileGrowsAfterStat(t *testing.T) {
 	}
 }
 
+// If the widened read fails, the normal tail's answer (e.g. a compact boundary
+// with no model) must survive instead of being thrown away, and the failure must
+// not be cached.
+func TestUsageWidenedFallsBackToTheNormalTailWhenTheReadFails(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close() // every read now fails
+	m := &Manager{}
+	narrow := Usage{ContextTokens: 25340, PostCompact: true}
+	u, ok := m.usageWidened("s1", p, f, fi, narrow, true)
+	if !ok || u != narrow {
+		t.Fatalf("got %+v ok=%v, want the normal-tail result %+v", u, ok, narrow)
+	}
+	if len(m.usageWide) != 0 {
+		t.Fatalf("a failed read was cached: %+v", m.usageWide)
+	}
+}
+
 // With no token count to show (a boundary lacking postTokens) the API must not
 // invent a 0% bar either.
 func TestUsageForNoPctWithoutATokenCount(t *testing.T) {

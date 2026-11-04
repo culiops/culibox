@@ -233,7 +233,7 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	}
 	u, ok := parseUsageTail(b)
 	if cut && (!ok || u.Model == "") { // no usage, or only a compact boundary: the model is further back
-		u, ok = m.usageWidened(id, l.path, f, fi)
+		u, ok = m.usageWidened(id, l.path, f, fi, u, ok)
 	}
 	if !ok {
 		return Usage{}, false
@@ -265,8 +265,9 @@ type usageWideEntry struct {
 // usageWidened parses the last usageWideTailBytes of a transcript whose normal
 // tail was not enough. The read is ~100 ms and tens of MB, and the sidebar polls
 // every few seconds, so the answer (including "none") is reused while the file is
-// unchanged. One entry per session; peekForget drops it with the session.
-func (m *Manager) usageWidened(id, path string, f *os.File, fi os.FileInfo) (Usage, bool) {
+// unchanged. One entry per session; peekForget drops it with the session. If the
+// wide read fails, narrow (the normal tail's result) is returned as is.
+func (m *Manager) usageWidened(id, path string, f *os.File, fi os.FileInfo, narrow Usage, narrowOK bool) (Usage, bool) {
 	m.usageMu.Lock()
 	e, hit := m.usageWide[id]
 	m.usageMu.Unlock()
@@ -275,7 +276,7 @@ func (m *Manager) usageWidened(id, path string, f *os.File, fi os.FileInfo) (Usa
 	}
 	b, err := readTail(f, fi, usageWideTailBytes)
 	if err != nil {
-		return Usage{}, false // a read error is not cached: the next poll retries
+		return narrow, narrowOK // a read error is not cached (the next poll retries); the normal tail's answer stands
 	}
 	u, ok := parseUsageTail(b)
 	m.usageMu.Lock()
