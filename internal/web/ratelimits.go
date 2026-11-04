@@ -2,7 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/culiops/culibox/internal/account"
@@ -24,11 +27,80 @@ type RateLimits struct {
 	UpdatedAt int64            `json:"updated_at,omitempty"`
 	FiveHour  *RateLimitWindow `json:"five_hour,omitempty"`
 	SevenDay  *RateLimitWindow `json:"seven_day,omitempty"`
+	// Model and ModelFamily name the model whose session wrote this snapshot;
+	// ByModel keeps the latest reading per model family. The quota can be
+	// reported per model bucket, so a reader that wants a stable number picks one
+	// bucket instead of interleaving whichever session rendered last.
+	Model       string                  `json:"model,omitempty"`
+	ModelFamily string                  `json:"model_family,omitempty"`
+	ByModel     map[string]BucketLimits `json:"by_model,omitempty"`
+}
+
+// BucketLimits is one model family's reading inside RateLimits.ByModel.
+type BucketLimits struct {
+	UpdatedAt int64            `json:"updated_at,omitempty"`
+	FiveHour  *RateLimitWindow `json:"five_hour,omitempty"`
+	SevenDay  *RateLimitWindow `json:"seven_day,omitempty"`
+}
+
+const (
+	rateLimitsCacheMax   = 64 // paths remembered by the last-good cache
+	rateLimitsMaxBuckets = 8  // by_model entries kept per snapshot
+)
+
+// rlLastGood remembers the last good snapshot read from each path.
+var rlLastGood = struct {
+	mu sync.Mutex
+	m  map[string]RateLimits
+}{m: map[string]RateLimits{}}
+
+// hasWindows reports whether a snapshot carries any reading at all.
+func (rl RateLimits) hasWindows() bool {
+	if rl.FiveHour != nil || rl.SevenDay != nil {
+		return true
+	}
+	for _, b := range rl.ByModel {
+		if b.FiveHour != nil || b.SevenDay != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// boundBuckets keeps the rateLimitsMaxBuckets most recently updated buckets (the
+// lexically smaller name wins a tie, so the choice does not depend on map order).
+func boundBuckets(m map[string]BucketLimits) map[string]BucketLimits {
+	if len(m) <= rateLimitsMaxBuckets {
+		return m
+	}
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if m[names[i]].UpdatedAt != m[names[j]].UpdatedAt {
+			return m[names[i]].UpdatedAt > m[names[j]].UpdatedAt
+		}
+		return names[i] < names[j]
+	})
+	out := make(map[string]BucketLimits, rateLimitsMaxBuckets)
+	for _, k := range names[:rateLimitsMaxBuckets] {
+		out[k] = m[k]
+	}
+	return out
 }
 
 // readRateLimits parses the rate-limits JSON file. ok=false when the file is
-// absent, unreadable, or malformed, or carries neither window — the caller then
-// simply shows nothing rather than a broken widget.
+// absent, or unreadable/malformed/empty with no earlier good reading, or carries
+// no window — the caller then simply shows nothing rather than a broken widget.
+//
+// A writer that is not atomic (abtop, an old agent-box script, the user's own
+// statusLine) leaves the file empty or half-written for a moment, and the old
+// agent-box script wrote window-less snapshots. Any of those would make an
+// account's meters vanish until the next poll, so the last good snapshot read
+// from each path is served instead. A deleted file is the exception: it is gone,
+// not torn, so its cached reading is dropped. The cache holds at most
+// rateLimitsCacheMax paths (the account count plus the default file).
 func readRateLimits(path string) (RateLimits, bool) {
 	if path == "" {
 		return RateLimits{}, false
@@ -36,18 +108,26 @@ func readRateLimits(path string) (RateLimits, bool) {
 	// The file lives in a directory a host-tier agent can write to: read it with
 	// the no-follow, FIFO-safe, size-capped reader so a planted FIFO or symlink
 	// cannot hang /api/meta.
-	b, ok := session.ReadRegistryFile(path)
-	if !ok {
-		return RateLimits{}, false
-	}
 	var rl RateLimits
-	if err := json.Unmarshal(b, &rl); err != nil {
+	b, ok := session.ReadRegistryFile(path)
+	if ok && json.Unmarshal(b, &rl) == nil && rl.hasWindows() {
+		rl.ByModel = boundBuckets(rl.ByModel)
+		rlLastGood.mu.Lock()
+		if _, have := rlLastGood.m[path]; !have && len(rlLastGood.m) >= rateLimitsCacheMax {
+			rlLastGood.m = map[string]RateLimits{}
+		}
+		rlLastGood.m[path] = rl
+		rlLastGood.mu.Unlock()
+		return rl, true
+	}
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		delete(rlLastGood.m, path)
 		return RateLimits{}, false
 	}
-	if rl.FiveHour == nil && rl.SevenDay == nil {
-		return RateLimits{}, false
-	}
-	return rl, true
+	last, have := rlLastGood.m[path]
+	return last, have
 }
 
 // rateLimitsByAccount returns each account's 5h/weekly windows. default reads
@@ -181,6 +261,7 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 		rl.UpdatedAt = 0
 	}
 	maxReset := now.Add(rateLimitsMaxReset).Unix()
+	futureCut := now.Add(rateLimitsFutureSlack).Unix()
 	clean := func(w *RateLimitWindow) *RateLimitWindow {
 		if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > maxReset {
 			return nil
@@ -195,8 +276,34 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 		return &c
 	}
 	rl.FiveHour, rl.SevenDay = clean(rl.FiveHour), clean(rl.SevenDay)
-	if rl.FiveHour == nil && rl.SevenDay == nil {
+	// Per-model buckets get the same checks; a bucket that fails them is dropped.
+	// The model strings only ever select a bucket, so cap their length.
+	rl.Model, rl.ModelFamily = clip(rl.Model, 80), clip(rl.ModelFamily, 40)
+	buckets := map[string]BucketLimits{}
+	for name, b := range rl.ByModel {
+		if b.UpdatedAt > futureCut {
+			continue
+		}
+		b.UpdatedAt = max(b.UpdatedAt, 0)
+		b.FiveHour, b.SevenDay = clean(b.FiveHour), clean(b.SevenDay)
+		if b.FiveHour != nil || b.SevenDay != nil {
+			buckets[clip(name, 40)] = b
+		}
+	}
+	rl.ByModel = nil
+	if len(buckets) > 0 {
+		rl.ByModel = boundBuckets(buckets)
+	}
+	if !rl.hasWindows() {
 		return RateLimits{}, false
 	}
 	return rl, true
+}
+
+// clip truncates s to at most n bytes.
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
