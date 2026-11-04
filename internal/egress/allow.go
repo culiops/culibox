@@ -13,7 +13,7 @@ import (
 // included; see spec §9), terraform init's registry and provider downloads, and
 // GitHub, where the registry's modules and git's ls-remote go. Added
 // 2026-11-04: the Go and npm registries (proxy.golang.org, sum.golang.org,
-// registry.npmjs.org), exact hosts only. Measured from prd-3: curl -sI
+// registry.npmjs.org), exact hosts only. Measured from the dev host: curl -sI
 // https://proxy.golang.org/github.com/creack/pty/@v/v1.1.24.zip answers
 // HTTP/2 200 with no redirect, and curl -sI
 // https://registry.npmjs.org/eslint/-/eslint-9.0.0.tgz answers HTTP/2 200.
