@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/culiops/culibox/internal/account"
-	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secretchain"
 )
 
 type accountView struct {
@@ -18,7 +18,7 @@ type accountView struct {
 	TokenSecret     string `json:"token_secret,omitempty"`
 	InheritPersonal bool   `json:"inherit_personal,omitempty"`
 	Default         bool   `json:"default,omitempty"`
-	// token | token_locked | token_missing | logged_in | unknown. A set token wins
+	// token | token_locked | token_unavailable | token_missing | logged_in | unknown. A set token wins
 	// over a login: the launcher injects it, and Claude Code prefers it.
 	LoginState string `json:"login_state"`
 	ConfigDir  string `json:"config_dir"` // ~-relative for display
@@ -27,21 +27,35 @@ type accountView struct {
 func (s *Server) accountView(r account.Resolved) accountView {
 	v := accountView{Name: r.Name, Provider: r.Provider, TokenSecret: r.TokenSecret,
 		InheritPersonal: r.InheritPersonal, Default: r.IsDefault, LoginState: "unknown", ConfigDir: tildePath(s.Home, r.ConfigDir)}
-	tok := ""
-	if r.TokenSecret != "" && s.AccountTokenState != nil {
-		tok = s.AccountTokenState(r.Account)
-	}
-	switch {
-	case tok == launcher.TokenOK:
-		v.LoginState = "token"
-	case tok == launcher.TokenLocked:
-		v.LoginState = "token_locked"
-	case tok == launcher.TokenMissing:
-		v.LoginState = "token_missing"
+	switch tok := s.tokenState(r.Account); {
+	case tok != "":
+		v.LoginState = tok
 	case fileExistsWeb(filepath.Join(r.ConfigDir, ".credentials.json")):
 		v.LoginState = "logged_in"
 	}
 	return v
+}
+
+// tokenState is an account's login_state when it has a token_secret ("" when
+// it has none, or nothing can check it): token, token_locked (unlock the
+// store), token_unavailable (the macOS Keychain refused the store key) or
+// token_missing.
+func (s *Server) tokenState(a account.Account) string {
+	if a.TokenSecret == "" || s.AccountTokenPresence == nil {
+		return ""
+	}
+	p, err := s.AccountTokenPresence(a)
+	switch {
+	case err != nil:
+		return "token_missing"
+	case p == secretchain.Present:
+		return "token"
+	case p == secretchain.StoredLocked:
+		return "token_locked"
+	case p == secretchain.StoredUnavailable:
+		return "token_unavailable"
+	}
+	return "token_missing"
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {

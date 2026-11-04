@@ -125,3 +125,19 @@ test("acctLoginText covers the token states", () => {
   assert.equal(acctLoginText("token_missing"), "token not found");
   assert.equal(acctLoginText("logged_in"), "logged in");
 });
+
+const { acctTokenStateText, acctCanToken } = require("../static/accounts.js");
+
+test("acctTokenStateText never repeats the word token and names the fix", () => {
+  assert.equal(acctTokenStateText("token", "ACCT_W_TOKEN"), "Token saved");
+  assert.match(acctTokenStateText("token_locked"), /unlock the store/);
+  assert.match(acctTokenStateText("token_unavailable"), /Keychain/);
+  assert.equal(acctTokenStateText("token_missing", "WORK_TOK"), "Token not found (WORK_TOK)");
+  assert.equal(acctLoginText("token_unavailable"), "token (Keychain unavailable)");
+});
+
+test("acctCanToken: claude only", () => {
+  assert.equal(acctCanToken({ provider: "claude" }), true);
+  assert.equal(acctCanToken({ provider: "codex" }), false);
+  assert.equal(acctCanToken(null), false);
+});

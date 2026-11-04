@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/culiops/culibox/internal/account"
@@ -32,9 +33,6 @@ func TestBuild_OwnStoreTokenResolvesWithoutStoreSource(t *testing.T) {
 	if envMap(env)[account.TokenEnv] != "sk-own" {
 		t.Fatalf("own store token not injected: %q", envMap(env)[account.TokenEnv])
 	}
-	if got := l.AccountTokenState(acct.Account); got != TokenOK {
-		t.Fatalf("AccountTokenState = %q, want ok", got)
-	}
 }
 
 func TestBuild_ChainWinsOverStoreFallback(t *testing.T) {
@@ -60,9 +58,6 @@ func TestBuild_ForeignStoreIDNeverFallsBack(t *testing.T) {
 		if _, _, err := l.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost}); err == nil {
 			t.Fatalf("token_secret %q resolved from the store without a store secret_source", id)
 		}
-		if got := l.AccountTokenState(acct.Account); got != TokenMissing {
-			t.Fatalf("AccountTokenState(%q) = %q via the store fallback, want missing", id, got)
-		}
 	}
 }
 
@@ -76,43 +71,19 @@ func TestBuild_OwnStoreTokenLockedIsStoreLocked(t *testing.T) {
 	if !errors.Is(err, ErrStoreLocked) {
 		t.Fatalf("err = %v, want ErrStoreLocked", err)
 	}
-	if got := l.AccountTokenState(acct.Account); got != TokenLocked {
-		t.Fatalf("AccountTokenState = %q, want locked", got)
-	}
 }
 
 func TestBuild_OwnStoreTokenMissingFails(t *testing.T) {
 	acct := workAcct("/d")
 	acct.TokenSecret = account.TokenID("work")
 	l := tokenLauncher(acct, nil, map[string]string{})
-	if _, _, err := l.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost}); err == nil {
-		t.Fatal("a missing own token must fail the spawn")
-	}
-	if got := l.AccountTokenState(acct.Account); got != TokenMissing {
-		t.Fatalf("AccountTokenState = %q for a missing token, want missing", got)
+	_, _, err := l.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost})
+	if err == nil || !strings.Contains(err.Error(), "no token is saved") || strings.Contains(err.Error(), "secret_sources") {
+		t.Fatalf("a missing own token must fail the spawn and point at Settings, not secret_sources: %v", err)
 	}
 	// No store wired at all (a launcher built without one) behaves the same.
 	l2 := tokenLauncher(acct, nil, nil)
 	if _, _, err := l2.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost}); err == nil {
 		t.Fatal("no store fallback: the spawn must fail")
-	}
-}
-
-func TestAccountTokenState_ChainName(t *testing.T) {
-	acct := workAcct("/d")
-	acct.TokenSecret = "WORK_TOK"
-	l := tokenLauncher(acct, map[string]string{"WORK_TOK": "w"}, nil)
-	if got := l.AccountTokenState(acct.Account); got != TokenOK {
-		t.Fatalf("a chain-resolvable token_secret: %q, want ok", got)
-	}
-	if got := l.AccountTokenState(account.Account{Name: "x"}); got != TokenNone {
-		t.Fatalf("no token_secret: %q, want none", got)
-	}
-	// A locked store SOURCE in the chain is reported as locked, not masked by the
-	// fallback.
-	l2 := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Base: "clean"}}, lockedResolver{}, nil)
-	l2.SetAccountTokenStore(fakeResolver{vals: map[string]string{"WORK_TOK": "w"}})
-	if got := l2.AccountTokenState(acct.Account); got != TokenLocked {
-		t.Fatalf("locked chain: %q, want locked", got)
 	}
 }

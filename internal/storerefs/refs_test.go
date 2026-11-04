@@ -148,6 +148,9 @@ func TestAccountTokensStored(t *testing.T) {
 	if !AccountTokensStored(own, fakeIDs{"x", "ACCT_WORK_TOKEN"}) {
 		t.Fatal("a stored own token must count")
 	}
+	if !AccountTokensStored(own, fakeIDs{"acct_work_token"}) {
+		t.Fatal("a case-folded twin is the same file on macOS: it must count")
+	}
 	if AccountTokensStored(own, fakeIDs{"x"}) {
 		t.Fatal("an own token not in the store must not count")
 	}

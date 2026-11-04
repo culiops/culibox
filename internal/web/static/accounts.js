@@ -85,7 +85,8 @@ function acctLoginProfile(profiles) {
 function acctLoginText(state) {
   if (!state) return "login unknown";
   return {
-    token: "token", token_locked: "token (store locked)", token_missing: "token not found",
+    token: "token", token_locked: "token (store locked)", token_unavailable: "token (Keychain unavailable)",
+    token_missing: "token not found",
     logged_in: "logged in", unknown: "login unknown",
   }[state] || state;
 }
@@ -102,6 +103,20 @@ function acctTokenId(name) {
 // something else may read; Remove only unlinks it.
 function acctTokenOwned(a) {
   return !!(a && a.name && a.token_secret && a.token_secret === acctTokenId(a.name));
+}
+
+// acctTokenStateText: the token line's sentence for a linked token.
+function acctTokenStateText(state, id) {
+  if (state === "token") return "Token saved";
+  if (state === "token_locked") return "Token saved · unlock the store to start sessions";
+  if (state === "token_unavailable") return "Token saved · the macOS Keychain did not give the store key";
+  return "Token not found" + (id ? " (" + id + ")" : "");
+}
+
+// acctCanToken: the account's provider signs in with a pasted token and an
+// interactive login (claude). Codex accounts are stored but cannot be spawned.
+function acctCanToken(a) {
+  return !!a && a.provider === "claude";
 }
 
 // acctTokenMode: what the token line of an account row shows. "set": a token
@@ -199,9 +214,10 @@ async function loadAccounts() {
   const list = document.getElementById("acct-list");
   if (!list) return;
   setAcctErr("");
-  // The token line depends on whether the store exists: read it fresh.
-  if (typeof refreshStore === "function") await refreshStore();
-  if (!(await fetchAccounts())) {
+  // The token line depends on whether the store exists: read it fresh, in
+  // parallel with the list.
+  const [, ok] = await Promise.all([typeof refreshStore === "function" ? refreshStore() : null, fetchAccounts()]);
+  if (!ok) {
     setAcctErr("Could not load agent accounts.");
     return;
   }
@@ -248,7 +264,7 @@ function acctRow(a, limits, now) {
     row.appendChild(inh);
     // Codex accounts are stored but cannot be spawned yet, so there is
     // nothing to log in with.
-    if (a.provider === "claude") {
+    if (acctCanToken(a)) {
       const login = document.createElement("button");
       login.type = "button";
       login.className = "btn";
@@ -264,7 +280,7 @@ function acctRow(a, limits, now) {
     del.onclick = () => acctDelete(a.name);
     row.appendChild(del);
     li.appendChild(row);
-    if (a.provider === "claude") li.appendChild(acctTokenBox(a, false));
+    if (acctCanToken(a)) li.appendChild(acctTokenBox(a, false));
   }
   return li;
 }
@@ -289,7 +305,7 @@ function acctTokenBox(a, editing) {
   if (mode === "set") {
     const t = document.createElement("span");
     t.className = "acct-token-state";
-    t.textContent = "Token: " + (a.login_state === "token" ? "saved" : acctLoginText(a.login_state));
+    t.textContent = acctTokenStateText(a.login_state, a.token_secret);
     box.append(t,
       acctBtn("Replace token", "btn", () => box.replaceWith(acctTokenBox(a, true))),
       acctBtn("Remove token", "btn dgr", () => acctTokenRemove(a)));
@@ -302,6 +318,7 @@ function acctTokenBox(a, editing) {
     box.append(p, acctBtn("Open Credentials", "btn", () => {
       if (typeof selectSettingsTab === "function") selectSettingsTab("creds");
     }));
+    if (editing) box.appendChild(acctBtn("Cancel", "btn", () => box.replaceWith(acctTokenBox(a, false))));
     return box;
   }
   const inp = document.createElement("input");
@@ -309,8 +326,10 @@ function acctTokenBox(a, editing) {
   inp.autocomplete = "new-password";
   inp.setAttribute("autocorrect", "off");
   inp.spellcheck = false;
+  inp.className = "fld";
   inp.name = "agent-box-acct-token";
-  inp.placeholder = "Paste a token from claude setup-token";
+  inp.placeholder = "Paste a setup-token";
+  inp.title = "A token printed by claude setup-token";
   inp.setAttribute("aria-label", "Token for agent account " + a.name);
   const save = acctBtn("Save token", "btn pri", () => acctTokenSave(a, inp, save));
   inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); save.click(); } };
@@ -356,8 +375,7 @@ async function acctTokenSave(a, inp, btn) {
       return;
     }
   }
-  await loadAccounts();
-  if (typeof refreshStore === "function") refreshStore(); // the store is in use now
+  await loadAccounts(); // also re-reads the store, which is in use now
   setAcctNote("Token saved for \"" + a.name + "\". New sessions under it use the token.");
 }
 
@@ -396,7 +414,6 @@ async function acctTokenRemove(a) {
     }
   }
   await loadAccounts();
-  if (typeof refreshStore === "function") refreshStore();
   setAcctNote("Token removed from \"" + a.name + "\".");
 }
 
@@ -447,9 +464,12 @@ async function acctNew() {
 async function acctDelete(name) {
   setAcctErr("");
   setAcctNote("");
+  const acct = accountsCache.find((x) => x.name === name);
+  const owned = acctTokenOwned(acct);
   const ok = await askConfirm({
     title: "Delete agent account",
-    body: "Unregister \"" + name + "\". Its folder (login + transcripts) stays on disk; you can delete it by hand.",
+    body: "Unregister \"" + name + "\". Its folder (login + transcripts) stays on disk; you can delete it by hand." +
+      (owned ? " Its saved token is deleted from the encrypted store." : ""),
     confirmLabel: "Delete",
     danger: true,
   });
@@ -463,8 +483,19 @@ async function acctDelete(name) {
     setAcctErr("Delete failed: " + e.message);
     return;
   }
+  // The account's own token goes with it, so an account created later under
+  // the same name never inherits it. The account no longer reads it, so the
+  // store allows the delete.
+  let tokenLeft = "";
+  if (owned) {
+    try {
+      await api("/api/store/values/" + encodeURIComponent(acct.token_secret), { method: "DELETE" });
+    } catch (e) {
+      tokenLeft = " Its stored token " + acct.token_secret + " could not be deleted (" + e.message + "); remove it on the Credentials tab.";
+    }
+  }
   await loadAccounts();
-  setAcctNote("Deleted \"" + name + "\". Its folder is left at " + ((r && r.left_on_disk) || "its old path") + ".");
+  setAcctNote("Deleted \"" + name + "\". Its folder is left at " + ((r && r.left_on_disk) || "its old path") + "." + tokenLeft);
 }
 
 // acctLogin starts a claude login-mode session under the account, on the host
@@ -527,6 +558,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     ACCT_DEFAULT, ACCT_STALE_SEC, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel,
     acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText,
-    acctTokenId, acctTokenOwned, acctTokenMode,
+    acctTokenId, acctTokenOwned, acctTokenMode, acctTokenStateText, acctCanToken,
   };
 }

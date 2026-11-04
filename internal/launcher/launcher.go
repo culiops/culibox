@@ -258,30 +258,6 @@ func (l *AgentLauncher) resolveAccountToken(a account.Account) (string, bool, er
 	return st.Resolve(a.TokenSecret)
 }
 
-// Account token states for the Settings screen (AccountTokenState).
-const (
-	TokenNone    = ""        // no token_secret
-	TokenOK      = "ok"      // resolves now
-	TokenLocked  = "locked"  // held by a locked (or unreadable) store
-	TokenMissing = "missing" // set, but resolves nowhere
-)
-
-// AccountTokenState reports whether the account's token resolves now, the
-// value never leaving this package: the Settings screen's token state.
-func (l *AgentLauncher) AccountTokenState(a account.Account) string {
-	if a.TokenSecret == "" {
-		return TokenNone
-	}
-	_, ok, err := l.resolveAccountToken(a)
-	switch {
-	case err != nil && storeLocked(a.TokenSecret, err) != nil:
-		return TokenLocked
-	case err == nil && ok:
-		return TokenOK
-	}
-	return TokenMissing
-}
-
 // AccountFor resolves which account a spawn runs under: the spawn override,
 // else the profile's, else default. Without a resolver only default exists.
 func (l *AgentLauncher) AccountFor(spec SpawnSpec) (account.Resolved, error) {
@@ -833,6 +809,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 				return nil, nil, fmt.Errorf("launcher: account %q: resolving token secret %s: %w", acct.Name, acct.TokenSecret, err)
 			}
 			if !ok {
+				if acct.OwnsStoreToken() { // a pasted token needs no secret_sources entry
+					return nil, nil, fmt.Errorf("launcher: account %q: no token is saved for it (paste one in Settings → Agent accounts)", acct.Name)
+				}
 				return nil, nil, fmt.Errorf("launcher: account %q: token secret %s is not resolvable (check secret_sources)", acct.Name, acct.TokenSecret)
 			}
 			env[account.TokenEnv] = v

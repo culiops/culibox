@@ -11,7 +11,7 @@ import (
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
-	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/session"
 )
 
@@ -27,7 +27,7 @@ func acctServer(t *testing.T) (*Server, *mockSvc, string) {
 	svc := &mockSvc{}
 	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	pm.SetAccounts(st)
-	s := &Server{Accounts: st, Profiles: pm, API: &API{Sessions: svc}, AccountTokenState: func(account.Account) string { return "missing" }}
+	s := &Server{Accounts: st, Profiles: pm, API: &API{Sessions: svc}, AccountTokenPresence: func(account.Account) (secretchain.Presence, error) { return secretchain.Absent, nil }}
 	return s, svc, data
 }
 
@@ -119,9 +119,9 @@ func TestMetaRateLimitsPerAccount(t *testing.T) {
 
 func TestAccountsLoginStateNeverLeaksSecretValue(t *testing.T) {
 	s, _, _ := acctServer(t)
-	state := launcher.TokenOK
+	state := secretchain.Present
 	var asked account.Account
-	s.AccountTokenState = func(a account.Account) string { asked = a; return state }
+	s.AccountTokenPresence = func(a account.Account) (secretchain.Presence, error) { asked = a; return state, nil }
 	doJSON(t, s.handleAccounts, "POST", "/api/accounts", `{"name":"work","provider":"claude","token_secret":"WORK_TOK"}`)
 	get := func() map[string]any {
 		rec := doJSON(t, s.handleAccounts, "GET", "/api/accounts", "")
@@ -135,10 +135,10 @@ func TestAccountsLoginStateNeverLeaksSecretValue(t *testing.T) {
 	if asked.Name != "work" || asked.TokenSecret != "WORK_TOK" {
 		t.Fatalf("the state check got %+v, want the whole account (name decides the store fallback)", asked)
 	}
-	for st, want := range map[string]string{launcher.TokenLocked: "token_locked", launcher.TokenMissing: "token_missing"} {
+	for st, want := range map[secretchain.Presence]string{secretchain.StoredLocked: "token_locked", secretchain.StoredUnavailable: "token_unavailable", secretchain.Absent: "token_missing"} {
 		state = st
 		if v := get(); v["login_state"] != want {
-			t.Fatalf("state %q: login_state = %v, want %s", st, v["login_state"], want)
+			t.Fatalf("state %v: login_state = %v, want %s", st, v["login_state"], want)
 		}
 	}
 }
@@ -147,7 +147,10 @@ func TestAccountsLoginStateNeverLeaksSecretValue(t *testing.T) {
 // login file.
 func TestAccountsNoTokenSkipsTokenState(t *testing.T) {
 	s, _, _ := acctServer(t)
-	s.AccountTokenState = func(account.Account) string { t.Fatal("asked for an account with no token"); return "" }
+	s.AccountTokenPresence = func(account.Account) (secretchain.Presence, error) {
+		t.Fatal("asked for an account with no token")
+		return secretchain.Absent, nil
+	}
 	doJSON(t, s.handleAccounts, "POST", "/api/accounts", `{"name":"work","provider":"claude"}`)
 	rec := doJSON(t, s.handleAccounts, "GET", "/api/accounts", "")
 	var list []map[string]any

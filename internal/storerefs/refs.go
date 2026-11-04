@@ -5,6 +5,7 @@ package storerefs
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/config"
@@ -44,8 +45,10 @@ func InUse(cfg config.Config) bool {
 // "github_apps/<name>", "static_tokens/<name>", "agents/<agent>.secrets",
 // "accounts/<account>.token_secret". Secret NAMES (agent secrets and account
 // token_secret) count as store ids only when a store secret_source exists,
-// because only then does a name resolve to the value with that id. Names that
-// are not valid store ids are skipped. Values are never read.
+// because only then does a name resolve to the value with that id; an
+// account's own pasted token (account.OwnsStoreToken) always counts, since the
+// launcher reads it straight from the store. Names that are not valid store
+// ids are skipped. Values are never read.
 func Refs(cfg config.Config, accts []account.Account) map[string][]string {
 	return refs(cfg, SecretNameRefs(cfg, accts))
 }
@@ -104,7 +107,7 @@ func AccountTokensStored(accts []account.Account, st StoreIDs) bool {
 	own := map[string]bool{}
 	for _, a := range accts {
 		if a.OwnsStoreToken() {
-			own[a.TokenSecret] = true
+			own[a.TokenSecret] = true // TokenID is already upper-case
 		}
 	}
 	if len(own) == 0 || st == nil {
@@ -115,7 +118,9 @@ func AccountTokensStored(accts []account.Account, st StoreIDs) bool {
 		return false
 	}
 	for _, e := range ents {
-		if own[e.ID] {
+		// Upper-cased: on a case-insensitive macOS volume a value written as
+		// acct_work_token is the same file the launcher reads.
+		if own[strings.ToUpper(e.ID)] {
 			return true
 		}
 	}

@@ -791,8 +791,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		RateLimitsFile: rateLimitsFile,
 		BoxFiles:       mgr.BoxFiles,
 
-		Accounts:          accts,
-		AccountTokenState: lnch.AccountTokenState,
+		Accounts: accts,
+		AccountTokenPresence: func(a account.Account) (secretchain.Presence, error) {
+			return secretchain.AccountTokenPresence(resolver, acctTokenStore, a)
+		},
 		// The credentials screen's legacy-secret status: presence only, no value.
 		SecretCheck: resolver.Check,
 
