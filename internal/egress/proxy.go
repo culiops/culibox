@@ -58,6 +58,13 @@ type SessionView struct {
 	GitHub      *config.GitHubBinding
 	Tokens      []config.StaticToken
 	PATs        []config.StaticToken
+	// EgressAllow and EgressOpen are the profile's network policy, copied at
+	// spawn. They matter only for a bound session: EgressAllow joins its
+	// allowlist, EgressOpen puts it in open mode (any public host on 443; the
+	// port, private-address and host-address checks still apply). An unbound
+	// session is open already.
+	EgressAllow []string
+	EgressOpen  bool
 }
 
 // Lookup resolves a session id; ok is false for an unknown session. It is asked
@@ -648,13 +655,16 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		return bad, authBad
 	}
 	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs}
+	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs, EgressAllow: v.EgressAllow}
 	if !bs.Any() {
 		pr.open = true
 	} else {
 		pr.allow = Effective(bs)
 		pr.github = v.GitHub != nil
 		pr.ports, pr.private = entryRules(v.Tokens, v.PATs)
+		// Open mode for a bound session skips only the host allowlist: the
+		// port check and the private-address filtering run for every principal.
+		pr.open = v.EgressOpen
 	}
 	return pr, authOK
 }

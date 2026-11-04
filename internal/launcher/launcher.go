@@ -462,6 +462,16 @@ func (l *AgentLauncher) GitHubFor(agent string) *config.GitHubBinding {
 	return cfg.GitHub.Clone()
 }
 
+// EgressFor returns the profile's network policy: a copy of egress_allow (nil
+// when unset) and egress_open. An unknown profile has none.
+func (l *AgentLauncher) EgressFor(agent string) ([]string, bool) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(cfg.EgressAllow), cfg.EgressOpen
+}
+
 // SetStaticTokens installs the instance's static-token entries (deep-copied).
 // Safe to call again (a credential save pushes the new list); a running
 // session keeps the copy it was spawned with.

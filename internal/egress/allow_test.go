@@ -163,3 +163,12 @@ func TestDefaultAllowToolchainRegistries(t *testing.T) {
 		t.Error("evil.npmjs.org matched: the registries must be exact hosts")
 	}
 }
+
+func TestEffectiveProfileEgressAllow(t *testing.T) {
+	gh := &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}
+	got := Effective(config.Bindings{GitHub: gh, EgressAllow: []string{"pkg.example", "github.com", "pkg.example"}})
+	want := append(append(DefaultAllow(), GitHubAllow()...), "pkg.example")
+	if !slices.Equal(got, want) {
+		t.Fatalf("Effective = %v, want %v", got, want)
+	}
+}

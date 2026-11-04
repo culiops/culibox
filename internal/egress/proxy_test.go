@@ -1616,3 +1616,92 @@ func TestProxyPortEdges(t *testing.T) {
 		}
 	}
 }
+
+// ghOpenView is a GitHub-bound session whose profile set egress_open.
+func ghOpenView() SessionView {
+	v := ghView()
+	v.EgressOpen = true
+	return v
+}
+
+func TestProxyEgressOpenBound(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setView("s1", ghOpenView())
+	code, c := h.connect(t, "any.example:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("status %d, want 200", code)
+	}
+	c.Close()
+	if r := h.onlyRow(t); r.Outcome != OutcomeAllowed || r.Host != "any.example" {
+		t.Fatalf("row = %+v", r)
+	}
+
+	// A non-443 port no token entry declares is still refused.
+	h2 := newHarness(t, nil)
+	h2.setView("s1", ghOpenView())
+	code, _ = h2.connect(t, "any.example:8443", "s1", h2.tok("s1", nonceA))
+	if code != 405 {
+		t.Fatalf("port 8443: status %d, want 405", code)
+	}
+	if r := h2.onlyRow(t); r.Outcome != OutcomeBadMethod {
+		t.Fatalf("row = %+v", r)
+	}
+	if len(h2.dials()) != 0 {
+		t.Fatal("dialled")
+	}
+
+	// Private, tailnet, loopback and host addresses are still refused.
+	for _, ip := range []string{"10.0.0.5", "100.100.1.1", "127.0.0.1", hostAddr.String()} {
+		h3 := newHarness(t, func(string) []netip.Addr { return []netip.Addr{netip.MustParseAddr(ip)} })
+		h3.p.SetHostAddrs([]netip.Addr{hostAddr})
+		h3.setView("s1", ghOpenView())
+		code, _ = h3.connect(t, "any.example:443", "s1", h3.tok("s1", nonceA))
+		if code != 403 {
+			t.Fatalf("%s: status %d, want 403", ip, code)
+		}
+		if r := h3.onlyRow(t); r.Outcome != OutcomePrivateAddr {
+			t.Fatalf("%s: row = %+v", ip, r)
+		}
+		if len(h3.dials()) != 0 {
+			t.Fatalf("%s: dialled", ip)
+		}
+	}
+
+	// A literal IP is still refused.
+	h4 := newHarness(t, nil)
+	h4.setView("s1", ghOpenView())
+	if code, _ = h4.connect(t, "1.1.1.1:443", "s1", h4.tok("s1", nonceA)); code != 403 {
+		t.Fatalf("ip literal: status %d, want 403", code)
+	}
+
+	// Not open: denied.
+	h5 := newHarness(t, nil)
+	h5.setView("s1", ghView())
+	code, _ = h5.connect(t, "any.example:443", "s1", h5.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("not open: status %d, want 403", code)
+	}
+	if r := h5.onlyRow(t); r.Outcome != OutcomeDenied {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestProxyProfileEgressAllow(t *testing.T) {
+	v := ghView()
+	v.EgressAllow = []string{"pkg.example"}
+	h := newHarness(t, nil)
+	h.setView("s1", v)
+	code, c := h.connect(t, "pkg.example:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("pkg.example: status %d, want 200", code)
+	}
+	c.Close()
+	h2 := newHarness(t, nil)
+	h2.setView("s1", v)
+	if code, _ = h2.connect(t, "other.example:443", "s1", h2.tok("s1", nonceA)); code != 403 {
+		t.Fatalf("other.example: status %d, want 403", code)
+	}
+	if r := h2.onlyRow(t); r.Outcome != OutcomeDenied {
+		t.Fatalf("row = %+v", r)
+	}
+}

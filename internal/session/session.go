@@ -213,6 +213,13 @@ type TokenResolver interface {
 	TokensFor(agent string) (tokens, pats []config.StaticToken, err error)
 }
 
+// EgressResolver is implemented by launchers that know a profile's network
+// policy: extra allowlist hosts and the open flag. Optional, like AWSResolver:
+// without it a session has no policy. It matters only to a bound session.
+type EgressResolver interface {
+	EgressFor(agent string) (allow []string, open bool)
+}
+
 // CloneResolver is implemented by launchers that know a profile's clone spec.
 // Optional, like AWSResolver: without it no session is a clone session. A nil,
 // nil answer means the profile has no clone_of.
@@ -718,6 +725,10 @@ type Session struct {
 	// sorted by name). Immutable and read without the lock, like AWS: a later
 	// edit to static_tokens never changes a running session's scope.
 	Tokens, PATs []config.StaticToken
+	// EgressAllow and EgressOpen are the profile's network policy as spawned
+	// (see config.Bindings). Immutable and read without the lock.
+	EgressAllow []string
+	EgressOpen  bool
 	// BrokerNonce is this spawn's broker-token nonce (set iff the session has
 	// any binding). Immutable, read without the lock. Never put it on the wire:
 	// Info leaves it out.
@@ -1234,7 +1245,8 @@ func awsKeysOf(bs config.Bindings) []string {
 // Bindings is the set of credential bindings the session was spawned with.
 // Immutable, so it needs no lock.
 func (s *Session) Bindings() config.Bindings {
-	return config.Bindings{AWS: s.AWS, AWSConns: s.AWSConns, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs}
+	return config.Bindings{AWS: s.AWS, AWSConns: s.AWSConns, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs,
+		EgressAllow: s.EgressAllow, EgressOpen: s.EgressOpen}
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -1707,7 +1719,19 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
 	}
-	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats}
+	var egressAllow []string
+	var egressOpen bool
+	if r, ok := m.launcher.(EgressResolver); ok {
+		egressAllow, egressOpen = r.EgressFor(spec.Agent)
+	}
+	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats,
+		EgressAllow: egressAllow, EgressOpen: egressOpen}
+	if !bs.Any() {
+		// No binding: the box is open already, so the policy has no effect and
+		// must not split the box key or the binding hash.
+		egressAllow, egressOpen = nil, false
+		bs.EgressAllow, bs.EgressOpen = nil, false
+	}
 	m.mu.Lock()
 	brk := m.broker
 	eg := m.egress
@@ -2277,6 +2301,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.AWSConns = awsConns
 	sess.GitHub = ghBinding
 	sess.Tokens, sess.PATs = tokens, pats
+	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
@@ -2307,7 +2332,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
@@ -3055,6 +3080,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.AWSConns = md.AWSConns
 	sess.GitHub = md.GitHub
 	sess.Tokens, sess.PATs = md.Tokens, md.PATs
+	sess.EgressAllow, sess.EgressOpen = md.EgressAllow, md.EgressOpen
 	sess.BrokerNonce = md.BrokerNonce
 	sess.EgressNonce = md.EgressNonce
 	if sess.EgressNonce == "" && md.BrokerNonce != "" {

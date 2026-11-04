@@ -107,5 +107,12 @@ func Effective(bs config.Bindings) []string {
 			}
 		}
 	}
+	// The profile's own hosts last, each once, so a profile cannot reorder or
+	// duplicate what the bindings already listed.
+	for _, h := range bs.EgressAllow {
+		if !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
 	return out
 }
