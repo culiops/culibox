@@ -532,6 +532,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		if err := validateGitHub(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
+		if err := validateEgressPolicy(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
 		if err := validateClone(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}

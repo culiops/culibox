@@ -327,7 +327,7 @@ type principal struct {
 	sid    string // MAC-verified session id; "" for a probe principal
 	box    string
 	allow  []string
-	open   bool   // open mode: no binding at all, so no allowlist
+	open   bool   // open mode: unbound, or a bound profile with egress_open; no allowlist
 	github bool   // GitHub-bound: GitHub's Actions-log shard hosts are allowed
 	key    string // cap and throttle key
 	probe  *probePrincipal
@@ -335,7 +335,8 @@ type principal struct {
 	epoch  uint64 // p.epoch[sid] when authenticated
 	// ports maps an exact entry host to the extra (non-443) TLS ports its
 	// entries declare; private lists the (exact host, cidr) exceptions. Both
-	// are built once at authenticate; open and probe principals have neither.
+	// are built once at authenticate. An unbound open principal has neither; a
+	// bound open one keeps its token-entry ports and private exceptions; probes have none.
 	ports   map[string]map[int]bool
 	private []privateRule
 }
@@ -451,7 +452,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		row.Host = name
 	}
 	// 443 is fine for every allowed host; any other port only for the exact
-	// host of a token entry that declares it. Open mode and probes have none.
+	// host of a token entry that declares it. Unbound open principals and probes have none; a bound open one keeps
+	// its token-entry ports.
 	if portN != 443 && !pr.ports[name][portN] {
 		p.refuse(w, http.StatusMethodNotAllowed, row, OutcomeBadMethod, pr.key)
 		return

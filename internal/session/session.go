@@ -1162,7 +1162,7 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
-	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any())
+	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any() && !s.EgressOpen)
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.Clone = s.Clone.copy()
 	in.Return = s.ret.copy()
@@ -1203,7 +1203,8 @@ func (s *Session) Info() Info {
 	return in
 }
 
-// EgressMode is the network posture a session reports: "allowlist" (egress
+// EgressMode is the network posture a session reports (callers pass bound=false
+// for an egress_open profile, which is not limited to an allowlist): "allowlist" (egress
 // control on and at least one credential binding: only its hosts), "open"
 // (egress control on, unbound: any host through the authenticated proxy) or ""
 // (no egress control). Info and the profile list both use it, so a profile

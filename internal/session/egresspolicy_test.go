@@ -161,3 +161,27 @@ func TestRestoreKeepsEgressPolicy(t *testing.T) {
 		t.Fatalf("restored policy = %v %v", r.EgressAllow, r.EgressOpen)
 	}
 }
+
+// An open bound session reports the open posture, not "allowlist"; a bound
+// non-open one still reports allowlist.
+func TestInfoEgressReflectsOpenPolicy(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		l := egLauncher{ghLauncher: ghLauncherFor(config.RuntimeBox), open: open}
+		m := NewManager(l, nil, 1<<16, time.Minute)
+		m.SetBoxes(&fakeBoxes{})
+		m.SetBroker(&fakeBrokerHooks{})
+		m.SetEgress(&fakeEgressHooks{})
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "gh", Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+		want := "allowlist"
+		if open {
+			want = "open"
+		}
+		if got := s.Info().Egress; got != want {
+			t.Errorf("open=%v: Info.Egress = %q, want %q", open, got, want)
+		}
+	}
+}
