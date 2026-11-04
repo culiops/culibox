@@ -72,15 +72,23 @@ function acctWinText(label, win, nowSec) {
 // limit: it never understates. updated_at is the oldest reading shown. A window
 // no reading of which is live is returned as the top level has it (or the
 // freshest bucket's), so meterModel renders it as reset.
+//
+// The readings the daemon remembered (limits.seen, one per window and resets_at)
+// join the candidates: a host file written by sessions on different models only
+// ever holds the last writer's numbers, and by_model is absent from it.
 function acctBestLimits(limits, nowSec) {
-  if (!limits || !limits.by_model || typeof limits.by_model !== "object") return limits;
+  if (!limits) return limits;
+  const byModel = limits.by_model && typeof limits.by_model === "object" ? limits.by_model : null;
+  const seen = limits.seen && typeof limits.seen === "object" ? limits.seen : null;
+  if (!byModel && !seen) return limits;
   const pick = (key) => {
     const cands = [];
     const add = (w, at) => {
       if (w && typeof w.used_percentage === "number") cands.push({ w, at: Number(at) || 0 });
     };
     add(limits[key], limits.updated_at);
-    for (const b of Object.values(limits.by_model)) if (b && typeof b === "object") add(b[key], b.updated_at);
+    for (const b of Object.values(byModel || {})) if (b && typeof b === "object") add(b[key], b.updated_at);
+    for (const r of Array.isArray(seen && seen[key]) ? seen[key] : []) if (r && typeof r === "object") add(r, r.updated_at);
     const live = cands.filter((c) => !(c.w.resets_at > 0 && c.w.resets_at <= nowSec));
     if (live.length) return live.reduce((m, c) => (c.w.used_percentage > m.w.used_percentage || (c.w.used_percentage === m.w.used_percentage && c.at > m.at) ? c : m));
     if (limits[key]) return cands.find((c) => c.w === limits[key]) || null;

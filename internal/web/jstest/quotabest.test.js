@@ -78,3 +78,39 @@ test("acctOptionLabel (the spawn picker) shows the same reading as the header", 
   };
   assert.equal(acctOptionLabel("work", lim, NOW), "work · 5h 9% · wk 94%");
 });
+
+// The daemon remembers the readings it has seen per window (limits.seen), because
+// the host file only ever holds the last writer's numbers: opus 76% one moment,
+// haiku 94% the next. The client shows the highest live one of them.
+const seen = (pct, resets, at) => ({ used_percentage: pct, resets_at: resets, updated_at: at });
+
+test("acctBestLimits shows the highest remembered live reading, whichever model wrote the file last", () => {
+  const seenLim = { five_hour: [seen(9, 5000, 990)], seven_day: [seen(94, 8000, 700), seen(76, 9000, 990)] };
+  // the file currently holds the opus-like numbers...
+  const opusLast = { updated_at: 990, five_hour: win(9, 5000), seven_day: win(76, 9000), seen: seenLim };
+  // ...or the haiku-like ones: the same answer either way
+  const haikuLast = { updated_at: 700, five_hour: win(0, 4000), seven_day: win(94, 8000), seen: seenLim };
+  for (const lim of [opusLast, haikuLast]) {
+    const b = acctBestLimits(lim, NOW);
+    assert.equal(b.seven_day.used_percentage, 94);
+    assert.equal(b.seven_day.resets_at, 8000);
+    assert.equal(b.five_hour.used_percentage, 9);
+    assert.equal(b.updated_at, 700);
+  }
+});
+
+test("acctBestLimits ignores a remembered reading whose window has reset", () => {
+  const lim = { updated_at: 990, seven_day: win(76, 9000), seen: { seven_day: [seen(94, NOW, 700), seen(76, 9000, 990)] } };
+  assert.equal(acctBestLimits(lim, NOW).seven_day.used_percentage, 76);
+});
+
+test("acctBestLimits copes with a malformed seen block", () => {
+  const lim = { updated_at: 990, seven_day: win(76, 9000), seen: { seven_day: [null, "x", { used_percentage: "9" }] } };
+  assert.equal(acctBestLimits(lim, NOW).seven_day.used_percentage, 76);
+  assert.equal(acctBestLimits({ updated_at: 1, seven_day: win(5, 9000), seen: 3 }, NOW).seven_day.used_percentage, 5);
+});
+
+test("acctOptionLabel (the spawn picker) uses the remembered readings too", () => {
+  const lim = { updated_at: NOW - 10, five_hour: win(9, 5000), seven_day: win(76, 9000), seen: { seven_day: [seen(94, 8000, NOW - 60), seen(76, 9000, NOW - 10)] } };
+  assert.equal(acctOptionLabel("default", lim, NOW), "default · 5h 9% · wk 94%");
+});

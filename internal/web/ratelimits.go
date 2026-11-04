@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +35,24 @@ type RateLimits struct {
 	Model       string                  `json:"model,omitempty"`
 	ModelFamily string                  `json:"model_family,omitempty"`
 	ByModel     map[string]BucketLimits `json:"by_model,omitempty"`
+	// Seen is filled by the daemon, never read from a file: the readings it has
+	// seen for each window that has not reset yet, one per resets_at (the highest
+	// percentage), so the client can show the highest of them even when the file
+	// only ever holds the last writer's numbers.
+	Seen *SeenLimits `json:"seen,omitempty"`
+}
+
+// SeenReading is one remembered reading of a window.
+type SeenReading struct {
+	UsedPercentage float64 `json:"used_percentage"`
+	ResetsAt       int64   `json:"resets_at"`
+	UpdatedAt      int64   `json:"updated_at,omitempty"`
+}
+
+// SeenLimits holds the remembered readings of each window.
+type SeenLimits struct {
+	FiveHour []SeenReading `json:"five_hour,omitempty"`
+	SevenDay []SeenReading `json:"seven_day,omitempty"`
 }
 
 // BucketLimits is one model family's reading inside RateLimits.ByModel.
@@ -46,13 +65,112 @@ type BucketLimits struct {
 const (
 	rateLimitsCacheMax   = 64 // paths remembered by the last-good cache
 	rateLimitsMaxBuckets = 8  // by_model entries kept per snapshot
+	rateLimitsSeenMax    = 4  // remembered readings per window (one per resets_at)
 )
 
-// rlLastGood remembers the last good snapshot read from each path.
+// rlEntry is what is remembered about one snapshot source (a file path, or a
+// box's snapshot): its last good snapshot, and the readings seen per window.
+type rlEntry struct {
+	last    RateLimits
+	hasLast bool
+	seen    [2]map[int64]SeenReading // five_hour, seven_day: by resets_at
+}
+
+// rlLastGood is the daemon's memory of the snapshot sources, keyed by path (box
+// snapshots by "box\x00<box>\x00<account>"). At most rateLimitsCacheMax entries,
+// each holding at most 2 windows x rateLimitsSeenMax readings.
 var rlLastGood = struct {
 	mu sync.Mutex
-	m  map[string]RateLimits
-}{m: map[string]RateLimits{}}
+	m  map[string]*rlEntry
+}{m: map[string]*rlEntry{}}
+
+// rlEntryFor returns the entry for key, creating it. The caller holds rlLastGood.mu.
+// When the cache is full one arbitrary other entry is evicted: its source simply
+// starts remembering again on its next read.
+func rlEntryFor(key string) *rlEntry {
+	if e, ok := rlLastGood.m[key]; ok {
+		return e
+	}
+	if len(rlLastGood.m) >= rateLimitsCacheMax {
+		for k := range rlLastGood.m {
+			delete(rlLastGood.m, k)
+			break
+		}
+	}
+	e := &rlEntry{}
+	rlLastGood.m[key] = e
+	return e
+}
+
+// remember records every live reading of rl: its top-level windows and each
+// bucket's. Per window and resets_at only the highest percentage is kept (within
+// one window usage only rises, so the highest is never an overstatement). Readings
+// whose window has reset are dropped, and at most rateLimitsSeenMax remain per
+// window: the oldest resets_at are evicted first.
+func (e *rlEntry) remember(rl RateLimits, now time.Time) {
+	add := func(i int, w *RateLimitWindow, updated int64) {
+		w = cleanWindow(w, now)
+		if w == nil {
+			return
+		}
+		if e.seen[i] == nil {
+			e.seen[i] = map[int64]SeenReading{}
+		}
+		cur, have := e.seen[i][w.ResetsAt]
+		if !have || w.UsedPercentage > cur.UsedPercentage || (w.UsedPercentage == cur.UsedPercentage && updated > cur.UpdatedAt) {
+			e.seen[i][w.ResetsAt] = SeenReading{UsedPercentage: w.UsedPercentage, ResetsAt: w.ResetsAt, UpdatedAt: updated}
+		}
+	}
+	add(0, rl.FiveHour, rl.UpdatedAt)
+	add(1, rl.SevenDay, rl.UpdatedAt)
+	for _, b := range rl.ByModel {
+		add(0, b.FiveHour, b.UpdatedAt)
+		add(1, b.SevenDay, b.UpdatedAt)
+	}
+	for i := range e.seen {
+		e.prune(i, now)
+	}
+}
+
+// prune drops the readings of window i that have reset, then the oldest resets_at
+// beyond rateLimitsSeenMax.
+func (e *rlEntry) prune(i int, now time.Time) {
+	for r := range e.seen[i] {
+		if r <= now.Unix() {
+			delete(e.seen[i], r)
+		}
+	}
+	for len(e.seen[i]) > rateLimitsSeenMax {
+		oldest := int64(math.MaxInt64)
+		for r := range e.seen[i] {
+			oldest = min(oldest, r)
+		}
+		delete(e.seen[i], oldest)
+	}
+}
+
+// seenLimits returns the readings still live at now, oldest resets_at first; nil
+// when there are none.
+func (e *rlEntry) seenLimits(now time.Time) *SeenLimits {
+	var out SeenLimits
+	for i, dst := range []*[]SeenReading{&out.FiveHour, &out.SevenDay} {
+		e.prune(i, now)
+		for _, r := range e.seen[i] {
+			*dst = append(*dst, r)
+		}
+		sort.Slice(*dst, func(a, b int) bool { return (*dst)[a].ResetsAt < (*dst)[b].ResetsAt })
+	}
+	if len(out.FiveHour) == 0 && len(out.SevenDay) == 0 {
+		return nil
+	}
+	return &out
+}
+
+// withSeen is rl carrying the entry's remembered readings.
+func (e *rlEntry) withSeen(rl RateLimits, now time.Time) RateLimits {
+	rl.Seen = e.seenLimits(now)
+	return rl
+}
 
 // hasWindows reports whether a snapshot carries any reading at all.
 func (rl RateLimits) hasWindows() bool {
@@ -101,7 +219,10 @@ func boundBuckets(m map[string]BucketLimits) map[string]BucketLimits {
 // from each path is served instead. A deleted file is the exception: it is gone,
 // not torn, so its cached reading is dropped. The cache holds at most
 // rateLimitsCacheMax paths (the account count plus the default file).
-func readRateLimits(path string) (RateLimits, bool) {
+func readRateLimits(path string) (RateLimits, bool) { return readRateLimitsAt(path, time.Now()) }
+
+// readRateLimitsAt is readRateLimits with the clock passed in.
+func readRateLimitsAt(path string, now time.Time) (RateLimits, bool) {
 	if path == "" {
 		return RateLimits{}, false
 	}
@@ -114,25 +235,25 @@ func readRateLimits(path string) (RateLimits, bool) {
 		ok = false
 	}
 	if ok {
-		rl.ByModel = sanitizeBuckets(rl.ByModel, time.Now())
-	}
-	if ok && rl.hasWindows() {
-		rlLastGood.mu.Lock()
-		if _, have := rlLastGood.m[path]; !have && len(rlLastGood.m) >= rateLimitsCacheMax {
-			rlLastGood.m = map[string]RateLimits{}
-		}
-		rlLastGood.m[path] = rl
-		rlLastGood.mu.Unlock()
-		return rl, true
+		rl.Seen = nil // daemon-filled only: never trust one from the file
+		rl.ByModel = sanitizeBuckets(rl.ByModel, now)
 	}
 	rlLastGood.mu.Lock()
 	defer rlLastGood.mu.Unlock()
+	if ok && rl.hasWindows() {
+		e := rlEntryFor(path)
+		e.last, e.hasLast = rl, true
+		e.remember(rl, now)
+		return e.withSeen(rl, now), true
+	}
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		delete(rlLastGood.m, path)
 		return RateLimits{}, false
 	}
-	last, have := rlLastGood.m[path]
-	return last, have
+	if e, have := rlLastGood.m[path]; have && e.hasLast {
+		return e.withSeen(e.last, now), true
+	}
+	return RateLimits{}, false
 }
 
 // rateLimitsByAccount returns each account's 5h/weekly windows. default reads
@@ -218,6 +339,7 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 		if !ok {
 			continue
 		}
+		rl = rememberBoxReadings("box\x00"+f.Box+"\x00"+f.Account, rl, now)
 		if f.Account == account.Default { // no host default snapshot here
 			defCands, defRLs = append(defCands, f), append(defRLs, rl)
 			continue
@@ -265,6 +387,7 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 	if rl.UpdatedAt < 0 {
 		rl.UpdatedAt = 0
 	}
+	rl.Seen = nil // daemon-filled only (rememberBoxReadings)
 	rl.FiveHour, rl.SevenDay = cleanWindow(rl.FiveHour, now), cleanWindow(rl.SevenDay, now)
 	// The model strings only ever select a bucket, so cap their length.
 	rl.Model, rl.ModelFamily = clip(rl.Model, 80), clip(rl.ModelFamily, 40)
@@ -313,6 +436,16 @@ func sanitizeBuckets(in map[string]BucketLimits, now time.Time) map[string]Bucke
 		return nil
 	}
 	return boundBuckets(out)
+}
+
+// rememberBoxReadings records a sanitized box snapshot's readings under key and
+// returns it carrying everything remembered for that source.
+func rememberBoxReadings(key string, rl RateLimits, now time.Time) RateLimits {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	e := rlEntryFor(key)
+	e.remember(rl, now)
+	return e.withSeen(rl, now)
 }
 
 // clip truncates s to at most n bytes.
