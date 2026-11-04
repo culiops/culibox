@@ -95,6 +95,15 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 	return "idle"
 }
 
+// quietActivity is what Info's activity would read for this live session once
+// its PTY has gone silent: "waiting" for an agent given a turn, else "idle".
+// regActivity uses it when the registry says the turn has ended.
+func (s *Session) quietActivity() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return activityOf(false, false, 0, time.Time{}, time.Now(), idleThreshold, s.agentKind, s.submitted)
+}
+
 // recordActivity reports whether output observed at `now` should count as agent
 // activity: it does, unless `now` is still at or inside the muted window set by a
 // control-action repaint (see muteActivity).
@@ -1099,7 +1108,18 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 // Write sends input to the PTY. An Enter anywhere in p marks the session as
 // having been given a turn (see submitted). Focus reports, CPR/DA replies and
 // text without Enter do not count: xterm emits the former on its own.
+//
+// Every write also mutes activity for attachRepaintGrace: a TUI repaints
+// within milliseconds of a focus/mouse report or a keystroke (measured, #77),
+// and that echo is the viewer's doing, not agent work. The mute is set BEFORE
+// the bytes reach the PTY so the echo cannot land ahead of it. Real work after
+// an Enter still shows within about a second: a busy spinner repaints every
+// 0.1-0.33 s, well past the window. A live registry status overrides all of
+// this (regActivity); the mute matters for the PTY fallback.
 func (s *Session) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	s.muteActivity(time.Now())
+	s.mu.Unlock()
 	n, err := s.ptmx.Write(p)
 	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
 		s.markSubmitted()
@@ -2690,6 +2710,7 @@ func (m *Manager) List() []Info {
 		complete bool
 	}
 	histories := map[string]history{}
+	quiet := map[string]string{} // each session's silent-PTY activity, for regActivity
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2704,6 +2725,7 @@ func (m *Manager) List() []Info {
 				ids, complete := s.conversations()
 				histories[i.ID] = history{ids, complete}
 			}
+			quiet[i.ID] = s.quietActivity()
 			o = append(o, i)
 		}
 		return o
@@ -2723,10 +2745,12 @@ func (m *Manager) List() []Info {
 			c := costSrc.CostOf(h.ids)
 			out[i].CostUSD = &c
 		}
-		p, ok, blocked := m.peekAndBlocked(out[i].ID)
+		p, ok, reg := m.peekAndReg(out[i].ID)
+		blocked := reg == regStatusWaiting
 		if ok {
 			out[i].Summary = summaryLine(p.Text)
 		}
+		out[i].Activity = regActivity(out[i].Activity, quiet[out[i].ID], reg)
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull

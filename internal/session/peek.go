@@ -669,10 +669,20 @@ func (m *Manager) PeekFor(id string) (Peek, bool) {
 // session is sitting on a prompt. blocked can be true with ok=false (registry
 // readable, transcript not).
 func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
+	p, ok, reg := m.peekAndReg(id)
+	return p, ok, reg == regStatusWaiting
+}
+
+// peekAndReg is PeekFor plus the live registry entry's status ("" when no
+// entry validated). List feeds the status to regActivity.
+func (m *Manager) peekAndReg(id string) (Peek, bool, string) {
 	l, bound := m.boundTranscript(id)
-	blocked := l.reg != nil && l.reg.Status == regStatusWaiting
+	var reg string
+	if l.reg != nil {
+		reg = l.reg.Status
+	}
 	if !bound {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	var f *os.File
 	var fi, tailFi os.FileInfo // fi keys the cache; tailFi sizes the tail read
@@ -680,14 +690,14 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 		// Host tier, unchanged: one stat, and the file is opened only on a miss.
 		var err error
 		if fi, err = os.Stat(l.path); err != nil {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
-			return p, true, blocked
+			return p, true, reg
 		}
 		var ok bool
 		if f, tailFi, ok = l.openTranscript(); !ok {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		defer f.Close()
 	} else {
@@ -695,27 +705,27 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 		// so no stat of a box-chosen path ever runs outside the guard.
 		var ok bool
 		if f, fi, ok = l.openTranscript(); !ok {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		defer f.Close()
 		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
-			return p, true, blocked
+			return p, true, reg
 		}
 		tailFi = fi
 	}
 	b, cut, err := readUsageTail(f, tailFi)
 	if err != nil {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	p, ok := parsePeekTailCut(b, cut, l.created)
 	if !ok {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	if p.AskFull != "" {
 		p.askSrcPath, p.askSrcMTime, p.askSrcSize = l.path, fi.ModTime(), fi.Size()
 	}
 	m.peekStore(id, l.path, fi.ModTime(), fi.Size(), p)
-	return p, true, blocked
+	return p, true, reg
 }
 
 // SendMessage types one line into a session's PTY, followed by Enter.

@@ -37,9 +37,47 @@ type claudeRegEntry struct {
 	Status    string          `json:"status"`    // busy | idle | shell | waiting (observed)
 }
 
-// regStatusWaiting is the registry status Claude Code reports while it sits on
-// a permission / choice prompt (measured 2026-09-29, 2.1.284).
-const regStatusWaiting = "waiting"
+// Registry statuses. waiting: Claude Code sits on a permission / choice prompt
+// (measured 2026-09-29, 2.1.284). busy / idle: a turn is running / has ended;
+// they flip exactly at turn boundaries (busy 0.16 s after Enter, idle 0.1 s
+// after the turn ends) and viewer focus, mouse and typing never change them
+// (measured 2026-11-02, 2.1.316, #77). shell: the turn ended with a background
+// shell still running; Claude starts a new turn on its own when it finishes.
+const (
+	regStatusWaiting = "waiting"
+	regStatusBusy    = "busy"
+	regStatusIdle    = "idle"
+	regStatusShell   = "shell"
+)
+
+// regActivity is the activity of a live session once Claude Code's registry
+// status is known. act is what Info computed from PTY recency; quiet is what it
+// would read with a silent PTY (waiting or idle, see quietActivity); status is
+// the validated registry entry's ("" when there is none).
+//
+// The registry is the primary signal because a TUI repaints for reasons that
+// are not work (viewer focus/mouse/keys, its own idle redraws). PTY recency is
+// the fallback only with no entry (codex, an unreadable or drifted registry) or
+// a status we have not seen yet. Exit and detach always dominate.
+//
+// shell reads "working", not "your turn": the agent resumes by itself when the
+// background shell finishes, so a needs-you there is false and would fire a
+// second time at the real end of the turn. The UI has no distinct "background"
+// state, and adding one is a product call, not part of this fix (#77).
+func regActivity(act, quiet, status string) string {
+	if act != "working" && act != "waiting" && act != "idle" {
+		return act
+	}
+	switch status {
+	case regStatusBusy, regStatusShell:
+		return "working"
+	case regStatusWaiting:
+		return "waiting"
+	case regStatusIdle:
+		return quiet
+	}
+	return act
+}
 
 // sessionIDRe bounds what a registry sessionId may look like before it is ever
 // joined into a path: a uuid-ish token, nothing that can traverse. The first
