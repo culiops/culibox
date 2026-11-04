@@ -54,12 +54,62 @@ for key in ("five_hour", "seven_day"):
     if not isinstance(w, dict) or not w:
         continue
     out[key] = {"used_percentage": w.get("used_percentage", 0), "resets_at": w.get("resets_at", 0)}
-cfg = os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(os.path.expanduser("~"), ".claude"))
-try:
-    with open(os.path.join(cfg, "agent-box-rate-limits.json"), "w") as f:
-        json.dump(out, f)
-except OSError:
-    pass
+# rate_limits is absent until a session'"'"'s first API reply. A snapshot with no
+# window would wipe the last good one, so write nothing (the host script does the same).
+if "five_hour" in out or "seven_day" in out:
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(os.path.expanduser("~"), ".claude"))
+    path = os.path.join(cfg, "agent-box-rate-limits.json")
+    # The quota may be reported per model bucket (a haiku and an opus session on
+    # one token showed different weekly numbers), so also keep one reading per
+    # model family in by_model. The top-level fields stay the newest write, for
+    # readers that predate by_model.
+    mo = data.get("model")
+    mid = mo if isinstance(mo, str) else (mo.get("id") if isinstance(mo, dict) else "")
+    mid = mid if isinstance(mid, str) else ""
+    fam = ""
+    for known in ("opus", "sonnet", "haiku"):
+        if known in mid.lower():
+            fam = known
+            break
+    else:
+        fam = "".join(c for c in mid.lower() if c.isalnum() or c in "._-")[:40]
+    buckets = {}
+    try:
+        with open(path) as f:
+            old = json.load(f)
+        if isinstance(old.get("by_model"), dict):
+            buckets = {k: v for k, v in old["by_model"].items() if isinstance(v, dict)}
+    except Exception:
+        pass
+    if fam:
+        out["model"] = mid[:80]
+        out["model_family"] = fam
+        b = {"updated_at": out["updated_at"]}
+        for key in ("five_hour", "seven_day"):
+            if key in out:
+                b[key] = out[key]
+        buckets[fam] = b
+        # Bounded: keep this write plus the 7 most recently updated others.
+        def ts(k):
+            t = buckets[k].get("updated_at", 0)
+            return t if isinstance(t, (int, float)) and not isinstance(t, bool) else 0
+        keep = sorted((k for k in buckets if k != fam), key=ts, reverse=True)[:7] + [fam]
+        buckets = {k: buckets[k] for k in keep}
+    if buckets:
+        out["by_model"] = buckets
+    # Temp file in the same directory + rename: a reader never sees a half-written
+    # or empty file. Created with the umask-derived mode a plain open() gave.
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        with os.fdopen(fd, "w") as f:
+            json.dump(out, f)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 def obj(v):
     return v if isinstance(v, dict) else {}
 def text(v):
