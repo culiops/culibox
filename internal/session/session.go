@@ -128,15 +128,18 @@ func (s *Session) muteActivity(now time.Time) {
 	s.activityMutedUntil = now.Add(attachRepaintGrace)
 }
 
-// inputMuteMax caps how long back-to-back input can keep activity muted in one
-// run, so steady typing or mouse motion on the PTY fallback cannot hide real
-// work for longer than this.
+// inputMuteMax is the input-mute budget per idleThreshold window: viewer input
+// may keep activity muted for at most this long in each window, so at least
+// 7 s of every 10 s is unmuted and real work on the PTY fallback always shows,
+// however the input is spaced (a per-run cap let input every 1.01 s mute ~99%
+// of the time, since each write just past the grace began a new run).
 const inputMuteMax = 3 * time.Second
 
-// noteInput mutes activity for viewer input written at now (see Write). A run
-// is input arriving within attachRepaintGrace of the previous input; its mute
-// ends no later than inputMuteMax after the run started. It never shortens a
-// longer mute already set by a resize or forced redraw.
+// noteInput mutes activity for viewer input written at now (see Write): up to
+// attachRepaintGrace past now, drawn from the current window's budget. The
+// window starts at the first input after the previous one ended and lasts
+// idleThreshold; a pause does not refill it. It never shortens a longer mute
+// already set by a resize or forced redraw.
 //
 // A write holding '\r' or '\n' is a submitted line, not an echo: it mutes
 // nothing and ends the mute its keystrokes started (and any resize mute, which
@@ -145,21 +148,36 @@ const inputMuteMax = 3 * time.Second
 // right after see "working". Caller holds s.mu.
 func (s *Session) noteInput(now time.Time, p []byte) {
 	if bytes.ContainsAny(p, "\r\n") {
-		s.activityMutedUntil = time.Time{}
-		s.inputMuteLast = time.Time{}
+		s.endInputMute()
 		return
 	}
-	if now.Sub(s.inputMuteLast) > attachRepaintGrace {
-		s.inputMuteStart = now
+	if now.Sub(s.inputBudgetStart) >= idleThreshold {
+		s.inputBudgetStart, s.inputMuteUsed = now, 0
 	}
-	s.inputMuteLast = now
-	until := now.Add(attachRepaintGrace)
-	if limit := s.inputMuteStart.Add(inputMuteMax); until.After(limit) {
-		until = limit
+	from := now
+	if s.inputMuteUntil.After(from) {
+		from = s.inputMuteUntil // already muted up to here: only the extension costs budget
 	}
-	if until.After(s.activityMutedUntil) {
-		s.activityMutedUntil = until
+	grant := now.Add(attachRepaintGrace).Sub(from)
+	if left := inputMuteMax - s.inputMuteUsed; grant > left {
+		grant = left
 	}
+	if grant <= 0 {
+		return
+	}
+	s.inputMuteUsed += grant
+	s.inputMuteUntil = from.Add(grant)
+	if s.inputMuteUntil.After(s.activityMutedUntil) {
+		s.activityMutedUntil = s.inputMuteUntil
+	}
+}
+
+// endInputMute ends any activity mute now (a submitted line or a control
+// action: what follows is the agent's reaction). The window's budget is not
+// refilled. Caller holds s.mu.
+func (s *Session) endInputMute() {
+	s.activityMutedUntil = time.Time{}
+	s.inputMuteUntil = time.Time{}
 }
 
 // Backend is an optional session-persistence layer (abduco). When a Manager has
@@ -903,10 +921,11 @@ type Session struct {
 	// (resize/forced-redraw on attach), not agent work, so it must not count as
 	// activity. Guarded by mu.
 	activityMutedUntil time.Time
-	inputMuteStart     time.Time // when the current run of muted viewer input began (noteInput; mu)
-	inputMuteLast      time.Time // when that run's latest write landed (noteInput; mu)
-	exitCode           int       // agent exit code; meaningful only when exitCodeKnown
-	exitCodeKnown      bool      // true only for ephemeral sessions (cmd IS the agent)
+	inputBudgetStart   time.Time     // start of the current input-mute budget window (noteInput; mu)
+	inputMuteUsed      time.Duration // input mute granted in that window (noteInput; mu)
+	inputMuteUntil     time.Time     // end of the latest input mute (noteInput; mu)
+	exitCode           int           // agent exit code; meaningful only when exitCodeKnown
+	exitCodeKnown      bool          // true only for ephemeral sessions (cmd IS the agent)
 	removed            chan struct{}
 	removedOnce        sync.Once
 	detachedCh         chan struct{} // closed when the session goes detached (agent alive, pipe lost)
@@ -1157,16 +1176,27 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 // having been given a turn (see submitted). Focus reports, CPR/DA replies and
 // text without Enter do not count: xterm emits the former on its own.
 //
-// A write without Enter also mutes activity for attachRepaintGrace (capped per
-// run, see noteInput): a TUI repaints within milliseconds of a focus/mouse
-// report or a keystroke (measured, #77), and that echo is the viewer's doing,
-// not agent work. The mute is set BEFORE the bytes reach the PTY so the echo
-// cannot land ahead of it. A submitted line is never muted, so the agent's
-// start of work counts at once. A live registry status overrides all of this
-// (regActivity); the mute matters for the PTY fallback.
-func (s *Session) Write(p []byte) (int, error) {
+// A write without Enter also mutes activity for attachRepaintGrace (budgeted
+// per window, see noteInput): a TUI repaints within milliseconds of a
+// focus/mouse report or a keystroke (measured, #77), and that echo is the
+// viewer's doing, not agent work. The mute is set BEFORE the bytes reach the
+// PTY so the echo cannot land ahead of it. A submitted line is never muted, so
+// the agent's start of work counts at once. A live registry status overrides
+// all of this (regActivity); the mute matters for the PTY fallback.
+func (s *Session) Write(p []byte) (int, error) { return s.write(p, false) }
+
+// writeAction writes a control action's key (Interrupt's Esc/Ctrl+C, Answer's
+// 1/Esc). Like a submitted line it is never muted and ends any input mute:
+// the agent's reaction to it is real activity.
+func (s *Session) writeAction(p []byte) (int, error) { return s.write(p, true) }
+
+func (s *Session) write(p []byte, action bool) (int, error) {
 	s.mu.Lock()
-	s.noteInput(time.Now(), p)
+	if action {
+		s.endInputMute()
+	} else {
+		s.noteInput(time.Now(), p)
+	}
 	s.mu.Unlock()
 	n, err := s.ptmx.Write(p)
 	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
