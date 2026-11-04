@@ -20,9 +20,17 @@ type Usage struct {
 	ContextMax    int    `json:"contextMax,omitempty"`
 	Pct           *int   `json:"pct,omitempty"`
 	Cwd           string `json:"cwd,omitempty"`
+	// PostCompact marks ContextTokens as the size the transcript recorded right
+	// after a compaction (no reply has been counted since), not a reply's usage.
+	PostCompact bool `json:"postCompact,omitempty"`
 }
 
 const usageTailBytes = 256 << 10
+
+// usageWideTailBytes is the one-off wider read UsageFor retries with when the
+// normal tail holds no usage line (a long run of attachment records can exceed
+// usageTailBytes after the last reply). Bounded: never the whole transcript.
+const usageWideTailBytes = 4 << 20
 
 // slugNonAlnum matches Claude Code's transcript-dir encoder: every non-alphanumeric
 // character (including "/", ".", "_") becomes "-". An earlier version replaced only
@@ -78,12 +86,19 @@ func parseUsageTail(b []byte) (Usage, bool) {
 			cwd = probe.Cwd
 		}
 	}
+	postTokens := -1 // postTokens of a compact_boundary newer than any usage line
 	for i := len(lines) - 1; i >= 0; i-- {
 		ln := strings.TrimSpace(lines[i])
 		if ln == "" {
 			continue
 		}
 		var rec struct {
+			Type            string `json:"type"`
+			Subtype         string `json:"subtype"`
+			IsAPIError      bool   `json:"isApiErrorMessage"`
+			CompactMetadata struct {
+				PostTokens int `json:"postTokens"`
+			} `json:"compactMetadata"`
 			Message struct {
 				Role  string `json:"role"`
 				Model string `json:"model"`
@@ -97,22 +112,41 @@ func parseUsageTail(b []byte) (Usage, bool) {
 		if json.Unmarshal([]byte(ln), &rec) != nil {
 			continue
 		}
+		if rec.Type == "system" && rec.Subtype == "compact_boundary" && postTokens < 0 {
+			postTokens = rec.CompactMetadata.PostTokens
+			continue
+		}
 		if rec.Message.Role == "assistant" && rec.Message.Usage != nil {
 			u := rec.Message.Usage
+			tokens := u.Input + u.CacheRead + u.CacheWrite
+			// Claude Code skips its own placeholders (a failed API call leaves a
+			// <synthetic> zero-usage message): so do we, keeping the last real reply.
+			if rec.IsAPIError || rec.Message.Model == "<synthetic>" || tokens == 0 {
+				continue
+			}
+			if postTokens >= 0 {
+				tokens = postTokens
+			}
 			return Usage{
 				Model:         rec.Message.Model,
 				Effort:        effort,
-				ContextTokens: u.Input + u.CacheRead + u.CacheWrite,
+				ContextTokens: tokens,
 				Cwd:           cwd,
+				PostCompact:   postTokens >= 0,
 			}, true
 		}
+	}
+	if postTokens >= 0 { // the tail starts after the last reply: the boundary is all there is
+		return Usage{Effort: effort, ContextTokens: postTokens, Cwd: cwd, PostCompact: true}, true
 	}
 	return Usage{}, false
 }
 
 // contextWindows lists model-id prefixes and their context window (max input
 // tokens). First match wins. A model matching no prefix is unknown: no guessed
-// number, so no percentage.
+// number, so no percentage. opus-4-6 and sonnet-4-6 are deliberately absent: they
+// are 200k unless the session runs the [1m] variant, and the transcript's model id
+// does not say which, so either number would be a guess (#79).
 var contextWindows = []struct {
 	prefix string
 	max    int
@@ -120,9 +154,7 @@ var contextWindows = []struct {
 	{"claude-opus-5", 1_000_000},
 	{"claude-opus-4-8", 1_000_000},
 	{"claude-opus-4-7", 1_000_000},
-	{"claude-opus-4-6", 1_000_000},
 	{"claude-sonnet-5", 1_000_000},
-	{"claude-sonnet-4-6", 1_000_000},
 	{"claude-haiku-5", 1_000_000},
 	{"claude-fable-5", 1_000_000},
 	{"claude-mythos-5", 1_000_000},
@@ -192,11 +224,17 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 		return Usage{}, false
 	}
 	defer f.Close()
-	b, _, err := readUsageTail(f, fi)
+	b, cut, err := readUsageTail(f, fi)
 	if err != nil {
 		return Usage{}, false
 	}
 	u, ok := parseUsageTail(b)
+	if !ok && cut {
+		if b, err = readTail(f, fi, usageWideTailBytes); err != nil {
+			return Usage{}, false
+		}
+		u, ok = parseUsageTail(b)
+	}
 	if !ok {
 		return Usage{}, false
 	}
@@ -205,9 +243,10 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 		spawn = l.cwds // the raw spawn dir and its resolved form
 	}
 	u.Cwd = liveCwd(u.Cwd, spawn, l.boxed)
-	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
-		u.ContextMax = max
-		pctv := u.ContextTokens * 100 / max
+	if win, ok := contextMax(u.Model); ok && u.ContextTokens > 0 && u.ContextTokens <= win {
+		u.ContextMax = win
+		// Rounded and clamped like Claude Code's statusline (it uses Math.round).
+		pctv := min(100, max(0, (u.ContextTokens*100+win/2)/win))
 		u.Pct = &pctv
 	}
 	return u, true
@@ -247,17 +286,20 @@ func (m *Manager) ResolveBins() {
 // line fails to parse), could have hidden context just outside the window.
 // The caller opens the file (host: os.Open; boxed: boxread.Open) and closes it.
 func readUsageTail(f *os.File, fi os.FileInfo) (data []byte, cut bool, err error) {
-	size := fi.Size()
+	data, err = readTail(f, fi, usageTailBytes)
+	return data, fi.Size() > usageTailBytes, err
+}
+
+// readTail reads the last n bytes of a file (all of it if smaller).
+func readTail(f *os.File, fi os.FileInfo, n int64) ([]byte, error) {
 	off := int64(0)
-	if size > usageTailBytes {
-		off = size - usageTailBytes
-		cut = true
+	if size := fi.Size(); size > n {
+		off = size - n
 	}
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	data, err = io.ReadAll(f)
-	return data, cut, err
+	return io.ReadAll(f)
 }
 
 // liveCwd turns the transcript's cwd into the base the browser should join
