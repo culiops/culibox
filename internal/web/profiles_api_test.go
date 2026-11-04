@@ -570,12 +570,26 @@ func TestConvertConcurrentSecondConvertLeavesNoOrphan(t *testing.T) {
 	}
 }
 
+// contextTempDir is a fresh directory that checkContextPath accepts. t.TempDir
+// follows GOTMPDIR/TMPDIR, which can land under a path checkContextPath
+// refuses: the box image sets GOTMPDIR under /home/agent, and macOS puts
+// TMPDIR under /var.
+func contextTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "ctxw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}
+
 func TestProfilesAPIContextWarnings(t *testing.T) {
-	dir := t.TempDir()
+	dir := contextTempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("K=v"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	clean := t.TempDir()
+	clean := contextTempDir(t)
 	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	pm.home = t.TempDir()
 	s := &Server{Profiles: pm}
