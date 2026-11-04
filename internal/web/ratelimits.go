@@ -110,8 +110,13 @@ func readRateLimits(path string) (RateLimits, bool) {
 	// cannot hang /api/meta.
 	var rl RateLimits
 	b, ok := session.ReadRegistryFile(path)
-	if ok && json.Unmarshal(b, &rl) == nil && rl.hasWindows() {
-		rl.ByModel = boundBuckets(rl.ByModel)
+	if ok && json.Unmarshal(b, &rl) != nil {
+		ok = false
+	}
+	if ok {
+		rl.ByModel = sanitizeBuckets(rl.ByModel, time.Now())
+	}
+	if ok && rl.hasWindows() {
 		rlLastGood.mu.Lock()
 		if _, have := rlLastGood.m[path]; !have && len(rlLastGood.m) >= rateLimitsCacheMax {
 			rlLastGood.m = map[string]RateLimits{}
@@ -260,44 +265,54 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 	if rl.UpdatedAt < 0 {
 		rl.UpdatedAt = 0
 	}
-	maxReset := now.Add(rateLimitsMaxReset).Unix()
-	futureCut := now.Add(rateLimitsFutureSlack).Unix()
-	clean := func(w *RateLimitWindow) *RateLimitWindow {
-		if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > maxReset {
-			return nil
-		}
-		c := *w
-		// !(x > 0) catches NaN, negatives and -0 (normalized to +0).
-		if !(c.UsedPercentage > 0) {
-			c.UsedPercentage = 0
-		} else if c.UsedPercentage > 100 {
-			c.UsedPercentage = 100
-		}
-		return &c
-	}
-	rl.FiveHour, rl.SevenDay = clean(rl.FiveHour), clean(rl.SevenDay)
-	// Per-model buckets get the same checks; a bucket that fails them is dropped.
+	rl.FiveHour, rl.SevenDay = cleanWindow(rl.FiveHour, now), cleanWindow(rl.SevenDay, now)
 	// The model strings only ever select a bucket, so cap their length.
 	rl.Model, rl.ModelFamily = clip(rl.Model, 80), clip(rl.ModelFamily, 40)
-	buckets := map[string]BucketLimits{}
-	for name, b := range rl.ByModel {
-		if b.UpdatedAt > futureCut {
-			continue
-		}
-		b.UpdatedAt = max(b.UpdatedAt, 0)
-		b.FiveHour, b.SevenDay = clean(b.FiveHour), clean(b.SevenDay)
-		if b.FiveHour != nil || b.SevenDay != nil {
-			buckets[clip(name, 40)] = b
-		}
-	}
-	rl.ByModel = nil
-	if len(buckets) > 0 {
-		rl.ByModel = boundBuckets(buckets)
-	}
+	rl.ByModel = sanitizeBuckets(rl.ByModel, now)
 	if !rl.hasWindows() {
 		return RateLimits{}, false
 	}
 	return rl, true
+}
+
+// cleanWindow clamps used_percentage to [0,100] and drops (nil) a window whose
+// resets_at is not a plausible unix time (>= 1e9 and <= now+400d).
+func cleanWindow(w *RateLimitWindow, now time.Time) *RateLimitWindow {
+	if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > now.Add(rateLimitsMaxReset).Unix() {
+		return nil
+	}
+	c := *w
+	// !(x > 0) catches NaN, negatives and -0 (normalized to +0).
+	if !(c.UsedPercentage > 0) {
+		c.UsedPercentage = 0
+	} else if c.UsedPercentage > 100 {
+		c.UsedPercentage = 100
+	}
+	return &c
+}
+
+// sanitizeBuckets applies the snapshot checks to each per-model bucket: one
+// stamped more than rateLimitsFutureSlack ahead of now, or with no plausible
+// window left, is dropped; the rest are clamped, name-capped and bounded. nil
+// when none survive. Used for box files and host files alike, since either is
+// written by a process the daemon does not control.
+func sanitizeBuckets(in map[string]BucketLimits, now time.Time) map[string]BucketLimits {
+	futureCut := now.Add(rateLimitsFutureSlack).Unix()
+	out := map[string]BucketLimits{}
+	for name, b := range in {
+		if b.UpdatedAt > futureCut {
+			continue
+		}
+		b.UpdatedAt = max(b.UpdatedAt, 0)
+		b.FiveHour, b.SevenDay = cleanWindow(b.FiveHour, now), cleanWindow(b.SevenDay, now)
+		if b.FiveHour != nil || b.SevenDay != nil {
+			out[clip(name, 40)] = b
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return boundBuckets(out)
 }
 
 // clip truncates s to at most n bytes.

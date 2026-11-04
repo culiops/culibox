@@ -11,7 +11,10 @@ import (
 )
 
 // runIn execs the embedded script with cfg as CLAUDE_CONFIG_DIR and input on stdin.
-func runIn(t *testing.T, cfg, input string) {
+func runIn(t *testing.T, cfg, input string) { t.Helper(); runInEnv(t, cfg, input) }
+
+// runInEnv is runIn with extra environment entries (they override inherited ones).
+func runInEnv(t *testing.T, cfg, input string, env ...string) {
 	t.Helper()
 	for _, bin := range []string{"bash", "python3"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -24,6 +27,7 @@ func runIn(t *testing.T, cfg, input string) {
 	}
 	cmd := exec.Command("bash", script)
 	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+cfg, "AGENTBOX_STATUSLINE_DELEGATING=")
+	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(input)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -93,5 +97,49 @@ func TestScriptReplacesSnapshotAtomically(t *testing.T) {
 		if e.Name() != "agent-box-rate-limits.json" {
 			t.Errorf("leftover file in config dir: %s", e.Name())
 		}
+	}
+}
+
+// The snapshot holds account usage, not something other users need: it is
+// created owner-only, whatever the umask.
+func TestScriptSnapshotIsOwnerOnly(t *testing.T) {
+	cfg := t.TempDir()
+	runIn(t, cfg, sampleInput)
+	fi, err := os.Stat(filepath.Join(cfg, "agent-box-rate-limits.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("snapshot mode = %o, want 600", perm)
+	}
+}
+
+// Boxes can share a config dir across PID namespaces, so two writers can have
+// the same pid. A temp file named only by pid would then collide, and the script
+// would delete the other writer's file. Here a python3 shim plants a file named
+// for the interpreter's own pid (exec keeps the pid), the worst case for a
+// pid-only name: the snapshot must still be written and the planted file left.
+func TestScriptTempNameDoesNotCollideWithAnotherWritersPid(t *testing.T) {
+	real, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not installed")
+	}
+	cfg := t.TempDir()
+	bin := t.TempDir()
+	shim := "#!/bin/sh\n: > \"$CLAUDE_CONFIG_DIR/agent-box-rate-limits.json.$$.tmp\"\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "python3"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runInEnv(t, cfg, sampleInput, "PATH="+bin+":"+os.Getenv("PATH"))
+	assertHarvested(t, cfg)
+	ents, _ := os.ReadDir(cfg)
+	planted := 0
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			planted++
+		}
+	}
+	if planted != 1 {
+		t.Fatalf("the other writer's temp file was removed or ours was left behind: %d .tmp files", planted)
 	}
 }

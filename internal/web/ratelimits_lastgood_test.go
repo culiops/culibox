@@ -169,3 +169,27 @@ func TestSanitizeRateLimits_cleansBuckets(t *testing.T) {
 		t.Fatal("bucket stamped in the future kept")
 	}
 }
+
+// A host file is written by whatever statusLine tool the user runs, so its
+// per-model buckets get the same clamp and plausibility checks as a box's.
+func TestReadRateLimits_cleansHostBuckets(t *testing.T) {
+	future := time.Now().Add(time.Hour).Unix()
+	f := filepath.Join(t.TempDir(), "rl.json")
+	os.WriteFile(f, []byte(fmt.Sprintf(`{"updated_at":1785648756,"five_hour":{"used_percentage":1,"resets_at":1785654600},"by_model":{
+	  "opus":{"updated_at":1785648700,"seven_day":{"used_percentage":900,"resets_at":1786107600}},
+	  "junk":{"updated_at":1785648700,"seven_day":{"used_percentage":5,"resets_at":5}},
+	  "later":{"updated_at":%d,"seven_day":{"used_percentage":5,"resets_at":1786107600}}}}`, future)), 0o644)
+	rl, ok := readRateLimits(f)
+	if !ok {
+		t.Fatal("valid snapshot rejected")
+	}
+	if o := rl.ByModel["opus"]; o.SevenDay == nil || o.SevenDay.UsedPercentage != 100 {
+		t.Fatalf("host bucket not clamped: %+v", o)
+	}
+	if _, have := rl.ByModel["junk"]; have {
+		t.Fatal("host bucket with an implausible resets_at kept")
+	}
+	if _, have := rl.ByModel["later"]; have {
+		t.Fatal("host bucket stamped in the future kept")
+	}
+}

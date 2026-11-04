@@ -79,6 +79,9 @@ if "five_hour" in out or "seven_day" in out:
             break
     else:
         fam = "".join(c for c in mid.lower() if c.isalnum() or c in "._-")[:40]
+    # Read-modify-write without a lock: two sessions finishing at the same moment
+    # can each start from the same old file, so one bucket may be lost until
+    # that session renders again. Accepted: it self-heals on its next render.
     buckets = {}
     try:
         with open(path) as f:
@@ -104,18 +107,24 @@ if "five_hour" in out or "seven_day" in out:
     if buckets:
         out["by_model"] = buckets
     # Temp file in the same directory + rename: a reader never sees a half-written
-    # or empty file. Created with the umask-derived mode a plain open() gave.
-    tmp = "%s.%d.tmp" % (path, os.getpid())
+    # or empty file. Owner-only (0600): it is account usage. The name carries a
+    # random suffix because boxes sharing a config dir can have the same pid; the
+    # file is removed only if THIS process created it, never on an EEXIST.
+    tmp = "%s.%s.tmp" % (path, os.urandom(4).hex())
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-        with os.fdopen(fd, "w") as f:
-            json.dump(out, f)
-        os.replace(tmp, path)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError:
+        fd = None
+    if fd is not None:
         try:
-            os.unlink(tmp)
+            with os.fdopen(fd, "w") as f:
+                json.dump(out, f)
+            os.replace(tmp, path)
         except OSError:
-            pass
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 def obj(v):
     return v if isinstance(v, dict) else {}
 def text(v):
