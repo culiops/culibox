@@ -164,6 +164,27 @@ func TestDefaultAllowToolchainRegistries(t *testing.T) {
 	}
 }
 
+// storage.googleapis.com is where proxy.golang.org 302-redirects larger module
+// zips, but it serves every Google Cloud Storage bucket, so it stays out of
+// every built-in list (founder 2026-11-04): a profile opts in with egress_allow.
+func TestCloudStorageIsOptIn(t *testing.T) {
+	gh := &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}
+	for name, b := range map[string]config.Bindings{
+		"none": {}, "aws": {AWS: bound()}, "github": {GitHub: gh}, "aws+github": {AWS: bound(), GitHub: gh},
+	} {
+		got := Effective(b)
+		for _, h := range []string{"storage.googleapis.com", "bucket.storage.googleapis.com", "www.googleapis.com"} {
+			if hostmatch.Match(got, h) {
+				t.Errorf("Effective(%s) matches %s: %v", name, h, got)
+			}
+		}
+	}
+	got := Effective(config.Bindings{AWS: bound(), EgressAllow: []string{"storage.googleapis.com"}})
+	if !hostmatch.Match(got, "storage.googleapis.com") {
+		t.Errorf("egress_allow did not add storage.googleapis.com: %v", got)
+	}
+}
+
 func TestEffectiveProfileEgressAllow(t *testing.T) {
 	gh := &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}
 	got := Effective(config.Bindings{GitHub: gh, EgressAllow: []string{"pkg.example", "github.com", "pkg.example"}})
