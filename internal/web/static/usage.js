@@ -33,7 +33,7 @@ function usageTitle(u) {
   const parts = [];
   if (u.model) parts.push(u.model);
   if (u.effort) parts.push(u.effort);
-  parts.push(withCommas(u.contextTokens) + " tokens");
+  parts.push(withCommas(u.contextTokens) + " tokens" + (u.postCompact ? " (after compact)" : ""));
   return parts.join(" · ");
 }
 
