@@ -190,7 +190,8 @@ func TestWorktreeRootRejectsSubmoduleOfAWorktree(t *testing.T) {
 	}
 }
 
-// Transcript-shaped records, trimmed from real Claude Code JSONL (issue #79).
+// Transcript-shaped records, hand-built from the record shapes described in issue
+// #79 (not copied from a real transcript).
 const (
 	asstUsage = `{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":6,"cache_read_input_tokens":200000,"cache_creation_input_tokens":27448,"output_tokens":300}}}`
 	// compactBoundary is what Claude Code appends after an auto-compact: the
@@ -290,6 +291,79 @@ func TestUsageForWidensTheReadWhenTheTailHasNoUsage(t *testing.T) {
 	u, ok := m.UsageFor("s1")
 	if !ok || u.ContextTokens != 227454 || u.Model != "claude-opus-4-8" {
 		t.Fatalf("got %+v ok=%v, want the usage line beyond the first 256 KiB", u, ok)
+	}
+}
+
+// The widened read costs ~100 ms and 20 MB per call, and the sidebar polls every
+// few seconds: while the file is unchanged (same path, size, mtime) the answer
+// must be reused, not recomputed. Proof without a seam: overwrite the file with
+// different bytes of the same length and the same mtime; a re-read would see them.
+func TestUsageForReusesTheWidenedReadWhileTheFileIsUnchanged(t *testing.T) {
+	m, home := newLocatorManager(t)
+	att := `{"type":"attachment","attachment":{"type":"file","content":"` + strings.Repeat("x", 3000) + `"}}`
+	build := func(reply string) []string {
+		lines := []string{reply}
+		for i := 0; i < 110; i++ {
+			lines = append(lines, att)
+		}
+		return lines
+	}
+	mtime := time.Now().Add(-time.Minute).Truncate(time.Second)
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, build(asstUsage)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 227454 {
+		t.Fatalf("first call: got %+v ok=%v", u, ok)
+	}
+	other := strings.Replace(asstUsage, `"cache_read_input_tokens":200000`, `"cache_read_input_tokens":300000`, 1)
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, build(other)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 227454 {
+		t.Fatalf("second call on an unchanged file re-read it: got %+v ok=%v, want the cached 227454", u, ok)
+	}
+	// A real change (new size) is not served from the cache.
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, append(build(other), att)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 327454 {
+		t.Fatalf("after the file changed: got %+v ok=%v, want 327454", u, ok)
+	}
+}
+
+// Only the boundary fits in the tail; the reply that names the model sits further
+// back. The model (and so the %) must still be found, with one widened read.
+func TestUsageForWidensToFindTheModelBehindACompactBoundary(t *testing.T) {
+	m, home := newLocatorManager(t)
+	att := `{"type":"attachment","attachment":{"type":"file","content":"` + strings.Repeat("x", 3000) + `"}}`
+	lines := []string{asstUsage}
+	for i := 0; i < 110; i++ {
+		lines = append(lines, att)
+	}
+	lines = append(lines, compactBoundary)
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), lines...)
+	u, ok := m.UsageFor("s1")
+	if !ok || u.ContextTokens != 25340 || !u.PostCompact || u.Model != "claude-opus-4-8" || u.Pct == nil || *u.Pct != 3 {
+		t.Fatalf("got %+v ok=%v, want 25340 post-compact with the model and 3%%", u, ok)
+	}
+}
+
+// A transcript that grows between the Stat and the read must not make the
+// "bounded" tail read unbounded: readTail returns at most n bytes.
+func TestReadTailIsBoundedWhenTheFileGrowsAfterStat(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(p, []byte(strings.Repeat("a", 100)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(strings.Repeat("a", 5000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := readTail(f, fi, 10)
+	if err != nil || len(b) != 10 {
+		t.Fatalf("readTail read %d bytes (err %v), want exactly 10", len(b), err)
 	}
 }
 

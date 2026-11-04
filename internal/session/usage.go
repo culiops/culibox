@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/culiops/culibox/internal/gitrepo"
 	"github.com/culiops/culibox/internal/launcher"
@@ -144,9 +145,11 @@ func parseUsageTail(b []byte) (Usage, bool) {
 
 // contextWindows lists model-id prefixes and their context window (max input
 // tokens). First match wins. A model matching no prefix is unknown: no guessed
-// number, so no percentage. opus-4-6 and sonnet-4-6 are deliberately absent: they
-// are 200k unless the session runs the [1m] variant, and the transcript's model id
-// does not say which, so either number would be a guess (#79).
+// number, so no percentage. opus-4-6 and sonnet-4-6 are deliberately absent. Basis
+// (inferred, not from a primary source: Anthropic's docs were unreachable): issue
+// #79 reports Claude Code's catalog gives them 200k unless the [1m] variant is
+// used, and the transcript's model id does not say which, so either number would
+// be a guess.
 var contextWindows = []struct {
 	prefix string
 	max    int
@@ -229,11 +232,8 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 		return Usage{}, false
 	}
 	u, ok := parseUsageTail(b)
-	if !ok && cut {
-		if b, err = readTail(f, fi, usageWideTailBytes); err != nil {
-			return Usage{}, false
-		}
-		u, ok = parseUsageTail(b)
+	if cut && (!ok || u.Model == "") { // no usage, or only a compact boundary: the model is further back
+		u, ok = m.usageWidened(id, l.path, f, fi)
 	}
 	if !ok {
 		return Usage{}, false
@@ -250,6 +250,41 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 		u.Pct = &pctv
 	}
 	return u, true
+}
+
+// usageWideEntry is the cached result of one widened read, valid while the
+// transcript still has the same path, size and mtime.
+type usageWideEntry struct {
+	path  string
+	mtime time.Time
+	size  int64
+	u     Usage
+	ok    bool
+}
+
+// usageWidened parses the last usageWideTailBytes of a transcript whose normal
+// tail was not enough. The read is ~100 ms and tens of MB, and the sidebar polls
+// every few seconds, so the answer (including "none") is reused while the file is
+// unchanged. One entry per session; peekForget drops it with the session.
+func (m *Manager) usageWidened(id, path string, f *os.File, fi os.FileInfo) (Usage, bool) {
+	m.usageMu.Lock()
+	e, hit := m.usageWide[id]
+	m.usageMu.Unlock()
+	if hit && e.path == path && e.size == fi.Size() && e.mtime.Equal(fi.ModTime()) {
+		return e.u, e.ok
+	}
+	b, err := readTail(f, fi, usageWideTailBytes)
+	if err != nil {
+		return Usage{}, false // a read error is not cached: the next poll retries
+	}
+	u, ok := parseUsageTail(b)
+	m.usageMu.Lock()
+	if m.usageWide == nil {
+		m.usageWide = map[string]usageWideEntry{}
+	}
+	m.usageWide[id] = usageWideEntry{path: path, mtime: fi.ModTime(), size: fi.Size(), u: u, ok: ok}
+	m.usageMu.Unlock()
+	return u, ok
 }
 
 // ResolveBins fills in Bin for any session that still lacks it. Reconcile runs at
@@ -299,7 +334,7 @@ func readTail(f *os.File, fi os.FileInfo, n int64) ([]byte, error) {
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return nil, err
 	}
-	return io.ReadAll(f)
+	return io.ReadAll(io.LimitReader(f, n)) // the file may have grown since fi was taken
 }
 
 // liveCwd turns the transcript's cwd into the base the browser should join
