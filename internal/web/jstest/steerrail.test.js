@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -195,6 +195,13 @@ test("with no percentage it computes one, and clamps it", () => {
 
 test("a null percentage draws no fill rather than a zero-width one", () => {
   assert.strictEqual(ctxFill(null).width, "0%");
+});
+
+test("the empty context note: compacted with no size reported is not 'no usage yet'", () => {
+  assert.strictEqual(ctxEmptyNote({ claude: true }, null), "No transcript usage reported yet.");
+  assert.strictEqual(ctxEmptyNote({ claude: true }, { postCompact: true, contextTokens: 0 }), "Compacted; size not reported.");
+  assert.strictEqual(ctxEmptyNote({ claude: true }, { contextTokens: 5000 }), "No transcript usage reported yet.");
+  assert.strictEqual(ctxEmptyNote({ claude: false }, null), "Not a Claude session \u2014 no context to report.");
 });
 
 test("railMeta appends the caller's extra rows after its own", () => {

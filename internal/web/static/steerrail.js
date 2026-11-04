@@ -292,6 +292,15 @@ function ctxFill(u) {
   return { pct, width: (pct === null ? 0 : pct) + "%", used, max };
 }
 
+// ctxEmptyNote: the caption under the context meter when there is no bar to draw.
+// A session just compacted whose boundary carried no size reports postCompact with
+// zero tokens: that is "compacted", not "nothing reported yet".
+function ctxEmptyNote(s, u) {
+  if (!s.claude) return "Not a Claude session \u2014 no context to report.";
+  if (u && u.postCompact && !(Number(u.contextTokens) > 0)) return "Compacted; size not reported.";
+  return "No transcript usage reported yet.";
+}
+
 // --- DOM ---------------------------------------------------------------------
 
 const STEER_KEY = "agent-box:steerRail";
@@ -473,7 +482,7 @@ function renderSteerFacts(s) {
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
-    meta.rows.map((r) => r.k + "=" + r.v + (r.title ? "@" + r.title : "")).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
+    meta.rows.map((r) => r.k + "=" + r.v + (r.title ? "@" + r.title : "")).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0, ctxEmptyNote(s, usage),
     (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null), JSON.stringify(s.github || null),
     JSON.stringify(s.aws_connections || null)].join("|");
   if (key === steerFactsKey) return;
@@ -526,7 +535,7 @@ function renderSteerFacts(s) {
   } else {
     const cap = document.createElement("p");
     cap.className = "tiny mut";
-    cap.textContent = s.claude ? "No transcript usage reported yet." : "Not a Claude session — no context to report.";
+    cap.textContent = ctxEmptyNote(s, usage);
     ctx.appendChild(cap);
   }
 }
@@ -1320,5 +1329,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }
