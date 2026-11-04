@@ -119,6 +119,55 @@ func TestWriteMutesActivity(t *testing.T) {
 	}
 }
 
+// A submitted line is not a viewer echo: its echo and the agent's start of work
+// must count, which also makes a second SendMessage right after see "working".
+func TestSubmittedInputIsNotMuted(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour)
+	cases := []struct {
+		name   string
+		writes []string // written 100 ms apart, starting at t0
+	}{
+		{"a line ending in Enter", []string{"hi\r"}},
+		{"a pasted line ending in newline", []string{"hi\n"}},
+		{"Enter ends the mute its keystrokes started", []string{"h", "i", "\r"}},
+	}
+	for _, c := range cases {
+		s := &Session{lastActivityAt: t0.Add(-time.Hour)}
+		at := t0
+		for _, w := range c.writes {
+			s.noteInput(at, []byte(w))
+			at = at.Add(100 * time.Millisecond)
+		}
+		s.noteOutput(at)
+		if !s.lastActivityAt.Equal(at) {
+			t.Errorf("%s: output right after the line did not count", c.name)
+		}
+	}
+}
+
+// Back-to-back input (steady typing, mouse motion) may keep activity muted for
+// at most inputMuteMax in one run, so it cannot hide real work forever. A pause
+// longer than the grace starts a new run.
+func TestInputMuteIsCapped(t *testing.T) {
+	t0 := time.Now().Add(-time.Hour)
+	s := &Session{lastActivityAt: t0.Add(-time.Hour)}
+	for d := time.Duration(0); d <= 5*time.Second; d += 200 * time.Millisecond {
+		s.noteInput(t0.Add(d), []byte("x"))
+	}
+	if s.noteOutput(t0.Add(2 * time.Second)); !s.lastActivityAt.Before(t0) {
+		t.Fatal("output 2 s into a typing run counted: the run is still muted")
+	}
+	at := t0.Add(3*time.Second + 500*time.Millisecond)
+	if s.noteOutput(at); !s.lastActivityAt.Equal(at) {
+		t.Fatalf("output 3.5 s into a typing run was muted: the mute must be capped")
+	}
+	resume := t0.Add(5*time.Second + attachRepaintGrace + 500*time.Millisecond) // after a pause
+	s.noteInput(resume, []byte("x"))
+	if s.noteOutput(resume.Add(50 * time.Millisecond)); !s.lastActivityAt.Equal(at) {
+		t.Fatal("a keystroke after a pause did not start a new muted run")
+	}
+}
+
 // SendMessage's guard: the registry may only TIGHTEN the PTY verdict, never
 // loosen it. The agent can write its own registry (a boxed one always can), so
 // a forged "idle" must not let a line be typed into a prompt the PTY shows

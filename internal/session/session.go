@@ -128,6 +128,40 @@ func (s *Session) muteActivity(now time.Time) {
 	s.activityMutedUntil = now.Add(attachRepaintGrace)
 }
 
+// inputMuteMax caps how long back-to-back input can keep activity muted in one
+// run, so steady typing or mouse motion on the PTY fallback cannot hide real
+// work for longer than this.
+const inputMuteMax = 3 * time.Second
+
+// noteInput mutes activity for viewer input written at now (see Write). A run
+// is input arriving within attachRepaintGrace of the previous input; its mute
+// ends no later than inputMuteMax after the run started. It never shortens a
+// longer mute already set by a resize or forced redraw.
+//
+// A write holding '\r' or '\n' is a submitted line, not an echo: it mutes
+// nothing and ends the mute its keystrokes started (and any resize mute, which
+// at worst reads as work just as the agent starts some), so the line's echo
+// and the agent's start of work count. That also makes a second SendMessage
+// right after see "working". Caller holds s.mu.
+func (s *Session) noteInput(now time.Time, p []byte) {
+	if bytes.ContainsAny(p, "\r\n") {
+		s.activityMutedUntil = time.Time{}
+		s.inputMuteLast = time.Time{}
+		return
+	}
+	if now.Sub(s.inputMuteLast) > attachRepaintGrace {
+		s.inputMuteStart = now
+	}
+	s.inputMuteLast = now
+	until := now.Add(attachRepaintGrace)
+	if limit := s.inputMuteStart.Add(inputMuteMax); until.After(limit) {
+		until = limit
+	}
+	if until.After(s.activityMutedUntil) {
+		s.activityMutedUntil = until
+	}
+}
+
 // Backend is an optional session-persistence layer (abduco). When a Manager has
 // one, sessions run under it and survive a daemon restart; the daemon holds a
 // replaceable attach process. When nil, the Manager owns the agent PTY directly
@@ -864,8 +898,10 @@ type Session struct {
 	// (resize/forced-redraw on attach), not agent work, so it must not count as
 	// activity. Guarded by mu.
 	activityMutedUntil time.Time
-	exitCode           int  // agent exit code; meaningful only when exitCodeKnown
-	exitCodeKnown      bool // true only for ephemeral sessions (cmd IS the agent)
+	inputMuteStart     time.Time // when the current run of muted viewer input began (noteInput; mu)
+	inputMuteLast      time.Time // when that run's latest write landed (noteInput; mu)
+	exitCode           int       // agent exit code; meaningful only when exitCodeKnown
+	exitCodeKnown      bool      // true only for ephemeral sessions (cmd IS the agent)
 	removed            chan struct{}
 	removedOnce        sync.Once
 	detachedCh         chan struct{} // closed when the session goes detached (agent alive, pipe lost)
@@ -1116,16 +1152,16 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 // having been given a turn (see submitted). Focus reports, CPR/DA replies and
 // text without Enter do not count: xterm emits the former on its own.
 //
-// Every write also mutes activity for attachRepaintGrace: a TUI repaints
-// within milliseconds of a focus/mouse report or a keystroke (measured, #77),
-// and that echo is the viewer's doing, not agent work. The mute is set BEFORE
-// the bytes reach the PTY so the echo cannot land ahead of it. Real work after
-// an Enter still shows within about a second: a busy spinner repaints every
-// 0.1-0.33 s, well past the window. A live registry status overrides all of
-// this (regActivity); the mute matters for the PTY fallback.
+// A write without Enter also mutes activity for attachRepaintGrace (capped per
+// run, see noteInput): a TUI repaints within milliseconds of a focus/mouse
+// report or a keystroke (measured, #77), and that echo is the viewer's doing,
+// not agent work. The mute is set BEFORE the bytes reach the PTY so the echo
+// cannot land ahead of it. A submitted line is never muted, so the agent's
+// start of work counts at once. A live registry status overrides all of this
+// (regActivity); the mute matters for the PTY fallback.
 func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
-	s.muteActivity(time.Now())
+	s.noteInput(time.Now(), p)
 	s.mu.Unlock()
 	n, err := s.ptmx.Write(p)
 	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
