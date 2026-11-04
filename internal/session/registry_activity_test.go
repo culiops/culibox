@@ -109,3 +109,26 @@ func TestWriteMutesActivity(t *testing.T) {
 		t.Fatalf("output after the mute window did not count: got %v want %v", s.lastActivityAt, later)
 	}
 }
+
+// SendMessage must judge "waiting" the way List does: a registry that says the
+// turn is running refuses a reply even though the PTY has gone quiet.
+func TestSendMessageFollowsTheRegistry(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", regStatusBusy))
+	s := m.sessions["s1"]
+	s.replyable = true
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devnull.Close() })
+	s.ptmx = devnull
+	if err := m.SendMessage("s1", "next step"); err != ErrNotWaiting {
+		t.Errorf("busy registry, silent PTY: err=%v want ErrNotWaiting", err)
+	}
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", regStatusIdle))
+	s.lastActivityAt = time.Now() // an idle repaint
+	if err := m.SendMessage("s1", "next step"); err != nil {
+		t.Errorf("idle registry with a repaint: err=%v want nil", err)
+	}
+}

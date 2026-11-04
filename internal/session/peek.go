@@ -770,13 +770,16 @@ func (m *Manager) SendMessage(id, text string) error {
 	// pending=false PASSED the third guard — so the one state the guard exists
 	// to catch (no ground truth about the agent's turn) was also the state that
 	// waved the message through.
-	p, havePeek, blocked := m.peekAndBlocked(id)
+	p, havePeek, reg := m.peekAndReg(id)
 	if !havePeek {
 		return ErrNoTranscript
 	}
+	// "waiting" means what List says it means: the registry status first,
+	// PTY silence only without one, so a busy turn is never typed into.
+	act := regActivity(info.Activity, s.quietActivity(), reg)
 	// blocked joins pending: the registry can see a prompt before (or without)
 	// the transcript's tool_use, and a line typed into a prompt answers it.
-	if ok, why := canReply(info.Replyable, info.Activity, p.Pending || blocked); !ok {
+	if ok, why := canReply(info.Replyable, act, p.Pending || reg == regStatusWaiting); !ok {
 		switch why {
 		case "not_replyable":
 			return ErrNotReplyable
