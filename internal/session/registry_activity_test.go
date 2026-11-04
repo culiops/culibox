@@ -110,25 +110,36 @@ func TestWriteMutesActivity(t *testing.T) {
 	}
 }
 
-// SendMessage must judge "waiting" the way List does: a registry that says the
-// turn is running refuses a reply even though the PTY has gone quiet.
-func TestSendMessageFollowsTheRegistry(t *testing.T) {
-	m, home := newLocatorManager(t)
-	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", regStatusBusy))
-	s := m.sessions["s1"]
-	s.replyable = true
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
+// SendMessage's guard: the registry may only TIGHTEN the PTY verdict, never
+// loosen it. The agent can write its own registry (a boxed one always can), so
+// a forged "idle" must not let a line be typed into a prompt the PTY shows
+// animating — that dialog reads single keys.
+func TestSendMessageRegistryOnlyTightens(t *testing.T) {
+	cases := []struct {
+		name, reg string
+		silent    time.Duration // how long the PTY has been quiet
+		want      error
+	}{
+		{"busy refuses though the PTY is quiet", regStatusBusy, 30 * time.Second, ErrNotWaiting},
+		{"idle never overrides an animating PTY", regStatusIdle, 0, ErrNotWaiting},
+		{"shell with a quiet PTY accepts a reply: Claude is at its prompt", regStatusShell, 30 * time.Second, nil},
+		{"shell never overrides an animating PTY", regStatusShell, 0, ErrNotWaiting},
+		{"idle with a quiet PTY accepts a reply", regStatusIdle, 30 * time.Second, nil},
 	}
-	t.Cleanup(func() { _ = devnull.Close() })
-	s.ptmx = devnull
-	if err := m.SendMessage("s1", "next step"); err != ErrNotWaiting {
-		t.Errorf("busy registry, silent PTY: err=%v want ErrNotWaiting", err)
-	}
-	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", regStatusIdle))
-	s.lastActivityAt = time.Now() // an idle repaint
-	if err := m.SendMessage("s1", "next step"); err != nil {
-		t.Errorf("idle registry with a repaint: err=%v want nil", err)
+	for _, c := range cases {
+		m, home := newLocatorManager(t)
+		writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", c.reg))
+		s := m.sessions["s1"]
+		s.replyable = true
+		s.lastActivityAt = time.Now().Add(-c.silent)
+		devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = devnull.Close() })
+		s.ptmx = devnull
+		if err := m.SendMessage("s1", "next step"); err != c.want {
+			t.Errorf("%s: err=%v want %v", c.name, err, c.want)
+		}
 	}
 }

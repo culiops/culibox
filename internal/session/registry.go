@@ -79,6 +79,21 @@ func regActivity(act, quiet, status string) string {
 	return act
 }
 
+// replyActivity is the activity SendMessage's guard judges a reply by. Unlike
+// regActivity (what the dot shows), the registry may only TIGHTEN the PTY
+// verdict here, never loosen it: the agent can write its own registry (a boxed
+// one always can), so a forged "idle" must not let a line be typed into a
+// prompt the PTY shows animating, which reads single keys. busy refuses; idle,
+// shell and waiting leave the PTY verdict alone (waiting refuses through the
+// pending guard instead). shell with a quiet PTY therefore accepts a reply:
+// Claude is at its prompt and takes input while the background shell runs.
+func replyActivity(act, status string) string {
+	if status == regStatusBusy && act == "waiting" {
+		return "working"
+	}
+	return act
+}
+
 // sessionIDRe bounds what a registry sessionId may look like before it is ever
 // joined into a path: a uuid-ish token, nothing that can traverse. The first
 // character must be alphanumeric — real ids are UUIDs, and a leading "-"
