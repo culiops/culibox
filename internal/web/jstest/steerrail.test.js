@@ -4,7 +4,9 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+// steerrail.js is a browser script: withCommas is usage.js's global there.
+globalThis.withCommas = require("../static/usage.js").withCommas;
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -200,8 +202,17 @@ test("a null percentage draws no fill rather than a zero-width one", () => {
 test("the empty context note: compacted with no size reported is not 'no usage yet'", () => {
   assert.strictEqual(ctxEmptyNote({ claude: true }, null), "No transcript usage reported yet.");
   assert.strictEqual(ctxEmptyNote({ claude: true }, { postCompact: true, contextTokens: 0 }), "Compacted; size not reported.");
-  assert.strictEqual(ctxEmptyNote({ claude: true }, { contextTokens: 5000 }), "No transcript usage reported yet.");
+  // tokens but no pct: the model is not in the window table, so no bar is drawn.
+  assert.strictEqual(ctxEmptyNote({ claude: true }, { contextTokens: 25340, postCompact: true }), "Window size unknown for this model.");
+  assert.strictEqual(ctxEmptyNote({ claude: true }, { contextTokens: 5000, model: "claude-opus-4-6" }), "Window size unknown for this model.");
   assert.strictEqual(ctxEmptyNote({ claude: false }, null), "Not a Claude session \u2014 no context to report.");
+});
+
+test("the 'used' row says so when the count is the size right after a compaction", () => {
+  assert.strictEqual(ctxUsedText(ctxFill({ contextTokens: 25340, contextMax: 1000000, pct: 3, postCompact: true }), { postCompact: true }),
+    "25,340 / 1,000,000 (after compact)");
+  assert.strictEqual(ctxUsedText(ctxFill({ contextTokens: 25340, contextMax: 1000000, pct: 3 }), {}), "25,340 / 1,000,000");
+  assert.strictEqual(ctxUsedText(ctxFill({ contextTokens: 25340 }), null), "25,340");
 });
 
 test("railMeta appends the caller's extra rows after its own", () => {

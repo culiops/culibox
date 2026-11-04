@@ -84,5 +84,5 @@ function meterModel(label, win, nowSec) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
+  module.exports = { withCommas, fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
 }
