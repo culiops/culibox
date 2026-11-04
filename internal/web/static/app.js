@@ -1354,6 +1354,7 @@ function renderRateLimitsInto(host, rl) {
     const el = document.createElement("div");
     el.className = "mtr";
     if (m.hot) el.classList.add("hot");
+    if (m.unknown) el.classList.add("unk");
     const name = document.createElement("span");
     name.textContent = m.label;
     const bar = document.createElement("span");
@@ -1363,14 +1364,14 @@ function renderRateLimitsInto(host, rl) {
     bar.appendChild(fill);
     const pc = document.createElement("span");
     pc.className = "pc";
-    pc.textContent = m.pct + "%";
+    pc.textContent = m.unknown ? "–" : m.pct + "%";
     const rs = document.createElement("span");
     rs.className = "rs";
     rs.textContent = m.reset;
     el.append(name, bar, pc, rs);
     // The bar carries no text, so the meter needs an accessible name of its own.
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", m.label + " usage " + m.pct + "%, " + m.reset);
+    el.setAttribute("aria-label", m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + m.reset);
     host.appendChild(el);
     count++;
   }
@@ -1389,8 +1390,11 @@ function renderRateLimitsInto(host, rl) {
 // vanishes the band cleanly instead of leaving an empty 0% row.
 function renderRateLimits(rl) {
   const name = headerAccount();
-  acctHeaderShown = name;
-  const lims = acctLimitsMap(rl)[name] || null;
+  const model = headerModel();
+  acctHeaderShown = name + "|" + acctModelFamily(model);
+  // Show the focused session's model bucket, so two sessions on one token do
+  // not make the header flip between their numbers (acctPickBucket).
+  const lims = acctPickBucket(acctLimitsMap(rl)[name] || null, model);
   const age = acctLimitsAge(lims && lims.updated_at, Math.floor(Date.now() / 1000));
   for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
@@ -1403,6 +1407,13 @@ function renderRateLimits(rl) {
       host.prepend(lab);
     }
     host.classList.toggle("stale", !!(count && age.stale));
+    // A stale reading carries its age as visible text, not only in the tooltip.
+    if (count && age.stale) {
+      const ag = document.createElement("span");
+      ag.className = "acct-age";
+      ag.textContent = acctAgeNote(age);
+      host.appendChild(ag);
+    }
     host.title = count ? (name + " · updated " + age.text) : "";
     if (id === "limits-mobile" || id === "limits-side") host.hidden = count === 0;
   }

@@ -67,21 +67,41 @@ test("meterModel goes hot past 75 percent, not at it", () => {
 // Bad data must not paint a bar wider than its track or narrower than nothing.
 test("meterModel clamps the bar width to 0..100", () => {
   const now = 1_700_000_000;
-  assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now }, now).width, "100%");
-  assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now }, now).width, "0%");
+  assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now + 60 }, now).width, "100%");
+  assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now + 60 }, now).width, "0%");
   // The LABEL is deliberately not clamped: an out-of-range percentage means the
   // producer is wrong, and showing 100% would hide that. Only the bar is clamped,
   // because a bar cannot be drawn wider than its track.
-  assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now }, now).pct, 140);
-  assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now }, now).pct, -3);
+  assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now + 60 }, now).pct, 140);
+  assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now + 60 }, now).pct, -3);
 });
 
-test("meterModel words an expired reset as a state, not a duration", () => {
+// Once resets_at has passed, the window has rolled over and the stored percentage
+// describes the OLD window. We do not know the new usage, so the meter says
+// "reset" with no number and no fill rather than a stale 88% (or a false 0%).
+test("meterModel shows a window whose reset time has passed as reset, never the old percentage", () => {
   const now = 1_700_000_000;
-  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: now - 60 }, now).reset, "resets now");
-  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: now }, now).reset, "resets now");
-  // resets_at has no omitempty server-side, so a hook that omits it sends 0.
-  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: 0 }, now).reset, "resets now");
+  for (const at of [now - 3600, now - 1, now]) {
+    const m = meterModel("5h", { used_percentage: 88, resets_at: at }, now);
+    assert.equal(m.unknown, true, "resets_at " + (at - now));
+    assert.equal(m.pct, null);
+    assert.equal(m.width, "0%");
+    assert.equal(m.hot, false);
+    assert.equal(m.reset, "reset");
+  }
+  const live = meterModel("5h", { used_percentage: 88, resets_at: now + 1 }, now);
+  assert.equal(live.unknown, false);
+  assert.equal(live.pct, 88);
+});
+
+// resets_at has no omitempty server-side, so a hook that omits it sends 0: that
+// is "reset time unknown", which does not prove the window rolled over.
+test("meterModel does not call a window with no reset time reset", () => {
+  const now = 1_700_000_000;
+  const m = meterModel("5h", { used_percentage: 40, resets_at: 0 }, now);
+  assert.equal(m.unknown, false);
+  assert.equal(m.pct, 40);
+  assert.equal(m.reset, "resets now");
 });
 
 // An absent window renders no meter at all, never a 0% bar that would read as

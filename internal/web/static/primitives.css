@@ -133,6 +133,8 @@
     .mtr .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); display: block; }
     .mtr .pc { font-variant-numeric: tabular-nums; }
     .mtr .rs { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    /* A window past its reset time: usage unknown, so dimmed with no fill. */
+    .mtr.unk { opacity: .5; }
     .mtr.hot .bar i { background: var(--warn); }
     .mtr.hot .pc, .mtr.hot .rs { color: var(--warn); }
     /* Sidebar pane header bar. A solid full-width row, not a legend floated onto

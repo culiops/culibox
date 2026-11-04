@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { ACCT_DEFAULT, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel } = require("../static/accounts.js");
+const { ACCT_DEFAULT, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel, acctAgeNote, acctModelFamily, acctPickBucket } = require("../static/accounts.js");
 
 test("acctLimitsMap tolerates the pre-accounts flat shape", () => {
   const flat = { updated_at: 1, five_hour: { used_percentage: 5, resets_at: 9 } };
@@ -47,6 +47,52 @@ test("acctOptionLabel never presents stale quota as current", () => {
   assert.equal(acctOptionLabel("work", fresh, now), "work · 5h 10%");
   // numbers with no timestamp at all are also unverifiable
   assert.equal(acctOptionLabel("work", { five_hour: { used_percentage: 10 } }, now), "work · 5h 10% (no data)");
+});
+
+test("acctOptionLabel shows a window past its reset as reset, not the old percentage", () => {
+  const now = 100000;
+  const l = { updated_at: now - 60, five_hour: { used_percentage: 70, resets_at: now - 3600 }, seven_day: { used_percentage: 20, resets_at: now + 86400 } };
+  assert.equal(acctOptionLabel("coding", l, now), "coding · 5h reset · wk 20%");
+  // a window with no reset time cannot be proven reset
+  const noReset = { updated_at: now - 60, five_hour: { used_percentage: 70 } };
+  assert.equal(acctOptionLabel("coding", noReset, now), "coding · 5h 70%");
+});
+
+test("acctAgeNote: visible text only for a stale reading", () => {
+  const now = 100000;
+  assert.equal(acctAgeNote(acctLimitsAge(now - 60, now)), "");
+  assert.equal(acctAgeNote(acctLimitsAge(now - 7 * 3600, now)), "7h old");
+  assert.equal(acctAgeNote(acctLimitsAge(0, now)), "no data");
+});
+
+test("acctModelFamily groups model ids the way the statusLine script keys its buckets", () => {
+  assert.equal(acctModelFamily("claude-opus-4-5-20251101"), "opus");
+  assert.equal(acctModelFamily("Claude-Haiku-4-5"), "haiku");
+  assert.equal(acctModelFamily("claude-sonnet-4-5"), "sonnet");
+  assert.equal(acctModelFamily("Vendor Model/X 1"), "vendormodelx1");
+  assert.equal(acctModelFamily(""), "");
+  assert.equal(acctModelFamily(null), "");
+});
+
+test("acctPickBucket shows the focused session's model bucket, else the newest reading", () => {
+  const opus = { updated_at: 90, five_hour: { used_percentage: 9, resets_at: 500 }, seven_day: { used_percentage: 76, resets_at: 900 } };
+  const haiku = { updated_at: 100, five_hour: { used_percentage: 0, resets_at: 500 }, seven_day: { used_percentage: 94, resets_at: 800 } };
+  // top level mirrors the newest write (haiku), as the script writes it
+  const lim = { updated_at: 100, model_family: "haiku", five_hour: haiku.five_hour, seven_day: haiku.seven_day, by_model: { opus, haiku } };
+  const o = acctPickBucket(lim, "claude-opus-4-5");
+  assert.equal(o.seven_day.used_percentage, 76);
+  assert.equal(o.updated_at, 90);
+  assert.equal(acctPickBucket(lim, "claude-haiku-4-5").seven_day.used_percentage, 94);
+  // no focused model, or a model with no bucket: the newest reading (top level)
+  assert.equal(acctPickBucket(lim, "").seven_day.used_percentage, 94);
+  assert.equal(acctPickBucket(lim, "claude-sonnet-4-5").seven_day.used_percentage, 94);
+  // legacy snapshots without by_model, and absent data, pass through
+  const legacy = { updated_at: 5, five_hour: { used_percentage: 1, resets_at: 9 } };
+  assert.equal(acctPickBucket(legacy, "claude-opus-4-5"), legacy);
+  assert.equal(acctPickBucket(null, "claude-opus-4-5"), null);
+  // a bucket without a week window does not borrow the other bucket's week
+  const partial = { updated_at: 100, seven_day: haiku.seven_day, by_model: { opus: { updated_at: 90, five_hour: opus.five_hour } } };
+  assert.equal(acctPickBucket(partial, "claude-opus-4-5").seven_day, undefined);
 });
 
 const { acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText } = require("../static/accounts.js");

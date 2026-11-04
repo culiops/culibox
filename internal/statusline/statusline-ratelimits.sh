@@ -14,7 +14,13 @@
 # rate-limits file that tool produces; point `rate_limits_file` at it instead.
 #
 # OUTPUT: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/agent-box-rate-limits.json
-#   {"updated_at":<epoch>,"five_hour":{"used_percentage":N,"resets_at":E},"seven_day":{...}}
+#   {"updated_at":<epoch>,"five_hour":{"used_percentage":N,"resets_at":E},"seven_day":{...},
+#    "model":"<id>","model_family":"opus","by_model":{"opus":{"updated_at":..,"five_hour":..,"seven_day":..}}}
+# The file is replaced atomically (temp file + rename), and nothing is written
+# while Claude Code reports no rate limits (before a session's first reply).
+# The top-level windows are the newest write; by_model keeps one reading per
+# model family (at most 8), because sessions on different models can report
+# different quota numbers for one token.
 # THEN point agent-box at it — the default rate_limits_file is abtop's path, not
 # this one — in the agent-box config:
 #   { "rate_limits_file": "/home/you/.claude/agent-box-rate-limits.json" }
