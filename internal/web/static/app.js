@@ -4252,6 +4252,9 @@ function fillForm(p) {
   renderPfOptions(p.options || {});
   $("pf-context").value = contextPathsToText(p.context_paths);
   $("pf-context-warn").hidden = true;
+  $("pf-egress-allow").value = egressAllowToText(p.egress_allow);
+  $("pf-egress-open").checked = !!p.egress_open;
+  $("pf-egress-open-warn").hidden = !p.egress_open;
   $("pf-replyable").checked = !!p.replyable;
   // Checked = the box gets the files the CLAUDE.md imports; imports_off absent means on.
   $("pf-imports").checked = !p.imports_off;
@@ -4362,6 +4365,12 @@ function syncEditorActions() {
     f.disabled = aws.disabled;
   }
   $("pf-st-hint").hidden = !aws.hint;
+  // The Network block is a box-tier setting: hidden on host, locked like the rest.
+  $("pf-net-block").hidden = segValue($("pf-runtime")) === "host";
+  for (const f of $("pf-net-block").querySelectorAll(".fld, input[type=checkbox]")) {
+    f.classList.toggle("off", aws.disabled);
+    f.disabled = aws.disabled;
+  }
   // Last: the lock loop above re-enabled every radio, and this is the pass that
   // knows the tier, the instance and the lock together.
   syncPfMode();
@@ -4507,6 +4516,7 @@ function readForm() {
   }));
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
+  Object.assign(p, egressToSend(!$("pf-net-block").hidden, $("pf-egress-allow").value, $("pf-egress-open").checked));
   if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoaded && pfLoaded.replyable)) p.replyable = true;
   // A row the user cannot use (host tier, no box layer, an account without personal
   // config, a locked profile) keeps the stored value rather than dropping it.
@@ -4823,6 +4833,9 @@ $("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // under the cursor the moment its last path is deleted on the host tier.
 $("pf-context").addEventListener("input", () => {
   $("pf-context-hint").hidden = !contextRowState(segValue($("pf-runtime")), $("pf-context").value).hint;
+});
+$("pf-egress-open").addEventListener("change", () => {
+  $("pf-egress-open-warn").hidden = !$("pf-egress-open").checked;
 });
 $("pf-bin").addEventListener("input", () => {
   renderPfOptions(readForm().options);

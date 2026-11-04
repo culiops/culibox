@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -432,4 +432,28 @@ test("pfTouchProfile carries github_write and github_pat from the form's binding
 test("autoReturnToSend: only an unticked switch is sent", () => {
   assert.deepStrictEqual(autoReturnToSend(true), {});
   assert.deepStrictEqual(autoReturnToSend(false), { clone_no_auto_return: true });
+});
+
+test("egressAllowFromText: split, trim, drop empties, dedupe in first order", () => {
+  assert.deepStrictEqual(egressAllowFromText(" a.example \n\n*.b.example\r\na.example,c.example "), ["a.example", "*.b.example", "c.example"]);
+  assert.deepStrictEqual(egressAllowFromText(""), []);
+  assert.deepStrictEqual(egressAllowFromText(undefined), []);
+  // Junk is sent as typed; the server's validator refuses it.
+  assert.deepStrictEqual(egressAllowFromText("https://x.example"), ["https://x.example"]);
+});
+
+test("egressAllowToText: one host per line", () => {
+  assert.strictEqual(egressAllowToText(["a", "b"]), "a\nb");
+  assert.strictEqual(egressAllowToText(undefined), "");
+  assert.strictEqual(egressAllowToText([]), "");
+});
+
+test("egressToSend: only a visible block sends, and only what is set", () => {
+  assert.deepStrictEqual(egressToSend(true, "a.example\nb.example", true), { egress_allow: ["a.example", "b.example"], egress_open: true });
+  assert.deepStrictEqual(egressToSend(true, "", false), {});
+  assert.deepStrictEqual(egressToSend(true, "a.example", false), { egress_allow: ["a.example"] });
+  assert.deepStrictEqual(egressToSend(false, "a.example", true), {});
+  // Round trip: load -> text -> save keeps both.
+  const loaded = { egress_allow: ["a.example", "*.b.example"], egress_open: true };
+  assert.deepStrictEqual(egressToSend(true, egressAllowToText(loaded.egress_allow), loaded.egress_open), loaded);
 });
