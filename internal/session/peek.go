@@ -556,6 +556,21 @@ func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	return true, ""
 }
 
+// replyGate is SendMessage's whole per-session verdict after the kill-switch
+// and agent checks, shared with List's reply_ready so the UI offers exactly
+// the sends the server accepts. ptyAct is Info's PTY-recency activity, reg the
+// live registry status, silent how long the PTY has been quiet. Fails CLOSED
+// with no transcript ("no_transcript"): without ground truth about the turn,
+// the pending guard cannot hold.
+func replyGate(replyable bool, ptyAct, reg string, silent time.Duration, p Peek, havePeek bool) (bool, string) {
+	if !havePeek {
+		return false, "no_transcript"
+	}
+	// blocked joins pending: the registry can see a prompt before (or without)
+	// the transcript's tool_use, and a line typed into a prompt answers it.
+	return canReply(replyable, replyActivity(ptyAct, reg, silent), p.Pending || reg == regStatusWaiting)
+}
+
 // needOf is the attention decision for one listed session, pure so every
 // combination is table-testable. activity is what Info computed from PTY
 // silence; blocked is Claude Code's own live registry saying the session sits
@@ -774,17 +789,13 @@ func (m *Manager) SendMessage(id, text string) error {
 	// to catch (no ground truth about the agent's turn) was also the state that
 	// waved the message through.
 	p, havePeek, reg := m.peekAndReg(id)
-	if !havePeek {
-		return ErrNoTranscript
-	}
 	// The registry may only tighten the PTY verdict here (replyActivity): a
 	// busy turn is never typed into, and a forged idle never loosens it.
 	_, silent := s.quietActivity()
-	act := replyActivity(info.Activity, reg, silent)
-	// blocked joins pending: the registry can see a prompt before (or without)
-	// the transcript's tool_use, and a line typed into a prompt answers it.
-	if ok, why := canReply(info.Replyable, act, p.Pending || reg == regStatusWaiting); !ok {
+	if ok, why := replyGate(info.Replyable, info.Activity, reg, silent, p, havePeek); !ok {
 		switch why {
+		case "no_transcript":
+			return ErrNoTranscript
 		case "not_replyable":
 			return ErrNotReplyable
 		case "not_waiting":

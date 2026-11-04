@@ -1831,6 +1831,7 @@ function buildReplyComposer(s, opts) {
       replyable: o.replyable ? o.replyable() : s.replyable,
       activity: s.activity,
       pending: o.pending ? o.pending() : false,
+      reply_ready: s.reply_ready,
     });
     const closed = !st.enabled || pendingSends.has(s.id);
     // Three things move together, deliberately. The dimmed look says closed,
@@ -2624,7 +2625,7 @@ function renderNeedsCard(s) {
   // exactly this case (a claude session blocked on a permission prompt, which
   // the server refuses a reply to). The server's canReply stays the
   // authoritative gate either way.
-  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity });
+  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity, reply_ready: s.reply_ready });
   if (repliesOn) {
     for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
       const b = document.createElement("button");
@@ -6052,7 +6053,7 @@ function openReplySheet(s) {
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
       if (!repliesOn) return; // read-only sheet: no Send, quick replies or caption to paint
-      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity, reply_ready: s.reply_ready });
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
       // The quick replies are controls too — a session that is not
@@ -6086,7 +6087,7 @@ function openReplySheet(s) {
     // blocks a second one from the sheet too.
     function doSend(text) {
       if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity, reply_ready: s.reply_ready });
       if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
       pendingSends.add(s.id);
       send.disabled = true;

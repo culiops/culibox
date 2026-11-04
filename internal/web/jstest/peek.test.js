@@ -69,6 +69,33 @@ test("sendState reports pending before activity, matching canReply", () => {
   assert.equal(st.reason, "Session is inside a tool call. Open the tab to answer it.");
 });
 
+// reply_ready is the server's own SendMessage verdict (List). When present it
+// decides, so the control never offers a send the server refuses nor blocks
+// one it accepts; an older server that does not send it keeps today's gate.
+test("sendState: a waiting session the server is not ready for says it is finishing its turn", () => {
+  const st = sendState({ replyable: true, activity: "waiting", pending: false, reply_ready: false });
+  assert.deepEqual(st, { enabled: false, reason: "Session is finishing its turn — try again in a moment." });
+});
+
+test("sendState: the server's ready verdict opens a session the dot shows working (background shell)", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "working", pending: false, reply_ready: true }), { enabled: true, reason: "" });
+});
+
+test("sendState: a working session the server refuses keeps the activity's own words", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "working", pending: false, reply_ready: false }),
+    { enabled: false, reason: "Session is working — wait until it stops." });
+});
+
+test("sendState: opt-in and pending still come first whatever reply_ready says", () => {
+  assert.equal(sendState({ replyable: false, activity: "waiting", reply_ready: true }).reason, "Enable replies for this session first.");
+  assert.equal(sendState({ replyable: true, activity: "waiting", pending: true, reply_ready: true }).enabled, false);
+});
+
+test("sendState: without reply_ready (an older server) the activity decides, as before", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "waiting", pending: false }), { enabled: true, reason: "" });
+  assert.equal(sendState({ replyable: true, activity: "working", pending: false }).enabled, false);
+});
+
 test("notWaitingReason does not tell a dead session to keep working", () => {
   assert.match(notWaitingReason("working"), /wait until it stops/);
   // "wait until it stops" used to be shown for all four: an agent that has

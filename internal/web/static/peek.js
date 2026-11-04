@@ -63,6 +63,16 @@ function sendState(s) {
   if (s.pending) {
     return { enabled: false, reason: "Session is inside a tool call. Open the tab to answer it." };
   }
+  // reply_ready is the server's own SendMessage verdict (List): when present it
+  // decides. The dot can read waiting (the agent's status says the turn ended)
+  // a few seconds before the server takes a reply (its screen is still
+  // settling), and a background shell reads working while the agent takes one.
+  // An older server does not send it; the activity decides there, as before.
+  if (typeof s.reply_ready === "boolean") {
+    if (s.reply_ready) return { enabled: true, reason: "" };
+    if (s.activity === "waiting") return { enabled: false, reason: "Session is finishing its turn — try again in a moment." };
+    return { enabled: false, reason: notWaitingReason(s.activity) };
+  }
   // Not needsYou on purpose: a send is only accepted while the agent itself is
   // waiting (the server's canReply), and an expired sign-in does not change that.
   if (s.activity !== "waiting") {

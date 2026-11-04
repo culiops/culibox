@@ -168,6 +168,75 @@ func TestInputMuteIsCapped(t *testing.T) {
 	}
 }
 
+// List's reply_ready is SendMessage's own verdict, so the UI never offers a
+// send the server refuses (a turn just ended: registry idle, PTY still
+// "working") nor blocks one it accepts (shell with a quiet PTY).
+func TestListReplyReadyMatchesSendMessage(t *testing.T) {
+	cases := []struct {
+		name, reg    string        // reg "" = no valid registry entry
+		silent       time.Duration // how long the PTY has been quiet
+		replyable    bool
+		pending      bool // the transcript ends on a tool_use
+		off, nonAgnt bool // replies kill-switch off; a plain shell session
+		want         bool
+	}{
+		{"turn just ended: registry idle, PTY still working", regStatusIdle, 0, true, false, false, false, false},
+		{"idle and quiet", regStatusIdle, 30 * time.Second, true, false, false, false, true},
+		{"shell and quiet", regStatusShell, 30 * time.Second, true, false, false, false, true},
+		{"busy and quiet", regStatusBusy, 30 * time.Second, true, false, false, false, false},
+		{"stale busy", regStatusBusy, 2 * time.Minute, true, false, false, false, true},
+		{"registry waiting: a prompt", regStatusWaiting, 30 * time.Second, true, false, false, false, false},
+		{"no registry, quiet", "", 30 * time.Second, true, false, false, false, true},
+		{"no registry, output", "", 0, true, false, false, false, false},
+		{"pending tool call", regStatusIdle, 30 * time.Second, true, true, false, false, false},
+		{"not opted in", regStatusIdle, 30 * time.Second, false, false, false, false, false},
+		{"replies switched off", regStatusIdle, 30 * time.Second, true, false, true, false, false},
+		{"not an agent session", regStatusIdle, 30 * time.Second, true, false, false, true, false},
+	}
+	for _, c := range cases {
+		m, home := newLocatorManager(t)
+		body := "{}" // fails validation: no entry
+		if c.reg != "" {
+			body = regJSON(101, "aaaa-1", "5000", c.reg)
+		}
+		writeReg(t, home, 101, body)
+		if c.pending {
+			pending := `{"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}` + "\n"
+			if err := os.WriteFile(home+"/.claude/projects/"+projectSlug(locCwd)+"/aaaa-1.jsonl", []byte(pending), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s := m.sessions["s1"]
+		s.claudeSessionID = "aaaa-1" // bound by its conversation id even with no registry entry
+		s.replyable = c.replyable
+		s.lastActivityAt = time.Now().Add(-c.silent)
+		if c.nonAgnt {
+			s.Bin, s.agentKind = "/bin/zsh", false
+		}
+		m.SetRepliesEnabled(!c.off)
+		devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = devnull.Close() })
+		s.ptmx = devnull
+		var got *bool
+		for _, i := range m.List() {
+			if i.ID == "s1" {
+				got = i.ReplyReady
+			}
+		}
+		if got == nil {
+			t.Errorf("%s: List carries no reply_ready", c.name)
+			continue
+		}
+		sendErr := m.SendMessage("s1", "next step")
+		if *got != c.want || *got != (sendErr == nil) {
+			t.Errorf("%s: reply_ready=%v SendMessage err=%v, want ready=%v and the two to agree", c.name, *got, sendErr, c.want)
+		}
+	}
+}
+
 // SendMessage's guard: the registry may only TIGHTEN the PTY verdict, never
 // loosen it. The agent can write its own registry (a boxed one always can), so
 // a forged "idle" must not let a line be typed into a prompt the PTY shows

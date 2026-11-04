@@ -644,8 +644,13 @@ type Info struct {
 	// "agent" (the agent's own status report) or "pty" (the PTY-silence
 	// fallback, which output blips can flip; the client debounces only it).
 	ActivitySource string `json:"activity_source,omitempty"`
-	Name           string `json:"name"`              // mutable display label (id is the stable key)
-	Runtime        string `json:"runtime,omitempty"` // box | host
+	// ReplyReady is whether SendMessage would accept a reply right now (the
+	// same replyGate), so the UI offers exactly the sends the server takes.
+	// Filled only in List; absent elsewhere, so a client can tell "not ready"
+	// from "an older server that does not say".
+	ReplyReady *bool  `json:"reply_ready,omitempty"`
+	Name       string `json:"name"`              // mutable display label (id is the stable key)
+	Runtime    string `json:"runtime,omitempty"` // box | host
 	// ParentID is the session this one is a companion shell of ("" = top-level).
 	ParentID string `json:"parent_id,omitempty"`
 	// Options are the per-spawn option overrides this session started with
@@ -2764,9 +2769,11 @@ func (m *Manager) List() []Info {
 		silent time.Duration // how long the PTY has been silent
 	}
 	quiet := map[string]ptyQuiet{} // per session, for regActivity
+	var repliesOn bool
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		repliesOn = m.repliesOn
 		o := make([]Info, 0, len(m.sessions))
 		for _, s := range m.sessions {
 			i := s.Info()
@@ -2805,6 +2812,14 @@ func (m *Manager) List() []Info {
 			out[i].Summary = summaryLine(p.Text)
 		}
 		q := quiet[out[i].ID]
+		// SendMessage's own verdict, judged on the PTY activity BEFORE the
+		// registry folds into it. A non-agent session has no transcript, so
+		// replyGate refuses it as SendMessage's agent check does.
+		ready := repliesOn
+		if ready {
+			ready, _ = replyGate(out[i].Replyable, out[i].Activity, reg, q.silent, p, ok)
+		}
+		out[i].ReplyReady = &ready
 		out[i].Activity, out[i].ActivitySource = regActivity(out[i].Activity, q.act, reg, q.silent)
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
