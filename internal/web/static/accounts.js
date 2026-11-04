@@ -36,6 +36,7 @@ function acctBadge(session) {
 // older than ACCT_STALE_SEC (or with no timestamp) carry their age, so a
 // stale reading is never mistaken for a current one.
 function acctOptionLabel(name, limits, nowSec) {
+  limits = acctBestLimits(limits, nowSec);
   const parts = [];
   if (limits && limits.five_hour) parts.push(acctWinText("5h", limits.five_hour, nowSec));
   if (limits && limits.seven_day) parts.push(acctWinText("wk", limits.seven_day, nowSec));
@@ -60,26 +61,41 @@ function acctWinText(label, win, nowSec) {
   return label + " " + Math.round(win.used_percentage) + "%";
 }
 
-// acctModelFamily: the bucket key for a model id. Must match the statusLine
-// script (statusline-ratelimits.sh): opus/sonnet/haiku by substring, any other
-// id lowercased down to [a-z0-9._-], at most 40 chars. "" when there is no id.
-function acctModelFamily(model) {
-  const id = typeof model === "string" ? model.toLowerCase() : "";
-  for (const k of ["opus", "sonnet", "haiku"]) if (id.includes(k)) return k;
-  return id.replace(/[^a-z0-9._-]/g, "").slice(0, 40);
-}
-
-// acctPickBucket: the quota readings of one account for the model being looked
-// at. The quota can be reported per model bucket, so two sessions on one token
-// show different numbers, and the file's top level is only whichever rendered
-// last. With a bucket for the focused model (limits.by_model) that bucket is
-// shown, so the header stays put; otherwise the top level, the newest reading,
-// is returned unchanged. A bucket never borrows the other bucket's windows.
-function acctPickBucket(limits, model) {
-  const fam = acctModelFamily(model);
-  const b = limits && limits.by_model && fam ? limits.by_model[fam] : null;
-  if (!b) return limits;
-  return Object.assign({}, limits, { updated_at: b.updated_at, five_hour: b.five_hour, seven_day: b.seven_day });
+// acctBestLimits: the one reading of an account's quota that every meter shows
+// (header, mobile/side band, rail bars, spawn picker, Settings). Whether the
+// quota is per account or per model bucket is not known, and the snapshot's top
+// level is only whichever session wrote last, so two sessions on one token made
+// the meters flip. Each window therefore shows the HIGHEST used_percentage among
+// the top level and every limits.by_model bucket whose window has not reset yet,
+// with that reading's own resets_at. Within one window usage only rises, so per
+// account the highest is the freshest, and per model it is the most constraining
+// limit: it never understates. updated_at is the oldest reading shown. A window
+// no reading of which is live is returned as the top level has it (or the
+// freshest bucket's), so meterModel renders it as reset.
+function acctBestLimits(limits, nowSec) {
+  if (!limits || !limits.by_model || typeof limits.by_model !== "object") return limits;
+  const pick = (key) => {
+    const cands = [];
+    const add = (w, at) => {
+      if (w && typeof w.used_percentage === "number") cands.push({ w, at: Number(at) || 0 });
+    };
+    add(limits[key], limits.updated_at);
+    for (const b of Object.values(limits.by_model)) if (b && typeof b === "object") add(b[key], b.updated_at);
+    const live = cands.filter((c) => !(c.w.resets_at > 0 && c.w.resets_at <= nowSec));
+    if (live.length) return live.reduce((m, c) => (c.w.used_percentage > m.w.used_percentage || (c.w.used_percentage === m.w.used_percentage && c.at > m.at) ? c : m));
+    if (limits[key]) return cands.find((c) => c.w === limits[key]) || null;
+    return cands.length ? cands.reduce((m, c) => (c.at > m.at ? c : m)) : null;
+  };
+  const out = {};
+  const ats = [];
+  for (const key of ["five_hour", "seven_day"]) {
+    const c = pick(key);
+    if (!c) continue;
+    out[key] = c.w;
+    ats.push(c.at);
+  }
+  out.updated_at = ats.length ? Math.min(...ats) : limits.updated_at;
+  return out;
 }
 
 // acctChoices: the names an account <select> offers, default first. `keep` is
@@ -260,7 +276,7 @@ async function loadAccounts() {
   const lims = acctLimitsMap(lastRateLimits);
   const now = Math.floor(Date.now() / 1000);
   list.replaceChildren();
-  for (const a of accountsCache) list.appendChild(acctRow(a, lims[a.name], now));
+  for (const a of accountsCache) list.appendChild(acctRow(a, acctBestLimits(lims[a.name], now), now));
 }
 
 function acctRow(a, limits, now) {
@@ -563,15 +579,7 @@ async function acctLogin(name) {
 // list that arrives after the focus still lands the right account.
 function syncRateLimitsAccount() {
   if (typeof renderRateLimits !== "function") return;
-  if (headerAccount() + "|" + acctModelFamily(headerModel()) !== acctHeaderShown) renderRateLimits(lastRateLimits);
-}
-
-// headerModel: the focused session's model id (from its terminal tab's usage),
-// "" when unknown. It picks which model bucket of the account's quota to show.
-function headerModel() {
-  const t = typeof focusedTerminal === "function" ? focusedTerminal() : null;
-  const u = t && typeof t.usage === "function" ? t.usage() : null;
-  return u && u.model ? String(u.model) : "";
+  if (headerAccount() !== acctHeaderShown) renderRateLimits(lastRateLimits);
 }
 
 // headerAccount: whose quota the header shows — the focused session's
@@ -601,7 +609,7 @@ if (typeof document !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     ACCT_DEFAULT, ACCT_STALE_SEC, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel,
-    acctAgeNote, acctModelFamily, acctPickBucket,
+    acctAgeNote, acctBestLimits,
     acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText,
     acctTokenId, acctTokenOwned, acctTokenMode, acctTokenStateText, acctCanToken,
   };

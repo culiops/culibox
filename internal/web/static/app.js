@@ -686,7 +686,7 @@ function paintRailMeters() {
     const row = rows.find((r) => r.firstElementChild && r.firstElementChild.textContent === bar.dataset.win);
     const fill = row && row.querySelector(".bar i");
     bar.hidden = !fill;
-    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); any = true; }
+    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); bar.classList.toggle("unk", row.classList.contains("unk")); any = true; }
   }
   box.hidden = !any;
 }
@@ -1390,12 +1390,12 @@ function renderRateLimitsInto(host, rl) {
 // vanishes the band cleanly instead of leaving an empty 0% row.
 function renderRateLimits(rl) {
   const name = headerAccount();
-  const model = headerModel();
-  acctHeaderShown = name + "|" + acctModelFamily(model);
-  // Show the focused session's model bucket, so two sessions on one token do
-  // not make the header flip between their numbers (acctPickBucket).
-  const lims = acctPickBucket(acctLimitsMap(rl)[name] || null, model);
-  const age = acctLimitsAge(lims && lims.updated_at, Math.floor(Date.now() / 1000));
+  acctHeaderShown = name;
+  const now = Math.floor(Date.now() / 1000);
+  // One reading for every meter: the highest still-live one, so two sessions on
+  // one token do not make the header flip between their numbers (acctBestLimits).
+  const lims = acctBestLimits(acctLimitsMap(rl)[name] || null, now);
+  const age = acctLimitsAge(lims && lims.updated_at, now);
   for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
     if (!host) continue;
