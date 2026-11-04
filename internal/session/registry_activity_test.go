@@ -26,14 +26,16 @@ func TestRegActivity(t *testing.T) {
 		{"no registry: muted output (viewer echo) is not work", "", recent, true, true, false, false, "waiting"},
 		{"no registry: silence after a turn is waiting", "", stale, false, true, false, false, "waiting"},
 		{"no registry: silence before any turn is idle", "", stale, false, false, false, false, "idle"},
-		{"busy: working though the PTY is silent", regStatusBusy, stale, false, true, false, false, "working"},
+		{"busy: working though the PTY is silent", regStatusBusy, 30 * time.Second, false, true, false, false, "working"},
+		{"busy but silent past regStaleAfter: stale, the PTY rule decides", regStatusBusy, 2 * time.Minute, false, true, false, false, "waiting"},
+		{"shell but silent past regStaleAfter: the PTY rule decides", regStatusShell, 2 * time.Minute, false, true, false, false, "waiting"},
 		{"busy: working with output", regStatusBusy, recent, false, true, false, false, "working"},
 		{"idle: an unmuted repaint does not make it working", regStatusIdle, recent, false, true, false, false, "waiting"},
 		{"idle: silent after a turn is waiting", regStatusIdle, stale, false, true, false, false, "waiting"},
 		{"idle: never given a turn stays idle", regStatusIdle, recent, false, false, false, false, "idle"},
 		{"waiting: a prompt that animates is still waiting", regStatusWaiting, recent, false, true, false, false, "waiting"},
 		{"waiting: silent prompt is waiting", regStatusWaiting, stale, false, true, false, false, "waiting"},
-		{"shell: background shell is not your turn", regStatusShell, stale, false, true, false, false, "working"},
+		{"shell: background shell is not your turn", regStatusShell, 30 * time.Second, false, true, false, false, "working"},
 		{"shell: with output", regStatusShell, recent, false, true, false, false, "working"},
 		{"unknown status falls back to the PTY: fresh", "thinking", recent, false, true, false, false, "working"},
 		{"unknown status falls back to the PTY: silent", "thinking", stale, false, true, false, false, "waiting"},
@@ -53,7 +55,8 @@ func TestRegActivity(t *testing.T) {
 			s.muteActivity(at.Add(-100 * time.Millisecond))
 		}
 		s.noteOutput(at)
-		if got := regActivity(s.Info().Activity, s.quietActivity(), c.reg); got != c.want {
+		q, silent := s.quietActivity()
+		if got := regActivity(s.Info().Activity, q, c.reg, silent); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
@@ -73,6 +76,7 @@ func TestListActivityFollowsTheRegistry(t *testing.T) {
 	for _, c := range cases {
 		m, home := newLocatorManager(t)
 		writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", c.reg))
+		m.sessions["s1"].lastActivityAt = time.Now().Add(-30 * time.Second) // quiet, well inside regStaleAfter
 		if c.fresh {
 			m.sessions["s1"].lastActivityAt = time.Now()
 		}
@@ -121,6 +125,7 @@ func TestSendMessageRegistryOnlyTightens(t *testing.T) {
 		want      error
 	}{
 		{"busy refuses though the PTY is quiet", regStatusBusy, 30 * time.Second, ErrNotWaiting},
+		{"a stale busy (PTY silent past regStaleAfter) no longer refuses", regStatusBusy, 2 * time.Minute, nil},
 		{"idle never overrides an animating PTY", regStatusIdle, 0, ErrNotWaiting},
 		{"shell with a quiet PTY accepts a reply: Claude is at its prompt", regStatusShell, 30 * time.Second, nil},
 		{"shell never overrides an animating PTY", regStatusShell, 0, ErrNotWaiting},

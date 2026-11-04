@@ -776,7 +776,8 @@ func (m *Manager) SendMessage(id, text string) error {
 	}
 	// The registry may only tighten the PTY verdict here (replyActivity): a
 	// busy turn is never typed into, and a forged idle never loosens it.
-	act := replyActivity(info.Activity, reg)
+	_, silent := s.quietActivity()
+	act := replyActivity(info.Activity, reg, silent)
 	// blocked joins pending: the registry can see a prompt before (or without)
 	// the transcript's tool_use, and a line typed into a prompt answers it.
 	if ok, why := canReply(info.Replyable, act, p.Pending || reg == regStatusWaiting); !ok {

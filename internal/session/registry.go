@@ -50,6 +50,14 @@ const (
 	regStatusShell   = "shell"
 )
 
+// regStaleAfter: a busy or shell status is distrusted once the PTY has been
+// silent this long, and the PTY rule decides instead. A busy turn repaints its
+// spinner every 0.1-0.33 s (measured, #77), so a minute of silence means the
+// status is stale: an exit path that never rewrote it (Esc-interrupt, an API
+// error and /compact are unmeasured) or format drift. Past it, a long shell
+// reads as waiting: Claude sits at its prompt and accepts input.
+const regStaleAfter = 60 * time.Second
+
 // regActivity is the activity of a live session once Claude Code's registry
 // status is known. act is what Info computed from PTY recency; quiet is what it
 // would read with a silent PTY (waiting or idle, see quietActivity); status is
@@ -64,12 +72,15 @@ const (
 // background shell finishes, so a needs-you there is false and would fire a
 // second time at the real end of the turn. The UI has no distinct "background"
 // state, and adding one is a product call, not part of this fix (#77).
-func regActivity(act, quiet, status string) string {
+func regActivity(act, quiet, status string, silent time.Duration) string {
 	if act != "working" && act != "waiting" && act != "idle" {
 		return act
 	}
 	switch status {
 	case regStatusBusy, regStatusShell:
+		if silent > regStaleAfter {
+			return act
+		}
 		return "working"
 	case regStatusWaiting:
 		return "waiting"
@@ -87,8 +98,8 @@ func regActivity(act, quiet, status string) string {
 // shell and waiting leave the PTY verdict alone (waiting refuses through the
 // pending guard instead). shell with a quiet PTY therefore accepts a reply:
 // Claude is at its prompt and takes input while the background shell runs.
-func replyActivity(act, status string) string {
-	if status == regStatusBusy && act == "waiting" {
+func replyActivity(act, status string, silent time.Duration) string {
+	if status == regStatusBusy && act == "waiting" && silent <= regStaleAfter {
 		return "working"
 	}
 	return act

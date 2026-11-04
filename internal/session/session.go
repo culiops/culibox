@@ -96,12 +96,14 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 }
 
 // quietActivity is what Info's activity would read for this live session once
-// its PTY has gone silent: "waiting" for an agent given a turn, else "idle".
-// regActivity uses it when the registry says the turn has ended.
-func (s *Session) quietActivity() string {
+// its PTY has gone silent ("waiting" for an agent given a turn, else "idle"),
+// and how long the PTY has been silent. regActivity uses the first when the
+// registry says the turn has ended, the second to distrust a stale busy.
+func (s *Session) quietActivity() (string, time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return activityOf(false, false, 0, time.Time{}, time.Now(), idleThreshold, s.agentKind, s.submitted)
+	now := time.Now()
+	return activityOf(false, false, 0, time.Time{}, now, idleThreshold, s.agentKind, s.submitted), now.Sub(s.lastActivityAt)
 }
 
 // recordActivity reports whether output observed at `now` should count as agent
@@ -2710,7 +2712,11 @@ func (m *Manager) List() []Info {
 		complete bool
 	}
 	histories := map[string]history{}
-	quiet := map[string]string{} // each session's silent-PTY activity, for regActivity
+	type ptyQuiet struct {
+		act    string        // the silent-PTY activity
+		silent time.Duration // how long the PTY has been silent
+	}
+	quiet := map[string]ptyQuiet{} // per session, for regActivity
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2725,7 +2731,8 @@ func (m *Manager) List() []Info {
 				ids, complete := s.conversations()
 				histories[i.ID] = history{ids, complete}
 			}
-			quiet[i.ID] = s.quietActivity()
+			q, silent := s.quietActivity()
+			quiet[i.ID] = ptyQuiet{q, silent}
 			o = append(o, i)
 		}
 		return o
@@ -2750,7 +2757,8 @@ func (m *Manager) List() []Info {
 		if ok {
 			out[i].Summary = summaryLine(p.Text)
 		}
-		out[i].Activity = regActivity(out[i].Activity, quiet[out[i].ID], reg)
+		q := quiet[out[i].ID]
+		out[i].Activity = regActivity(out[i].Activity, q.act, reg, q.silent)
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull
