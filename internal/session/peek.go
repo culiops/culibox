@@ -649,8 +649,11 @@ func (m *Manager) peekStore(id, path string, mtime time.Time, size int64, p Peek
 // other.
 func (m *Manager) peekForget(id string) {
 	m.peekMu.Lock()
-	defer m.peekMu.Unlock()
 	delete(m.peekCache, id)
+	m.peekMu.Unlock()
+	m.usageMu.Lock()
+	delete(m.usageWide, id)
+	m.usageMu.Unlock()
 }
 
 // PeekFor reads the latest transcript peek for a claude session. ok=false for a

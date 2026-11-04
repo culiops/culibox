@@ -25,6 +25,13 @@ test("usageTitle lists model·effort·exact", () => {
   assert.equal(usageTitle(null), "");
 });
 
+test("usageTitle says so when the count is the size right after a compaction", () => {
+  assert.equal(
+    usageTitle({ model: "claude-opus-4-8", contextTokens: 25340, postCompact: true }),
+    "claude-opus-4-8 · 25,340 tokens (after compact)"
+  );
+});
+
 test("fmtCountdown", () => {
   const now = 1000000;
   assert.equal(fmtCountdown(now, now), "now");
