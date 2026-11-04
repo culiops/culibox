@@ -72,23 +72,33 @@ const regStaleAfter = 60 * time.Second
 // background shell finishes, so a needs-you there is false and would fire a
 // second time at the real end of the turn. The UI has no distinct "background"
 // state, and adding one is a product call, not part of this fix (#77).
-func regActivity(act, quiet, status string, silent time.Duration) string {
+//
+// src is what decided: srcAgent (the registry) or srcPTY (the fallback); ""
+// for an exited or detached session.
+func regActivity(act, quiet, status string, silent time.Duration) (_ string, src string) {
 	if act != "working" && act != "waiting" && act != "idle" {
-		return act
+		return act, ""
 	}
 	switch status {
 	case regStatusBusy, regStatusShell:
 		if silent > regStaleAfter {
-			return act
+			return act, srcPTY
 		}
-		return "working"
+		return "working", srcAgent
 	case regStatusWaiting:
-		return "waiting"
+		return "waiting", srcAgent
 	case regStatusIdle:
-		return quiet
+		return quiet, srcAgent
 	}
-	return act
+	return act, srcPTY
 }
+
+// Info.ActivitySource values. Provider-neutral: any agent that reports its own
+// live status is "agent".
+const (
+	srcAgent = "agent"
+	srcPTY   = "pty"
+)
 
 // replyActivity is the activity SendMessage's guard judges a reply by. Unlike
 // regActivity (what the dot shows), the registry may only TIGHTEN the PTY

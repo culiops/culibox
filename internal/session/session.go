@@ -603,10 +603,15 @@ type Info struct {
 	// says is blocked on a prompt (see needOf) — it never lowers it. That raise
 	// happens only in List, the same way Claude below is only filled there: a
 	// Get/Spawn response is never rendered as a row, so it carries the
-	// un-raised value.
+	// un-raised value. In List the agent's own live status, when it reports
+	// one, decides it (regActivity).
 	Activity string `json:"activity"`
-	Name     string `json:"name"`              // mutable display label (id is the stable key)
-	Runtime  string `json:"runtime,omitempty"` // box | host
+	// ActivitySource says what decided Activity for a live session in List:
+	// "agent" (the agent's own status report) or "pty" (the PTY-silence
+	// fallback, which output blips can flip; the client debounces only it).
+	ActivitySource string `json:"activity_source,omitempty"`
+	Name           string `json:"name"`              // mutable display label (id is the stable key)
+	Runtime        string `json:"runtime,omitempty"` // box | host
 	// ParentID is the session this one is a companion shell of ("" = top-level).
 	ParentID string `json:"parent_id,omitempty"`
 	// Options are the per-spawn option overrides this session started with
@@ -2758,7 +2763,7 @@ func (m *Manager) List() []Info {
 			out[i].Summary = summaryLine(p.Text)
 		}
 		q := quiet[out[i].ID]
-		out[i].Activity = regActivity(out[i].Activity, q.act, reg, q.silent)
+		out[i].Activity, out[i].ActivitySource = regActivity(out[i].Activity, q.act, reg, q.silent)
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull

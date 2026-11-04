@@ -56,33 +56,38 @@ func TestRegActivity(t *testing.T) {
 		}
 		s.noteOutput(at)
 		q, silent := s.quietActivity()
-		if got := regActivity(s.Info().Activity, q, c.reg, silent); got != c.want {
+		if got, _ := regActivity(s.Info().Activity, q, c.reg, silent); got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
 }
 
-// List folds the registry status into the activity it reports.
+// List folds the registry status into the activity it reports, and says where
+// the activity came from: "agent" (the agent's own status report) or "pty"
+// (the silence fallback), so the client debounces only the latter.
 func TestListActivityFollowsTheRegistry(t *testing.T) {
 	cases := []struct {
-		name, reg string
-		fresh     bool // PTY output just now
-		want      string
+		name, reg string        // reg "" = no valid registry entry
+		silent    time.Duration // how long the PTY has been quiet
+		want, src string
 	}{
-		{"busy and silent", regStatusBusy, false, "working"},
-		{"idle with a viewer repaint", regStatusIdle, true, "waiting"},
-		{"shell and silent", regStatusShell, false, "working"},
+		{"busy and silent", regStatusBusy, 30 * time.Second, "working", "agent"},
+		{"idle with a viewer repaint", regStatusIdle, 0, "waiting", "agent"},
+		{"shell and silent", regStatusShell, 30 * time.Second, "working", "agent"},
+		{"no registry: the PTY decides", "", 30 * time.Second, "waiting", "pty"},
+		{"stale busy: the PTY decides", regStatusBusy, 2 * time.Minute, "waiting", "pty"},
 	}
 	for _, c := range cases {
 		m, home := newLocatorManager(t)
-		writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", c.reg))
-		m.sessions["s1"].lastActivityAt = time.Now().Add(-30 * time.Second) // quiet, well inside regStaleAfter
-		if c.fresh {
-			m.sessions["s1"].lastActivityAt = time.Now()
+		body := "{}" // fails validation: no entry
+		if c.reg != "" {
+			body = regJSON(101, "aaaa-1", "5000", c.reg)
 		}
+		writeReg(t, home, 101, body)
+		m.sessions["s1"].lastActivityAt = time.Now().Add(-c.silent)
 		for _, i := range m.List() {
-			if i.ID == "s1" && i.Activity != c.want {
-				t.Errorf("%s: activity=%q want %q", c.name, i.Activity, c.want)
+			if i.ID == "s1" && (i.Activity != c.want || i.ActivitySource != c.src) {
+				t.Errorf("%s: activity=%q source=%q want %q %q", c.name, i.Activity, i.ActivitySource, c.want, c.src)
 			}
 		}
 	}

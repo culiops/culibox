@@ -78,24 +78,46 @@ test("waiting -> sustained working -> waiting fires again", () => {
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
 });
 
-test("one waiting period fires once even if a working blip lands in between (#77)", () => {
-  let r = needsTransitions(seeded(), [W("a")], 3000);
+// Activity decided by the PTY-silence fallback, or by the agent's own status.
+const Wp = (id) => ({ id, activity: "waiting", activity_source: "pty" });
+const Bp = (id) => ({ id, activity: "working", activity_source: "pty" });
+const Wa = (id) => ({ id, activity: "waiting", activity_source: "agent" });
+const Ba = (id) => ({ id, activity: "working", activity_source: "agent" });
+
+test("pty fallback: one waiting period fires once even if a working blip lands in between (#77)", () => {
+  let r = needsTransitions(seeded(), [Wp("a")], 3000);
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
   // A false "working" (a repaint read as work) is visible for 7-13 s.
-  for (const t of [6000, 9000, 12000, 15000]) r = needsTransitions(r.next, [B("a")], t);
-  r = needsTransitions(r.next, [W("a")], 18000);
+  for (const t of [6000, 9000, 12000, 15000]) r = needsTransitions(r.next, [Bp("a")], t);
+  r = needsTransitions(r.next, [Wp("a")], 18000);
   assert.deepEqual(r.fired, []);
   // ...and a second short blip right after is absorbed the same way.
-  r = needsTransitions(r.next, [B("a")], 21000);
-  r = needsTransitions(r.next, [W("a")], 24000);
+  r = needsTransitions(r.next, [Bp("a")], 21000);
+  r = needsTransitions(r.next, [Wp("a")], 24000);
   assert.deepEqual(r.fired, []);
 });
 
-test("the hysteresis is per session: another session's first wait still fires", () => {
-  let r = needsTransitions(seeded(), [W("a"), B("b")], 3000);
-  r = needsTransitions(r.next, [B("a"), B("b")], 6000);
-  r = needsTransitions(r.next, [W("a"), W("b")], 9000);
+test("pty fallback: the hysteresis is per session: another session's first wait still fires", () => {
+  let r = needsTransitions(seeded(), [Wp("a"), Bp("b")], 3000);
+  r = needsTransitions(r.next, [Bp("a"), Bp("b")], 6000);
+  r = needsTransitions(r.next, [Wp("a"), Wp("b")], 9000);
   assert.deepEqual(r.fired.map((s) => s.id), ["b"]);
+});
+
+test("agent status: a second prompt 5 s after approving the first fires again", () => {
+  // The agent's status flips exactly at turn boundaries: no blip to debounce.
+  let r = needsTransitions(seeded(), [Wa("a")], 3000);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+  r = needsTransitions(r.next, [Ba("a")], 6000);
+  r = needsTransitions(r.next, [Wa("a")], 9000);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+});
+
+test("agent status: an 8 s turn ending in waiting fires again", () => {
+  let r = needsTransitions(seeded(), [Wa("a")], 3000);
+  for (const t of [6000, 9000]) r = needsTransitions(r.next, [Ba("a")], t);
+  r = needsTransitions(r.next, [Wa("a")], 12000);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
 });
 
 test("a session that leaves the list forgets its waiting period", () => {
