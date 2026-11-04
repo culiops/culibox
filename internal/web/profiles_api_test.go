@@ -642,3 +642,31 @@ func TestProfileImportsOffRoundTripsThroughTheAPI(t *testing.T) {
 		t.Fatal("profile missing from the list view")
 	}
 }
+
+func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	s := &Server{Profiles: pm}
+	put := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+		if rec.Code == 409 || rec.Code == 201 {
+			rec = httptest.NewRecorder()
+			s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/e1", strings.NewReader(body)))
+		}
+		return rec
+	}
+	rec := put(`{"name":"e1","bin":"claude","runtime":"box","egress_open":true}`)
+	var out struct {
+		Warnings []string `json:"warnings"`
+	}
+	want := config.AgentConfig{EgressOpen: true}.EgressWarning()
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || len(out.Warnings) != 1 || out.Warnings[0] != want {
+		t.Fatalf("unbound: code %d body %s", rec.Code, rec.Body)
+	}
+	rec = put(`{"name":"e1","bin":"claude","runtime":"box","egress_open":true,"aws":{"source_profile":"sandbox-admin",` +
+		`"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"]}}`)
+	if rec.Code != 204 || rec.Body.Len() != 0 {
+		t.Fatalf("bound: code %d body %s, want 204", rec.Code, rec.Body)
+	}
+}

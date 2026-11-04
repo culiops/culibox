@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/culiops/culibox/internal/hostmatch"
@@ -386,6 +387,29 @@ type Bindings struct {
 	GitHub   *GitHubBinding
 	Tokens   []StaticToken // clones of the entries named in a profile's tokens
 	PATs     []StaticToken // clones of the entries GitHub owners name in token (deduped)
+	// EgressAllow and EgressOpen are the profile's egress policy. They are part
+	// of the scope hash (two policies never share a box) but not of Any().
+	EgressAllow []string
+	EgressOpen  bool
+}
+
+// validateEgressPolicy checks a profile's egress_allow and egress_open.
+func validateEgressPolicy(a AgentConfig) error {
+	if len(a.EgressAllow) == 0 && !a.EgressOpen {
+		return nil
+	}
+	if a.Runtime != RuntimeBox {
+		return errors.New("egress_allow and egress_open need runtime: box (set it explicitly)")
+	}
+	if len(a.EgressAllow) > maxEgressAllow {
+		return fmt.Errorf("egress_allow has more than %d entries", maxEgressAllow)
+	}
+	for i, p := range a.EgressAllow {
+		if err := hostmatch.ValidPattern(p); err != nil {
+			return fmt.Errorf("egress_allow[%d] %q: %v", i, p, err)
+		}
+	}
+	return nil
 }
 
 // Any reports whether the session has at least one binding. PATs do not count
@@ -415,11 +439,17 @@ func (b Bindings) Hash() string {
 		sum := sha256.Sum256([]byte(base + "\x00awsconns\x00" + AWSConnsHash(b.AWSConns)))
 		base = hex.EncodeToString(sum[:6])
 	}
-	if len(b.Tokens)+len(b.PATs) == 0 {
-		return base
+	if len(b.Tokens)+len(b.PATs) > 0 {
+		sum := sha256.Sum256([]byte(base + "\x00tokens\x00" + TokensHash(b.Tokens, b.PATs)))
+		base = hex.EncodeToString(sum[:6])
 	}
-	sum := sha256.Sum256([]byte(base + "\x00tokens\x00" + TokensHash(b.Tokens, b.PATs)))
-	return hex.EncodeToString(sum[:6])
+	if len(b.EgressAllow) > 0 || b.EgressOpen {
+		allow := slices.Clone(b.EgressAllow)
+		slices.Sort(allow)
+		sum := sha256.Sum256([]byte(base + "\x00egress\x00" + strings.Join(allow, ",") + "\x00open=" + strconv.FormatBool(b.EgressOpen)))
+		base = hex.EncodeToString(sum[:6])
+	}
+	return base
 }
 
 // ParseGitHubRepo reads owner and repo out of a remote URL. It accepts only the
