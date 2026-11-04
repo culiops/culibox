@@ -391,8 +391,8 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 //   o.view       the saved ProfileView of this profile, or null for a draft
 //   o.claude     the form's binary is claude (spawnform.js isClaudeBinName)
 //   o.egressAll  every boxed spawn goes through the egress proxy
-// Network mirrors session.EgressMode: bound = allowlist, unbound = open only
-// when egress is mandatory. The inline AWS binding is not edited here, so its
+// Network mirrors session.EgressMode: bound = allowlist (open when the form
+// sets egress_open), unbound = open only when egress is mandatory. The inline AWS binding is not edited here, so its
 // name and flags come from the saved view while the form still carries it.
 function pfTouchProfile(form, o) {
   const f = form || {};
@@ -414,7 +414,7 @@ function pfTouchProfile(form, o) {
   if (tokens.length) out.tokens = tokens;
   if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
   const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
-  out.network = bound ? "allowlist" : x.egressAll === true ? "open" : "";
+  out.network = bound ? (f.egress_open === true ? "open" : "allowlist") : x.egressAll === true ? "open" : "";
   return out;
 }
 

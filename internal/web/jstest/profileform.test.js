@@ -457,3 +457,11 @@ test("egressToSend: only a visible block sends, and only what is set", () => {
   const loaded = { egress_allow: ["a.example", "*.b.example"], egress_open: true };
   assert.deepStrictEqual(egressToSend(true, egressAllowToText(loaded.egress_allow), loaded.egress_open), loaded);
 });
+
+test("pfTouchProfile network mirrors EgressMode: bound+egress_open is open, bound alone is allowlist", () => {
+  const bound = { bin: "claude", tokens: ["t"] };
+  assert.strictEqual(pfTouchProfile({ ...bound, egress_open: true }, {}).network, "open");
+  assert.strictEqual(pfTouchProfile(bound, {}).network, "allowlist");
+  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
+  assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
+});
