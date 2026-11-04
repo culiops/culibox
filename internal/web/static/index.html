@@ -456,7 +456,7 @@
           <textarea id="pf-egress-allow" class="fld" rows="3" spellcheck="false" placeholder="api.example.com&#10;*.example.org"></textarea>
           <label class="pf-check"><input type="checkbox" id="pf-egress-open"> Allow all internet hosts (no allowlist)</label>
           <p class="warnbox tiny" id="pf-egress-open-warn" hidden>The agent can send this profile's credentials to any internet host. Private, tailnet and host addresses stay blocked, and every host is logged. To build an allowlist, turn this on briefly, read Activity › Egress, add those hosts above, then turn it off.</p>
-          <p class="tiny">Applies only when the profile has a credential binding; without one the box already reaches any public host.</p>
+          <p class="tiny mut">Applies only when the profile has a credential binding; without one the box already reaches any public host.</p>
         </div>
         <button id="pf-adv" class="pf-adv" type="button" aria-expanded="false" aria-controls="pf-base-col pf-options pf-replyable-row pf-args-row pf-env-block">Advanced · base environment, options, args, environment variables, replies</button>
         <div id="pf-options"></div>

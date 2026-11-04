@@ -1572,6 +1572,9 @@
        Entries reuse .pf-check; the entry's own lines sit under its name. */
     #pf-st-block { margin-top: 14px; }
     #pf-st-block > .flab { display: block; margin-bottom: 6px; }
+    /* The Network block (egress hosts, open mode) follows Tokens with the same spacing. */
+    #pf-net-block { margin-top: 14px; }
+    #pf-net-block > .flab { display: block; margin-bottom: 6px; }
     #pf-st-hint, #pf-st-none { margin: 0 0 8px; }
     .pf-st-group { display: block; margin: 8px 0 2px; }
     .pf-st-entry { align-items: flex-start; margin-bottom: 6px; }

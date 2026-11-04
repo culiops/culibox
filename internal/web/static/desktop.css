@@ -1194,6 +1194,7 @@
   #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { height: auto; padding: 0; background: none; border-radius: 0; position: static; }
   #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
   #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
+  #page-host > #settings-modal.as-page #manage #pf-net-block { order: 35; }
   #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
   #page-host > #settings-modal.as-page #manage #pf-base-col { order: 41; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #pf-options > .frow { order: 42; grid-column: span 2; }
