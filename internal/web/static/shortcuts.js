@@ -243,9 +243,24 @@ function helpText(rows, runtimeLabel) {
   return blocks.join("\n\n") + (runtimeLabel ? "\n\nRuntime: " + runtimeLabel : "");
 }
 
+// helpTextStacked: the phone's version of helpText (#59). The aligned key column
+// is up to 64 characters wide, more than a 390 px dialog fits (322 px of 12 px
+// mono, 7.22 px per character = 44), so each row is its keys on one line and its
+// description on the next, indented two spaces. Same groups, same order, same
+// trailing Runtime line; showShortcuts picks it on the phone layout (app.js).
+function helpTextStacked(rows, runtimeLabel) {
+  const groups = SC_GROUP_ORDER.filter((g) => rows.some((r) => r.group === g));
+  for (const r of rows) if (!groups.includes(r.group)) groups.push(r.group);
+  const blocks = groups.map((g) => [g].concat(
+    ...rows.filter((r) => r.group === g).map((r) => [r.keys, "  " + r.label]),
+  ).join("\n"));
+  return blocks.join("\n\n") + (runtimeLabel ? "\n\nRuntime: " + runtimeLabel : "");
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, jumpHint,
     shortcutMatches, shortcutFor, bindShortcut, dispatchShortcut, _resetShortcutBindings, cmKeys, helpRows, helpText,
+    helpTextStacked,
   };
 }
