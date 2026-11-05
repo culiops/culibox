@@ -244,6 +244,10 @@ function stripKey(s, activeKind, repliesEnabled) {
     s.id, s.need || "", s.activity || "", s.ask || "", deskHash(s.ask_full), s.summary || "",
     !!s.replyable, !!s.claude, repliesEnabled === true,
     s.aws ? JSON.stringify(s.aws) : "", JSON.stringify(s.aws_connections || null),
+    // The composer's gate (sendState): it turns true a few seconds after a
+    // turn ends. Not in stripHoldKey: a disabled field cannot hold focus, and a
+    // flap to false mid-typing must not tear the field down (the server refuses).
+    s.reply_ready === true,
   ]);
 }
 

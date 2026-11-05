@@ -185,6 +185,17 @@ test("stripKey: stable across tab kinds, moves with the ask, the need and replie
   assert.equal(d.stripKey(null, "terminal", true), "", "no session, no strip");
 });
 
+test("stripKey moves with reply_ready; stripHoldKey does not (#77)", () => {
+  // A strip built in the seconds after a turn ends (reply_ready false) must
+  // rebuild once the server is ready, or its composer never opens.
+  const a = { id: "w", activity: "waiting", need: "turn", summary: "done", replyable: true, claude: true, reply_ready: false };
+  assert.notEqual(d.stripKey(a, "terminal", true), d.stripKey({ ...a, reply_ready: true }, "terminal", true));
+  assert.equal(d.stripKey(a, "terminal", true), d.stripKey({ ...a, reply_ready: undefined }, "terminal", true), "absent reads as not ready");
+  // A disabled field cannot hold focus, and a flap to false while typing must
+  // not tear the field down (the server's 409 covers that send).
+  assert.equal(d.stripHoldKey({ ...a, reply_ready: true }, true), d.stripHoldKey(a, true));
+});
+
 test("emptyStateModel: first run, none open, and recent profiles that still exist", () => {
   const builtin = [{ name: "claude", builtin: true }];
   assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first");

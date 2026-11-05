@@ -1841,10 +1841,15 @@ function buildReplyComposer(s, opts) {
   // refresh() writes the disabled flags from the gate every time it runs, so
   // anything set behind its back is undone by the next call.
   const refresh = () => {
+    // The poll's live copy, not the one this composer was built with: it can
+    // outlive several polls (an opt-in, reply_ready turning true).
+    const cur = lastSessions.find((x) => x.id === s.id) || s;
     const st = sendState({
-      replyable: o.replyable ? o.replyable() : s.replyable,
-      activity: s.activity,
+      replyable: o.replyable ? o.replyable() : cur.replyable,
+      activity: cur.activity,
       pending: o.pending ? o.pending() : false,
+      need: cur.need,
+      reply_ready: cur.reply_ready,
     });
     const closed = !st.enabled || pendingSends.has(s.id);
     // Three things move together, deliberately. The dimmed look says closed,
@@ -2025,6 +2030,9 @@ async function togglePeek(li, s) {
     const want = cb.checked;
     if (await postReplyable(s.id, want)) {
       s.replyable = want;
+      // The server's reply_ready moves with replyable: fetch the list now, so
+      // composer.refresh() (which reads the live copy) sees it at once.
+      await refreshSessions();
     } else {
       cb.checked = !want; // the server is the truth; put the box back
       showToast("Could not change the reply setting", { error: true });
@@ -2638,7 +2646,7 @@ function renderNeedsCard(s) {
   // exactly this case (a claude session blocked on a permission prompt, which
   // the server refuses a reply to). The server's canReply stays the
   // authoritative gate either way.
-  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity });
+  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity, need: s.need, reply_ready: s.reply_ready });
   if (repliesOn) {
     for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
       const b = document.createElement("button");
@@ -3125,7 +3133,7 @@ function signalAttention() {
 let attnPrev = null;
 let sessionsLoaded = false;
 function notifyTransitions() {
-  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions);
+  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions, Date.now());
   attnPrev = t.next;
   if (!t.fired.length || !notifyWanted()) return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
@@ -3264,6 +3272,9 @@ async function refreshSessions() {
   // Same treatment for the steer rail's composer, and for the same reason: it
   // re-gates, it never rebuilds, so a half-typed reply keeps its caret.
   if (typeof repaintSteerRail === "function") repaintSteerRail();
+  // And for an open mobile reply sheet: reply_ready turns true a few seconds
+  // after a turn ends, and the sheet must not need reopening to notice.
+  if (repaintReplySheet) repaintReplySheet();
   // Per-window usage: fetch only for open terminal tabs whose session is still
   // listed (alive), and only when visible. 204 (non-claude / no transcript) →
   // null → no readout. A gone session keeps its last usage rather than blanking.
@@ -5920,6 +5931,12 @@ function openActionsSheet(s) {
 // place that computes send.disabled and the caption text, from the same
 // sendState/replyTextError peek.js already ships to the desktop composer.
 // Control and caption are written by the same call, so they cannot disagree.
+//
+// repaintReplySheet re-runs the open sheet's refresh() from the 3s poll, as
+// repaintSteerRail does for the rail: paint-only, so a half-typed reply keeps
+// its text and caret. null when no reply sheet is open; a stale one (the sheet
+// closed or now shows something else) clears itself.
+let repaintReplySheet = null;
 function openReplySheet(s) {
   // pendingNow mirrors togglePeek's li.dataset.peekPending: whether the
   // session is inside a tool call right now. There is no session-list field
@@ -5970,6 +5987,7 @@ function openReplySheet(s) {
     const repliesOn = globalThis.repliesEnabled === true;
     const qkButtons = [];
     let ta = null, send = null, note = null, optin = null, qk = null;
+    let optinCb = null, optinBusy = false; // the opt-in box, and whether its POST is in flight
 
     // Enable-replies toggle (I1 regression fix). Replyable defaults false and
     // the ONLY control that grants it is this checkbox — pre-5c it lived in
@@ -5990,8 +6008,11 @@ function openReplySheet(s) {
       const optinText = document.createElement("span");
       optinText.textContent = "Enable replies for this session";
       optin.append(cb, optinText);
+      optinCb = cb;
       cb.onchange = async () => {
         const want = cb.checked;
+        let changed = false;
+        optinBusy = true;
         try {
           const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
             method: "POST",
@@ -6000,10 +6021,14 @@ function openReplySheet(s) {
           });
           if (!res.ok) throw new Error(String(res.status));
           s.replyable = want;
+          changed = true;
         } catch (_) {
           cb.checked = !want; // the server is the truth; put the box back
           showToast("Could not change the reply setting", { error: true });
         }
+        // refresh() gates on the poll's copy (sheetGateInput): fetch it now so
+        // the new replyable and the server's reply_ready land before it runs.
+        try { if (changed) await refreshSessions(); } finally { optinBusy = false; }
         refresh();
       };
 
@@ -6066,7 +6091,7 @@ function openReplySheet(s) {
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
       if (!repliesOn) return; // read-only sheet: no Send, quick replies or caption to paint
-      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
+      const st = sendState(sheetGateInput(lastSessions, s, pendingNow, sessionsLoaded));
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
       // The quick replies are controls too — a session that is not
@@ -6100,7 +6125,7 @@ function openReplySheet(s) {
     // blocks a second one from the sheet too.
     function doSend(text) {
       if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
+      const st = sendState(sheetGateInput(lastSessions, s, pendingNow, sessionsLoaded));
       if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
       pendingSends.add(s.id);
       send.disabled = true;
@@ -6120,6 +6145,12 @@ function openReplySheet(s) {
     }
 
     refresh();
+    repaintReplySheet = () => {
+      const dlg = document.getElementById("sheet-modal");
+      if (!dlg || !dlg.open || !box.isConnected) { repaintReplySheet = null; return; }
+      if (optinCb) optinCb.checked = optinChecked(lastSessions, s, optinBusy, optinCb.checked);
+      refresh();
+    };
 
     // Live last message + pending flag, the same fetch togglePeek makes on
     // expand — the sheet can be opened straight from the M1 card without the

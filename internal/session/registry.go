@@ -37,9 +37,83 @@ type claudeRegEntry struct {
 	Status    string          `json:"status"`    // busy | idle | shell | waiting (observed)
 }
 
-// regStatusWaiting is the registry status Claude Code reports while it sits on
-// a permission / choice prompt (measured 2026-09-29, 2.1.284).
-const regStatusWaiting = "waiting"
+// Registry statuses. waiting: Claude Code sits on a permission / choice prompt
+// (measured 2026-09-29, 2.1.284). busy / idle: a turn is running / has ended;
+// they flip exactly at turn boundaries (busy 0.16 s after Enter, idle 0.1 s
+// after the turn ends) and viewer focus, mouse and typing never change them
+// (measured 2026-11-02, 2.1.316, #77). shell: the turn ended with a background
+// shell still running; Claude starts a new turn on its own when it finishes.
+const (
+	regStatusWaiting = "waiting"
+	regStatusBusy    = "busy"
+	regStatusIdle    = "idle"
+	regStatusShell   = "shell"
+)
+
+// regStaleAfter: a busy or shell status is distrusted once the PTY has been
+// silent this long, and the PTY rule decides instead. A busy turn repaints its
+// spinner every 0.1-0.33 s (measured, #77), so a minute of silence means the
+// status is stale: an exit path that never rewrote it (Esc-interrupt, an API
+// error and /compact are unmeasured) or format drift. Past it, a long shell
+// reads as waiting: Claude sits at its prompt and accepts input.
+const regStaleAfter = 60 * time.Second
+
+// regActivity is the activity of a live session once Claude Code's registry
+// status is known. act is what Info computed from PTY recency; quiet is what it
+// would read with a silent PTY (waiting or idle, see quietActivity); status is
+// the validated registry entry's ("" when there is none).
+//
+// The registry is the primary signal because a TUI repaints for reasons that
+// are not work (viewer focus/mouse/keys, its own idle redraws). PTY recency is
+// the fallback only with no entry (codex, an unreadable or drifted registry) or
+// a status we have not seen yet. Exit and detach always dominate.
+//
+// shell reads "working", not "your turn": the agent resumes by itself when the
+// background shell finishes, so a needs-you there is false and would fire a
+// second time at the real end of the turn. The UI has no distinct "background"
+// state, and adding one is a product call, not part of this fix (#77).
+//
+// src is what decided: srcAgent (the registry) or srcPTY (the fallback); ""
+// for an exited or detached session.
+func regActivity(act, quiet, status string, silent time.Duration) (_ string, src string) {
+	if act != "working" && act != "waiting" && act != "idle" {
+		return act, ""
+	}
+	switch status {
+	case regStatusBusy, regStatusShell:
+		if silent > regStaleAfter {
+			return act, srcPTY
+		}
+		return "working", srcAgent
+	case regStatusWaiting:
+		return "waiting", srcAgent
+	case regStatusIdle:
+		return quiet, srcAgent
+	}
+	return act, srcPTY
+}
+
+// Info.ActivitySource values. Provider-neutral: any agent that reports its own
+// live status is "agent".
+const (
+	srcAgent = "agent"
+	srcPTY   = "pty"
+)
+
+// replyActivity is the activity SendMessage's guard judges a reply by. Unlike
+// regActivity (what the dot shows), the registry may only TIGHTEN the PTY
+// verdict here, never loosen it: the agent can write its own registry (a boxed
+// one always can), so a forged "idle" must not let a line be typed into a
+// prompt the PTY shows animating, which reads single keys. busy refuses; idle,
+// shell and waiting leave the PTY verdict alone (waiting refuses through the
+// pending guard instead). shell with a quiet PTY therefore accepts a reply:
+// Claude is at its prompt and takes input while the background shell runs.
+func replyActivity(act, status string, silent time.Duration) string {
+	if status == regStatusBusy && act == "waiting" && silent <= regStaleAfter {
+		return "working"
+	}
+	return act
+}
 
 // sessionIDRe bounds what a registry sessionId may look like before it is ever
 // joined into a path: a uuid-ish token, nothing that can traverse. The first
