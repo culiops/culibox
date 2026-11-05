@@ -77,12 +77,15 @@ type Mount struct {
 	// CLAUDE.md import is one.
 	Yield bool
 	// ID, when set, is Host's identity when it was last checked (a context
-	// path on Linux). Once the box runs, ensure refuses it unless Box shows the
-	// same identity inside it (checkMountIDs).
+	// path, on Linux read on the host). Once the box runs, ensure refuses it
+	// unless Box shows the same identity inside it (checkMountIDs).
 	ID *FileID
 	// CheckID marks a mount whose identity must be checked even though the host
-	// recorded none (a context path on macOS). ensure then takes ID from
-	// Options.VMIDs before the mount is made.
+	// recorded none (a context path on macOS, where a host inode number is not
+	// the one the box sees). With no ID and Options.VMIDs set, ensure reads the
+	// identity inside the VM before the mount is made, and checkMountIDs then
+	// compares it like any other. Only context mounts set it: a config overlay
+	// or guard mount is never refused for being a symlink.
 	CheckID bool
 }
 

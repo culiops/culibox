@@ -221,6 +221,21 @@ a git config `include`, and so on). What it covers and what it does not is in
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.
 
+### Context paths
+
+`context_paths` (see [Reading other repos](CONTEXT-PATHS.md)) works as on
+Linux, including the check that the mounted path is the one that was checked.
+An inode number on the Mac is not the one the box sees through the VM's file
+share, so on macOS that identity is read inside the VM (one `colima ssh` per
+spawn with context paths), which also refuses a symlink in the path.
+
+- Measured on a Mac (colima 0.8.1, virtiofs): the device and inode the VM
+  reports for a path are the ones the box's bind mount shows, and are stable
+  across repeat reads.
+- Not yet tested on a Mac: that `colima ssh` passes the script to the VM
+  unchanged (if it does not, spawns with context paths are refused, not let
+  through), and that the identity stays stable across a VM restart.
+
 ## Behind a TLS-inspecting proxy
 
 Some company networks (for example Zscaler or Netskope) decrypt HTTPS and
