@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -426,5 +427,91 @@ func TestBoxListenerNamesItsBox(t *testing.T) {
 	}
 	if _, ok := net.Listener(&sharedListener{}).(interface{ BoxName() string }); ok {
 		t.Fatal("the shared listener belongs to no box")
+	}
+}
+
+// holdConns opens n idle connections to the unix socket sock; the test's
+// cleanup closes them.
+func holdConns(t *testing.T, sock string, n int) []net.Conn {
+	t.Helper()
+	held := make([]net.Conn, 0, n)
+	for i := 0; i < n; i++ {
+		c, err := net.DialTimeout("unix", sock, 2*time.Second)
+		if err != nil {
+			t.Fatalf("connection %d of %d: %v", i+1, n, err)
+		}
+		held = append(held, c)
+		t.Cleanup(func() { c.Close() })
+	}
+	return held
+}
+
+// capHolds checks one more connection to sock: while every conn in held is
+// open it is not served, and once one of them closes it is, with body want.
+func capHolds(t *testing.T, sock string, held []net.Conn, want string) {
+	t.Helper()
+	extra, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close()
+	extra.SetDeadline(time.Now().Add(10 * time.Second))
+	io.WriteString(extra, "GET / HTTP/1.1\r\nHost: broker\r\nConnection: close\r\n\r\n")
+	got := make(chan string, 1)
+	go func() {
+		resp, err := http.ReadResponse(bufio.NewReader(extra), &http.Request{Method: "GET"})
+		if err != nil {
+			got <- "error: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		got <- string(b)
+	}()
+	select {
+	case r := <-got:
+		t.Fatalf("connection %d was served while %d were held open: %q", len(held)+1, len(held), r)
+	case <-time.After(300 * time.Millisecond):
+	}
+	held[0].Close() // a slot frees
+	select {
+	case r := <-got:
+		if r != want {
+			t.Fatalf("the waiting connection got %q, want %q", r, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("closing a held connection did not let the waiting one in")
+	}
+}
+
+// One box's socket holds at most maxSockConns open connections, idle ones
+// included, so an agent cannot use up the daemon's file descriptors (which
+// would take down the UI and every PTY) through its own socket (#113).
+func TestPerBoxSocketCapsConnections(t *testing.T) {
+	root := shortDir(t)
+	s, _ := startedBoxSockets(t, root)
+	if _, err := s.Acquire(bx); err != nil {
+		t.Fatal(err)
+	}
+	sock := perBoxSock(root, bx)
+	capHolds(t, sock, holdConns(t, sock, maxSockConns), bx)
+}
+
+// The shared socket that boxes from before the per-box sockets mount is capped
+// the same way: those boxes can still open connections to it.
+func TestSharedSocketCapsConnections(t *testing.T) {
+	ep, err := listenLinux(shortDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ep.Listener.Close(); ep.Boxes.Close() })
+	(&serveLog{}).serve(ep.Listener)
+	sock := ep.Listener.Addr().String()
+	capHolds(t, sock, holdConns(t, sock, maxSockConns), "<shared>")
+}
+
+func TestMaxSockConnsIsBounded(t *testing.T) {
+	if maxSockConns <= 0 || maxSockConns > maxDarwinConns {
+		t.Fatalf("maxSockConns = %d", maxSockConns)
 	}
 }

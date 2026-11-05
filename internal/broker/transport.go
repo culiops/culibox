@@ -100,6 +100,6 @@ func listenLinux(stateRoot string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	return Endpoint{Listener: &sharedListener{l}, BoxURL: "unix://" + SockBoxDir + "/" + boxSockName,
+	return Endpoint{Listener: &sharedListener{netlimit.Listener(l, maxSockConns)}, BoxURL: "unix://" + SockBoxDir + "/" + boxSockName,
 		Boxes: newBoxSockets(stateRoot)}, nil
 }
