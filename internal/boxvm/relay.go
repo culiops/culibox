@@ -15,22 +15,36 @@ import (
 )
 
 // relayScript is the whole relay: one TCP listener per (listen port, target
-// host, target port) triple on the bind address, piped through. Every
-// upstream connection first carries the relay key line ("AGENTBOX-RELAY <64
-// hex>\r\n", 81 bytes) and then a PROXY v1 line ("PROXY TCP4 <box-ip> <bind>
-// <box-port> <listen-port>\r\n") naming the box that connected, in one write.
-// The host listeners accept the PROXY line only behind the key, so they can tell
-// boxes apart while another process on the Mac cannot claim a box's address
-// (#114); the relay itself makes every box arrive from loopback (#71). The key
-// comes from the environment (RelayKeyEnv), never argv; without a well-formed
-// one the script prints "ERR KEY missing or malformed" and exits 1 before it
-// listens. A peer that is not a plain IPv4 address is dropped. It prints
-// "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a listen
-// error, which is all Ensure reads (never a dial: the INPUT rules also drop the
-// VM's own connections to the gateway). Run as `node -e <script> BIND LPORT
-// THOST TPORT ...`, where argv.slice(1) is the arguments after the script
-// (measured on the Mac).
-const relayScript = `const net=require("net");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K="AGENTBOX-RELAY "+k+"\r\n";const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write(K+"PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+// host, target port) triple on the bind address, piped through once the host
+// listener has proven it holds the relay key. Per connection it dials the
+// target, writes the hello ("AGENTBOX-RELAY2 <64 hex nonce>\r\n", 82 bytes),
+// reads exactly one proof line (131 bytes) and checks its MAC under the key for
+// the target port, and only then writes its own proof, the PROXY v1 line
+// ("PROXY TCP4 <box-ip> <bind> <box-port> <listen-port>\r\n") naming the box
+// that connected, in one write, and pipes the box through. The wire format and
+// both MACs are proxyline/handshake.go's (its RelayHandshake is this half in Go,
+// and the end-to-end tests run the two against each other). The key never
+// crosses the wire, so a process that holds the target port while CuliBox does
+// not learns nothing it can reuse, and the host listeners tell boxes apart (#114)
+// while the relay makes every box arrive from loopback (#71).
+//
+// The box socket is created paused (pauseOnConnect), so its bytes stay in the
+// kernel until the proof verifies: before that the target receives the hello and
+// nothing else, no PROXY line and no box byte. A proof that is wrong, longer than
+// 131 bytes or malformed destroys both sockets, as does an upstream that closes
+// or errors first and a 5 s timer from accept that the proof has not stopped
+// (a late proof is a wrong one). Hostile upstream bytes never throw: the regexp
+// fixes both fields to 64 hex characters before they are decoded and compared
+// with timingSafeEqual. Nothing is logged per connection: Ensure reads this
+// process's stdout and treats any "ERR " line as fatal. The key comes from the
+// environment (RelayKeyEnv), never argv; without a well-formed one the script
+// prints "ERR KEY missing or malformed" and exits 1 before it listens. A peer
+// that is not a plain IPv4 address is dropped. It prints "listening BIND:PORT"
+// per port, and "ERR PORT CODE" then exits 1 on a listen error, which is all
+// Ensure reads (never a dial: the INPUT rules also drop the VM's own connections
+// to the gateway). Run as `node -e <script> BIND LPORT THOST TPORT ...`, where
+// argv.slice(1) is the arguments after the script (measured on the Mac).
+const relayScript = `const net=require("net"),C=require("crypto");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K=Buffer.from(k,"hex");const mac=(l,p,r,n)=>{const b=Buffer.alloc(2);b.writeUInt16BE(p);return C.createHmac("sha256",K).update(Buffer.concat([Buffer.from("culibox relay2 "+l+"\0"),b,r,n])).digest()};const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer({pauseOnConnect:true},c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const r=C.randomBytes(32),u=net.connect(tp,th);let g=Buffer.alloc(0),ok=false;const end=()=>{clearTimeout(t);c.destroy();u.destroy()};const t=setTimeout(end,5e3);c.on("error",end);u.on("error",end);u.on("close",()=>{if(!ok)end()});const h=d=>{g=Buffer.concat([g,d]);if(g.length<131)return;const m=/^([0-9a-f]{64}) ([0-9a-f]{64})\r\n$/.exec(g.toString("latin1"));if(g.length>131||!m)return end();const n=Buffer.from(m[1],"hex");if(!C.timingSafeEqual(Buffer.from(m[2],"hex"),mac("listener",tp,r,n)))return end();ok=true;clearTimeout(t);u.removeListener("data",h);u.write(mac("relay",tp,r,n).toString("hex")+"\r\nPROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c)};u.on("data",h);u.write("AGENTBOX-RELAY2 "+r.toString("hex")+"\r\n")}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
 
 // RelayKeyEnv is the environment variable the relay container reads its key
 // from. `docker run -e RelayKeyEnv` (the name alone) takes the value from the
@@ -181,8 +195,10 @@ type Relay struct {
 	EgressPort      int
 	BrokerPort      int
 	UID, GID        int
-	// Key is the relay key the container presents ahead of every PROXY line.
-	// Required: Ensure refuses the zero Key before it touches the VM.
+	// Key is the relay key the container proves to every host listener, and
+	// requires the listener to prove, before it forwards a byte (the key itself
+	// never crosses the wire). Required: Ensure refuses the zero Key before it
+	// touches the VM.
 	Key          proxyline.Key
 	ReadyTimeout time.Duration // default 10s
 }
