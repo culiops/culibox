@@ -207,3 +207,13 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
   assert.ok(rulesFor(".ph-ico svg").some((b) => /display:\s*block/.test(b) && /width:\s*14px/.test(b) && /height:\s*14px/.test(b)));
   assert.ok(rulesFor(".ph-tab").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b)));
 });
+
+// #27: the AWS table keeps the automatic column layout, so a name that cannot wrap holds
+// its column open past the section's box (overflow: hidden): a 30-character name cut
+// Delete off at 1240 px, a 60-character one scrolled the whole page. The name wraps like
+// the GitHub and token tables' (hyphens first, mid-word only past the column).
+test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {
+  assert.ok(!/\[data-group="aws"\][^{}]*\.c-nm[^{}]*\{[^}]*white-space:\s*nowrap/.test(block), "no nowrap on the AWS name");
+  assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");
+  assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-main").some((b) => /overflow-wrap:\s*break-word/.test(b)), "and breaks between words first");
+});

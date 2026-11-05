@@ -1338,8 +1338,10 @@
   /* Names break between words, never inside one ("Missin/g"). */
   #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
-  /* AWS sizes its columns to content: a name holds its column open whole. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { white-space: nowrap; }
+  /* AWS sizes its columns to content, so its name must be allowed to wrap: a nowrap
+     name held its column open past the section's box (a 30-character one cut Delete
+     off at 1240px, a 60-character one scrolled the page). It breaks at hyphens first
+     (.c-main), so a short name is not split while its column has room for it. */
   /* Status wraps between words ("Stored (store locked)" stays in its column).
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
   #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: break-word; }
