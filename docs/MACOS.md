@@ -198,7 +198,7 @@ A token presented from any other box, bound or unbound, is refused with the same
 message as any other refusal and audited as `denied_box`. An unbound box on macOS
 can open a connection to the broker, but its address never matches a bound
 session's box, so its requests are refused. The broker caps the connections it
-holds open. A refusal for the wrong box can take as long as the lookup timeout
+holds open, in total and for any one box, and closes idle ones. A refusal for the wrong box can take as long as the lookup timeout
 (5 seconds) when docker is slow. That delay is a liveness hint only: a token
 that does not verify already gets a different refusal (401) from a valid token
 presented from the wrong box (403).

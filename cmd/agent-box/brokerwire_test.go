@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -691,5 +692,104 @@ func TestServeBrokerNamesTheBoxWhenItsSocketStops(t *testing.T) {
 		if got != "" {
 			t.Fatalf("a closed listener (%v) was logged: %q", closed, got)
 		}
+	}
+}
+
+func TestBrokerServerTimeoutsAreSet(t *testing.T) {
+	srv := newBrokerServer(http.NotFoundHandler())
+	if srv.IdleTimeout != 30*time.Second || srv.ReadTimeout != 15*time.Second ||
+		srv.ReadHeaderTimeout != 5*time.Second || srv.WriteTimeout != 30*time.Second || srv.BaseContext == nil {
+		t.Fatalf("server = idle %v read %v header %v write %v basecontext %v",
+			srv.IdleTimeout, srv.ReadTimeout, srv.ReadHeaderTimeout, srv.WriteTimeout, srv.BaseContext != nil)
+	}
+}
+
+// shrinkBrokerTimeouts makes the broker's idle and read timeouts short for one test.
+func shrinkBrokerTimeouts(t *testing.T, idle, read time.Duration) {
+	t.Helper()
+	oldIdle, oldRead := brokerIdleTimeout, brokerReadTimeout
+	brokerIdleTimeout, brokerReadTimeout = idle, read
+	t.Cleanup(func() { brokerIdleTimeout, brokerReadTimeout = oldIdle, oldRead })
+}
+
+// closedWithin reports whether the server ends c within d (EOF or a reset).
+func closedWithin(c net.Conn, d time.Duration) bool {
+	c.SetReadDeadline(time.Now().Add(d))
+	buf := make([]byte, 512)
+	for {
+		if _, err := c.Read(buf); err != nil {
+			var ne net.Error
+			return !(errors.As(err, &ne) && ne.Timeout())
+		}
+	}
+}
+
+// A connection whose request was answered is not held for ever: on macOS one box
+// opening many of them and idling would otherwise stall every other box.
+func TestBrokerServerClosesAnIdleKeepAliveConnection(t *testing.T) {
+	shrinkBrokerTimeouts(t, 150*time.Millisecond, 5*time.Second)
+	svc, _ := boxWireBroker(t)
+	c, err := net.DialTimeout("unix", boxSock(t, svc, wireBox), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "POST /v1/credentials HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer garbage\r\nContent-Length: 0\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "POST"})
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first request: %v %v", resp, err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if !closedWithin(c, 3*time.Second) {
+		t.Fatal("the broker kept an idle keep-alive connection open past its idle timeout")
+	}
+}
+
+// A client that sends its headers and then stalls the body is cut off.
+func TestBrokerServerCutsAStalledRequestBody(t *testing.T) {
+	shrinkBrokerTimeouts(t, 30*time.Second, 200*time.Millisecond)
+	svc, _ := boxWireBroker(t)
+	c, err := net.DialTimeout("unix", boxSock(t, svc, wireBox), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "POST /v1/static/token HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer garbage\r\nContent-Length: 100\r\n\r\n{")
+	if !closedWithin(c, 3*time.Second) {
+		t.Fatal("the broker kept a connection with a stalled request body open past its read timeout")
+	}
+}
+
+// The read timeout bounds receiving a request, not answering it: a mint that
+// takes far longer than it must still finish, with its request context alive.
+// (This is the measurement the timeout's value rests on, see newBrokerServer.)
+func TestBrokerServerReadTimeoutDoesNotCutASlowHandler(t *testing.T) {
+	shrinkBrokerTimeouts(t, 30*time.Second, 150*time.Millisecond)
+	ctxErr := make(chan error, 1)
+	srv := newBrokerServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(700 * time.Millisecond) // several read timeouts: a slow STS or GitHub mint
+		ctxErr <- r.Context().Err()
+		io.WriteString(w, "minted")
+	}))
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(l)
+	defer srv.Close()
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Post("http://"+l.Addr().String(), "application/json", strings.NewReader(`{"a":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "minted" {
+		t.Fatalf("reply %q", b)
+	}
+	if err := <-ctxErr; err != nil {
+		t.Fatalf("the request context was cancelled during a slow handler: %v", err)
 	}
 }
