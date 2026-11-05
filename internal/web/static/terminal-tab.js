@@ -356,6 +356,12 @@ class TerminalTab {
     // copy it asked for.
     this.gestureAt = 0;
     termEl.addEventListener("mousedown", (e) => this.armOsc52(e));
+    // Any press in the page, in this pane or not, ends a release still pending
+    // from an earlier press (see armOsc52). Heard on the document in the capture
+    // phase, so a control that cancels its own mousedown cannot hide the press.
+    // Removed in dispose(): one listener per live tab, none left behind.
+    this.onDocMouseDown = () => this.dropOsc52Release();
+    document.addEventListener("mousedown", this.onDocMouseDown, true);
     if (this.term.parser && this.term.parser.registerOscHandler) {
       // true = consumed: xterm has no OSC 52 handler of its own to fall back to.
       this.term.parser.registerOscHandler(52, (data) => { this.onOsc52(data); return true; });
@@ -486,15 +492,21 @@ class TerminalTab {
   // opens the window on its release. Every press first drops a release still
   // pending from an earlier one: a mouseup can be lost (a drag released outside
   // the browser), and the next release anywhere, even a Shift+drag's, must not
-  // arm on its behalf.
+  // arm on its behalf. A press in ANOTHER pane or control does the same through
+  // the document listener (onDocMouseDown), which runs first on a press here.
   armOsc52(e) {
-    if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
-    this.osc52Up = null;
+    this.dropOsc52Release();
     if (this.replaying() || !osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
     // The release checks again: a press made before a reconnect can end inside
     // the replay it did not see.
     this.osc52Up = () => { this.osc52Up = null; if (!this.replaying()) this.gestureAt = Date.now(); };
     document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
+  // dropOsc52Release forgets a release that a press is still waiting on.
+  dropOsc52Release() {
+    if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
+    this.osc52Up = null;
   }
 
   // armOsc52Key is the keyboard half: an exact Ctrl+C opens the window at once.
@@ -823,6 +835,8 @@ class TerminalTab {
   dispose() {
     this.closed = true;
     this.clearRetry();
+    if (this.onDocMouseDown) document.removeEventListener("mousedown", this.onDocMouseDown, true);
+    this.dropOsc52Release();
     if (this.resizeObserver) { try { this.resizeObserver.disconnect(); } catch (_) {} }
     if (this._fitRaf) { try { cancelAnimationFrame(this._fitRaf); } catch (_) {} this._fitRaf = 0; }
     this.hideTrouble();

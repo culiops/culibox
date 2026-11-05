@@ -538,3 +538,83 @@ test("a stale parse callback from an earlier connection does not release the new
     assert.ok(r.tab.gestureAt > 0);
   } finally { r.cleanup(); }
 });
+
+// --- a release left pending by a press that never finished --------------------
+// Built through the real constructor, with the browser and xterm replaced by
+// stubs, because the document listener that clears a stale release is installed
+// there and must be gone again after dispose().
+function builtTab() {
+  const listeners = []; // what the tab has on the document right now
+  const element = () => {
+    const handlers = {};
+    return {
+      handlers, className: "", clientWidth: 0, clientHeight: 0, firstChild: null,
+      append() {}, insertBefore() {}, remove() {}, closest: () => null, querySelector: () => null,
+      addEventListener(type, fn) { (handlers[type] = handlers[type] || []).push(fn); },
+      removeEventListener() {},
+    };
+  };
+  const textarea = {};
+  global.IS_MAC = false;
+  global.window = { innerWidth: 1200 };
+  global.location = { protocol: "http:", host: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } close() {} };
+  global.api = () => Promise.resolve([]);
+  global.document = {
+    createElement: element, hasFocus: () => true, activeElement: textarea, visibilityState: "visible",
+    addEventListener: (type, fn, opts) => listeners.push([type, fn, !!(opts === true || (opts && opts.capture))]),
+    removeEventListener: (type, fn, opts) => {
+      const cap = !!(opts === true || (opts && opts.capture));
+      const i = listeners.findIndex((l) => l[0] === type && l[1] === fn && l[2] === cap);
+      if (i >= 0) listeners.splice(i, 1);
+    },
+  };
+  global.Terminal = class {
+    constructor() { this.modes = { mouseTrackingMode: "any" }; this.parser = { registerOscHandler() {} }; this.textarea = textarea; this.rows = 24; this.cols = 80; }
+    loadAddon() {} open() {} onData() {} attachCustomKeyEventHandler() {} registerLinkProvider() {}
+    reset() {} dispose() {} focus() {} write() {}
+  };
+  global.FitAddon = { FitAddon: class { fit() {} } };
+  global.WebglAddon = { WebglAddon: class {} };
+  const tab = new TerminalTab("s1", "one");
+  tab.replay.hold = 0; // connect() holds gestures for the replay; this is about what follows it
+  return {
+    tab, listeners,
+    docDown: () => { for (const [type, fn, cap] of [...listeners]) if (type === "mousedown" && cap) fn({ type: "mousedown" }); },
+    docUp: () => { for (const [type, fn, cap] of [...listeners]) if (type === "mouseup" && cap) fn({ type: "mouseup" }); },
+    paneDown: (o) => { for (const fn of tab.termEl.handlers.mousedown) fn(mouse(o)); },
+    cleanup: () => { for (const k of ["IS_MAC", "window", "location", "WebSocket", "api", "document", "Terminal", "FitAddon", "WebglAddon"]) delete global[k]; },
+  };
+}
+
+test("a press anywhere in the document drops a release still pending", () => {
+  const r = builtTab();
+  try {
+    r.paneDown();   // a press the program receives: its release would arm the window
+    // The release is lost; the user then presses a control that cancels its own
+    // mousedown, so no pane sees it. Only the document (capture) can.
+    r.docDown();
+    r.docUp();      // a later release, e.g. of a drag started in the page chrome
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("a press in this pane still arms its own release", () => {
+  const r = builtTab();
+  try {
+    // A real press reaches the document in the capture phase before the pane.
+    r.docDown(); r.paneDown();
+    r.docUp();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+test("dispose removes every document listener the tab added", () => {
+  const r = builtTab();
+  try {
+    r.paneDown();   // leaves a release pending as well
+    assert.ok(r.listeners.length >= 2, "the tab is listening: " + r.listeners.map((l) => l[0]));
+    r.tab.dispose();
+    assert.deepStrictEqual(r.listeners.map((l) => l[0]), []);
+  } finally { r.cleanup(); }
+});
