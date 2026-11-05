@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -82,6 +83,54 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Moun
 		}
 	}
 	return nil
+}
+
+// ctxIdentityFailed is the refusal when the box VM could not give the identity
+// of the context mounts at paths: the same ErrContextMountChanged family, so
+// the session and web layers show it like the other context refusals. The
+// reason (VM output only, never a path byte) says whether a path is a symlink,
+// is missing or the VM did not answer. The refusal names every path of the
+// batch: the VM read them together.
+func ctxIdentityFailed(paths []string, err error) error {
+	return &ctxMountError{ctxPathError{"context_paths " + strings.Join(paths, ", ") +
+		": the box VM could not confirm the path (" + err.Error() + "); refusing"}}
+}
+
+// fillVMIDs gives every CheckID mount that has no ID its identity from
+// Options.VMIDs, and returns extraRO with those IDs set (a copy; the caller's
+// slice is never written to). Mounts that already carry an ID, and mounts that
+// are not CheckID, are not asked about. It is one VMIDs call for all of them,
+// and none when there is nothing to ask or no hook (Linux records the identity
+// on the host), so it can run again for the same spawn at no cost. Fail closed:
+// an error or a wrong count refuses the spawn. Caller holds opMu.
+func (m *Manager) fillVMIDs(ctx context.Context, extraRO []Mount) ([]Mount, error) {
+	if m.opts.VMIDs == nil {
+		return extraRO, nil
+	}
+	var at []int
+	var paths []string
+	for i, mt := range extraRO {
+		if mt.CheckID && mt.ID == nil {
+			at = append(at, i)
+			paths = append(paths, mt.Host)
+		}
+	}
+	if len(at) == 0 {
+		return extraRO, nil
+	}
+	ids, err := m.opts.VMIDs(ctx, paths)
+	if err == nil && len(ids) != len(paths) {
+		err = fmt.Errorf("got %d identities for %d paths", len(ids), len(paths))
+	}
+	if err != nil {
+		return nil, ctxIdentityFailed(paths, err)
+	}
+	out := slices.Clone(extraRO)
+	for k, i := range at {
+		id := ids[k]
+		out[i].ID = &id
+	}
+	return out, nil
 }
 
 // refuseMountChanged handles a box that failed checkMountIDs. A box this spawn
