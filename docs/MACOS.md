@@ -186,15 +186,27 @@ your Mac running as your user can connect to `127.0.0.1` and write that header
 itself. It already runs as you, inside your trust boundary, so this is not an
 additional exposure.
 
-Not yet bound to the box: the credential broker's own session token, on macOS
-and on Linux. On macOS the broker checks only that a request comes from the box
-subnet; on Linux every bound box reaches it over the same socket. Neither checks
-that the request comes from the box the token was issued to. Another box that
-gets hold of a bound box's broker token (on Linux any bound box, on macOS any
-box) can therefore ask the broker for that session's credentials (AWS role sessions, GitHub installation tokens, static
-tokens). The exposure stays between boxes of one CuliBox, under one user; it is
-not reachable from outside. Until it is fixed, do not run a profile you do not
-trust next to a bound profile whose credentials are broader than its own.
+The credential broker accepts a session's token only from the box that session
+runs in. On macOS it compares the address in the relay's header with that box's
+address on the egress network. The address comes from docker (the VM's docker),
+is kept in a cache the egress proxy shares, and is looked up again at most every
+10 seconds when a request does not match. If the broker cannot find out, it
+refuses. On Linux each bound box has its own broker socket, so the box is known
+from the socket the request arrives on.
+
+A token presented from any other box, bound or unbound, is refused with the same
+message as any other refusal and audited as `denied_box`. An unbound box on macOS
+can open a connection to the broker, but its address never matches a bound
+session's box, so its requests are refused. The broker caps the connections it
+holds open. A refusal for the wrong box can take as long as the lookup timeout
+(5 seconds) when docker is slow. That delay is a liveness hint only: a token
+that does not verify already gets a different refusal (401) from a valid token
+presented from the wrong box (403).
+
+What stays: sessions that share a box (the same profile and binding) can read
+each other's token; code planted into the owning box, for example through a
+shared workspace, runs with that box's access; and a process on your Mac running
+as your user.
 
 ### In-place guard
 
