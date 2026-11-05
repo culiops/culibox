@@ -5,6 +5,8 @@ package box
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -67,6 +69,44 @@ func TestDockerItWorkspaceFlippedBeforeRunIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	_, _, _, err := m.Wrap(ctx, ws, "it-flip", BoxKey{}, []string{"sleep", "1"}, nil, nil)
+	if !flipped {
+		t.Fatal("the flip never ran: docker run was not reached")
+	}
+	if !errors.Is(err, ErrWorkspaceMountChanged) {
+		t.Fatalf("err = %v, want ErrWorkspaceMountChanged", err)
+	}
+	if left := itBoxCount(t, bin); len(left) != 0 {
+		t.Fatalf("containers left after the refused spawn: %v", left)
+	}
+}
+
+// The same for a guard: with the in-place guards on, a guard path swapped for a
+// link before the daemon mounts it would show the folder the link leads to,
+// read-only, at the guard's path. The in-box compare of the guard refuses it and
+// removes the box.
+func TestDockerItGuardFlippedBeforeRunIsRefused(t *testing.T) {
+	bin, image := itDocker(t)
+	t.Cleanup(func() { itRemoveBoxes(bin) })
+	ws := itRepo(t, ".githooks")
+	state := t.TempDir()
+	claude := filepath.Join(ws, ".claude")
+	flipped := false
+	m := itFlipManager(t, bin, image, state, true, func([]string) {
+		if flipped {
+			return
+		}
+		flipped = true
+		if err := os.Rename(claude, claude+".real"); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.Symlink(state, claude); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, _, _, err := m.Wrap(ctx, ws, "it-guard-flip", BoxKey{}, []string{"sleep", "1"}, nil, nil)
 	if !flipped {
 		t.Fatal("the flip never ran: docker run was not reached")
 	}

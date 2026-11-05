@@ -53,11 +53,13 @@ type FileID struct{ Dev, Ino uint64 }
 // extra mounts. Docker follows symlinks in a bind source, so a path flipped to a
 // link between that read and `docker run` would mount the link's target; this
 // catches it before the agent starts. One `docker exec` for all of them, paths
-// as argv (no shell). Mounts without an ID cost nothing. Caller holds opMu.
-func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount) error {
+// as argv (no shell). Mounts without an ID cost nothing. The guards of the
+// workspace are compared only when this spawn created the box (see
+// skipGuard). Caller holds opMu.
+func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, created bool) error {
 	var checked []Mount
 	for _, mt := range ms {
-		if mt.ID != nil {
+		if mt.ID != nil && !skipGuard(mt, created) {
 			checked = append(checked, mt)
 		}
 	}
@@ -84,6 +86,16 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount) er
 		}
 	}
 	return nil
+}
+
+// skipGuard is true for a guard mount of a box this spawn did not create. A
+// file bind mount pins the inode it was made with, and an editor that saves
+// CLAUDE.md by rename leaves the host's file with another identity while the
+// running box keeps the old one: comparing a guard on reuse would refuse the next
+// session after any such save. The workspace directory is not replaced by normal
+// work, so it is compared every time.
+func skipGuard(mt Mount, created bool) bool {
+	return mt.kind == mountGuard && !created
 }
 
 // mountChanged is the refusal for a mount whose in-box identity is not the one
@@ -146,12 +158,13 @@ func identityFailed(ms []Mount, err error) error {
 
 // fillVMIDs gives every CheckID mount that has no ID its identity from
 // Options.VMIDs, and returns ms with those IDs set (a copy; the caller's slice
-// is never written to). Mounts that already carry an ID, and mounts that are not
-// CheckID, are not asked about. It is one VMIDs call for all of them, and none
-// when there is nothing to ask or no hook (Linux records the identity on the
-// host), so it can run again for the same spawn at no cost. Fail closed: an
-// error or a wrong count refuses the spawn. Caller holds opMu.
-func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount) ([]Mount, error) {
+// is never written to). Mounts that already carry an ID, mounts that are not
+// CheckID, and the guards of a box this spawn did not create (skipGuard), are
+// not asked about. It is one VMIDs call for all of them, and none when there is
+// nothing to ask or no hook (Linux records the identity on the host), so it can
+// run again for the same spawn at no cost. Fail closed: an error or a wrong
+// count refuses the spawn. Caller holds opMu.
+func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount, created bool) ([]Mount, error) {
 	if m.opts.VMIDs == nil {
 		return ms, nil
 	}
@@ -159,7 +172,7 @@ func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount) ([]Mount, error) {
 	var asked []Mount
 	var paths []string
 	for i, mt := range ms {
-		if mt.CheckID && mt.ID == nil {
+		if mt.CheckID && mt.ID == nil && !skipGuard(mt, created) {
 			at = append(at, i)
 			asked = append(asked, mt)
 			paths = append(paths, mt.Host)
@@ -183,6 +196,23 @@ func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount) ([]Mount, error) {
 	return out, nil
 }
 
+// vmView is ms as the box's identity check sees it. With a VM hook (macOS) the
+// identity of a guard is the VM's to read, never the host's inode, which is not
+// the one the box shows (Options.VMIDs): it returns a copy with the ID cleared on
+// every guard. Without the hook it is ms itself.
+func (m *Manager) vmView(ms []Mount) []Mount {
+	if m.opts.VMIDs == nil {
+		return ms
+	}
+	out := slices.Clone(ms)
+	for i := range out {
+		if out[i].kind == mountGuard {
+			out[i].ID = nil
+		}
+	}
+	return out
+}
+
 // withWorkspace is the batch of the workspace mount and the extra mounts, the
 // workspace first. A new slice: the caller's is never written to.
 func withWorkspace(wsm Mount, extraRO []Mount) []Mount {
@@ -191,8 +221,8 @@ func withWorkspace(wsm Mount, extraRO []Mount) []Mount {
 
 // fillMountIDs is fillVMIDs over the workspace mount and extraRO as one batch,
 // so the VM is asked once, the workspace first, and gives both back.
-func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount) (Mount, []Mount, error) {
-	all, err := m.fillVMIDs(ctx, withWorkspace(wsm, extraRO))
+func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount, created bool) (Mount, []Mount, error) {
+	all, err := m.fillVMIDs(ctx, withWorkspace(wsm, extraRO), created)
 	if err != nil {
 		return wsm, extraRO, err
 	}

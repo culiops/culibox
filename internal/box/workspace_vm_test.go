@@ -180,3 +180,39 @@ func TestVMReadErrorNamesTheWorkspaceAndTheContextPaths(t *testing.T) {
 		t.Fatalf("err = %q, want it to contain %q", err, want)
 	}
 }
+
+// With the VM hook the guards' identities are the VM's too (the host's inode is
+// not the one the box shows), read in the same batch as the workspace and only
+// when the spawn creates the box.
+func TestGuardIdentitiesAreReadInTheVMOnCreationOnly(t *testing.T) {
+	v := &vmFake{}
+	sf := &statFake{}
+	m, _ := vmManager(t, v, sf)
+	m.opts.GuardInPlace = true
+	ws := ctxTmp(t)
+	if err := os.WriteFile(filepath.Join(ws, "CLAUDE.md"), []byte("# rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	claude, claudeMD := filepath.Join(ws, ".claude"), filepath.Join(ws, "CLAUDE.md")
+
+	name, err := wrapWith(m, ws, "s1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{ws, claude, claudeMD}; v.n() != 1 || !slices.Equal(v.calls[0], want) {
+		t.Fatalf("the creating spawn's VM read = %v, want one: %v", v.calls, want)
+	}
+	if want := inBoxStatArgv(name, ws, claude, claudeMD); sf.n() != 1 || !slices.Equal(sf.calls[0], want) {
+		t.Fatalf("the creating spawn's stat = %v, want one: %v", sf.calls, want)
+	}
+
+	if _, err := wrapWith(m, ws, "s2", nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{ws}; v.n() != 2 || !slices.Equal(v.calls[1], want) {
+		t.Fatalf("the reused spawn's VM read = %v, want only the workspace: %v", v.calls, want)
+	}
+	if want := inBoxStatArgv(name, ws); sf.n() != 2 || !slices.Equal(sf.calls[1], want) {
+		t.Fatalf("the reused spawn's stat = %v, want only the workspace: %v", sf.calls, want)
+	}
+}

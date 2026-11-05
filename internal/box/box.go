@@ -77,15 +77,17 @@ type Mount struct {
 	// CLAUDE.md import is one.
 	Yield bool
 	// ID, when set, is Host's identity when it was last checked (a context
-	// path, on Linux read on the host). Once the box runs, ensure refuses it
-	// unless Box shows the same identity inside it (checkMountIDs).
+	// path or an in-place guard, on Linux read on the host). Once the box runs,
+	// ensure refuses it unless Box shows the same identity inside it
+	// (checkMountIDs).
 	ID *FileID
 	// CheckID marks a mount whose identity must be checked even though the host
 	// recorded none (a context path on macOS, where a host inode number is not
 	// the one the box sees). With no ID and Options.VMIDs set, ensure reads the
 	// identity inside the VM before the mount is made, and checkMountIDs then
-	// compares it like any other. Context mounts set it, and so does the
-	// workspace mount ensure adds (never a caller's mount): a config overlay is
+	// compares it like any other. Context mounts set it, and so do the workspace
+	// mount ensure adds and the in-place guards of the workspace (which
+	// inPlaceMounts already refuses for being symlinks): a config overlay is
 	// never refused for being a symlink.
 	CheckID bool
 	// kind says what the mount is for, which only decides the refusal when its
@@ -868,7 +870,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		if err != nil {
 			return nil, nil, "", err
 		}
-		extraRO = append(slices.Clip(extraRO), guard...)
+		extraRO = append(slices.Clip(extraRO), m.vmView(guard)...)
 	}
 	// Last, so the clone and guard mounts above count as covering too.
 	extraRO = yieldCovered(ws.Path, extraRO)
@@ -1101,7 +1103,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		// exists: a path flipped after this makes docker mount something the
 		// in-box check below sees as another file. A box reused instead takes it
 		// just before that check. One read for all of them, the workspace first.
-		if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO); err != nil {
+		if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, true); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
@@ -1124,11 +1126,11 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	// runs in it. A reused box has had no VM identity read yet (a created one
 	// has, above, and this is then a no-op): the box's mount is old, the path's
 	// identity is now.
-	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO); err != nil {
+	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, created); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
-	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO)); err != nil {
+	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn

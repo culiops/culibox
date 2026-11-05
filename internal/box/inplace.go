@@ -44,7 +44,10 @@ func refuseInPlace(format string, a ...any) error {
 // (absolute, symlinks resolved). Every Mount has Host == Box and is required.
 // Every error wraps ErrUnboxableWorkspace and names the path and the way out.
 // All access inside ws goes through an os.Root, so a symlink the box planted
-// is never followed out of it.
+// is never followed out of it. Each carries the identity of the file or
+// directory it was derived from (the Lstat of its top-level name, taken here)
+// and is marked for the in-box check, so the box docker creates must show these
+// very files at these paths (Mount.CheckID, kind mountGuard).
 func inPlaceMounts(ws string) ([]Mount, error) {
 	return inPlaceMountsAt(workspace{Given: ws, Path: ws})
 }
@@ -99,7 +102,12 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 	}
 
 	var out []Mount
-	guard := func(p string) { out = append(out, Mount{Host: p, Box: p}) }
+	// fi is the Lstat of p taken while it was derived, so its identity is that of
+	// what was checked. Off Linux the host records none (fileInfoID): the VM
+	// reads it (see Manager.vmView).
+	guard := func(p string, fi fs.FileInfo) {
+		out = append(out, Mount{Host: p, Box: p, ID: fileInfoID(fi), CheckID: true, kind: mountGuard})
+	}
 
 	// 3. .git: a directory, or a gitfile (worktree / separate git dir) whose
 	// gitdir: line the box would otherwise rewrite.
@@ -109,7 +117,7 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 			return nil, refuseInPlace("%s is neither a directory nor a gitfile, so it cannot be guarded. Remove it, or %s",
 				filepath.Join(ws, ".git"), lowerFirst(inPlaceTrustedHost))
 		}
-		guard(filepath.Join(ws, ".git"))
+		guard(filepath.Join(ws, ".git"), gitFi)
 	}
 
 	// 4. .claude always: created here when absent, as the daemon user. Left to
@@ -125,7 +133,7 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 		return nil, refuseInPlace("%s is not a directory, so it cannot be guarded. Remove or rename it, or %s",
 			filepath.Join(ws, ".claude"), lowerFirst(inPlaceTrustedHost))
 	}
-	guard(filepath.Join(ws, ".claude"))
+	guard(filepath.Join(ws, ".claude"), claude)
 
 	// 5. Instruction and MCP files, when present.
 	for _, name := range inPlaceGuardFiles {
@@ -137,7 +145,7 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 			return nil, refuseInPlace("%s is not a regular file, so it cannot be guarded. Remove or rename it, or %s",
 				filepath.Join(ws, name), lowerFirst(inPlaceTrustedHost))
 		}
-		guard(filepath.Join(ws, name))
+		guard(filepath.Join(ws, name), fi)
 	}
 
 	// 6 + 7. The hooks directory git uses, when it lies in the workspace.
@@ -146,7 +154,12 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 		return nil, err
 	}
 	if hooks != "" {
-		guard(hooks)
+		// guardHooksDir returns <ws>/<first>: one name directly under ws.
+		fi, err := root.Lstat(filepath.Base(hooks))
+		if err != nil {
+			return nil, uncheckable(ws, filepath.Base(hooks), err)
+		}
+		guard(hooks, fi)
 	}
 	return out, nil
 }
