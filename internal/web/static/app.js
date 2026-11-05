@@ -3346,6 +3346,8 @@ async function refreshSessions() {
 
 // --- spawn / kill ------------------------------------------------------------
 let profiles = [];
+// pfSchema: the profile schema pinned at boot from /api/meta (see schemaPin).
+const pfSchema = schemaPin();
 // profilesLoaded distinguishes "the server has no profiles" from "we could not
 // ask". Without it, one transient failure at boot leaves the primary spawn
 // button disabled under a caption that blames the config, and in dev, `air`
@@ -4609,7 +4611,7 @@ async function saveProfile() {
       $("pf-copy-err").hidden = true;
       let saved = null;
       try {
-        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editing ? withRev(p, pfLoaded) : p) });
+        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(withSchema(editing ? withRev(p, pfLoaded) : p, pfSchema.get())) });
       } catch (e) {
         // A save from a form the server has moved past keeps what the user typed
         // and offers Load latest; no other refusal is cured by a reload, so the
@@ -6662,6 +6664,10 @@ initMobileShell();
   try {
     const seq = ++credListsSeq; // shares the refresh's sequence, so a slower boot answer cannot overwrite a newer one
     const meta = await api("/api/meta");
+    // The profile schema this page was loaded with: the first answer is kept for
+    // the life of the page (no other /api/meta read pins), so a save from a page
+    // that predates an update is refused by the server instead of dropping fields.
+    pfSchema.pin(meta && meta.profile_schema);
     // Whether replies are on gates every reply surface; closed until this answers.
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
     // Quick-shell profile first: it is independent of the env badge, so it must

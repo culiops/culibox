@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, staleSave } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -496,4 +496,42 @@ test("staleSave names only the stale refusal", () => {
     null,
     undefined,
   ]) assert.strictEqual(staleSave(e), null);
+});
+
+// #109: the page pins the profile schema it read at load and sends it with every
+// profile save, so a page from before an update (whose form lacks a field the
+// server now has) is refused instead of dropping that field. withRev keeps its
+// own contract; withSchema is the sibling.
+test("withSchema adds the pinned schema and nothing else, without mutating", () => {
+  const p = { name: "a", rev: "abc" };
+  assert.deepStrictEqual(withSchema(p, "0123456789abcdef"), { name: "a", rev: "abc", schema: "0123456789abcdef" });
+  assert.deepStrictEqual(p, { name: "a", rev: "abc" });
+  assert.notStrictEqual(withSchema(p, ""), p);
+  // Nothing pinned (the page never read one): no schema key at all, so the
+  // server's own answer to a missing one stands.
+  for (const none of ["", null, undefined, 7, {}]) {
+    assert.deepStrictEqual(withSchema({ name: "a" }, none), { name: "a" });
+    assert.ok(!("schema" in withSchema({ name: "a" }, none)));
+  }
+  // Composes with withRev in either order.
+  assert.deepStrictEqual(withSchema(withRev({ name: "a" }, { rev: "r" }), "s1"), { name: "a", rev: "r", schema: "s1" });
+});
+
+test("schemaPin keeps the first schema it was given and never updates", () => {
+  const pin = schemaPin();
+  assert.strictEqual(pin.get(), "");
+  // An answer without a usable value does not pin (a later good one still can).
+  for (const bad of ["", null, undefined, 3, {}]) pin.pin(bad);
+  assert.strictEqual(pin.get(), "");
+  assert.strictEqual(pin.pin("first0123456789a"), "first0123456789a");
+  assert.strictEqual(pin.pin("later0123456789b"), "first0123456789a");
+  assert.strictEqual(pin.get(), "first0123456789a");
+  // Each page gets its own pin.
+  assert.strictEqual(schemaPin().get(), "");
+});
+
+test("staleSave gives no Load latest for a page from before an update", () => {
+  // Load latest would load into the old form and drop the new field again: the
+  // plain "Save failed: ..." line carries the reload message instead.
+  assert.strictEqual(staleSave({ status: 409, code: "page_outdated", message: "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved" }), null);
 });

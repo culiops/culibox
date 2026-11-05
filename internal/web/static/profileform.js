@@ -462,6 +462,32 @@ function withRev(p, loaded) {
   return out;
 }
 
+// schemaPin holds the profile schema a page read at load (/api/meta's
+// profile_schema: the server's fingerprint of the profile fields it knows). The
+// first usable value pinned wins and nothing moves it afterwards, so a page
+// loaded before an update keeps the old value for as long as it is open, and the
+// server, which now holds the new one, refuses its saves (a form that predates a
+// field would otherwise drop that field). One pin per page.
+function schemaPin() {
+  let pinned = "";
+  return {
+    pin(v) {
+      if (!pinned && typeof v === "string" && v) pinned = v;
+      return pinned;
+    },
+    get() { return pinned; },
+  };
+}
+
+// withSchema: a save body plus the schema the page pinned, for POST and PUT
+// alike. With nothing pinned the body carries no schema key at all, so the
+// server's own answer to a missing one stands. Never mutates body.
+function withSchema(body, schema) {
+  const out = Object.assign({}, body);
+  if (typeof schema === "string" && schema) out.schema = schema;
+  return out;
+}
+
 // staleSave: what to show when a save is refused because the profile changed
 // after the form was opened (409 profile_changed), or null for any other
 // failure. Only that one refusal gets a banner with Load latest: the others
@@ -476,5 +502,5 @@ function staleSave(err) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, staleSave };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave };
 }

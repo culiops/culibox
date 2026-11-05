@@ -91,7 +91,22 @@ const HTML = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"),
 
 test("saveProfile sends the opened revision on PUT and nothing extra on POST", () => {
   const b = body("saveProfile");
-  assert.match(b, /JSON\.stringify\(editing \? withRev\(p, pfLoaded\) : p\)/);
+  // Both carry the schema the page pinned at load; only the PUT carries a rev.
+  assert.match(b, /JSON\.stringify\(withSchema\(editing \? withRev\(p, pfLoaded\) : p, pfSchema\.get\(\)\)\)/);
+});
+
+// #109: the schema comes from /api/meta, which the page reads at boot (initEnv);
+// the pin keeps the first value, so a later read after a deploy cannot give an
+// old page the new schema.
+test("the page pins profile_schema from the first /api/meta answer", () => {
+  assert.match(APP, /const pfSchema = schemaPin\(\);/);
+  const boot = APP.indexOf("(async function initEnv(");
+  assert.ok(boot >= 0, "initEnv not found");
+  const pin = APP.indexOf("pfSchema.pin(meta && meta.profile_schema)", boot);
+  assert.ok(pin > boot, "initEnv must pin meta.profile_schema");
+  assert.ok(pin < APP.indexOf("metaLoaded = true", boot), "the pin comes with the first meta answer");
+  // Only the boot read pins: no other /api/meta reader may move it.
+  assert.strictEqual((APP.match(/pfSchema\.pin\(/g) || []).length, 1);
 });
 
 test("saveProfile shows a stale save on the banner before the per-block lines", () => {

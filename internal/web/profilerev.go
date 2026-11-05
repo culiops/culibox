@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/store"
@@ -28,6 +32,79 @@ func profileRev(p config.AgentConfig) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// profileSchema is the fingerprint of the profile wire format this build knows:
+// the first 16 hex chars of the sha256 of every JSON field name of
+// config.AgentConfig and of the structs nested in it. A page reads it once at
+// load and sends it back with each save; a save from a page that was loaded
+// before an update that added a field would otherwise be accepted and silently
+// drop that field, because the old form does not know it. It is derived from
+// the type, never stored, and computed once.
+func profileSchema() string {
+	profileSchemaOnce.Do(func() { profileSchemaValue = schemaOf(reflect.TypeOf(config.AgentConfig{})) })
+	return profileSchemaValue
+}
+
+var (
+	profileSchemaOnce  sync.Once
+	profileSchemaValue string
+)
+
+// schemaOf is the fingerprint of t's JSON field names (see profileSchema).
+func schemaOf(t reflect.Type) string {
+	sum := sha256.Sum256([]byte(strings.Join(schemaNames(t), "\n")))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// schemaNames lists the JSON field names reachable from t, sorted. A nested
+// struct's fields carry their path ("aws.region"), so a nested "p" and a
+// top-level "p" are two names. Fields json skips ("-", unexported) are left
+// out; an untagged embedded struct's fields count as the parent's, as
+// encoding/json promotes them. Pointers, slices, arrays and maps are looked
+// through to their element type; a type met again on its own path is not
+// entered twice, so a recursive type ends.
+func schemaNames(t reflect.Type) []string {
+	var names []string
+	walkSchema(t, "", map[reflect.Type]bool{}, &names)
+	sort.Strings(names)
+	return names
+}
+
+func walkSchema(t reflect.Type, prefix string, onPath map[reflect.Type]bool, out *[]string) {
+	for {
+		switch t.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+			t = t.Elem()
+			continue
+		}
+		break
+	}
+	if t.Kind() != reflect.Struct || onPath[t] {
+		return
+	}
+	onPath[t] = true
+	defer delete(onPath, t)
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if f.Anonymous && name == "" {
+			walkSchema(f.Type, prefix, onPath, out)
+			continue
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		*out = append(*out, prefix+name)
+		walkSchema(f.Type, prefix+name+".", onPath, out)
+	}
+}
+
 // What a refused save reports. The API maps them to a 409 (see writeSaveErr).
 var (
 	// ErrProfileChanged: the profile is not what the saver opened.
@@ -39,12 +116,29 @@ var (
 )
 
 // profileDoc is a profile on the wire for the editor: the config fields plus
-// the revision. GET sends it; PUT must send back the rev it was given. It is
-// not a config field and never reaches profiles.json: Rev is a pointer so a
-// missing rev (nil) and an empty one ("") can both be told from a real value.
+// the revision and the schema. GET sends both; PUT must send back the rev it was
+// given and the schema its page loaded with. Neither is a config field and
+// neither reaches profiles.json. Both are pointers so a missing value (nil) and
+// an empty one ("") can be told from a real one.
 type profileDoc struct {
 	config.AgentConfig
-	Rev *string `json:"rev,omitempty"`
+	Rev    *string `json:"rev,omitempty"`
+	Schema *string `json:"schema,omitempty"`
+}
+
+// pageOutdatedMsg is the 409 body of a save whose schema is not this build's.
+const pageOutdatedMsg = "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved"
+
+// schemaStale reports whether schema, the one a save carried, is one this build
+// does not hold. A nil schema is "not sent" and is the caller's to judge.
+func schemaStale(schema *string) bool {
+	return schema != nil && *schema != profileSchema()
+}
+
+// writePageOutdated answers a save from a page loaded before an update: its form
+// does not know every field the profile now has, so saving it would drop them.
+func writePageOutdated(w http.ResponseWriter) {
+	writeErrCode(w, http.StatusConflict, pageOutdatedMsg, "page_outdated")
 }
 
 // profilesFileChangedMsg is what a save refused by store.ErrChangedOnDisk says:

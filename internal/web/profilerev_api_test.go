@@ -33,8 +33,9 @@ func revOf(t *testing.T, s *Server, name string) string {
 	return *doc.Rev
 }
 
-// putWithRev PUTs body (a JSON object) with its "rev" set to rev.
-func putWithRev(t *testing.T, s *Server, name, body, rev string) *httptest.ResponseRecorder {
+// putWithRevSchema PUTs body (a JSON object) with its "rev" set to rev and its
+// "schema" set to schema (no schema key at all when schema is "-none-").
+func putWithRevSchema(t *testing.T, s *Server, name, body, rev, schema string) *httptest.ResponseRecorder {
 	t.Helper()
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &obj); err != nil {
@@ -42,6 +43,10 @@ func putWithRev(t *testing.T, s *Server, name, body, rev string) *httptest.Respo
 	}
 	r, _ := json.Marshal(rev)
 	obj["rev"] = r
+	if schema != noSchema {
+		sc, _ := json.Marshal(schema)
+		obj["schema"] = sc
+	}
 	b, err := json.Marshal(obj)
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +54,16 @@ func putWithRev(t *testing.T, s *Server, name, body, rev string) *httptest.Respo
 	rec := httptest.NewRecorder()
 	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/"+name, strings.NewReader(string(b))))
 	return rec
+}
+
+// noSchema asks putWithRevSchema to leave the schema key out.
+const noSchema = "-none-"
+
+// putWithRev PUTs body with its "rev" set to rev and the page's schema (the
+// server's own, as a page loaded from this build holds it).
+func putWithRev(t *testing.T, s *Server, name, body, rev string) *httptest.ResponseRecorder {
+	t.Helper()
+	return putWithRevSchema(t, s, name, body, rev, profileSchema())
 }
 
 // putProfile is what the editor does: GET the profile's rev, then PUT body
@@ -155,9 +170,11 @@ func TestPutWithAStaleRevisionIs409AndMergesNothing(t *testing.T) {
 func TestPutWithoutARevisionIs428(t *testing.T) {
 	s := revServer(t)
 	before := revOf(t, s, "p")
+	// The page's schema is present, so it is the missing rev that is refused.
+	sch := `"schema":"` + profileSchema() + `"`
 	for _, body := range []string{
-		`{"name":"p","bin":"bash","args":["--x"]}`,
-		`{"name":"p","bin":"bash","args":["--x"],"rev":""}`,
+		`{"name":"p","bin":"bash","args":["--x"],` + sch + `}`,
+		`{"name":"p","bin":"bash","args":["--x"],"rev":"",` + sch + `}`,
 	} {
 		rec := httptest.NewRecorder()
 		s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/p", strings.NewReader(body)))

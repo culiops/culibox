@@ -26,6 +26,13 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// A page sends the schema it loaded with; one from before an update would
+		// create a profile without the fields it does not know. A bare POST (an
+		// API client) sends none and is accepted.
+		if schemaStale(doc.Schema) {
+			writePageOutdated(w)
+			return
+		}
 		p := doc.AgentConfig
 		if err := s.Profiles.Create(p); err != nil {
 			writeSaveErr(w, err)
@@ -59,12 +66,24 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such profile")
 			return
 		}
-		rev := profileRev(p)
-		writeJSON(w, http.StatusOK, profileDoc{AgentConfig: p, Rev: &rev})
+		rev, schema := profileRev(p), profileSchema()
+		writeJSON(w, http.StatusOK, profileDoc{AgentConfig: p, Rev: &rev, Schema: &schema})
 	case http.MethodPut:
 		doc, err := decodeProfile(w, r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// The schema first: a page from before an update must be told to reload,
+		// not that the profile changed (Load latest would drop the new fields
+		// again). A missing schema is refused like a missing rev, so a page from
+		// before the schema existed is too.
+		if doc.Schema == nil || *doc.Schema == "" {
+			writeErrCode(w, http.StatusPreconditionRequired, revRequiredMsg, "rev_required")
+			return
+		}
+		if schemaStale(doc.Schema) {
+			writePageOutdated(w)
 			return
 		}
 		if doc.Rev == nil || *doc.Rev == "" {
@@ -120,8 +139,9 @@ func saveWarnings(s *Server, p config.AgentConfig) []string {
 	return warnings
 }
 
-// decodeProfile reads a profile and its rev from the request body (64 KiB at
-// most). POST ignores the rev; PUT requires it.
+// decodeProfile reads a profile with its rev and schema from the request body
+// (64 KiB at most). POST ignores the rev and checks the schema only if sent; PUT
+// requires both.
 func decodeProfile(w http.ResponseWriter, r *http.Request) (profileDoc, error) {
 	var doc profileDoc
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&doc); err != nil {
