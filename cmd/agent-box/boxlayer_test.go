@@ -162,6 +162,11 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 		t.Fatal(err)
 	}
 	fc.socket = l.vm.Config().DockerSocket()
+	// Every darwin test layer carries the relay key the daemon would have
+	// loaded at start (#114).
+	if err := l.loadRelayKey(); err != nil {
+		t.Fatal(err)
+	}
 	if !notSetUp {
 		vc := l.vm.Config()
 		if err := os.MkdirAll(vc.ColimaHome(), 0o700); err != nil {
@@ -172,6 +177,102 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 		}
 	}
 	return l, fc, d
+}
+
+// #114: the macOS daemon keeps one relay key per data directory, in
+// relay.secret, so the relay and the listeners agree on it across restarts.
+func TestDarwinLayerLoadsOneRelayKeyPerDataDir(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	if l.relayKey.IsZero() {
+		t.Fatal("relay key is zero: loadRelayKey did not set it")
+	}
+	path := filepath.Join(l.dataDir, relaySecretFile)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("relay.secret mode = %v, want 0600", info.Mode().Perm())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) != 32 || !bytes.Equal(b, l.relayKey[:]) {
+		t.Fatalf("relay.secret is %d bytes and does not equal the key", len(b))
+	}
+
+	// A second layer on the same root gets the same key.
+	again, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}, l.dataDir, l.dataDir, "darwin", &fakeColima{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.loadRelayKey(); err != nil {
+		t.Fatal(err)
+	}
+	if again.relayKey != l.relayKey {
+		t.Error("a second layer on the same data dir got another key")
+	}
+
+	// Another data dir gets its own.
+	other, _, _ := darwinLayer(t, false)
+	if other.relayKey == l.relayKey {
+		t.Error("two data dirs share a relay key")
+	}
+}
+
+func TestLinuxLayerHasNoRelayKey(t *testing.T) {
+	root := t.TempDir()
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.loadRelayKey(); err != nil {
+		t.Fatalf("loadRelayKey on linux: %v", err)
+	}
+	if !l.relayKey.IsZero() {
+		t.Error("linux layer carries a relay key")
+	}
+	if _, err := os.Stat(filepath.Join(root, relaySecretFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("linux wrote %s (stat err %v)", relaySecretFile, err)
+	}
+}
+
+func TestLoadRelayKeyRefusesAnUnreadableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 000 file")
+	}
+	l, _, _ := darwinLayer(t, false)
+	path := filepath.Join(l.dataDir, relaySecretFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+
+	fresh, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}, l.dataDir, l.dataDir, "darwin", &fakeColima{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.loadRelayKey(); err == nil {
+		t.Fatal("an unreadable relay.secret must be an error")
+	}
+	if !fresh.relayKey.IsZero() {
+		t.Error("the key must stay zero after a failed load")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("an unreadable relay.secret was overwritten")
+	}
 }
 
 func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {

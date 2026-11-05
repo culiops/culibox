@@ -466,6 +466,12 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
 	} else {
 		layer, boxes = l, l.boxes
+		// Not fatal (D8): without the key the darwin listeners and the relay
+		// refuse, so every boxed spawn on this Mac says why instead.
+		if err := l.loadRelayKey(); err != nil {
+			log.Printf("relay key unavailable (%v); every boxed spawn on this Mac is refused until %s can be read",
+				err, filepath.Join(dataDir, relaySecretFile))
+		}
 		mgr.SetBoxes(boxes)
 		boxRuntime = boxes.Runtime()
 		if l.vm != nil {
