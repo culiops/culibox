@@ -197,8 +197,8 @@ type Relay struct {
 	UID, GID        int
 	// Key is the relay key the container proves to every host listener, and
 	// requires the listener to prove, before it forwards a byte (the key itself
-	// never crosses the wire). Required: Ensure refuses the zero Key before it
-	// touches the VM.
+	// never crosses the wire). Required: Ensure removes any relay and refuses the
+	// zero Key before it reads the VM's rules.
 	Key          proxyline.Key
 	ReadyTimeout time.Duration // default 10s
 }
@@ -279,26 +279,66 @@ func (r *Relay) remove(ctx context.Context) error {
 	return nil
 }
 
+// inspectRelay is `docker inspect` of the relay container as
+// "<running>\t<relay-config label>", or docker's error ("No such container" when
+// the relay is absent).
+func (r *Relay) inspectRelay(ctx context.Context) (string, error) {
+	return r.dockerStdout(ctx, "inspect", "--type", "container", "--format",
+		`{{.State.Running}}`+"\t"+`{{index .Config.Labels "`+relayConfigLabel+`"}}`, RelayName(r.Instance))
+}
+
+// removeUnlessCurrent is the refusal path that keeps a relay running only when
+// it can be vouched for (D7): cause is returned either way, and the relay is
+// removed unless it runs with the current config hash (same script, flags and
+// key). A relay with another hash may be one from before #118, which does not
+// authenticate the listener, and the v2 listeners refuse it anyway. A current
+// relay stays because the refusals that come here (rules unreadable, DOCKER-USER
+// refused) can be a transient ssh failure that must not cut live sessions. When
+// docker cannot say what runs, nothing is removed and the error says so.
+func (r *Relay) removeUnlessCurrent(ctx context.Context, gw netip.Addr, cause error) error {
+	out, err := r.inspectRelay(ctx)
+	switch {
+	case err == nil:
+		if strings.TrimSpace(out) == "true\t"+r.configHash(gw) {
+			return cause
+		}
+		return r.removeAlso(ctx, cause)
+	case strings.Contains(err.Error(), "No such"):
+		return cause
+	default:
+		return errors.Join(cause, fmt.Errorf("inspecting the relay: %w", err))
+	}
+}
+
 // Ensure makes the relay run for gateway gw, or returns an error and leaves no
-// relay behind. Without a key it refuses before it touches the VM or docker
-// (the relay would have nothing to present, and the listeners refuse it all).
+// relay it cannot vouch for. Without a key it removes any relay and refuses,
+// without reading the VM's rules: no listener binds without a key, so the removal
+// cuts nothing that works, and a relay left running could be one from before #118.
 // The INPUT rules are checked live first, every time: they are what keeps an
 // unfenced box off the relay, so a VM without them gets no relay.
 //
 // INPUT rules read and wrong: the relay is removed. Rules that could not be
-// read (colima ssh error, timeout): this Ready is refused but a running relay is
-// left alone. The relay only ever started after the rules were verified this
-// boot; a VM reboot or dockerd restart stops it (no restart policy); and a
-// transient ssh failure must not cut every live fenced session's proxy and
-// broker. A DOCKER-USER chain that lets TCP past the relay or lacks the gateway
-// DROP (CheckDockerUserRules) is refused the same way, relay kept: that path does not go through the relay,
-// so removing it would close nothing. Within one daemon run, live sessions keep
-// their proxy and broker; a daemon that starts on such a VM never starts its
-// egress listener (Ready fails before it), so they keep only the broker until
-// the VM is recreated, which ends them anyway.
+// read (colima ssh error, timeout): this Ready is refused, and a running relay
+// is kept only if it is current (same script, flags and key: it proves itself to
+// the listeners); any other is removed, because during an upgrade it may be a
+// relay that does not authenticate the listener (#118). The relay only ever
+// started after the rules were verified this boot, a VM reboot or dockerd
+// restart stops it (no restart policy), and a transient ssh failure must not cut
+// every live fenced session's proxy and broker, so a current relay stays. A
+// DOCKER-USER chain that lets TCP past the relay or lacks the gateway DROP
+// (CheckDockerUserRules) is refused the same way, a current relay kept and any
+// other removed: that path does not go through the relay, so removing a current
+// one would close nothing. Within one daemon run, live sessions keep their proxy
+// and broker; a daemon that starts on such a VM never starts its egress listener
+// (Ready fails before it), so they keep only the broker until the VM is
+// recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Key.IsZero() {
-		return fmt.Errorf("relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)")
+		err := fmt.Errorf("relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)")
+		if r.Instance != "" && r.Docker != nil {
+			return r.removeAlso(ctx, err)
+		}
+		return err
 	}
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")
@@ -308,19 +348,18 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	}
 	rules, err := r.VM.FilterRules(ctx)
 	if err != nil {
-		return fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err)
+		return r.removeUnlessCurrent(ctx, gw, fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err))
 	}
 	if err := CheckInputRules(rules, r.EgressPort, r.BrokerPort); err != nil {
 		// Read and wrong: nothing may keep relaying without the rules.
 		return r.removeAlso(ctx, err)
 	}
 	if err := CheckDockerUserRules(rules); err != nil {
-		return err
+		return r.removeUnlessCurrent(ctx, gw, err)
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
-	out, err := r.dockerStdout(ctx, "inspect", "--type", "container", "--format",
-		`{{.State.Running}}`+"\t"+`{{index .Config.Labels "`+relayConfigLabel+`"}}`, name)
+	out, err := r.inspectRelay(ctx)
 	switch {
 	case err == nil:
 		if strings.TrimSpace(out) == "true\t"+hash {

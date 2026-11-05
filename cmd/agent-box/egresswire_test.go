@@ -341,10 +341,12 @@ func TestStartEgressDarwinHandsTheRelayItsKey(t *testing.T) {
 	}
 }
 
-// D8: no key means no relay. Ensure refuses before it reads the VM's rules or
-// calls docker for the relay; the egress zero-key refusal that follows it in
-// Ready would come too late.
-func TestStartEgressDarwinWithoutAKeyTouchesNeitherTheVMNorTheRelay(t *testing.T) {
+// D7: no key means no relay, and whatever relay runs is removed. During the
+// upgrade it can be one from before #118, which does not authenticate the
+// listener, and with no key no listener binds the egress port, so the relay would
+// hand the boxes' tokens to whatever does. Ensure removes it (exactly once) and
+// refuses, without reading the VM's rules or starting one.
+func TestStartEgressDarwinWithoutAKeyReadsNoVMAndRemovesTheRelay(t *testing.T) {
 	ep, bp := freePort(t), freePort(t)
 	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)
 	l.relayKey = proxyline.Key{}
@@ -357,10 +359,13 @@ func TestStartEgressDarwinWithoutAKeyTouchesNeitherTheVMNorTheRelay(t *testing.T
 	}
 	defer svc.Stop(context.Background())
 	out := d.log()
-	for _, bad := range []string{"COLIMA ssh", "run -d", "rm -f", "logs agentbox-relay"} {
+	for _, bad := range []string{"COLIMA ssh", "run -d", "logs agentbox-relay"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("%q ran without a relay key:\n%s", bad, out)
 		}
+	}
+	if n := strings.Count(out, "rm -f agentbox-relay-"); n != 1 {
+		t.Errorf("the relay was removed %d time(s), want once:\n%s", n, out)
 	}
 	if !strings.Contains(buf.String(), "relay key") {
 		t.Errorf("the refusal's reason is not logged: %q", buf.String())

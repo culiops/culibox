@@ -342,6 +342,25 @@ func TestEnsureRefusesAStaleBrokerReturnAndKeepsTheRelay(t *testing.T) {
 	}
 }
 
+// A relay that is not current may be one from before #118, which does not
+// authenticate the listener, so a refusal that keeps a relay keeps only a current
+// one: any other is removed, and nothing is started in its place.
+func TestEnsureRemovesAStaleRelayOnAStaleBrokerReturn(t *testing.T) {
+	r := testRelay(fakeVM{out: goodRules + staleBrokerReturn}, nil)
+	d := &fakeDocker{inspect: "true\t" + v1RelayHash(t, r) + "\n", logs: bothListening}
+	r.Docker = d
+	err := r.Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "box setup -recreate") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := strings.Join(d.subcommands(), ","); got != "inspect,rm" {
+		t.Fatalf("calls = %s, want the stale relay inspected and removed, nothing started", got)
+	}
+	if rm := d.find("rm"); strings.Join(rm[0], " ") != "rm -f agentbox-relay-prod" {
+		t.Fatalf("rm = %v", rm)
+	}
+}
+
 func TestEnsureChecksRulesBeforeTheRelay(t *testing.T) {
 	d := &fakeDocker{}
 	err := testRelay(fakeVM{out: "-P INPUT ACCEPT\n"}, d).Ensure(context.Background(), gw)
@@ -369,6 +388,80 @@ func TestEnsureRefusesWhenTheRulesCannotBeRead(t *testing.T) {
 	if !strings.Contains(err.Error(), "could not be read") || !strings.Contains(err.Error(), "ssh: connection refused") ||
 		strings.Contains(err.Error(), "recreate") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// #113: a transient ssh failure must not cut live sessions, so a relay that is
+// current (the label equals the config hash: same script, flags and key) is kept
+// on a rules read error. It is looked at, though: that is what makes it kept
+// rather than merely left.
+func TestEnsureKeepsACurrentRelayWhenTheRulesCannotBeRead(t *testing.T) {
+	r := testRelay(fakeVM{err: errors.New("ssh: connection refused")}, nil)
+	d := &fakeDocker{inspect: "true\t" + r.configHash(gw) + "\n", logs: bothListening}
+	r.Docker = d
+	err := r.Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "could not be read") || !strings.Contains(err.Error(), "ssh: connection refused") ||
+		strings.Contains(err.Error(), "recreate") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := strings.Join(d.subcommands(), ","); got != "inspect" {
+		t.Fatalf("calls = %s, want the relay inspected and nothing else", got)
+	}
+}
+
+// Any relay that is not current is removed on that refusal: during an upgrade it
+// can be one from before #118 that does not authenticate the listener (D7). One
+// that has stopped forwards nothing, and the next good Ensure replaces it, so it
+// goes too.
+func TestEnsureRemovesAStaleRelayWhenTheRulesCannotBeRead(t *testing.T) {
+	other := testRelay(fakeVM{}, nil)
+	other.Key = otherRelayKey
+	for name, inspect := range map[string]func(r *Relay) string{
+		"a v1 relay":          func(r *Relay) string { return "true\t" + v1RelayHash(t, r) },
+		"another key":         func(r *Relay) string { return "true\t" + other.configHash(gw) },
+		"stopped but current": func(r *Relay) string { return "false\t" + r.configHash(gw) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := testRelay(fakeVM{err: errors.New("ssh: connection refused")}, nil)
+			d := &fakeDocker{inspect: inspect(r) + "\n", logs: bothListening}
+			r.Docker = d
+			err := r.Ensure(context.Background(), gw)
+			if err == nil || !strings.Contains(err.Error(), "could not be read") || !strings.Contains(err.Error(), "ssh: connection refused") {
+				t.Fatalf("err = %v", err)
+			}
+			if got := strings.Join(d.subcommands(), ","); got != "inspect,rm" {
+				t.Fatalf("calls = %s, want the relay inspected and removed, nothing started", got)
+			}
+			if rm := d.find("rm"); strings.Join(rm[0], " ") != "rm -f agentbox-relay-prod" {
+				t.Fatalf("rm = %v", rm)
+			}
+		})
+	}
+}
+
+// When docker cannot say what runs, nothing is removed (there is no telling a
+// current relay from a stale one) and the operator is told both things: why the
+// Ready was refused and that the relay could not be checked.
+func TestEnsureReportsAnInspectFailureOnARefusal(t *testing.T) {
+	inspErr := errors.New("Cannot connect to the Docker daemon")
+	for name, tc := range map[string]struct {
+		vm   fakeVM
+		want string
+	}{
+		"rules unreadable":  {fakeVM{err: errors.New("ssh: connection refused")}, "ssh: connection refused"},
+		"stale broker rule": {fakeVM{out: goodRules + staleBrokerReturn}, "box setup -recreate"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := &fakeDocker{inspErr: inspErr}
+			err := testRelay(tc.vm, d).Ensure(context.Background(), gw)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "inspecting the relay") ||
+				!errors.Is(err, inspErr) {
+				t.Fatalf("err = %v, want the refusal (%q) and the failed inspect", err, tc.want)
+			}
+			if got := strings.Join(d.subcommands(), ","); got != "inspect" {
+				t.Fatalf("calls = %s, want one inspect: nothing removed, nothing started", got)
+			}
+		})
 	}
 }
 
@@ -778,14 +871,20 @@ func (c *countingVM) FilterRules(context.Context) (string, error) {
 	return goodRules, nil
 }
 
-// A zero key is refused before the VM or docker is touched (D8): the relay
-// would otherwise start and have nothing to present, and the egress listener's
-// own zero-key refusal only comes after Ensure.
-func TestEnsureRefusesWithoutAKey(t *testing.T) {
+// D7: with no key Ensure removes whatever relay runs, then refuses, and it never
+// reads the VM's rules or starts anything. During the upgrade the running relay
+// can be one from before #118, which does not authenticate the listener, so
+// leaving it up would let whatever holds the egress port act as the boxes'
+// proxy. No listener binds with a zero key, so the removal cuts nothing that
+// works.
+func TestEnsureWithoutAKeyRemovesAnyRelay(t *testing.T) {
 	vm := &countingVM{}
 	d := &fakeDocker{logs: bothListening}
 	r := &Relay{VM: vm, Docker: d, Image: "agent-box/box:test", Instance: "prod", EgressPort: 9072, BrokerPort: 9071,
 		UID: 501, GID: 20, ReadyTimeout: 300 * time.Millisecond}
+	// What runs is a keyed relay from before #118, the case D7 is about: its label
+	// is the v1 hash of a keyed twin of r.
+	d.inspect = "true\t" + v1RelayHash(t, testRelay(fakeVM{}, nil)) + "\n"
 	err := r.Ensure(context.Background(), gw)
 	want := "relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)"
 	if err == nil || err.Error() != want {
@@ -794,7 +893,33 @@ func TestEnsureRefusesWithoutAKey(t *testing.T) {
 	if vm.reads != 0 {
 		t.Errorf("the VM's firewall was read %d time(s) before the key check", vm.reads)
 	}
-	if len(d.calls) != 0 || len(d.envs) != 0 || len(d.runViaRun) != 0 {
+	var got []string
+	for _, c := range d.calls {
+		got = append(got, strings.Join(c, " "))
+	}
+	if !slices.Equal(got, []string{"rm -f agentbox-relay-prod"}) {
+		t.Errorf("docker calls = %q, want exactly the relay's removal", got)
+	}
+	if len(d.envs) != 0 || len(d.runViaRun) != 0 {
+		t.Errorf("a relay was started: %d RunEnv call(s), %d run via Run", len(d.envs), len(d.runViaRun))
+	}
+}
+
+// The removal needs a name and a docker to do it with. Without either, the zero
+// key is only refused: no docker call, and never an `rm -f agentbox-relay-` for a
+// relay that has no name.
+func TestEnsureWithoutAKeyOrNothingToRemoveJustRefuses(t *testing.T) {
+	want := "relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)"
+	d := &fakeDocker{}
+	for name, r := range map[string]*Relay{
+		"no docker":   {VM: &countingVM{}, Instance: "prod", EgressPort: 9072, BrokerPort: 9071},
+		"no instance": {VM: &countingVM{}, Docker: d, EgressPort: 9072, BrokerPort: 9071},
+	} {
+		if err := r.Ensure(context.Background(), gw); err == nil || err.Error() != want {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+	}
+	if len(d.calls) != 0 {
 		t.Errorf("docker was called: %v", d.subcommands())
 	}
 }
@@ -1089,13 +1214,20 @@ func argsWithScript(t *testing.T, r *Relay, script string) []string {
 	return args
 }
 
+// v1RelayHash is the config label a relay started before #118 carries: r's own
+// argv and key id with the v1 script in place of the current one.
+func v1RelayHash(t *testing.T, r *Relay) string {
+	t.Helper()
+	return hashWithKeyID(r, argsWithScript(t, r, v1RelayScript))
+}
+
 // A relay started before #118 differs from the current one only in its script,
 // so the next Ensure must replace it: it does not authenticate the listener and
 // the v2 listeners refuse it. The key stays the same here on purpose, so the
 // script is the one thing that decides.
 func TestEnsureReplacesAV1Relay(t *testing.T) {
 	r := testRelay(fakeVM{out: goodRules}, nil)
-	d := &fakeDocker{inspect: "true\t" + hashWithKeyID(r, argsWithScript(t, r, v1RelayScript)) + "\n", logs: bothListening}
+	d := &fakeDocker{inspect: "true\t" + v1RelayHash(t, r) + "\n", logs: bothListening}
 	r.Docker = d
 	if err := r.Ensure(context.Background(), gw); err != nil {
 		t.Fatal(err)
