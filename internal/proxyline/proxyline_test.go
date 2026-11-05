@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -13,6 +15,15 @@ import (
 const goodHeader = "PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\n"
 
 func allowAll(netip.Addr) bool { return true }
+
+// testKey is the relay key every test listener wants; otherKey is a wrong one.
+var (
+	testKey  = keyOf(0x11)
+	otherKey = keyOf(0x22)
+)
+
+// keyed is h as the relay sends it: the key line, then h.
+func keyed(h string) string { return string(testKey.Preamble()) + h }
 
 func TestParseV1Valid(t *testing.T) {
 	src, dst, err := ParseV1([]byte(goodHeader))
@@ -76,16 +87,29 @@ func TestParseV1AcceptsMaxLen(t *testing.T) {
 	}
 }
 
-// listen starts a wrapped loopback listener.
+// listen starts a wrapped loopback listener that wants testKey.
 func listen(t *testing.T, allow func(netip.Addr) bool, timeout time.Duration) net.Listener {
+	t.Helper()
+	return listenOpts(t, Options{Key: testKey, Allow: allow, Timeout: timeout})
+}
+
+// listenOpts is listen with the whole Options.
+func listenOpts(t *testing.T, o Options) net.Listener {
 	t.Helper()
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := Wrap(raw, allow, timeout)
+	l := Wrap(raw, o)
 	t.Cleanup(func() { l.Close() })
 	return l
+}
+
+// refusals counts KeyRefused calls.
+type refusals struct{ n atomic.Int32 }
+
+func (r *refusals) opts(key Key, timeout time.Duration) Options {
+	return Options{Key: key, Allow: allowAll, Timeout: timeout, KeyRefused: func() { r.n.Add(1) }}
 }
 
 func dial(t *testing.T, l net.Listener) net.Conn {
@@ -111,7 +135,7 @@ func accept(t *testing.T, l net.Listener) net.Conn {
 func TestWrapSetsRemoteAddrFromHeader(t *testing.T) {
 	l := listen(t, allowAll, 5*time.Second)
 	cl := dial(t, l)
-	if _, err := cl.Write([]byte(goodHeader + "hello")); err != nil {
+	if _, err := cl.Write([]byte(keyed(goodHeader + "hello"))); err != nil {
 		t.Fatal(err)
 	}
 	sc := accept(t, l)
@@ -137,7 +161,7 @@ func TestWrapDeliversBytesAfterHeader(t *testing.T) {
 	for i := range payload {
 		payload[i] = byte(i * 7)
 	}
-	if _, err := cl.Write(append([]byte(goodHeader), payload...)); err != nil {
+	if _, err := cl.Write(append([]byte(keyed(goodHeader)), payload...)); err != nil {
 		t.Fatal(err)
 	}
 	sc := accept(t, l)
@@ -153,7 +177,7 @@ func TestWrapDeliversBytesAfterHeader(t *testing.T) {
 func TestWrapRejectsMissingHeader(t *testing.T) {
 	l := listen(t, allowAll, 5*time.Second)
 	cl := dial(t, l)
-	if _, err := cl.Write([]byte("CONNECT x:443 HTTP/1.1\r\n\r\n")); err != nil {
+	if _, err := cl.Write([]byte(keyed("CONNECT x:443 HTTP/1.1\r\n\r\n"))); err != nil {
 		t.Fatal(err)
 	}
 	sc := accept(t, l)
@@ -178,7 +202,7 @@ func TestWrapRejectsMissingHeader(t *testing.T) {
 func TestWrapRejectsDisallowedSource(t *testing.T) {
 	l := listen(t, func(netip.Addr) bool { return false }, 5*time.Second)
 	cl := dial(t, l)
-	if _, err := cl.Write([]byte(goodHeader + "x")); err != nil {
+	if _, err := cl.Write([]byte(keyed(goodHeader + "x"))); err != nil {
 		t.Fatal(err)
 	}
 	sc := accept(t, l)
@@ -191,7 +215,7 @@ func TestWrapAllowReceivesHeaderSource(t *testing.T) {
 	var seen netip.Addr
 	l := listen(t, func(a netip.Addr) bool { seen = a; return true }, 5*time.Second)
 	cl := dial(t, l)
-	cl.Write([]byte(goodHeader))
+	cl.Write([]byte(keyed(goodHeader)))
 	sc := accept(t, l)
 	_ = sc.RemoteAddr() // triggers the header read
 	if seen.String() != "172.29.72.5" {
@@ -202,7 +226,7 @@ func TestWrapAllowReceivesHeaderSource(t *testing.T) {
 func TestWrapNilAllowFailsClosed(t *testing.T) {
 	l := listen(t, nil, 5*time.Second)
 	cl := dial(t, l)
-	cl.Write([]byte(goodHeader))
+	cl.Write([]byte(keyed(goodHeader)))
 	sc := accept(t, l)
 	if _, err := sc.Read(make([]byte, 1)); !errors.Is(err, ErrHeader) {
 		t.Fatalf("Read err = %v, want ErrHeader", err)
@@ -232,7 +256,7 @@ func TestWrapSlowClientDoesNotBlockAccept(t *testing.T) {
 	l := listen(t, allowAll, 5*time.Second)
 	_ = dial(t, l) // A: silent
 	b := dial(t, l)
-	if _, err := b.Write([]byte(goodHeader)); err != nil {
+	if _, err := b.Write([]byte(keyed(goodHeader))); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
@@ -292,9 +316,10 @@ func (f *fakeListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0
 func TestWrapNonLoopbackPeerRefused(t *testing.T) {
 	cs, ss := net.Pipe()
 	defer cs.Close()
-	go func() { cs.Write([]byte(goodHeader + "x")) }()
+	go func() { cs.Write([]byte(keyed(goodHeader + "x"))) }()
 	fl := &fakeListener{conn: fakeConn{Conn: ss, remote: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1234}}}
-	l := Wrap(fl, allowAll, 5*time.Second)
+	var refused refusals
+	l := Wrap(fl, refused.opts(testKey, 5*time.Second))
 	c, err := l.Accept()
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +331,10 @@ func TestWrapNonLoopbackPeerRefused(t *testing.T) {
 	if got := c.RemoteAddr().String(); got != "10.0.0.1:1234" {
 		t.Fatalf("RemoteAddr = %s, want the real peer", got)
 	}
+	// The peer was refused before the key was looked at.
+	if refused.n.Load() != 0 {
+		t.Fatalf("KeyRefused called %d times for a non-loopback peer", refused.n.Load())
+	}
 }
 
 func TestWrapAddrAndCloseDelegate(t *testing.T) {
@@ -313,7 +342,7 @@ func TestWrapAddrAndCloseDelegate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := Wrap(raw, allowAll, time.Second)
+	l := Wrap(raw, Options{Key: testKey, Allow: allowAll, Timeout: time.Second})
 	if l.Addr().String() != raw.Addr().String() {
 		t.Fatal("Addr not delegated")
 	}
@@ -328,7 +357,7 @@ func TestWrapAddrAndCloseDelegate(t *testing.T) {
 func TestWrapKeepsCallerReadDeadline(t *testing.T) {
 	l := listen(t, allowAll, 5*time.Second)
 	cl := dial(t, l)
-	cl.Write([]byte(goodHeader)) // header only, then silence
+	cl.Write([]byte(keyed(goodHeader))) // header only, then silence
 	sc := accept(t, l)
 	if err := sc.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
 		t.Fatal(err)
@@ -362,7 +391,7 @@ func TestWrapWriteBeforeHeaderFails(t *testing.T) {
 func TestWrapForwardsCloseWrite(t *testing.T) {
 	l := listen(t, allowAll, 5*time.Second)
 	cl := dial(t, l)
-	cl.Write([]byte(goodHeader))
+	cl.Write([]byte(keyed(goodHeader)))
 	sc := accept(t, l)
 	cw, ok := sc.(interface{ CloseWrite() error })
 	if !ok {
@@ -388,8 +417,8 @@ func TestWrapForwardsCloseWrite(t *testing.T) {
 func TestWrapCloseWriteUnsupportedInner(t *testing.T) {
 	cs, ss := net.Pipe()
 	defer cs.Close()
-	go func() { cs.Write([]byte(goodHeader)) }()
-	l := Wrap(&fakeListener{conn: fakeConn{Conn: ss, remote: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}}}, allowAll, time.Second)
+	go func() { cs.Write([]byte(keyed(goodHeader))) }()
+	l := Wrap(&fakeListener{conn: fakeConn{Conn: ss, remote: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}}}, Options{Key: testKey, Allow: allowAll, Timeout: time.Second})
 	c, _ := l.Accept()
 	defer c.Close()
 	if err := c.(interface{ CloseWrite() error }).CloseWrite(); err == nil {
@@ -400,7 +429,7 @@ func TestWrapCloseWriteUnsupportedInner(t *testing.T) {
 func TestWrapAllowPanicFailsClosed(t *testing.T) {
 	l := listen(t, func(netip.Addr) bool { panic("boom") }, 5*time.Second)
 	cl := dial(t, l)
-	cl.Write([]byte(goodHeader))
+	cl.Write([]byte(keyed(goodHeader)))
 	sc := accept(t, l)
 	func() {
 		defer func() { recover() }()
@@ -426,6 +455,161 @@ func TestWrapTimeoutKeepsNetErrorTimeout(t *testing.T) {
 	var ne net.Error
 	if !errors.Is(err, ErrHeader) || !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatalf("err = %v, want ErrHeader that is also a net.Error timeout", err)
+	}
+}
+
+// seesNothing fails unless the client's side of a refused connection is closed
+// without a single byte having come back (a reset counts as closed: the server
+// may close with unread input).
+func seesNothing(t *testing.T, cl net.Conn) {
+	t.Helper()
+	cl.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, err := io.ReadAll(cl)
+	if len(got) != 0 {
+		t.Fatalf("a refused connection got %d bytes back: %q", len(got), got)
+	}
+	if err != nil && !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("client read err = %v, want EOF or a reset", err)
+	}
+}
+
+// readRefused reads sc and requires the handshake's ErrHeader.
+func readRefused(t *testing.T, sc net.Conn) error {
+	t.Helper()
+	_, err := sc.Read(make([]byte, 16))
+	if !errors.Is(err, ErrHeader) {
+		t.Fatalf("Read err = %v, want ErrHeader", err)
+	}
+	return err
+}
+
+// A connection that opens with the PROXY line and no key line is refused,
+// whether it stops short of the key's length (the read ends at the timeout) or
+// goes past it (the bytes are not the key).
+func TestWrapNeedsTheKeyBeforeTheHeader(t *testing.T) {
+	for name, payload := range map[string]string{
+		"header and two bytes": goodHeader + "hi",
+		"long, not the key":    goodHeader + strings.Repeat("x", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var r refusals
+			l := listenOpts(t, r.opts(testKey, 300*time.Millisecond))
+			cl := dial(t, l)
+			if _, err := cl.Write([]byte(payload)); err != nil {
+				t.Fatal(err)
+			}
+			sc := accept(t, l)
+			err := readRefused(t, sc)
+			for _, hex := range []string{testKey.Hex(), otherKey.Hex()} {
+				if strings.Contains(err.Error(), hex) {
+					t.Fatalf("the error holds a key: %v", err)
+				}
+			}
+			seesNothing(t, cl)
+			if got := r.n.Load(); got != 1 {
+				t.Fatalf("KeyRefused called %d times, want 1", got)
+			}
+			// Sticky: the same refusal on every later call, and no second count.
+			if _, err := sc.Write([]byte("x")); !errors.Is(err, ErrHeader) {
+				t.Fatalf("Write err = %v, want ErrHeader", err)
+			}
+			if got := r.n.Load(); got != 1 {
+				t.Fatalf("KeyRefused called %d times after a second call, want 1", got)
+			}
+		})
+	}
+}
+
+func TestWrapRefusesAWrongKey(t *testing.T) {
+	var r refusals
+	l := listenOpts(t, r.opts(testKey, 5*time.Second))
+	cl := dial(t, l)
+	if _, err := cl.Write([]byte(string(otherKey.Preamble()) + goodHeader + "hi")); err != nil {
+		t.Fatal(err)
+	}
+	sc := accept(t, l)
+	err := readRefused(t, sc)
+	for _, hex := range []string{testKey.Hex(), otherKey.Hex()} {
+		if strings.Contains(err.Error(), hex) {
+			t.Fatalf("the error holds a key: %v", err)
+		}
+	}
+	// The header after the wrong key was never believed.
+	if got := sc.RemoteAddr().String(); strings.HasPrefix(got, "172.29.72.5") {
+		t.Fatalf("RemoteAddr = %s: the header after a wrong key was trusted", got)
+	}
+	seesNothing(t, cl)
+	if got := r.n.Load(); got != 1 {
+		t.Fatalf("KeyRefused called %d times, want 1", got)
+	}
+}
+
+// With no key configured there is nothing to compare: refuse, even a client
+// that sends the all-zero key line.
+func TestWrapZeroKeyRefusesEverything(t *testing.T) {
+	var r refusals
+	l := listenOpts(t, r.opts(Key{}, 5*time.Second))
+	cl := dial(t, l)
+	if _, err := cl.Write([]byte(string(Key{}.Preamble()) + goodHeader + "hi")); err != nil {
+		t.Fatal(err)
+	}
+	sc := accept(t, l)
+	readRefused(t, sc)
+	seesNothing(t, cl)
+	if got := r.n.Load(); got != 1 {
+		t.Fatalf("KeyRefused called %d times, want 1", got)
+	}
+}
+
+// The relay writes key and header in one write, but TCP may split them anywhere.
+func TestWrapAcceptsAKeySplitAcrossWrites(t *testing.T) {
+	var r refusals
+	l := listenOpts(t, r.opts(testKey, 5*time.Second))
+	cl := dial(t, l)
+	pre := testKey.Preamble()
+	go func() {
+		cl.Write(pre[:40])
+		time.Sleep(50 * time.Millisecond)
+		cl.Write(pre[40:])
+		cl.Write([]byte(goodHeader + "payload"))
+	}()
+	sc := accept(t, l)
+	if got := sc.RemoteAddr().String(); got != "172.29.72.5:40000" {
+		t.Fatalf("RemoteAddr = %s", got)
+	}
+	buf := make([]byte, len("payload"))
+	if _, err := io.ReadFull(sc, buf); err != nil || string(buf) != "payload" {
+		t.Fatalf("payload = %q, %v", buf, err)
+	}
+	if got := r.n.Load(); got != 0 {
+		t.Fatalf("KeyRefused called %d times for a good connection", got)
+	}
+}
+
+// One deadline covers both lines: a client that sends the key and then goes
+// quiet is closed at the timeout, not a whole timeout after the key.
+func TestWrapKeyAndHeaderShareTheTimeout(t *testing.T) {
+	const timeout = 500 * time.Millisecond
+	var r refusals
+	l := listenOpts(t, r.opts(testKey, timeout))
+	cl := dial(t, l)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cl.Write(testKey.Preamble())
+	}()
+	sc := accept(t, l)
+	start := time.Now()
+	err := readRefused(t, sc)
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if el := time.Since(start); el < 400*time.Millisecond || el > 700*time.Millisecond {
+		t.Fatalf("closed after %v, want about %v (key and header share the deadline)", el, timeout)
+	}
+	seesNothing(t, cl)
+	if got := r.n.Load(); got != 0 {
+		t.Fatalf("KeyRefused called %d times for a connection that had the right key", got)
 	}
 }
 

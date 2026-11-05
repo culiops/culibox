@@ -134,7 +134,7 @@ func freePort(t *testing.T) int {
 func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 	bin, dir := statefulEgressDocker(t)
 	port := freePort(t)
-	svc, err := startEgress(t.TempDir(), &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}, config.Config{EgressPort: port}, "darwin", noSessions)
+	svc, err := startEgress(t.TempDir(), &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}, config.Config{EgressPort: port}, "darwin", noSessions)
 	if err != nil {
 		t.Fatalf("darwin must start egress now: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestEgressVerifyFailsClosedWhenTheProxyCannotStart(t *testing.T) {
 func TestEgressVerifyDarwinRunsTheProbeThenTheLoopbackCheck(t *testing.T) {
 	bin, dir := statefulEgressDocker(t)
 	port := freePort(t)
-	l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+	l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: port}, "darwin", noSessions)
 	if err != nil {
 		t.Fatal(err)
@@ -576,7 +576,7 @@ func TestEgressVerifyDarwinFailsClosed(t *testing.T) {
 		"loopback inconclusive": {nil, "", true},
 	} {
 		bin, dir := statefulEgressDocker(t)
-		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
 		if err != nil {
 			t.Fatal(err)
@@ -614,7 +614,7 @@ func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
 		"no VM (linux)": {novm: true, want: false},
 	} {
 		bin, _ := statefulEgressDocker(t)
-		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 		var vm *boxvm.VM
 		if !tc.novm {
 			dl, _, _ := darwinLayer(t, true)

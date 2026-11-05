@@ -18,6 +18,7 @@ import (
 
 	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/session"
 )
 
@@ -79,6 +80,19 @@ func TestEgressAndBrokerShareTheLayersBoxAddrCache(t *testing.T) {
 	}
 }
 
+// testRelayKey is a relay key for tests that hand the macOS wiring one by hand.
+var testRelayKey = func() proxyline.Key {
+	var raw [32]byte
+	for i := range raw {
+		raw[i] = 0x51 + byte(i)
+	}
+	k, err := proxyline.KeyFromBytes(raw[:])
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
+
 // rawPostProxy is one POST over TCP behind a PROXY line: status and body, or the
 // error when the connection was closed unanswered.
 func rawPostProxy(t *testing.T, addr, prefix, path, tok, body string) (int, string, error) {
@@ -120,13 +134,15 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 		}
 		return netip.Addr{}, errors.New("no such box")
 	}
-	own := "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
-	other := "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n"
+	// The relay writes its key line ahead of the PROXY line (#114).
+	preamble := string(testRelayKey.Preamble())
+	own := preamble + "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
+	other := preamble + "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n"
 	const path, body = "/v1/static/token", `{"name":"kept"}`
 
 	dir := shortRoot(t)
 	svc, err := startBrokerWithStore(dir, dir, "darwin", 0, get, info, nil, []config.StaticToken{kept}, nil,
-		boxaddr.New(context.Background(), lookup, time.Now))
+		boxaddr.New(context.Background(), lookup, time.Now), testRelayKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +157,7 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 	}
 
 	dir2 := shortRoot(t)
-	svc2, err := startBrokerWithStore(dir2, dir2, "darwin", 0, get, info, nil, []config.StaticToken{kept}, nil, nil)
+	svc2, err := startBrokerWithStore(dir2, dir2, "darwin", 0, get, info, nil, []config.StaticToken{kept}, nil, nil, testRelayKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,5 +166,21 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 	tok2 := svc2.Hooks.Token("tok-1", wireNonce)
 	if code, _, err := rawPostProxy(t, addr2, own, path, tok2, body); err != nil || code != http.StatusForbidden {
 		t.Fatalf("no box source: %d %v, want 403", code, err)
+	}
+}
+
+// #114: on macOS the broker does not open without the relay key; the failure
+// wraps errBrokerListen, which the daemon logs (profiles with an AWS binding
+// then refuse to spawn) instead of exiting.
+func TestStartBrokerDarwinRefusesWithoutARelayKey(t *testing.T) {
+	dir := shortRoot(t)
+	_, err := startBrokerWithStore(dir, dir, "darwin", 0,
+		func(string) (*session.Session, bool) { return nil, false },
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil, nil, nil, proxyline.Key{})
+	if !errors.Is(err, errBrokerListen) {
+		t.Fatalf("err = %v, want errBrokerListen", err)
+	}
+	if !strings.Contains(err.Error(), "relay key") {
+		t.Errorf("err = %v, want one naming the relay key", err)
 	}
 }

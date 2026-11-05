@@ -18,7 +18,7 @@ import (
 )
 
 // proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// PROXY line; the relay writes it before any other byte.
+// relay key line and PROXY line; the relay writes both before any other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
@@ -43,6 +43,10 @@ type ServiceOptions struct {
 	// after the network is ensured and before anything else, so a failure keeps
 	// boxes off an egress path whose VM firewall rules no longer hold.
 	AfterNetwork func(ctx context.Context, n Net) error
+	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay presents
+	// before its PROXY line (#114). On darwin a zero key makes Ready refuse to
+	// listen: the PROXY line is never trusted on its own.
+	RelayKey proxyline.Key
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -145,9 +149,15 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
+	// macOS trusts a PROXY line only behind the relay's key, so no key means no
+	// listener (fail closed and loud), never a header-only fallback.
+	if s.o.GOOS == "darwin" && s.o.RelayKey.IsZero() {
+		return Endpoint{}, errors.New("egress: no relay key; refusing to listen")
+	}
 	// The source check is on for both OSes. On macOS every box reaches the proxy
 	// through the relay, so the TCP peer is always loopback; the box address is
-	// the relay's PROXY line, which the wrapper below requires and vets.
+	// the relay's PROXY line, which the wrapper below requires (behind the relay
+	// key) and vets.
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
@@ -169,7 +179,12 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	// own address on Linux. One box cannot then take every slot of the total.
 	l = netlimit.Listener(l, s.maxConns)
 	if s.o.GOOS == "darwin" {
-		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(n.Subnet, n.Gateway), proxyHeaderTimeout)
+		l = proxyline.Wrap(l, proxyline.Options{
+			Key:        s.o.RelayKey,
+			Allow:      proxyline.InSubnetNotGateway(n.Subnet, n.Gateway),
+			Timeout:    proxyHeaderTimeout,
+			KeyRefused: proxyline.NewRefusalLog("egress proxy", time.Minute, time.Now, log.Printf).Refused,
+		})
 	}
 	l = netlimit.PerSource(l, s.maxPerSource)
 	host := s.o.ProxyHost

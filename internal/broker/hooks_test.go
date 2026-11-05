@@ -11,6 +11,7 @@ import (
 
 	"github.com/culiops/culibox/internal/awsprobe"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/sesstoken"
 )
 
@@ -38,7 +39,7 @@ func TestHooksBoxFor(t *testing.T) {
 // reference, and every Acquire is paired with one Release.
 func TestHooksAcquireBoxLinux(t *testing.T) {
 	root := shortDir(t)
-	ep, err := Listen("linux", root, 0)
+	ep, err := Listen("linux", root, 0, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}

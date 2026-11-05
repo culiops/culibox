@@ -17,11 +17,12 @@ import (
 
 	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 func TestListenLinuxUnixSocket(t *testing.T) {
 	root := shortDir(t)
-	ep, err := Listen("linux", root, 9071)
+	ep, err := Listen("linux", root, 9071, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 		t.Fatalf("box URL %q", ep.BoxURL)
 	}
 	ep.Listener.Close()
-	ep2, err := Listen("linux", root, 9071) // a stale socket from a crash is replaced
+	ep2, err := Listen("linux", root, 9071, proxyline.Key{}) // a stale socket from a crash is replaced
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 // only: a bound session would then get no credentials at all, silently.
 func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
 	root := rootOfLen(t, 84)
-	ep, err := Listen("linux", root, 9071)
+	ep, err := Listen("linux", root, 9071, proxyline.Key{})
 	if err == nil {
 		ep.Listener.Close()
 		t.Fatal("a state root that pushes the per-box socket path over the unix limit was accepted")
@@ -71,7 +72,7 @@ func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
 		t.Fatal("a shared socket was left listening")
 	}
 	// One byte shorter fits.
-	ok, err := Listen("linux", rootOfLen(t, 83), 9071)
+	ok, err := Listen("linux", rootOfLen(t, 83), 9071, proxyline.Key{})
 	if err != nil {
 		t.Fatalf("an 83 byte state root must work: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestSockBoxDirIsNotThePreBindingDir(t *testing.T) {
 }
 
 func TestListenLinuxServesOverTheSocket(t *testing.T) {
-	ep, err := Listen("linux", shortDir(t), 9071)
+	ep, err := Listen("linux", shortDir(t), 9071, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestListenLinuxRefusesAPlantedSymlink(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(root, "broker")); err != nil {
 		t.Fatal(err)
 	}
-	if ep, err := Listen("linux", root, 9071); err == nil {
+	if ep, err := Listen("linux", root, 9071, proxyline.Key{}); err == nil {
 		ep.Listener.Close()
 		t.Fatal("a symlinked broker dir must be refused")
 	}
@@ -134,7 +135,7 @@ func TestListenLinuxRefusesAPlantedSymlink(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(root2, "broker", "sock")); err != nil {
 		t.Fatal(err)
 	}
-	if ep, err := Listen("linux", root2, 9071); err == nil {
+	if ep, err := Listen("linux", root2, 9071, proxyline.Key{}); err == nil {
 		ep.Listener.Close()
 		t.Fatal("a symlinked sock dir must be refused")
 	}
@@ -148,7 +149,7 @@ func TestListenLinuxTightensALooseDir(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "broker", "sock"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ep, err := Listen("linux", root, 9071)
+	ep, err := Listen("linux", root, 9071, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +159,36 @@ func TestListenLinuxTightensALooseDir(t *testing.T) {
 	}
 }
 
+// testRelayKey is the relay key every darwin test listener wants; the relay
+// writes it ahead of the PROXY line. wrongRelayKey is another one.
+var (
+	testRelayKey  = mustRelayKey(0x31)
+	wrongRelayKey = mustRelayKey(0x32)
+)
+
+func mustRelayKey(seed byte) proxyline.Key {
+	var raw [32]byte
+	for i := range raw {
+		raw[i] = seed + byte(i)
+	}
+	k, err := proxyline.KeyFromBytes(raw[:])
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+// withKey is h as the relay sends it: the key line, then h.
+func withKey(h string) string { return string(testRelayKey.Preamble()) + h }
+
+// keyed is what the relay writes for a box at src: the key line, then the
+// PROXY line naming the box.
+func keyed(src string) string {
+	return withKey("PROXY TCP4 " + src + " 172.29.72.1 40000 9071\r\n")
+}
+
 func TestListenDarwinLoopbackTCP(t *testing.T) {
-	ep, err := Listen("darwin", t.TempDir(), 0) // 0 = any free port, for the test only
+	ep, err := Listen("darwin", t.TempDir(), 0, testRelayKey) // 0 = any free port, for the test only
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +211,7 @@ func TestListenDarwinLoopbackTCP(t *testing.T) {
 // peer address it saw.
 func darwinBroker(t *testing.T) string {
 	t.Helper()
-	ep, err := Listen("darwin", t.TempDir(), 0)
+	ep, err := Listen("darwin", t.TempDir(), 0, testRelayKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,17 +244,17 @@ func rawGet(t *testing.T, addr, prefix string) (string, error) {
 // becomes the request's RemoteAddr.
 func TestListenDarwinRequiresHeader(t *testing.T) {
 	addr := darwinBroker(t)
-	body, err := rawGet(t, addr, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n")
+	body, err := rawGet(t, addr, keyed("172.29.72.9"))
 	if err != nil || body != "172.29.72.9:40000" {
 		t.Fatalf("with header: body %q err %v", body, err)
 	}
 	for name, prefix := range map[string]string{
-		"no header":   "",
-		"gateway":     "PROXY TCP4 172.29.72.1 172.29.72.1 40000 9071\r\n",
-		"outside":     "PROXY TCP4 10.1.2.3 172.29.72.1 40000 9071\r\n",
-		"loopback":    "PROXY TCP4 127.0.0.1 172.29.72.1 40000 9071\r\n",
-		"garbage":     "PROXY nonsense\r\n",
-		"unspecified": "PROXY TCP4 0.0.0.0 172.29.72.1 40000 9071\r\n",
+		"key but no header": withKey(""),
+		"gateway":           keyed("172.29.72.1"),
+		"outside":           keyed("10.1.2.3"),
+		"loopback":          keyed("127.0.0.1"),
+		"garbage":           withKey("PROXY nonsense\r\n"),
+		"unspecified":       keyed("0.0.0.0"),
 	} {
 		if body, err := rawGet(t, addr, prefix); err == nil {
 			t.Errorf("%s: served %q", name, body)
@@ -258,7 +287,7 @@ func rawPost(t *testing.T, addr, prefix, path, tok, body string) (int, string, e
 // (the cap sits under the PROXY wrapper, so a connection that never sends its
 // header still holds its slot until the header timeout).
 func TestListenDarwinCapsConnections(t *testing.T) {
-	ep, err := listenDarwin(0, 2, 100)
+	ep, err := listenDarwin(0, testRelayKey, 2, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +311,7 @@ func TestListenDarwinCapsConnections(t *testing.T) {
 	}
 	defer third.Close()
 	third.SetDeadline(time.Now().Add(10 * time.Second))
-	fmt.Fprint(third, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\nGET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n")
+	fmt.Fprint(third, keyed("172.29.72.9")+"GET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n")
 	got := make(chan string, 1)
 	go func() {
 		resp, err := http.ReadResponse(bufio.NewReader(third), &http.Request{Method: "GET"})
@@ -316,11 +345,11 @@ func TestMaxDarwinConnsIsBounded(t *testing.T) {
 	}
 }
 
-// macOS end to end over the real listener: the relay's PROXY source decides the
-// box. The box's own address gets the value; any other address, a bound box's or
-// an unbound one's, is refused as denied_box; no PROXY line is closed unanswered
-// and writes no row.
-func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
+// darwinBoundBroker serves a static-token broker over the real darwin
+// listener, with session "s" bound to ownBox at 172.29.72.9. It returns the
+// address to dial and the audit recorder.
+func darwinBoundBroker(t *testing.T) (string, *memRec) {
+	t.Helper()
 	v := staticSession(grafanaEntry())
 	v.Box = ownBox
 	b, _, rec, _ := staticSetup(t, map[string]SessionView{"s": v})
@@ -331,21 +360,29 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 		return netip.Addr{}, errors.New("no such box")
 	}
 	b.SetBoxSource(boxaddr.New(context.Background(), lookup, time.Now))
-	ep, err := listenDarwin(0, maxDarwinConns, maxDarwinPerSource)
+	ep, err := listenDarwin(0, testRelayKey, maxDarwinConns, maxDarwinPerSource)
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: b.Handler(), BaseContext: BaseContext, ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(ep.Listener)
 	t.Cleanup(func() { srv.Close(); ep.Listener.Close() })
-	addr := ep.Listener.Addr().String()
+	return ep.Listener.Addr().String(), rec
+}
+
+// macOS end to end over the real listener: the relay's PROXY source decides the
+// box. The box's own address gets the value; any other address, a bound box's or
+// an unbound one's, is refused as denied_box; no PROXY line is closed unanswered
+// and writes no row.
+func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
+	addr, rec := darwinBoundBroker(t)
 	tok := tokA("s")
 
-	code, body, err := rawPost(t, addr, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n", "/v1/static/token", tok, grafanaBody)
+	code, body, err := rawPost(t, addr, keyed("172.29.72.9"), "/v1/static/token", tok, grafanaBody)
 	if err != nil || code != 200 || !strings.Contains(body, staticSecret) {
 		t.Fatalf("own address: %d %q %v", code, body, err)
 	}
-	code, body, err = rawPost(t, addr, "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n", "/v1/static/token", tok, grafanaBody)
+	code, body, err = rawPost(t, addr, keyed("172.29.72.10"), "/v1/static/token", tok, grafanaBody)
 	if err != nil || code != 403 || strings.Contains(body, staticSecret) {
 		t.Fatalf("another box's address: %d %q %v", code, body, err)
 	}
@@ -355,14 +392,78 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 	if len(rows) != 2 || rows[0].Outcome != OutcomeFetched || rows[1].Outcome != OutcomeDeniedBox || rows[1].SessionID != "s" {
 		t.Fatalf("rows = %+v, want fetched then denied_box", rows)
 	}
-	if _, _, err := rawPost(t, addr, "", "/v1/static/token", tok, grafanaBody); err == nil {
-		t.Fatal("a connection with no PROXY line was answered")
+	if _, _, err := rawPost(t, addr, withKey(""), "/v1/static/token", tok, grafanaBody); err == nil {
+		t.Fatal("a connection with the key and no PROXY line was answered")
 	}
 	rec.mu.Lock()
 	n := len(rec.rows)
 	rec.mu.Unlock()
 	if n != 2 {
 		t.Fatalf("a connection with no PROXY line wrote a row: %d rows", n)
+	}
+}
+
+// #114: the PROXY line is believed only after the relay key. A process on the
+// Mac that dials the loopback port and names the bound box's own address, with a
+// valid token, gets no answer without the key or with another key, writes no
+// audit row, and the same request behind the right key is served.
+func TestListenDarwinNeedsTheRelayKey(t *testing.T) {
+	addr, rec := darwinBoundBroker(t)
+	tok := tokA("s")
+	own := "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
+
+	for name, prefix := range map[string]string{
+		"no key":    own,
+		"wrong key": string(wrongRelayKey.Preamble()) + own,
+	} {
+		if code, body, err := rawPost(t, addr, prefix, "/v1/static/token", tok, grafanaBody); err == nil {
+			t.Errorf("%s: answered %d %q", name, code, body)
+		}
+	}
+	rec.mu.Lock()
+	n := len(rec.rows)
+	rec.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a refused connection wrote %d audit rows", n)
+	}
+
+	code, body, err := rawPost(t, addr, withKey(own), "/v1/static/token", tok, grafanaBody)
+	if err != nil || code != 200 || !strings.Contains(body, staticSecret) {
+		t.Fatalf("right key: %d %q %v", code, body, err)
+	}
+	rec.mu.Lock()
+	rows := append([]Row(nil), rec.rows...)
+	rec.mu.Unlock()
+	if len(rows) != 1 || rows[0].Outcome != OutcomeFetched {
+		t.Fatalf("rows = %+v, want exactly one fetched row", rows)
+	}
+}
+
+// With no relay key the Mac listener does not open at all (fail closed and loud:
+// the alternative is trusting the PROXY line alone).
+func TestListenDarwinRefusesAZeroKey(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	for name, open := range map[string]func() (Endpoint, error){
+		"listenDarwin": func() (Endpoint, error) { return listenDarwin(port, proxyline.Key{}, 2, 2) },
+		"Listen":       func() (Endpoint, error) { return Listen("darwin", t.TempDir(), port, proxyline.Key{}) },
+	} {
+		ep, err := open()
+		if err == nil {
+			ep.Listener.Close()
+			t.Fatalf("%s: a zero key opened a listener", name)
+		}
+		if !strings.Contains(err.Error(), "relay key") {
+			t.Errorf("%s: error %q does not name the relay key", name, err)
+		}
+		if c, derr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second); derr == nil {
+			c.Close()
+			t.Errorf("%s: something is listening on %d", name, port)
+		}
 	}
 }
 
@@ -381,7 +482,7 @@ func keepAliveGet(t *testing.T, addr, src string) (net.Conn, string, error) {
 		t.Fatal(err)
 	}
 	c.SetDeadline(time.Now().Add(3 * time.Second))
-	fmt.Fprintf(c, "PROXY TCP4 %s 172.29.72.1 40000 9071\r\nGET / HTTP/1.1\r\nHost: b\r\n\r\n", src)
+	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\n\r\n", keyed(src))
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
 	if err != nil {
 		c.Close()
@@ -397,7 +498,7 @@ func keepAliveGet(t *testing.T, addr, src string) (net.Conn, string, error) {
 // holds at most its share, another source still gets in, and a slot comes back
 // when its holder closes.
 func TestListenDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
-	ep, err := listenDarwin(0, 256, 3)
+	ep, err := listenDarwin(0, testRelayKey, 256, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

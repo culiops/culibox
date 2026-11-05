@@ -152,6 +152,7 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	}
 	proxy := egress.New(egress.Options{Secret: sec.Secret(), Lookup: egressLookup(get), Audit: audit, BoxAddrs: layer.addrs})
 	opts := egressServiceOptions(cfg, goos, proxy, layer.cli)
+	opts.RelayKey = layer.relayKey // zero off darwin; darwin's Ready refuses a zero key
 	if goos == "darwin" && layer.vm != nil {
 		// Ready runs this on every call, under its lock: the relay is started
 		// only after the VM's firewall rules (INPUT and DOCKER-USER) are read back
