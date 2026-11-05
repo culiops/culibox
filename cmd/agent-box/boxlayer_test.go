@@ -29,7 +29,7 @@ type fakeColima struct {
 	mount   string // mount_type reported while running; "" = virtiofs
 	garbled bool   // status exits 0 with output that is not colima's JSON
 	hang    bool   // status blocks until its context ends (a wedged hostagent)
-	rules   string // what `ssh … iptables -S INPUT` prints
+	rules   string // what `ssh … iptables -S` prints
 	onSSH   func() // called on each ssh (lets a test order it against docker calls)
 	calls   []string
 }

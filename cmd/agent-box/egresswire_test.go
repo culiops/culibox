@@ -244,7 +244,7 @@ func TestStartEgressDarwinBootChecksTheNetworkWhenTheVMRuns(t *testing.T) {
 	}
 }
 
-// goodInputRules is `iptables -S INPUT` on a VM provisioned for option (c).
+// goodInputRules is the INPUT part of `iptables -S` on a VM provisioned for option (c).
 func goodInputRules(egressPort, brokerPort int) string {
 	return fmt.Sprintf(`-P INPUT ACCEPT
 -A INPUT -s %[1]s -d %[2]s/32 -p tcp -m tcp --dport %[3]d -j ACCEPT
@@ -328,6 +328,29 @@ func TestStartEgressDarwinBadInputRulesStartNoRelay(t *testing.T) {
 	}
 	if _, err := svc.Svc.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "INPUT rules") {
 		t.Errorf("a bound spawn must be refused while the rules are wrong: %v", err)
+	}
+}
+
+// A VM provisioned before #113 still lets its default network past the relay
+// to the broker port: the daemon starts, starts no relay, and refuses bound
+// spawns with the fix in the message.
+func TestStartEgressDarwinStaleBrokerRuleStartsNoRelay(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	stale := goodInputRules(ep, bp) + fmt.Sprintf("-A DOCKER-USER -d %s/32 -p tcp -m tcp --dport %d -j RETURN\n", boxvm.LimaHostGateway, bp)
+	l, _, d := relayDarwin(t, stale, ep, bp)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatalf("a refused relay must not fail the daemon: %v", err)
+	}
+	defer svc.Stop(context.Background())
+	if strings.Contains(d.log(), "run -d") {
+		t.Fatalf("a relay started on a VM with the old broker rule:\n%s", d.log())
+	}
+	if _, err := svc.Svc.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "box setup -recreate") {
+		t.Errorf("a bound spawn must be refused until the VM is recreated: %v", err)
 	}
 }
 

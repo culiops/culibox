@@ -210,17 +210,17 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
-// InputRules returns the VM's live INPUT chain (`iptables -S INPUT`). It runs
-// over `colima ssh`, which fails on a stopped VM and never starts one: the
-// relay may only follow rules that are loaded now, not rules a script wrote on
-// some earlier boot.
-func (v *VM) InputRules(ctx context.Context) (string, error) {
+// FilterRules returns the VM's live filter table (`iptables -S`, every chain:
+// the relay checks INPUT and DOCKER-USER). It runs over `colima ssh`, which
+// fails on a stopped VM and never starts one: the relay may only follow rules
+// that are loaded now, not rules a script wrote on some earlier boot.
+func (v *VM) FilterRules(ctx context.Context) (string, error) {
 	if err := v.preflight(); err != nil {
 		return "", err
 	}
-	out, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "ssh", "--profile", Profile, "--", "sudo", "iptables", "-w", "-S", "INPUT")
+	out, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "ssh", "--profile", Profile, "--", "sudo", "iptables", "-w", "-S")
 	if err != nil {
-		return "", fmt.Errorf("reading the box VM's INPUT rules: %w", err)
+		return "", fmt.Errorf("reading the box VM's firewall rules: %w", err)
 	}
 	return out, nil
 }

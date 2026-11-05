@@ -56,8 +56,8 @@ func errRulesMissing(why string) error {
 	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes; run `agent-box box setup -recreate`", why)
 }
 
-// CheckInputRules verifies that the first four rules of `iptables -S INPUT`
-// are exactly the ones provisioning writes, in order: the egress and broker
+// CheckInputRules verifies that the first four rules of the INPUT chain in
+// `iptables -S` output are exactly the ones provisioning writes, in order: the egress and broker
 // ports for the egress subnet to the gateway, then the subnet to anywhere
 // DROP, then anyone to the gateway DROP. Exact, not "present": a foreign rule
 // above ours (an ACCEPT) or an extra match on one of ours changes what they do.
@@ -82,6 +82,36 @@ func CheckInputRules(out string, egressPort, brokerPort int) error {
 		}
 		if got[i] != w {
 			return errRulesMissing(fmt.Sprintf("INPUT rule %d is %q, want %q", i+1, got[i], w))
+		}
+	}
+	return nil
+}
+
+// CheckDockerUserRules refuses a DOCKER-USER rule that lets TCP through. VMs
+// provisioned before #113 carry one for the broker port, which lets every
+// container on the VM's default network reach the broker on the Mac without the
+// relay, and so write the PROXY line that names a box itself. Nothing CuliBox
+// writes passes TCP there now and docker adds at most a bare RETURN, so any such
+// rule (any port, any address, RETURN or ACCEPT) means the VM still runs an old
+// provision script. Rules in other chains are not looked at.
+func CheckDockerUserRules(out string) error {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != "-A" || f[1] != "DOCKER-USER" {
+			continue
+		}
+		var proto, target string
+		for i := 2; i+1 < len(f); i++ {
+			switch f[i] {
+			case "-p":
+				proto = f[i+1]
+			case "-j":
+				target = f[i+1]
+			}
+		}
+		if proto == "tcp" && (target == "RETURN" || target == "ACCEPT") {
+			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `agent-box box setup -recreate`",
+				strings.Join(f[2:], " "))
 		}
 	}
 	return nil
@@ -119,7 +149,7 @@ type Docker interface {
 // on the internal network reach nothing else.
 type Relay struct {
 	VM interface {
-		InputRules(context.Context) (string, error)
+		FilterRules(context.Context) (string, error)
 	}
 	Docker          Docker
 	Image, Instance string
@@ -198,12 +228,14 @@ func (r *Relay) remove(ctx context.Context) error {
 // relay behind. The INPUT rules are checked live first, every time: they are
 // what keeps an unfenced box off the relay, so a VM without them gets no relay.
 //
-// Rules read and wrong: the relay is removed. Rules that could not be read
-// (colima ssh error, timeout): this Ready is refused but a running relay is
+// INPUT rules read and wrong: the relay is removed. Rules that could not be
+// read (colima ssh error, timeout): this Ready is refused but a running relay is
 // left alone. The relay only ever started after the rules were verified this
 // boot; a VM reboot or dockerd restart stops it (no restart policy); and a
 // transient ssh failure must not cut every live fenced session's proxy and
-// broker.
+// broker. A DOCKER-USER rule that lets TCP past the relay (CheckDockerUserRules)
+// is refused the same way, relay kept: that path does not go through the relay,
+// so removing it would cut live sessions and close nothing.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")
@@ -211,13 +243,16 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if gw.String() != EgressGateway {
 		return fmt.Errorf("relay: network gateway %s is not the provisioned %s", gw, EgressGateway)
 	}
-	rules, err := r.VM.InputRules(ctx)
+	rules, err := r.VM.FilterRules(ctx)
 	if err != nil {
 		return fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err)
 	}
 	if err := CheckInputRules(rules, r.EgressPort, r.BrokerPort); err != nil {
 		// Read and wrong: nothing may keep relaying without the rules.
 		return r.removeAlso(ctx, err)
+	}
+	if err := CheckDockerUserRules(rules); err != nil {
+		return err
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
