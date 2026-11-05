@@ -493,6 +493,11 @@ func (m *ProfileManager) OptionDefs() []config.OptionDef { return m.options }
 func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.getLocked(name)
+}
+
+// getLocked is Get for a caller that already holds m.mu.
+func (m *ProfileManager) getLocked(name string) (config.AgentConfig, bool) {
 	for _, p := range m.merged() {
 		if p.Name == name {
 			return p, true
@@ -544,8 +549,47 @@ func profileBinds(p config.AgentConfig, kind, name string) bool {
 	return false
 }
 
+// Create saves a new runtime profile. It refuses a name a config seed or a
+// stored profile already holds (ErrProfileExists): a create must never replace
+// a profile it did not see.
+func (m *ProfileManager) Create(p config.AgentConfig) error {
+	return m.save(p, func() error {
+		if _, taken := m.getLocked(p.Name); taken {
+			return ErrProfileExists
+		}
+		return nil
+	})
+}
+
+// Update saves a runtime profile only if it is still the one the caller opened:
+// rev, taken from Get's value by profileRev, must equal the revision of the
+// current merged profile of that name. A profile that changed since gives
+// ErrProfileChanged and one that was deleted gives ErrProfileGone; either way
+// nothing is saved and nothing of the caller's edit is merged in. A config seed
+// has a revision too, so saving one creates its override. The profile is
+// validated first, so an invalid one is reported as such, not as stale.
+func (m *ProfileManager) Update(p config.AgentConfig, rev string) error {
+	return m.save(p, func() error {
+		cur, ok := m.getLocked(p.Name)
+		if !ok {
+			return ErrProfileGone
+		}
+		if rev == "" || profileRev(cur) != rev {
+			return ErrProfileChanged
+		}
+		return nil
+	})
+}
+
 // Save validates and persists a runtime profile, then refreshes the launcher.
-func (m *ProfileManager) Save(p config.AgentConfig) error {
+// It checks no revision and no existing name: the API goes through Create and
+// Update, so Save is for tests and for callers that really mean "overwrite".
+func (m *ProfileManager) Save(p config.AgentConfig) error { return m.save(p, nil) }
+
+// save is the body of Save, Create and Update. guard, when not nil, runs under
+// m.mu right before the store write, after every validation, so what it checks
+// cannot change before the write; an error from it is returned as it is.
+func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
 		return err
 	}
@@ -579,6 +623,11 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	}
 	if err := m.checkAccount(p); err != nil {
 		return err
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			return err
+		}
 	}
 	if err := m.store.Save(p); err != nil {
 		return err
