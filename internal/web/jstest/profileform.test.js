@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, staleSave } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -464,4 +464,36 @@ test("pfTouchProfile network mirrors EgressMode: bound+egress_open is open, boun
   assert.strictEqual(pfTouchProfile(bound, {}).network, "allowlist");
   assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
   assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
+});
+
+test("withRev carries the revision the form was opened at", () => {
+  const p = { name: "a" };
+  assert.deepStrictEqual(withRev(p, { rev: "abc" }), { name: "a", rev: "abc" });
+  // The input is never mutated: the caller reuses it for the POST branch.
+  assert.deepStrictEqual(p, { name: "a" });
+  assert.notStrictEqual(withRev(p, null), p);
+  // A draft, an unset loaded profile and an empty revision carry no rev at all:
+  // the server's 428 is the answer to a missing one, not an empty string.
+  for (const loaded of [null, undefined, {}, { rev: "" }, { rev: 7 }]) {
+    assert.deepStrictEqual(withRev({ name: "a" }, loaded), { name: "a" });
+    assert.ok(!("rev" in withRev({ name: "a" }, loaded)));
+  }
+});
+
+test("staleSave names only the stale refusal", () => {
+  const msg = "profile changed since you opened it; nothing was saved";
+  const s = staleSave({ status: 409, code: "profile_changed", message: msg });
+  assert.strictEqual(s.button, "Load latest");
+  assert.ok(s.message.includes(msg));
+  assert.ok(s.message.includes("Load latest"));
+  assert.ok(s.message.includes("Your edits are still here"));
+  for (const e of [
+    { status: 409, code: "profile_exists", message: "x" },
+    { status: 409, code: "profiles_file_changed", message: "x" },
+    { status: 428, code: "rev_required", message: "x" },
+    { status: 400, code: "", message: "x" },
+    { status: 400, code: "profile_changed", message: "x" },
+    null,
+    undefined,
+  ]) assert.strictEqual(staleSave(e), null);
 });

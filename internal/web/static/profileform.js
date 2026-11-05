@@ -20,8 +20,9 @@ function editorState(view) {
 
 // What Save does with the form. selected is the saved profile the editor is on,
 // "" for a draft. A saved profile is always updated under its own name; a draft
-// is always created, and refused when a stored profile already has its name
-// (the server's Save is an upsert, so a POST would silently overwrite it).
+// is always created, and refused here when a stored profile already has its name
+// (the server refuses it too, 409 profile_exists, but the list on screen may be
+// stale, so the editor says so before sending).
 function saveTarget(selected, formName, existing) {
   if (selected) return { method: "PUT", name: selected };
   if ((existing || []).includes(formName)) return { error: 'A profile named "' + formName + '" already exists. Pick another name.' };
@@ -450,6 +451,30 @@ function egressToSend(visible, text, open) {
   return out;
 }
 
+// withRev: the body of a save of a stored profile. The revision is the one the
+// form was opened at (the server adds it to every profile it returns), and the
+// server refuses the save when the profile is no longer at it. Without a loaded
+// revision (a draft, or nothing loaded) the body carries no rev key at all, so
+// the server's own answer to a missing one stands. Never mutates p.
+function withRev(p, loaded) {
+  const out = Object.assign({}, p);
+  if (loaded && typeof loaded.rev === "string" && loaded.rev) out.rev = loaded.rev;
+  return out;
+}
+
+// staleSave: what to show when a save is refused because the profile changed
+// after the form was opened (409 profile_changed), or null for any other
+// failure. Only that one refusal gets a banner with Load latest: the others
+// (a taken name, a hand-edited profiles file, a missing revision) are not cured
+// by reloading the profile, so they keep the ordinary failure line.
+function staleSave(err) {
+  if (!err || err.status !== 409 || err.code !== "profile_changed") return null;
+  return {
+    message: err.message + ". Your edits are still here; Load latest replaces them with the saved version.",
+    button: "Load latest",
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, staleSave };
 }
