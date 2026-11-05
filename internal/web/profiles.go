@@ -32,14 +32,30 @@ type ProfileOption struct {
 	Value   any      `json:"value"`
 }
 
+// Where a profile came from (ProfileView.Source). Provider-neutral: it says
+// who made the profile, never what it runs.
+const (
+	// ProfileSourceBuiltin: CuliBox added it itself (the zero-config default
+	// agents and the detected-shell seed), so the user has made nothing yet.
+	ProfileSourceBuiltin = "builtin"
+	// ProfileSourceConfig: an agents entry of the user's config.json.
+	ProfileSourceConfig = "config"
+	// ProfileSourceRuntime: saved from the UI (the profile store); it wins over
+	// a same-named config entry.
+	ProfileSourceRuntime = "runtime"
+)
+
 // ProfileView is a profile for GET /api/profiles. Editable = came from the
-// runtime store (config seeds are read-only). Runtime is the EFFECTIVE tier the
-// spawn form should open on — already resolved against the instance default, so
-// the client never has to re-derive containment policy.
+// runtime store (config seeds are read-only). Source says where the profile
+// came from; it is derived on every read and never written to a file, and
+// Editable is exactly Source == ProfileSourceRuntime. Runtime is the EFFECTIVE
+// tier the spawn form should open on — already resolved against the instance
+// default, so the client never has to re-derive containment policy.
 type ProfileView struct {
 	Name       string          `json:"name"`
 	Account    string          `json:"account,omitempty"`
 	Editable   bool            `json:"editable"`
+	Source     string          `json:"source"`
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
 	Options    []ProfileOption `json:"options,omitempty"`
@@ -149,6 +165,22 @@ type ProfileManager struct {
 	// (both OSes; Manager.SetEgressAll). It decides whether an unbound boxed profile
 	// previews as "open" or as no egress control.
 	egressAll bool
+	// builtin names the seeds CuliBox added itself (see SetBuiltin); nil = none.
+	builtin map[string]bool
+}
+
+// SetBuiltin names the seeds that are built in: profiles CuliBox put there
+// itself, not ones the user wrote, so Views reports them as ProfileSourceBuiltin
+// instead of ProfileSourceConfig. Call at boot; nil = no profile is built in.
+// A profile saved from the UI is runtime whatever its name.
+func (m *ProfileManager) SetBuiltin(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	m.mu.Lock()
+	m.builtin = set
+	m.mu.Unlock()
 }
 
 // SetEgressAll records whether egress is mandatory for every boxed spawn, so a
@@ -424,10 +456,18 @@ func (m *ProfileManager) Views() []ProfileView {
 	for _, a := range merged {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a)
 		bound := a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0
+		source := ProfileSourceConfig
+		switch {
+		case editable[a.Name]:
+			source = ProfileSourceRuntime
+		case m.builtin[a.Name]:
+			source = ProfileSourceBuiltin
+		}
 		pv := ProfileView{
 			Name:          a.Name,
 			Account:       a.Account,
-			Editable:      editable[a.Name],
+			Editable:      source == ProfileSourceRuntime,
+			Source:        source,
 			Runtime:       rt,
 			DefaultCwd:    a.DefaultCwd,
 			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),

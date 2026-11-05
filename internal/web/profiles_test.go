@@ -907,3 +907,72 @@ func TestProfileViewNetworkReflectsEgressOpen(t *testing.T) {
 		t.Fatalf("networks = %v, want closed=allowlist open=open", got)
 	}
 }
+
+// TestViewsSourceTellsBuiltinFromConfigFromRuntime is #15: a profile view says
+// where the profile came from, so the first-run welcome can tell a built-in
+// profile from one the user wrote. A stored profile is "runtime" even when it
+// overrides a seed; a seed named by SetBuiltin is "builtin"; any other seed is
+// "config". Only a runtime profile is editable.
+func TestViewsSourceTellsBuiltinFromConfigFromRuntime(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "claude", Bin: "claude"},
+		{Name: "bash", Bin: "bash"},
+		{Name: "ops", Bin: "claude"},
+	}
+	fs := newFakeStore()
+	fs.m["mine"] = config.AgentConfig{Name: "mine", Bin: "bash"}
+	fs.m["ops"] = config.AgentConfig{Name: "ops", Bin: "claude", Args: []string{"--x"}}
+	m := NewProfileManager(seeds, nil, "", nil, fs, func([]config.AgentConfig) {})
+	m.SetBuiltin([]string{"claude"})
+
+	want := map[string]struct {
+		source   string
+		editable bool
+	}{
+		"claude": {ProfileSourceBuiltin, false},
+		"bash":   {ProfileSourceConfig, false},
+		"ops":    {ProfileSourceRuntime, true},
+		"mine":   {ProfileSourceRuntime, true},
+	}
+	got := map[string]ProfileView{}
+	for _, v := range m.Views() {
+		got[v.Name] = v
+	}
+	for name, w := range want {
+		v, ok := got[name]
+		if !ok {
+			t.Errorf("%s: no view", name)
+			continue
+		}
+		if v.Source != w.source || v.Editable != w.editable {
+			t.Errorf("%s: source=%q editable=%v, want source=%q editable=%v", name, v.Source, v.Editable, w.source, w.editable)
+		}
+		if v.Editable != (v.Source == ProfileSourceRuntime) {
+			t.Errorf("%s: editable %v disagrees with source %q", name, v.Editable, v.Source)
+		}
+	}
+
+	s := &Server{Profiles: m}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("GET", "/api/profiles", nil))
+	body := rec.Body.String()
+	for _, frag := range []string{`"source":"builtin"`, `"source":"config"`, `"source":"runtime"`} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("GET /api/profiles lacks %s: %s", frag, body)
+		}
+	}
+}
+
+// A manager nobody called SetBuiltin on has no built-in profile: a seed is the
+// user's own (config).
+func TestViewsSourceWithoutSetBuiltinIsConfig(t *testing.T) {
+	m := NewProfileManager([]config.AgentConfig{{Name: "claude", Bin: "claude"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	vs := m.Views()
+	if len(vs) != 1 || vs[0].Source != ProfileSourceConfig {
+		t.Fatalf("a seed with no SetBuiltin call must be %q, got %+v", ProfileSourceConfig, vs)
+	}
+	m.SetBuiltin(nil)
+	if vs := m.Views(); vs[0].Source != ProfileSourceConfig {
+		t.Fatalf("SetBuiltin(nil) must leave a seed %q, got %q", ProfileSourceConfig, vs[0].Source)
+	}
+}
