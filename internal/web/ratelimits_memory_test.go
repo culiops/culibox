@@ -101,7 +101,9 @@ func TestSanitizeRateLimits_boundsResetsAtByWindowLength(t *testing.T) {
 		keepWeek bool
 	}{
 		{"both inside", at(4 * time.Hour), at(6 * 24 * time.Hour), true, true},
-		{"five hour window claiming 6h", at(6 * time.Hour), at(6 * 24 * time.Hour), false, true},
+		// Claude may round the window start up, so an hour more than 5h is fine
+		{"five hour window claiming 5h50", at(5*time.Hour + 50*time.Minute), at(6 * 24 * time.Hour), true, true},
+		{"five hour window claiming 7h", at(7 * time.Hour), at(6 * 24 * time.Hour), false, true},
 		{"five hour window claiming 24h", at(24 * time.Hour), at(6 * 24 * time.Hour), false, true},
 		{"week window claiming 8 days", at(4 * time.Hour), at(8 * 24 * time.Hour), true, false},
 		{"week window claiming 399 days", at(4 * time.Hour), at(399 * 24 * time.Hour), true, false},

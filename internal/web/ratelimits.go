@@ -78,17 +78,24 @@ type rlEntry struct {
 	used    uint64                   // rlLastGood.tick when last used (LRU)
 }
 
-// windowSpan is how long each window is: five_hour, seven_day.
-var windowSpan = [2]time.Duration{5 * time.Hour, 7 * 24 * time.Hour}
+// windowSpan is how far from now each window's reset can plausibly be: five_hour,
+// seven_day. The windows are 5h and 7d long; five_hour gets an hour more in case
+// Claude rounds the window start up, so a legitimate reading is not dropped.
+var windowSpan = [2]time.Duration{5*time.Hour + time.Hour, 7 * 24 * time.Hour}
+
+// rateLimitsClock is the clock of the quota code; tests replace it.
+var rateLimitsClock = time.Now
 
 // rlAcctKey is the memory key of a non-default account's pooled readings.
 func rlAcctKey(name string) string { return "acct\x00" + name }
 
 // rlLastGood is the daemon's memory of the quota sources, in process only (a
-// restart clears it). Keys: a file path; "acct\x00<name>" for a non-default
-// account's readings pooled over all its sources; "box\x00<box>\x00default" for a
-// default-account box. At most rateLimitsCacheMax entries, each holding at most
-// 2 windows x rateLimitsSeenMax readings.
+// restart clears it). Keys: a file path (the default account's file, and the file
+// of each non-default account); "acct\x00<name>" for a non-default account's
+// readings pooled over all its sources, so such an account uses two entries (its
+// file and its pool); "box\x00<box>\x00default" for a default-account box. At
+// most rateLimitsCacheMax entries, each holding at most 2 windows x
+// rateLimitsSeenMax readings.
 //
 // Known limit: the default account's remembered readings cannot be tied to a
 // credential. A host /login to another subscription is invisible to the daemon,
@@ -99,7 +106,36 @@ var rlLastGood = struct {
 	mu   sync.Mutex
 	m    map[string]*rlEntry
 	tick uint64
-}{m: map[string]*rlEntry{}}
+	// cut is, per non-default account, the unix time its token last changed: a
+	// reading stamped at or before it belongs to the old token and is ignored
+	// wherever it turns up (the old file still on disk, buckets copied from it, a
+	// retained box's file, a poll that was already in flight). Entries older than
+	// the longest window can no longer matter and are pruned.
+	cut map[string]int64
+}{m: map[string]*rlEntry{}, cut: map[string]int64{}}
+
+// dropBefore removes from rl every reading stamped at or before cut (the top
+// level by its updated_at, each bucket by its own); ok=false when none is left.
+// The caller holds rlLastGood.mu when cut comes from rlLastGood.cut.
+func dropBefore(cut int64, rl RateLimits) (RateLimits, bool) {
+	if cut <= 0 {
+		return rl, true
+	}
+	if rl.UpdatedAt <= cut {
+		rl.FiveHour, rl.SevenDay = nil, nil
+	}
+	var kept map[string]BucketLimits
+	for k, b := range rl.ByModel {
+		if b.UpdatedAt > cut {
+			if kept == nil {
+				kept = map[string]BucketLimits{}
+			}
+			kept[k] = b
+		}
+	}
+	rl.ByModel = kept
+	return rl, rl.hasWindows()
+}
 
 // rlEntryFor returns the entry for key, creating it and marking it used. The
 // caller holds rlLastGood.mu. When the cache is full it evicts the least recently
@@ -132,15 +168,48 @@ func rlEntryFor(key string, box bool) *rlEntry {
 }
 
 // forgetAccountQuota drops everything remembered for a non-default account: its
-// pooled readings and the last good snapshot of its file. Called when the account
-// is edited (its token may have changed: the new credential has its own quota) or
-// deleted, so the old token's readings cannot linger for up to 7 days.
-func forgetAccountQuota(name string) {
+// pooled readings and the last good snapshot of its file. Called when the
+// account's token changes or the account is deleted.
+func forgetAccountQuota(name string, now time.Time) {
 	rlLastGood.mu.Lock()
 	defer rlLastGood.mu.Unlock()
 	for k, e := range rlLastGood.m {
 		if e.acct == name || k == rlAcctKey(name) {
 			delete(rlLastGood.m, k)
+		}
+	}
+	rlLastGood.cut[name] = now.Unix()
+	for n, c := range rlLastGood.cut {
+		if c < now.Add(-windowSpan[1]-rateLimitsFutureSlack).Unix() {
+			delete(rlLastGood.cut, n)
+		}
+	}
+}
+
+// accountTokenChanged is called when a non-default account's token really
+// changed (or the account was deleted): the new credential has its own quota, so
+// the old token's readings must not linger for up to 7 days. It forgets what the
+// daemon remembered and removes the account's snapshot file, best effort: the
+// file still holds the old token's numbers (and other-model buckets the script
+// would copy into the next write) until a session on the new token replies, and
+// a daemon restart would otherwise bring them back.
+func (s *Server) accountTokenChanged(name, configDir string) {
+	forgetAccountQuota(name, rateLimitsClock())
+	if configDir != "" {
+		os.Remove(filepath.Join(configDir, account.RateLimitsName)) // ENOENT and the rest ignored
+	}
+}
+
+// storeValueChanged is called after a stored value is set, replaced or removed:
+// when its id is some account's token the account's token changed (the "Replace
+// token" flow only ever PUTs the value, never the account).
+func (s *Server) storeValueChanged(id string) {
+	if s.Accounts == nil {
+		return
+	}
+	for _, a := range s.Accounts.List() {
+		if !a.IsDefault && a.TokenSecret == id {
+			s.accountTokenChanged(a.Name, a.ConfigDir)
 		}
 	}
 }
@@ -152,9 +221,10 @@ func forgetAccountQuota(name string) {
 // long, are dropped, and at most rateLimitsSeenMax remain per window: the oldest
 // resets_at are evicted first.
 func (e *rlEntry) remember(rl RateLimits, now time.Time) {
+	cut := rlLastGood.cut[e.acct] // 0 for the default account and for no change
 	add := func(i int, w *RateLimitWindow, updated int64) {
 		w = cleanWindow(w, now, windowSpan[i])
-		if w == nil {
+		if w == nil || (cut > 0 && updated <= cut) {
 			return
 		}
 		if e.seen[i] == nil {
@@ -261,9 +331,9 @@ func boundBuckets(m map[string]BucketLimits) map[string]BucketLimits {
 // agent-box script wrote window-less snapshots. Any of those would make an
 // account's meters vanish until the next poll, so the last good snapshot read
 // from each path is served instead. A deleted file is the exception: it is gone,
-// not torn, so its cached reading is dropped. The cache holds at most
-// rateLimitsCacheMax paths (the account count plus the default file).
-func readRateLimits(path string) (RateLimits, bool) { return readRateLimitsAt(path, time.Now()) }
+// not torn, so its cached reading is dropped. The memory is bounded by
+// rateLimitsCacheMax entries in all (see rlLastGood).
+func readRateLimits(path string) (RateLimits, bool) { return readRateLimitsAt(path, rateLimitsClock()) }
 
 // readRateLimitsAt is readRateLimits with the clock passed in. The file's own
 // entry remembers the readings seen (the default account's host file).
@@ -294,6 +364,9 @@ func readSnapshot(path, acct string, remember bool, now time.Time) (RateLimits, 
 	}
 	rlLastGood.mu.Lock()
 	defer rlLastGood.mu.Unlock()
+	if ok && acct != "" {
+		rl, ok = dropBefore(rlLastGood.cut[acct], rl)
+	}
 	if ok && rl.hasWindows() {
 		e := rlEntryFor(path, false)
 		e.acct = acct
@@ -324,7 +397,7 @@ func readSnapshot(path, acct string, remember bool, now time.Time) (RateLimits, 
 // The account list is read on every call, so an account created while the daemon
 // runs shows its quota without a restart.
 func (s *Server) rateLimitsByAccount() map[string]RateLimits {
-	now := time.Now()
+	now := rateLimitsClock()
 	out := map[string]RateLimits{}
 	if rl, ok := readRateLimitsAt(s.RateLimitsFile, now); ok {
 		out[account.Default] = rl
@@ -424,6 +497,12 @@ func (s *Server) mergeBoxFiles(out map[string]RateLimits, now time.Time, pooled 
 		rl, ok := sanitizeRateLimits(rl, now)
 		if !ok {
 			continue
+		}
+		if f.Account != account.Default {
+			// a retained box still holds the old token's snapshot after a change
+			if rl, ok = dropBefore(accountCutoff(f.Account), rl); !ok {
+				continue
+			}
 		}
 		if f.Account == account.Default { // no host default snapshot here
 			rl = rememberBoxReadings("box\x00"+f.Box+"\x00"+f.Account, rl, now)
@@ -535,6 +614,13 @@ func rememberBoxReadings(key string, rl RateLimits, now time.Time) RateLimits {
 	e.acct = account.Default
 	e.remember(rl, now)
 	return e.withSeen(rl, now)
+}
+
+// accountCutoff is the unix time of the account's last token change (0: none).
+func accountCutoff(name string) int64 {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	return rlLastGood.cut[name]
 }
 
 // rememberAccountReadings records a snapshot of a non-default account (from its

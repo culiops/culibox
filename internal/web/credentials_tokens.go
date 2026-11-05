@@ -315,6 +315,7 @@ func (s *Server) handleStoreValue(w http.ResponseWriter, r *http.Request) {
 			writeCredErr(w, err)
 			return
 		}
+		s.storeValueChanged(id)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -340,6 +341,7 @@ func (s *Server) handleStoreValue(w http.ResponseWriter, r *http.Request) {
 		writeCredErr(w, err)
 		return
 	}
+	s.storeValueChanged(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
