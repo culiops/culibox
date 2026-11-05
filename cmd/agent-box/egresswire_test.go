@@ -21,6 +21,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/session"
 )
 
@@ -134,7 +135,7 @@ func freePort(t *testing.T) int {
 func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 	bin, dir := statefulEgressDocker(t)
 	port := freePort(t)
-	svc, err := startEgress(t.TempDir(), &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}, config.Config{EgressPort: port}, "darwin", noSessions)
+	svc, err := startEgress(t.TempDir(), &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}, config.Config{EgressPort: port}, "darwin", noSessions)
 	if err != nil {
 		t.Fatalf("darwin must start egress now: %v", err)
 	}
@@ -283,6 +284,7 @@ case "$1 $2" in
 "network ls") echo agentbox-egress-default ;;
 "network inspect") printf '{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false"},"IPAM":{"Config":[{"Subnet":"` + boxvm.EgressSubnet + `","Gateway":"` + boxvm.EgressGateway + `"}]}}' ;;
 "inspect --type") echo "Error: No such object" >&2; exit 1 ;;
+"run -d") printf %s "$AGENTBOX_RELAY_KEY" > "$d/relaykey" ;;
 "logs agentbox-relay-default") echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(egressPort) + `"; echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(brokerPort) + `" ;;
 esac
 exit 0
@@ -310,6 +312,58 @@ func TestStartEgressDarwinWiresTheRelay(t *testing.T) {
 	}
 	if !strings.Contains(log, "--user "+strconv.Itoa(os.Getuid())+":"+strconv.Itoa(os.Getgid())) {
 		t.Errorf("the relay must run as the daemon's uid:gid:\n%s", log)
+	}
+}
+
+// #114: the relay container gets the layer's key through the docker child's
+// environment, by name: the key is in no argv (the fake docker logs every one).
+func TestStartEgressDarwinHandsTheRelayItsKey(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	got, err := os.ReadFile(filepath.Join(d.dir, "relaykey"))
+	if err != nil {
+		t.Fatalf("the relay's docker run saw no key in its environment: %v", err)
+	}
+	if string(got) != l.relayKey.Hex() {
+		t.Error("the key the relay's docker run saw is not the layer's relay key (values not printed)")
+	}
+	log := d.log()
+	if !strings.Contains(log, "-e AGENTBOX_RELAY_KEY") {
+		t.Errorf("the run argv does not name the variable:\n%s", log)
+	}
+	if strings.Contains(log, l.relayKey.Hex()) {
+		t.Error("a docker argv carries the relay key (argv not printed)")
+	}
+}
+
+// D8: no key means no relay. Ensure refuses before it reads the VM's rules or
+// calls docker for the relay; the egress zero-key refusal that follows it in
+// Ready would come too late.
+func TestStartEgressDarwinWithoutAKeyTouchesNeitherTheVMNorTheRelay(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)
+	l.relayKey = proxyline.Key{}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatalf("a refused relay must not fail the daemon: %v", err)
+	}
+	defer svc.Stop(context.Background())
+	out := d.log()
+	for _, bad := range []string{"COLIMA ssh", "run -d", "rm -f", "logs agentbox-relay"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("%q ran without a relay key:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(buf.String(), "relay key") {
+		t.Errorf("the refusal's reason is not logged: %q", buf.String())
 	}
 }
 
@@ -536,7 +590,7 @@ func TestEgressVerifyFailsClosedWhenTheProxyCannotStart(t *testing.T) {
 func TestEgressVerifyDarwinRunsTheProbeThenTheLoopbackCheck(t *testing.T) {
 	bin, dir := statefulEgressDocker(t)
 	port := freePort(t)
-	l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+	l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: port}, "darwin", noSessions)
 	if err != nil {
 		t.Fatal(err)
@@ -576,7 +630,7 @@ func TestEgressVerifyDarwinFailsClosed(t *testing.T) {
 		"loopback inconclusive": {nil, "", true},
 	} {
 		bin, dir := statefulEgressDocker(t)
-		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
 		if err != nil {
 			t.Fatal(err)
@@ -614,7 +668,7 @@ func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
 		"no VM (linux)": {novm: true, want: false},
 	} {
 		bin, _ := statefulEgressDocker(t)
-		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}, relayKey: testRelayKey}
 		var vm *boxvm.VM
 		if !tc.novm {
 			dl, _, _ := darwinLayer(t, true)

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"time"
@@ -22,7 +23,7 @@ import (
 const SockBoxDir = box.BrokerMountDest
 
 // proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// PROXY line; the relay writes it before any other byte.
+// relay key line and PROXY line; the relay writes both before any other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // maxDarwinConns caps the raw connections the darwin listener holds at once
@@ -53,37 +54,52 @@ type Endpoint struct {
 // Listen opens the broker's listeners. Linux: one unix socket per bound box
 // (BoxSockets, created as sessions need them: the box that mounts a socket's
 // directory is the box every request on it comes from) plus the old shared
-// socket, which only answers "respawn". darwin: unix sockets do not cross the
-// colima VM (measured in M2), so TCP on the Mac's loopback. Only bound sessions
-// get AGENTBOX_BROKER (session.go calls BoxFor under bs.Any()), and on darwin
-// every bound box sits on the internal egress network, where host.lima.internal
-// does not resolve: the relay on the network's gateway forwards the broker port
-// to the Mac's loopback, so boxes are handed the gateway address. The relay
-// prepends a PROXY line naming the box, and the listener refuses any connection
-// without one that names an address inside the box subnet (not the gateway), so
-// RemoteAddr is the box's address. The line is not authenticated: any process on
-// the Mac that dials the loopback port can write one (docs/MACOS.md, Token
-// binding), which Linux's per-box sockets do not allow. The token guards the rest.
-func Listen(goos, stateRoot string, port int) (Endpoint, error) {
+// socket, which only answers "respawn"; relayKey is ignored there (no relay).
+// darwin: unix sockets do not cross the colima VM (measured in M2), so TCP on
+// the Mac's loopback. Only bound sessions get AGENTBOX_BROKER (session.go calls
+// BoxFor under bs.Any()), and on darwin every bound box sits on the internal
+// egress network, where host.lima.internal does not resolve: the relay on the
+// network's gateway forwards the broker port to the Mac's loopback, so boxes
+// are handed the gateway address.
+//
+// The relay opens each connection with its key line (relayKey) and then a PROXY
+// line naming the box. The listener reads the key first and compares it in
+// constant time; only after it matches is the PROXY line believed, and only if
+// it names an address inside the box subnet (not the gateway), so RemoteAddr is
+// the box's address. A connection without the key is closed unanswered, and a
+// zero relayKey refuses to listen at all. The key keeps another process on the
+// Mac from claiming a box's address; it is not a boundary against your own user,
+// since a process running as you can read the key (docs/MACOS.md, Token
+// binding). The token guards the rest.
+func Listen(goos, stateRoot string, port int, relayKey proxyline.Key) (Endpoint, error) {
 	if goos == "darwin" {
-		return listenDarwin(port, maxDarwinConns, maxDarwinPerSource)
+		return listenDarwin(port, relayKey, maxDarwinConns, maxDarwinPerSource)
 	}
 	return listenLinux(stateRoot)
 }
 
 // listenDarwin is the Mac's broker listener: TCP on the loopback, at most
-// maxConns raw connections open, then the PROXY wrapper, then at most
-// maxPerSource open connections for any one source address. The total cap goes
-// UNDER the wrapper so a connection that never sends its PROXY line still holds
-// its slot (until the header timeout) instead of being free to pile up.
-func listenDarwin(port, maxConns, maxPerSource int) (Endpoint, error) {
+// maxConns raw connections open, then the relay-key and PROXY wrapper, then at
+// most maxPerSource open connections for any one source address. The total cap
+// goes UNDER the wrapper so a connection that never sends its key or PROXY line
+// still holds its slot (until the header timeout) instead of being free to pile
+// up. A zero relayKey is refused before anything is bound.
+func listenDarwin(port int, relayKey proxyline.Key, maxConns, maxPerSource int) (Endpoint, error) {
+	if relayKey.IsZero() {
+		return Endpoint{}, fmt.Errorf("broker: no relay key; refusing to listen on 127.0.0.1:%d", port)
+	}
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
 	}
 	p := l.Addr().(*net.TCPAddr).Port
 	l = netlimit.Listener(l, maxConns)
-	l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
+	l = proxyline.Wrap(l, proxyline.Options{
+		Key:        relayKey,
+		Allow:      proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)),
+		Timeout:    proxyHeaderTimeout,
+		KeyRefused: proxyline.NewRefusalLog("broker", time.Minute, time.Now, log.Printf).Refused,
+	})
 	// Above the wrapper: the source is the PROXY header's, known only once the
 	// header was read (in the conn's own goroutine). A conn that has not shown it
 	// yet is held by the total cap alone.

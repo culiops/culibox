@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
 )
@@ -38,7 +39,7 @@ func TestBrokerServesStoreTokenAndHonoursLock(t *testing.T) {
 	}
 	svc, err := startBrokerWithStore(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false }, nil, []config.StaticToken{entry}, st, nil)
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, []config.StaticToken{entry}, st, nil, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}

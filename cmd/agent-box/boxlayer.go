@@ -4,16 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"path/filepath"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 // verifyTimeout bounds the containment probe of a new box. The spawn holds the
@@ -61,8 +65,49 @@ type boxLayer struct {
 	// second cache would never be cleared. nil only for a layer built by hand in
 	// a test.
 	addrs *boxaddr.Cache
+	// relayKey is the secret CuliBox's relay presents to the broker and the
+	// egress proxy ahead of the PROXY line (#114). One per data directory,
+	// loaded once per daemon start by loadRelayKey. Zero off darwin (Linux has
+	// no relay) and zero when relay.secret could not be read, in which case
+	// the darwin listeners and the relay refuse to start.
+	relayKey proxyline.Key
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
+}
+
+// relaySecretFile is the relay key's file in the data directory.
+const relaySecretFile = "relay.secret"
+
+// loadRelayKey reads, or creates, the relay key for this data directory and
+// sets l.relayKey. Off darwin (no VM, so no relay) it does nothing. It uses the
+// same helper and protection as broker.secret and cookie.secret: 32 random
+// bytes, mode 0600 in the 0700 data directory, an unreadable existing file is an
+// error and is never overwritten. An error leaves the key zero, and a zero key
+// fails closed everywhere it is used.
+func (l *boxLayer) loadRelayKey() error {
+	if l.vm == nil {
+		return nil
+	}
+	path := filepath.Join(l.dataDir, relaySecretFile)
+	sec, err := auth.NewCookieAuth(path)
+	if err != nil {
+		// The helper words its error for the cookie secret and repeats the path.
+		// Keep only the OS error and say what this file is and what fixes it.
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return fmt.Errorf("relay secret %s cannot be read or created (%w); delete it (CuliBox creates a new one and replaces the relay once); fixing its permissions keeps the old key", path, err)
+	}
+	k, err := proxyline.KeyFromBytes(sec.Secret())
+	if err != nil {
+		// The helper only returns 32 bytes, so what KeyFromBytes refuses is an
+		// all-zero file, which no listener accepts as a key. It is readable, so
+		// the fix is a new file.
+		return fmt.Errorf("relay secret %s is all zero, which is not a key; delete it and restart CuliBox to create a new one", path)
+	}
+	l.relayKey = k
+	return nil
 }
 
 // newBoxLayer builds the containment layer, or reports why it is unavailable.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 const bx = "ab-box-0123456789ab"
@@ -405,7 +406,7 @@ func TestBaseContextNamesThePresenter(t *testing.T) {
 // shared socket never claims a box.
 func TestSharedListenerRequestsArePresentedAsShared(t *testing.T) {
 	root := shortDir(t)
-	ep, err := Listen("linux", root, 0)
+	ep, err := Listen("linux", root, 0, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}

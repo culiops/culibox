@@ -10,20 +10,32 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 // relayScript is the whole relay: one TCP listener per (listen port, target
 // host, target port) triple on the bind address, piped through. Every
-// upstream connection first carries a PROXY v1 line ("PROXY TCP4 <box-ip>
-// <bind> <box-port> <listen-port>\r\n") naming the box that connected, so the
-// host listeners can tell boxes apart: the relay itself makes every box arrive
-// from loopback (#71). A peer that is not a plain IPv4 address is dropped. It
-// prints "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a
-// listen error, which is all Ensure reads (never a dial: the INPUT rules also
-// drop the VM's own connections to the gateway). Run as
-// `node -e <script> BIND LPORT THOST TPORT ...`, where argv.slice(1) is the
-// arguments after the script (measured on the Mac).
-const relayScript = `const net=require("net");const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write("PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+// upstream connection first carries the relay key line ("AGENTBOX-RELAY <64
+// hex>\r\n", 81 bytes) and then a PROXY v1 line ("PROXY TCP4 <box-ip> <bind>
+// <box-port> <listen-port>\r\n") naming the box that connected, in one write.
+// The host listeners accept the PROXY line only behind the key, so they can tell
+// boxes apart while another process on the Mac cannot claim a box's address
+// (#114); the relay itself makes every box arrive from loopback (#71). The key
+// comes from the environment (RelayKeyEnv), never argv; without a well-formed
+// one the script prints "ERR KEY missing or malformed" and exits 1 before it
+// listens. A peer that is not a plain IPv4 address is dropped. It prints
+// "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a listen
+// error, which is all Ensure reads (never a dial: the INPUT rules also drop the
+// VM's own connections to the gateway). Run as `node -e <script> BIND LPORT
+// THOST TPORT ...`, where argv.slice(1) is the arguments after the script
+// (measured on the Mac).
+const relayScript = `const net=require("net");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K="AGENTBOX-RELAY "+k+"\r\n";const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write(K+"PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+
+// RelayKeyEnv is the environment variable the relay container reads its key
+// from. `docker run -e RelayKeyEnv` (the name alone) takes the value from the
+// docker CLI child's environment, so the key is in no argv and no label.
+const RelayKeyEnv = "AGENTBOX_RELAY_KEY"
 
 const (
 	relayLabel       = "io.culiops.agent-box.relay"
@@ -147,9 +159,12 @@ func normaliseRule(f []string) string {
 
 // Docker is the docker CLI as the relay needs it: args after "docker".
 // box.CLIClient satisfies it. Stdout returns stdout alone: a CLI or context
-// warning on stderr must not be read as the answer.
+// warning on stderr must not be read as the answer. RunEnv is Run with extra
+// environment variables for the docker child only: the relay's key goes in
+// that way, never in argv.
 type Docker interface {
 	Run(ctx context.Context, args []string) (string, error)
+	RunEnv(ctx context.Context, args, env []string) (string, error)
 	Stdout(ctx context.Context, args []string) (string, error)
 }
 
@@ -166,16 +181,21 @@ type Relay struct {
 	EgressPort      int
 	BrokerPort      int
 	UID, GID        int
-	ReadyTimeout    time.Duration // default 10s
+	// Key is the relay key the container presents ahead of every PROXY line.
+	// Required: Ensure refuses the zero Key before it touches the VM.
+	Key          proxyline.Key
+	ReadyTimeout time.Duration // default 10s
 }
 
 // runArgs is the relay's whole `docker run` argv; extra flags go in after the
-// fixed ones, before the image. Without extras it is what configHash hashes;
-// Ensure adds the config label that carries that hash.
+// fixed ones, before the image. Without extras it is what configHash hashes
+// (with the key's id, which is not in argv); Ensure adds the config label that
+// carries that hash. It names the key's variable and never holds the key.
 func (r *Relay) runArgs(gw netip.Addr, extra ...string) []string {
 	args := []string{"run", "-d", "--init", "--name", RelayName(r.Instance), "--network", "host", "--entrypoint", "node",
 		"--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "64", "--pull=never",
 		"--user", fmt.Sprintf("%d:%d", r.UID, r.GID),
+		"-e", RelayKeyEnv, // the name only: docker takes the value from its own environment
 		"--label", relayLabel + "=" + r.Instance}
 	args = append(args, extra...)
 	args = append(args, r.Image, "-e", relayScript, gw.String())
@@ -196,15 +216,24 @@ func hashArgs(args []string) string {
 }
 
 // configHash identifies everything the running relay was built from: a relay
-// whose label differs (any run flag, image, script, port or user) is replaced.
+// whose label differs (any run flag, image, script, port or user, or the key) is
+// replaced. The key enters as its ID, a domain-separated fingerprint, never the
+// key: the hash goes in a container label.
 func (r *Relay) configHash(gw netip.Addr) string {
-	return hashArgs(r.runArgs(gw))
+	return hashArgs(append(r.runArgs(gw), "relay-key-id="+r.Key.ID()))
 }
 
 func (r *Relay) docker(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, relayDockerTimeout)
 	defer cancel()
 	return r.Docker.Run(ctx, args)
+}
+
+// dockerEnv is docker with env added to the child's environment only.
+func (r *Relay) dockerEnv(ctx context.Context, args, env []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, relayDockerTimeout)
+	defer cancel()
+	return r.Docker.RunEnv(ctx, args, env)
 }
 
 func (r *Relay) dockerStdout(ctx context.Context, args ...string) (string, error) {
@@ -235,8 +264,10 @@ func (r *Relay) remove(ctx context.Context) error {
 }
 
 // Ensure makes the relay run for gateway gw, or returns an error and leaves no
-// relay behind. The INPUT rules are checked live first, every time: they are
-// what keeps an unfenced box off the relay, so a VM without them gets no relay.
+// relay behind. Without a key it refuses before it touches the VM or docker
+// (the relay would have nothing to present, and the listeners refuse it all).
+// The INPUT rules are checked live first, every time: they are what keeps an
+// unfenced box off the relay, so a VM without them gets no relay.
 //
 // INPUT rules read and wrong: the relay is removed. Rules that could not be
 // read (colima ssh error, timeout): this Ready is refused but a running relay is
@@ -250,6 +281,9 @@ func (r *Relay) remove(ctx context.Context) error {
 // egress listener (Ready fails before it), so they keep only the broker until
 // the VM is recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
+	if r.Key.IsZero() {
+		return fmt.Errorf("relay: no relay key; CuliBox could not load relay.secret at start (its log says why)")
+	}
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")
 	}
@@ -284,7 +318,7 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return fmt.Errorf("inspecting the relay: %w", err)
 	}
 
-	if _, err := r.docker(ctx, r.runArgs(gw, "--label", relayConfigLabel+"="+hash)...); err != nil {
+	if _, err := r.dockerEnv(ctx, r.runArgs(gw, "--label", relayConfigLabel+"="+hash), []string{RelayKeyEnv + "=" + r.Key.Hex()}); err != nil {
 		return r.removeAlso(ctx, fmt.Errorf("starting the relay: %w", err))
 	}
 	if err := r.waitListening(ctx, name, gw.String()); err != nil {

@@ -382,6 +382,40 @@ func TestRunInputFeedsStdin(t *testing.T) {
 	}
 }
 
+// RunEnv hands the relay key to `docker run -e NAME` through the docker child's
+// environment: the child sees it, and neither the daemon's own environment nor
+// a later parent value changes.
+func TestRunEnvSetsTheChildEnvironmentOnly(t *testing.T) {
+	c := CLIClient{Bin: "/bin/sh"}
+	args := []string{"-c", `printf %s "$AB_RELAY_T"`}
+	env := []string{"AB_RELAY_T=v1"}
+	out, err := c.RunEnv(context.Background(), args, env)
+	if err != nil || out != "v1" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	t.Setenv("AB_RELAY_T", "parent")
+	out, err = c.RunEnv(context.Background(), args, env)
+	if err != nil || out != "v1" {
+		t.Fatalf("with the parent's own value set: out=%q err=%v, want the child to see v1", out, err)
+	}
+	if got := os.Getenv("AB_RELAY_T"); got != "parent" {
+		t.Fatalf("RunEnv changed this process's environment: %q", got)
+	}
+	if out, err := c.RunEnv(context.Background(), args, nil); err != nil || out != "parent" {
+		t.Fatalf("without extra env the child inherits the parent's: out=%q err=%v", out, err)
+	}
+}
+
+// The env carries the relay key, so a failing command must not echo it back
+// into the returned error.
+func TestRunEnvErrorDoesNotEchoTheEnv(t *testing.T) {
+	c := CLIClient{Bin: "/bin/sh"}
+	_, err := c.RunEnv(context.Background(), []string{"-c", "echo oops >&2; exit 3"}, []string{"AB_RELAY_T=SECRET"})
+	if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "oops") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // The stdin payload carries the probe credential, so a failing command must not
 // echo it back into the returned error.
 func TestRunInputErrorDoesNotEchoStdin(t *testing.T) {

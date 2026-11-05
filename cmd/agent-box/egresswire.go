@@ -152,13 +152,15 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	}
 	proxy := egress.New(egress.Options{Secret: sec.Secret(), Lookup: egressLookup(get), Audit: audit, BoxAddrs: layer.addrs})
 	opts := egressServiceOptions(cfg, goos, proxy, layer.cli)
+	opts.RelayKey = layer.relayKey // zero off darwin; darwin's Ready refuses a zero key
 	if goos == "darwin" && layer.vm != nil {
 		// Ready runs this on every call, under its lock: the relay is started
 		// only after the VM's firewall rules (INPUT and DOCKER-USER) are read back
 		// live, and a Ready that fails here refuses the spawn. Nothing else may
 		// call Ensure.
 		relay := &boxvm.Relay{VM: layer.vm, Docker: layer.cli, Image: layer.image, Instance: cfg.BoxInstance(),
-			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid()}
+			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid(),
+			Key: layer.relayKey}
 		opts.AfterNetwork = func(ctx context.Context, n egress.Net) error { return relay.Ensure(ctx, n.Gateway) }
 	}
 	svc := egress.NewService(opts)

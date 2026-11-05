@@ -466,6 +466,11 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
 	} else {
 		layer, boxes = l, l.boxes
+		// Not fatal (D8): without the key the darwin listeners and the relay
+		// refuse, so every boxed spawn on this Mac says why instead.
+		if err := l.loadRelayKey(); err != nil {
+			log.Printf("relay key unavailable: %v; every boxed spawn on this Mac is refused until that is fixed", err)
+		}
 		mgr.SetBoxes(boxes)
 		boxRuntime = boxes.Runtime()
 		if l.vm != nil {
@@ -574,7 +579,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	var brokerSvc *brokerService
 	if layer != nil {
 		svc, err := startBrokerWithStore(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
-			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens, vstore, layer.addrs)
+			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens, vstore, layer.addrs, layer.relayKey)
 		switch {
 		case errors.Is(err, errBrokerListen):
 			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)
