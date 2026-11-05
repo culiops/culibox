@@ -128,10 +128,10 @@ both of which listen on `127.0.0.1` on the Mac. A profile without a binding
 reaches any public host on port 443 through the proxy ("open" in the steer
 rail); a profile with bindings reaches only the hosts they allow. Rules in the
 VM's firewall let the box subnet reach those two ports and nothing else, and
-keep every other box off the relay. If those rules are missing or out of order,
-agent-box refuses to start a boxed session and tells you that this VM predates
-egress control for all boxes and to run `agent-box box setup -recreate`; it
-checks them again on every boxed spawn.
+keep every other box off the relay. If those rules are missing or out of order
+(a VM from before egress control for all boxes, or one set up for other ports),
+agent-box refuses to start a boxed session and tells you to run
+`agent-box box setup -recreate`; it checks them again on every boxed spawn.
 
 Egress control for every macOS box was verified on a Mac (macOS 14, colima 0.8.1) on 2026-11-02: bound and unbound boxes are fenced, a box's proxy token is refused when used from another box, boxes cannot reach each other, and direct, DNS and Mac loopback connections are blocked.
 

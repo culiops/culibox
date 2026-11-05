@@ -294,7 +294,7 @@ exit 0
 }
 
 // darwin option (c): the boot Ready of an existing network verifies the VM's
-// INPUT rules over colima ssh before it starts the relay container.
+// firewall rules over colima ssh before it starts the relay container.
 func TestStartEgressDarwinWiresTheRelay(t *testing.T) {
 	ep, bp := freePort(t), freePort(t)
 	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)

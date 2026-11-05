@@ -194,8 +194,9 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
 // 2026-11-02). VMs provisioned before #113 let the broker port through the
 // gateway DROP for every container on the VM's default network, which reached
 // the broker without the relay and could write the PROXY line itself. Such a VM
-// is replaced, not repaired: a changed script reaches an existing VM only
-// through `box setup -recreate` (Provision refuses a drifted VM), and until then
+// is replaced, not repaired: a changed script reaches an existing stamped VM
+// only through `box setup -recreate` (Provision refuses a drifted one; a VM with
+// no stamp gets the new yaml and the delete runs on its next start), and until then
 // the relay's live check (CheckDockerUserRules) refuses boxed spawns on it. This
 // block only deletes the rule, so the script stays idempotent wherever it runs.
 const provisionBroker = `# credential broker (loopback on the Mac): reached through the relay only; delete

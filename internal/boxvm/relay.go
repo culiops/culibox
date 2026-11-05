@@ -243,8 +243,8 @@ func (r *Relay) remove(ctx context.Context) error {
 // left alone. The relay only ever started after the rules were verified this
 // boot; a VM reboot or dockerd restart stops it (no restart policy); and a
 // transient ssh failure must not cut every live fenced session's proxy and
-// broker. A DOCKER-USER rule that lets TCP past the relay (CheckDockerUserRules)
-// is refused the same way, relay kept: that path does not go through the relay,
+// broker. A DOCKER-USER chain that lets TCP past the relay or lacks the gateway
+// DROP (CheckDockerUserRules) is refused the same way, relay kept: that path does not go through the relay,
 // so removing it would close nothing. Within one daemon run, live sessions keep
 // their proxy and broker; a daemon that starts on such a VM never starts its
 // egress listener (Ready fails before it), so they keep only the broker until

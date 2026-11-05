@@ -173,7 +173,8 @@ func (v *VM) provisionHash() string {
 // ProvisionDrifted reports whether the VM was provisioned with a different
 // provision script than agent-box would write now. A VM set up before the
 // script was stamped has no stamp and reads as drifted: that is the VM that
-// predates egress control for all boxes. Fails closed on an unreadable stamp.
+// predates egress control for all boxes. A changed port or a newer script (#113)
+// drifts it too. Fails closed on an unreadable stamp.
 func (v *VM) ProvisionDrifted() bool {
 	b, err := os.ReadFile(v.cfg.ProvisionStampPath())
 	return err != nil || strings.TrimSpace(string(b)) != v.provisionHash()

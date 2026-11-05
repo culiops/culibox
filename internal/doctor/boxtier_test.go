@@ -108,7 +108,7 @@ func TestBoxTierUncheckedContextIsNotAPass(t *testing.T) {
 // The live firewall check has its own row when it ran, and none when it did
 // not (VM stopped).
 func TestBoxTierFirewallRow(t *testing.T) {
-	if d := detail(boxTierResults("darwin", ok(), tokenOK)); !strings.Contains(d, "PASS box VM firewall: the relay's rules are in place and no DOCKER-USER rule lets TCP past the gateway DROP") {
+	if d := detail(boxTierResults("darwin", ok(), tokenOK)); !strings.Contains(d, "PASS box VM firewall: the relay's INPUT rules and the gateway DROP are loaded, and no DOCKER-USER rule passes TCP") {
 		t.Fatalf("a verified firewall deserves its own PASS row:\n%s", d)
 	}
 	f := ok()

@@ -344,7 +344,7 @@ func TestProvisionWritesYAMLAndStampAndDetectsDrift(t *testing.T) {
 	}
 }
 
-// Doctor's "predates egress control" reason hangs on this: a size change is
+// Doctor's provision-drift Fail hangs on this: a size change is
 // drift but not provision drift; a VM with no provision stamp (set up before it
 // existed) or a stale one is provision drift.
 func TestProvisionDriftIsSeparateFromOtherDrift(t *testing.T) {

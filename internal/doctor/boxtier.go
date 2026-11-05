@@ -205,7 +205,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		case f.FirewallErr != nil:
 			out = append(out, Result{Fail, "box VM firewall", f.FirewallErr.Error()})
 		default:
-			out = append(out, Result{Pass, "box VM firewall", "the relay's rules are in place and no DOCKER-USER rule lets TCP past the gateway DROP"})
+			out = append(out, Result{Pass, "box VM firewall", "the relay's INPUT rules and the gateway DROP are loaded, and no DOCKER-USER rule passes TCP"})
 		}
 	}
 	stopped()
