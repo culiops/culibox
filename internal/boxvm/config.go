@@ -163,7 +163,7 @@ func (c Config) Mounts() []string {
 // it here is harmless if docker has not started yet (docker keeps it).
 // provisionEgress adds the INPUT rules for the internal egress network.
 func provisionScript(brokerPort, egressPort int) string {
-	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort, brokerPort) +
+	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort) +
 		fmt.Sprintf(provisionEgress, egressPort, brokerPort, brokerPort, egressPort)
 }
 
@@ -188,11 +188,16 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
 
 // provisionBroker is its own constant, formatted with only the broker port, so
 // a stray % in provisionBase can never break it. The credential broker listens
-// on the Mac's loopback; boxes reach it through the gateway on exactly one TCP
-// port, re-inserted above the DROP on every boot like DNS.
-const provisionBroker = `# credential broker (loopback on the Mac): one TCP port through the gateway DROP.
+// on the Mac's loopback and boxes reach it only through the relay, whose dial
+// to the gateway is the VM's own OUTPUT, never DOCKER-USER (the egress port has
+// never had a rule here and works through the same relay, measured on the Mac
+// 2026-11-02). VMs provisioned before #113 let the broker port through the
+// gateway DROP for every container on the VM's default network, which reached
+// the broker without the relay and could write the PROXY line itself; this
+// block only deletes that rule now.
+const provisionBroker = `# credential broker (loopback on the Mac): reached through the relay only; delete
+# the TCP pass-through older versions inserted above the gateway DROP.
 while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
-iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
 `
 
 // provisionEgress is formatted with only the two ports, egress then broker,

@@ -33,9 +33,9 @@ provision:
       # DROP on every run, so the order always holds.
       while iptables -w -D DOCKER-USER -d "$gw" -p udp --dport 53 -j RETURN 2>/dev/null; do :; done
       iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
-      # credential broker (loopback on the Mac): one TCP port through the gateway DROP.
+      # credential broker (loopback on the Mac): reached through the relay only; delete
+      # the TCP pass-through older versions inserted above the gateway DROP.
       while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport 9071 -j RETURN 2>/dev/null; do :; done
-      iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport 9071 -j RETURN
       # egress (M3c): boxes on the internal egress network reach only the relay on
       # its gateway (broker and egress ports); nobody else reaches the relay.
       sub=172.29.72.0/24
