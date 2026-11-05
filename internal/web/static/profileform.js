@@ -503,8 +503,11 @@ function staleSave(err) {
   const what = gone
     ? "Duplicate saves them as a new profile, Load latest clears the form."
     : "Load latest replaces them with the saved version.";
+  // The server's messages are Go error strings, which start lowercase; on the
+  // banner the message opens a sentence.
+  const msg = String(err.message);
   return {
-    message: err.message + ". Your edits are still here; " + what,
+    message: msg.charAt(0).toUpperCase() + msg.slice(1) + ". Your edits are still here; " + what,
     button: "Load latest",
   };
 }

@@ -484,7 +484,8 @@ test("staleSave names only the stale refusal", () => {
   const msg = "profile changed since you opened it; nothing was saved";
   const s = staleSave({ status: 409, code: "profile_changed", message: msg });
   assert.strictEqual(s.button, "Load latest");
-  assert.ok(s.message.includes(msg));
+  assert.ok(s.message.includes(msg.slice(1)), "the server's message, first letter aside");
+  assert.ok(s.message.startsWith("Profile changed since"), "shown as a sentence");
   assert.ok(s.message.includes("Load latest"));
   assert.ok(s.message.includes("Your edits are still here"));
   for (const e of [
@@ -543,10 +544,10 @@ test("staleSave tells a changed profile from a deleted one", () => {
   const changed = "this profile was changed after you opened it (another tab, another device or a restart); nothing was saved";
   const gone = "this profile no longer exists (it was deleted after you opened it); nothing was saved";
   const c = staleSave({ status: 409, code: "profile_changed", message: changed, body: { error: changed, code: "profile_changed" } });
-  assert.strictEqual(c.message, changed + ". Your edits are still here; Load latest replaces them with the saved version.");
+  assert.strictEqual(c.message, "This" + changed.slice(4) + ". Your edits are still here; Load latest replaces them with the saved version.");
   assert.strictEqual(c.button, "Load latest");
   const g = staleSave({ status: 409, code: "profile_changed", message: gone, body: { error: gone, code: "profile_changed", gone: true } });
-  assert.strictEqual(g.message, gone + ". Your edits are still here; Duplicate saves them as a new profile, Load latest clears the form.");
+  assert.strictEqual(g.message, "This" + gone.slice(4) + ". Your edits are still here; Duplicate saves them as a new profile, Load latest clears the form.");
   assert.strictEqual(g.button, "Load latest");
   assert.ok(!g.message.includes("saved version"));
   // Only a real true counts: no body, or a non-true "gone", is the changed text.
@@ -554,4 +555,16 @@ test("staleSave tells a changed profile from a deleted one", () => {
     const e = staleSave({ status: 409, code: "profile_changed", message: changed, body });
     assert.ok(e.message.includes("saved version"), JSON.stringify(body));
   }
+});
+
+// The server's Go error strings start lowercase; the banner shows a sentence.
+test("staleSave starts its message with a capital letter", () => {
+  const e = (message, body) => staleSave({ status: 409, code: "profile_changed", message, body });
+  assert.ok(e("this profile was changed after you opened it; nothing was saved").message.startsWith("This profile was changed after you opened it; nothing was saved. "));
+  assert.ok(e("this profile no longer exists; nothing was saved", { gone: true }).message.startsWith("This profile no longer exists; nothing was saved. "));
+  // Already capitalised, or not a letter: left as it is. Only the first
+  // character changes.
+  assert.ok(e("Already a sentence").message.startsWith("Already a sentence. "));
+  assert.ok(e("3 edits lost").message.startsWith("3 edits lost. "));
+  assert.ok(e("a b C").message.startsWith("A b C. "));
 });
