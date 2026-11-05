@@ -127,7 +127,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("config: %v", err)
 		}
-		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
+		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
 	log.Print(cred.summary())

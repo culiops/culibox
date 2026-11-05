@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 
-	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
@@ -28,28 +28,40 @@ var (
 )
 
 // realCloneBackends finds host git and the docker CLI the way the daemon does.
-func realCloneBackends(cfg config.Config) (clone.Git, clone.Docker, error) {
+func realCloneBackends(cfg config.Config, goos, dataDir, home string) (clone.Git, clone.Docker, error) {
 	g, err := clone.NewExecGit()
 	if err != nil {
 		return nil, nil, err
 	}
-	bin, err := box.LookDocker(cfg.DockerBin)
+	d, err := cloneDocker(context.Background(), cfg, goos, dataDir, home, boxvm.ExecRunner{})
 	if err != nil {
 		return nil, nil, err
 	}
-	return g, clone.ExecDocker{Bin: bin}, nil
+	return g, d, nil
+}
+
+// cloneDocker is the docker the bundle container runs on: the box layer's, as
+// in the daemon, so on macOS the box VM's (where the clone is shared). It never
+// starts the VM: a CLI starting colima beside a serving daemon could race its
+// own start, so a stopped VM is refused with the way to start it.
+func cloneDocker(ctx context.Context, cfg config.Config, goos, dataDir, home string, runner boxvm.Runner) (clone.Docker, error) {
+	l, err := newBoxLayer(cfg, dataDir, home, goos, runner, nil)
+	if err != nil {
+		return nil, err
+	}
+	if l.vmStopped(ctx) {
+		return nil, errors.New("the box VM is not running; start it with `agent-box box setup` (or any boxed session), then run clone fetch again")
+	}
+	return clone.ExecDocker{Bin: l.dockerBin, Args: l.dockerArgs}, nil
 }
 
 // runClone serves `agent-box clone fetch`: it brings a clone-mode profile's
 // branch home as box/<branch> in clone_of. It reads the profile store without
 // writing it, so it is safe to run while agent-box serves (a daemon restart aborts it; rerun).
-func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.Writer) int {
+func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string, w io.Writer) int {
 	fail := func(format string, args ...any) int {
 		fmt.Fprintf(w, "agent-box clone: "+format+"\n", args...)
 		return 1
-	}
-	if runtime.GOOS == "darwin" {
-		return fail("clone mode is Linux-only for now")
 	}
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
 	if err != nil {
@@ -109,7 +121,7 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 	if err := owner.checkOf(c.Of); err != nil {
 		return fail("%v", err)
 	}
-	g, d, err := cloneBackends(cfg)
+	g, d, err := cloneBackends(cfg, goos, dataDir, home)
 	if err != nil {
 		return fail("%v", err)
 	}

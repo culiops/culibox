@@ -60,6 +60,7 @@ func TestParseCloneFetch(t *testing.T) {
 type cloneEnv struct {
 	cfg  config.Config
 	home string
+	goos string // what runClone is told it runs on; linux unless a test sets it
 	data string
 	req  clone.FetchRequest
 	res  clone.FetchResult
@@ -69,7 +70,7 @@ type cloneEnv struct {
 func newCloneEnv(t *testing.T, stored []config.AgentConfig, seeds []config.AgentConfig) *cloneEnv {
 	t.Helper()
 	root := t.TempDir()
-	e := &cloneEnv{home: filepath.Join(root, "home"), data: filepath.Join(root, "data")}
+	e := &cloneEnv{home: filepath.Join(root, "home"), goos: "linux", data: filepath.Join(root, "data")}
 	if err := os.MkdirAll(e.data, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func newCloneEnv(t *testing.T, stored []config.AgentConfig, seeds []config.Agent
 		e.req = r
 		return e.res, e.err
 	}
-	cloneBackends = func(config.Config) (clone.Git, clone.Docker, error) { return nil, nil, nil }
+	cloneBackends = func(config.Config, string, string, string) (clone.Git, clone.Docker, error) { return nil, nil, nil }
 	t.Cleanup(func() { cloneFetch, cloneBackends = oldFetch, oldBack })
 	return e
 }
@@ -96,7 +97,7 @@ func cloneProfile(name, of, dir string) config.AgentConfig {
 
 func runCloneArgs(e *cloneEnv, profile, branch, base string) (int, string) {
 	var out bytes.Buffer
-	rc := runClone(cliArgs{Cmd: "clone", Sub: "fetch", Profile: profile, Branch: branch, Base: base}, e.cfg, e.home, nil, &out)
+	rc := runClone(cliArgs{Cmd: "clone", Sub: "fetch", Profile: profile, Branch: branch, Base: base}, e.cfg, e.home, e.goos, nil, &out)
 	return rc, out.String()
 }
 
@@ -177,7 +178,7 @@ func TestRunCloneOutput(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	rc := runClone(cliArgs{Cmd: "clone", Sub: "fetch", Profile: "p", Branch: "feat/x", Base: "main", AllowOldHistory: true},
-		e.cfg, e.home, nil, &buf)
+		e.cfg, e.home, e.goos, nil, &buf)
 	out := buf.String()
 	if e.req.DataDir != e.data {
 		t.Errorf("DataDir = %q, want the data dir %q (where the base record lives)", e.req.DataDir, e.data)
@@ -206,10 +207,88 @@ func TestRunCloneFetchError(t *testing.T) {
 
 func TestRunCloneBackendError(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
-	cloneBackends = func(config.Config) (clone.Git, clone.Docker, error) { return nil, nil, errors.New("git not found") }
+	cloneBackends = func(config.Config, string, string, string) (clone.Git, clone.Docker, error) {
+		return nil, nil, errors.New("git not found")
+	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
 	if rc != 1 || out != "agent-box clone: git not found\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+}
+
+// clone fetch runs on macOS too, and asks for that OS's backends with the
+// same data dir and home it read the profile from.
+func TestRunCloneOnDarwin(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	e.goos = "darwin"
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b"}
+	var gotOS, gotData, gotHome string
+	cloneBackends = func(_ config.Config, goos, dataDir, home string) (clone.Git, clone.Docker, error) {
+		gotOS, gotData, gotHome = goos, dataDir, home
+		return nil, nil, nil
+	}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 0 || !strings.HasPrefix(out, "fetched box/b ") {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+	if gotOS != "darwin" || gotData != e.data || gotHome != e.home {
+		t.Fatalf("backends for (%q, %q, %q), want (darwin, %q, %q)", gotOS, gotData, gotHome, e.data, e.home)
+	}
+}
+
+// lastDockerCall is the last argv the fake docker logged.
+func lastDockerCall(d *fakeDocker) string {
+	lines := strings.Split(strings.TrimSpace(d.log()), "\n")
+	return lines[len(lines)-1]
+}
+
+// On macOS the bundle container of clone fetch runs on the box VM's docker,
+// where the clone is shared.
+func TestCloneDockerOnDarwinIsTheVMs(t *testing.T) {
+	root := resolved(t, shortRoot(t))
+	d := newFakeDocker(t)
+	fc := &fakeColima{running: true}
+	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dk.Remove(context.Background(), "agent-box-clonefetch-x"); err != nil {
+		t.Fatal(err)
+	}
+	want := "--host unix://" + filepath.Join(root, "vm", "agent-box", "docker.sock") + " --config " + filepath.Join(root, "docker") + " rm -f agent-box-clonefetch-x"
+	if got := lastDockerCall(d); got != want {
+		t.Fatalf("docker call = %q, want %q", got, want)
+	}
+}
+
+// clone fetch never starts the VM: with it stopped there is no docker to run
+// the bundle container on, and the refusal says how to start it.
+func TestCloneDockerRefusesAStoppedVM(t *testing.T) {
+	root := resolved(t, shortRoot(t))
+	d := newFakeDocker(t)
+	fc := &fakeColima{}
+	_, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc)
+	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "agent-box box setup") {
+		t.Fatalf("err = %v; want the stopped-VM refusal", err)
+	}
+	if fc.called("start") {
+		t.Fatal("clone fetch started the VM")
+	}
+}
+
+// On Linux the bundle container runs on the host's docker, with no global flags.
+func TestCloneDockerOnLinuxIsTheHosts(t *testing.T) {
+	root := t.TempDir()
+	d := newFakeDocker(t)
+	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin}, "linux", root, root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dk.Remove(context.Background(), "agent-box-clonefetch-x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastDockerCall(d); got != "rm -f agent-box-clonefetch-x" {
+		t.Fatalf("docker call = %q", got)
 	}
 }
 
