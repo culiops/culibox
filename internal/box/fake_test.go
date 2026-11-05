@@ -47,6 +47,7 @@ type fakeClient struct {
 	// for a running box.
 	mounts    map[string][]string
 	mountsErr error
+	bindErr   error // fails BindSource alone (InspectMounts still works)
 	// sources is, per box, each bind's host path by in-box destination, recorded
 	// from every --mount of a Run (a test overrides one to stand for a box made
 	// by an older build). BindSource reads it.
@@ -253,8 +254,8 @@ func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []s
 func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.mountsErr != nil {
-		return "", f.mountsErr
+	if f.bindErr != nil {
+		return "", f.bindErr
 	}
 	return f.sources[name][dst], nil
 }

@@ -224,3 +224,49 @@ func boundBoxName(t *testing.T, m *Manager, dir string) string {
 	}
 	return n
 }
+
+// Fail closed: when docker cannot say where a running box's broker mount comes
+// from, the box is neither reused nor removed. Idle or live, the spawn is
+// refused and the box is left as it is (an idle one keeps its timer).
+func TestBoxWhoseBrokerMountCannotBeReadIsNeitherReusedNorRemoved(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		name := "idle"
+		if live {
+			name = "live"
+		}
+		t.Run(name, func(t *testing.T) {
+			m, f := brokerManager(t)
+			dir := t.TempDir()
+			key := BoxKey{Binding: "h1"}
+			boxName, err := m.BoxName(dir, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mounts := []Mount{ownBrokerMount(t, m, boxName)}
+			if _, _, _, err := m.Wrap(context.Background(), dir, "s1", key, []string{"bash"}, nil, mounts); err != nil {
+				t.Fatal(err)
+			}
+			if !live {
+				m.ReleaseBox(boxName)
+			}
+			f.bindErr = errors.New("docker inspect: daemon unreachable")
+			_, _, _, err = m.Wrap(context.Background(), dir, "s2", key, []string{"bash"}, nil, mounts)
+			if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "daemon unreachable") {
+				t.Fatalf("err = %v, want ErrBoxUnavailable naming the cause", err)
+			}
+			if f.stops() != 0 || f.runs() != 1 {
+				t.Fatalf("the box must be left alone: stops=%d runs=%d", f.stops(), f.runs())
+			}
+			m.mu.Lock()
+			_, armed := m.timers[boxName]
+			active := m.active[boxName]
+			m.mu.Unlock()
+			if live && active != 1 {
+				t.Fatalf("the refused spawn must not count as a session: active=%d", active)
+			}
+			if !live && !armed {
+				t.Fatal("an idle box refused for this must keep its idle timer")
+			}
+		})
+	}
+}
