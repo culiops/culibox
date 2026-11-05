@@ -27,7 +27,7 @@ func boxFilesOf(files ...session.BoxFile) func(string, int64) []session.BoxFile 
 
 func TestSanitizeRateLimits(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	fut := now.Add(24 * time.Hour).Unix()
+	fut := now.Add(3 * time.Hour).Unix() // inside both windows: a 5h window cannot reset more than 5h away
 	win := func(p float64, r int64) *RateLimitWindow { return &RateLimitWindow{UsedPercentage: p, ResetsAt: r} }
 	cases := []struct {
 		name     string
@@ -41,7 +41,7 @@ func TestSanitizeRateLimits(t *testing.T) {
 		{"future updated_at dropped", RateLimits{UpdatedAt: now.Add(10 * time.Minute).Unix(), FiveHour: win(5, fut)}, false, nil, true},
 		{"4 min future tolerated", RateLimits{UpdatedAt: now.Add(4 * time.Minute).Unix(), FiveHour: win(5, fut)}, true, win(5, fut), true},
 		{"implausible resets_at drops that window", RateLimits{UpdatedAt: now.Unix(), FiveHour: win(5, 5), SevenDay: win(7, fut)}, true, nil, false},
-		{"resets_at beyond 400 days drops window", RateLimits{UpdatedAt: now.Unix(), FiveHour: win(5, now.Add(401*24*time.Hour).Unix()), SevenDay: win(7, fut)}, true, nil, false},
+		{"resets_at beyond the window drops it", RateLimits{UpdatedAt: now.Unix(), FiveHour: win(5, now.Add(401*24*time.Hour).Unix()), SevenDay: win(7, fut)}, true, nil, false},
 		{"both windows dropped", RateLimits{UpdatedAt: now.Unix(), FiveHour: win(5, 5), SevenDay: win(7, 0)}, false, nil, true},
 	}
 	for _, c := range cases {

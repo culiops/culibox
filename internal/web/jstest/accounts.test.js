@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { ACCT_DEFAULT, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel } = require("../static/accounts.js");
+const { ACCT_DEFAULT, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel, acctAgeNote } = require("../static/accounts.js");
 
 test("acctLimitsMap tolerates the pre-accounts flat shape", () => {
   const flat = { updated_at: 1, five_hour: { used_percentage: 5, resets_at: 9 } };
@@ -47,6 +47,22 @@ test("acctOptionLabel never presents stale quota as current", () => {
   assert.equal(acctOptionLabel("work", fresh, now), "work · 5h 10%");
   // numbers with no timestamp at all are also unverifiable
   assert.equal(acctOptionLabel("work", { five_hour: { used_percentage: 10 } }, now), "work · 5h 10% (no data)");
+});
+
+test("acctOptionLabel shows a window past its reset as reset, not the old percentage", () => {
+  const now = 100000;
+  const l = { updated_at: now - 60, five_hour: { used_percentage: 70, resets_at: now - 3600 }, seven_day: { used_percentage: 20, resets_at: now + 86400 } };
+  assert.equal(acctOptionLabel("coding", l, now), "coding · 5h reset · wk 20%");
+  // a window with no reset time cannot be proven reset
+  const noReset = { updated_at: now - 60, five_hour: { used_percentage: 70 } };
+  assert.equal(acctOptionLabel("coding", noReset, now), "coding · 5h 70%");
+});
+
+test("acctAgeNote: visible text only for a stale reading", () => {
+  const now = 100000;
+  assert.equal(acctAgeNote(acctLimitsAge(now - 60, now)), "");
+  assert.equal(acctAgeNote(acctLimitsAge(now - 7 * 3600, now)), "7h old");
+  assert.equal(acctAgeNote(acctLimitsAge(0, now)), "no data");
 });
 
 const { acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText } = require("../static/accounts.js");

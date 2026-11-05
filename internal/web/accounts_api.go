@@ -104,6 +104,12 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid account json")
 			return
 		}
+		prevToken := ""
+		for _, a := range s.Accounts.List() {
+			if a.Name == name {
+				prevToken = a.TokenSecret
+			}
+		}
 		res, err := s.Accounts.Update(name, body.TokenSecret, body.InheritPersonal)
 		if err != nil {
 			code := http.StatusBadRequest
@@ -113,11 +119,22 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, err.Error())
 			return
 		}
+		// Only a real token change touches the quota memory: toggling
+		// inherit_personal, say, is the same credential.
+		if res.TokenSecret != prevToken {
+			s.accountTokenChanged(name, res.ConfigDir)
+		}
 		writeJSON(w, http.StatusOK, s.accountView(res))
 	case http.MethodDelete:
 		if who := s.accountInUse(name); who != "" {
 			writeErr(w, http.StatusConflict, "account "+name+" is used by "+who)
 			return
+		}
+		configDir := ""
+		for _, a := range s.Accounts.List() {
+			if a.Name == name {
+				configDir = a.ConfigDir
+			}
 		}
 		root, err := s.Accounts.Delete(name)
 		if err != nil {
@@ -128,6 +145,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, err.Error())
 			return
 		}
+		s.accountTokenChanged(name, configDir) // its directory stays on disk, its readings must not
 		writeJSON(w, http.StatusOK, map[string]string{"left_on_disk": tildePath(s.Home, root)})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
