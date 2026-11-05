@@ -21,13 +21,14 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.Profiles.Views())
 	case http.MethodPost:
-		p, err := decodeProfile(w, r)
+		doc, err := decodeProfile(w, r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.Profiles.Save(p); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+		p := doc.AgentConfig
+		if err := s.Profiles.Create(p); err != nil {
+			writeSaveErr(w, err)
 			return
 		}
 		created := struct {
@@ -58,16 +59,22 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such profile")
 			return
 		}
-		writeJSON(w, http.StatusOK, p)
+		rev := profileRev(p)
+		writeJSON(w, http.StatusOK, profileDoc{AgentConfig: p, Rev: &rev})
 	case http.MethodPut:
-		p, err := decodeProfile(w, r)
+		doc, err := decodeProfile(w, r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if doc.Rev == nil || *doc.Rev == "" {
+			writeErrCode(w, http.StatusPreconditionRequired, revRequiredMsg, "rev_required")
+			return
+		}
+		p := doc.AgentConfig
 		p.Name = name // the path is authoritative for the name
-		if err := s.Profiles.Save(p); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+		if err := s.Profiles.Update(p, *doc.Rev); err != nil {
+			writeSaveErr(w, err)
 			return
 		}
 		if warnings := saveWarnings(s, p); len(warnings) > 0 {
@@ -79,6 +86,10 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		if err := s.Profiles.Delete(name); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeErr(w, http.StatusNotFound, "no such editable profile")
+				return
+			}
+			if errors.Is(err, store.ErrChangedOnDisk) {
+				writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
 				return
 			}
 			writeErr(w, http.StatusInternalServerError, "delete failed")
@@ -109,12 +120,14 @@ func saveWarnings(s *Server, p config.AgentConfig) []string {
 	return warnings
 }
 
-func decodeProfile(w http.ResponseWriter, r *http.Request) (config.AgentConfig, error) {
-	var p config.AgentConfig
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&p); err != nil {
-		return config.AgentConfig{}, errors.New("invalid profile json")
+// decodeProfile reads a profile and its rev from the request body (64 KiB at
+// most). POST ignores the rev; PUT requires it.
+func decodeProfile(w http.ResponseWriter, r *http.Request) (profileDoc, error) {
+	var doc profileDoc
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&doc); err != nil {
+		return profileDoc{}, errors.New("invalid profile json")
 	}
-	return p, nil
+	return doc, nil
 }
 
 // convertAWSSuffix is the path word after a profile name that converts its
@@ -244,11 +257,14 @@ func (s *Server) handleConvertAWS(w http.ResponseWriter, r *http.Request, name s
 		writeErrCode(w, http.StatusConflict, "the profile changed while it was being converted: reload and try again", "profile_changed")
 		return
 	}
+	// Saved against the revision just read, so an edit landing between that
+	// read and this write is refused (409), not overwritten.
+	rev := profileRev(fresh)
 	fresh.AWS = nil
 	fresh.AWSConnections = []string{created}
-	if err := s.Profiles.Save(fresh); err != nil {
+	if err := s.Profiles.Update(fresh, rev); err != nil {
 		s.removeConverted(name, created)
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeSaveErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"connection": created})
