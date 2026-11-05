@@ -1319,9 +1319,42 @@ function credScrollPending() {
 function credWireHeld(host) {
   if (credHeldWired) return;
   credHeldWired = true;
-  host.addEventListener("focusout", () => {
-    setTimeout(() => { if (credRepaintHeld && credView) renderCredentials(credView); }, 0);
-  });
+  host.addEventListener("focusout", () => setTimeout(credFocusLeft, 0));
+}
+
+// credFocusLeft: focus left something in the body. A repaint held for the unlock
+// field is made now; otherwise a width repaint that was held back (see
+// credWidthHold) gets another look.
+function credFocusLeft() {
+  if (credRepaintHeld && credView) renderCredentials(credView);
+  else credRepaintForWidth();
+}
+
+// credWidthHold: what a repaint for a new width must not replace. A Delete
+// confirmation is a question the user is about to answer; a store passphrase is
+// text they have typed, and focus may have left the field (dragging the window or
+// the sidebar does that), so storeUnlockFocused cannot see it. Read from the DOM,
+// so there is no flag to keep in step. This is not credRepaintHeld: that one is
+// released by the body's focusout, and the click on the confirmation's own Cancel
+// or Delete would fire it first and repaint the button away before it was clicked.
+function credWidthHold(host) {
+  if (host.querySelector(".confirm")) return true;
+  return Array.from(host.querySelectorAll(".storepass")).some((i) => !!i.value);
+}
+
+// credRepaintForWidth: repaint from the cached view when the body is in a different
+// mode (tables or cards) than its last paint, unless something is held. A held
+// repaint is asked for again where the hold ends (credDismissConfirm, the body's
+// focusout), and a later resize asks too.
+function credRepaintForWidth() {
+  const host = document.getElementById("creds-body");
+  // A hidden tab reads 0 wide, which credTablesAt takes for "tables": it must not
+  // flip. The observer entry is checked for this; the frame comes later, and the tab
+  // may have been hidden in between.
+  if (!host || !credView || !(host.clientWidth > 0)) return;
+  if (credTableMode() === credPaintedTables) return;
+  if (credWidthHold(host)) return;
+  renderCredentials(credView);
 }
 
 // credWatchWidth: once, repaint from the cached view when the body crosses the
@@ -1331,8 +1364,9 @@ function credWireHeld(host) {
 // because the sidebar is dragged too. Nothing happens per pixel: only a change of
 // mode repaints, and never a refetch. renderCredentials already declines while the
 // Add / Edit view is open and while the unlock field has focus, and the next paint
-// (closing the view, leaving the field) draws the right mode. A hidden tab
-// reports 0 wide: skipped, it must not flip anything.
+// (closing the view, leaving the field) draws the right mode. credRepaintForWidth
+// also waits while a Delete confirmation is open or a passphrase is typed (#123). A
+// hidden tab reports 0 wide: skipped, it must not flip anything.
 //
 // The repaint runs on the next frame, not inside the observer callback: a repaint
 // changes #creds-body's height, which the observer is also watching, and that
@@ -1349,7 +1383,7 @@ function credWatchWidth(host) {
     queued = true;
     later(() => {
       queued = false;
-      if (credView && credTableMode() !== credPaintedTables) renderCredentials(credView);
+      credRepaintForWidth();
     });
   }).observe(host);
 }
@@ -2930,9 +2964,12 @@ function credValueForm(replaceId) {
 function credDismissConfirm(box) {
   const host = box.parentElement;
   box.remove();
-  if (!host || !host.classList.contains("ctab-ex") || host.firstElementChild) return;
-  const row = host.closest("tr.ctab-x");
-  if (row) row.remove();
+  if (host && host.classList.contains("ctab-ex") && !host.firstElementChild) {
+    const row = host.closest("tr.ctab-x");
+    if (row) row.remove();
+  }
+  // The confirmation held back a repaint for a new width: make it now.
+  credRepaintForWidth();
 }
 
 // credConfirmDelete: an inline confirmation in the card or row (no browser
