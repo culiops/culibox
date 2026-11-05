@@ -2,12 +2,14 @@ package statusline
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runIn execs the embedded script with cfg as CLAUDE_CONFIG_DIR and input on stdin.
@@ -25,7 +27,11 @@ func runInEnv(t *testing.T, cfg, input string, env ...string) {
 	if err := os.WriteFile(script, Script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", script)
+	// A hung script must fail the test, not hang it (a FIFO in the snapshot's place).
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", script)
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+cfg, "AGENTBOX_STATUSLINE_DELEGATING=")
 	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(input)

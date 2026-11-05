@@ -45,7 +45,7 @@ done
 
 # Harvest rate limits (side effect) and compute the fallback footer line.
 FALLBACK=$(printf '%s' "$INPUT" | python3 -c '
-import sys, json, time, os
+import sys, json, time, os, stat
 try:
     data = json.load(sys.stdin)
 except Exception:
@@ -82,14 +82,22 @@ if "five_hour" in out or "seven_day" in out:
     # Read-modify-write without a lock: two sessions finishing at the same moment
     # can each start from the same old file, so one bucket may be lost until
     # that session renders again. Accepted: it self-heals on its next render.
+    # The old file sits where a box can write, so it is opened without following
+    # a link and without blocking on a FIFO, and only a regular file of sane size
+    # is read. Any failure means no old buckets.
     buckets = {}
     try:
-        with open(path) as f:
-            old = json.load(f)
-        if isinstance(old.get("by_model"), dict):
-            buckets = {k: v for k, v in old["by_model"].items() if isinstance(v, dict)}
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            st = os.fstat(fd)
+            if stat.S_ISREG(st.st_mode) and st.st_size <= 65536:
+                old = json.loads(os.read(fd, 65536))
+                if isinstance(old.get("by_model"), dict):
+                    buckets = {k: v for k, v in old["by_model"].items() if isinstance(v, dict)}
+        finally:
+            os.close(fd)
     except Exception:
-        pass
+        buckets = {}
     if fam:
         out["model"] = mid[:80]
         out["model_family"] = fam
