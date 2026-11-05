@@ -30,7 +30,7 @@ CuliBox starts shells and agents on your machine, so authentication is never opt
 - Read access can still pull data into a transcript that `ReadOnlyAccess` allows and the session policy does not deny (Lambda code URLs, Athena and Glue results, CloudWatch Logs, and others). Use the broker with a sandbox or lab account for now, not production.
 - The credential broker holds access to your SSO session. Treat the machine running CuliBox accordingly.
 - Persistence covers the daemon restarting, not the whole container or machine being destroyed. After a restart the terminal repaints, but earlier scrollback is not replayed.
-- Codex accounts can be created and stored but cannot launch sessions yet.
+- Claude Code is the supported agent.
 
 
 <a id="host-services"></a>
