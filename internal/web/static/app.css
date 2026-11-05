@@ -550,6 +550,16 @@
     #files-phd.closed #ft-newdir,
     #files-phd.closed #ft-refresh,
     #files-phd.closed #ft-upload { display: none; }
+    /* A read-only listing (the scratch folder) has nothing to create or upload
+       into: filetree.js sets `hidden` on these two. The attribute alone loses at
+       both widths, because an id rule's own display beats the UA [hidden] rule:
+       desktop.css's `#drawer #files-phd #ft-newdir ... { display: revert }` and
+       the phone's `html.mobile-screen-files #files-phd #ft-newdir { display:
+       inline-flex }` below. This is the [hidden] partner rule pattern used above
+       (.rail, .dbd, #agent-seg), with !important because those two out-rank a
+       plain one. It holds at every width, so it sits here, in no media query.
+       #ft-refresh and #ft-palette are not listed: they still work. */
+    #files-phd #ft-newdir[hidden], #files-phd #ft-upload[hidden] { display: none !important; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border);
