@@ -785,14 +785,26 @@ func TestEnsureRefusesWithoutAKey(t *testing.T) {
 	r := &Relay{VM: vm, Docker: d, Image: "agent-box/box:test", Instance: "prod", EgressPort: 9072, BrokerPort: 9071,
 		UID: 501, GID: 20, ReadyTimeout: 300 * time.Millisecond}
 	err := r.Ensure(context.Background(), gw)
-	if err == nil || !strings.Contains(err.Error(), "relay key") {
-		t.Fatalf("err = %v, want a refusal that names the relay key", err)
+	want := "relay: no relay key; CuliBox could not load relay.secret at start (its log says why)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
 	}
 	if vm.reads != 0 {
 		t.Errorf("the VM's firewall was read %d time(s) before the key check", vm.reads)
 	}
 	if len(d.calls) != 0 || len(d.envs) != 0 || len(d.runViaRun) != 0 {
 		t.Errorf("docker was called: %v", d.subcommands())
+	}
+}
+
+// A missing image, instance or port keeps its own message: the zero-key text
+// points at relay.secret, which would send the reader to the wrong place.
+func TestEnsureNamesMissingFieldsApartFromTheKey(t *testing.T) {
+	r := &Relay{VM: &countingVM{}, Docker: &fakeDocker{logs: bothListening}, Instance: "prod", EgressPort: 9072, BrokerPort: 9071,
+		UID: 501, GID: 20, Key: relayTestKey, ReadyTimeout: 300 * time.Millisecond}
+	err := r.Ensure(context.Background(), gw)
+	if err == nil || err.Error() != "relay: image, instance and both ports are required" {
+		t.Fatalf("err = %v, want the missing-fields refusal", err)
 	}
 }
 

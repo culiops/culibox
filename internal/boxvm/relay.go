@@ -281,8 +281,11 @@ func (r *Relay) remove(ctx context.Context) error {
 // egress listener (Ready fails before it), so they keep only the broker until
 // the VM is recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
-	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 || r.Key.IsZero() {
-		return fmt.Errorf("relay: image, instance, both ports and the relay key are required")
+	if r.Key.IsZero() {
+		return fmt.Errorf("relay: no relay key; CuliBox could not load relay.secret at start (its log says why)")
+	}
+	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
+		return fmt.Errorf("relay: image, instance and both ports are required")
 	}
 	if gw.String() != EgressGateway {
 		return fmt.Errorf("relay: network gateway %s is not the provisioned %s", gw, EgressGateway)
