@@ -309,3 +309,64 @@ func TestPerSourceCloseUnblocksAccept(t *testing.T) {
 		t.Fatal("Close did not unblock Accept")
 	}
 }
+
+// cwAddrConn is a conn with a chosen source that records CloseWrite.
+type cwAddrConn struct {
+	*closeWriteConn
+	addr string
+}
+
+func (c *cwAddrConn) RemoteAddr() net.Addr { return fixedAddr(c.addr) }
+
+// net/http sends a FIN and waits (closeWriteAndWait) before it closes a
+// connection after an early error reply (413, 431, 400), so the client reads the
+// reply instead of a reset. It finds CloseWrite by type assertion, so a wrapper
+// that hides it silently drops the FIN.
+func TestPerSourceConnForwardsCloseWrite(t *testing.T) {
+	inner := newChanListener()
+	l := PerSource(inner, 1)
+	c, peer := pipeConn()
+	defer peer.Close()
+	inner.ch <- &cwAddrConn{closeWriteConn: c, addr: "172.29.72.9:40000"}
+	got, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cw, ok := got.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatal("the per-source wrapper hides CloseWrite")
+	}
+	if err := cw.CloseWrite(); err != nil || c.cw.Load() != 1 {
+		t.Fatalf("CloseWrite not forwarded: err=%v n=%d", err, c.cw.Load())
+	}
+	if c.closes.Load() != 0 {
+		t.Fatal("CloseWrite closed the conn")
+	}
+
+	// A conn that was refused is closed and gets no half-close.
+	c2, peer2 := pipeConn()
+	defer peer2.Close()
+	inner.ch <- &cwAddrConn{closeWriteConn: c2, addr: "172.29.72.9:40001"}
+	refused, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refused.(interface{ CloseWrite() error }).CloseWrite(); err == nil || c2.cw.Load() != 0 {
+		t.Fatalf("a refused conn was given a half-close: err=%v n=%d", err, c2.cw.Load())
+	}
+}
+
+func TestPerSourceConnCloseWriteErrorsWhenUnsupported(t *testing.T) {
+	inner := newChanListener()
+	l := PerSource(inner, 1)
+	a, b := net.Pipe() // no CloseWrite
+	defer b.Close()
+	inner.ch <- &addrConn{Conn: a, addr: "172.29.72.9:40000"}
+	got, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := got.(interface{ CloseWrite() error }).CloseWrite(); err == nil {
+		t.Fatal("CloseWrite on a conn without it must fail so the caller falls back to Close")
+	}
+}

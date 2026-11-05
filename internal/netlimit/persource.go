@@ -108,6 +108,22 @@ func (c *perSourceConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
+// CloseWrite forwards the half-close, as the wrapped conn (a PROXY wrapper's)
+// provides it. net/http finds it by type assertion to send a FIN before it
+// closes a connection after an early error reply (413, 431, 400); a wrapper that
+// hid it would let the client see a reset in place of that reply. A refused conn
+// is closed and gets none.
+func (c *perSourceConn) CloseWrite() error {
+	c.admit()
+	if c.refused {
+		return errSourceRefused
+	}
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.New("netlimit: connection does not support CloseWrite")
+}
+
 func (c *perSourceConn) Close() error {
 	err := c.Conn.Close()
 	c.l.mu.Lock()
