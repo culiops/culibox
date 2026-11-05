@@ -51,10 +51,14 @@ Host header is refused.
 
 ## Rotate credentials
 
-Both files sit in the data directory (default `~/.local/share/agent-box`).
+These files sit in the data directory (default `~/.local/share/agent-box`).
 
 - New login token: delete `login.token` and restart.
 - Log out every browser: delete `cookie.secret` and restart.
+- New relay secret (what the box VM's relay shows the proxy and the broker):
+  delete `relay.secret` and restart. The relay is replaced when CuliBox starts
+  with the box VM running, or at the next boxed spawn, so connections open
+  through it drop once.
 
 ## Boxed tier (contained sessions)
 
@@ -158,7 +162,12 @@ These limits are the same as on Linux and are not configurable.
   you do. Sessions still running in boxes after the upgrade lose the egress
   proxy until then (the recreate ends them anyway), so end them first.
   Like any recreate, it refuses while a box is running unless you add `-force`,
-  and CuliBox must be restarted afterwards.
+  and CuliBox must be restarted afterwards. Upgrading to the version with the
+  relay secret (see [Token binding](#token-binding)) replaces the relay once, so
+  connections open through it drop once. On a VM that still needs the recreate
+  above, the old relay is kept and the proxy and the broker refuse its
+  connections, so sessions running across that upgrade also lose the credential
+  broker until you recreate the VM.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
@@ -181,20 +190,24 @@ These limits are the same as on Linux and are not configurable.
 
 ### Token binding
 
-The relay prepends a one-line header (PROXY protocol v1)
-naming the box's own address on every connection it forwards. The proxy and
-the broker on your Mac accept a connection only when that header is present and
-names an address inside the box subnet other than the gateway, so a box's
-token is refused when another box presents it.
+The relay starts every connection it forwards with two lines: a secret, then a
+header (PROXY protocol v1) naming the box's own address. The proxy and the
+broker on your Mac accept a connection only when the secret matches and the
+header names an address inside the box subnet other than the gateway, so a box's
+token is refused when another box presents it. Any other connection is closed
+without an answer, and CuliBox's log counts such refusals at most once a minute.
 
-This is weaker than on Linux, where the box is known from the socket a request
-arrives on. The header itself proves nothing: any process on your Mac, under
-any user account, can connect to the proxy's or the broker's port on
-`127.0.0.1` and write that header, naming any box's address. With a token taken
-from a box, its requests then count as that box's. A process running as you is
-inside your trust boundary anyway; another account on the same Mac is not. A
-secret shared by the relay and the broker would close this gap; it is not built
-yet.
+The secret is 32 random bytes in `relay.secret` in the data directory, readable
+only by you. CuliBox creates it on first start, keeps it across restarts, and
+hands it to the relay container through its environment, never on a command
+line. Another user account on the same Mac therefore cannot write a header the
+proxy or the broker accepts.
+
+This is still weaker than on Linux, where the box is known from the socket a
+request arrives on. A process running as you can read the secret, and with a
+token taken from a box its requests then count as that box's; such a process is
+inside your trust boundary anyway. Anything that can read your Mac's loopback
+traffic, such as root, sees the secret and the session tokens alike.
 
 Before this version, the box VM also let any container on its default Docker
 network (not the egress network) reach the broker's port directly, without the
@@ -222,8 +235,8 @@ presented from the wrong box (403).
 
 What stays: sessions that share a box (the same profile and binding) can read
 each other's token; code planted into the owning box, for example through a
-shared workspace, runs with that box's access; and any process on your Mac,
-under any user account, that holds a session's token (see above).
+shared workspace, runs with that box's access; and a process running as you on
+your Mac that holds a session's token (see above).
 
 ### In-place guard
 
