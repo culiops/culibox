@@ -108,9 +108,15 @@ type boxFacts struct {
 	ProbeRan    bool
 	UserContext error    // boxvm.CheckUserDockerContext result
 	Stopped     []string // this instance's boxes that are not running
-	// ProvisionDrifted: the drift includes the provision script (the egress
-	// INPUT rules), so every boxed spawn is refused until the VM is recreated.
+	// ProvisionDrifted: the drift includes the provision script (the VM's
+	// firewall rules), so every boxed spawn is refused until the VM is recreated.
 	ProvisionDrifted bool
+	// FirewallRan: the VM runs and its live rules were asked for. FirewallReadErr:
+	// they could not be read. FirewallErr: read, and not the rules the relay
+	// needs (boxvm.CheckInputRules, boxvm.CheckDockerUserRules).
+	FirewallRan     bool
+	FirewallErr     error
+	FirewallReadErr error
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -163,7 +169,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
 	if f.Drifted && f.ProvisionDrifted {
-		out = append(out, Result{Fail, "box VM config", "this VM predates egress control for all boxes; run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
+		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
 	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
@@ -190,6 +196,16 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 			out = append(out, Result{Fail, "containment", f.ProbeErr.Error()})
 		} else {
 			out = append(out, Result{Pass, "containment", "a box cannot reach the Mac's loopback services"})
+		}
+	}
+	if f.FirewallRan {
+		switch {
+		case f.FirewallReadErr != nil:
+			out = append(out, Result{Warn, "box VM firewall", "could not read the rules (" + f.FirewallReadErr.Error() + ")"})
+		case f.FirewallErr != nil:
+			out = append(out, Result{Fail, "box VM firewall", f.FirewallErr.Error()})
+		default:
+			out = append(out, Result{Pass, "box VM firewall", "the relay's INPUT rules and the gateway DROP are loaded, and no DOCKER-USER rule passes TCP"})
 		}
 	}
 	stopped()
@@ -234,6 +250,13 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	f.Status, f.StatusErr = vm.Status(ctx)
 	if f.StatusErr != nil || !f.Status.Running {
 		return f
+	}
+	// The same live check the relay runs before every start (relay.go Ensure).
+	f.FirewallRan = true
+	if rules, err := vm.FilterRules(ctx); err != nil {
+		f.FirewallReadErr = err
+	} else if f.FirewallErr = boxvm.CheckInputRules(rules, vc.EgressPort, vc.BrokerPort); f.FirewallErr == nil {
+		f.FirewallErr = boxvm.CheckDockerUserRules(rules)
 	}
 	cli := box.CLIClient{Bin: bin, Args: vc.DockerArgs()}
 	img := boximage.Docker{Bin: bin, Args: vc.DockerArgs()}

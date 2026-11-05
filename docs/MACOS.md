@@ -128,10 +128,10 @@ both of which listen on `127.0.0.1` on the Mac. A profile without a binding
 reaches any public host on port 443 through the proxy ("open" in the steer
 rail); a profile with bindings reaches only the hosts they allow. Rules in the
 VM's firewall let the box subnet reach those two ports and nothing else, and
-keep every other box off the relay. If those rules are missing or out of order,
-agent-box refuses to start a boxed session and tells you that this VM predates
-egress control for all boxes and to run `agent-box box setup -recreate`; it
-checks them again on every boxed spawn.
+keep every other box off the relay. If those rules are missing or out of order
+(a VM from before egress control for all boxes, or one set up for other ports),
+agent-box refuses to start a boxed session and tells you to run
+`agent-box box setup -recreate`; it checks them again on every boxed spawn.
 
 Egress control for every macOS box was verified on a Mac (macOS 14, colima 0.8.1) on 2026-11-02: bound and unbound boxes are fenced, a box's proxy token is refused when used from another box, boxes cannot reach each other, and direct, DNS and Mac loopback connections are blocked.
 
@@ -148,11 +148,15 @@ access on a Mac:
 
 These limits are the same as on Linux and are not configurable.
 
-- After upgrading, run `agent-box box setup -recreate` once. The rules live in
-  the VM's provisioning, so an existing VM has none until it is recreated, and
-  from this version that applies to every box, not only bound ones;
-  `agent-box doctor` fails "this VM predates egress control for all boxes" and
-  every boxed spawn is refused until you do.
+- After upgrading, run `agent-box box setup -recreate` once when doctor asks
+  for it. The rules live in the VM's provisioning, so an existing VM keeps the
+  old ones until it is recreated: a VM set up before egress control for all
+  boxes has none, and one set up before the broker fix (see
+  [Token binding](#token-binding)) still lets containers on the VM's default
+  network reach the broker. `agent-box doctor` fails ("box VM config", and
+  "box VM firewall" while the VM runs) and every boxed spawn is refused until
+  you do. Sessions still running in boxes after the upgrade lose the egress
+  proxy until then (the recreate ends them anyway), so end them first.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
@@ -181,20 +185,45 @@ The relay prepends a one-line header (PROXY protocol v1)
 naming the box's own address on every connection it forwards. The proxy and
 the broker on your Mac accept a connection only when that header is present and
 names an address inside the box subnet other than the gateway, so a box's
-proxy token works only from that box, as on Linux. Residual risk: a process on
-your Mac running as your user can connect to `127.0.0.1` and write that header
-itself. It already runs as you, inside your trust boundary, so this is not an
-additional exposure.
+token is refused when another box presents it.
 
-Not yet bound to the box: the credential broker's own session token, on macOS
-and on Linux. On macOS the broker checks only that a request comes from the box
-subnet; on Linux every bound box reaches it over the same socket. Neither checks
-that the request comes from the box the token was issued to. Another box that
-gets hold of a bound box's broker token (on Linux any bound box, on macOS any
-box) can therefore ask the broker for that session's credentials (AWS role sessions, GitHub installation tokens, static
-tokens). The exposure stays between boxes of one CuliBox, under one user; it is
-not reachable from outside. Until it is fixed, do not run a profile you do not
-trust next to a bound profile whose credentials are broader than its own.
+This is weaker than on Linux, where the box is known from the socket a request
+arrives on. The header itself proves nothing: any process on your Mac, under
+any user account, can connect to the proxy's or the broker's port on
+`127.0.0.1` and write that header, naming any box's address. With a token taken
+from a box, its requests then count as that box's. A process running as you is
+inside your trust boundary anyway; another account on the same Mac is not. A
+secret shared by the relay and the broker would close this gap; it is not built
+yet.
+
+Before this version, the box VM also let any container on its default Docker
+network (not the egress network) reach the broker's port directly, without the
+relay, and so write the header too. A VM set up before this version keeps that
+firewall rule until it is recreated: `agent-box doctor` fails "box VM
+firewall", and every boxed spawn is refused until you run
+`agent-box box setup -recreate`.
+
+The credential broker accepts a session's token only from the box that session
+runs in. On macOS it compares the address in the relay's header with that box's
+address on the egress network. The address comes from docker (the VM's docker),
+is kept in a cache the egress proxy shares, and is looked up again at most every
+10 seconds when a request does not match. If the broker cannot find out, it
+refuses. On Linux each bound box has its own broker socket, so the box is known
+from the socket the request arrives on.
+
+A token presented from any other box, bound or unbound, is refused with the same
+message as any other refusal and audited as `denied_box`. An unbound box on macOS
+can open a connection to the broker, but its address never matches a bound
+session's box, so its requests are refused. The broker caps the connections it
+holds open, in total and for any one box, and closes idle ones. A refusal for the wrong box can take as long as the lookup timeout
+(5 seconds) when docker is slow. That delay is a liveness hint only: a token
+that does not verify already gets a different refusal (401) from a valid token
+presented from the wrong box (403).
+
+What stays: sessions that share a box (the same profile and binding) can read
+each other's token; code planted into the owning box, for example through a
+shared workspace, runs with that box's access; and any process on your Mac,
+under any user account, that holds a session's token (see above).
 
 ### In-place guard
 
@@ -220,6 +249,33 @@ a git config `include`, and so on). What it covers and what it does not is in
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.
+
+### Context paths
+
+`context_paths` (see [Reading other repos](CONTEXT-PATHS.md)) makes the same
+check as on Linux that the mounted path is the one that was checked, with the
+identity read a different way. An inode number on the Mac is not the one the
+box sees through the VM's file share, so on macOS the identity is read inside
+the VM, by a short script run over one `colima ssh` per spawn with context
+paths. It enters the parent directory (`cd -P`) and refuses unless that
+directory's real path is the listed parent, so a symlink in any parent is
+refused. It then reads the last component inside that directory with one
+`lstat` (type and identity together) and refuses a symlink, a FIFO, a socket, a
+device or anything else that is not a directory or regular file. It is a shell
+script (`cd -P`, `pwd -P`, `stat`), not the descriptor walk Linux uses, and a
+real directory moved into place before it reads is taken as the path you
+listed.
+
+- Measured on a Mac (colima 0.8.1, virtiofs): the device and inode the VM
+  reports for a path are the ones the box's bind mount shows, and are stable
+  across repeat reads.
+- Tested only on Linux, with dash and GNU coreutils like the VM's: the script against a
+  parent directory flipped between a directory and a symlink, and against the last
+  component exchanged for a FIFO or a symlink, each in a loop.
+- Not yet tested on a Mac: that `colima ssh` passes the script to the VM
+  unchanged (if it does not, spawns with context paths are refused, not let
+  through), the script on the VM itself, and that the identity stays stable
+  across a VM restart.
 
 ## Behind a TLS-inspecting proxy
 

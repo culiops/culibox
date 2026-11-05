@@ -89,6 +89,7 @@ func ghSetup(t *testing.T, sessions map[string]SessionView) (*Broker, *fakeGH, *
 
 func ghCall(b *Broker, tok, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/v1/github/token", strings.NewReader(body))
+	r = r.WithContext(withBox(r.Context(), testBox))
 	if tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)
 	}

@@ -274,8 +274,8 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	if !found || !sv.Live {
 		b.Forget(sid)
 	}
-	if reason := refusalReason(sv, found, nonce, kindGitHub); reason != "" {
-		b.recordDenied(Row{Time: now, SessionID: sid, Provider: ProviderGitHub, Outcome: OutcomeDeniedSession, Error: reason})
+	if o, why := b.refusal(r, sv, found, nonce, kindGitHub); o != "" {
+		b.recordDenied(Row{Time: now, SessionID: sid, Provider: ProviderGitHub, Outcome: o, Error: why})
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding") // same text for every reason: no oracle to the box
 		return
 	}
@@ -407,7 +407,8 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// catches a new spawn under the same id. lookup runs before b.mu, as it
 	// does everywhere else.
 	cur, curFound := b.lookup(sid)
-	stillLive := refusalReason(cur, curFound, nonce, kindGitHub) == ""
+	o, _ := b.refusal(r, cur, curFound, nonce, kindGitHub) // the same judge, with the box this request came from
+	stillLive := o == ""
 	b.mu.Lock()
 	if fl.dead || !stillLive || b.closing {
 		closing := b.closing

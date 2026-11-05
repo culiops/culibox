@@ -523,3 +523,66 @@ func TestWrapAppliesYieldAfterCloneAndGuardMounts(t *testing.T) {
 		t.Errorf("an uncovered yield mount and the bundle must stay: %q", args)
 	}
 }
+
+// #73: a bound spawn mounts its box's own broker socket directory at a NEW
+// in-box path (broker.SockBoxDir). A box created before that change mounts the
+// shared broker/sock directory at the old path. reuseMounts compares in-box
+// destinations only, so the new path is what keeps a pre-upgrade box from being
+// reused silently for a new bound spawn: a live one refuses the spawn and names
+// the missing mount, an idle one is recreated.
+func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
+	// The pre-#73 and the current broker.SockBoxDir (internal/broker cannot be
+	// imported from here).
+	old := Mount{Host: "/s/broker/sock", Box: "/opt/agentbox-sock"}
+	curFor := func(m *Manager, dir string) Mount {
+		name, err := m.BoxName(dir, BoxKey{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Mount{Host: BrokerDir(m.opts.StateRoot, name), Box: "/opt/agentbox-broker"}
+	}
+
+	t.Run("live", func(t *testing.T) {
+		m, f := newTestManagerWithFake(t)
+		dir := t.TempDir()
+		ctx := context.Background()
+		if _, _, _, err := m.Wrap(ctx, dir, "old-1", BoxKey{}, []string{"bash"}, nil, []Mount{old}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{curFor(m, dir)})
+		if !errors.Is(err, ErrBoxUnavailable) {
+			t.Fatalf("want ErrBoxUnavailable for a live pre-#73 box, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "/opt/agentbox-broker") {
+			t.Fatalf("the refusal must name the missing mount: %v", err)
+		}
+		if f.stops() != 0 {
+			t.Fatalf("a box with a live session must never be removed: stops=%d", f.stops())
+		}
+	})
+
+	t.Run("idle", func(t *testing.T) {
+		m, f := newTestManagerWithFake(t)
+		dir := t.TempDir()
+		ctx := context.Background()
+		_, _, name, err := m.Wrap(ctx, dir, "old-1", BoxKey{}, []string{"bash"}, nil, []Mount{old})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.ReleaseBox(name)
+		_, _, name2, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{curFor(m, dir)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name2 != name {
+			t.Fatalf("recreating must keep the box name: %s != %s", name2, name)
+		}
+		if f.stops() != 1 || f.runs() != 2 {
+			t.Fatalf("want the idle pre-#73 box removed and recreated: stops=%d runs=%d", f.stops(), f.runs())
+		}
+		last := f.runArgs[len(f.runArgs)-1]
+		if !hasDst(last, curFor(m, dir).Box) || hasDst(last, old.Box) {
+			t.Fatalf("recreated box must mount %s and not %s: %v", curFor(m, dir).Box, old.Box, last)
+		}
+	})
+}

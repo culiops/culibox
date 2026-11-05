@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +23,20 @@ import (
 )
 
 const wireNonce = "0123456789abcdef0123456789abcdef"
+
+// wireBox is the box the wire tests' sessions run in.
+const wireBox = "ab-box-0123456789ab"
+
+// boxSock takes svc's broker socket for box (what a bound spawn does) and
+// returns its path. The reference is never released: Stop closes every socket.
+func boxSock(t *testing.T, svc *brokerService, box string) string {
+	t.Helper()
+	m, err := svc.Hooks.AcquireBox(box)
+	if err != nil || len(m) != 1 {
+		t.Fatalf("AcquireBox(%s) = %+v, %v", box, m, err)
+	}
+	return filepath.Join(m[0].Host, "s")
+}
 
 func wireBinding() *config.AWSBinding {
 	return &config.AWSBinding{SourceProfile: "no-such-profile", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent",
@@ -54,10 +70,10 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	dataDir := shortRoot(t) // holds broker/sock/broker.sock
+	dataDir := shortRoot(t) // holds broker/sock/broker.sock and broker/b/<hex>/s
 
 	sessions := map[string]*session.Session{
-		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: wireNonce},
+		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, AWS: wireBinding(), BrokerNonce: wireNonce},
 		"claude-4": {ID: "claude-4", Agent: "claude", Runtime: config.RuntimeHost, AWS: wireBinding(), BrokerNonce: wireNonce},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
@@ -85,9 +101,15 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "audit.db")); err != nil {
 		t.Fatalf("audit.db: %v", err)
 	}
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	if fi, err := os.Stat(sock); err != nil || fi.Mode().Perm() != 0o600 || fi.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("socket: %v %v", fi, err)
+	}
+	// The shared socket (the one boxes from before the per-box sockets mount)
+	// still exists too.
+	shared := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	if fi, err := os.Stat(shared); err != nil || fi.Mode().Perm() != 0o600 || fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("shared socket: %v %v", fi, err)
 	}
 
 	// The handler is attached and signs with the persisted secret.
@@ -119,10 +141,14 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 
 	svc.Stop(context.Background())
 	stopped = true
-	c, err := net.Dial("unix", sock)
-	if err == nil {
-		c.Close()
-		t.Error("broker still accepting after Stop")
+	for _, p := range []string{sock, shared} {
+		if c, err := net.Dial("unix", p); err == nil {
+			c.Close()
+			t.Errorf("broker still accepting on %s after Stop", p)
+		}
+	}
+	if _, err := os.Lstat(sock); err == nil {
+		t.Error("the per-box socket file survived Stop")
 	}
 }
 
@@ -362,7 +388,7 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 		t.Skip("unix socket transport")
 	}
 	sessions := map[string]*session.Session{
-		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce,
+		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce,
 			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}},
 	}
 	get := func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok }
@@ -389,7 +415,7 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer svc.Stop(context.Background())
-			sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+			sock := boxSock(t, svc, wireBox)
 			code, body := postGHToken(t, sock, svc.Hooks.Token("gh-1", wireNonce))
 			if code != tc.want {
 				t.Fatalf("status %d (%s), want %d", code, body, tc.want)
@@ -436,7 +462,7 @@ func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
 	}
 	kept, old := tokenEntry("kept", valFile), tokenEntry("old", valFile)
 	sessions := map[string]*session.Session{
-		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{kept, old}},
+		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{kept, old}},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
@@ -445,7 +471,7 @@ func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Stop(context.Background())
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	tok := svc.Hooks.Token("tok-1", wireNonce)
 
 	if code, body := postStaticToken(t, sock, tok, "kept"); code != http.StatusOK || !strings.Contains(body, "tok-SECRET-1234") {
@@ -513,5 +539,257 @@ func TestBrokerSessionViewCarriesAWSConns(t *testing.T) {
 	v := brokerSessionView(s, definedTokens(nil))
 	if v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" || !v.Boxed || v.Nonce != wireNonce {
 		t.Fatalf("view = %+v", v)
+	}
+}
+
+func TestBrokerSessionViewCarriesBox(t *testing.T) {
+	s := boundSess("aws-1")
+	s.Box = wireBox
+	s.BrokerNonce = wireNonce
+	if v := brokerSessionView(s, definedTokens(nil)); v.Box != wireBox {
+		t.Fatalf("view.Box = %q, want the session's box %q: the broker compares it with the presenting box", v.Box, wireBox)
+	}
+	s.Box = ""
+	if v := brokerSessionView(s, definedTokens(nil)); v.Box != "" {
+		t.Fatalf("view.Box = %q for a session with no box", v.Box)
+	}
+}
+
+// postCredsBody is postCreds with the reply body.
+func postCredsBody(t *testing.T, sock, token string) (int, string) {
+	t.Helper()
+	c := &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}, Timeout: 10 * time.Second}
+	req, _ := http.NewRequest(http.MethodPost, "http://broker/v1/credentials", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// boxWireBroker starts a broker with one bound session, claude-3, in wireBox.
+func boxWireBroker(t *testing.T) (*brokerService, string) {
+	t.Helper()
+	dataDir := shortRoot(t)
+	sessions := map[string]*session.Session{
+		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, AWS: wireBinding(), BrokerNonce: wireNonce},
+	}
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(id string) (session.Info, bool) {
+			if _, ok := sessions[id]; !ok {
+				return session.Info{}, false
+			}
+			return session.Info{ID: id, AWS: &session.AWSInfo{Label: "x"}}, true
+		}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Stop(context.Background()) })
+	return svc, dataDir
+}
+
+// The box a token is presented from is the box whose socket it arrives on: the
+// token of a session in wireBox is refused on another box's socket, with an
+// audit row the session's Access tab shows, and no credential.
+func TestStartBrokerRefusesATokenOnAnotherBoxsSocket(t *testing.T) {
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	svc, _ := boxWireBroker(t)
+
+	tok := svc.Hooks.Token("claude-3", wireNonce)
+	other := boxSock(t, svc, "ab-box-bbbbbbbbbbbb")
+	if got := postCreds(t, other, tok); got != http.StatusForbidden {
+		t.Fatalf("a token presented on another box's socket: %d want 403", got)
+	}
+	st, ok := svc.Status.AWSStatus("claude-3")
+	if !ok {
+		t.Fatal("no status for a bound session")
+	}
+	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), "denied_box") {
+		t.Fatalf("the refusal is not audited as denied_box: %s", raw)
+	}
+	// The owning box's socket passes the box check and reaches the minter,
+	// which fails on the missing source profile: 502, not 403.
+	if got := postCreds(t, boxSock(t, svc, wireBox), tok); got != http.StatusBadGateway {
+		t.Fatalf("the owning box: %d want 502 from the minter", got)
+	}
+}
+
+// A box started before the per-box sockets still mounts the shared one. It is
+// refused with a message that says to respawn, and the row says why.
+func TestStartBrokerSharedSocketTellsTheBoxToRespawn(t *testing.T) {
+	svc, dataDir := boxWireBroker(t)
+
+	shared := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	code, body := postCredsBody(t, shared, svc.Hooks.Token("claude-3", wireNonce))
+	if code != http.StatusForbidden || !strings.Contains(body, "respawn this session") {
+		t.Fatalf("shared socket: %d %q, want 403 with the respawn message", code, body)
+	}
+	st, ok := svc.Status.AWSStatus("claude-3")
+	if !ok {
+		t.Fatal("no status for a bound session")
+	}
+	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), "denied_box") {
+		t.Fatalf("the refusal is not audited as denied_box: %s", raw)
+	}
+}
+
+// failListener is a listener whose Accept fails for good (not a close), the
+// way a socket that went bad would; box makes it look like a per-box listener.
+type failListener struct {
+	box string
+	err error
+}
+
+func (f failListener) Accept() (net.Conn, error) { return nil, f.err }
+func (f failListener) Close() error              { return nil }
+func (f failListener) Addr() net.Addr            { return &net.UnixAddr{Name: "test", Net: "unix"} }
+
+type namedFailListener struct{ failListener }
+
+func (f namedFailListener) BoxName() string { return f.box }
+
+// captureLog returns what log.Printf wrote while fn ran.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	fn()
+	return buf.String()
+}
+
+// A per-box socket that dies on its own is logged with its box, so the one
+// broken box can be told from a broker that stopped; fail closed either way (a
+// listener that is not serving answers nobody).
+func TestServeBrokerNamesTheBoxWhenItsSocketStops(t *testing.T) {
+	boom := errors.New("accept failed for good")
+	srv := &http.Server{}
+	got := captureLog(t, func() { serveBroker(srv, namedFailListener{failListener{box: wireBox, err: boom}}) })
+	if !strings.Contains(got, "broker socket for box "+wireBox+" stopped") || !strings.Contains(got, boom.Error()) {
+		t.Fatalf("log = %q, want the per-box message naming %s", got, wireBox)
+	}
+	if strings.Contains(got, "credential broker stopped") {
+		t.Fatalf("a per-box socket stopping is not the broker stopping: %q", got)
+	}
+
+	// Any other listener (the shared socket, the darwin TCP one) keeps the old message.
+	got = captureLog(t, func() { serveBroker(srv, failListener{err: boom}) })
+	if !strings.Contains(got, "credential broker stopped") || strings.Contains(got, "broker socket for box") {
+		t.Fatalf("log = %q, want the broker message", got)
+	}
+
+	// A listener that was closed (the box's last session left, or shutdown) is not an error.
+	for _, closed := range []error{http.ErrServerClosed, net.ErrClosed} {
+		got = captureLog(t, func() { serveBroker(srv, namedFailListener{failListener{box: wireBox, err: closed}}) })
+		if got != "" {
+			t.Fatalf("a closed listener (%v) was logged: %q", closed, got)
+		}
+	}
+}
+
+func TestBrokerServerTimeoutsAreSet(t *testing.T) {
+	srv := newBrokerServer(http.NotFoundHandler())
+	if srv.IdleTimeout != 30*time.Second || srv.ReadTimeout != 15*time.Second ||
+		srv.ReadHeaderTimeout != 5*time.Second || srv.WriteTimeout != 30*time.Second || srv.BaseContext == nil {
+		t.Fatalf("server = idle %v read %v header %v write %v basecontext %v",
+			srv.IdleTimeout, srv.ReadTimeout, srv.ReadHeaderTimeout, srv.WriteTimeout, srv.BaseContext != nil)
+	}
+}
+
+// shrinkBrokerTimeouts makes the broker's idle and read timeouts short for one test.
+func shrinkBrokerTimeouts(t *testing.T, idle, read time.Duration) {
+	t.Helper()
+	oldIdle, oldRead := brokerIdleTimeout, brokerReadTimeout
+	brokerIdleTimeout, brokerReadTimeout = idle, read
+	t.Cleanup(func() { brokerIdleTimeout, brokerReadTimeout = oldIdle, oldRead })
+}
+
+// closedWithin reports whether the server ends c within d (EOF or a reset).
+func closedWithin(c net.Conn, d time.Duration) bool {
+	c.SetReadDeadline(time.Now().Add(d))
+	buf := make([]byte, 512)
+	for {
+		if _, err := c.Read(buf); err != nil {
+			var ne net.Error
+			return !(errors.As(err, &ne) && ne.Timeout())
+		}
+	}
+}
+
+// A connection whose request was answered is not held for ever: on macOS one box
+// opening many of them and idling would otherwise stall every other box.
+func TestBrokerServerClosesAnIdleKeepAliveConnection(t *testing.T) {
+	shrinkBrokerTimeouts(t, 150*time.Millisecond, 5*time.Second)
+	svc, _ := boxWireBroker(t)
+	c, err := net.DialTimeout("unix", boxSock(t, svc, wireBox), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "POST /v1/credentials HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer garbage\r\nContent-Length: 0\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "POST"})
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("first request: %v %v", resp, err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if !closedWithin(c, 3*time.Second) {
+		t.Fatal("the broker kept an idle keep-alive connection open past its idle timeout")
+	}
+}
+
+// A client that sends its headers and then stalls the body is cut off.
+func TestBrokerServerCutsAStalledRequestBody(t *testing.T) {
+	shrinkBrokerTimeouts(t, 30*time.Second, 200*time.Millisecond)
+	svc, _ := boxWireBroker(t)
+	c, err := net.DialTimeout("unix", boxSock(t, svc, wireBox), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "POST /v1/static/token HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer garbage\r\nContent-Length: 100\r\n\r\n{")
+	if !closedWithin(c, 3*time.Second) {
+		t.Fatal("the broker kept a connection with a stalled request body open past its read timeout")
+	}
+}
+
+// The read timeout bounds receiving a request, not answering it: a mint that
+// takes far longer than it must still finish, with its request context alive.
+// (This is the measurement the timeout's value rests on, see newBrokerServer.)
+func TestBrokerServerReadTimeoutDoesNotCutASlowHandler(t *testing.T) {
+	shrinkBrokerTimeouts(t, 30*time.Second, 150*time.Millisecond)
+	ctxErr := make(chan error, 1)
+	srv := newBrokerServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(700 * time.Millisecond) // several read timeouts: a slow STS or GitHub mint
+		ctxErr <- r.Context().Err()
+		io.WriteString(w, "minted")
+	}))
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(l)
+	defer srv.Close()
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Post("http://"+l.Addr().String(), "application/json", strings.NewReader(`{"a":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "minted" {
+		t.Fatalf("reply %q", b)
+	}
+	if err := <-ctxErr; err != nil {
+		t.Fatalf("the request context was cancelled during a slow handler: %v", err)
 	}
 }

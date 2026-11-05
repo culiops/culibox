@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
@@ -116,6 +118,17 @@ func warnBridgeBoxes(ctx context.Context, d egress.Docker, instance, network str
 	}
 }
 
+// newBoxAddrs is the box-address cache for one instance: a box's address on that
+// instance's egress network, from docker inspect through d (on macOS the client
+// pinned to the colima VM). The lookups run under the daemon's own context with
+// their own timeout (boxaddr.LookupTimeout), never under a request's.
+func newBoxAddrs(d egress.Docker, instance string) *boxaddr.Cache {
+	network := egress.NetworkName(instance)
+	return boxaddr.New(context.Background(), func(ctx context.Context, name string) (netip.Addr, error) {
+		return egress.BoxAddr(ctx, d, name, network)
+	}, time.Now)
+}
+
 // startEgress builds the egress proxy: the persisted HMAC secret (its own file,
 // not the broker's), the audit store, and the lazy network + listener service.
 // Nothing listens yet unless the egress network already exists (a restored
@@ -137,12 +150,13 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	if err != nil {
 		return nil, fmt.Errorf("egress audit store: %w", err)
 	}
-	proxy := egress.New(egress.Options{Secret: sec.Secret(), Lookup: egressLookup(get), Audit: audit})
+	proxy := egress.New(egress.Options{Secret: sec.Secret(), Lookup: egressLookup(get), Audit: audit, BoxAddrs: layer.addrs})
 	opts := egressServiceOptions(cfg, goos, proxy, layer.cli)
 	if goos == "darwin" && layer.vm != nil {
 		// Ready runs this on every call, under its lock: the relay is started
-		// only after the VM's INPUT rules are read back live, and a Ready that
-		// fails here refuses the spawn. Nothing else may call Ensure.
+		// only after the VM's firewall rules (INPUT and DOCKER-USER) are read back
+		// live, and a Ready that fails here refuses the spawn. Nothing else may
+		// call Ensure.
 		relay := &boxvm.Relay{VM: layer.vm, Docker: layer.cli, Image: layer.image, Instance: cfg.BoxInstance(),
 			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid()}
 		opts.AfterNetwork = func(ctx context.Context, n egress.Net) error { return relay.Ensure(ctx, n.Gateway) }

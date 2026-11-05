@@ -9,6 +9,7 @@ import (
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
@@ -54,6 +55,12 @@ type boxLayer struct {
 	goos       string // runtime.GOOS as the layer was built
 	dataDir    string // the absolute data dir, for the store doctor and box setup read
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
+	// addrs is the one box-address cache the egress proxy and the credential
+	// broker share (both OSes). One instance on purpose: the proxy drops a box's
+	// entry when its session ends or a probe re-verifies a recreated box, and a
+	// second cache would never be cleared. nil only for a layer built by hand in
+	// a test.
+	addrs *boxaddr.Cache
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 }
@@ -99,6 +106,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		l.dockerArgs = vc.DockerArgs()
 	}
 	l.cli = box.CLIClient{Bin: bin, Args: l.dockerArgs}
+	l.addrs = newBoxAddrs(l.cli, cfg.BoxInstance())
 	l.img = boximage.Docker{Bin: bin, Args: l.dockerArgs}
 	o := l.options(cfg)
 	o.Protected = protected
@@ -144,6 +152,9 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 	if l.vm != nil {
 		o.Prepare = l.prepare
 		o.Verify = l.verify
+		// #72: the context-path identity, read in the VM (Linux records it on the
+		// host and needs no hook).
+		o.VMIDs = l.vmIDs
 		o.Shared = l.vm.Config().Mounts()
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
@@ -211,6 +222,28 @@ func (l *boxLayer) verify(ctx context.Context, name string) error {
 	return nil
 }
 
+// vmIDsTimeout bounds the VM identity read of a boxed spawn's context paths.
+// The box manager runs it under its operation lock, so a wedged `colima ssh`
+// must not hold every other spawn. A var so a test can shorten it.
+var vmIDsTimeout = 30 * time.Second
+
+// vmIDs is box.Options.VMIDs on macOS: the identity of each path as the VM
+// sees it, which is the one the box's bind mount shows (a Mac inode number is
+// not). It only asks; a stopped VM is an error, never a start.
+func (l *boxLayer) vmIDs(ctx context.Context, paths []string) ([]box.FileID, error) {
+	ctx, cancel := context.WithTimeout(ctx, vmIDsTimeout)
+	defer cancel()
+	ids, err := l.vm.PathIDs(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]box.FileID, len(ids))
+	for i, id := range ids {
+		out[i] = box.FileID{Dev: id.Dev, Ino: id.Ino}
+	}
+	return out, nil
+}
+
 // execNode runs `node -e <script>` in the named box and returns its stdout.
 func (l *boxLayer) execNode(name string) boxvm.ExecFunc {
 	return func(ctx context.Context, script string) (string, error) {
@@ -270,7 +303,7 @@ func (l *boxLayer) recreateHint() string {
 	if l.vm == nil || !l.vm.Drifted() {
 		return ""
 	}
-	return " (the box VM's provision config is out of date, so its egress rules may be missing; run `agent-box box setup -recreate`)"
+	return " (the box VM's provision config is out of date, so its firewall rules may be too; run `agent-box box setup -recreate`)"
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it

@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -75,7 +74,7 @@ func TestBrokerStopRevokesAll(t *testing.T) {
 	}
 	dataDir := shortRoot(t)
 	sessions := map[string]*session.Session{
-		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce,
+		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce,
 			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
@@ -90,7 +89,7 @@ func TestBrokerStopRevokesAll(t *testing.T) {
 			svc.Stop(context.Background())
 		}
 	}()
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	fm := &stopMinter{sock: sock}
 	svc.Hooks.B.SetGitHub(fm)
 

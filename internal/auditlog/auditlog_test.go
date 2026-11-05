@@ -317,7 +317,7 @@ func TestSummaryCounts(t *testing.T) {
 	s := newSeeder(t)
 	const ts = 5000
 	for _, o := range []broker.Outcome{broker.OutcomeMinted, broker.OutcomeMinted, broker.OutcomeFetched,
-		broker.OutcomeDeniedToken, broker.OutcomeDeniedSession, broker.OutcomeDeniedScope,
+		broker.OutcomeDeniedToken, broker.OutcomeDeniedSession, broker.OutcomeDeniedScope, broker.OutcomeDeniedBox,
 		broker.OutcomeSSOExpired, broker.OutcomeProbeMinted, broker.OutcomeRevoked} {
 		s.credential(ts, "c1", o)
 	}
@@ -340,7 +340,7 @@ func TestSummaryCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Summary{Issued: 3, Refused: 4, Elevations: 2, EgressAllowed: 2, EgressDenied: 6, Sessions: []string{"c1"}}
+	want := Summary{Issued: 3, Refused: 5, Elevations: 2, EgressAllowed: 2, EgressDenied: 6, Sessions: []string{"c1"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/awsprobe"
-	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/sesstoken"
 )
@@ -17,7 +17,7 @@ import (
 func testHooks(t *testing.T) Hooks {
 	t.Helper()
 	return Hooks{B: New(secret, nil, nil, &memRec{}), StateRoot: t.TempDir(),
-		EP: Endpoint{BoxURL: "unix:///opt/agentbox-sock/broker.sock", Mounts: []box.Mount{{Host: "/s", Box: SockBoxDir}}}}
+		EP: Endpoint{BoxURL: "unix:///opt/agentbox-broker/s"}}
 }
 
 func TestHooksBoxFor(t *testing.T) {
@@ -26,16 +26,64 @@ func TestHooksBoxFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mounts) != 2 || mounts[0].Box != BoxDir || mounts[1].Box != SockBoxDir {
-		t.Fatalf("mounts %+v", mounts)
+	if len(mounts) != 1 || mounts[0].Box != BoxDir {
+		t.Fatalf("mounts %+v: BoxFor returns the binding dir only; the box's own socket comes from AcquireBox", mounts)
 	}
-	if !slices.Contains(env, "AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock") {
+	if !slices.Contains(env, "AGENTBOX_BROKER=unix:///opt/agentbox-broker/s") {
 		t.Fatalf("env %q", env)
 	}
-	// BoxFor must not write into the endpoint's own mount slice.
-	if len(h.EP.Mounts) != 1 {
-		t.Fatalf("endpoint mounts changed: %+v", h.EP.Mounts)
+}
+
+// A bound spawn takes its box's own socket: Linux hands out the mount and a
+// reference, and every Acquire is paired with one Release.
+func TestHooksAcquireBoxLinux(t *testing.T) {
+	root := shortDir(t)
+	ep, err := Listen("linux", root, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer ep.Listener.Close()
+	ep.Boxes.Start(func(net.Listener) {})
+	defer ep.Boxes.Close()
+	h := Hooks{StateRoot: root, EP: ep}
+	ms, err := h.AcquireBox(bx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 || ms[0].Box != SockBoxDir || ms[0].Host != filepath.Dir(perBoxSock(root, bx)) {
+		t.Fatalf("mounts %+v", ms)
+	}
+	if err := h.AdoptBox(bx); err != nil {
+		t.Fatal(err)
+	}
+	h.ReleaseBox(bx)
+	if _, err := os.Lstat(perBoxSock(root, bx)); err != nil {
+		t.Fatalf("the socket closed with one reference left: %v", err)
+	}
+	h.ReleaseBox(bx)
+	if _, err := os.Lstat(perBoxSock(root, bx)); err == nil {
+		t.Fatal("the socket survived its last release")
+	}
+	if _, err := h.AcquireBox("not-a-box"); err == nil {
+		t.Fatal("AcquireBox accepted a name that is not a box")
+	}
+	if err := h.AdoptBox("not-a-box"); err == nil {
+		t.Fatal("AdoptBox accepted a name that is not a box")
+	}
+}
+
+// On macOS the box is identified per request (the relay's PROXY source), so
+// there is nothing to mount and nothing to hold.
+func TestHooksAcquireBoxDarwinIsNoop(t *testing.T) {
+	h := Hooks{EP: Endpoint{}} // Boxes == nil
+	ms, err := h.AcquireBox(bx)
+	if ms != nil || err != nil {
+		t.Fatalf("AcquireBox = %v, %v; want nil, nil", ms, err)
+	}
+	if err := h.AdoptBox(bx); err != nil {
+		t.Fatalf("AdoptBox = %v", err)
+	}
+	h.ReleaseBox(bx) // must not panic
 }
 
 func TestHooksBoxForRefusesAnInvalidBinding(t *testing.T) {
@@ -107,7 +155,7 @@ func TestHooksBoxForGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mounts) != 2 || mounts[0].Box != BoxDir {
+	if len(mounts) != 1 || mounts[0].Box != BoxDir {
 		t.Fatalf("mounts %+v", mounts)
 	}
 	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(env, "AGENTBOX_GH_OWNERS=culiops,CuliOps2") {

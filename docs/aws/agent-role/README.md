@@ -252,6 +252,9 @@ the agent can do no harm:
 
 ## Known limits between sessions
 
+- **Between boxes:** a broker token works only from the box its session runs in.
+  Presented from any other box it is refused and audited as `denied_box`, so a
+  token that leaks into another box is no use there.
 - **Within one box:** processes share a uid and can read each other's
   `/proc/*/environ`, so one session can present another's broker token. Attribution
   (the audit and CloudTrail `SourceIdentity`) is best-effort between sessions that share a

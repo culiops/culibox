@@ -15,7 +15,7 @@ import (
 )
 
 func ok() boxFacts {
-	return boxFacts{SetUp: true, MacOSMajor: 14, ColimaVer: "0.8.1", ServerArch: "arm64", ProbeRan: true, ImageName: "culiops/agent-box:base",
+	return boxFacts{SetUp: true, MacOSMajor: 14, ColimaVer: "0.8.1", ServerArch: "arm64", ProbeRan: true, FirewallRan: true, ImageName: "culiops/agent-box:base",
 		Status: boxvm.Status{Running: true, MountType: "virtiofs", Driver: "macOS Virtualization.Framework"},
 		Image:  boximage.ImageState{Present: true, Arch: "arm64", Hash: boximage.Hash()}}
 }
@@ -57,8 +57,14 @@ func TestBoxTierRows(t *testing.T) {
 		{"stopped", func(f *boxFacts) { f.Status.Running = false; f.ProbeRan = false }, Pass, "first boxed spawn"},
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
-		{"provision drift fails with the egress reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
-			`this VM predates egress control for all boxes; run "agent-box box setup -recreate"`},
+		{"provision drift fails with the firewall reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
+			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "agent-box box setup -recreate"`},
+		{"stale VM firewall fails", func(f *boxFacts) {
+			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `agent-box box setup -recreate`")
+		}, Fail, "FAIL box VM firewall: the box VM's firewall lets containers"},
+		{"unreadable VM firewall warns", func(f *boxFacts) {
+			f.FirewallReadErr = errors.New("reading the box VM's firewall rules: exit status 255")
+		}, Warn, "WARN box VM firewall: could not read the rules (reading the box VM's firewall rules: exit status 255)"},
 		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},
@@ -96,6 +102,19 @@ func TestBoxTierUncheckedContextIsNotAPass(t *testing.T) {
 		if r.Check == "docker context" && r.Status != Warn {
 			t.Fatalf("unchecked context must WARN: %+v", r)
 		}
+	}
+}
+
+// The live firewall check has its own row when it ran, and none when it did
+// not (VM stopped).
+func TestBoxTierFirewallRow(t *testing.T) {
+	if d := detail(boxTierResults("darwin", ok(), tokenOK)); !strings.Contains(d, "PASS box VM firewall: the relay's INPUT rules and the gateway DROP are loaded, and no DOCKER-USER rule passes TCP") {
+		t.Fatalf("a verified firewall deserves its own PASS row:\n%s", d)
+	}
+	f := ok()
+	f.Status.Running, f.ProbeRan, f.FirewallRan = false, false, false
+	if d := detail(boxTierResults("darwin", f, tokenOK)); strings.Contains(d, "box VM firewall") {
+		t.Fatalf("no firewall row for a stopped VM:\n%s", d)
 	}
 }
 

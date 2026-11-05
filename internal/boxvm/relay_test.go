@@ -20,13 +20,27 @@ import (
 	"github.com/culiops/culibox/internal/proxyline"
 )
 
+// goodRules is `iptables -S` (the whole filter table) on a VM provisioned for
+// option (c) after #113, in iptables' own output format.
 const goodRules = `-P INPUT ACCEPT
+-P FORWARD DROP
+-P OUTPUT ACCEPT
+-N DOCKER
+-N DOCKER-USER
 -A INPUT -s 172.29.72.0/24 -d 172.29.72.1/32 -p tcp -m tcp --dport 9072 -j ACCEPT
 -A INPUT -s 172.29.72.0/24 -d 172.29.72.1/32 -p tcp -m tcp --dport 9071 -j ACCEPT
 -A INPUT -s 172.29.72.0/24 -j DROP
 -A INPUT -d 172.29.72.1/32 -j DROP
 -A INPUT -i lo -j ACCEPT
+-A FORWARD -j DOCKER-USER
+-A DOCKER-USER -s 172.29.72.0/24 -j DROP
+-A DOCKER-USER -d 192.168.5.2/32 -p udp -m udp --dport 53 -j RETURN
+-A DOCKER-USER -d 192.168.5.2/32 -j DROP
+-A DOCKER -d 172.17.0.2/32 ! -i docker0 -o docker0 -p tcp -m tcp --dport 8080 -j ACCEPT
 `
+
+// staleBrokerReturn is the DOCKER-USER rule VMs provisioned before #113 carry.
+const staleBrokerReturn = "-A DOCKER-USER -d 192.168.5.2/32 -p tcp -m tcp --dport 9071 -j RETURN\n"
 
 const optionARules = `-P INPUT ACCEPT
 -A INPUT -s 172.29.72.0/24 -j DROP
@@ -37,7 +51,7 @@ type fakeVM struct {
 	err error
 }
 
-func (f fakeVM) InputRules(context.Context) (string, error) { return f.out, f.err }
+func (f fakeVM) FilterRules(context.Context) (string, error) { return f.out, f.err }
 
 // fakeDocker records argv and answers by subcommand. Zero values mean success
 // with empty output; inspect defaults to "no such container".
@@ -194,6 +208,91 @@ func TestCheckInputRulesRefuses(t *testing.T) {
 				t.Fatalf("error does not say how to fix it: %v", err)
 			}
 		})
+	}
+}
+
+// The provisioned DOCKER-USER chain passes, with or without the bare RETURN
+// some docker versions append; a TCP ACCEPT in another chain (docker's own
+// DOCKER chain, the relay's INPUT rules) is not DOCKER-USER's business.
+func TestCheckDockerUserRulesAcceptsTheProvisionedChain(t *testing.T) {
+	for name, out := range map[string]string{
+		"provisioned":            goodRules,
+		"docker's bare RETURN":   goodRules + "-A DOCKER-USER -j RETURN\n",
+		"a tcp RETURN elsewhere": goodRules + "-A FORWARD -d 192.168.5.2/32 -p tcp -m tcp --dport 9071 -j RETURN\n",
+	} {
+		if err := CheckDockerUserRules(out); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Any DOCKER-USER rule that lets TCP through is refused: the broker rule of a
+// VM provisioned before #113 (whatever broker port or gateway address it was
+// written for, wherever it sits) and anything shaped like it.
+func TestCheckDockerUserRulesRefusesATCPPassThrough(t *testing.T) {
+	for name, out := range map[string]string{
+		"broker rule before #113": staleBrokerReturn + goodRules,
+		"after the gateway DROP":  goodRules + staleBrokerReturn,
+		"another broker port":     goodRules + "-A DOCKER-USER -d 192.168.5.2/32 -p tcp -m tcp --dport 9100 -j RETURN\n",
+		"another gateway address": goodRules + "-A DOCKER-USER -d 192.168.5.3/32 -p tcp -m tcp --dport 9071 -j RETURN\n",
+		"ACCEPT target":           goodRules + "-A DOCKER-USER -d 192.168.5.2/32 -p tcp -m tcp --dport 9071 -j ACCEPT\n",
+	} {
+		err := CheckDockerUserRules(out)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "box setup -recreate") || !strings.Contains(err.Error(), "-p tcp") {
+			t.Errorf("%s: the error must name the rule and the fix: %v", name, err)
+		}
+	}
+}
+
+// The gateway DROP itself must be there, for the address the relay dials
+// (LimaHostGateway): without it nothing stops the VM's default network from
+// reaching the Mac's loopback.
+func TestCheckDockerUserRulesRequiresTheGatewayDrop(t *testing.T) {
+	noDrop := strings.Replace(goodRules, "-A DOCKER-USER -d 192.168.5.2/32 -j DROP\n", "", 1)
+	for name, out := range map[string]string{
+		"chain not created yet":     "-P INPUT ACCEPT\n",
+		"no gateway DROP":           noDrop,
+		"DROP for another address":  noDrop + "-A DOCKER-USER -d 192.168.5.3/32 -j DROP\n",
+		"DROP narrowed to one port": noDrop + "-A DOCKER-USER -d 192.168.5.2/32 -p tcp -m tcp --dport 22 -j DROP\n",
+	} {
+		err := CheckDockerUserRules(out)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "box setup -recreate") || !strings.Contains(err.Error(), "192.168.5.2") {
+			t.Errorf("%s: the error must name the gateway and the fix: %v", name, err)
+		}
+	}
+}
+
+// A VM that still has the old broker rule gets no new relay and no boxed
+// spawn. A relay that already runs is kept: the direct path does not go
+// through it, so removing it would only cut live sessions.
+func TestEnsureRefusesAStaleBrokerReturnAndKeepsTheRelay(t *testing.T) {
+	stale := goodRules + staleBrokerReturn
+	r := testRelay(fakeVM{out: stale}, nil)
+	d := &fakeDocker{inspect: "true\t" + r.configHash(gw) + "\n", logs: bothListening}
+	r.Docker = d
+	err := r.Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "box setup -recreate") {
+		t.Fatalf("running relay: err = %v", err)
+	}
+	if len(d.find("rm")) != 0 || len(d.find("run")) != 0 {
+		t.Fatalf("running relay: churned: %v", d.subcommands())
+	}
+
+	d = &fakeDocker{logs: bothListening}
+	err = testRelay(fakeVM{out: stale}, d).Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "box setup -recreate") {
+		t.Fatalf("no relay: err = %v", err)
+	}
+	if len(d.find("run")) != 0 || len(d.find("rm")) != 0 {
+		t.Fatalf("no relay: docker calls %v", d.subcommands())
 	}
 }
 

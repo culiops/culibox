@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
@@ -86,8 +88,54 @@ func definedTokens(ts *tokenSet) func([]config.StaticToken) []config.StaticToken
 // removal from aws_connections), so unlike token entries they are passed through
 // without filtering.
 func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []config.StaticToken) broker.SessionView {
-	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
+	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, Box: s.Box, GitHub: s.GitHub,
 		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
+}
+
+// How long the broker keeps a connection that is not in the middle of a
+// request, and how long it waits for one request to arrive in full. Variables
+// so a test can shrink them.
+var (
+	brokerIdleTimeout = 30 * time.Second
+	brokerReadTimeout = 15 * time.Second
+)
+
+// newBrokerServer is the broker's HTTP server, shared by every listener (the
+// Linux per-box sockets and the shared one, the macOS TCP listener).
+//
+// IdleTimeout: without it a keep-alive connection that has had its one request
+// answered is held forever, and on macOS one box can fill the connection budget
+// with such connections. 30 s, as the egress proxy keeps its idle ones.
+//
+// ReadTimeout bounds receiving ONE request (headers and body), so a client that
+// stalls a body cannot hold a connection either. It does not run while a handler
+// does: net/http clears the read deadline when the handler starts reading
+// ahead, so an STS or GitHub mint that takes 10 or 20 seconds is never cut by
+// it (measured). It is 15 s because the broker's own clients give up on a call
+// after 10 s (AWS, static tokens) or 15 s (GitHub): a request still arriving
+// after that has no one waiting for it, and a request that is a few hundred
+// bytes never needs more than a moment.
+func newBrokerServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, BaseContext: broker.BaseContext,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: brokerReadTimeout, IdleTimeout: brokerIdleTimeout,
+		WriteTimeout: 30 * time.Second}
+}
+
+// serveBroker serves one listener until it closes. A listener closing is how a
+// box's socket ends (its last session left) or the daemon stops: not an error.
+// One that fails for another reason is logged, a per-box socket by its box so
+// the one broken box can be told from the broker stopping. Either way Serve has
+// closed it: nothing is served over it any more (fail closed).
+func serveBroker(srv *http.Server, l net.Listener) {
+	err := srv.Serve(l)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return
+	}
+	if n, ok := l.(interface{ BoxName() string }); ok {
+		log.Printf("broker socket for box %s stopped: %v", n.BoxName(), err)
+		return
+	}
+	log.Printf("credential broker stopped: %v", err)
 }
 
 // startBroker brings the credential broker up: the persisted HMAC secret, the
@@ -98,15 +146,17 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken) (*brokerService, error) {
-	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil)
+	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil, nil)
 }
 
 // startBrokerWithStore is startBroker with the daemon's encrypted store, which
 // serves `store` value references for static tokens and GitHub App keys. A nil
-// vstore leaves the references refusing, exactly as without a store.
+// vstore leaves the references refusing, exactly as without a store. addrs is
+// the layer's box-address cache, which decides the box of a request that
+// arrives on no per-box socket (macOS); nil leaves every such request refused.
 func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken,
-	vstore *secretstore.Store) (*brokerService, error) {
+	vstore *secretstore.Store, addrs *boxaddr.Cache) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -156,18 +206,29 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 	if vstore != nil {
 		brk.SetResolver(credref.Default{Store: vstore})
 	}
+	// Only a real cache: a nil *Cache inside the interface would panic on the
+	// first request instead of refusing. No goos branch: a Linux request always
+	// arrives on a per-box (or the shared) socket, which decides before this is
+	// consulted.
+	if addrs != nil {
+		brk.SetBoxSource(addrs)
+	}
 
 	ep, err := broker.Listen(goos, stateRoot, port)
 	if err != nil {
 		_ = audit.Close()
 		return nil, fmt.Errorf("%w: %v", errBrokerListen, err)
 	}
-	srv := &http.Server{Handler: brk.Handler(), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
-	go func() {
-		if err := srv.Serve(ep.Listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("credential broker stopped: %v", err)
-		}
-	}()
+	// BaseContext puts the listener's identity (a box's own socket, or the old
+	// shared one) into every request context: the broker learns which box
+	// presents a token from the socket it arrived on.
+	srv := newBrokerServer(brk.Handler())
+	go serveBroker(srv, ep.Listener)
+	if ep.Boxes != nil {
+		// A listener per bound box, started as the session layer takes a box's
+		// socket and closed when its last session ends.
+		ep.Boxes.Start(func(l net.Listener) { go serveBroker(srv, l) })
+	}
 	// The aws CLI is resolved once. Without it the SSO card offers the host
 	// command only (the endpoint answers 502 with it).
 	var sso *ssologin.Runner
@@ -204,6 +265,9 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			// mints nothing, so no token can be issued past the revoke. The
 			// audit store is still open for its rows.
 			brk.RevokeAllGitHub(ctx)
+			if ep.Boxes != nil {
+				ep.Boxes.Close()
+			}
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}

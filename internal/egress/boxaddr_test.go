@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/culiops/culibox/internal/boxaddr"
 )
 
 // boxIPs is a fake box-address resolver: box name → address, with a call count.
@@ -145,7 +147,7 @@ func TestBoxIPChangeRefreshesOnceThenAllows(t *testing.T) {
 	// The box was recreated at 127.0.0.1; once the interval has passed, a
 	// mismatch refreshes the entry once and the CONNECT goes through.
 	ips.set("box-1", "127.0.0.1")
-	clk.advance(boxRefreshInterval + time.Second)
+	clk.advance(boxaddr.RefreshInterval + time.Second)
 	code, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
 	if code != 200 {
 		t.Fatalf("after the box's address changed: status %d", code)
@@ -180,7 +182,7 @@ func TestRepeatedMismatchesCallDockerOncePerInterval(t *testing.T) {
 	if n := ips.calls.Load(); n != 1 {
 		t.Fatalf("docker lookups within one interval = %d, want 1", n)
 	}
-	clk.advance(boxRefreshInterval + time.Second)
+	clk.advance(boxaddr.RefreshInterval + time.Second)
 	h.connect(t, "exfil.example.net:443", "s3", tok)
 	h.connect(t, "exfil.example.net:443", "s3", tok)
 	if n := ips.calls.Load(); n != 2 {
@@ -298,25 +300,31 @@ func TestProbeCredentialDropsTheBoxEntry(t *testing.T) {
 }
 
 func TestForgetDropsTheBoxEntry(t *testing.T) {
-	h, _, _ := boundHarness(t)
+	h, ips, _ := boundHarness(t)
 	code, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
 	c.Close()
-	h.p.mu.Lock()
-	_, cached := h.p.boxAddrs["box-1"]
-	h.p.mu.Unlock()
-	if !cached {
-		t.Fatal("box-1 not cached after a matched CONNECT")
+	if n := ips.calls.Load(); n != 1 {
+		t.Fatalf("lookups after a matched CONNECT = %d, want 1", n)
 	}
 	h.p.Forget("s1")
 	h.p.mu.Lock()
-	_, cached = h.p.boxAddrs["box-1"]
 	_, owner := h.p.sidBox["s1"]
 	h.p.mu.Unlock()
-	if cached || owner {
-		t.Fatal("Forget left the session's box entry behind")
+	if owner {
+		t.Fatal("Forget left the session's box owner entry behind")
+	}
+	// The box's cached address went with the session: the next CONNECT for s1
+	// (the same token still verifies) must look the box up again.
+	code, c = h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("CONNECT after Forget: status %d", code)
+	}
+	c.Close()
+	if n := ips.calls.Load(); n != 2 {
+		t.Fatalf("lookups after Forget = %d, want 2 (the cached entry should be gone)", n)
 	}
 }
 

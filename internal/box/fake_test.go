@@ -47,6 +47,11 @@ type fakeClient struct {
 	// for a running box.
 	mounts    map[string][]string
 	mountsErr error
+	bindErr   error // fails BindSource alone (InspectMounts still works)
+	// sources is, per box, each bind's host path by in-box destination, recorded
+	// from every --mount of a Run (a test overrides one to stand for a box made
+	// by an older build). BindSource reads it.
+	sources map[string]map[string]string
 
 	// runHook answers a Run before it is recorded or counted (handled=true),
 	// so a test can serve the image/create/cp/rm calls of caBundle without
@@ -59,7 +64,7 @@ type fakeClient struct {
 
 func newFake() *fakeClient {
 	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{},
-		mounts: map[string][]string{}}
+		mounts: map[string][]string{}, sources: map[string]map[string]string{}}
 }
 
 func (f *fakeClient) Stdout(_ context.Context, args []string) (string, error) {
@@ -95,15 +100,24 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	var name string
 	lbl := map[string]string{}
 	var dsts []string
+	srcs := map[string]string{}
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "--name":
 			name = args[i+1]
 		case "--mount":
+			var src, dst string
 			for _, opt := range strings.Split(args[i+1], ",") {
 				if d, ok := strings.CutPrefix(opt, "dst="); ok {
 					dsts = append(dsts, d)
+					dst = d
 				}
+				if s, ok := strings.CutPrefix(opt, "src="); ok {
+					src = s
+				}
+			}
+			if dst != "" {
+				srcs[dst] = src
 			}
 		case "--label":
 			if k, v, ok := strings.Cut(args[i+1], "="); ok {
@@ -124,6 +138,7 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	if name != "" {
 		f.labels[name] = lbl
 		f.mounts[name] = dsts
+		f.sources[name] = srcs
 	}
 	return "container-id", nil
 }
@@ -234,6 +249,15 @@ func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []s
 		return StateMissing, nil, "", f.mountsErr
 	}
 	return st, append([]string(nil), f.mounts[name]...), f.labels[name][extraca.Label], nil
+}
+
+func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bindErr != nil {
+		return "", f.bindErr
+	}
+	return f.sources[name][dst], nil
 }
 
 func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {

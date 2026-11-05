@@ -51,7 +51,14 @@ type fakeBoxes struct {
 	adopted  []string
 	marked   []string // MarkExclusive calls
 
-	wrapErr    error // returned by Wrap when set
+	wrapErr error // returned by Wrap when set
+	// name is BoxName's answer and, unless wrapName is set, Wrap's ("" is
+	// "ab-box-test"); wrapName makes Wrap report another box than BoxName named.
+	name       string
+	wrapName   string
+	nameErr    error
+	nameKey    box.BoxKey // the key BoxName was last asked about
+	nameCalls  int
 	prepares   int
 	prepareErr error
 	order      *callLog // optional: shared with fakeBundles to pin call order
@@ -86,6 +93,26 @@ func (f *fakeBoxes) Prepare(context.Context) error {
 	return f.prepareErr
 }
 
+// boxNameLocked is the box the fake names; the caller holds f.mu or has no race.
+func (f *fakeBoxes) boxNameLocked() string {
+	if f.name != "" {
+		return f.name
+	}
+	return "ab-box-test"
+}
+
+func (f *fakeBoxes) BoxName(_ string, key box.BoxKey) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nameCalls++
+	f.nameKey = key
+	f.order.add("boxname")
+	if f.nameErr != nil {
+		return "", f.nameErr
+	}
+	return f.boxNameLocked(), nil
+}
+
 func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, key box.BoxKey, argv, env []string, extraRO []box.Mount) ([]string, []string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -102,7 +129,11 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, key box.BoxKey, 
 	// /usr/bin/env, not docker: it exists on Linux and macOS alike and really
 	// runs argv, so the kill/exit tests drive a live agent instead of a
 	// `docker exec` that fails at once.
-	return append([]string{"/usr/bin/env"}, argv...), env, "ab-box-test", nil
+	name := f.boxNameLocked()
+	if f.wrapName != "" {
+		name = f.wrapName
+	}
+	return append([]string{"/usr/bin/env"}, argv...), env, name, nil
 }
 
 func (f *fakeBoxes) AdoptBox(name string) {

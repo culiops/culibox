@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -47,11 +48,12 @@ func ctxMountChanged(p, extra string) error {
 type FileID struct{ Dev, Ino uint64 }
 
 // checkMountIDs compares, inside the running box name, the identity of every
-// extra mount that carries an ID with the one recorded on the host. Docker
-// follows symlinks in a bind source, so a path flipped to a link between the
-// last host check and `docker run` would mount the link's target; this catches
-// it before the agent starts. One `docker exec` for all of them, paths as argv
-// (no shell). Mounts without an ID cost nothing. Caller holds opMu.
+// extra mount that carries an ID with the one recorded on the host (Linux) or
+// read in the box VM (macOS, see fillVMIDs). Docker follows symlinks in a bind
+// source, so a path flipped to a link between that read and `docker run` would
+// mount the link's target; this catches it before the agent starts. One
+// `docker exec` for all of them, paths as argv (no shell). Mounts without an ID
+// cost nothing. Caller holds opMu.
 func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Mount) error {
 	var ms []Mount
 	for _, mt := range extraRO {
@@ -82,6 +84,56 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Moun
 		}
 	}
 	return nil
+}
+
+// ctxIdentityFailed is the refusal when the box VM could not give the identity
+// of the context mounts at paths: the same ErrContextMountChanged family, so
+// the session and web layers show it like the other context refusals. The
+// reason is the VM read's own error: fixed messages that name a position, never
+// a path, saying whether a path is a symlink, is missing or the VM did not
+// answer (plus, when the exec itself failed, the first line colima printed,
+// passed through as it came). The refusal names every path of the batch: the
+// VM read them together.
+func ctxIdentityFailed(paths []string, err error) error {
+	return &ctxMountError{ctxPathError{"context_paths " + strings.Join(paths, ", ") +
+		": the box VM could not confirm the path (" + err.Error() + "); refusing"}}
+}
+
+// fillVMIDs gives every CheckID mount that has no ID its identity from
+// Options.VMIDs, and returns extraRO with those IDs set (a copy; the caller's
+// slice is never written to). Mounts that already carry an ID, and mounts that
+// are not CheckID, are not asked about. It is one VMIDs call for all of them,
+// and none when there is nothing to ask or no hook (Linux records the identity
+// on the host), so it can run again for the same spawn at no cost. Fail closed:
+// an error or a wrong count refuses the spawn. Caller holds opMu.
+func (m *Manager) fillVMIDs(ctx context.Context, extraRO []Mount) ([]Mount, error) {
+	if m.opts.VMIDs == nil {
+		return extraRO, nil
+	}
+	var at []int
+	var paths []string
+	for i, mt := range extraRO {
+		if mt.CheckID && mt.ID == nil {
+			at = append(at, i)
+			paths = append(paths, mt.Host)
+		}
+	}
+	if len(at) == 0 {
+		return extraRO, nil
+	}
+	ids, err := m.opts.VMIDs(ctx, paths)
+	if err == nil && len(ids) != len(paths) {
+		err = fmt.Errorf("got %d identities for %d paths", len(ids), len(paths))
+	}
+	if err != nil {
+		return nil, ctxIdentityFailed(paths, err)
+	}
+	out := slices.Clone(extraRO)
+	for k, i := range at {
+		id := ids[k]
+		out[i].ID = &id
+	}
+	return out, nil
 }
 
 // refuseMountChanged handles a box that failed checkMountIDs. A box this spawn
@@ -118,9 +170,11 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 
 // CheckContextPathID refuses a context path the box could not mount safely or at
 // all, and returns the identity of the leaf it checked, for Mount.ID (nil off
-// Linux, where no in-box comparison is made). The identity comes from a walk
-// that follows no symlink in any component (leafID), so a component swapped
-// after the check makes docker mount something with another identity. p is absolute and clean (config validation has seen it). No component of
+// Linux: a Mac inode number is not the one the box sees, so there the box layer
+// reads the identity inside the VM instead, see Options.VMIDs). The identity
+// comes from a walk that follows no symlink in any component (leafID), so a
+// component swapped after the check makes docker mount something with another
+// identity. p is absolute and clean (config validation has seen it). No component of
 // p may be a symlink: the mount follows links on the host, so a link swapped
 // after this check would expose a different path than the one the user chose.
 // The leaf must exist and be a directory or a regular file. home is the user's
