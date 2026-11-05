@@ -97,7 +97,7 @@ func (l *boxLayer) loadRelayKey() error {
 		if errors.As(err, &pe) {
 			err = pe.Err
 		}
-		return fmt.Errorf("relay secret %s cannot be read or created (%w); fix its permissions, or delete it to have CuliBox create a new one", path, err)
+		return fmt.Errorf("relay secret %s cannot be read or created (%w); delete it (CuliBox creates a new one and replaces the relay once); fixing its permissions keeps the old key", path, err)
 	}
 	k, err := proxyline.KeyFromBytes(sec.Secret())
 	if err != nil {

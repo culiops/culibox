@@ -305,7 +305,7 @@ func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
 		if err == nil {
 			t.Fatal("an unreadable relay.secret must be an error")
 		}
-		for _, want := range []string{"relay secret", path, "permission denied", "fix its permissions"} {
+		for _, want := range []string{"relay secret", path, "permission denied", "delete it (CuliBox creates a new one and replaces the relay once); fixing its permissions keeps the old key"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error lacks %q: %v", want, err)
 			}
