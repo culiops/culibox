@@ -1296,10 +1296,14 @@ function hintShortcuts() {
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
 // desktop, Mod+/ and ?, Settings, About). The rows come from the registry
 // (shortcuts.js) plus the box runtime; the text goes in through textContent in askDialog.
+// On the phone layout each row stacks (keys, then the description indented): the
+// aligned desktop columns are wider than the dialog. Decided when it opens (#59).
 function showShortcuts() {
+  const rows = helpRows(IS_MAC);
+  const runtime = tierRuntimeLabel(boxRuntime);
   return askDialog({
     title: "Keyboard shortcuts",
-    body: helpText(helpRows(IS_MAC), tierRuntimeLabel(boxRuntime)),
+    body: mobileActive(window.innerWidth) ? helpTextStacked(rows, runtime) : helpText(rows, runtime),
     confirmLabel: "Close",
     info: true,
   });

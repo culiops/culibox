@@ -486,3 +486,20 @@ test("headerSyncKey moves with the name and with cost_usd, and not with anything
   assert.equal(d.headerSyncKey("api", { ...working, cost_usd: 1.5004 }), k, "same displayed cents: no repaint per poll");
   assert.equal(d.headerSyncKey("api", null), d.headerSyncKey("api", null));
 });
+
+// paneTabs: the pane header's tabs, in order, each with the label its button
+// shows and the icon it shows instead of the label in a narrow pane (#13).
+test("paneTabs lists the four tabs of a pane with a session, each with its own icon", () => {
+  const t = d.paneTabs(true);
+  assert.deepEqual(t.map((x) => x.id), ["terminal", "files", "activity", "access"]);
+  assert.deepEqual(t.map((x) => x.label), ["Terminal", "Files", "Activity", "Access"]);
+  assert.ok(t.every((x) => typeof x.icon === "string" && x.icon), "every tab names an icon");
+  assert.strictEqual(new Set(t.map((x) => x.icon)).size, t.length, "no two tabs share an icon");
+});
+
+test("paneTabs for a pane of files has Files alone: no session to describe", () => {
+  const t = d.paneTabs(false);
+  assert.deepEqual(t.map((x) => x.id), ["files"]);
+  assert.deepEqual(t.map((x) => x.label), ["Files"]);
+  assert.strictEqual(t[0].icon, "files");
+});

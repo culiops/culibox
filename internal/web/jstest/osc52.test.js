@@ -4,7 +4,7 @@
 // copy in that same, visible, focused pane (see osc52Decision).
 const test = require("node:test");
 const assert = require("node:assert");
-const { osc52Decision, osc52Gesture, osc52Lines } = require("../static/terminal-tab.js");
+const { osc52Decision, osc52Gesture, osc52Lines, osc52HintText } = require("../static/terminal-tab.js");
 
 // b64 builds the payload the way Claude Code does: base64 of the UTF-8 bytes.
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
@@ -309,6 +309,56 @@ test("a refused write names the way out when the page has one", () => {
   const warn = console.warn; console.warn = () => {};
   try { osc("c;" + b64("a\rb")); } finally { console.warn = warn; delete global.scEntry; delete global.IS_MAC; }
   assert.match(log.toasts[0][0], /Shift\+drag/);
+});
+
+// #111: the way out is a desktop gesture (Shift+drag, Option+drag). A touch screen
+// has none, so on touch the toast says what happened and stops there.
+test("osc52HintText names the selection gesture, and nothing on touch or without a help row", () => {
+  const entry = { text: { mac: "⌥+drag", other: "Shift+drag" } };
+  assert.strictEqual(osc52HintText(entry, false, false), " Select with Shift+drag to copy instead.");
+  assert.match(osc52HintText(entry, true, false), /⌥\+drag/);
+  assert.strictEqual(osc52HintText(entry, false, true), "");
+  assert.strictEqual(osc52HintText(entry, true, true), "");
+  assert.strictEqual(osc52HintText(null, false, false), "");
+  assert.strictEqual(osc52HintText(undefined, false, true), "");
+});
+
+test("a refused write on a touch screen says what happened and names no desktop gesture", () => {
+  const { log, osc } = harness();
+  global.IS_MAC = false;
+  global.scEntry = () => ({ text: { mac: "⌥+drag", other: "Shift+drag" } });
+  global.touchPrimary = require("../static/mobileterm.js").touchPrimary;
+  global.window = { matchMedia: (q) => ({ matches: /hover: none/.test(q) }) };
+  const warn = console.warn; console.warn = () => {};
+  try { osc("c;" + b64("a\rb")); } finally {
+    console.warn = warn; delete global.scEntry; delete global.IS_MAC; delete global.touchPrimary; delete global.window;
+  }
+  assert.strictEqual(log.toasts[0][0], "Not copied: the agent's text has hidden characters.");
+});
+
+test("a blocked copy on a touch screen names no desktop gesture either", () => {
+  const { log, osc } = harness(false);
+  global.IS_MAC = false;
+  global.scEntry = () => ({ text: { mac: "⌥+drag", other: "Shift+drag" } });
+  global.touchPrimary = require("../static/mobileterm.js").touchPrimary;
+  global.window = { matchMedia: () => ({ matches: true }) };
+  try { osc("c;" + b64("hello")); } finally {
+    delete global.scEntry; delete global.IS_MAC; delete global.touchPrimary; delete global.window;
+  }
+  assert.strictEqual(log.toasts[0][0], "The browser blocked the agent's copy.");
+});
+
+test("a refused write with a mouse still names the way out", () => {
+  const { log, osc } = harness();
+  global.IS_MAC = false;
+  global.scEntry = () => ({ text: { mac: "⌥+drag", other: "Shift+drag" } });
+  global.touchPrimary = require("../static/mobileterm.js").touchPrimary;
+  global.window = { matchMedia: () => ({ matches: false }) };
+  const warn = console.warn; console.warn = () => {};
+  try { osc("c;" + b64("a\rb")); } finally {
+    console.warn = warn; delete global.scEntry; delete global.IS_MAC; delete global.touchPrimary; delete global.window;
+  }
+  assert.strictEqual(log.toasts[0][0], "Not copied: the agent's text has hidden characters. Select with Shift+drag to copy instead.");
 });
 
 test("a write the browser refuses says so instead of claiming a copy", () => {

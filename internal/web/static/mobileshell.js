@@ -105,9 +105,25 @@ function sessionGroups(sessions, statusFn) {
     });
 }
 
+// #111: a toast sits at the viewport bottom, which on a phone is the snippet
+// row, the key bar and the nav. mobileToastBottom is the offset from the viewport
+// bottom that clears whatever of them is showing: `tops` are the rects' top edges
+// (a screen shows a different set, and the soft keyboard removes the nav), the
+// highest one wins, `gap` is the air above it. A top that is not a positive
+// number inside the viewport (a hidden element reports 0) is no chrome at all;
+// null when none is left, so the caller keeps the CSS fallback. showToast (shell.js)
+// reads the rects and applies the number.
+function mobileToastBottom(innerHeight, tops, gap) {
+  if (typeof innerHeight !== "number" || !Number.isFinite(innerHeight) || !Array.isArray(tops)) return null;
+  const valid = tops.filter((t) => typeof t === "number" && Number.isFinite(t) && t > 0 && t <= innerHeight);
+  if (!valid.length) return null;
+  return innerHeight - Math.min(...valid) + gap;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     MOBILE_MAX_PX, MOBILESHELL_KEY, MOBILE_SCREENS,
     mobileActive, mobileMediaQuery, effectiveMaximized, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
+    mobileToastBottom,
   };
 }

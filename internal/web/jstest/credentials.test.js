@@ -10,6 +10,7 @@ const {
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
   awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
   GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
+  credTablesAt,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -558,7 +559,9 @@ test("table mode needs the as-page class and room in #creds-body; the card path 
   assert.ok(/as-page/.test(body("credPageMode")));
   assert.ok(/credPageMode\(\)/.test(body("credTableMode")));
   // The room is the body's own width (the sidebar is draggable), never the window's.
-  assert.ok(/creds-body/.test(body("credTableMode")) && /CRED_TABLE_MIN_WIDTH/.test(body("credTableMode")));
+  // The rule itself is credTablesAt's (pure, and what the resize observer asks too).
+  assert.ok(/creds-body/.test(body("credTableMode")) && /credTablesAt\(/.test(body("credTableMode")));
+  assert.ok(/CRED_TABLE_MIN_WIDTH/.test(body("credTablesAt")));
   assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "not keyed on the window width");
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
@@ -921,4 +924,27 @@ test("credDeleteText: says nothing it does not know about the store value", () =
   const invalid = { name: "t", status: "invalid", value_kind: "store" };
   assert.ok(!credDeleteText("token", invalid).includes("stays in the encrypted store"));
   assert.match(credDeleteText("token", invalid), /Any value in the store stays/);
+});
+
+// --- #27: the table/card choice as one pure rule --------------------------------
+
+test("credTablesAt: never outside the page, whatever the width", () => {
+  assert.strictEqual(credTablesAt(1440, false), false);
+  assert.strictEqual(credTablesAt(300, false), false);
+  assert.strictEqual(credTablesAt(0, false), false);
+  assert.strictEqual(credTablesAt(NaN, false), false);
+});
+
+test("credTablesAt: a body that cannot be measured keeps tables (the tab is hidden, today's rule)", () => {
+  assert.strictEqual(credTablesAt(0, true), true);
+  assert.strictEqual(credTablesAt(NaN, true), true);
+  assert.strictEqual(credTablesAt(undefined, true), true);
+  assert.strictEqual(credTablesAt(-1, true), true);
+});
+
+test("credTablesAt: tables from 700 up, cards below (the measured threshold)", () => {
+  assert.strictEqual(credTablesAt(699, true), false);
+  assert.strictEqual(credTablesAt(700, true), true);
+  assert.strictEqual(credTablesAt(1440, true), true);
+  assert.strictEqual(credTablesAt(1, true), false);
 });

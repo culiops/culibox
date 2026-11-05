@@ -12,6 +12,9 @@
 function dropHint(kind, desktop) {
   const where = desktop ? "the Files drawer" : "Files";
   if (kind === "nodest") return "No destination folder yet. Drop onto a folder in " + where + " instead";
+  // A scratch listing refuses every write (the server's word); the same wording
+  // either side of the 700 px line, since neither names a place to go instead.
+  if (kind === "readonly") return "This folder is read-only: nothing can be dropped here";
   return "Drop onto a terminal pane, or onto a folder in " + where;
 }
 
@@ -176,8 +179,16 @@ function dragHasFiles(e) {
 // makeDropZone wires one element as a drop target. destFn resolves the
 // destination at DROP time, not at wiring time: the tree root and the focused
 // session both move while the page stays open.
+//
+// opts.readOnly (a function, asked at event time like destFn) marks a folder the
+// server would refuse every write into (a read-only listing: the scratch folder).
+// Such a zone still claims the drag, so the window-level "miss" handler does not
+// fire too, but it never lights up, answers dropEffect "none" (a browser that
+// honours it cancels the drag, so no drop arrives), and a drop that does arrive
+// anyway is swallowed with the reason instead of becoming an upload that 403s.
 function makeDropZone(el, destFn, opts) {
   opts = opts || {};
+  const readOnly = () => typeof opts.readOnly === "function" && opts.readOnly();
   // The element that lights up is not always the listener: a terminal pane
   // listens on its tab body but must highlight the whole cell, which is what
   // carries the border and is what reads as a target at 390px.
@@ -188,6 +199,7 @@ function makeDropZone(el, destFn, opts) {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
+    if (readOnly()) return;
     depth++;
     lit = hot();
     lit.classList.add("drop-hot");
@@ -196,7 +208,7 @@ function makeDropZone(el, destFn, opts) {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = "copy";
+    e.dataTransfer.dropEffect = readOnly() ? "none" : "copy";
   });
   el.addEventListener("dragleave", (e) => {
     if (!dragHasFiles(e)) return;
@@ -214,6 +226,10 @@ function makeDropZone(el, destFn, opts) {
     e.stopPropagation();
     depth = 0;
     if (lit) { lit.classList.remove("drop-hot"); lit = null; }
+    if (readOnly()) {
+      showToast(dropHint("readonly", desktopNow()), { error: true });
+      return;
+    }
     uploadFiles(e.dataTransfer.files, destFn(), { onDone: opts.onDone });
   });
 }
@@ -269,7 +285,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint, makeDropZone };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when
@@ -322,5 +338,10 @@ function initUpload() {
   // The tree background is a drop zone rooted at the current root; individual
   // directory rows override it by stopping propagation (see filetree.js).
   const tree = document.getElementById("filetree");
-  if (tree) makeDropZone(tree, () => ftRoot(), { onDone: () => ftLoadRoot({ fresh: true }) });
+  // readOnly: the root listing's own answer (a scratch folder), so a drop on the
+  // empty part of the tree is refused here instead of by a 403 after the upload.
+  if (tree) makeDropZone(tree, () => ftRoot(), {
+    onDone: () => ftLoadRoot({ fresh: true }),
+    readOnly: () => typeof ftRootIsReadOnly === "function" && ftRootIsReadOnly(),
+  });
 }

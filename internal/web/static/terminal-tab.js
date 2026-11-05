@@ -953,12 +953,21 @@ const OSC52_WINDOW_MS = 1500;
 // own 10 MB limit on a sequence.
 const OSC52_MAX_BYTES = 1024 * 1024;
 
-// osc52SelectHint names the way out of a refused or blocked agent copy: the
-// terminal's own selection, as the help screen names it (a help-only row, so
-// shortcutHint has no chord to render). "" when the page has no such row.
+// osc52HintText is the sentence that names the way out of a refused or blocked
+// agent copy: the terminal's own selection, as the help screen names it (a
+// help-only row, so shortcutHint has no chord to render). "" when the page has no
+// such row, and "" on a touch screen: Shift+drag / Option+drag is a mouse gesture
+// and the terminal has no touch selection to name instead (#111).
+function osc52HintText(entry, mac, touch) {
+  if (touch || !entry) return "";
+  return ` Select with ${entry.text[mac ? "mac" : "other"]} to copy instead.`;
+}
+
 function osc52SelectHint() {
   const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
-  return sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
+  if (!sel) return "";
+  const touch = typeof touchPrimary === "function" && typeof window !== "undefined" && touchPrimary(window.matchMedia);
+  return osc52HintText(sel, IS_MAC, touch);
 }
 
 // OSC52_FORMAT matches what a selection off a terminal screen never holds and a
@@ -1069,5 +1078,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

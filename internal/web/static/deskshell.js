@@ -351,7 +351,22 @@ function paneTitle(name, tab, session, tabCount) {
   return name + cwd + (tabCount > 1 ? " (" + tabCount + " tabs in this pane)" : "");
 }
 
+// paneTabs: the pane header's tabs, in the order they show. `label` is the text
+// of a wide header, `icon` the glyph tabIcon draws in its place when the pane is
+// too narrow for four words (#13); the button keeps both, so CSS alone picks. A
+// pane of files has no session to describe: Files alone, no Activity, no Access.
+function paneTabs(hasTerm) {
+  const files = { id: "files", label: "Files", icon: "files" };
+  if (!hasTerm) return [files];
+  return [
+    { id: "terminal", label: "Terminal", icon: "terminal" },
+    files,
+    { id: "activity", label: "Activity", icon: "activity" },
+    { id: "access", label: "Access", icon: "access" },
+  ];
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs };
 }

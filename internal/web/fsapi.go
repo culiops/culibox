@@ -111,7 +111,8 @@ func openFsTarget(t fsTarget, flag int) (*os.File, error) {
 }
 
 // handleFsList serves GET /api/fs/list?path=<abs-dir> → the directory's entries,
-// directories first then files, each sorted by name.
+// directories first then files, each sorted by name. A listing that touched the
+// scratch folder also says "readonly": true (the key is absent otherwise).
 func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 	t, err := s.resolveFs(r.URL.Query().Get("path"))
 	if err != nil {
@@ -155,7 +156,14 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].Name < out[j].Name
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"path": t.Abs, "entries": out})
+	resp := map[string]any{"path": t.Abs, "entries": out}
+	// Same wording and omit-when-false as fsRead.ReadOnly: the Files tree hides
+	// its mutation buttons from it. The server refuses those mutations anyway
+	// (openParent), so this field only spares the user a dead button.
+	if t.ReadOnly {
+		resp["readonly"] = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 const maxTextBytes = 2 << 20 // 2 MiB preview cap for text files

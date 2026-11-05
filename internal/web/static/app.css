@@ -550,6 +550,16 @@
     #files-phd.closed #ft-newdir,
     #files-phd.closed #ft-refresh,
     #files-phd.closed #ft-upload { display: none; }
+    /* A read-only listing (the scratch folder) has nothing to create or upload
+       into: filetree.js sets `hidden` on these two. The attribute alone loses at
+       both widths, because an id rule's own display beats the UA [hidden] rule:
+       desktop.css's `#drawer #files-phd #ft-newdir ... { display: revert }` and
+       the phone's `html.mobile-screen-files #files-phd #ft-newdir { display:
+       inline-flex }` below. This is the [hidden] partner rule pattern used above
+       (.rail, .dbd, #agent-seg), with !important because those two out-rank a
+       plain one. It holds at every width, so it sits here, in no media query.
+       #ft-refresh and #ft-palette are not listed: they still work. */
+    #files-phd #ft-newdir[hidden], #files-phd #ft-upload[hidden] { display: none !important; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border);
@@ -2569,7 +2579,19 @@
       #foot-bug { height: auto; flex-wrap: wrap; padding: 8px 13px; }
       #bug-status { flex-basis: 100%; order: -1; }
       #bug-status:empty { display: none; }
-      #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
+      /* bottom: the nav (60) + 8, so a toast clears the nav on every screen even if
+         showToast (shell.js) cannot measure. The Terminal screen also stacks the
+         snippet row and the key bar above the nav, and the keyboard removes the
+         nav: placeToast sets the inline `bottom` from what is on screen (#111). */
+      #toast { right: 8px; left: 8px; max-width: none; bottom: 68px; }
+      /* The Keyboard shortcuts help is pre-formatted text (white-space: pre above,
+         so desktop keeps its aligned columns). On the phone showShortcuts() already
+         stacks each row's keys over its description to fit the dialog; this is the
+         net for a narrower phone (360 px fits ~40 characters), wrapping the line
+         instead of scrolling the dialog sideways (#59). Same specificity as the
+         rule above and later in the file; desktop.css re-declares `pre` inside its
+         own min-width: 701px block, so this cannot reach the desktop. */
+      #ask-modal.info #ask-body { white-space: pre-wrap; overflow-wrap: anywhere; }
       /* (The Files action buttons #ft-newdir/#ft-refresh/#ft-upload are sized
          with the promoted Files topbar above — on a phone the tree only ever
          shows on the Files screen, where that bar owns them.) */

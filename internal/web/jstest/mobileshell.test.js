@@ -136,3 +136,120 @@ test("effectiveMaximized: desktop passes the maximized cell through unchanged", 
   assert.equal(m.effectiveMaximized(cell, false), cell);
   assert.equal(m.effectiveMaximized(null, false), null);
 });
+
+// #111: a toast sits at the viewport bottom, over the key rows and the nav on a
+// phone. mobileToastBottom is the pixel offset from the viewport bottom that
+// clears the visible bottom chrome: innerHeight - (the highest top) + gap.
+test("mobileToastBottom clears the highest visible chrome top by the gap", () => {
+  // The measured 390x800 Terminal screen: snippets row 627, key bar 683, nav 740.
+  assert.equal(m.mobileToastBottom(800, [627, 683, 740], 8), 181);
+  assert.equal(m.mobileToastBottom(800, [740, 683, 627], 8), 181); // order does not matter
+  assert.equal(m.mobileToastBottom(800, [740], 8), 68);            // Sessions/Files screen: nav only
+  assert.equal(m.mobileToastBottom(800, [683], 0), 117);           // gap is added as given
+});
+
+test("mobileToastBottom is null when there is no usable top", () => {
+  assert.equal(m.mobileToastBottom(800, [], 8), null);
+  assert.equal(m.mobileToastBottom(800, [0, NaN, 900], 8), null);  // 0, NaN, below the viewport
+  assert.equal(m.mobileToastBottom(800, [-5, Infinity, "740", null, undefined], 8), null);
+  assert.equal(m.mobileToastBottom(800, undefined, 8), null);
+});
+
+test("mobileToastBottom ignores the invalid tops and keeps the valid ones", () => {
+  assert.equal(m.mobileToastBottom(800, [0, NaN, 900, 740], 8), 68);
+  assert.equal(m.mobileToastBottom(800, [NaN, 683, -1], 8), 125);
+});
+
+test("mobileToastBottom: a top at the viewport bottom (a zero-height chrome edge) leaves just the gap", () => {
+  assert.equal(m.mobileToastBottom(800, [800], 8), 8);
+  assert.equal(m.mobileToastBottom(800, [800, 900], 8), 8);
+});
+
+// showToast places itself above the phone's bottom chrome (#111). The DOM here is
+// a stand-in: each element has the rect and the "is it displayed" answer the real
+// one would give (getClientRects is empty for display: none).
+function toastHarness(width, height, chrome) {
+  const box = { style: {}, classList: { toggle() {}, add() {}, remove() {} } };
+  const els = {
+    toast: box,
+    "toast-msg": {},
+    "toast-undo": { hidden: true },
+  };
+  for (const [id, c] of Object.entries(chrome)) {
+    els[id] = {
+      getClientRects: () => (c.shown ? [{}] : []),
+      getBoundingClientRect: () => ({ top: c.top, bottom: c.top + c.h, height: c.h }),
+    };
+  }
+  global.document = { getElementById: (id) => els[id] || null };
+  global.window = { innerWidth: width, innerHeight: height };
+  global.mobileActive = m.mobileActive;
+  global.mobileToastBottom = m.mobileToastBottom;
+  return box;
+}
+function toastCleanup() {
+  for (const k of ["document", "window", "mobileActive", "mobileToastBottom"]) delete global[k];
+}
+const { showToast, hideToast } = require("../static/shell.js");
+const PHONE_TERMINAL = {
+  "term-snips": { shown: true, top: 627, h: 56 },
+  "term-keybar": { shown: true, top: 683, h: 57 },
+  "mobile-nav": { shown: true, top: 740, h: 60 },
+};
+
+test("showToast on a phone sits above the highest visible chrome", () => {
+  const box = toastHarness(390, 800, PHONE_TERMINAL);
+  try {
+    showToast("hello", { sticky: true });
+    assert.equal(box.style.bottom, "181px");
+  } finally { hideToast(); toastCleanup(); }
+});
+
+test("showToast on a phone skips chrome that is not displayed", () => {
+  const box = toastHarness(390, 800, {
+    "term-snips": { shown: false, top: 0, h: 0 },
+    "term-keybar": { shown: false, top: 0, h: 0 },
+    "mobile-nav": { shown: true, top: 740, h: 60 },
+  });
+  try {
+    showToast("hello", { sticky: true });
+    assert.equal(box.style.bottom, "68px"); // Sessions / Files screen: the nav only
+    // The soft keyboard removes the nav too: nothing to clear, so the CSS fallback stands.
+    toastHarness(390, 800, {
+      "term-snips": { shown: false, top: 0, h: 0 },
+      "term-keybar": { shown: true, top: 683, h: 57 },
+      "mobile-nav": { shown: false, top: 0, h: 0 },
+    });
+    const kbd = global.document.getElementById("toast");
+    kbd.style.bottom = "stale";
+    showToast("hello", { sticky: true });
+    assert.equal(kbd.style.bottom, "125px");
+  } finally { hideToast(); toastCleanup(); }
+});
+
+test("showToast on a phone with no chrome measured clears the inline bottom (the CSS fallback applies)", () => {
+  const box = toastHarness(390, 800, {});
+  box.style.bottom = "181px";
+  try {
+    showToast("hello", { sticky: true });
+    assert.equal(box.style.bottom, "");
+  } finally { hideToast(); toastCleanup(); }
+});
+
+test("showToast above the phone breakpoint leaves the desktop position alone", () => {
+  const box = toastHarness(1280, 900, PHONE_TERMINAL);
+  box.style.bottom = "181px"; // left over from a phone-width toast before the window grew
+  try {
+    showToast("hello", { sticky: true });
+    assert.equal(box.style.bottom, "");
+  } finally { hideToast(); toastCleanup(); }
+});
+
+test("showToast without the mobile shell loaded (shell.js loads first) does not throw", () => {
+  const box = toastHarness(390, 800, PHONE_TERMINAL);
+  delete global.mobileActive;
+  try {
+    showToast("hello", { sticky: true });
+    assert.equal(box.style.bottom, "");
+  } finally { hideToast(); toastCleanup(); }
+});

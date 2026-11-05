@@ -228,7 +228,8 @@ function installRealToast(t) {
   const shell = require(path);
   const classes = new Set();
   const els = {
-    toast: { classList: {
+    // `style`: showToast sets the inline bottom offset on the phone layout (#111).
+    toast: { style: {}, classList: {
       toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
       add: (c) => classes.add(c),
       remove: (c) => classes.delete(c),

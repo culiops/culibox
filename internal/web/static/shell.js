@@ -15,6 +15,32 @@ let toastTimer = null;
 let toastSeq = 0;
 function toastSeqNow() { return toastSeq; }
 
+// placeToast keeps the toast clear of the phone's bottom chrome (#111). On the
+// phone layout the Terminal screen stacks the snippet row, the key bar and the
+// nav at the bottom, a 3-line toast at the CSS default covered the whole key bar,
+// and which of them is showing changes with the screen and with the soft
+// keyboard (it hides the nav). So the offset is read from what is displayed
+// right now (mobileToastBottom, mobileshell.js). Anywhere else the inline value
+// is cleared and the stylesheet's own bottom applies. mobileshell.js loads after
+// this file, hence the typeof guards.
+const TOAST_CHROME_IDS = ["term-snips", "term-keybar", "mobile-nav"];
+const TOAST_CHROME_GAP = 8;
+function placeToast(box) {
+  box.style.bottom = "";
+  if (typeof mobileActive !== "function" || typeof mobileToastBottom !== "function") return;
+  if (!mobileActive(window.innerWidth)) return;
+  const tops = [];
+  for (const id of TOAST_CHROME_IDS) {
+    const el = document.getElementById(id);
+    // display: none has no client rects; a zero-height box is not in the way either.
+    if (!el || el.getClientRects().length === 0) continue;
+    const r = el.getBoundingClientRect();
+    if (r.height > 0) tops.push(r.top);
+  }
+  const px = mobileToastBottom(window.innerHeight, tops, TOAST_CHROME_GAP);
+  if (px !== null) box.style.bottom = px + "px";
+}
+
 // showToast(msg, {undo, ms, error, warn, sticky}): `sticky` skips the auto-hide
 // timer (a pending toast stays until its owner hides it). `undo` is a callback;
 // supplying it reveals the Undo button and clicking it dismisses the toast after
@@ -46,6 +72,7 @@ function showToast(msg, opts) {
       bar.hidden = true;
     }
   }
+  placeToast(box);
   box.classList.add("show");
   clearTimeout(toastTimer);
   if (!opts.sticky) toastTimer = setTimeout(hideToast, opts.ms || 6000);
