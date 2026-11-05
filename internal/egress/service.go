@@ -54,8 +54,9 @@ type Endpoint struct {
 
 // Service owns the egress network and the proxy's listener for one instance.
 type Service struct {
-	o        ServiceOptions
-	maxConns int
+	o            ServiceOptions
+	maxConns     int
+	maxPerSource int
 
 	mu     sync.Mutex
 	ep     Endpoint
@@ -78,7 +79,7 @@ func NewService(o ServiceOptions) *Service {
 			return BoxAddr(ctx, d, box, network)
 		})
 	}
-	return &Service{o: o, maxConns: MaxProxyConns}
+	return &Service{o: o, maxConns: MaxProxyConns, maxPerSource: MaxProxyConnsPerSource}
 }
 
 // RefreshHostAddrs reads the host's interface addresses and hands them to the
@@ -160,13 +161,17 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("egress: listener is bound to %s, not %s; refusing to serve", l.Addr(), addr)
 	}
 	port := int(got.Port())
-	// The raw-connection limit counts before the header is read, so a silent
-	// client cannot hold more than its slot. darwin only: Linux boxes connect
-	// directly from their own address.
+	// Both caps apply on both OSes. The total cap sits under the PROXY wrapper
+	// and counts raw connections before any header is read, so a silent client
+	// cannot hold more than one slot, and only until the header timeout. The
+	// per-box cap sits above the wrapper, keyed on the source it vets: the PROXY
+	// line's address on macOS (the TCP peer is always the relay) and the peer's
+	// own address on Linux. One box cannot then take every slot of the total.
 	l = netlimit.Listener(l, s.maxConns)
 	if s.o.GOOS == "darwin" {
 		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(n.Subnet, n.Gateway), proxyHeaderTimeout)
 	}
+	l = netlimit.PerSource(l, s.maxPerSource)
 	host := s.o.ProxyHost
 	if host == "" {
 		host = n.Gateway.String()

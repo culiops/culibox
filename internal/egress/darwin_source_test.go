@@ -3,12 +3,14 @@ package egress
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -87,6 +89,77 @@ func TestDarwinTokenFromOtherBoxRefused(t *testing.T) {
 	}
 	if got := strings.Join(addrStrings(h.dials()), ","); got == "" {
 		t.Fatal("the matched request never dialled")
+	}
+}
+
+// Darwin shape: the cap is keyed on the PROXY line's source, since the TCP peer
+// is always the relay's loopback. One box holding its whole share leaves the
+// others served, and a closed connection frees a slot.
+func TestServiceDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: newFakeDocker(), GOOS: "darwin", Instance: "DEV", Port: 0,
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen})
+	s.maxPerSource = 3
+	defer s.Close(context.Background())
+	ep, err := s.Ready(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", ep.Port)
+	const bareConnect = "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"
+	dial := func(src string, port int) net.Conn {
+		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		fmt.Fprintf(c, "PROXY TCP4 %s 172.29.72.1 %d 9072\r\n", src, port)
+		return c
+	}
+	// send writes a bare CONNECT on c and gives the reply 2 s.
+	send := func(c net.Conn) *bufio.Reader {
+		c.SetDeadline(time.Now().Add(2 * time.Second))
+		fmt.Fprint(c, bareConnect)
+		return bufio.NewReader(c)
+	}
+	// status is the HTTP status of the reply, or 0 when the conn was closed
+	// with no response.
+	status := func(c net.Conn) int {
+		resp, err := http.ReadResponse(send(c), &http.Request{Method: "CONNECT"})
+		if err != nil {
+			return 0
+		}
+		return resp.StatusCode
+	}
+
+	var held []net.Conn
+	for i := 0; i < 3; i++ {
+		// Only the PROXY line: the connection stays open and holds its slot.
+		held = append(held, dial("172.29.72.9", 40000+i))
+	}
+	time.Sleep(200 * time.Millisecond) // the server admits them on their own goroutines
+
+	// The server closes it with the CONNECT still unread, which the kernel may
+	// report to the client as a reset instead of a plain EOF: either way it is
+	// closed and no byte comes back.
+	b, err := io.ReadAll(send(dial("172.29.72.9", 40003)))
+	if len(b) != 0 {
+		t.Fatalf("a fourth connection from one box was served: %q", b)
+	}
+	if err != nil && !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("fourth connection: %v, want EOF or a reset", err)
+	}
+
+	if code := status(dial("172.29.72.10", 40000)); code != 407 {
+		t.Fatalf("another box: status %d, want 407", code)
+	}
+
+	held[0].Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for status(dial("172.29.72.9", 40004)) != 407 {
+		if time.Now().After(deadline) {
+			t.Fatal("closing a held connection never freed a slot for its box")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
