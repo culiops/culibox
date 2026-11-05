@@ -4,7 +4,7 @@ Every feature in detail. The [README](../README.md) has the one-line summary.
 
 ## Watch
 
-- **Multi-session web terminal.** Run several agent sessions side by side in the browser (xterm.js over WebSocket), on desktop or phone.
+- **Multi-session web terminal.** Run several agent sessions side by side in the browser (xterm.js over WebSocket), on desktop or phone. A plain drag over Claude Code's fullscreen view copies the text: the agent's clipboard write (OSC 52) is accepted only within 1.5 seconds of you releasing a click or drag, or pressing Ctrl+C, in that terminal, while it is visible and focused, and each copy shows a toast. A request to read your clipboard is never answered. Shift+drag (Option+drag on macOS) still selects with the terminal's own selection.
 - **Attention awareness.** Sessions report whether they are working, idle or waiting, and why: a pending tool call or permission prompt, or simply your turn. The tab title and favicon change while something needs you. For Claude Code sessions, a card shows the pending tool call.
 - **Usage and cost.** Per-session context size and model, and account-level 5-hour and 7-day rate-limit windows when a statusLine hook provides them. A local analytics store (SQLite) ingests Claude Code transcripts into daily token usage, estimated cost per model, project and session, and skill/MCP attribution. Dollar figures are estimates from a built-in price table. Analytics can be turned off.
 - **Environment badge.** `env_label` and `env_color` mark an instance as DEV, PROD and so on in the UI.

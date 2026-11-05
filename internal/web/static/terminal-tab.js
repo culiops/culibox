@@ -349,8 +349,20 @@ class TerminalTab {
       const sel = this.term.getSelection();
       if (sel) copyText(sel, () => this.term.focus());
     });
+    // OSC 52: the gesture that may let the program write the clipboard (see
+    // osc52Gesture). The window opens on the RELEASE, which is when Claude Code
+    // copies, and is heard on the document because a drag can end outside the
+    // pane. A press that becomes a long drag would otherwise expire before the
+    // copy it asked for.
+    this.gestureAt = 0;
+    termEl.addEventListener("mousedown", (e) => this.armOsc52(e));
+    if (this.term.parser && this.term.parser.registerOscHandler) {
+      // true = consumed: xterm has no OSC 52 handler of its own to fall back to.
+      this.term.parser.registerOscHandler(52, (data) => { this.onOsc52(data); return true; });
+    }
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      if (osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) this.gestureAt = Date.now();
       const act = termKeyAction(e, IS_MAC, this.term.hasSelection());
       if (act === "copy") {
         e.preventDefault();
@@ -470,8 +482,55 @@ class TerminalTab {
   }
   resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }
 
+  // armOsc52 is the press half of the gesture: a press osc52Gesture accepts
+  // opens the window on its release. Every press first drops a release still
+  // pending from an earlier one: a mouseup can be lost (a drag released outside
+  // the browser), and the next release anywhere, even a Shift+drag's, must not
+  // arm on its behalf.
+  armOsc52(e) {
+    if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
+    this.osc52Up = null;
+    if (!osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
+    this.osc52Up = () => { this.osc52Up = null; this.gestureAt = Date.now(); };
+    document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
+  // onOsc52 handles the program asking to write the clipboard (OSC 52): how
+  // Claude Code's fullscreen copies its own selection. osc52Decision is the gate;
+  // an accepted write spends the gesture, so one drag or Ctrl+C buys one copy.
+  // Every copy is announced: the toast is how a user notices a write they did
+  // not expect. Drops are silent on screen (an agent must not be able to spam
+  // toasts) and logged once per tab.
+  onOsc52(data) {
+    const v = osc52Decision(data, {
+      now: Date.now(),
+      armedAt: this.gestureAt,
+      focused: document.hasFocus() && document.activeElement === this.term.textarea,
+      visible: document.visibilityState === "visible" && hasSize(this.termEl.clientWidth, this.termEl.clientHeight),
+    });
+    if (v.action !== "write") {
+      if (v.reason !== "read" && !this.warnedOsc52) { this.warnedOsc52 = true; console.warn("dropped an OSC 52 clipboard write:", v.reason); }
+      return;
+    }
+    this.gestureAt = 0;
+    const n = [...v.text].length;
+    copyText(v.text, (ok) => {
+      this.term.focus();
+      if (typeof showToast !== "function") return;
+      if (ok) { showToast(`Copied ${n} character${n === 1 ? "" : "s"} from the agent`); return; }
+      // The way out is the terminal's own selection, named as the help screen
+      // names it (a help-only row, so shortcutHint has no chord to render).
+      const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
+      const how = sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
+      showToast("The browser blocked the agent's copy." + how, { warn: true });
+    });
+  }
+
   connect() {
     this.term.reset();
+    // The output ring replays from here, and it can hold an old OSC 52: a
+    // gesture made before the reconnect must not let the replay write.
+    this.gestureAt = 0;
     this.clearRetry();
     this.hideTrouble();
     this.setStatus("connecting…");
@@ -823,6 +882,74 @@ function classifyTermPath(tok, cwd, agentCwd, home, boxed) {
   return { kind: "host", path: p };
 }
 
+// OSC52_WINDOW_MS is how long after a gesture the program may write the
+// clipboard. The copy it answers is one round trip (browser, server, PTY, agent
+// and back): milliseconds locally, a few hundred over a tunnel. 1.5 s leaves a
+// busy agent room without leaving the clipboard open while the user types.
+const OSC52_WINDOW_MS = 1500;
+// OSC52_MAX_BYTES caps one write, decoded. A full screen is ~30 KB and a long
+// scrolled selection a few hundred; 1 MiB is past both and well under xterm's
+// own 10 MB limit on a sequence.
+const OSC52_MAX_BYTES = 1024 * 1024;
+
+// osc52Decision decides what to do with an OSC 52 sequence (`Pc;Pd`): the
+// program asking to write, or read, the user's clipboard. The program is the
+// agent, which is untrusted, so a write is honoured only inside the window
+// after a gesture, in a pane that is visible and focused at the moment it
+// arrives; st = {now, armedAt, focused, visible}. Returns
+//   {action: "write", text}  copy text
+//   {action: "drop", reason} ignore it: read | hidden | unfocused | no-gesture |
+//                            empty | too-large | invalid | control
+// A read (`Pd = ?`) is refused before anything else: answering it would hand
+// the clipboard (a password, a token) to the agent.
+//
+// Decoding is strict where atob() forgives: unpadded input, spaces, bytes that
+// are not UTF-8. Text with control characters other than tab and line breaks is
+// refused: a selection off a screen never has them, and ESC is how a pasted
+// payload breaks out of bracketed paste in a terminal that does not filter it.
+// The gate runs before decoding, so a flood of writes costs a comparison each.
+function osc52Decision(data, st) {
+  const i = data.indexOf(";");
+  if (i < 0 || !/^[cpqs0-7]*$/.test(data.slice(0, i))) return { action: "drop", reason: "invalid" };
+  const pd = data.slice(i + 1);
+  if (pd === "?") return { action: "drop", reason: "read" };
+  if (!st.visible) return { action: "drop", reason: "hidden" };
+  if (!st.focused) return { action: "drop", reason: "unfocused" };
+  const age = st.now - st.armedAt;
+  if (!(st.armedAt > 0) || age < 0 || age > OSC52_WINDOW_MS) return { action: "drop", reason: "no-gesture" };
+  if (!pd) return { action: "drop", reason: "empty" };
+  if (pd.length > Math.ceil(OSC52_MAX_BYTES / 3) * 4) return { action: "drop", reason: "too-large" };
+  if (pd.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(pd)) return { action: "drop", reason: "invalid" };
+  const bin = atob(pd);
+  if (bin.length > OSC52_MAX_BYTES) return { action: "drop", reason: "too-large" };
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  } catch (_) {
+    return { action: "drop", reason: "invalid" };
+  }
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text)) return { action: "drop", reason: "control" };
+  return { action: "write", text };
+}
+
+// osc52Gesture reports whether a user input opens the OSC 52 window. Claude
+// Code copies through OSC 52 only for its own selection, which exists only while
+// it has mouse reporting on (mouseMode, from term.modes), and only at two
+// moments: the release of the drag and Ctrl+C. So the set is exactly
+//   - a left press xterm forwards to the program: not a forced selection
+//     (Shift, or Option on macOS), which is CuliBox's own copy-on-select and
+//     must not be overwritten by the agent a moment later
+//   - an exact Ctrl+C, matched on keyCode as xterm does when it sends ^C
+// Anything wider is exposure for nothing: Cmd+C and Ctrl+Shift+C send no bytes
+// to the PTY, and opening on every keydown would let the agent time a write to
+// each keystroke of a reply.
+function osc52Gesture(e, mouseMode, mac) {
+  if (!mouseMode || mouseMode === "none") return false;
+  if (e.type === "mousedown") return e.button === 0 && !(mac ? e.altKey : e.shiftKey);
+  if (e.type === "keydown") return e.keyCode === 67 && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+  return false;
+}
+
 // termKeyAction: what the xterm key handler does with a keydown, decided from
 // the shortcut registry (term.copy / term.paste). Returns
 //   "copy"    a copy chord with a selection: copy it, swallow the key
@@ -841,5 +968,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termKeyAction, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }
