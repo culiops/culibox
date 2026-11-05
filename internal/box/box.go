@@ -482,6 +482,15 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
 }
 
+// BoxName is the container name Wrap uses for (cwd, key): the same function, so
+// a caller that must prepare something for the box before it exists (the
+// credential broker's per-box socket) learns the name without starting it. The
+// key must be complete (binding, elevate session, clone, context), exactly as
+// it will be passed to Wrap.
+func (m *Manager) BoxName(cwd string, key BoxKey) (string, error) {
+	return m.boxName(cwd, key)
+}
+
 // stateDir is the HOST directory holding a box's agent home. It is a plain
 // directory rather than a named volume on purpose: a named volume is seeded
 // from the image and inherits the image's ownership, so any host uid that
