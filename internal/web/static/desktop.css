@@ -1354,8 +1354,10 @@
      off at 1240px, a 60-character one scrolled the page). It breaks at hyphens first,
      so a short name is not split while its column has room for it. A name with no
      hyphen has no break point, and break-word (.c-main) does not lower a column's
-     min-content width, so it held the column open all the same: `anywhere` does. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { overflow-wrap: anywhere; }
+     min-content width, so it held the column open all the same: `anywhere` does. Only
+     the name's own cell: every plain cell is a .c-nm, and the account id and Used by
+     must not split mid-word. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm { overflow-wrap: anywhere; }
   /* Status wraps between words ("Stored (store locked)" stays in its column).
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
   #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: break-word; }

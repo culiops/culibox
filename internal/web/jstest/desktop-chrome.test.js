@@ -222,10 +222,14 @@ test("the AWS connection name is allowed to wrap (a nowrap name overflowed the t
 // point, and break-word does not lower a column's min-content width, so on the AWS
 // table's automatic layout it held the column open like nowrap did (a 30-character one
 // overflowed 92px at 1225px, a 60-character one 316px). Only `anywhere` counts in the
-// column sizing, so the AWS name gets it.
-test("the AWS connection name may break anywhere when it has no hyphen to break at", () => {
-  const sel = '#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm';
-  assert.ok(rulesFor(sel).some((b) => /overflow-wrap:\s*anywhere/.test(b)), "overflow-wrap: anywhere on the AWS name");
+// column sizing, so the AWS name gets it. But credCellNode wraps EVERY plain cell in .c-nm
+// (the account id, Used by, ...), and those must keep break-word: an account id or a
+// profile name splitting mid-word ("1234567890/12") is what the rule above them forbids.
+// So it is the first cell's .c-nm only.
+test("only the AWS connection name (first cell) may break anywhere, not the account id or Used by", () => {
+  const sel = '#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm';
+  assert.ok(rulesFor(sel).some((b) => /overflow-wrap:\s*anywhere/.test(b)), "overflow-wrap: anywhere on the AWS name cell's name");
+  assert.ok(!rulesFor('#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm').length, "no rule reaches every .c-nm of the AWS table");
 });
 
 // #123: .btn is nowrap (primitives.css), so in the store strip a 701px window (the strip's
