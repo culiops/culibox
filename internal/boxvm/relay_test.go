@@ -218,7 +218,6 @@ func TestCheckDockerUserRulesAcceptsTheProvisionedChain(t *testing.T) {
 	for name, out := range map[string]string{
 		"provisioned":            goodRules,
 		"docker's bare RETURN":   goodRules + "-A DOCKER-USER -j RETURN\n",
-		"chain not created yet":  "-P INPUT ACCEPT\n",
 		"a tcp RETURN elsewhere": goodRules + "-A FORWARD -d 192.168.5.2/32 -p tcp -m tcp --dport 9071 -j RETURN\n",
 	} {
 		if err := CheckDockerUserRules(out); err != nil {
@@ -245,6 +244,28 @@ func TestCheckDockerUserRulesRefusesATCPPassThrough(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "box setup -recreate") || !strings.Contains(err.Error(), "-p tcp") {
 			t.Errorf("%s: the error must name the rule and the fix: %v", name, err)
+		}
+	}
+}
+
+// The gateway DROP itself must be there, for the address the relay dials
+// (LimaHostGateway): without it nothing stops the VM's default network from
+// reaching the Mac's loopback.
+func TestCheckDockerUserRulesRequiresTheGatewayDrop(t *testing.T) {
+	noDrop := strings.Replace(goodRules, "-A DOCKER-USER -d 192.168.5.2/32 -j DROP\n", "", 1)
+	for name, out := range map[string]string{
+		"chain not created yet":     "-P INPUT ACCEPT\n",
+		"no gateway DROP":           noDrop,
+		"DROP for another address":  noDrop + "-A DOCKER-USER -d 192.168.5.3/32 -j DROP\n",
+		"DROP narrowed to one port": noDrop + "-A DOCKER-USER -d 192.168.5.2/32 -p tcp -m tcp --dport 22 -j DROP\n",
+	} {
+		err := CheckDockerUserRules(out)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "box setup -recreate") || !strings.Contains(err.Error(), "192.168.5.2") {
+			t.Errorf("%s: the error must name the gateway and the fix: %v", name, err)
 		}
 	}
 }

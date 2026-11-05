@@ -93,12 +93,19 @@ func CheckInputRules(out string, egressPort, brokerPort int) error {
 // relay, and so write the PROXY line that names a box itself. Nothing CuliBox
 // writes passes TCP there now and docker adds at most a bare RETURN, so any such
 // rule (any port, any address, RETURN or ACCEPT) means the VM still runs an old
-// provision script. Rules in other chains are not looked at.
+// provision script. The gateway DROP itself must be there too, for the address
+// the relay dials (LimaHostGateway): the provision script drops the address
+// host.lima.internal resolves to, which is that one (measured in the spike), and
+// a VM where they differ must not pass. Rules in other chains are not looked at.
 func CheckDockerUserRules(out string) error {
+	drop := false
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 || f[0] != "-A" || f[1] != "DOCKER-USER" {
 			continue
+		}
+		if normaliseRule(f[2:]) == "-d "+LimaHostGateway+" -j DROP" {
+			drop = true
 		}
 		var proto, target string
 		for i := 2; i+1 < len(f); i++ {
@@ -113,6 +120,9 @@ func CheckDockerUserRules(out string) error {
 			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `agent-box box setup -recreate`",
 				strings.Join(f[2:], " "))
 		}
+	}
+	if !drop {
+		return fmt.Errorf("the box VM's firewall has no DOCKER-USER DROP for the lima gateway %s, so containers on its default network may reach the Mac's loopback; run `agent-box box setup -recreate`", LimaHostGateway)
 	}
 	return nil
 }
