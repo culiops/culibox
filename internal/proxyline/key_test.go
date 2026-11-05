@@ -188,7 +188,7 @@ func TestRefusalLogRateLimits(t *testing.T) {
 	if l := got(); len(l) != 1 {
 		t.Fatalf("3 refusals at t0 gave %d lines: %q", len(l), l)
 	} else {
-		want := "broker: refused 1 connection(s) without CuliBox's relay key since 10:00:00 (a process on this Mac that is not the relay, or a relay started with an old key)"
+		want := "broker: refused 1 connection(s) without CuliBox's relay key since 10:00:00 (a process on this Mac that is not the relay, a relay started with an old key, or a relay from an earlier CuliBox)"
 		if l[0] != want {
 			t.Fatalf("line = %q\nwant   %q", l[0], want)
 		}

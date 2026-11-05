@@ -127,6 +127,6 @@ func (r *RefusalLog) Refused() {
 	r.count = 0
 	r.last = t
 	r.mu.Unlock()
-	r.logf("%s: refused %d connection(s) without CuliBox's relay key since %s (a process on this Mac that is not the relay, or a relay started with an old key)",
+	r.logf("%s: refused %d connection(s) without CuliBox's relay key since %s (a process on this Mac that is not the relay, a relay started with an old key, or a relay from an earlier CuliBox)",
 		r.listener, n, since.Format("15:04:05"))
 }
