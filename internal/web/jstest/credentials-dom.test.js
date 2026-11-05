@@ -687,3 +687,19 @@ test("a repaint held for the unlock field is still made when nothing was typed",
   p.box.credFocusLeft();
   assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "focus left an empty field: repainted");
 });
+
+// A repaint held for a DATA change (the unlock request was in flight) while a Delete
+// confirmation was open: Cancel must let it through even though the width did not change.
+test("Cancel on a Delete confirmation makes a repaint held for new data, not only one for a new width", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.box.storeUnlockFocused = () => true; // an unlock is in flight: the body holds its repaint
+  p.box.renderCredentials({ ...liveView, tokens: [tok("sentry-prod"), tok("sentry-added")] });
+  assert.ok(!/sentry-added/.test(body.textContent), "held: the old body is still on screen");
+  p.box.storeUnlockFocused = () => false;
+  cancelBtn(p).onclick();
+  assert.ok(/sentry-added/.test(body.textContent), "the new data is painted once the confirmation is gone");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
+});

@@ -2974,8 +2974,9 @@ function credDismissConfirm(box) {
     const row = host.closest("tr.ctab-x");
     if (row) row.remove();
   }
-  // The confirmation held back a repaint for a new width: make it now.
-  credRepaintForWidth();
+  // The confirmation may have held back a repaint, for a new width or for new data
+  // (one held while the unlock request was in flight): credFocusLeft makes either.
+  credFocusLeft();
 }
 
 // credConfirmDelete: an inline confirmation in the card or row (no browser
