@@ -42,8 +42,14 @@ func TestWrapRefusesAWorkspaceFlippedBeforeDockerRun(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
 	}
-	if !strings.Contains(err.Error(), "is not the one that was checked") {
-		t.Fatalf("err = %v", err)
+	// The box was created by this spawn, so the text says it changed while the
+	// box started, and points to the requirement that docker must see host files
+	// as they are: a repeat for every folder means it does not.
+	want := "workspace " + ws + ": the mounted folder is not the one that was checked (it changed while the box started); refusing. " +
+		"If this repeats for every folder, CuliBox's docker does not see host files as they are " +
+		"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
 	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d, want the created box removed", f.runs(), f.stops())
@@ -157,6 +163,14 @@ func TestWrapRefusesAnIdleBoxWhoseWorkspaceWasReplaced(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceMountChanged) || !strings.Contains(err.Error(), "the box was removed, spawn again") {
 		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and the idle box removed", err)
 	}
+	// A reused box was not created by this spawn: it was replaced since, and the
+	// folder is not the one at fault for every folder, so no requirement is cited.
+	if want := "workspace " + ws + ": the mounted folder is not the one that was checked (it was replaced since the box started); refusing"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "README") {
+		t.Fatalf("err = %v, a reused box's refusal must not cite the docker requirement", err)
+	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d, want the idle box removed, not recreated", f.runs(), f.stops())
 	}
@@ -182,6 +196,9 @@ func TestWrapKeepsALiveBoxWhoseWorkspaceWasReplaced(t *testing.T) {
 	_, _, _, err := m.Wrap(context.Background(), ws, "s2", BoxKey{}, []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrWorkspaceMountChanged) || !strings.Contains(err.Error(), "still runs 1 session(s) and is kept") {
 		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and the live box kept", err)
+	}
+	if !strings.Contains(err.Error(), "(it was replaced since the box started)") {
+		t.Fatalf("err = %v, want the reused-box text", err)
 	}
 	if f.runs() != 1 || f.stops() != 0 {
 		t.Fatalf("runs=%d stops=%d, want the live box kept", f.runs(), f.stops())

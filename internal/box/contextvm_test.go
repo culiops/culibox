@@ -322,6 +322,9 @@ func TestVMIDsReusedBoxIsCheckedAgain(t *testing.T) {
 	if !strings.Contains(err.Error(), "still runs 1 session(s)") {
 		t.Fatalf("err = %v, want the live box kept and the remedy given", err)
 	}
+	if want := "context_paths /srv/ctx0: " + replacedMsg; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
 	if f.runs() != 1 || f.stops() != 0 {
 		t.Fatalf("runs=%d stops=%d, want the live box kept", f.runs(), f.stops())
 	}

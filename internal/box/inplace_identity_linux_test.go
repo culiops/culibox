@@ -65,8 +65,15 @@ func TestWrapRefusesAGuardFlippedBeforeDockerRun(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
 	}
-	if !strings.Contains(err.Error(), "workspace "+claude+": ") {
-		t.Fatalf("err = %v, want it to name %s", err, claude)
+	// A guard is a file or folder of the workspace, not the workspace: named as
+	// a guard, with the box created by this spawn, and without the docker
+	// requirement (one guard says nothing about every folder).
+	want := "guard " + claude + ": the mounted file or folder is not the one that was checked (it changed while the box started); refusing"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if strings.Contains(err.Error(), "workspace "+claude) || strings.Contains(err.Error(), "README") {
+		t.Fatalf("err = %v, a guard must not be called the workspace or cite the docker requirement", err)
 	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d, want the created box removed", f.runs(), f.stops())

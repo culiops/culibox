@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -37,9 +38,10 @@ type ctxMountError struct{ ctxPathError }
 
 func (e *ctxMountError) Is(target error) bool { return target == ErrContextMountChanged }
 
-func ctxMountChanged(p, extra string) error {
-	return &ctxMountError{ctxPathError{"context_paths " + p +
-		": the mounted path is not the checked one (it changed while the box started); refusing" + extra}}
+// ctxMountChanged is the refusal for context path p, with why saying what the
+// in-box check found. Its text is "context_paths <p>: <why>; refusing".
+func ctxMountChanged(p, why string) error {
+	return &ctxMountError{ctxPathError{"context_paths " + p + ": " + why + "; refusing"}}
 }
 
 // FileID is a file's identity on its filesystem. A bind mount shares its
@@ -75,17 +77,41 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, cr
 	}
 	// Stdout only: stderr noise on a successful exec would shift the lines below.
 	out, err := m.opts.Client.Stdout(ctx, args)
-	extra := ""
-	if err != nil {
-		extra = fmt.Sprintf(" (in-box check failed: %v)", err)
-	}
 	lines := strings.Split(out, "\n")
 	for i, mt := range checked {
-		if err != nil || i >= len(lines) || strings.TrimSpace(lines[i]) != fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
-			return mountChanged(mt, extra)
+		// A check that did not run (the exec failed, or its answer is missing or
+		// no identity) is not a path that changed: mountChanged says so.
+		switch {
+		case err != nil:
+			return mountChanged(mt, created, err)
+		case i >= len(lines):
+			return mountChanged(mt, created, errors.New("it printed no identity for this path"))
 		}
+		got := strings.TrimSpace(lines[i])
+		if got == fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
+			continue
+		}
+		if !isIDLine(got) {
+			return mountChanged(mt, created, errors.New("it printed something that is not an identity"))
+		}
+		return mountChanged(mt, created, nil)
 	}
 	return nil
+}
+
+// isIDLine reports whether s has the shape of one line of the in-box stat,
+// "<dev>:<ino>" in decimal.
+func isIDLine(s string) bool {
+	dev, ino, ok := strings.Cut(s, ":")
+	if !ok {
+		return false
+	}
+	for _, n := range []string{dev, ino} {
+		if _, err := strconv.ParseUint(n, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // skipGuard is true for a guard mount of a box this spawn did not create. A
@@ -98,15 +124,50 @@ func skipGuard(mt Mount, created bool) bool {
 	return mt.kind == mountGuard && !created
 }
 
-// mountChanged is the refusal for a mount whose in-box identity is not the one
-// checked: the workspace (and a guard of it) is a mount-changed refusal of the
-// workspace, anything else is today's context-path one. extra is appended to
-// the text (why the in-box check failed, when it did).
-func mountChanged(mt Mount, extra string) error {
-	if mt.kind == mountWorkspace || mt.kind == mountGuard {
-		return wsChanged(mt.Host, "the mounted folder is not the one that was checked (its path changed while the box started)"+extra)
+// wsHostFilesHint ends the refusal of a workspace that a box created by this
+// spawn does not show as the checked folder: one such refusal is a race, but one
+// for every folder means docker does not see the host's files as they are, which
+// the README lists as a requirement.
+const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
+	"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+
+// mountChanged is the refusal for a mount the in-box check did not confirm: the
+// workspace (and a guard of it) is a mount-changed refusal of the workspace,
+// anything else is a context-path one. The text matches what was found.
+// checkErr is why the check could not run (the exec failed, or its answer is
+// missing or is no identity), and then nothing is claimed to have changed. With
+// no checkErr the identity differs: created says the box is this spawn's, so the
+// mount changed while it started, and otherwise the box was reused and its mount
+// was replaced since it started. A workspace that differs in a box this spawn
+// created also carries wsHostFilesHint. A guard is named as one, and as a file or
+// folder, because it is not the workspace.
+func mountChanged(mt Mount, created bool, checkErr error) error {
+	var what, verdict string
+	switch mt.kind {
+	case mountWorkspace:
+		what, verdict = "workspace", "the mounted folder is not the one that was checked"
+	case mountGuard:
+		what, verdict = "guard", "the mounted file or folder is not the one that was checked"
+	default:
+		what, verdict = "context_paths", "the mounted path is not the checked one"
 	}
-	return ctxMountChanged(mt.Host, extra)
+	var why string
+	switch {
+	case checkErr != nil:
+		why = fmt.Sprintf("the in-box check could not run (%v)", checkErr)
+	case created:
+		why = verdict + " (it changed while the box started)"
+	default:
+		why = verdict + " (it was replaced since the box started)"
+	}
+	if mt.kind == mountWorkspace || mt.kind == mountGuard {
+		msg := what + " " + mt.Host + ": " + why + "; refusing"
+		if mt.kind == mountWorkspace && created && checkErr == nil {
+			msg += ". " + wsHostFilesHint
+		}
+		return &wsMountError{msg: msg}
+	}
+	return ctxMountChanged(mt.Host, why)
 }
 
 // ctxIdentityFailed is the refusal when the box VM could not give the identity

@@ -92,7 +92,13 @@ func ctxMounts(ids ...FileID) []Mount {
 	return out
 }
 
-const changedMsg = "the mounted path is not the checked one (it changed while the box started); refusing"
+// The three texts a context mount's refusal has, by what the check found: the
+// mount of a box this spawn created is not the checked path, the mount of a box
+// reused from an earlier spawn is not, or the in-box check did not give an answer.
+const (
+	changedMsg  = "the mounted path is not the checked one (it changed while the box started); refusing"
+	replacedMsg = "the mounted path is not the checked one (it was replaced since the box started); refusing"
+)
 
 func TestContextMountMatchStartsTheBox(t *testing.T) {
 	m, f := newTestManagerWithFake(t)
@@ -124,16 +130,22 @@ func TestContextMountMismatchRemovesACreatedBox(t *testing.T) {
 		name, out string
 		err       error
 		bad       string // the path the refusal must name
-		extra     string
+		want      string // the text after "<what> <path>: "
 		// wsFirst: the refusal is the workspace's. A stat that fails as a whole
 		// says nothing about which mount is wrong, so the first of the batch is
 		// named, and the workspace leads it where the host records its identity.
 		wsFirst bool
 	}{
-		{"second differs", "10:20\n11:99", nil, "/srv/ctx1", "", false},
-		{"first differs", "10:21\n11:21", nil, "/srv/ctx0", "", false},
-		{"short output", "10:20", nil, "/srv/ctx1", "", false},
-		{"stat failed", "", errors.New("docker exec: exit status 1: stat: cannot statx"), "/srv/ctx0", "in-box check failed", runtime.GOOS == "linux"},
+		{"second differs", "10:20\n11:99", nil, "/srv/ctx1", changedMsg, false},
+		{"first differs", "10:21\n11:21", nil, "/srv/ctx0", changedMsg, false},
+		// An answer that is missing or is no identity is a check that did not run,
+		// not a path that changed: the text must not claim a change.
+		{"short output", "10:20", nil, "/srv/ctx1",
+			"the in-box check could not run (it printed no identity for this path); refusing", false},
+		{"garbage output", "10:20\nnot an id", nil, "/srv/ctx1",
+			"the in-box check could not run (it printed something that is not an identity); refusing", false},
+		{"stat failed", "", errors.New("docker exec: exit status 1: stat: cannot statx"), "/srv/ctx0",
+			"the in-box check could not run (docker exec: exit status 1: stat: cannot statx); refusing", runtime.GOOS == "linux"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m, f := newTestManagerWithFake(t)
@@ -149,19 +161,16 @@ func TestContextMountMismatchRemovesACreatedBox(t *testing.T) {
 				if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
 					t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
 				}
-				if want := "workspace " + dir + ": the mounted folder is not the one that was checked"; !strings.Contains(err.Error(), want) {
+				if want := "workspace " + dir + ": " + c.want; !strings.Contains(err.Error(), want) {
 					t.Fatalf("err = %v, want %q", err, want)
 				}
 			} else {
 				if !errors.Is(err, ErrContextMountChanged) || !errors.Is(err, ErrUnboxableWorkspace) {
 					t.Fatalf("err = %v, want ErrContextMountChanged and ErrUnboxableWorkspace", err)
 				}
-				if want := "context_paths " + c.bad + ": " + changedMsg; !strings.Contains(err.Error(), want) {
+				if want := "context_paths " + c.bad + ": " + c.want; !strings.Contains(err.Error(), want) {
 					t.Fatalf("err = %v, want %q", err, want)
 				}
-			}
-			if c.extra != "" && !strings.Contains(err.Error(), c.extra) {
-				t.Fatalf("err = %v, want %q", err, c.extra)
 			}
 			if f.runs() != 1 || f.stops() != 1 {
 				t.Fatalf("runs=%d stops=%d, want the created box removed", f.runs(), f.stops())
@@ -226,6 +235,10 @@ func TestContextMountMismatchRemovesAnIdleReusedBox(t *testing.T) {
 	if !strings.HasSuffix(err.Error(), "; the box was removed, spawn again") {
 		t.Fatalf("err = %v, want it to say the idle box was removed", err)
 	}
+	// A box from an earlier spawn did not change "while the box started".
+	if want := "context_paths /srv/ctx0: " + replacedMsg; !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d, want the idle box removed, not recreated", f.runs(), f.stops())
 	}
@@ -263,5 +276,66 @@ func TestCheckContextPathIDOffLinux(t *testing.T) {
 	id, err := CheckContextPathID(d, "/h", nil, nil)
 	if err != nil || id != nil {
 		t.Fatalf("CheckContextPathID = %+v, %v; want nil, nil", id, err)
+	}
+}
+
+// The refusal text says what the check found, on any platform: a mount of a box
+// this spawn created changed while it started, one of a reused box was replaced
+// since, a check that did not run claims no change, and a guard is a guard (a file
+// or folder), not the workspace. Only a workspace of a created box points to the
+// requirement that docker sees host files as they are.
+func TestMountChangedTextMatchesTheCase(t *testing.T) {
+	const hint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
+		"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+	ws := Mount{Host: "/w/p", kind: mountWorkspace}
+	guard := Mount{Host: "/w/p/CLAUDE.md", kind: mountGuard}
+	ctx := Mount{Host: "/srv/c"}
+	execErr := errors.New("docker exec: exit status 1")
+	for _, c := range []struct {
+		name    string
+		mt      Mount
+		created bool
+		err     error
+		want    string // the whole text
+		// classes: every error class the refusal is, and the ones it is not.
+		ws, ctxClass bool
+	}{
+		{"workspace created", ws, true, nil,
+			"workspace /w/p: the mounted folder is not the one that was checked (it changed while the box started); refusing. " + hint,
+			true, false},
+		{"workspace reused", ws, false, nil,
+			"workspace /w/p: the mounted folder is not the one that was checked (it was replaced since the box started); refusing",
+			true, false},
+		{"workspace exec failed on a created box", ws, true, execErr,
+			"workspace /w/p: the in-box check could not run (docker exec: exit status 1); refusing", true, false},
+		{"workspace exec failed on a reused box", ws, false, execErr,
+			"workspace /w/p: the in-box check could not run (docker exec: exit status 1); refusing", true, false},
+		{"guard created", guard, true, nil,
+			"guard /w/p/CLAUDE.md: the mounted file or folder is not the one that was checked (it changed while the box started); refusing",
+			true, false},
+		{"guard exec failed", guard, true, execErr,
+			"guard /w/p/CLAUDE.md: the in-box check could not run (docker exec: exit status 1); refusing", true, false},
+		{"context created", ctx, true, nil,
+			"context_paths /srv/c: the mounted path is not the checked one (it changed while the box started); refusing", false, true},
+		{"context reused", ctx, false, nil,
+			"context_paths /srv/c: the mounted path is not the checked one (it was replaced since the box started); refusing", false, true},
+		{"context exec failed", ctx, false, execErr,
+			"context_paths /srv/c: the in-box check could not run (docker exec: exit status 1); refusing", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := mountChanged(c.mt, c.created, c.err)
+			if err.Error() != c.want {
+				t.Fatalf("text:\n got  %q\n want %q", err, c.want)
+			}
+			if got := errors.Is(err, ErrWorkspaceMountChanged) && errors.Is(err, ErrBoxUnavailable); got != c.ws {
+				t.Fatalf("ErrWorkspaceMountChanged and ErrBoxUnavailable = %v, want %v", got, c.ws)
+			}
+			if got := errors.Is(err, ErrContextMountChanged) && errors.Is(err, ErrUnboxableWorkspace); got != c.ctxClass {
+				t.Fatalf("ErrContextMountChanged and ErrUnboxableWorkspace = %v, want %v", got, c.ctxClass)
+			}
+			if errors.Is(err, ErrContextMountChanged) == c.ws || errors.Is(err, ErrWorkspaceMountChanged) == c.ctxClass {
+				t.Fatalf("err = %v is both the workspace and the context refusal", err)
+			}
+		})
 	}
 }
