@@ -3,7 +3,9 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestProjectSlug(t *testing.T) {
@@ -60,8 +62,8 @@ func TestContextMaxCurrentModels(t *testing.T) {
 		{"claude-mythos-5", 1_000_000, true},
 		{"claude-opus-4-8", 1_000_000, true},
 		{"claude-opus-4-7", 1_000_000, true},
-		{"claude-opus-4-6", 1_000_000, true},
-		{"claude-sonnet-4-6", 1_000_000, true},
+		{"claude-opus-4-6", 0, false}, // 200k unless [1m], which the transcript model id does not carry: unknown, no guessed %
+		{"claude-sonnet-4-6", 0, false},
 		{"claude-haiku-4-5-20251001", 200_000, true},
 		{"<synthetic>", 0, false},
 		{"", 0, false},
@@ -185,5 +187,232 @@ func TestWorktreeRootRejectsSubmoduleOfAWorktree(t *testing.T) {
 	os.WriteFile(filepath.Join(d, ".git"), []byte("gitdir: /m/.git/worktrees/wt/modules/sub\n"), 0o644)
 	if r, ok := worktreeRoot(d); ok {
 		t.Fatalf("submodule of a worktree taken as a worktree root %q", r)
+	}
+}
+
+// Transcript-shaped records, hand-built from the record shapes described in issue
+// #79 (not copied from a real transcript).
+const (
+	asstUsage = `{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":6,"cache_read_input_tokens":200000,"cache_creation_input_tokens":27448,"output_tokens":300}}}`
+	// compactBoundary is what Claude Code appends after an auto-compact: the
+	// pre-compact size is gone from the transcript's usage lines, postTokens is
+	// the size of the new context.
+	compactBoundary = `{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","compactMetadata":{"trigger":"auto","preTokens":227454,"postTokens":25340}}`
+	// synthetic429 is what a failed API call leaves behind: a fake assistant
+	// message with zero usage and the <synthetic> model.
+	synthetic429 = `{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}`
+)
+
+// After an auto-compact the last usage line still carries the PRE-compact size
+// (227,454 tokens = 22% of 1M); the tab must show the post-compact size instead.
+func TestParseUsageTail_compactAfterLastUsageShowsPostTokens(t *testing.T) {
+	lines := asstUsage + "\n" + `{"type":"user","message":{"role":"user"}}` + "\n" + compactBoundary + "\n"
+	u, ok := parseUsageTail([]byte(lines))
+	if !ok || u.ContextTokens != 25340 {
+		t.Fatalf("got %+v ok=%v, want ContextTokens=25340", u, ok)
+	}
+}
+
+func TestParseUsageTail_compactIsMarkedPostCompact(t *testing.T) {
+	u, ok := parseUsageTail([]byte(asstUsage + "\n" + compactBoundary + "\n"))
+	if !ok || !u.PostCompact {
+		t.Fatalf("got %+v ok=%v, want PostCompact=true", u, ok)
+	}
+	plain, _ := parseUsageTail([]byte(asstUsage + "\n"))
+	if plain.PostCompact {
+		t.Fatalf("a plain usage line must not be marked post-compact: %+v", plain)
+	}
+}
+
+// The tail may start after the last reply, leaving only the boundary.
+func TestParseUsageTail_compactBoundaryAloneIsEnough(t *testing.T) {
+	u, ok := parseUsageTail([]byte(`{"type":"user","message":{"role":"user"}}` + "\n" + compactBoundary + "\n"))
+	if !ok || u.ContextTokens != 25340 || !u.PostCompact {
+		t.Fatalf("got %+v ok=%v, want 25340 post-compact", u, ok)
+	}
+}
+
+// A failed API call ends the transcript on a <synthetic> zero-usage assistant
+// message; the tab and the steer rail must keep the last real reply instead.
+func TestParseUsageTail_syntheticErrorMessageIsSkipped(t *testing.T) {
+	u, ok := parseUsageTail([]byte(asstUsage + "\n" + synthetic429 + "\n"))
+	if !ok || u.ContextTokens != 227454 || u.Model != "claude-opus-4-8" {
+		t.Fatalf("got %+v ok=%v, want the real reply (227454, claude-opus-4-8)", u, ok)
+	}
+}
+
+// Each skip criterion stands alone: a <synthetic> model, an API-error flag, or
+// zero usage, even when the other markers are missing.
+func TestParseUsageTail_eachSkipCriterionStandsAlone(t *testing.T) {
+	for name, bad := range map[string]string{
+		"synthetic model": `{"message":{"role":"assistant","model":"<synthetic>","usage":{"input_tokens":5,"cache_read_input_tokens":5}}}`,
+		"api error flag":  `{"isApiErrorMessage":true,"message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":5,"cache_read_input_tokens":5}}}`,
+		"zero usage":      `{"message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":0}}}`,
+	} {
+		u, ok := parseUsageTail([]byte(asstUsage + "\n" + bad + "\n"))
+		if !ok || u.ContextTokens != 227454 {
+			t.Errorf("%s: got %+v ok=%v, want the earlier real reply", name, u, ok)
+		}
+	}
+}
+
+// Claude Code rounds the context % to the nearest point, it does not truncate
+// (227,454 / 1M = 22.7% shows as 23%; truncating showed 22 on 9 of 20 sessions).
+func TestUsageForRoundsPctLikeClaudeCode(t *testing.T) {
+	for _, c := range []struct {
+		tokens string
+		want   int
+	}{
+		{`"input_tokens":6,"cache_read_input_tokens":200000,"cache_creation_input_tokens":27448`, 23}, // 22.7
+		{`"input_tokens":224000`, 22},  // 22.4
+		{`"input_tokens":999600`, 100}, // 99.96 rounds up to the clamp
+		{`"input_tokens":1`, 0},        // never negative, never nil
+	} {
+		m, home := newLocatorManager(t)
+		writeTxLines(t, home, locCwd, "aaaa-1", time.Now(),
+			`{"message":{"role":"assistant","model":"claude-opus-4-8","usage":{`+c.tokens+`}}}`)
+		u, ok := m.UsageFor("s1")
+		if !ok || u.Pct == nil || *u.Pct != c.want {
+			t.Errorf("%s: got %+v ok=%v, want pct %d", c.tokens, u, ok, c.want)
+		}
+	}
+}
+
+// 1 of 745 real transcripts ended in ~320 KB of attachment records after the
+// last reply: the usage line sat outside the 256 KiB tail and the tab went blank.
+func TestUsageForWidensTheReadWhenTheTailHasNoUsage(t *testing.T) {
+	m, home := newLocatorManager(t)
+	att := `{"type":"attachment","attachment":{"type":"file","content":"` + strings.Repeat("x", 3000) + `"}}`
+	lines := []string{asstUsage}
+	for i := 0; i < 110; i++ { // ~330 KB
+		lines = append(lines, att)
+	}
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), lines...)
+	u, ok := m.UsageFor("s1")
+	if !ok || u.ContextTokens != 227454 || u.Model != "claude-opus-4-8" {
+		t.Fatalf("got %+v ok=%v, want the usage line beyond the first 256 KiB", u, ok)
+	}
+}
+
+// The widened read costs ~100 ms and 20 MB per call, and the sidebar polls every
+// few seconds: while the file is unchanged (same path, size, mtime) the answer
+// must be reused, not recomputed. Proof without a seam: overwrite the file with
+// different bytes of the same length and the same mtime; a re-read would see them.
+func TestUsageForReusesTheWidenedReadWhileTheFileIsUnchanged(t *testing.T) {
+	m, home := newLocatorManager(t)
+	att := `{"type":"attachment","attachment":{"type":"file","content":"` + strings.Repeat("x", 3000) + `"}}`
+	build := func(reply string) []string {
+		lines := []string{reply}
+		for i := 0; i < 110; i++ {
+			lines = append(lines, att)
+		}
+		return lines
+	}
+	mtime := time.Now().Add(-time.Minute).Truncate(time.Second)
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, build(asstUsage)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 227454 {
+		t.Fatalf("first call: got %+v ok=%v", u, ok)
+	}
+	other := strings.Replace(asstUsage, `"cache_read_input_tokens":200000`, `"cache_read_input_tokens":300000`, 1)
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, build(other)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 227454 {
+		t.Fatalf("second call on an unchanged file re-read it: got %+v ok=%v, want the cached 227454", u, ok)
+	}
+	// A real change (new size) is not served from the cache.
+	writeTxLines(t, home, locCwd, "aaaa-1", mtime, append(build(other), att)...)
+	if u, ok := m.UsageFor("s1"); !ok || u.ContextTokens != 327454 {
+		t.Fatalf("after the file changed: got %+v ok=%v, want 327454", u, ok)
+	}
+}
+
+// Only the boundary fits in the tail; the reply that names the model sits further
+// back. The model (and so the %) must still be found, with one widened read.
+func TestUsageForWidensToFindTheModelBehindACompactBoundary(t *testing.T) {
+	m, home := newLocatorManager(t)
+	att := `{"type":"attachment","attachment":{"type":"file","content":"` + strings.Repeat("x", 3000) + `"}}`
+	lines := []string{asstUsage}
+	for i := 0; i < 110; i++ {
+		lines = append(lines, att)
+	}
+	lines = append(lines, compactBoundary)
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), lines...)
+	u, ok := m.UsageFor("s1")
+	if !ok || u.ContextTokens != 25340 || !u.PostCompact || u.Model != "claude-opus-4-8" || u.Pct == nil || *u.Pct != 3 {
+		t.Fatalf("got %+v ok=%v, want 25340 post-compact with the model and 3%%", u, ok)
+	}
+}
+
+// A transcript that grows between the Stat and the read must not make the
+// "bounded" tail read unbounded: readTail returns at most n bytes.
+func TestReadTailIsBoundedWhenTheFileGrowsAfterStat(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(p, []byte(strings.Repeat("a", 100)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(strings.Repeat("a", 5000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := readTail(f, fi, 10)
+	if err != nil || len(b) != 10 {
+		t.Fatalf("readTail read %d bytes (err %v), want exactly 10", len(b), err)
+	}
+}
+
+// If the widened read fails, the normal tail's answer (e.g. a compact boundary
+// with no model) must survive instead of being thrown away, and the failure must
+// not be cached.
+func TestUsageWidenedFallsBackToTheNormalTailWhenTheReadFails(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close() // every read now fails
+	m := &Manager{}
+	narrow := Usage{ContextTokens: 25340, PostCompact: true}
+	u, ok := m.usageWidened("s1", p, f, fi, narrow, true)
+	if !ok || u != narrow {
+		t.Fatalf("got %+v ok=%v, want the normal-tail result %+v", u, ok, narrow)
+	}
+	if len(m.usageWide) != 0 {
+		t.Fatalf("a failed read was cached: %+v", m.usageWide)
+	}
+}
+
+// With no token count to show (a boundary lacking postTokens) the API must not
+// invent a 0% bar either.
+func TestUsageForNoPctWithoutATokenCount(t *testing.T) {
+	m, home := newLocatorManager(t)
+	bare := `{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":150000}}`
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), asstUsage, bare)
+	u, ok := m.UsageFor("s1")
+	if !ok || u.ContextTokens != 0 || u.Pct != nil {
+		t.Fatalf("got %+v ok=%v, want 0 tokens and no pct", u, ok)
+	}
+}
+
+// A boundary without postTokens (older Claude Code) must still never fall back
+// to the stale pre-compact number: zero tokens renders as a blank tab.
+func TestParseUsageTail_compactWithoutPostTokensIsBlankNotStale(t *testing.T) {
+	bare := `{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":150000}}`
+	u, _ := parseUsageTail([]byte(asstUsage + "\n" + bare + "\n"))
+	if u.ContextTokens != 0 {
+		t.Fatalf("got %+v, want ContextTokens=0", u)
 	}
 }

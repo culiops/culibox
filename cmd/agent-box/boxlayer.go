@@ -51,7 +51,7 @@ type boxLayer struct {
 	cli        box.CLIClient
 	img        boximage.Docker
 	image      string // the fallback box image (box_image)
-	goos       string // runtime.GOOS as the layer was built; linux fences and guards every box
+	goos       string // runtime.GOOS as the layer was built
 	dataDir    string // the absolute data dir, for the store doctor and box setup read
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
 	// egressProbe is egress.Probe; a test replaces it.
@@ -135,10 +135,11 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		ExtraCA:    extra,
 		ExtraCAErr: extraErr,
 		// Both OSes: every box sits on the egress network (darwin through the
-		// option (c) relay, since #69). Only Linux has its guard files
-		// read-only in place (#68).
+		// option (c) relay, since #69) and has its guard files read-only in
+		// place (darwin since #68: the full read-only self-bind of .git held
+		// through colima virtiofs on a Mac, the partial overlay did not).
 		EgressAll:    true,
-		GuardInPlace: l.goos == "linux",
+		GuardInPlace: true,
 	}
 	if l.vm != nil {
 		o.Prepare = l.prepare
@@ -286,13 +287,15 @@ func (l *boxLayer) vmStopped(ctx context.Context) bool {
 
 // bootReconcile reaps this instance's orphaned boxes and their stale homes at
 // boot. With the VM stopped no box can be alive, so it waits for the first
-// boxed spawn, whose VM start runs the same pass (prepare).
-func (l *boxLayer) bootReconcile(ctx context.Context) {
+// boxed spawn, whose VM start runs the same pass (prepare). It reports whether
+// it ran: false only while the VM is stopped and its docker unreachable.
+func (l *boxLayer) bootReconcile(ctx context.Context) bool {
 	if l.vmStopped(ctx) {
 		log.Printf("box VM stopped: box reconcile and reclaim wait for the first boxed spawn")
-		return
+		return false
 	}
 	l.reconcileAndReclaim(ctx)
+	return true
 }
 
 // dailyReclaim is the reclaim ticker's pass. Silent while the VM is stopped:

@@ -1,6 +1,6 @@
 # Clone mode
 
-Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `agent-box clone fetch`, for you to review. Linux only for now.
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `agent-box clone fetch`, for you to review. It works on Linux and, in the box VM, on macOS (see [On macOS](#on-macos)).
 
 Two profile fields turn it on:
 
@@ -54,11 +54,20 @@ Commit subjects are printed with control characters replaced, because a box wrot
 
 ## Refusals
 
-- A host-tier session is refused anywhere inside a clone, including a subdirectory or a path that does not exist yet. The box wrote those files, and host-tier tools would trust them. A host-tier session at `clone_of` or at a share source is fine.
+- A host-tier session is refused anywhere inside a clone, including a subdirectory, a path that does not exist yet, or another spelling of the same directory (a symlink, or different letter case on a case-insensitive disk such as the macOS default). The box wrote those files, and host-tier tools would trust them. A host-tier session at `clone_of` or at a share source is fine.
 - CuliBox records every directory it has used as a clone in `<data dir>/clone-dirs`, one path per line. A recorded directory stays box-owned even after its profile is edited or deleted. Deleting the directory does not release it. To release one, remove its line from `<data dir>/clone-dirs`. An unreadable record refuses every host-tier spawn until it is fixed.
 - A spawn is refused, never partly started, if `clone_of`, a share source or a mountpoint is unsafe: a symlink on the path, a path inside the data root or a config directory, or an existing clone whose `origin` is not `clone_of`.
 - A `clone_of` that is inside another profile's clone, or inside a recorded clone directory, is refused when you save the profile, when you spawn it and in `clone fetch`: the owning box could have planted git hooks there.
 - Changing `clone_of`, `default_cwd` or `clone_share` gives the profile a new box rather than reusing the old one.
+
+## On macOS
+
+Clone mode works as on Linux, with the boxes in CuliBox's box VM (see [Running CuliBox on macOS](MACOS.md#boxed-tier-contained-sessions)). The containers that refresh a clone, list its branches and make the bundle for `clone fetch` run in that VM too, never on your own docker.
+
+- `clone_of` and the copy (`default_cwd`) must both be under your home directory: the VM shares only the home (and the data root, which cannot hold either). Any other place is refused when you save the profile and when you spawn it, before the copy is made.
+- `agent-box clone fetch` needs the box VM running and never starts it. With the VM stopped it refuses and tells you to run `agent-box box setup` (or start any boxed session) first.
+- Leftover clone containers are removed when `agent-box serve` starts and the VM is running. While the VM is stopped no container runs in it.
+- Files the box writes in the clone are owned by your Mac user.
 
 ## Known limits
 

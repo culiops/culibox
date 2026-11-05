@@ -15,8 +15,20 @@ import (
 	"github.com/culiops/culibox/internal/session"
 )
 
+// resetRateLimitsMemory clears the daemon's in-process quota memory, which is
+// global: account names repeat across tests, and a token change in one would
+// otherwise leave a cutoff that hides another test's readings.
+func resetRateLimitsMemory() {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	rlLastGood.m = map[string]*rlEntry{}
+	rlLastGood.cut = map[string]int64{}
+}
+
 func acctServer(t *testing.T) (*Server, *mockSvc, string) {
 	t.Helper()
+	resetRateLimitsMemory()
+	t.Cleanup(resetRateLimitsMemory)
 	data := t.TempDir()
 	def := filepath.Join(t.TempDir(), ".claude")
 	os.MkdirAll(def, 0o700)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -176,9 +177,22 @@ func absClean(field, p string) error {
 	return nil
 }
 
+// foldPaths makes pathOverlap ignore case. macOS APFS does by default, so
+// there /Users/a/App/box is inside /Users/a/app; the box layer folds the
+// same way (box.ProtectedOverlap). A var so tests can exercise both.
+var foldPaths = runtime.GOOS == "darwin"
+
 // pathOverlap reports whether a and b are equal or one is inside the other,
 // component-wise ("/a/b" and "/a/bc" do not overlap). Both must be clean.
+// On macOS it ignores case, which only ever refuses more.
 func pathOverlap(a, b string) bool {
+	return pathOverlapFold(a, b, foldPaths)
+}
+
+func pathOverlapFold(a, b string, fold bool) bool {
+	if fold {
+		a, b = strings.ToLower(a), strings.ToLower(b)
+	}
 	return within(a, b) || within(b, a)
 }
 

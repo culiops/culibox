@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,5 +130,85 @@ func TestBoxOwnedMessageNamesTheClone(t *testing.T) {
 	}
 	if strings.Contains(msg, "profile") {
 		t.Errorf("message %q mentions a profile; a recorded dir has none", msg)
+	}
+}
+
+// foldingStat is os.Stat on a filesystem that, like macOS APFS by default,
+// ignores case: every "/Box-Clones" in a path names the "/box-clones" on disk.
+func foldingStat(p string) (fs.FileInfo, error) {
+	return os.Stat(strings.ReplaceAll(p, "/Box-Clones", "/box-clones"))
+}
+
+// On a case-insensitive filesystem one directory has many spellings no string
+// compare matches. A path the filesystem resolves into the clone is owned,
+// whatever its case.
+func TestBoxOwnedComparesByIdentity(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "box-clones", "work")
+	mustMkdir(t, filepath.Join(dir, "sub"))
+	other := filepath.Join(base, "box-clones", "other")
+	mustMkdir(t, other)
+	clones := []config.Clone{
+		{Dir: filepath.Join(base, "box-clones", "never-created")},
+		{Of: filepath.Join(base, "of"), Dir: dir},
+	}
+	variant := filepath.Join(base, "Box-Clones", "work")
+	for _, tc := range []struct {
+		name  string
+		cwd   string
+		owned bool
+	}{
+		{"the clone, another case", variant, true},
+		{"inside it, another case", filepath.Join(variant, "sub"), true},
+		{"a not-yet-existing path under it, another case", filepath.Join(variant, "new", "deeper"), true},
+		{"a sibling, another case", filepath.Join(base, "Box-Clones", "other"), false},
+		{"the clones' parent, another case", filepath.Join(base, "Box-Clones"), false},
+	} {
+		msg, owned := boxOwned(tc.cwd, clones, foldingStat)
+		if owned != tc.owned {
+			t.Errorf("%s: boxOwned(%q) = %v (%q), want %v", tc.name, tc.cwd, owned, msg, tc.owned)
+		}
+		if owned && !strings.Contains(msg, tc.cwd+" is inside the box-owned clone "+dir) {
+			t.Errorf("%s: message %q does not name the cwd and the clone", tc.name, msg)
+		}
+	}
+}
+
+// The same on a real case-insensitive filesystem (the macOS default). Skipped
+// where the filesystem is case-sensitive.
+func TestBoxOwnedCaseVariantOnThisFilesystem(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "box-clones", "work")
+	mustMkdir(t, dir)
+	variant := filepath.Join(base, "BOX-CLONES", "WORK")
+	a, errA := os.Stat(dir)
+	b, errB := os.Stat(variant)
+	if errA != nil || errB != nil || !os.SameFile(a, b) {
+		t.Skip("case-sensitive filesystem")
+	}
+	if _, owned := BoxOwned(filepath.Join(variant, "sub"), []config.Clone{{Dir: dir}}); !owned {
+		t.Fatalf("a case variant of the clone is not owned")
+	}
+}
+
+// A stat that fails for a reason other than "not there" leaves the identity
+// unknown, so the path is owned.
+func TestBoxOwnedIdentityFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "box-clones", "work")
+	mustMkdir(t, dir)
+	cwd := filepath.Join(base, "elsewhere")
+	mustMkdir(t, cwd)
+	clones := []config.Clone{{Dir: dir}}
+	for name, failing := range map[string]string{"the clone dir": dir, "an ancestor of cwd": base} {
+		stat := func(p string) (fs.FileInfo, error) {
+			if p == failing {
+				return nil, fs.ErrPermission
+			}
+			return os.Stat(p)
+		}
+		if msg, owned := boxOwned(cwd, clones, stat); !owned || !strings.Contains(msg, "cannot be resolved") {
+			t.Errorf("%s unreadable: boxOwned = %v %q, want owned", name, owned, msg)
+		}
 	}
 }

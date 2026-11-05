@@ -103,6 +103,11 @@ context and never edits `~/.ssh/config`.
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
+- Clone mode (a box works on a private copy of a repo and its branches come
+  home for review) runs here too, in the box VM. Keep the repo and its copy
+  under your home directory; anything else is refused. `agent-box clone fetch`
+  needs the VM running and never starts it. See
+  [Clone mode](CLONE-MODE.md#on-macos). Not yet tested end to end on a Mac.
 - Restart `agent-box serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
@@ -190,6 +195,31 @@ box) can therefore ask the broker for that session's credentials (AWS role sessi
 tokens). The exposure stays between boxes of one CuliBox, under one user; it is
 not reachable from outside. Until it is fixed, do not run a profile you do not
 trust next to a bound profile whose credentials are broader than its own.
+
+### In-place guard
+
+A box started in place sees the workspace root's `.git`, `.claude/` and any
+top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only,
+as on Linux, and the same repositories are refused (submodules, `core.worktree`,
+a git config `include`, and so on). What it covers and what it does not is in
+[Security model](SECURITY.md#known-limits).
+
+- Measured on a Mac (colima 0.8.1, virtiofs, workspace under the home) for
+  `.git`: writes, config edits, renaming `.git` or `hooks`, a new hook and a
+  write through a symlink are refused in the box, and the Mac copy does not
+  change. A read-only mount of only `.git/hooks` does not hold, which is why the
+  whole `.git` is mounted. The other guarded names use the same read-only mount
+  and have not been measured separately on a Mac yet.
+- Not yet tested: whether a box can write a guarded file under another spelling
+  of its name, such as `claude.md`, or a worktree's `.git` file as `.GIT`. A
+  macOS volume ignores case by default, so the Mac treats that as the same
+  file, while the read-only mount in the box covers only the one spelling.
+  Until this is measured, treat those files as writable by the box. The guarded
+  directories (`.git`, `.claude/`, the hooks directory) are expected to hold,
+  but are not measured under another spelling either.
+- After upgrading, a box that was started before this guard and still runs
+  sessions is refused at the next spawn ("started without ... which this
+  session needs") until you end those sessions. An idle one is recreated.
 
 ## Behind a TLS-inspecting proxy
 

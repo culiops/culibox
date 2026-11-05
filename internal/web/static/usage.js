@@ -33,7 +33,7 @@ function usageTitle(u) {
   const parts = [];
   if (u.model) parts.push(u.model);
   if (u.effort) parts.push(u.effort);
-  parts.push(withCommas(u.contextTokens) + " tokens");
+  parts.push(withCommas(u.contextTokens) + " tokens" + (u.postCompact ? " (after compact)" : ""));
   return parts.join(" · ");
 }
 
@@ -67,22 +67,29 @@ const METER_HOT_PCT = 75;
 
 function meterModel(label, win, nowSec) {
   if (!win || typeof win.used_percentage !== "number") return null;
+  // resets_at in the past: the window has rolled over, so the stored percentage
+  // describes the OLD window. The new usage is unknown, so show "reset" with no
+  // number and an empty bar, never the old % (and never a 0% that would claim
+  // "plenty left"). resets_at 0/missing is "unknown reset time", not a reset.
+  if (win.resets_at > 0 && win.resets_at <= nowSec) {
+    return { label: label, pct: null, width: "0%", hot: false, unknown: true, reset: "reset" };
+  }
   const raw = win.used_percentage;
   const clamped = Math.min(100, Math.max(0, raw));
-  // fmtCountdown returns the word "now" (not a duration) once the reset time has
-  // passed or is missing — resets_at has no omitempty server-side, and the
-  // snapshot file can also simply go stale for hours between statusLine writes.
-  // Appending " left" to that word would read as the nonsensical "now left".
+  // fmtCountdown returns the word "now" (not a duration) when the reset time is
+  // missing — resets_at has no omitempty server-side. Appending " left" to that
+  // word would read as the nonsensical "now left".
   const c = fmtCountdown(win.resets_at, nowSec);
   return {
     label: label,
     pct: Math.round(raw),
     width: clamped + "%",
     hot: raw > METER_HOT_PCT,
+    unknown: false,
     reset: c === "now" ? "resets now" : c + " left",
   };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
+  module.exports = { withCommas, fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
 }

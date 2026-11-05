@@ -127,7 +127,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("config: %v", err)
 		}
-		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
+		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
 	log.Print(cred.summary())
@@ -555,17 +555,17 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 
-	// Clone mode (Linux only). The profile list is read through the launcher on
-	// every call, so a profile saved after boot is covered. Before Reconcile,
-	// like the box hooks. Hooks are installed on Linux even when clone creation
-	// is unavailable (no layer, no git): the host-tier box-owned guard needs
-	// neither. The interface must never hold a nil *cloneHooks, so SetClone runs
-	// only for a real value.
-	h, err := newCloneHooks(runtime.GOOS, layer, home, bundleSrc, dataDir, cfg.BoxInstance(), protected, lnch.Clones)
+	// Clone mode (Linux and macOS). The profile list is read through the
+	// launcher on every call, so a profile saved after boot is covered. Before
+	// Reconcile, like the box hooks. Hooks are installed even when clone
+	// creation is unavailable (no layer, no git): the host-tier box-owned guard
+	// needs neither. The interface must never hold a nil *cloneHooks, so
+	// SetClone runs only for a real value.
+	h, err := newCloneHooks(layer, home, bundleSrc, dataDir, cfg.BoxInstance(), protected, lnch.Clones)
 	if err != nil {
 		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
 	}
-	if h != nil { // non-nil on Linux even when unavailable: the box-owned guard stays on
+	if h != nil { // non-nil even when unavailable: the box-owned guard stays on
 		mgr.SetClone(h)
 	}
 
@@ -652,14 +652,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		// On darwin with the VM stopped this waits for the first boxed spawn: it
 		// never starts the VM, and an unreachable docker must not read as "no
 		// boxes".
-		layer.bootReconcile(context.Background())
-		if runtime.GOOS == "linux" { // clone mode is Linux-only
-			sctx, scancel := context.WithTimeout(context.Background(), time.Minute)
-			if n := sweepCloneContainers(sctx, layer.cli.ListByLabel, layer.cli.Stop, cfg.BoxInstance()); n > 0 {
-				log.Printf("clone: removed %d leftover clone container(s)", n)
-			}
-			scancel()
-		}
+		bootReconcileAndSweep(context.Background(), layer, cfg.BoxInstance())
 		if egressSvc != nil {
 			warnBridgeBoxes(context.Background(), layer.cli, cfg.BoxInstance(), egressSvc.Svc.Network())
 		}
@@ -781,7 +774,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Protected:        protected,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       boxRuntime,
-		CloneUnavailable: cloneUnavailableReason(runtime.GOOS, h),
+		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
 

@@ -298,7 +298,10 @@ func TestPreEgressUnboundIdleBoxIsRecreatedOnNetwork(t *testing.T) {
 }
 
 // newDarwinShapedManager is what boxLayer.options builds on macOS since #69:
-// EgressAll on (every box fenced), the VM hooks set, GuardInPlace off.
+// EgressAll on (every box fenced), the VM hooks set. GuardInPlace is off here
+// (options turns it on since #68): these tests are about the network fence, and
+// an old box the fake started without the guard mounts would be refused for
+// those first. The guard under the VM's shares is TestWrapGuardsStayUnderTheVMShares.
 func newDarwinShapedManager(t *testing.T, verify func(context.Context, string) error) (*Manager, *fakeClient) {
 	t.Helper()
 	f := newFake()

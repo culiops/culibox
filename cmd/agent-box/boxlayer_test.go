@@ -200,10 +200,10 @@ func TestBoxLayerOptionsFenceEveryBox(t *testing.T) {
 	if o := (&boxLayer{goos: "linux"}).options(cfg); !o.EgressAll || !o.GuardInPlace {
 		t.Errorf("linux must fence and guard every box: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
 	}
-	// #69: darwin fences every box too (option (c) relay); the in-place guard
-	// stays Linux-only (#68).
-	if o := (&boxLayer{goos: "darwin"}).options(cfg); !o.EgressAll || o.GuardInPlace {
-		t.Errorf("darwin must fence every box but not guard in place: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
+	// #69: darwin fences every box too (option (c) relay). #68: and guards it in
+	// place, as the Mac spike showed the read-only self-binds hold through virtiofs.
+	if o := (&boxLayer{goos: "darwin"}).options(cfg); !o.EgressAll || !o.GuardInPlace {
+		t.Errorf("darwin must fence and guard every box: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
 	}
 }
 

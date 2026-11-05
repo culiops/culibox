@@ -32,18 +32,96 @@ function acctBadge(session) {
   return { text: a, title: "Agent account: " + a };
 }
 
-// acctOptionLabel: the spawn select's text for one account. Quota numbers
-// older than ACCT_STALE_SEC (or with no timestamp) carry their age, so a
-// stale reading is never mistaken for a current one.
+// acctOptionLabel: the spawn select's text for one account. A reading older than
+// ACCT_STALE_SEC (or with no timestamp) carries its age, so a stale reading is
+// never mistaken for a current one. The age belongs to each window's own reading
+// (acctBestLimits can mix a fresh five-hour number with a two-day-old weekly
+// one): one trailing note when every live window is equally old, else per window.
 function acctOptionLabel(name, limits, nowSec) {
-  const parts = [];
-  if (limits && limits.five_hour) parts.push("5h " + Math.round(limits.five_hour.used_percentage) + "%");
-  if (limits && limits.seven_day) parts.push("wk " + Math.round(limits.seven_day.used_percentage) + "%");
-  if (!parts.length) return name + " · no quota data";
-  let label = name + " · " + parts.join(" · ");
-  const age = acctLimitsAge(limits.updated_at, nowSec);
-  if (age.stale) label += " (" + age.text.replace(" ago", " old") + ")";
-  return label;
+  limits = acctBestLimits(limits, nowSec);
+  const wins = [];
+  if (limits && limits.five_hour) wins.push(["5h", limits.five_hour]);
+  if (limits && limits.seven_day) wins.push(["wk", limits.seven_day]);
+  if (!wins.length) return name + " · no quota data";
+  // A window past its reset shows no number, so it carries no age either.
+  const notes = wins.map(([, w]) => (acctWinReset(w, nowSec) ? "" : acctAgeNote(acctWinAge(w, limits, nowSec))));
+  const live = notes.filter((_, i) => !acctWinReset(wins[i][1], nowSec));
+  if (live.length && live.every((n) => n && n === live[0])) {
+    return name + " · " + wins.map(([l, w]) => acctWinText(l, w, nowSec)).join(" · ") + " (" + live[0] + ")";
+  }
+  return name + " · " + wins.map(([l, w], i) => acctWinText(l, w, nowSec) + (notes[i] ? " (" + notes[i] + ")" : "")).join(" · ");
+}
+
+// acctWinAge: the age of one window's reading. acctBestLimits stamps each window
+// with its own updated_at; a window without one (a legacy snapshot) takes the
+// snapshot's.
+function acctWinAge(win, limits, nowSec) {
+  const at = win && win.updated_at !== undefined ? win.updated_at : limits && limits.updated_at;
+  return acctLimitsAge(at, nowSec);
+}
+
+// acctWinReset: the window's reset time has passed (see meterModel).
+function acctWinReset(win, nowSec) {
+  return win.resets_at > 0 && win.resets_at <= nowSec;
+}
+
+// acctAgeNote: the visible age text for a stale reading ("7h old", "no data"),
+// "" for a fresh one. A tooltip alone is not enough: the number must not be
+// mistaken for a current one.
+function acctAgeNote(age) {
+  return age && age.stale ? age.text.replace(" ago", " old") : "";
+}
+
+// acctWinText: one window's text in the spawn select. A window past its reset
+// time has rolled over, so its old percentage is not shown (see meterModel).
+function acctWinText(label, win, nowSec) {
+  if (acctWinReset(win, nowSec)) return label + " reset";
+  return label + " " + Math.round(win.used_percentage) + "%";
+}
+
+// acctBestLimits: the one reading of an account's quota that every meter shows
+// (header, mobile/side band, rail bars, spawn picker, Settings). Whether the
+// quota is per account or per model bucket is not known, and the snapshot's top
+// level is only whichever session wrote last, so two sessions on one token made
+// the meters flip. Each window therefore shows the HIGHEST used_percentage among
+// the top level and every limits.by_model bucket whose window has not reset yet,
+// with that reading's own resets_at. Within one window usage only rises, so per
+// account the highest is the freshest, and per model it is the most constraining
+// limit: it never understates. updated_at is the oldest reading shown. A window
+// no reading of which is live is returned as the top level has it (or the
+// freshest bucket's), so meterModel renders it as reset.
+//
+// The readings the daemon remembered (limits.seen, one per window and resets_at)
+// join the candidates: a host file written by sessions on different models only
+// ever holds the last writer's numbers, and by_model is absent from it.
+function acctBestLimits(limits, nowSec) {
+  if (!limits) return limits;
+  const byModel = limits.by_model && typeof limits.by_model === "object" ? limits.by_model : null;
+  const seen = limits.seen && typeof limits.seen === "object" ? limits.seen : null;
+  if (!byModel && !seen) return limits;
+  const pick = (key) => {
+    const cands = [];
+    const add = (w, at) => {
+      if (w && typeof w.used_percentage === "number") cands.push({ w, at: Number(at) || 0 });
+    };
+    add(limits[key], limits.updated_at);
+    for (const b of Object.values(byModel || {})) if (b && typeof b === "object") add(b[key], b.updated_at);
+    for (const r of Array.isArray(seen && seen[key]) ? seen[key] : []) if (r && typeof r === "object") add(r, r.updated_at);
+    const live = cands.filter((c) => !(c.w.resets_at > 0 && c.w.resets_at <= nowSec));
+    if (live.length) return live.reduce((m, c) => (c.w.used_percentage > m.w.used_percentage || (c.w.used_percentage === m.w.used_percentage && c.at > m.at) ? c : m));
+    if (limits[key]) return cands.find((c) => c.w === limits[key]) || null;
+    return cands.length ? cands.reduce((m, c) => (c.at > m.at ? c : m)) : null;
+  };
+  const out = {};
+  const ats = [];
+  for (const key of ["five_hour", "seven_day"]) {
+    const c = pick(key);
+    if (!c) continue;
+    out[key] = Object.assign({}, c.w, { updated_at: c.at }); // each window keeps its own age
+    ats.push(c.at);
+  }
+  out.updated_at = ats.length ? Math.min(...ats) : limits.updated_at; // the oldest shown
+  return out;
 }
 
 // acctChoices: the names an account <select> offers, default first. `keep` is
@@ -114,7 +192,7 @@ function acctTokenStateText(state, id) {
 }
 
 // acctCanToken: the account's provider signs in with a pasted token and an
-// interactive login (claude). Codex accounts are stored but cannot be spawned.
+// interactive login (claude). Any other stored provider is listed and deletable only.
 function acctCanToken(a) {
   return !!a && a.provider === "claude";
 }
@@ -224,7 +302,7 @@ async function loadAccounts() {
   const lims = acctLimitsMap(lastRateLimits);
   const now = Math.floor(Date.now() / 1000);
   list.replaceChildren();
-  for (const a of accountsCache) list.appendChild(acctRow(a, lims[a.name], now));
+  for (const a of accountsCache) list.appendChild(acctRow(a, acctBestLimits(lims[a.name], now), now));
 }
 
 function acctRow(a, limits, now) {
@@ -248,8 +326,6 @@ function acctRow(a, limits, now) {
   ag.className = "acct-age";
   ag.textContent = n ? "updated " + age.text : "no quota data yet: it appears after a session runs under this account";
   meters.appendChild(ag);
-  // Only numbers can be stale; "no quota data yet" is already the honest text.
-  if (n && age.stale) meters.classList.add("stale");
   li.appendChild(meters);
 
   if (!a.default) {
@@ -262,8 +338,8 @@ function acctRow(a, limits, now) {
     cb.onchange = () => acctUpdate(a, { inherit_personal: cb.checked });
     inh.append(cb, document.createTextNode(" inherit personal config (CLAUDE.md, skills, MCP)"));
     row.appendChild(inh);
-    // Codex accounts are stored but cannot be spawned yet, so there is
-    // nothing to log in with.
+    // Only a claude account signs in, so any other stored provider gets no
+    // Log in button.
     if (acctCanToken(a)) {
       const login = document.createElement("button");
       login.type = "button";
@@ -376,7 +452,7 @@ async function acctTokenSave(a, inp, btn) {
     }
   }
   await loadAccounts(); // also re-reads the store, which is in use now
-  setAcctNote("Token saved for \"" + a.name + "\". New sessions under it use the token.");
+  setAcctNote("Token saved for \"" + a.name + "\". New sessions under it use the token. The quota meter can keep showing the old token's numbers while its sessions run, until that window resets.");
 }
 
 // acctTokenRemove unlinks the token and, when it is the account's own value,
@@ -437,11 +513,9 @@ async function acctUpdate(a, patch) {
 async function acctNew() {
   setAcctErr("");
   setAcctNote("");
-  const provSel = document.getElementById("acct-provider");
-  const provider = (provSel && provSel.value) || "claude";
   const name = await askPrompt({
     title: "New agent account",
-    body: "A separate " + provider + " login. Lowercase letters, digits and '-'. Example: work",
+    body: "A separate claude login. Lowercase letters, digits and '-'. Example: work",
     label: "Name",
     placeholder: "work",
     confirmLabel: "Create",
@@ -452,7 +526,7 @@ async function acctNew() {
     await api("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name, provider: provider }),
+      body: JSON.stringify({ name: name, provider: "claude" }),
     });
   } catch (e) {
     setAcctErr("Create failed: " + e.message);
@@ -557,6 +631,7 @@ if (typeof document !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     ACCT_DEFAULT, ACCT_STALE_SEC, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel,
+    acctAgeNote, acctBestLimits, acctWinAge,
     acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText,
     acctTokenId, acctTokenOwned, acctTokenMode, acctTokenStateText, acctCanToken,
   };
