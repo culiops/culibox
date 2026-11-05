@@ -228,8 +228,9 @@ let it open a connection that the proxy or the broker take for the relay's.
 Loopback traffic is not encrypted, though, so treat such an account like root:
 it may be able to tamper with a connection that is already open. A process under
 any account can still open connections that take up the proxy's and the
-broker's shared connection slots until they time out; that can delay boxes, not
-impersonate them.
+broker's shared connection slots until they time out; that can delay or drop
+boxes' connections (the relay gives up on one after 5 seconds), not impersonate
+them.
 
 The handshake proofs bind the port, not the address. That is enough only while
 the box VM's host agent (lima, under colima) dials CuliBox at `127.0.0.1`. If it
@@ -244,9 +245,9 @@ An earlier version's firewall rule let any container on the box VM's default
 Docker network (not the egress network) reach the broker's port directly,
 without the relay. With the handshake such a container can still reach the port,
 but it cannot pass the handshake, so it cannot write a header the broker
-accepts. A VM set up before the broker fix keeps that firewall rule until it is
-recreated: `agent-box doctor` fails "box VM firewall", and every boxed spawn is
-refused until you run `agent-box box setup -recreate`.
+accepts. A VM set up with that rule keeps it until it is recreated:
+`agent-box doctor` fails "box VM firewall", and every boxed spawn is refused
+until you run `agent-box box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -269,7 +270,10 @@ What stays: sessions that share a box (the same profile and binding) can read
 each other's token; code planted into the owning box, for example through a
 shared workspace, runs with that box's access; a process running as you on your
 Mac that holds a session's token, and an account that can read loopback traffic
-(see above); and while CuliBox does not hold its ports, boxes cannot reach the
+(see above); a process that receives the relay's connection on an address
+other than `127.0.0.1` could sit in the middle, because the proofs bind the port
+and not the address (see above; that the host agent dials `127.0.0.1` is
+inferred, not measured); and while CuliBox does not hold its ports, boxes cannot reach the
 proxy or the broker.
 
 While CuliBox is not listening on its ports (stopped, restarting, or its
