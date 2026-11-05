@@ -153,8 +153,13 @@ const revRequiredMsg = "this page is out of date (its save carries no revision):
 // else (a validation error) stays a 400 with its message, as it always was.
 func writeSaveErr(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrProfileChanged), errors.Is(err, ErrProfileGone):
+	case errors.Is(err, ErrProfileChanged):
 		writeErrCode(w, http.StatusConflict, err.Error(), "profile_changed")
+	case errors.Is(err, ErrProfileGone):
+		// The same code as a changed profile, plus "gone": there is no saved
+		// version for the editor to load, so it must not offer to replace the
+		// user's edits with one.
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "profile_changed", "gone": true})
 	case errors.Is(err, ErrProfileExists):
 		writeErrCode(w, http.StatusConflict, err.Error(), "profile_exists")
 	case errors.Is(err, store.ErrChangedOnDisk):

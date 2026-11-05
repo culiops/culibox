@@ -491,12 +491,20 @@ function withSchema(body, schema) {
 // staleSave: what to show when a save is refused because the profile changed
 // after the form was opened (409 profile_changed), or null for any other
 // failure. Only that one refusal gets a banner with Load latest: the others
-// (a taken name, a hand-edited profiles file, a missing revision) are not cured
-// by reloading the profile, so they keep the ordinary failure line.
+// (a taken name, a hand-edited profiles file, a missing revision, a page from
+// before an update) are not cured by reloading the profile, so they keep the
+// ordinary failure line.
 function staleSave(err) {
   if (!err || err.status !== 409 || err.code !== "profile_changed") return null;
+  // A profile deleted meanwhile has no saved version to load: Load latest opens
+  // a blank draft. The server marks that case (body.gone), so the text names
+  // what each button really does.
+  const gone = !!err.body && err.body.gone === true;
+  const what = gone
+    ? "Duplicate saves them as a new profile, Load latest clears the form."
+    : "Load latest replaces them with the saved version.";
   return {
-    message: err.message + ". Your edits are still here; Load latest replaces them with the saved version.",
+    message: err.message + ". Your edits are still here; " + what,
     button: "Load latest",
   };
 }

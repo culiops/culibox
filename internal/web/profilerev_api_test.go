@@ -87,11 +87,18 @@ func deleteProfile(s *Server, name string) *httptest.ResponseRecorder {
 
 func apiCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
-	var m map[string]string
+	code, _ := apiBody(t, rec)["code"].(string)
+	return code
+}
+
+// apiBody is an error body as a map: "gone" is a bool, the rest strings.
+func apiBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("not a json error body: %s", rec.Body)
 	}
-	return m["code"]
+	return m
 }
 
 // revServer is a Server over a fake store and the given seeds, with profile p
@@ -161,6 +168,10 @@ func TestPutWithAStaleRevisionIs409AndMergesNothing(t *testing.T) {
 	if rec.Code != 409 || apiCode(t, rec) != "profile_changed" || !strings.Contains(rec.Body.String(), "nothing was saved") {
 		t.Fatalf("tab 2: %d %s, want 409 profile_changed saying nothing was saved", rec.Code, rec.Body)
 	}
+	// The profile is there, so Load latest has a saved version: no "gone" key.
+	if _, has := apiBody(t, rec)["gone"]; has {
+		t.Fatalf("tab 2: %s, a changed (not deleted) profile must not carry \"gone\"", rec.Body)
+	}
 	p, _ := s.Profiles.Get("p")
 	if len(p.EgressAllow) != 1 || p.EgressAllow[0] != "a.example" || p.EgressOpen {
 		t.Fatalf("stored profile = allow %v open %v, want tab 1's allow list and egress_open false", p.EgressAllow, p.EgressOpen)
@@ -196,6 +207,11 @@ func TestPutAfterDeleteIs409AndDoesNotRecreate(t *testing.T) {
 	rec := putWithRev(t, s, "p", `{"name":"p","bin":"bash","args":["--x"]}`, rev)
 	if rec.Code != 409 || apiCode(t, rec) != "profile_changed" || !strings.Contains(rec.Body.String(), "no longer exists") {
 		t.Fatalf("PUT after delete: %d %s, want 409 profile_changed (no longer exists)", rec.Code, rec.Body)
+	}
+	// Same code as a changed profile, but the body says there is no saved version
+	// to load, so the editor does not offer to replace the edits with one.
+	if gone, _ := apiBody(t, rec)["gone"].(bool); !gone {
+		t.Fatalf("PUT after delete: %s, want \"gone\":true in the body", rec.Body)
 	}
 	rec = httptest.NewRecorder()
 	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/p", nil))

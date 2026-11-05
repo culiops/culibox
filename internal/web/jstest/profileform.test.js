@@ -535,3 +535,23 @@ test("staleSave gives no Load latest for a page from before an update", () => {
   // plain "Save failed: ..." line carries the reload message instead.
   assert.strictEqual(staleSave({ status: 409, code: "page_outdated", message: "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved" }), null);
 });
+
+// A profile deleted meanwhile has no saved version: Load latest opens a blank
+// draft, so the text must not promise one. The server marks that 409 with
+// gone:true (api() keeps the parsed body on err.body).
+test("staleSave tells a changed profile from a deleted one", () => {
+  const changed = "this profile was changed after you opened it (another tab, another device or a restart); nothing was saved";
+  const gone = "this profile no longer exists (it was deleted after you opened it); nothing was saved";
+  const c = staleSave({ status: 409, code: "profile_changed", message: changed, body: { error: changed, code: "profile_changed" } });
+  assert.strictEqual(c.message, changed + ". Your edits are still here; Load latest replaces them with the saved version.");
+  assert.strictEqual(c.button, "Load latest");
+  const g = staleSave({ status: 409, code: "profile_changed", message: gone, body: { error: gone, code: "profile_changed", gone: true } });
+  assert.strictEqual(g.message, gone + ". Your edits are still here; Duplicate saves them as a new profile, Load latest clears the form.");
+  assert.strictEqual(g.button, "Load latest");
+  assert.ok(!g.message.includes("saved version"));
+  // Only a real true counts: no body, or a non-true "gone", is the changed text.
+  for (const body of [undefined, null, {}, { gone: false }, { gone: "true" }, { gone: 1 }]) {
+    const e = staleSave({ status: 409, code: "profile_changed", message: changed, body });
+    assert.ok(e.message.includes("saved version"), JSON.stringify(body));
+  }
+});
