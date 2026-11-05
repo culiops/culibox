@@ -207,7 +207,10 @@ This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
 token taken from a box its requests then count as that box's; such a process is
 inside your trust boundary anyway. Anything that can read your Mac's loopback
-traffic, such as root, sees the secret and the session tokens alike.
+traffic, such as root, sees the secret and the session tokens alike. A process
+under any account can still open connections that take up the proxy's and the
+broker's shared connection slots until they time out; that can delay boxes, not
+impersonate them.
 
 Before this version, the box VM also let any container on its default Docker
 network (not the egress network) reach the broker's port directly, without the
