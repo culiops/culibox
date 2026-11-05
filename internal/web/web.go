@@ -248,6 +248,10 @@ func (s *Server) Handler() http.Handler {
 			"replies":           s.RepliesEnabled,
 			"commit":            s.Commit,
 			"version":           s.Version,
+			// The profile wire format this build knows. The page pins the value
+			// it reads at load and sends it with each profile save, so a page
+			// from before an update cannot save over fields it does not show.
+			"profile_schema": profileSchema(),
 		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}

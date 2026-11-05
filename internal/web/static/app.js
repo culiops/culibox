@@ -1296,10 +1296,14 @@ function hintShortcuts() {
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
 // desktop, Mod+/ and ?, Settings, About). The rows come from the registry
 // (shortcuts.js) plus the box runtime; the text goes in through textContent in askDialog.
+// On the phone layout each row stacks (keys, then the description indented): the
+// aligned desktop columns are wider than the dialog. Decided when it opens (#59).
 function showShortcuts() {
+  const rows = helpRows(IS_MAC);
+  const runtime = tierRuntimeLabel(boxRuntime);
   return askDialog({
     title: "Keyboard shortcuts",
-    body: helpText(helpRows(IS_MAC), tierRuntimeLabel(boxRuntime)),
+    body: mobileActive(window.innerWidth) ? helpTextStacked(rows, runtime) : helpText(rows, runtime),
     confirmLabel: "Close",
     info: true,
   });
@@ -3346,6 +3350,8 @@ async function refreshSessions() {
 
 // --- spawn / kill ------------------------------------------------------------
 let profiles = [];
+// pfSchema: the profile schema pinned at boot from /api/meta (see schemaPin).
+const pfSchema = schemaPin();
 // profilesLoaded distinguishes "the server has no profiles" from "we could not
 // ask". Without it, one transient failure at boot leaves the primary spawn
 // button disabled under a caption that blames the config, and in dev, `air`
@@ -4248,6 +4254,9 @@ let pfAwsRemoved = false;
 // The line shown after a convert, until the form is next filled.
 let pfAwsDone = "";
 function fillForm(p) {
+  // Any load is the editor showing what it was given: a stale-save banner about
+  // the form it replaces no longer applies.
+  $("pf-stale").hidden = true;
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
@@ -4565,6 +4574,7 @@ function pfSaveError(msg) {
 async function saveProfile() {
   const p = readForm();
   setDialogError("settings-modal", "");
+  $("pf-stale").hidden = true;
   if (!p.name || !p.bin) { pfSaveError("Name and Command are required."); return; }
   const rowsErr = rowError(pfEnvRows);
   if (rowsErr) { pfSaveError(rowsErr); return; }
@@ -4605,8 +4615,16 @@ async function saveProfile() {
       $("pf-copy-err").hidden = true;
       let saved = null;
       try {
-        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(withSchema(editing ? withRev(p, pfLoaded) : p, pfSchema.get())) });
       } catch (e) {
+        // A save from a form the server has moved past keeps what the user typed
+        // and offers Load latest; no other refusal is cured by a reload, so the
+        // rest fall through to the lines below.
+        const stale = staleSave(e);
+        if (stale) { showPfStale(stale); return; }
+        // A create refused because the name is taken means the list on screen
+        // was behind: refresh it, so the editor's own check knows the name too.
+        if (e.code === "profile_exists") await loadProfiles(false);
         // The per-block lines first, the dialog's line (which scrolls) last: they sit
         // above it, so un-hiding one after the scroll would push it back off screen.
         // A refusal that names a token entry is also shown on the Tokens block.
@@ -4659,6 +4677,27 @@ async function saveProfile() {
   } finally {
     syncEditorActions();
   }
+}
+// The banner for a save the server refused as stale. The fold opens FIRST, as in
+// pfSaveError: opening it after the scroll adds the Advanced block above the
+// banner and pushes it off screen.
+function showPfStale(model) {
+  setPfAdvOpen(true);
+  $("pf-stale-msg").textContent = model.message;
+  $("pf-stale").hidden = false;
+  $("pf-stale").scrollIntoView({ block: "nearest" });
+}
+// Load latest: drop the edits and show what the server holds now. The list is
+// refetched first, so a profile deleted meanwhile is noticed and the editor goes
+// back to a blank draft instead of failing to load it. A failed reload keeps the
+// old revision on purpose: the next Save is refused as stale again, which is the
+// safe side.
+async function reloadStaleProfile() {
+  const name = selectedProfileName();
+  $("pf-stale").hidden = true;
+  await loadProfiles(false);
+  if (name && profiles.some((x) => x.name === name)) await editProfile(name);
+  else newProfile();
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It opens an UNSAVED draft, as New profile does, so Save
@@ -4827,6 +4866,7 @@ function discardProfileEdits() {
   else newProfile();
 }
 $("pf-discard").addEventListener("click", discardProfileEdits);
+$("pf-stale-reload").addEventListener("click", reloadStaleProfile);
 // Advanced (desktop page): folds base environment, the other options, replies,
 // args and the allowlist. CSS only hides them; every field stays in the form.
 function setPfAdvOpen(open) {
@@ -6628,6 +6668,10 @@ initMobileShell();
   try {
     const seq = ++credListsSeq; // shares the refresh's sequence, so a slower boot answer cannot overwrite a newer one
     const meta = await api("/api/meta");
+    // The profile schema this page was loaded with: the first answer is kept for
+    // the life of the page (no other /api/meta read pins), so a save from a page
+    // that predates an update is refused by the server instead of dropping fields.
+    pfSchema.pin(meta && meta.profile_schema);
     // Whether replies are on gates every reply surface; closed until this answers.
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
     // Quick-shell profile first: it is independent of the env badge, so it must

@@ -83,3 +83,95 @@ test("saveProfile re-runs syncEditorActions after withPending settles", () => {
   assert.ok(after > wrap, "syncEditorActions() must follow withPending(");
   assert.match(b.slice(wrap), /finally\s*\{\s*syncEditorActions\(\);\s*\}/);
 });
+
+// #109: the editor sends the revision it opened, so a save made from a stale
+// form is refused instead of silently reverting a newer setting. A draft has no
+// revision and POSTs as before; a stale refusal keeps the user's edits.
+const HTML = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+
+test("saveProfile sends the opened revision on PUT and nothing extra on POST", () => {
+  const b = body("saveProfile");
+  // Both carry the schema the page pinned at load; only the PUT carries a rev.
+  assert.match(b, /JSON\.stringify\(withSchema\(editing \? withRev\(p, pfLoaded\) : p, pfSchema\.get\(\)\)\)/);
+});
+
+// #109: the schema comes from /api/meta, which the page reads at boot (initEnv);
+// the pin keeps the first value, so a later read after a deploy cannot give an
+// old page the new schema.
+test("the page pins profile_schema from the first /api/meta answer", () => {
+  assert.match(APP, /const pfSchema = schemaPin\(\);/);
+  const boot = APP.indexOf("(async function initEnv(");
+  assert.ok(boot >= 0, "initEnv not found");
+  const pin = APP.indexOf("pfSchema.pin(meta && meta.profile_schema)", boot);
+  assert.ok(pin > boot, "initEnv must pin meta.profile_schema");
+  assert.ok(pin < APP.indexOf("metaLoaded = true", boot), "the pin comes with the first meta answer");
+  // Only the boot read pins: no other /api/meta reader may move it.
+  assert.strictEqual((APP.match(/pfSchema\.pin\(/g) || []).length, 1);
+});
+
+test("saveProfile shows a stale save on the banner before the per-block lines", () => {
+  const b = body("saveProfile");
+  const stale = b.indexOf("staleSave(");
+  assert.ok(stale >= 0, "saveProfile must call staleSave(");
+  assert.match(b, /showPfStale\(/);
+  assert.ok(b.indexOf("showPfStale(") > stale);
+  assert.ok(stale < b.indexOf('$("pf-st-err").textContent'), "staleSave( must run before the per-block lines");
+  assert.ok(stale < b.indexOf("Save failed:"), "staleSave( must run before the generic failure line");
+  // Cleared at the start, so a banner from the last attempt never outlives a retry.
+  assert.match(b.slice(0, b.indexOf("withPending(")), /\$\("pf-stale"\)\.hidden\s*=\s*true/);
+});
+
+test("saveProfile refreshes the list when the name turned out to be taken", () => {
+  const b = body("saveProfile");
+  // Anchored to the branch itself: the success path below also calls loadProfiles(.
+  assert.match(b, /if \(e\.code === "profile_exists"\) await loadProfiles\(false\);/);
+});
+
+test("fillForm hides the stale banner: any load clears it", () => {
+  assert.match(body("fillForm"), /\$\("pf-stale"\)\.hidden\s*=\s*true/);
+});
+
+test("showPfStale opens Advanced first, then shows the message and scrolls to it", () => {
+  const b = body("showPfStale");
+  const open = b.indexOf("setPfAdvOpen(true)");
+  const text = b.indexOf("pf-stale-msg");
+  assert.ok(open >= 0 && text > open, "setPfAdvOpen(true) must come before the message is set");
+  assert.match(b, /\$\("pf-stale-msg"\)\.textContent\s*=\s*model\.message/);
+  assert.match(b, /\$\("pf-stale"\)\.hidden\s*=\s*false/);
+  assert.match(b, /scrollIntoView\(\{\s*block:\s*"nearest"\s*\}\)/);
+});
+
+test("reloadStaleProfile refetches the list before it reopens the profile", () => {
+  const b = body("reloadStaleProfile");
+  const list = b.indexOf("loadProfiles(");
+  const edit = b.indexOf("editProfile(");
+  assert.ok(list >= 0 && edit > list, "loadProfiles( must come before editProfile(");
+  assert.match(b, /newProfile\(\)/);
+  assert.match(APP, /\$\("pf-stale-reload"\)\.addEventListener\("click",\s*reloadStaleProfile\)/);
+});
+
+test("the stale banner is in the editor markup, above the dialog's error line", () => {
+  for (const id of ["pf-stale", "pf-stale-msg", "pf-stale-reload"]) {
+    assert.match(HTML, new RegExp('id="' + id + '"'), id + " missing from index.html");
+  }
+  assert.ok(HTML.indexOf('id="pf-stale"') < HTML.indexOf('id="settings-err"'));
+  assert.match(HTML, /<div class="warnbox" id="pf-stale" role="alert" hidden>/);
+});
+
+// Measured on a phone viewport: Load latest was 24px tall while every other
+// button in the editor is 44. The floor is the page's --tap, inside the
+// max-width 700px block like the editor's other mobile buttons, so desktop is
+// unchanged.
+test("Load latest takes the mobile tap floor", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = /([^{}]*#pf-stale-reload[^{}]*)\{([^{}]*)\}/.exec(css);
+  assert.ok(rule, "no rule names #pf-stale-reload");
+  assert.match(rule[2], /min-height:\s*var\(--tap\)/);
+  // The rule sits inside an open @media (max-width: 700px) block.
+  const before = css.slice(0, rule.index);
+  const media = before.lastIndexOf("@media");
+  assert.ok(media >= 0 && /^@media \(max-width: 700px\)/.test(before.slice(media)), "the rule is not under @media (max-width: 700px)");
+  const between = before.slice(media);
+  const open = (between.match(/\{/g) || []).length - (between.match(/\}/g) || []).length;
+  assert.ok(open >= 1, "the @media (max-width: 700px) block is already closed before the rule");
+});

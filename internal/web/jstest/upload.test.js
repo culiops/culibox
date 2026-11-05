@@ -84,3 +84,90 @@ test("dropHint: desktop names the Files drawer", () => {
   assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files drawer instead");
   assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files drawer");
 });
+
+test("dropHint: a read-only folder says so, on desktop and mobile alike", () => {
+  assert.strictEqual(dropHint("readonly", true), "This folder is read-only: nothing can be dropped here");
+  assert.strictEqual(dropHint("readonly", false), "This folder is read-only: nothing can be dropped here");
+});
+
+// --- makeDropZone with opts.readOnly (#55) --------------------------------------
+
+const { makeDropZone } = require("../static/upload.js");
+
+function zoneFixture(opts) {
+  const handlers = {}, classes = new Set();
+  const el = {
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
+  };
+  const toasts = [], posts = [];
+  globalThis.showToast = (msg, o) => toasts.push({ msg, o });
+  globalThis.XMLHttpRequest = class {
+    constructor() { this.upload = {}; }
+    open(method, url) { posts.push(method + " " + url); }
+    send() {}
+  };
+  makeDropZone(el, () => "/dest", opts);
+  // A file drag, as the browser reports it.
+  const drag = () => {
+    const ev = { dataTransfer: { types: ["Files"], files: [new File(["x"], "f.txt")], dropEffect: "" }, prevented: false, stopped: false };
+    ev.preventDefault = () => { ev.prevented = true; };
+    ev.stopPropagation = () => { ev.stopped = true; };
+    return ev;
+  };
+  return { handlers, classes, toasts, posts, drag };
+}
+
+test("a writable zone still lights up, copies and uploads (regression)", () => {
+  const z = zoneFixture({ readOnly: () => false });
+  const enter = z.drag(); z.handlers.dragenter(enter);
+  assert.ok(z.classes.has("drop-hot"));
+  const over = z.drag(); z.handlers.dragover(over);
+  assert.strictEqual(over.dataTransfer.dropEffect, "copy");
+  z.handlers.drop(z.drag());
+  assert.ok(!z.classes.has("drop-hot"));
+  assert.deepStrictEqual(z.posts, ["POST /api/fs/upload?dir=%2Fdest"]);
+  assert.deepStrictEqual(z.toasts.map((t) => t.msg).filter((m) => /read-only/.test(m)), []);
+});
+
+test("a zone with no readOnly option behaves as before", () => {
+  const z = zoneFixture(undefined);
+  z.handlers.dragenter(z.drag());
+  assert.ok(z.classes.has("drop-hot"));
+  z.handlers.drop(z.drag());
+  assert.strictEqual(z.posts.length, 1);
+});
+
+test("a read-only zone never lights up, shows the no-drop cursor and swallows a drop with the reason", () => {
+  const z = zoneFixture({ readOnly: () => true });
+  const enter = z.drag(); z.handlers.dragenter(enter);
+  assert.ok(!z.classes.has("drop-hot"), "no drop-hot");
+  assert.ok(enter.prevented && enter.stopped, "still claimed, so the window-level miss toast does not also fire");
+  const over = z.drag(); z.handlers.dragover(over);
+  assert.strictEqual(over.dataTransfer.dropEffect, "none");
+  assert.ok(over.stopped);
+  const drop = z.drag(); z.handlers.drop(drop);
+  assert.ok(drop.prevented && drop.stopped, "the browser must not open the file");
+  assert.deepStrictEqual(z.posts, [], "nothing is uploaded");
+  assert.deepStrictEqual(z.toasts, [{ msg: "This folder is read-only: nothing can be dropped here", o: { error: true } }]);
+  assert.ok(!z.classes.has("drop-hot"));
+});
+
+test("readOnly is asked at event time: a listing that turns read-only mid-drag stops the drop", () => {
+  let ro = false;
+  const z = zoneFixture({ readOnly: () => ro });
+  z.handlers.dragenter(z.drag());
+  assert.ok(z.classes.has("drop-hot"));
+  ro = true;
+  z.handlers.drop(z.drag());
+  assert.ok(!z.classes.has("drop-hot"), "the highlight is cleared by the drop");
+  assert.deepStrictEqual(z.posts, []);
+  assert.strictEqual(z.toasts.length, 1);
+});
+
+test("a read-only zone ignores a drag that carries no files (text selection)", () => {
+  const z = zoneFixture({ readOnly: () => true });
+  const ev = { dataTransfer: { types: ["text/plain"] }, preventDefault() { throw new Error("must not claim"); }, stopPropagation() { throw new Error("must not claim"); } };
+  z.handlers.dragenter(ev); z.handlers.dragover(ev); z.handlers.drop(ev);
+  assert.deepStrictEqual(z.toasts, []);
+});

@@ -77,17 +77,33 @@ type Mount struct {
 	// CLAUDE.md import is one.
 	Yield bool
 	// ID, when set, is Host's identity when it was last checked (a context
-	// path, on Linux read on the host). Once the box runs, ensure refuses it
-	// unless Box shows the same identity inside it (checkMountIDs).
+	// path or an in-place guard, on Linux read on the host). Once the box runs,
+	// ensure refuses it unless Box shows the same identity inside it
+	// (checkMountIDs).
 	ID *FileID
 	// CheckID marks a mount whose identity must be checked even though the host
 	// recorded none (a context path on macOS, where a host inode number is not
 	// the one the box sees). With no ID and Options.VMIDs set, ensure reads the
 	// identity inside the VM before the mount is made, and checkMountIDs then
-	// compares it like any other. Only context mounts set it: a config overlay
-	// or guard mount is never refused for being a symlink.
+	// compares it like any other. Context mounts set it, and so do the workspace
+	// mount ensure adds and the in-place guards of the workspace (which
+	// inPlaceMounts already refuses for being symlinks): a config overlay is
+	// never refused for being a symlink.
 	CheckID bool
+	// kind says what the mount is for, which only decides the refusal when its
+	// identity does not match (mountChanged). Unexported, so a caller outside
+	// this package cannot mark its mount as the workspace.
+	kind mountKind
 }
+
+// mountKind is what an identity-checked mount stands for.
+type mountKind uint8
+
+const (
+	mountExtra     mountKind = iota // a caller's mount, a context path
+	mountWorkspace                  // the workspace
+	mountGuard                      // an in-place guard of the workspace
+)
 
 // State is what docker says about a box container. Stopped is not Missing: an
 // exited container keeps its name, so treating it as absent makes the next
@@ -247,10 +263,11 @@ type Options struct {
 	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
-	// not the one virtiofs shows the box). ensure calls it, once, for the mounts
-	// that are CheckID with no ID, before the box is created. An error or a
-	// wrong count refuses the spawn. nil = such mounts are not checked (Linux
-	// records the identity on the host itself).
+	// not the one virtiofs shows the box). ensure calls it, once, for the
+	// workspace (always asked, first) and the mounts that are CheckID with no ID,
+	// before the box is created. An error or a wrong count refuses the spawn.
+	// nil = such mounts are not checked (Linux records the identity on the host
+	// itself, the workspace's included).
 	VMIDs func(ctx context.Context, paths []string) ([]FileID, error)
 	// Shared lists the host directories the docker daemon can see; a workspace
 	// outside them is refused. nil = every path is visible.
@@ -494,14 +511,17 @@ type CloneMounts struct {
 // and a context_paths hash goes after that for the same reason. An imports-off
 // key adds "\x00noimports" last, only when set, so every other name is unchanged.
 func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
-	real, err := filepath.EvalSymlinks(cwd)
+	abs, err := resolvePath(cwd)
 	if err != nil {
-		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
+		return "", err
 	}
-	abs, err := filepath.Abs(real)
-	if err != nil {
-		return "", fmt.Errorf("box: absolute path for %q: %w", real, err)
-	}
+	return m.nameFor(abs, k), nil
+}
+
+// nameFor is boxName for a workspace path that is already absolute and
+// symlink-resolved (workspace.Path). Wrap names the box from the same path it
+// checked and mounts; boxName resolves first, so BoxName and Wrap agree.
+func (m *Manager) nameFor(abs string, k BoxKey) string {
 	key := m.opts.Instance + "\x00" + abs
 	if k.Account != "" && k.Account != "default" { // account.Default; box does not import account
 		key += "\x00" + k.Account
@@ -522,7 +542,7 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 		key += "\x00noimports"
 	}
 	sum := sha256.Sum256([]byte(key))
-	return namePrefix + hex.EncodeToString(sum[:6]), nil
+	return namePrefix + hex.EncodeToString(sum[:6])
 }
 
 // BoxName is the container name Wrap uses for (cwd, key): the same function, so
@@ -695,7 +715,19 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 	}
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
+	} else {
+		// A directory that does not exist yet (a profile's default, say) is still
+		// judged by where it would be created: the existing part of its path
+		// resolved, as ProtectedOverlap always did.
+		abs = resolveExisting(abs)
 	}
+	return unboxableResolved(abs, protected, shared)
+}
+
+// unboxableResolved is unboxableWorkspace for a path that is already absolute and
+// symlink-resolved (workspace.Path), which it does not resolve again: the
+// protected check in it (protectedOverlapResolved) is about this very path.
+func unboxableResolved(abs string, protected []ProtectedDir, shared []string) (string, bool) {
 	if reason := MountUnsafe(abs); reason != "" {
 		return reason, true
 	}
@@ -710,7 +742,7 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 			return reason, true
 		}
 	}
-	if reason := ProtectedOverlap(abs, protected); reason != "" {
+	if reason := protectedOverlapResolved(abs, protected); reason != "" {
 		return reason, true
 	}
 	if len(shared) > 0 && !UnderMount(abs, shared) {
@@ -718,6 +750,14 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 			"), so docker cannot see it", true
 	}
 	return "", false
+}
+
+// errUnboxable is Wrap's refusal of a workspace unboxableWorkspace (or
+// unboxableResolved) gave a reason for. It names cwd, the path the user chose.
+func errUnboxable(cwd, reason string) error {
+	return fmt.Errorf("%w: %s (%s). Pick a project directory, "+
+		"or choose \"Run on trusted host\" to run it uncontained on purpose",
+		ErrUnboxableWorkspace, cwd, reason)
 }
 
 // homeReason reports why abs (absolute, symlinks resolved) cannot be mounted
@@ -770,15 +810,34 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if m.opts.ExtraCAErr != nil {
 		return nil, nil, "", fmt.Errorf("%w: extra_ca_certs: %v", ErrBoxUnavailable, m.opts.ExtraCAErr)
 	}
-	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
-		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
-			"or choose \"Run on trusted host\" to run it uncontained on purpose",
-			ErrUnboxableWorkspace, cwd, reason)
+	// The one resolution: every use of the workspace below takes ws.Path (what
+	// is checked, named, guarded, labelled and mounted), so a symlink in the path
+	// that changes after this point cannot make one of them look somewhere the
+	// others did not. cwd is only named in refusals.
+	real, err := resolvePath(cwd)
+	if err != nil {
+		// A workspace that does not exist yet and overlaps a protected directory
+		// (a config dir not created yet) is still refused for that reason, which
+		// says what to do, before the plain resolve failure: as it always was.
+		// Nothing is created either way; this only words the refusal. It is for a
+		// resolution that failed here, never for a path whose identity cannot be
+		// read below: that one changed, whatever it leads to now.
+		if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
+			return nil, nil, "", errUnboxable(cwd, reason)
+		}
+		return nil, nil, "", err
 	}
-	name, err := m.boxName(cwd, key)
+	ws, err := workspaceAt(cwd, real, workspaceID)
 	if err != nil {
 		return nil, nil, "", err
 	}
+	if wrapResolvedHook != nil {
+		wrapResolvedHook(ws)
+	}
+	if reason, bad := unboxableResolved(ws.Path, m.protected(), m.opts.Shared); bad {
+		return nil, nil, "", errUnboxable(cwd, reason)
+	}
+	name := m.nameFor(ws.Path, key)
 	// Before anything exists: the caller prepared this box's broker socket
 	// directory for the name it asked for. If a symlink on the workspace path was
 	// repointed since, the name differs, and a box created now would carry
@@ -789,10 +848,6 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	if err := m.checkBrokerMount(name, extraRO); err != nil {
 		return nil, nil, "", err
-	}
-	real, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
 	if key.Clone != nil {
 		if key.Clone.Hash == "" {
@@ -806,19 +861,20 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	// A clone workspace is the box's own tree, rewritable by the box by design;
 	// guarding its .git/.claude would only protect the box from itself.
 	if m.opts.GuardInPlace && key.Clone == nil {
-		// Derived from the resolved path, which is what docker mounts. Appended
-		// as ordinary read-only extras, so MountUnsafe, reuseMounts (a live box
-		// without a guard is refused, an idle one recreated) and runArgs all see
-		// them. Clip: never write into the caller's backing array.
-		guard, err := inPlaceMounts(real)
+		// Derived from ws, the single resolution above, which is what docker
+		// mounts. Appended as ordinary read-only extras, so MountUnsafe,
+		// reuseMounts (a live box without a guard is refused, an idle one
+		// recreated) and runArgs all see them. Clip: never write into the caller's
+		// backing array.
+		guard, err := inPlaceMountsAt(ws)
 		if err != nil {
 			return nil, nil, "", err
 		}
-		extraRO = append(slices.Clip(extraRO), guard...)
+		extraRO = append(slices.Clip(extraRO), m.vmView(guard)...)
 	}
 	// Last, so the clone and guard mounts above count as covering too.
-	extraRO = yieldCovered(real, extraRO)
-	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust); err != nil {
+	extraRO = yieldCovered(ws.Path, extraRO)
+	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust); err != nil {
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -832,7 +888,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		}
 	}
 	m.prepareHomePid(name, sessionID)
-	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
+	return m.execArgv(name, ws.Path, sessionID, argv, env), env, name, nil
 }
 
 // yieldCovered drops each Yield mount whose Box path the workspace or a
@@ -877,9 +933,14 @@ func withoutNames(env, names []string) []string {
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, partial, bound, exclusive, preTrust bool) error {
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
+
+	// The workspace is checked like a context mount: what the box shows at its
+	// path must be the directory that was resolved and checked. With a VM hook
+	// the identity is the VM's, whatever the host recorded.
+	wsm := ws.mount(m.opts.VMIDs != nil)
 
 	m.mu.Lock()
 	if t, ok := m.timers[name]; ok {
@@ -909,7 +970,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 
 	// Under opMu with the docker run below, so two spawns in this process
 	// cannot both pass the check.
-	if err := m.claimCheck(ctx, name, cwd, exclusive); err != nil {
+	if err := m.claimCheck(ctx, name, ws.Path, exclusive); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
@@ -934,7 +995,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		// Mounts are fixed at `docker run`, and the box key does not say which
 		// agent will run in the box, so check the box can serve this spawn
 		// before anything else trusts it (brain #131).
-		if st, err = m.reuseMounts(ctx, name, cwd, have, extraRO, partial); err != nil {
+		if st, err = m.reuseMounts(ctx, name, ws.Path, have, extraRO, partial); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
@@ -959,7 +1020,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		// again, so the window before `docker run` is no wider than a fresh
 		// box's.
 		if st == StateMissing {
-			if err := m.claimCheck(ctx, name, cwd, exclusive); err != nil {
+			if err := m.claimCheck(ctx, name, ws.Path, exclusive); err != nil {
 				m.rearmIfIdle(name)
 				return err
 			}
@@ -1008,7 +1069,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 				return fmt.Errorf("%w: extra_ca_certs: building the trust bundle: %v", ErrBoxUnavailable, err)
 			}
 		}
-		srcs := append([]string{cwd, m.stateDir(name), OutputDir(m.opts.StateRoot, name)}, mountSources(extraRO)...)
+		srcs := append([]string{ws.Path, m.stateDir(name), OutputDir(m.opts.StateRoot, name)}, mountSources(extraRO)...)
 		if bundle != "" {
 			srcs = append(srcs, bundle)
 		}
@@ -1020,7 +1081,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		}
 		trust := ""
 		if preTrust {
-			trust = cwd
+			trust = ws.Path
 		}
 		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
 			m.rearmIfIdle(name)
@@ -1037,15 +1098,16 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return fmt.Errorf("%w: %v", ErrBoxUnavailable, err)
 		}
-		// The identity of each context mount as the VM sees it (macOS), taken as
-		// late as it can be and still before the mount exists: a path flipped
-		// after this makes docker mount something the in-box check below sees as
-		// another file. A box reused instead takes it just before that check.
-		if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+		// The identity of the workspace and of each context mount as the VM sees
+		// it (macOS), taken as late as it can be and still before the mount
+		// exists: a path flipped after this makes docker mount something the
+		// in-box check below sees as another file. A box reused instead takes it
+		// just before that check. One read for all of them, the workspace first.
+		if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, true); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive, bundle, memory)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
@@ -1059,15 +1121,16 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.markVerified(name)
 		}
 	}
-	// The box runs, created or reused; the agent has not started. A mount that
-	// is not the checked path is refused here, before anything runs in it. A
-	// reused box has had no VM identity read yet (a created one has, above, and
-	// this is then a no-op): the box's mount is old, the path's identity is now.
-	if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+	// The box runs, created or reused; the agent has not started. The workspace
+	// or a mount that is not the checked path is refused here, before anything
+	// runs in it. A reused box has had no VM identity read yet (a created one
+	// has, above, and this is then a no-op): the box's mount is old, the path's
+	// identity is now.
+	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, created); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
-	if err := m.checkMountIDs(ctx, name, extraRO); err != nil {
+	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn

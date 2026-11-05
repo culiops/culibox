@@ -57,6 +57,56 @@ function actionsLabel(isDir) {
   return isDir ? "Folder actions" : "File actions";
 }
 
+// listingReadOnly: did /api/fs/list say every write here is refused (the Claude
+// scratch folder, or anything reached through it)? Only the exact boolean true
+// counts: the key is absent for an ordinary listing, so an older server, an error
+// body or a string all read as "writable" and keep today's menus. The server
+// stays the authority either way; this only spares the user a button that would
+// answer 403.
+function listingReadOnly(data) {
+  return !!data && data.readonly === true;
+}
+
+// The row menu's items by id. The ids and their order are what the tests pin;
+// the labels are the strings the menu has always shown.
+const ROW_MENU_LABELS = {
+  insert: "Insert path at prompt",
+  copy: "Copy path",
+  copyrel: "Copy relative path",
+  copycontents: "Copy contents",
+  download: "Download",
+  downloaddir: "Download .tar.gz",
+  newdir: "New folder here\u2026",
+  rename: "Rename\u2026",
+  delete: "Delete\u2026",
+};
+function rowMenuLabel(id, isDir) {
+  return ROW_MENU_LABELS[id === "download" && isDir ? "downloaddir" : id];
+}
+
+// rowMenuIds lists a row's menu, `null` being a rule. Path actions first: the
+// terminal next door is where these paths are going, and inserting at the prompt
+// is the shortest route there. Copy is second because composing a command by
+// hand means typing `cat ` BEFORE the path. Then Download and, on a folder, New
+// folder here, then past a second rule the destructive pair. A read-only listing
+// keeps only what reads: no New folder here, Rename or Delete, and not the rule
+// that fenced them off.
+function rowMenuIds(o) {
+  const ids = ["insert", "copy", "copyrel"];
+  // Contents last in the clipboard group, and only where there is text to take.
+  // A directory has none, and an image is served as raw bytes rather than JSON,
+  // so asking for one would fail inside JSON.parse with nothing useful to say.
+  // A symlink TO a directory still gets the item (os.ReadDir reports lstat, so
+  // the tree cannot tell) and /api/fs/read answers "is a directory", which the
+  // toast repeats.
+  if (!o.isDir && !o.isImage) ids.push("copycontents");
+  ids.push(null, "download");
+  if (o.readOnly) return ids;
+  if (o.isDir) ids.push("newdir");
+  ids.push(null, "rename", "delete"); // destructive actions sit past a second rule
+  return ids;
+}
+
 // treeBranch builds the box-drawing prefix for one row and the prefix its own
 // children inherit. Depth used to be left padding; drawing it is what makes the
 // tree read as a TUI.
@@ -104,6 +154,20 @@ function setFtRoot(path) {
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 let ftExpanded = new Set();     // absolute dir paths the user has opened; see treestate.js
+// The root listing's own read-only answer, kept so the whole-tree drop zone
+// (upload.js) can ask at drop time. Set by ftLoadRoot, only for the newest load.
+let ftRootReadOnly = false;
+function ftRootIsReadOnly() { return ftRootReadOnly; }
+// ftApplyReadOnly hides the toolbar buttons that write into the root (new folder,
+// upload) while its listing is read-only. The `hidden` attribute needs the
+// !important rule in app.css to win against the desktop drawer's and the phone's
+// own display rules; refresh and the palette stay.
+function ftApplyReadOnly(ro) {
+  for (const id of ["ft-newdir", "ft-upload"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !!ro;
+  }
+}
 
 // The Files drawer marks what the agent changed (filesdrawer.js decides which
 // paths): a dot after the name. A row's path is kept here, not in the DOM, so
@@ -146,7 +210,12 @@ async function ftRenderDir(path, container, prefix) {
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
   catch (e) { failure = e; }
   finally { done(); }
-  if (failure) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = failure.message; container.append(d); return; }
+  // A failed listing is not "read-only": the buttons stay and the server refuses.
+  if (failure) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = failure.message; container.append(d); return false; }
+  // Per listing, not per tree: a link in $HOME can lead into the scratch folder
+  // and back, so each directory answers for itself. Every row below acts on
+  // THIS listing's folder (rename, delete, drop onto it).
+  const ro = listingReadOnly(data);
   const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
     ? drawerChangedFor(ftRoot()) : null;
   for (let i = 0; i < data.entries.length; i++) {
@@ -200,7 +269,7 @@ async function ftRenderDir(path, container, prefix) {
     // is a Private Use Area glyph — non-empty, but with no Unicode name — so
     // without this the control announces as nothing at all.
     more.setAttribute("aria-label", moreLabel);
-    more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
+    more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir, ro); };
     row.append(more);
     ftRowPaths.set(row, full);
     ftMarkRow(row, full, chg);
@@ -249,6 +318,7 @@ async function ftRenderDir(path, container, prefix) {
       // wins over the whole-tree zone underneath it.
       if (typeof makeDropZone === "function") {
         makeDropZone(row, () => full, {
+          readOnly: () => ro,
           onDone: () => {
             if (!open || !childBox) return;
             childBox.replaceChildren();
@@ -284,6 +354,7 @@ async function ftRenderDir(path, container, prefix) {
       };
     }
   }
+  return ro;
 }
 
 // ftLoadRoot renders off-DOM and swaps in only if it is still the newest load.
@@ -304,14 +375,17 @@ async function ftLoadRoot(opts) {
   // ftRenderDir paints there are never seen. This one sits in the live tree,
   // above whatever it shows now, and covers every level of a restored subtree.
   const done = pendingRegion(ftTreeEl, "Loading…");
+  let ro = false;
   try {
-    await ftRenderDir(ftRoot(), box);
+    ro = await ftRenderDir(ftRoot(), box);
   } finally {
     done();
     // Waiters resume in a later microtask, after the swap below has run.
     release();
   }
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
+  ftRootReadOnly = ro === true;
+  ftApplyReadOnly(ftRootReadOnly);
   ftTreeEl.replaceChildren(...box.childNodes);
   // The listing is on screen; now ask what git says about it (badges follow).
   if (typeof gitStatusLoad === "function") gitStatusLoad(ftRoot(), typeof gitStatusTreeSid === "function" ? gitStatusTreeSid() : null, { fresh: !!(opts && opts.fresh) });
@@ -330,7 +404,7 @@ async function ftLoadRoot(opts) {
 // preview what the items below will put on the clipboard — "Copy path" copies
 // the absolute path and "Copy relative path" copies a third, different string,
 // so no single header could match all of them.
-function openRowMenu(anchor, path, name, isDir) {
+function openRowMenu(anchor, path, name, isDir, readOnly) {
   if (!document.getElementById("ft-menu")) return;
   const nodes = [];
 
@@ -339,39 +413,28 @@ function openRowMenu(anchor, path, name, isDir) {
   head.textContent = shortPath(path);
   nodes.push(head);
 
-  // Path actions first: the terminal next door is where these paths are going,
-  // and inserting at the prompt is the shortest route there. Copy is second
-  // because composing a command by hand means typing `cat ` BEFORE the path.
-  const items = [
-    ["Insert path at prompt", () => insertPathAtPrompt(path)],
-    ["Copy path", () => copyPath(path)],
-    ["Copy relative path", () => copyPath(relativeTo(ftRoot(), path))],
-  ];
-  // Contents last in the clipboard group, and only where there is text to take.
-  // A directory has none, and an image is served as raw bytes rather than JSON,
-  // so asking for one would fail inside JSON.parse with nothing useful to say.
-  // A symlink TO a directory still gets the item — os.ReadDir reports lstat, so
-  // the tree cannot tell — and /api/fs/read answers "is a directory", which the
-  // toast repeats.
-  if (!isDir && !IMAGE_EXTS.has(extOf(name))) {
-    items.push(["Copy contents", () => copyContents(path, name)]);
-  }
-  items.push(null); // separator
-  items.push([isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)]);
-  // The symlink-skip disclosure is NOT repeated here: downloadPath's probe toast
-  // already carries it on every folder download, and a toast is readable on a
-  // phone where the old ⤓ tooltip never was.
-  if (isDir) items.push(["New folder here…", () => promptMkdir(path)]);
-  items.push(null); // destructive actions sit past a second rule
-  items.push(["Rename…", () => promptRename(path, name)]);
-  items.push(["Delete…", () => confirmDelete(path, name, isDir)]);
-
-  for (const it of items) {
-    if (!it) { nodes.push(document.createElement("hr")); continue; }
+  // Which items, in which order, is rowMenuIds' (a read-only listing leaves out
+  // what the server would refuse). The handlers live here.
+  // The symlink-skip disclosure is NOT repeated on Download: downloadPath's probe
+  // toast already carries it on every folder download, and a toast is readable on
+  // a phone where the old ⤓ tooltip never was.
+  const act = {
+    insert: () => insertPathAtPrompt(path),
+    copy: () => copyPath(path),
+    copyrel: () => copyPath(relativeTo(ftRoot(), path)),
+    copycontents: () => copyContents(path, name),
+    download: () => downloadPath(path, isDir),
+    newdir: () => promptMkdir(path),
+    rename: () => promptRename(path, name),
+    delete: () => confirmDelete(path, name, isDir),
+  };
+  const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true });
+  for (const id of ids) {
+    if (id === null) { nodes.push(document.createElement("hr")); continue; }
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = it[0];
-    b.onclick = () => { closeRowMenu(); it[1](); };
+    b.textContent = rowMenuLabel(id, isDir);
+    b.onclick = () => { closeRowMenu(); act[id](); };
     nodes.push(b);
   }
   ftShowMenu(anchor, nodes);
@@ -801,5 +864,8 @@ async function initFileTree() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel };
+  module.exports = {
+    iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
+    listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
+  };
 }

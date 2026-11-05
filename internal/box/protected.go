@@ -258,7 +258,23 @@ func protectedOverlap(workspace string, dirs []ProtectedDir, fold bool) string {
 }
 
 func protectedOverlapHint(workspace string, dirs []ProtectedDir, fold bool) (string, string) {
-	ws := resolveExisting(workspace)
+	return protectedOverlapHintAt(resolveExisting(workspace), dirs, fold)
+}
+
+// protectedOverlapResolved is ProtectedOverlap for a workspace the caller has
+// already resolved (see resolveWorkspace): ws is compared as given and is not
+// resolved again, so the answer is about the very path the caller goes on to
+// name, guard and mount. Called with an unresolved path it would compare the
+// spelling, not the directory; ProtectedOverlap is the one that resolves.
+func protectedOverlapResolved(ws string, dirs []ProtectedDir) string {
+	reason, _ := protectedOverlapHintAt(ws, dirs, runtime.GOOS == "darwin")
+	return reason
+}
+
+// protectedOverlapHintAt is protectedOverlapHint for a ws that is already
+// absolute and resolved. The protected directories themselves are still
+// resolved here: they are configuration, not the workspace.
+func protectedOverlapHintAt(ws string, dirs []ProtectedDir, fold bool) (string, string) {
 	for _, d := range dirs {
 		if d.Path == "" {
 			continue

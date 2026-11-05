@@ -58,7 +58,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 - Go 1.26.5 or newer (see `go.mod`) to build.
 - Linux or macOS. macOS needs 13+ on Apple Silicon (Intel is untested) for the boxed tier.
 - [abduco](https://www.brain-dump.org/projects/abduco/) on `PATH`. It is required; the daemon will not start without it.
-- For the boxed tier: Docker on Linux, or `colima` and `docker` on macOS.
+- For the boxed tier: Docker on Linux, or `colima` and `docker` on macOS. On Linux the docker daemon must run on the same machine and see host files as they are (a local Docker Engine). A VM-backed or remote daemon (for example Docker Desktop for Linux or a remote docker context) is not supported for boxed sessions: CuliBox refuses to start a box there, because it cannot confirm the box got the folder that was checked.
 - The agent CLI you want to run. Claude Code (`claude`) is the supported agent. Other terminal programs can be configured as agents (a shell, for example), but status, usage and reply features are Claude Code only.
 - Node.js, only to run the browser-side tests in development.
 

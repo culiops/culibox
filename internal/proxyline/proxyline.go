@@ -1,18 +1,27 @@
 // Package proxyline wraps a net.Listener so that every accepted connection
-// must begin with a strict PROXY protocol v1 (TCP4) header, and reports the
-// header's source as RemoteAddr.
+// must begin with CuliBox's relay key line and then a strict PROXY protocol v1
+// (TCP4) header, and reports the header's source as RemoteAddr.
 //
 // It exists for macOS, where boxes reach host services through a relay in the
-// colima VM and therefore arrive from 127.0.0.1. The relay prepends the
-// header; the host listener trusts it only from a loopback peer and only when
-// the caller's allow function accepts the claimed source. Every failure
-// closes the connection (fail closed).
+// colima VM and therefore arrive from 127.0.0.1. The relay writes the key line
+// (Key.Preamble) and then the header. The host listener reads the key line
+// first and compares it in constant time; only a connection that presented the
+// right key has its header parsed and believed, and then only from a loopback
+// peer and only when the caller's allow function accepts the claimed source.
+// Every failure closes the connection with nothing written back (fail closed).
+//
+// The key keeps another process on the Mac from claiming a box's address just
+// by reaching the loopback port. It is not a boundary against your own user: a
+// process running as you can read the key from the daemon's data directory
+// (docs/MACOS.md).
 package proxyline
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strconv"
@@ -21,8 +30,9 @@ import (
 	"time"
 )
 
-// ErrHeader is returned (possibly wrapped) when the PROXY header is missing,
-// malformed, from a disallowed source, or sent by a non-loopback peer.
+// ErrHeader is returned (possibly wrapped) when the relay key line or the PROXY
+// header is missing, malformed or wrong, the header is from a disallowed
+// source, or the peer is not loopback.
 var ErrHeader = errors.New("proxyline: missing or invalid PROXY header")
 
 // InSubnetNotGateway returns the predicate "a is inside subnet and is not the
@@ -85,19 +95,41 @@ func ParseV1(line []byte) (src, dst netip.AddrPort, err error) {
 	return netip.AddrPortFrom(addrs[0], ports[0]), netip.AddrPortFrom(addrs[1], ports[1]), nil
 }
 
-// Wrap returns a listener whose accepted connections require a PROXY v1
-// header. The header is read lazily in the connection's own goroutine (on the
-// first Read or RemoteAddr), never inside Accept, so a silent client cannot
-// stall the accept loop. allow is called with the header's source address;
-// a nil allow rejects everything. timeout bounds the header read.
-func Wrap(l net.Listener, allow func(netip.Addr) bool, timeout time.Duration) net.Listener {
-	return &listener{Listener: l, allow: allow, timeout: timeout}
+// Options configures Wrap.
+type Options struct {
+	// Key is the relay key a connection must present before its PROXY line is
+	// read. The zero Key refuses every connection: a listener with no key has
+	// nothing to compare, and must not fall back to trusting the header alone.
+	Key Key
+	// Allow is called with the header's source address; nil rejects everything.
+	Allow func(netip.Addr) bool
+	// Timeout bounds the whole handshake: one read deadline covers the key line
+	// and the PROXY line together.
+	Timeout time.Duration
+	// KeyRefused, when set, is called once for a connection that came from a
+	// loopback peer but did not present the key (short read, EOF, timeout,
+	// wrong bytes, or a zero Key). It is told nothing about what was sent, and
+	// is not called for a non-loopback peer or after the key matched.
+	KeyRefused func()
+}
+
+// Wrap returns a listener whose accepted connections require the relay key line
+// and then a PROXY v1 header. Both are read lazily in the connection's own
+// goroutine (on the first Read or RemoteAddr), never inside Accept, so a silent
+// client cannot stall the accept loop.
+func Wrap(l net.Listener, o Options) net.Listener {
+	ln := &listener{Listener: l, o: o}
+	if !o.Key.IsZero() {
+		// Built once: every connection compares against these same bytes.
+		ln.preamble = o.Key.Preamble()
+	}
+	return ln
 }
 
 type listener struct {
 	net.Listener
-	allow   func(netip.Addr) bool
-	timeout time.Duration
+	o        Options
+	preamble []byte // o.Key.Preamble(), nil for the zero Key
 }
 
 func (l *listener) Accept() (net.Conn, error) {
@@ -105,13 +137,13 @@ func (l *listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conn{Conn: c, allow: l.allow, timeout: l.timeout}, nil
+	return &conn{Conn: c, o: l.o, preamble: l.preamble}, nil
 }
 
 type conn struct {
 	net.Conn
-	allow   func(netip.Addr) bool
-	timeout time.Duration
+	o        Options
+	preamble []byte // the listener's, shared and never written
 
 	once sync.Once
 	br   *bufio.Reader
@@ -155,10 +187,17 @@ func (c *conn) readHeader() error {
 	if !peerIsLoopback(c.Conn.RemoteAddr()) {
 		return fmt.Errorf("%w: peer %v is not loopback", ErrHeader, c.Conn.RemoteAddr())
 	}
-	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+	// One deadline for the key line and the PROXY line.
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.o.Timeout)); err != nil {
 		return fmt.Errorf("%w: %w", ErrHeader, err)
 	}
 	c.br = bufio.NewReaderSize(c.Conn, 4096)
+	if err := c.readKey(); err != nil {
+		if c.o.KeyRefused != nil {
+			c.o.KeyRefused()
+		}
+		return err
+	}
 	line := make([]byte, 0, maxLine)
 	for {
 		b, err := c.br.ReadByte()
@@ -177,10 +216,27 @@ func (c *conn) readHeader() error {
 	if err != nil {
 		return err
 	}
-	if c.allow == nil || !c.allow(src.Addr()) {
+	if c.o.Allow == nil || !c.o.Allow(src.Addr()) {
 		return fmt.Errorf("%w: source %v not allowed", ErrHeader, src.Addr())
 	}
 	c.addr = net.TCPAddrFromAddrPort(src)
+	return nil
+}
+
+// readKey reads the relay key line, exactly PreambleLen bytes, and compares it
+// with the key's own in constant time. Nothing it read is returned or put in an
+// error: a refused connection's bytes may be a guess at the key.
+func (c *conn) readKey() error {
+	if c.preamble == nil { // Wrap leaves it nil for the zero Key
+		return fmt.Errorf("%w: no relay key configured", ErrHeader)
+	}
+	buf := make([]byte, PreambleLen)
+	if _, err := io.ReadFull(c.br, buf); err != nil {
+		return fmt.Errorf("%w: relay key line: %w", ErrHeader, err)
+	}
+	if subtle.ConstantTimeCompare(buf, c.preamble) != 1 {
+		return fmt.Errorf("%w: relay key missing or wrong", ErrHeader)
+	}
 	return nil
 }
 

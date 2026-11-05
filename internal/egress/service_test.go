@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -119,7 +120,7 @@ func TestReadyLinuxBindsGatewayOnlyWithSourceCheck(t *testing.T) {
 func TestReadyDarwinBindsLoopbackWithSourceCheck(t *testing.T) {
 	f, lr := newFakeDocker(), &listenRec{}
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
-		Want: Want{Subnet: "172.29.72.0/24"}, ProxyHost: "host.lima.internal", NoProxy: "host.lima.internal", Listen: lr.listen})
+		Want: Want{Subnet: "172.29.72.0/24"}, ProxyHost: "host.lima.internal", NoProxy: "host.lima.internal", Listen: lr.listen, RelayKey: testRelayKey})
 	defer s.Close(context.Background())
 	ep, err := s.Ready(context.Background())
 	if err != nil {
@@ -139,10 +140,39 @@ func TestReadyDarwinBindsLoopbackWithSourceCheck(t *testing.T) {
 	}
 }
 
+// #114: on macOS the PROXY line is trusted only behind the relay key, so a
+// service with no key must not listen at all (and must say why).
+func TestReadyDarwinRefusesWithoutARelayKey(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: lr.listen})
+	defer s.Close(context.Background())
+	_, err := s.Ready(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "relay key") {
+		t.Fatalf("Ready without a relay key: err = %v, want one naming the relay key", err)
+	}
+	if lr.count() != 0 {
+		t.Fatalf("listens = %d, want 0: the refusal must come before Listen", lr.count())
+	}
+}
+
+// Linux has no relay, so no key: nothing changes there.
+func TestReadyLinuxNeedsNoRelayKey(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatalf("Ready on linux with a zero key: %v", err)
+	}
+	if lr.count() != 1 {
+		t.Fatalf("listens = %d, want 1", lr.count())
+	}
+}
+
 func TestReadyReportsTheRealPortWhenAskedForZero(t *testing.T) {
 	f := newFakeDocker()
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 0,
-		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen})
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen, RelayKey: testRelayKey})
 	defer s.Close(context.Background())
 	ep, err := s.Ready(context.Background())
 	if err != nil {
@@ -282,7 +312,7 @@ func TestCloseStopsListenerAndRefusesLaterReady(t *testing.T) {
 func TestServiceListenerLimitsConnections(t *testing.T) {
 	f := newFakeDocker()
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 0,
-		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen})
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen, RelayKey: testRelayKey})
 	s.maxConns = 2
 	defer s.Close(context.Background())
 	ep, err := s.Ready(context.Background())
@@ -309,7 +339,7 @@ func TestServiceListenerLimitsConnections(t *testing.T) {
 	}
 	defer c3.Close()
 	go func() {
-		fmt.Fprintf(c3, "PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\nCONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+		fmt.Fprint(c3, keyed("PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\nCONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"))
 		resp, err := http.ReadResponse(bufio.NewReader(c3), nil)
 		if err == nil && resp.StatusCode == 407 {
 			served.Store(true)
@@ -333,6 +363,92 @@ func TestDefaultMaxConnsIsTheNamedConstant(t *testing.T) {
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: newFakeDocker(), GOOS: "linux"})
 	if s.maxConns != MaxProxyConns {
 		t.Fatalf("maxConns = %d", s.maxConns)
+	}
+}
+
+func TestDefaultMaxPerSourceIsTheNamedConstant(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		s := NewService(ServiceOptions{Proxy: testProxy(), Docker: newFakeDocker(), GOOS: goos})
+		if s.maxPerSource != MaxProxyConnsPerSource {
+			t.Fatalf("%s: maxPerSource = %d", goos, s.maxPerSource)
+		}
+	}
+}
+
+// srcConn is a pipe end that reports a chosen peer address, as a Linux box's
+// connection reports its own address on the egress network.
+type srcConn struct {
+	net.Conn
+	addr net.Addr
+}
+
+func (c srcConn) RemoteAddr() net.Addr { return c.addr }
+
+// Linux shape: the cap is keyed on the connection's own peer address. One box
+// holding its whole share leaves the others served, and a closed connection
+// frees a slot.
+func TestServiceLinuxOneSourceCannotCrowdOutAnother(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := linuxService(f, lr)
+	s.maxPerSource = 3
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ln := lr.lns[0]
+	// open hands the proxy the server end of a pipe that claims to come from
+	// src, and returns the client end.
+	open := func(src string) net.Conn {
+		client, server := net.Pipe()
+		ln.ch <- srcConn{Conn: server, addr: net.TCPAddrFromAddrPort(netip.MustParseAddrPort(src))}
+		t.Cleanup(func() { client.Close() })
+		return client
+	}
+	const bareConnect = "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"
+	// send writes a bare CONNECT on c (in its own goroutine: a pipe write
+	// blocks until the server reads, and a refused conn never does) and gives
+	// the reply 2 s.
+	send := func(c net.Conn) *bufio.Reader {
+		c.SetDeadline(time.Now().Add(2 * time.Second))
+		go c.Write([]byte(bareConnect))
+		return bufio.NewReader(c)
+	}
+	// status is the HTTP status of the reply, or 0 when the conn was closed
+	// with no response.
+	status := func(c net.Conn) int {
+		resp, err := http.ReadResponse(send(c), &http.Request{Method: "CONNECT"})
+		if err != nil {
+			return 0
+		}
+		return resp.StatusCode
+	}
+
+	var held []net.Conn
+	for i := 0; i < 3; i++ {
+		// Silent: it holds a slot until closed, without sending a byte.
+		held = append(held, open(fmt.Sprintf("172.21.0.5:%d", 40000+i)))
+	}
+	time.Sleep(200 * time.Millisecond) // the server admits them on their own goroutines
+
+	b, err := io.ReadAll(send(open("172.21.0.5:40003")))
+	if len(b) != 0 {
+		t.Fatalf("a fourth connection from one source was served: %q", b)
+	}
+	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("fourth connection: %v, want EOF or a closed pipe", err)
+	}
+
+	if code := status(open("172.21.0.6:40000")); code != 407 {
+		t.Fatalf("another source: status %d, want 407", code)
+	}
+
+	held[0].Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for status(open("172.21.0.5:40004")) != 407 {
+		if time.Now().After(deadline) {
+			t.Fatal("closing a held connection never freed a slot for its source")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -412,7 +528,7 @@ func TestSpawnEnvDarwinHostAndNoProxy(t *testing.T) {
 	f, lr := newFakeDocker(), &listenRec{}
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
 		Want: Want{Subnet: "172.29.72.0/24"}, ProxyHost: "host.lima.internal", NoProxy: "host.lima.internal",
-		ExtraEnv: []string{"FOO=bar", "CHECKPOINT_DISABLE=1"}, Listen: lr.listen})
+		ExtraEnv: []string{"FOO=bar", "CHECKPOINT_DISABLE=1"}, Listen: lr.listen, RelayKey: testRelayKey})
 	defer s.Close(context.Background())
 	env, err := s.SpawnEnv(context.Background(), "s1", sesstoken.NewNonce())
 	if err != nil {

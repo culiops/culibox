@@ -197,17 +197,44 @@ test("stripKey moves with reply_ready; stripHoldKey does not (#77)", () => {
 });
 
 test("emptyStateModel: first run, none open, and recent profiles that still exist", () => {
-  const builtin = [{ name: "claude", builtin: true }];
+  const builtin = [{ name: "claude", source: "builtin" }];
   assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first");
   assert.equal(d.emptyStateModel({ sessions: [working], profiles: builtin, recent: [] }).kind, "none");
-  // the real /api/profiles marks a built-in with editable:false
-  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }], recent: [] }).kind, "first");
-  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }, { name: "mine", editable: true }], recent: [] }).kind, "none", "custom profiles, no sessions: never a blank pane");
-  const r = d.emptyStateModel({ sessions: [working], profiles: [{ name: "claude", editable: false }, { name: "hubs-dev", editable: true }], recent: ["gone", "hubs-dev"] });
+  // the real /api/profiles marks a built-in with source:"builtin"
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", source: "builtin", editable: false }], recent: [] }).kind, "first");
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", source: "builtin", editable: false }, { name: "mine", source: "runtime", editable: true }], recent: [] }).kind, "none", "custom profiles, no sessions: never a blank pane");
+  const r = d.emptyStateModel({ sessions: [working], profiles: [{ name: "claude", source: "builtin", editable: false }, { name: "hubs-dev", source: "runtime", editable: true }], recent: ["gone", "hubs-dev"] });
   assert.deepEqual(r.profiles, ["hubs-dev"]);
-  const many = ["a", "b", "c", "d"].map((name) => ({ name, editable: true }));
+  const many = ["a", "b", "c", "d"].map((name) => ({ name, source: "runtime", editable: true }));
   assert.deepEqual(d.emptyStateModel({ sessions: [working], profiles: many, recent: ["a", "b", "c", "d"] }).profiles, ["a", "b", "c"]);
   assert.deepEqual(d.emptyStateModel({ sessions: [], profiles: null, recent: null }).profiles, []);
+});
+
+// #15: the server says where each profile came from (source), and only a
+// built-in counts as "nothing set up yet". A profile from config.json is the
+// user's own work even though the editor cannot edit it.
+test("emptyStateModel: config.json profiles are the user's own", () => {
+  const cfg = [{ name: "claude", source: "config", editable: false }];
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: cfg, recent: [] }).kind, "none");
+});
+
+test("emptyStateModel: every profile built in is first run", () => {
+  const builtin = [{ name: "claude", source: "builtin" }, { name: "zsh", source: "builtin" }];
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first");
+});
+
+test("emptyStateModel: one built-in and one config profile is not first run", () => {
+  const mixed = [{ name: "claude", source: "builtin" }, { name: "ops", source: "config", editable: false }];
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: mixed, recent: [] }).kind, "none");
+});
+
+test("emptyStateModel: a runtime profile next to a built-in is not first run", () => {
+  const mixed = [{ name: "claude", source: "builtin" }, { name: "mine", source: "runtime", editable: true }];
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: mixed, recent: [] }).kind, "none");
+});
+
+test("emptyStateModel: a profile with no source is not built-in", () => {
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }], recent: [] }).kind, "none");
 });
 
 test("pushRecentProfile: most recent first, de-duplicated, max three", () => {
@@ -283,7 +310,7 @@ test("emptyStateModel with sessions present is \"none\" even while profiles load
 });
 
 test("emptyStateModel is silent while the session list is unknown", () => {
-  const builtin = [{ name: "claude", editable: false }];
+  const builtin = [{ name: "claude", source: "builtin", editable: false }];
   assert.equal(d.emptyStateModel({ sessions: null, profiles: builtin, recent: [] }).kind, null, "no first-run flash for a user with live sessions");
   assert.equal(d.emptyStateModel({ sessions: undefined, profiles: builtin, recent: [] }).kind, null);
   assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first", "a known empty list still means first run");
@@ -458,4 +485,21 @@ test("headerSyncKey moves with the name and with cost_usd, and not with anything
   assert.equal(d.headerSyncKey("api", { ...working, cost_usd: 1.5, activity: "idle" }), k, "unrelated field: no repaint");
   assert.equal(d.headerSyncKey("api", { ...working, cost_usd: 1.5004 }), k, "same displayed cents: no repaint per poll");
   assert.equal(d.headerSyncKey("api", null), d.headerSyncKey("api", null));
+});
+
+// paneTabs: the pane header's tabs, in order, each with the label its button
+// shows and the icon it shows instead of the label in a narrow pane (#13).
+test("paneTabs lists the four tabs of a pane with a session, each with its own icon", () => {
+  const t = d.paneTabs(true);
+  assert.deepEqual(t.map((x) => x.id), ["terminal", "files", "activity", "access"]);
+  assert.deepEqual(t.map((x) => x.label), ["Terminal", "Files", "Activity", "Access"]);
+  assert.ok(t.every((x) => typeof x.icon === "string" && x.icon), "every tab names an icon");
+  assert.strictEqual(new Set(t.map((x) => x.icon)).size, t.length, "no two tabs share an icon");
+});
+
+test("paneTabs for a pane of files has Files alone: no session to describe", () => {
+  const t = d.paneTabs(false);
+  assert.deepEqual(t.map((x) => x.id), ["files"]);
+  assert.deepEqual(t.map((x) => x.label), ["Files"]);
+  assert.strictEqual(t[0].icon, "files");
 });

@@ -72,3 +72,21 @@ test("keyboardOpen is true only when the viewport shrank past minDelta", () => {
   assert.equal(m.keyboardOpen(844, 800, 120), false); // 44px -> browser chrome, not a keyboard
   assert.equal(m.keyboardOpen(844, 844, 120), false);
 });
+
+// #111: the toast names a desktop selection gesture (Shift+drag) that a touch
+// screen does not have. touchPrimary is the one question: is the primary input a
+// finger? It takes matchMedia as an argument so it runs without a window.
+test("touchPrimary is true when the primary input cannot hover and is coarse", () => {
+  const asked = [];
+  const mm = (q) => { asked.push(q); return { matches: true }; };
+  assert.equal(m.touchPrimary(mm), true);
+  assert.deepEqual(asked, ["(hover: none) and (pointer: coarse)"]);
+  assert.equal(m.touchPrimary(() => ({ matches: false })), false);
+});
+
+test("touchPrimary is false when matchMedia is missing or throws", () => {
+  assert.equal(m.touchPrimary(undefined), false);
+  assert.equal(m.touchPrimary(null), false);
+  assert.equal(m.touchPrimary(() => { throw new Error("no matchMedia"); }), false);
+  assert.equal(m.touchPrimary(() => undefined), false);
+});

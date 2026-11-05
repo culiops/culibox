@@ -32,14 +32,30 @@ type ProfileOption struct {
 	Value   any      `json:"value"`
 }
 
+// Where a profile came from (ProfileView.Source). Provider-neutral: it says
+// who made the profile, never what it runs.
+const (
+	// ProfileSourceBuiltin: CuliBox added it itself (the zero-config default
+	// agents and the detected-shell seed), so the user has made nothing yet.
+	ProfileSourceBuiltin = "builtin"
+	// ProfileSourceConfig: an agents entry of the user's config.json.
+	ProfileSourceConfig = "config"
+	// ProfileSourceRuntime: saved from the UI (the profile store); it wins over
+	// a same-named config entry.
+	ProfileSourceRuntime = "runtime"
+)
+
 // ProfileView is a profile for GET /api/profiles. Editable = came from the
-// runtime store (config seeds are read-only). Runtime is the EFFECTIVE tier the
-// spawn form should open on — already resolved against the instance default, so
-// the client never has to re-derive containment policy.
+// runtime store (config seeds are read-only). Source says where the profile
+// came from; it is derived on every read and never written to a file, and
+// Editable is exactly Source == ProfileSourceRuntime. Runtime is the EFFECTIVE
+// tier the spawn form should open on — already resolved against the instance
+// default, so the client never has to re-derive containment policy.
 type ProfileView struct {
 	Name       string          `json:"name"`
 	Account    string          `json:"account,omitempty"`
 	Editable   bool            `json:"editable"`
+	Source     string          `json:"source"`
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
 	Options    []ProfileOption `json:"options,omitempty"`
@@ -149,6 +165,22 @@ type ProfileManager struct {
 	// (both OSes; Manager.SetEgressAll). It decides whether an unbound boxed profile
 	// previews as "open" or as no egress control.
 	egressAll bool
+	// builtin names the seeds CuliBox added itself (see SetBuiltin); nil = none.
+	builtin map[string]bool
+}
+
+// SetBuiltin names the seeds that are built in: profiles CuliBox put there
+// itself, not ones the user wrote, so Views reports them as ProfileSourceBuiltin
+// instead of ProfileSourceConfig. Call at boot; nil = no profile is built in.
+// A profile saved from the UI is runtime whatever its name.
+func (m *ProfileManager) SetBuiltin(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	m.mu.Lock()
+	m.builtin = set
+	m.mu.Unlock()
 }
 
 // SetEgressAll records whether egress is mandatory for every boxed spawn, so a
@@ -424,10 +456,18 @@ func (m *ProfileManager) Views() []ProfileView {
 	for _, a := range merged {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a)
 		bound := a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0
+		source := ProfileSourceConfig
+		switch {
+		case editable[a.Name]:
+			source = ProfileSourceRuntime
+		case m.builtin[a.Name]:
+			source = ProfileSourceBuiltin
+		}
 		pv := ProfileView{
 			Name:          a.Name,
 			Account:       a.Account,
-			Editable:      editable[a.Name],
+			Editable:      source == ProfileSourceRuntime,
+			Source:        source,
 			Runtime:       rt,
 			DefaultCwd:    a.DefaultCwd,
 			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
@@ -493,6 +533,11 @@ func (m *ProfileManager) OptionDefs() []config.OptionDef { return m.options }
 func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.getLocked(name)
+}
+
+// getLocked is Get for a caller that already holds m.mu.
+func (m *ProfileManager) getLocked(name string) (config.AgentConfig, bool) {
 	for _, p := range m.merged() {
 		if p.Name == name {
 			return p, true
@@ -544,8 +589,47 @@ func profileBinds(p config.AgentConfig, kind, name string) bool {
 	return false
 }
 
+// Create saves a new runtime profile. It refuses a name a config seed or a
+// stored profile already holds (ErrProfileExists): a create must never replace
+// a profile it did not see.
+func (m *ProfileManager) Create(p config.AgentConfig) error {
+	return m.save(p, func() error {
+		if _, taken := m.getLocked(p.Name); taken {
+			return ErrProfileExists
+		}
+		return nil
+	})
+}
+
+// Update saves a runtime profile only if it is still the one the caller opened:
+// rev, taken from Get's value by profileRev, must equal the revision of the
+// current merged profile of that name. A profile that changed since gives
+// ErrProfileChanged and one that was deleted gives ErrProfileGone; either way
+// nothing is saved and nothing of the caller's edit is merged in. A config seed
+// has a revision too, so saving one creates its override. The profile is
+// validated first, so an invalid one is reported as such, not as stale.
+func (m *ProfileManager) Update(p config.AgentConfig, rev string) error {
+	return m.save(p, func() error {
+		cur, ok := m.getLocked(p.Name)
+		if !ok {
+			return ErrProfileGone
+		}
+		if rev == "" || profileRev(cur) != rev {
+			return ErrProfileChanged
+		}
+		return nil
+	})
+}
+
 // Save validates and persists a runtime profile, then refreshes the launcher.
-func (m *ProfileManager) Save(p config.AgentConfig) error {
+// It checks no revision and no existing name: the API goes through Create and
+// Update, so Save is for tests and for callers that really mean "overwrite".
+func (m *ProfileManager) Save(p config.AgentConfig) error { return m.save(p, nil) }
+
+// save is the body of Save, Create and Update. guard, when not nil, runs under
+// m.mu right before the store write, after every validation, so what it checks
+// cannot change before the write; an error from it is returned as it is.
+func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
 		return err
 	}
@@ -579,6 +663,11 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	}
 	if err := m.checkAccount(p); err != nil {
 		return err
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			return err
+		}
 	}
 	if err := m.store.Save(p); err != nil {
 		return err

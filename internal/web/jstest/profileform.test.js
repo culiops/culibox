@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -464,4 +464,107 @@ test("pfTouchProfile network mirrors EgressMode: bound+egress_open is open, boun
   assert.strictEqual(pfTouchProfile(bound, {}).network, "allowlist");
   assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
   assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
+});
+
+test("withRev carries the revision the form was opened at", () => {
+  const p = { name: "a" };
+  assert.deepStrictEqual(withRev(p, { rev: "abc" }), { name: "a", rev: "abc" });
+  // The input is never mutated: the caller reuses it for the POST branch.
+  assert.deepStrictEqual(p, { name: "a" });
+  assert.notStrictEqual(withRev(p, null), p);
+  // A draft, an unset loaded profile and an empty revision carry no rev at all:
+  // the server's 428 is the answer to a missing one, not an empty string.
+  for (const loaded of [null, undefined, {}, { rev: "" }, { rev: 7 }]) {
+    assert.deepStrictEqual(withRev({ name: "a" }, loaded), { name: "a" });
+    assert.ok(!("rev" in withRev({ name: "a" }, loaded)));
+  }
+});
+
+test("staleSave names only the stale refusal", () => {
+  const msg = "profile changed since you opened it; nothing was saved";
+  const s = staleSave({ status: 409, code: "profile_changed", message: msg });
+  assert.strictEqual(s.button, "Load latest");
+  assert.ok(s.message.includes(msg.slice(1)), "the server's message, first letter aside");
+  assert.ok(s.message.startsWith("Profile changed since"), "shown as a sentence");
+  assert.ok(s.message.includes("Load latest"));
+  assert.ok(s.message.includes("Your edits are still here"));
+  for (const e of [
+    { status: 409, code: "profile_exists", message: "x" },
+    { status: 409, code: "profiles_file_changed", message: "x" },
+    { status: 428, code: "rev_required", message: "x" },
+    { status: 400, code: "", message: "x" },
+    { status: 400, code: "profile_changed", message: "x" },
+    null,
+    undefined,
+  ]) assert.strictEqual(staleSave(e), null);
+});
+
+// #109: the page pins the profile schema it read at load and sends it with every
+// profile save, so a page from before an update (whose form lacks a field the
+// server now has) is refused instead of dropping that field. withRev keeps its
+// own contract; withSchema is the sibling.
+test("withSchema adds the pinned schema and nothing else, without mutating", () => {
+  const p = { name: "a", rev: "abc" };
+  assert.deepStrictEqual(withSchema(p, "0123456789abcdef"), { name: "a", rev: "abc", schema: "0123456789abcdef" });
+  assert.deepStrictEqual(p, { name: "a", rev: "abc" });
+  assert.notStrictEqual(withSchema(p, ""), p);
+  // Nothing pinned (the page never read one): no schema key at all, so the
+  // server's own answer to a missing one stands.
+  for (const none of ["", null, undefined, 7, {}]) {
+    assert.deepStrictEqual(withSchema({ name: "a" }, none), { name: "a" });
+    assert.ok(!("schema" in withSchema({ name: "a" }, none)));
+  }
+  // Composes with withRev in either order.
+  assert.deepStrictEqual(withSchema(withRev({ name: "a" }, { rev: "r" }), "s1"), { name: "a", rev: "r", schema: "s1" });
+});
+
+test("schemaPin keeps the first schema it was given and never updates", () => {
+  const pin = schemaPin();
+  assert.strictEqual(pin.get(), "");
+  // An answer without a usable value does not pin (a later good one still can).
+  for (const bad of ["", null, undefined, 3, {}]) pin.pin(bad);
+  assert.strictEqual(pin.get(), "");
+  assert.strictEqual(pin.pin("first0123456789a"), "first0123456789a");
+  assert.strictEqual(pin.pin("later0123456789b"), "first0123456789a");
+  assert.strictEqual(pin.get(), "first0123456789a");
+  // Each page gets its own pin.
+  assert.strictEqual(schemaPin().get(), "");
+});
+
+test("staleSave gives no Load latest for a page from before an update", () => {
+  // Load latest would load into the old form and drop the new field again: the
+  // plain "Save failed: ..." line carries the reload message instead.
+  assert.strictEqual(staleSave({ status: 409, code: "page_outdated", message: "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved" }), null);
+});
+
+// A profile deleted meanwhile has no saved version: Load latest opens a blank
+// draft, so the text must not promise one. The server marks that 409 with
+// gone:true (api() keeps the parsed body on err.body).
+test("staleSave tells a changed profile from a deleted one", () => {
+  const changed = "this profile was changed after you opened it (another tab, another device or a restart); nothing was saved";
+  const gone = "this profile no longer exists (it was deleted after you opened it); nothing was saved";
+  const c = staleSave({ status: 409, code: "profile_changed", message: changed, body: { error: changed, code: "profile_changed" } });
+  assert.strictEqual(c.message, "This" + changed.slice(4) + ". Your edits are still here; Load latest replaces them with the saved version.");
+  assert.strictEqual(c.button, "Load latest");
+  const g = staleSave({ status: 409, code: "profile_changed", message: gone, body: { error: gone, code: "profile_changed", gone: true } });
+  assert.strictEqual(g.message, "This" + gone.slice(4) + ". Your edits are still here; Duplicate saves them as a new profile, Load latest clears the form.");
+  assert.strictEqual(g.button, "Load latest");
+  assert.ok(!g.message.includes("saved version"));
+  // Only a real true counts: no body, or a non-true "gone", is the changed text.
+  for (const body of [undefined, null, {}, { gone: false }, { gone: "true" }, { gone: 1 }]) {
+    const e = staleSave({ status: 409, code: "profile_changed", message: changed, body });
+    assert.ok(e.message.includes("saved version"), JSON.stringify(body));
+  }
+});
+
+// The server's Go error strings start lowercase; the banner shows a sentence.
+test("staleSave starts its message with a capital letter", () => {
+  const e = (message, body) => staleSave({ status: 409, code: "profile_changed", message, body });
+  assert.ok(e("this profile was changed after you opened it; nothing was saved").message.startsWith("This profile was changed after you opened it; nothing was saved. "));
+  assert.ok(e("this profile no longer exists; nothing was saved", { gone: true }).message.startsWith("This profile no longer exists; nothing was saved. "));
+  // Already capitalised, or not a letter: left as it is. Only the first
+  // character changes.
+  assert.ok(e("Already a sentence").message.startsWith("Already a sentence. "));
+  assert.ok(e("3 edits lost").message.startsWith("3 edits lost. "));
+  assert.ok(e("a b C").message.startsWith("A b C. "));
 });

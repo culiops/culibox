@@ -343,6 +343,60 @@ test("helpText emits the groups in a fixed order, each row under its own heading
   }
 });
 
+// helpTextStacked is the phone's version of helpText (#59): the key column cannot
+// sit beside its description in a 390 px dialog (the widest helpText line is 64
+// chars, the dialog fits 44), so each row is its keys on one line and its
+// description, indented two spaces, on the next. Same groups, same order, same
+// trailing Runtime line.
+test("helpTextStacked puts each row's keys on one line and its description indented on the next", () => {
+  const order = ["General", "Sessions & panes", "Terminal", "Editor & files"];
+  for (const mac of [true, false]) {
+    const rows = SC.helpRows(mac);
+    // Reversed so neither the group order nor the row order can come from the registry.
+    const lines = SC.helpTextStacked(rows.slice().reverse(), "runc").split("\n");
+    const at = order.map((g) => lines.indexOf(g));
+    for (const i of at) assert.ok(i >= 0);
+    for (let i = 1; i < at.length; i++) assert.ok(at[i - 1] < at[i], order[i] + " out of order");
+    order.forEach((g, gi) => {
+      // The block under a heading: up to the blank line that ends it.
+      const from = at[gi] + 1;
+      let to = from;
+      while (to < lines.length && lines[to] !== "") to++;
+      const want = rows.filter((r) => r.group === g).reverse().flatMap((r) => [r.keys, "  " + r.label]);
+      assert.deepStrictEqual(lines.slice(from, to), want, g);
+    });
+  }
+});
+
+test("helpTextStacked: the Runtime line is last, and absent without a label", () => {
+  const rows = SC.helpRows(false);
+  const withRt = SC.helpTextStacked(rows, "sysbox");
+  assert.ok(withRt.endsWith("\n\nRuntime: sysbox"));
+  assert.strictEqual(withRt.split("\n").pop(), "Runtime: sysbox");
+  assert.ok(!SC.helpTextStacked(rows).includes("Runtime:"));
+  assert.ok(!SC.helpTextStacked(rows, "").includes("Runtime:"));
+  assert.ok(!SC.helpTextStacked(rows).endsWith("\n"));
+});
+
+test("helpTextStacked: no line is wider than the 44 characters a 390 px dialog fits", () => {
+  // Measured, not guessed: #ask-body is 322 px wide at 390 px and the 12 px mono
+  // face is 7.22 px per character, so 44 characters fit. The longest is the
+  // indented "Select text when the agent holds the mouse" (2 + 42 = 44).
+  for (const mac of [true, false]) {
+    for (const l of SC.helpTextStacked(SC.helpRows(mac), "sysbox").split("\n")) {
+      assert.ok(l.length <= 44, JSON.stringify(l) + " is " + l.length + " chars");
+    }
+  }
+});
+
+test("helpText is unchanged by the stacked variant (desktop keeps its aligned columns)", () => {
+  const rows = SC.helpRows(false);
+  const w = Math.max(...rows.map((r) => r.keys.length));
+  const text = SC.helpText(rows, "runc");
+  assert.ok(text.includes("Ctrl+Shift+K".padEnd(w) + "  Command palette"));
+  assert.notStrictEqual(text, SC.helpTextStacked(rows, "runc"));
+});
+
 test("dispatchShortcut", () => {
   SC._resetShortcutBindings();
   const ran = [];

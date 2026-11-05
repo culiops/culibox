@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/launcher"
+	"github.com/culiops/culibox/internal/proxyline"
 )
 
 // A bound box gets its broker socket from the broker, per box: the session layer
@@ -283,7 +284,7 @@ func realSockHooks(t *testing.T) (sockHooks, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
-	ep, err := broker.Listen("linux", root, 0)
+	ep, err := broker.Listen("linux", root, 0, proxyline.Key{})
 	if err != nil {
 		t.Fatal(err)
 	}

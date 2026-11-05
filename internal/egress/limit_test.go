@@ -32,3 +32,14 @@ func TestMaxProxyConnsIsBounded(t *testing.T) {
 		t.Fatalf("MaxProxyConns = %d", MaxProxyConns)
 	}
 }
+
+// One box may take at most a quarter of the proxy's connections, and still
+// keeps a whole session's tunnel quota.
+func TestMaxProxyConnsPerSourceIsBounded(t *testing.T) {
+	if MaxProxyConnsPerSource < defaultPerSession {
+		t.Fatalf("MaxProxyConnsPerSource = %d, below one session's tunnel cap %d", MaxProxyConnsPerSource, defaultPerSession)
+	}
+	if MaxProxyConnsPerSource*4 > MaxProxyConns {
+		t.Fatalf("MaxProxyConnsPerSource = %d: one box could take more than a quarter of MaxProxyConns %d", MaxProxyConnsPerSource, MaxProxyConns)
+	}
+}

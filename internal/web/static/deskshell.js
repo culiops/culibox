@@ -271,14 +271,16 @@ function deskHash(str) {
 }
 
 // emptyStateModel: which empty state the pane area shows. "first": nothing has
-// ever been set up (no sessions and only built-in profiles, which the server
-// marks editable:false). "none": anything else with no pane open (the caller
-// only asks when that is so), including sessions that exist while the profiles
-// are still loading: a blank pane would be worse than "No session open".
-// null while the session list is unknown (null), or while profiles have not
-// loaded and there are no sessions, so the first-run screen never flashes at
-// someone with custom profiles or live sessions. profiles: up
-// to three recently spawned profile names that still exist.
+// ever been set up (no sessions, and every profile is one CuliBox built in: the
+// server marks those source:"builtin"). A profile from the user's config.json
+// ("config") or saved in the UI ("runtime") is the user's own, so it is never
+// first run, and neither is a profile with no source. "none": anything else
+// with no pane open (the caller only asks when that is so), including sessions
+// that exist while the profiles are still loading: a blank pane would be worse
+// than "No session open". null while the session list is unknown (null), or
+// while profiles have not loaded and there are no sessions, so the first-run
+// screen never flashes at someone with custom profiles or live sessions.
+// profiles: up to three recently spawned profile names that still exist.
 function emptyStateModel({ sessions, profiles, recent }) {
   const ps = Array.isArray(profiles) ? profiles : [];
   const have = new Set(ps.map((p) => p.name));
@@ -290,7 +292,7 @@ function emptyStateModel({ sessions, profiles, recent }) {
   let kind = "none";
   if (!hasSessions) {
     if (!ps.length) kind = null;
-    else if (ps.every((p) => p.builtin === true || !p.editable)) kind = "first";
+    else if (ps.every((p) => p.source === "builtin")) kind = "first";
   }
   return { kind, profiles: names };
 }
@@ -349,7 +351,22 @@ function paneTitle(name, tab, session, tabCount) {
   return name + cwd + (tabCount > 1 ? " (" + tabCount + " tabs in this pane)" : "");
 }
 
+// paneTabs: the pane header's tabs, in the order they show. `label` is the text
+// of a wide header, `icon` the glyph tabIcon draws in its place when the pane is
+// too narrow for four words (#13); the button keeps both, so CSS alone picks. A
+// pane of files has no session to describe: Files alone, no Activity, no Access.
+function paneTabs(hasTerm) {
+  const files = { id: "files", label: "Files", icon: "files" };
+  if (!hasTerm) return [files];
+  return [
+    { id: "terminal", label: "Terminal", icon: "terminal" },
+    files,
+    { id: "activity", label: "Activity", icon: "activity" },
+    { id: "access", label: "Access", icon: "access" },
+  ];
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs };
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/ghapp"
+	"github.com/culiops/culibox/internal/proxyline"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/ssologin"
@@ -146,7 +147,7 @@ func serveBroker(srv *http.Server, l net.Listener) {
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken) (*brokerService, error) {
-	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil, nil)
+	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil, nil, proxyline.Key{})
 }
 
 // startBrokerWithStore is startBroker with the daemon's encrypted store, which
@@ -154,9 +155,11 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 // vstore leaves the references refusing, exactly as without a store. addrs is
 // the layer's box-address cache, which decides the box of a request that
 // arrives on no per-box socket (macOS); nil leaves every such request refused.
+// relayKey is the key the relay presents on macOS (the layer's); the darwin
+// listener refuses to open without it, and Linux ignores it.
 func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken,
-	vstore *secretstore.Store, addrs *boxaddr.Cache) (*brokerService, error) {
+	vstore *secretstore.Store, addrs *boxaddr.Cache, relayKey proxyline.Key) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -214,7 +217,7 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		brk.SetBoxSource(addrs)
 	}
 
-	ep, err := broker.Listen(goos, stateRoot, port)
+	ep, err := broker.Listen(goos, stateRoot, port, relayKey)
 	if err != nil {
 		_ = audit.Close()
 		return nil, fmt.Errorf("%w: %v", errBrokerListen, err)

@@ -306,9 +306,13 @@
   .ph-ics { display: contents; }
   .ph-tabs { display: flex; align-items: center; gap: 2px; }
   .ph-tab {
+    display: inline-flex; align-items: center;
     padding: 4px 9px; font: 12.5px var(--font-ui); color: var(--muted);
     background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
   }
+  /* Each tab holds its icon and its word; only the narrow rule below swaps them. */
+  .ph-ico { display: none; }
+  .ph-ico svg { display: block; width: 14px; height: 14px; }
   .ph-tab:hover { color: var(--fg); }
   .ph-tab.on { color: var(--fg); background: var(--raise); }
   /* Files is a toggle over the pane (the drawer): an underline while open.
@@ -340,19 +344,41 @@
 
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
      tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
-     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 540px is the bar's content
-     box, i.e. a pane under NARROW_PANE_PX (560) in tabs.js. */
-  @container (max-width: 540px) {
+     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 550px is
+     the bar's content box (a 570px pane), not tabs.js's NARROW_PANE_PX (560): with
+     the pointer over the header the wide padding clipped Terminal from 561 to 568
+     (#13), so the compact look must reach 568. */
+  @container (max-width: 550px) {
     .ph-sep { display: none; }
     .ph-tab { padding: 4px 5px; }
     .ph-shell { font-size: 0; padding: 4px 8px; }
     .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
   }
-  /* Too narrow for the tabs at all: dot, name and chip only. Files and Activity
-     stay one click away in the pane's ⋯ menu (Open files here, Context by tool),
-     Access in the palette. */
-  @container (max-width: 250px) {
-    .ph-tabs, .ph-shell { display: none; }
+  /* Too narrow for four words (the compact text tabs need a 440px pane): the same
+     four tabs as icons, 24px squares like ⋯ ⛶ ×, still named by title and
+     aria-label (#13). A maximized pane keeps its ⛶ in the flow, which costs 26px
+     the + Shell button gives back, or Terminal clips at 339-354px. The rule holds
+     below 339px too, though + would fit there from a 249px pane: a rare corner
+     (a maximized pane under 339px) kept to one rule. */
+  @container (max-width: 439px) {
+    .ph-lbl { display: none; }
+    .ph-ico { display: block; }
+    .ph-tab { padding: 5px; }
+    .cell-bar:has(.ph-max.pin) .ph-shell { display: none; }
+  }
+  /* Too narrow for four icons beside the name's room (a 338px pane or less, 318px
+     of content box): dot, name, chip, + and ⋯. Files and Activity stay one click
+     away in the pane's ⋯ menu (Open files here, Context by tool), Access in the
+     palette. */
+  @container (max-width: 318px) {
+    .ph-tabs { display: none; }
+  }
+  /* + Shell (25px, the compact "+" above) fits beside the name's 140px and ⋯ from
+     a 223px pane (203px of content box); below it, the name keeps its room and
+     the + goes too. 210px leaves 7px of slack and clears the 202px panes of four
+     columns at 701px. */
+  @container (max-width: 210px) {
+    .ph-shell { display: none; }
   }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in

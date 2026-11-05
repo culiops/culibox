@@ -455,3 +455,59 @@ func TestReadOnly_HomeMutationsStillWork(t *testing.T) {
 		t.Fatalf("mkdir in home: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// listJSON lists dir through handleFsList and returns the decoded body, so a test
+// can tell an absent "readonly" key from a false one.
+func listJSON(t *testing.T, s *Server, dir string) map[string]any {
+	t.Helper()
+	rec := fsGet(s.handleFsList, "/api/fs/list", dir)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list %s: %d %s", dir, rec.Code, rec.Body)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// wantListReadOnly: the listing says readonly:true (the Files tree hides its
+// mutation buttons from it; the server refuses the mutations regardless).
+func wantListReadOnly(t *testing.T, s *Server, dir string) {
+	t.Helper()
+	m := listJSON(t, s, dir)
+	if m["readonly"] != true {
+		t.Fatalf("list %s: readonly = %v, want true (body %v)", dir, m["readonly"], m)
+	}
+}
+
+func TestScratch_ListCarriesReadOnly(t *testing.T) {
+	s, _, scratch := roFixture(t)
+	wantListReadOnly(t, s, scratch)
+	wantListReadOnly(t, s, filepath.Join(scratch, "a"))
+}
+
+func TestScratch_ListHomeHasNoReadOnly(t *testing.T) {
+	s, home, _ := roFixture(t)
+	m := listJSON(t, s, filepath.Join(home, "p"))
+	if _, has := m["readonly"]; has {
+		t.Fatalf("a home listing must omit readonly, got %v", m)
+	}
+	if m["path"] != filepath.Join(home, "p") {
+		t.Fatalf("path = %v", m["path"])
+	}
+}
+
+func TestScratch_ListThroughHomeLinkIntoScratchIsReadOnly(t *testing.T) {
+	s, home, scratch := roFixture(t)
+	mustSymlink(t, scratch, filepath.Join(home, "s"))
+	wantListReadOnly(t, s, filepath.Join(home, "s"))
+}
+
+// Sticky, as fsresolve.go says: once the walk touched a scratch root it stays
+// read-only even when a link in it leads back into $HOME.
+func TestScratch_ListScratchLinkIntoHomeIsReadOnly(t *testing.T) {
+	s, home, scratch := roFixture(t)
+	mustSymlink(t, filepath.Join(home, "p"), filepath.Join(scratch, "h"))
+	wantListReadOnly(t, s, filepath.Join(scratch, "h"))
+}

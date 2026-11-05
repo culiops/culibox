@@ -4,6 +4,7 @@
 package store
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,11 +19,24 @@ import (
 // ErrNotFound is returned by Delete/Get for an unknown profile.
 var ErrNotFound = errors.New("store: profile not found")
 
+// ErrChangedOnDisk is returned by Save and Delete when the profiles file no
+// longer holds the bytes this process last read or wrote: someone edited,
+// replaced or removed it, or it appeared after Open found none. The store
+// refuses to write over it (that would silently discard the change) and leaves
+// its in-memory state as it was; reloading means restarting.
+var ErrChangedOnDisk = errors.New("store: the profiles file changed on disk after it was loaded")
+
 // Store is a JSON-file-backed profile store, safe for concurrent use.
 type Store struct {
 	path string
 	mu   sync.Mutex
 	m    map[string]config.AgentConfig
+
+	// disk is the sha256 of the file as this process last read or wrote it;
+	// onDisk is false when there was no file. checkDiskLocked compares them
+	// with the file as it is now.
+	disk   [sha256.Size]byte
+	onDisk bool
 }
 
 // Open loads the store from path (a missing file is an empty store).
@@ -42,6 +56,7 @@ func Open(path string) (*Store, error) {
 	for _, p := range list {
 		s.m[p.Name] = p
 	}
+	s.disk, s.onDisk = sha256.Sum256(b), true
 	return s, nil
 }
 
@@ -60,23 +75,54 @@ func (s *Store) Get(name string) (config.AgentConfig, bool) {
 	return p, ok
 }
 
-// Save creates or updates a profile and persists atomically.
+// Save creates or updates a profile and persists atomically. It returns
+// ErrChangedOnDisk, changing nothing, when the file was changed behind the
+// store's back.
 func (s *Store) Save(p config.AgentConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkDiskLocked(); err != nil {
+		return err
+	}
 	s.m[p.Name] = p
 	return s.flushLocked()
 }
 
-// Delete removes a profile and persists atomically.
+// Delete removes a profile and persists atomically. Like Save it returns
+// ErrChangedOnDisk, changing nothing, when the file was changed behind the
+// store's back.
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[name]; !ok {
 		return ErrNotFound
 	}
+	if err := s.checkDiskLocked(); err != nil {
+		return err
+	}
 	delete(s.m, name)
 	return s.flushLocked()
+}
+
+// checkDiskLocked compares the file as it is now with what this process last
+// read or wrote (the content, not the mtime: an identical rewrite is not a
+// change). nil means they match, or the file is absent and was absent at Open;
+// ErrChangedOnDisk means the bytes differ, the file appeared or it vanished.
+func (s *Store) checkDiskLocked() error {
+	b, err := os.ReadFile(s.path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("store: read %s: %w", s.path, err)
+		}
+		if s.onDisk {
+			return ErrChangedOnDisk
+		}
+		return nil
+	}
+	if !s.onDisk || sha256.Sum256(b) != s.disk {
+		return ErrChangedOnDisk
+	}
+	return nil
 }
 
 func (s *Store) sortedLocked() []config.AgentConfig {
@@ -112,6 +158,8 @@ func (s *Store) flushLocked() error {
 	if err := os.Rename(tmp, s.path); err != nil { // atomic replace
 		return err
 	}
+	// what checkDiskLocked expects to find on the next write
+	s.disk, s.onDisk = sha256.Sum256(b), true
 	if d, err := os.Open(filepath.Dir(s.path)); err == nil { // make the rename durable
 		_ = d.Sync()
 		_ = d.Close()

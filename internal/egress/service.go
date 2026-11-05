@@ -18,7 +18,7 @@ import (
 )
 
 // proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// PROXY line; the relay writes it before any other byte.
+// relay key line and PROXY line; the relay writes both before any other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
@@ -43,6 +43,10 @@ type ServiceOptions struct {
 	// after the network is ensured and before anything else, so a failure keeps
 	// boxes off an egress path whose VM firewall rules no longer hold.
 	AfterNetwork func(ctx context.Context, n Net) error
+	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay presents
+	// before its PROXY line (#114). On darwin a zero key makes Ready refuse to
+	// listen: the PROXY line is never trusted on its own.
+	RelayKey proxyline.Key
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -54,8 +58,9 @@ type Endpoint struct {
 
 // Service owns the egress network and the proxy's listener for one instance.
 type Service struct {
-	o        ServiceOptions
-	maxConns int
+	o            ServiceOptions
+	maxConns     int
+	maxPerSource int
 
 	mu     sync.Mutex
 	ep     Endpoint
@@ -78,7 +83,7 @@ func NewService(o ServiceOptions) *Service {
 			return BoxAddr(ctx, d, box, network)
 		})
 	}
-	return &Service{o: o, maxConns: MaxProxyConns}
+	return &Service{o: o, maxConns: MaxProxyConns, maxPerSource: MaxProxyConnsPerSource}
 }
 
 // RefreshHostAddrs reads the host's interface addresses and hands them to the
@@ -144,9 +149,15 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
+	// macOS trusts a PROXY line only behind the relay's key, so no key means no
+	// listener (fail closed and loud), never a header-only fallback.
+	if s.o.GOOS == "darwin" && s.o.RelayKey.IsZero() {
+		return Endpoint{}, errors.New("egress: no relay key; refusing to listen")
+	}
 	// The source check is on for both OSes. On macOS every box reaches the proxy
 	// through the relay, so the TCP peer is always loopback; the box address is
-	// the relay's PROXY line, which the wrapper below requires and vets.
+	// the relay's PROXY line, which the wrapper below requires (behind the relay
+	// key) and vets.
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
@@ -160,13 +171,22 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 		return Endpoint{}, fmt.Errorf("egress: listener is bound to %s, not %s; refusing to serve", l.Addr(), addr)
 	}
 	port := int(got.Port())
-	// The raw-connection limit counts before the header is read, so a silent
-	// client cannot hold more than its slot. darwin only: Linux boxes connect
-	// directly from their own address.
+	// Both caps apply on both OSes. The total cap sits under the PROXY wrapper
+	// and counts raw connections before any header is read, so a silent client
+	// cannot hold more than one slot, and only until the header timeout. The
+	// per-box cap sits above the wrapper, keyed on the source it vets: the PROXY
+	// line's address on macOS (the TCP peer is always the relay) and the peer's
+	// own address on Linux. One box cannot then take every slot of the total.
 	l = netlimit.Listener(l, s.maxConns)
 	if s.o.GOOS == "darwin" {
-		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(n.Subnet, n.Gateway), proxyHeaderTimeout)
+		l = proxyline.Wrap(l, proxyline.Options{
+			Key:        s.o.RelayKey,
+			Allow:      proxyline.InSubnetNotGateway(n.Subnet, n.Gateway),
+			Timeout:    proxyHeaderTimeout,
+			KeyRefused: proxyline.NewRefusalLog("egress proxy", time.Minute, time.Now, log.Printf).Refused,
+		})
 	}
+	l = netlimit.PerSource(l, s.maxPerSource)
 	host := s.o.ProxyHost
 	if host == "" {
 		host = n.Gateway.String()

@@ -143,8 +143,7 @@ func TestProfilesAPIShareWarnings(t *testing.T) {
 		t.Errorf("the warning must also be logged, log = %q", logs.String())
 	}
 
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/cl", strings.NewReader(body(`,"clone_share":[".env"]`))))
+	rec = putProfile(t, s, "cl", body(`,"clone_share":[".env"]`))
 	var updated struct {
 		Warnings []string `json:"warnings"`
 	}
@@ -152,8 +151,7 @@ func TestProfilesAPIShareWarnings(t *testing.T) {
 		t.Fatalf("PUT with the share: code %d body %s, want 200 with the same warning", rec.Code, rec.Body)
 	}
 
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/cl", strings.NewReader(body(`,"clone_share":["docs"]`))))
+	rec = putProfile(t, s, "cl", body(`,"clone_share":["docs"]`))
 	if rec.Code != 204 || rec.Body.Len() != 0 {
 		t.Fatalf("PUT without a warning: code %d body %q, want 204 and no body", rec.Code, rec.Body)
 	}
@@ -184,8 +182,7 @@ func TestPUTProfileWithBoxImageIs400(t *testing.T) {
 	if rec.Code != 201 {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/p", strings.NewReader(`{"name":"p","bin":"bash","box":{"image":"x:1"}}`)))
+	rec = putProfile(t, s, "p", `{"name":"p","bin":"bash","box":{"image":"x:1"}}`)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "box_image") {
 		t.Fatalf("PUT with box.image: code %d body %s, want 400 naming box_image", rec.Code, rec.Body)
 	}
@@ -204,8 +201,7 @@ func TestPOSTProfileWithCAEnvIs400(t *testing.T) {
 	if rec.Code != 201 {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/p", strings.NewReader(`{"name":"p","bin":"bash","env":{"SSL_CERT_FILE":"/x"}}`)))
+	rec = putProfile(t, s, "p", `{"name":"p","bin":"bash","env":{"SSL_CERT_FILE":"/x"}}`)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "SSL_CERT_FILE") {
 		t.Fatalf("PUT with a CA env var: code %d body %s, want 400 naming it", rec.Code, rec.Body)
 	}
@@ -613,8 +609,7 @@ func TestProfilesAPIContextWarnings(t *testing.T) {
 		t.Errorf("the warning must also be logged, log = %q", logs.String())
 	}
 
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/c1", strings.NewReader(body("c1", dir))))
+	rec = putProfile(t, s, "c1", body("c1", dir))
 	var updated struct {
 		Warnings []string `json:"warnings"`
 	}
@@ -622,8 +617,7 @@ func TestProfilesAPIContextWarnings(t *testing.T) {
 		t.Fatalf("PUT: code %d body %s, want 200 with a secrets warning", rec.Code, rec.Body)
 	}
 
-	rec = httptest.NewRecorder()
-	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/c1", strings.NewReader(body("c1", clean))))
+	rec = putProfile(t, s, "c1", body("c1", clean))
 	if rec.Code != 204 || rec.Body.Len() != 0 {
 		t.Fatalf("PUT clean: code %d body %q, want 204 and no body", rec.Code, rec.Body)
 	}
@@ -665,8 +659,7 @@ func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
 		rec := httptest.NewRecorder()
 		s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
 		if rec.Code == 409 || rec.Code == 201 {
-			rec = httptest.NewRecorder()
-			s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/e1", strings.NewReader(body)))
+			rec = putProfile(t, s, "e1", body)
 		}
 		return rec
 	}
