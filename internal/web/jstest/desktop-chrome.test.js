@@ -218,6 +218,16 @@ test("the AWS connection name is allowed to wrap (a nowrap name overflowed the t
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-main").some((b) => /overflow-wrap:\s*break-word/.test(b)), "and breaks between words first");
 });
 
+// A name with no hyphen (the name rule allows one: ^[a-z0-9][a-z0-9-]{0,62}$) has no break
+// point, and break-word does not lower a column's min-content width, so on the AWS
+// table's automatic layout it held the column open like nowrap did (a 30-character one
+// overflowed 92px at 1225px, a 60-character one 316px). Only `anywhere` counts in the
+// column sizing, so the AWS name gets it.
+test("the AWS connection name may break anywhere when it has no hyphen to break at", () => {
+  const sel = '#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm';
+  assert.ok(rulesFor(sel).some((b) => /overflow-wrap:\s*anywhere/.test(b)), "overflow-wrap: anywhere on the AWS name");
+});
+
 // #123: .btn is nowrap (primitives.css), so in the store strip a 701px window (the strip's
 // body is 178px wide there) pushed "Create the encrypted store" (186px) 25px past its
 // warning box, and again inside the passphrase form it opens. Wrapping the label is what
