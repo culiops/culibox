@@ -587,6 +587,53 @@ func TestWrapGuardOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+// macOS (#68): docker only sees the box VM's shared directories. Every guard is
+// derived below the workspace, so a workspace under a share gets all of them
+// there, and one outside the shares is refused before any guard is derived or
+// any docker call is made: a guard is never silently left out.
+func TestWrapGuardsStayUnderTheVMShares(t *testing.T) {
+	ctx := context.Background()
+	shared := realTemp(t)
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		GuardInPlace: true, Shared: []string{shared}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outside := realTemp(t)
+	gitRepo(t, outside, "")
+	_, _, _, err = m.Wrap(ctx, outside, "s1", BoxKey{}, []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
+		t.Fatalf("want a shared-dirs refusal, got %v", err)
+	}
+	if f.runs() != 0 {
+		t.Fatalf("a refused workspace must not start a box, runs=%d", f.runs())
+	}
+	if _, err := os.Lstat(filepath.Join(outside, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("no guard may be derived for a refused workspace (it creates .claude): %v", err)
+	}
+
+	inside := filepath.Join(shared, "proj")
+	gitRepo(t, inside, "[core]\n\thooksPath = .husky/_\n")
+	mkdirs(t, filepath.Join(inside, ".husky", "_"))
+	writeFile(t, filepath.Join(inside, "CLAUDE.md"), "x")
+	writeFile(t, filepath.Join(inside, ".mcp.json"), "{}")
+	if _, _, _, err := m.Wrap(ctx, inside, "s2", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("a workspace under a share must box: %v", err)
+	}
+	args := f.runArgs[0]
+	for _, rel := range []string{".git", ".claude", "CLAUDE.md", ".mcp.json", ".husky"} {
+		g := filepath.Join(inside, rel)
+		if !containsPair(args, "--mount", "type=bind,src="+g+",dst="+g+",readonly") {
+			t.Errorf("want %s bound read-only onto itself: %q", rel, args)
+		}
+		if !UnderMount(g, m.opts.Shared) {
+			t.Errorf("guard %s is outside the VM's shares %q", g, m.opts.Shared)
+		}
+	}
+}
+
 // The workspace is spelled through a symlink: the guards are derived from, and
 // mounted at, its resolved path.
 func TestWrapGuardsTheResolvedWorkspace(t *testing.T) {
