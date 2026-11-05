@@ -192,7 +192,7 @@ function acctTokenStateText(state, id) {
 }
 
 // acctCanToken: the account's provider signs in with a pasted token and an
-// interactive login (claude). Codex accounts are stored but cannot be spawned.
+// interactive login (claude). Any other stored provider is listed and deletable only.
 function acctCanToken(a) {
   return !!a && a.provider === "claude";
 }
@@ -338,8 +338,8 @@ function acctRow(a, limits, now) {
     cb.onchange = () => acctUpdate(a, { inherit_personal: cb.checked });
     inh.append(cb, document.createTextNode(" inherit personal config (CLAUDE.md, skills, MCP)"));
     row.appendChild(inh);
-    // Codex accounts are stored but cannot be spawned yet, so there is
-    // nothing to log in with.
+    // Only a claude account signs in, so any other stored provider gets no
+    // Log in button.
     if (acctCanToken(a)) {
       const login = document.createElement("button");
       login.type = "button";
@@ -513,11 +513,9 @@ async function acctUpdate(a, patch) {
 async function acctNew() {
   setAcctErr("");
   setAcctNote("");
-  const provSel = document.getElementById("acct-provider");
-  const provider = (provSel && provSel.value) || "claude";
   const name = await askPrompt({
     title: "New agent account",
-    body: "A separate " + provider + " login. Lowercase letters, digits and '-'. Example: work",
+    body: "A separate claude login. Lowercase letters, digits and '-'. Example: work",
     label: "Name",
     placeholder: "work",
     confirmLabel: "Create",
@@ -528,7 +526,7 @@ async function acctNew() {
     await api("/api/accounts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name, provider: provider }),
+      body: JSON.stringify({ name: name, provider: "claude" }),
     });
   } catch (e) {
     setAcctErr("Create failed: " + e.message);

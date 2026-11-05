@@ -76,13 +76,13 @@ function needLabel(s) {
 //  - turn on claude: the summary + a one-line reply when the session has
 //    opted in, else an "Enable replies" control — never a dead field, and
 //    never digits (a digit would become the agent's next prompt).
-//  - non-claude (codex), OR claude with no `need` at all: Open only, no reply
+//  - non-claude (a shell or other bin), OR claude with no `need` at all: Open only, no reply
 //    path. The server only ever reports `need` for a waiting claude session
 //    whose transcript it could read; empty `need` on a waiting claude session
 //    means the transcript was NOT readable, and SendMessage refuses every
 //    send to such a session (ErrNoTranscript) regardless of `replyable` — so
-//    a reply field here would be dead on arrival. Same shape as codex on
-//    purpose: neither has a real answer path from this card.
+//    a reply field here would be dead on arrival. Same shape as a
+//    non-claude session on purpose: neither has a real answer path from this card.
 function cardContent(s) {
   const v = s || {};
   // Kill-switch: the text is the peek and stays; only the reply paths close.
