@@ -103,6 +103,11 @@ context and never edits `~/.ssh/config`.
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
+- Clone mode (a box works on a private copy of a repo and its branches come
+  home for review) runs here too, in the box VM. Keep the repo and its copy
+  under your home directory; anything else is refused. `agent-box clone fetch`
+  needs the VM running and never starts it. See
+  [Clone mode](CLONE-MODE.md#on-macos). Not yet tested end to end on a Mac.
 - Restart `agent-box serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can

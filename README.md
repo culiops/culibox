@@ -38,7 +38,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 - **Boxed runtime (the default).** Each project gets its own Docker container where only the project folder is mounted writable: no host home, no `~/.ssh`, no Docker socket, all capabilities dropped, a read-only root, and PID and memory caps. With a config file, boxes are the default and the `host` tier (no containment) is something you choose; with no config file at all, CuliBox runs on the host tier.
 - **Your agent config, filtered.** A box gets an allowlisted slice of your Claude Code config (`CLAUDE.md` and the files it imports, skills, plugins, MCP servers that run in the image). Credentials, history and transcripts are never copied. See [CLAUDE.md imports](docs/CLAUDE-MD-IMPORTS.md).
-- **Clone mode.** An agent works on a private copy of a repo, and its branches come home as `box/<branch>` for you to review. Linux only. See [Clone mode](docs/CLONE-MODE.md).
+- **Clone mode.** An agent works on a private copy of a repo, and its branches come home as `box/<branch>` for you to review. Linux, and macOS with the boxed tier. See [Clone mode](docs/CLONE-MODE.md).
 - **Read other repos.** `context_paths` mounts partner repos or docs into a box read-only. See [Reading other repos](docs/CONTEXT-PATHS.md).
 - **A ready box shell.** zsh with completion for aws, terraform, kubectl, helm and gh, and a prompt that shows production contexts in red.
 - **macOS.** Boxes run in CuliBox's own colima VM. See [docs/MACOS.md](docs/MACOS.md).
