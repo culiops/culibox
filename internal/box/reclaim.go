@@ -48,8 +48,9 @@ type Reclaimed struct {
 	Box string
 	Age time.Duration
 	// Bytes is what the sweep freed: the whole home, or with Caches the files
-	// under the allowlisted paths as measured before the removal (an upper bound
-	// when a path would not go and the error says so).
+	// under the allowlisted paths as measured before the removal, counted down to
+	// maxCacheDepth only (an upper bound when a path would not go and the error
+	// says so).
 	Bytes int64
 	// Caches is true when only the allowlisted caches were removed and the home
 	// itself stays.
@@ -108,6 +109,12 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 	var out []Reclaimed
 	var errs []error
 	for _, e := range entries {
+		// The context bounds the file work too, not only the docker calls: a pass
+		// that is out of time stops here instead of walking the next home.
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		name := e.Name()
 		if !e.IsDir() || !isBoxName(name) || known[name] {
 			continue
@@ -131,9 +138,11 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 			reclaimed, err = m.reclaimOne(ctx, name, dir, ttl, dirBytes(dir))
 		} else {
 			// Nothing to prune is the usual case on every pass after the first,
-			// and costs a few lstats instead of taking opMu.
-			size := cacheBytes(dir)
-			if size == 0 {
+			// and costs a few lstats instead of taking opMu. Whether there is
+			// something is the paths' existence, not the byte count: a tree
+			// deeper than the walk goes counts for nothing and still has to go.
+			size, found := cacheBytes(ctx, dir)
+			if !found || ctx.Err() != nil {
 				continue
 			}
 			reclaimed, err = m.pruneOne(ctx, name, dir, cacheTTL, size)
@@ -243,11 +252,23 @@ func (m *Manager) pruneOne(ctx context.Context, name, dir string, cacheTTL time.
 	var errs []error
 	removed := false
 	for _, p := range cachePaths {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
 		if !plainPath(root, p) {
 			continue
 		}
-		makeRemovable(root, p)
-		if err := root.RemoveAll(p); err != nil {
+		// Most trees go in this one call: the build cache, npm's, the venv, and a
+		// module cache written with -modcacherw. Only a read-only one needs the
+		// walk that makes its directories writable, and a walk costs far more
+		// than the removal, with opMu held.
+		err := root.RemoveAll(p)
+		if err != nil {
+			makeRemovable(ctx, root, p)
+			err = root.RemoveAll(p)
+		}
+		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p, err))
 			continue
 		}
@@ -286,51 +307,84 @@ func plainPath(root *os.Root, rel string) bool {
 	return true
 }
 
-// makeRemovable gives the owner full access to every directory under rel, which
-// has passed plainPath. A Go module cache written without -modcacherw is 0555
-// directories of 0444 files, and none of it can be unlinked until its
-// directories are writable again. The chmod comes BEFORE WalkDir reads a
-// directory, so even one with no read bit can be listed. A chmod that fails is
-// ignored: if it mattered, RemoveAll fails right after with the real cause (a
-// directory owned by another uid), and that is the error worth reporting.
-func makeRemovable(root *os.Root, rel string) {
-	_ = fs.WalkDir(root.FS(), rel, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
+// maxCacheDepth is how many directory levels below a cache path the walks read.
+// The module and build caches, npm's cache and a venv are a dozen levels deep at
+// most. A home is the agent's to fill, though, and a chain of thousands of
+// directories (`mkdir a; cd a`, repeated) makes a walk through root.FS() stall:
+// os.Root resolves every path component of every open one by one, so the cost
+// grows with the square of the depth (measured: 1000 deep 6.7 s, 2000 deep 46 s),
+// on a pass that runs before the daemon serves and under opMu. Past the cap a
+// directory is not read; RemoveAll still removes it, which is linear.
+const maxCacheDepth = 64
+
+// walkCache calls visit for every entry under rel, which has passed plainPath,
+// down to maxCacheDepth, and stops with ctx's error as soon as ctx is done.
+// visit runs on a directory before it is read.
+func walkCache(ctx context.Context, root *os.Root, rel string, visit func(p string, d fs.DirEntry)) error {
+	top := strings.Count(rel, "/")
+	return fs.WalkDir(root.FS(), rel, func(p string, d fs.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if err != nil {
 			return nil
 		}
-		if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
-			_ = root.Chmod(p, fi.Mode().Perm()|0o700)
+		if d.IsDir() && strings.Count(p, "/")-top > maxCacheDepth {
+			return fs.SkipDir
 		}
+		visit(p, d)
 		return nil
 	})
 }
 
+// makeRemovable gives the owner full access to every directory under rel, which
+// has passed plainPath. A Go module cache written without -modcacherw is 0555
+// directories of 0444 files, and none of it can be unlinked until its
+// directories are writable again. The chmod comes BEFORE the walk reads a
+// directory, so even one with no read bit can be listed. A chmod that fails is
+// ignored: if it mattered, RemoveAll fails right after with the real cause (a
+// directory owned by another uid), and that is the error worth reporting.
+func makeRemovable(ctx context.Context, root *os.Root, rel string) {
+	_ = walkCache(ctx, root, rel, func(p string, d fs.DirEntry) {
+		if !d.IsDir() {
+			return
+		}
+		if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
+			_ = root.Chmod(p, fi.Mode().Perm()|0o700)
+		}
+	})
+}
+
 // cacheBytes sums the regular-file bytes under the cachePaths of dir that
-// pruneOne would remove. It only reads, so it runs before opMu like dirBytes; it
-// is also what keeps every pass after the first cheap: a home with nothing left
-// to prune returns 0 and is never locked.
-func cacheBytes(dir string) int64 {
+// pruneOne would remove, and reports whether any of those paths exists at all.
+// It only reads, so it runs before opMu like dirBytes; it is also what keeps
+// every pass after the first cheap: a home with no cache path left returns
+// found=false and is never locked. The sum is a report number and stops at
+// maxCacheDepth; found does not depend on it.
+func cacheBytes(ctx context.Context, dir string) (size int64, found bool) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	defer root.Close()
-	var total int64
 	for _, p := range cachePaths {
 		if !plainPath(root, p) {
 			continue
 		}
-		_ = fs.WalkDir(root.FS(), p, func(_ string, d fs.DirEntry, err error) error {
-			if err != nil || !d.Type().IsRegular() {
-				return nil
+		found = true
+		err := walkCache(ctx, root, p, func(_ string, d fs.DirEntry) {
+			if !d.Type().IsRegular() {
+				return
 			}
 			if fi, err := d.Info(); err == nil {
-				total += fi.Size()
+				size += fi.Size()
 			}
-			return nil
 		})
+		if err != nil {
+			break
+		}
 	}
-	return total
+	return size, found
 }
 
 // isBoxName matches only what boxName produces: the prefix plus 12 hex digits.

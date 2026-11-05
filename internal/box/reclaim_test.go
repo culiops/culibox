@@ -832,3 +832,138 @@ func TestPruneIsOffWhenTheCacheTTLIsNotShorterThanTheTTL(t *testing.T) {
 	mustBeGone(t, old)
 	mustExist(t, dir)
 }
+
+// deepChain makes dir/a/a/.../a, n levels, with a 10-byte file at the bottom.
+// MkdirAll resolves the whole path, which stays far under PATH_MAX at two bytes a
+// level.
+func deepChain(t *testing.T, dir string, n int) string {
+	t.Helper()
+	bottom := filepath.Join(dir, strings.Repeat("a/", n))
+	if err := os.MkdirAll(bottom, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bottom, "f"), []byte("0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return bottom
+}
+
+// An agent can `mkdir a; cd a` as many times as it likes. os.Root resolves every
+// path component one at a time, so a fs.WalkDir over root.FS() costs depth
+// squared (measured: 1000 deep 6.7 s, 2000 deep 46 s), and the pass runs before
+// the daemon serves and under opMu. The bound is generous on purpose: it has to
+// fail on a quadratic walk, not on a slow disk.
+func TestPruneIsBoundedOnADeepDirectoryChain(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-aaaaaaaaaaaa", 2*time.Hour)
+	// The only cache in this home is a chain far deeper than any walk goes: the
+	// byte count never sees its file, and the cache must still go.
+	if err := os.RemoveAll(filepath.Join(dir, ".npm")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, ".claude", "keep"), "0123456789")
+	mod := filepath.Join(dir, "go", "pkg", "mod")
+	deepChain(t, mod, 1000)
+
+	start := time.Now()
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the pass took %v on a 1000-deep chain", took)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 1 || !done[0].Caches {
+		t.Fatalf("want one cache prune, got %+v", done)
+	}
+	mustBeGone(t, mod)
+	mustExist(t, filepath.Join(dir, ".claude", "keep"))
+}
+
+// The same chain made read-only, so the chmod walk is needed too. Past the walk's
+// depth cap it cannot reach the bottom, so the tree stays and the error says so;
+// what matters is that it neither stalls nor takes the other caches with it.
+func TestPruneIsBoundedOnADeepReadOnlyChain(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a read-only tree is removable anyway")
+	}
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-bbbbbbbbbbbb", 2*time.Hour)
+	seedCaches(t, dir)
+	mod := filepath.Join(dir, "go", "pkg", "mod")
+	if err := os.RemoveAll(filepath.Join(dir, "go")); err != nil {
+		t.Fatal(err)
+	}
+	bottom := deepChain(t, mod, 1000)
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(mod, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				_ = os.Chmod(p, 0o755)
+			}
+			return nil
+		})
+	})
+	if err := os.Chmod(filepath.Join(bottom, "f"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	for p := bottom; len(p) >= len(mod); p = filepath.Dir(p) {
+		if err := os.Chmod(p, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := time.Now()
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the pass took %v on a 1000-deep read-only chain", took)
+	}
+	if err == nil || !strings.Contains(err.Error(), "ab-box-bbbbbbbbbbbb") {
+		t.Fatalf("a tree the pruner cannot reach must be reported by box name: %v", err)
+	}
+	if len(done) != 1 || !done[0].Caches {
+		t.Fatalf("the other caches must still be reported, got %+v", done)
+	}
+	mustBeGone(t, filepath.Join(dir, ".npm"))
+	mustBeGone(t, filepath.Join(dir, ".cache", "go-build"))
+}
+
+// A pass whose deadline has passed stops instead of walking on: the context the
+// daemon gives a pass bounds its docker calls, and the file work has to honour it
+// too.
+func TestReclaimStopsWhenTheContextIsDone(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-cccccccccccc", 2*time.Hour)
+	seedCaches(t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done, err := m.ReclaimState(ctx, DefaultStateTTL, DefaultCacheTTL)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled pass must say so: %v", err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("a cancelled pass pruned %+v", done)
+	}
+	for _, p := range wantCachePaths {
+		mustExist(t, filepath.Join(dir, p, "blob"))
+	}
+}
+
+// The walk itself checks the context, so a deadline that passes mid-home stops
+// it rather than the next home: a cancelled one reads no file, yet still says
+// that the caches are there.
+func TestCacheBytesStopsWalkingWhenTheContextIsDone(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-dddddddddddd", 2*time.Hour)
+	seedCaches(t, dir)
+	if size, found := cacheBytes(context.Background(), dir); size != 40 || !found {
+		t.Fatalf("cacheBytes = %d, %v; want 40, true", size, found)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if size, found := cacheBytes(ctx, dir); size != 0 || !found {
+		t.Fatalf("a cancelled cacheBytes = %d, %v; want 0, true", size, found)
+	}
+	if size, found := cacheBytes(context.Background(), t.TempDir()); size != 0 || found {
+		t.Fatalf("a home with no cache = %d, %v; want 0, false", size, found)
+	}
+}
