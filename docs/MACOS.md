@@ -206,8 +206,12 @@ a git config `include`, and so on). What it covers and what it does not is in
   whole `.git` is mounted. The other guarded names use the same read-only mount
   and have not been measured separately on a Mac yet.
 - Not yet tested: whether a box can write a guarded file under another spelling
-  of its name, such as `claude.md`. A macOS volume ignores case by default, so
-  the Mac treats that as the same file.
+  of its name, such as `claude.md`, or a worktree's `.git` file as `.GIT`. A
+  macOS volume ignores case by default, so the Mac treats that as the same
+  file, while the read-only mount in the box covers only the one spelling.
+  Until this is measured, treat those files as writable by the box. The guarded
+  directories (`.git`, `.claude/`, the hooks directory) are expected to hold,
+  but are not measured under another spelling either.
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.
