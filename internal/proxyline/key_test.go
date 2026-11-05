@@ -70,14 +70,52 @@ func TestKeyIDIsStableAndNotTheKey(t *testing.T) {
 	}
 }
 
+// keyRepresentations returns every way fmt can spell the key's bytes: hex, the
+// decimal, octal and binary numbers of %d, %o and %b, and the raw characters of
+// %c. A formatted value that holds any of them leaked the key.
+func keyRepresentations(k Key) map[string]string {
+	join := func(verb string) string {
+		parts := make([]string, len(k))
+		for i, b := range k {
+			parts[i] = fmt.Sprintf(verb, b)
+		}
+		return strings.Join(parts, " ")
+	}
+	return map[string]string{
+		"hex":     k.Hex(),
+		"decimal": join("%d"),
+		"octal":   join("%o"),
+		"binary":  join("%b"),
+		"chars":   join("%c"),
+	}
+}
+
+// Every verb prints the redacted ID, wherever fmt can reach the Key through an
+// exported path. A failure names the verb and the shape, never the output: the
+// output would be the key.
 func TestKeyNeverFormatsItsBytes(t *testing.T) {
 	k := keyOf(9)
-	wrapped := struct{ K Key }{k}
-	for _, verb := range []string{"%v", "%s", "%+v", "%#v", "%x", "%q"} {
-		for name, arg := range map[string]any{"key": k, "struct": wrapped, "pointer": &wrapped, "key pointer": &k} {
+	type exported struct{ K Key }
+	wrapped := exported{k}
+	reps := keyRepresentations(k)
+	args := map[string]any{
+		"key":            k,
+		"key pointer":    &k,
+		"struct":         wrapped,
+		"struct pointer": &wrapped,
+		"slice":          []Key{k},
+		"map":            map[string]Key{"k": k},
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%o", "%b", "%c", "%U", "%e", "%08d", "% x"} {
+		for name, arg := range args {
 			got := fmt.Sprintf(verb, arg)
-			if strings.Contains(got, k.Hex()) {
-				t.Errorf("%s on %s leaks the key: %s", verb, name, got)
+			for rep, leaked := range reps {
+				if strings.Contains(got, leaked) {
+					t.Errorf("%s on a %s printed the key's %s form", verb, name, rep)
+				}
+			}
+			if !strings.Contains(got, k.ID()) {
+				t.Errorf("%s on a %s did not print the key's ID", verb, name)
 			}
 		}
 	}

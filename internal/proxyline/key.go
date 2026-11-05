@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -13,12 +15,13 @@ import (
 // only from a connection that began with it, so another process on the Mac
 // cannot claim a box's address just by reaching the loopback port.
 //
-// The key is 32 random bytes. Only Hex and Preamble yield the material. String
-// and GoString print the redacted ID, and fmt calls them for every verb when the
-// Key is the operand itself or sits in an exported struct field, slice element
-// or map value. fmt cannot call a method on an unexported struct field, so a Key
-// held in one is printed as its raw bytes by %v, %+v and %x: never format a
-// struct that keeps a Key in an unexported field.
+// The key is 32 random bytes. Only Hex and Preamble yield the material. Format
+// writes the redacted ID (String, or GoString for %#v) for every verb, so a Key
+// that is the operand itself, or that sits in an exported struct field, slice
+// element or map value, never prints its bytes under %v, %s, %q, %x, %d, %o, %b
+// or %c. fmt cannot call a method on an unexported struct field, so a Key held in
+// one is printed as its raw bytes: never format a struct that keeps a Key in an
+// unexported field.
 type Key [32]byte
 
 // PreambleLen is the length of Key.Preamble: the prefix, 64 hex characters and
@@ -66,11 +69,23 @@ func (k Key) ID() string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// String redacts the key: fmt's %v, %s, %x and %q all end up here.
+// String redacts the key. Printing a Key with fmt goes through Format, which
+// uses it.
 func (k Key) String() string { return "proxyline.Key(id=" + k.ID() + ")" }
 
 // GoString redacts the key for %#v.
 func (k Key) GoString() string { return k.String() }
+
+// Format makes every fmt verb print the redacted ID. Without it fmt would only
+// call String for the verbs that print text, and %d, %o, %b and %c would spell
+// out the raw bytes.
+func (k Key) Format(f fmt.State, verb rune) {
+	if verb == 'v' && f.Flag('#') {
+		io.WriteString(f, k.GoString())
+		return
+	}
+	io.WriteString(f, k.String())
+}
 
 // RefusalLog counts connections a listener refused for lacking the relay key
 // and logs a summary at most once per interval. A refused connection is closed
