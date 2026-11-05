@@ -26,13 +26,19 @@ type FileID struct{ Dev, Ino uint64 }
 // and its leaf l, and the script refuses unless
 //   - the path is absolute and clean: d/l rebuilds it exactly, and l is not
 //     empty (a trailing slash, or "/" itself), "." or "..";
-//   - `cd -P` into d lands in a directory whose real path (`pwd -P`, the
-//     kernel's getcwd) is d itself: no parent component is a symlink, and the
-//     directory held now is the one that sits at d;
-//   - every check on the leaf is made on ./l inside that held directory, so
-//     the parents are never looked up again: it is not a symlink, it is a
-//     directory or a regular file (no socket, FIFO or device), and stat before
-//     and after those checks gives one identity.
+//   - `cd -P` into d lands in a directory whose real path is d itself
+//     (`pwd -P`, which dash answers with the getcwd taken when the directory
+//     was entered, so it describes the directory as it was then): no parent
+//     component is a symlink, and the directory held now is the one that sits
+//     at d. The path is read with a sentinel, `$(pwd -P; echo x)`, because
+//     command substitution would otherwise strip a trailing newline from a
+//     real directory name and accept a symlink to it;
+//   - the leaf, looked up as ./l inside that held directory (so the parents
+//     are never looked up again), is a directory or a regular file, by ONE
+//     lstat (`stat` without -L) that gives its mode and its identity together:
+//     separate -L, -d and -f lookups could each see a different file if the
+//     leaf were exchanged for a FIFO or a symlink between them. The same lstat
+//     a second time must give the same answer.
 //
 // Resolving the whole path again for each check is what this replaces: GNU
 // stat follows every parent component, so a parent flipped between a real
@@ -55,13 +61,13 @@ case $l in ""|.|..) die "path $i: not a clean path";; esac
 if [ "$d" = / ]; then w=/$l; else w=$d/$l; fi
 [ "$w" = "$p" ] || die "path $i: not a clean path"
 cd -P "$d" 2>/dev/null || die "path $i: not found or unreadable"
-[ "$(pwd -P)" = "$d" ] || die "path $i: a parent directory is a symlink, or the path is not clean"
-a=$(stat -c %d:%i -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
-[ ! -L "./$l" ] || die "path $i: the path is a symlink"
-[ -d "./$l" ] || [ -f "./$l" ] || die "path $i: not a directory or a regular file"
-b=$(stat -c %d:%i -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
-[ "$a" = "$b" ] || die "path $i: changed during the check"
-echo "ctxid $a"
+c=$(pwd -P; echo x); c=${c%?x}
+[ "$c" = "$d" ] || die "path $i: a parent directory is a symlink, or the path is not clean"
+s=$(stat -c '%d:%i %f' -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
+case $((0x${s#* } & 0xF000)) in 16384|32768) ;; *) die "path $i: a symlink, or not a directory or a regular file";; esac
+t=$(stat -c '%d:%i %f' -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
+[ "$s" = "$t" ] || die "path $i: changed during the check"
+echo "ctxid ${s% *}"
 ) || exit 1
 done
 `
@@ -75,10 +81,11 @@ var ctxIDLine = regexp.MustCompile(`^ctxid ([0-9]+):([0-9]+)$`)
 // stands in for the host's identity. Like InputRules it only asks: a stopped VM
 // is an error, never a start.
 //
-// It fails closed: an error for any path that is not absolute and clean, has a
-// symlink as a parent directory or as its leaf, is not a directory or a regular
-// file, or whose identity changed while it was read; and an error unless the output holds exactly one ctxid
-// line per path. paths travel base64-encoded inside a fixed script
+// It fails closed: an error for any path that is not absolute and clean (or
+// holds a NUL), has a symlink as a parent directory, is itself a symlink or not
+// a directory or a regular file, or whose leaf answered differently the second
+// time it was read; and an error unless the output holds exactly one ctxid line
+// per path. paths travel base64-encoded inside a fixed script
 // (pathIDsScript), never as argv, so they are inert to a shell.
 func (v *VM) PathIDs(ctx context.Context, paths []string) ([]FileID, error) {
 	if len(paths) == 0 {
@@ -90,6 +97,11 @@ func (v *VM) PathIDs(ctx context.Context, paths []string) ([]FileID, error) {
 			// The position, never the path: the refusal built from this error
 			// must not carry a byte of a path into a log or a page.
 			return nil, fmt.Errorf("reading file identities in the box VM: path %d is not an absolute path", i+1)
+		}
+		if strings.IndexByte(p, 0) >= 0 {
+			// dash drops a NUL without a word, so the script would read a path
+			// other than the one listed.
+			return nil, fmt.Errorf("reading file identities in the box VM: path %d contains a NUL byte", i+1)
 		}
 		words[i] = base64.StdEncoding.EncodeToString([]byte(p))
 	}

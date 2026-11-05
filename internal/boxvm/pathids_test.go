@@ -152,6 +152,24 @@ func TestPathIDsErrorsCarryNoPath(t *testing.T) {
 	}
 }
 
+// A NUL cannot travel through the shell (dash drops it silently, so the script
+// would read a different path than the one listed): PathIDs refuses it itself,
+// before any exec, and without naming the path.
+func TestPathIDsRefusesAPathWithANUL(t *testing.T) {
+	r := &sshRunner{out: "ctxid 1:2\nctxid 3:4\n"}
+	v := vmWith(t, r)
+	ids, err := v.PathIDs(context.Background(), []string{"/ok", "/secret-name\x00tail"})
+	if err == nil || ids != nil {
+		t.Fatalf("a NUL in a path must be refused: ids=%v err=%v", ids, err)
+	}
+	if strings.Contains(err.Error(), "secret-name") || !strings.Contains(err.Error(), "path 2") {
+		t.Fatalf("error = %v, want the position (path 2) and no path", err)
+	}
+	if len(r.argv) != 0 {
+		t.Fatalf("a bad path must not reach the VM: %q", r.argv)
+	}
+}
+
 func TestPathIDsIgnoresNoiseAroundTheIdentityLines(t *testing.T) {
 	out := "WARN[0000] lima says something\nctxid 44:393\nctxid 16777232:153593034\nShared connection closed.\n"
 	v := vmWith(t, &sshRunner{out: out})

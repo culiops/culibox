@@ -184,16 +184,28 @@ func TestPathIDsScriptNeverPrintsATargetWhenAParentIsFlipped(t *testing.T) {
 	if real == secret {
 		t.Fatal("the two directories share an identity; the test cannot tell them apart")
 	}
-	flip := func() error {
-		return unix.Renameat2(unix.AT_FDCWD, team, unix.AT_FDCWD, swap, unix.RENAME_EXCHANGE)
+	exchangeRace(t, team, swap, listed, real, secret, 300)
+}
+
+// exchangeRace runs the script on listed 'runs' times while a goroutine swaps a
+// and b (renameat2 RENAME_EXCHANGE, so each name always exists, as a directory,
+// a symlink or a FIFO, never neither). real is the identity listed has when it
+// is the real thing; bad is the identity the script must never print. A run may
+// be refused; it may print real; it must not print bad, and nothing else.
+func exchangeRace(t *testing.T, a, b, listed string, real, bad FileID, runs int) {
+	t.Helper()
+	if real == bad {
+		t.Fatal("the two files share an identity; the test cannot tell them apart")
 	}
-	if err := flip(); err != nil { // also proves the filesystem can exchange a dir and a symlink
+	flip := func() error {
+		return unix.Renameat2(unix.AT_FDCWD, a, unix.AT_FDCWD, b, unix.RENAME_EXCHANGE)
+	}
+	if err := flip(); err != nil { // also proves the filesystem can exchange the two kinds
 		t.Skipf("RENAME_EXCHANGE unavailable here: %v", err)
 	}
 	if err := flip(); err != nil {
 		t.Fatal(err)
 	}
-
 	stop, flips := make(chan struct{}), make(chan int)
 	go func() {
 		n := 0
@@ -212,7 +224,6 @@ func TestPathIDsScriptNeverPrintsATargetWhenAParentIsFlipped(t *testing.T) {
 		}
 	}()
 
-	const runs = 300
 	v := vmWith(t, localSh{})
 	var accepted, refused, leaked int
 	for i := 0; i < runs; i++ {
@@ -220,22 +231,91 @@ func TestPathIDsScriptNeverPrintsATargetWhenAParentIsFlipped(t *testing.T) {
 		switch {
 		case err != nil:
 			refused++
-		case ids[0] == secret:
+		case ids[0] == bad:
 			leaked++
 		case ids[0] == real:
 			accepted++
 		default:
-			t.Errorf("run %d printed %+v, which is neither directory", i, ids[0])
+			t.Errorf("run %d printed %+v, which is neither file", i, ids[0])
 		}
 	}
 	close(stop)
 	n := <-flips
-	t.Logf("%d runs while %d flips: %d accepted the real dir, %d refused, %d printed the secret's identity", runs, n, accepted, refused, leaked)
+	t.Logf("%d runs while %d flips: %d accepted the real one, %d refused, %d printed the identity that must never be printed", runs, n, accepted, refused, leaked)
 	if n == 0 {
-		t.Fatal("the parent was never flipped; the test proved nothing")
+		t.Fatal("nothing was flipped; the test proved nothing")
 	}
 	if leaked != 0 {
-		t.Fatalf("%d of %d runs printed the identity of the directory a flipped parent led to", leaked, runs)
+		t.Fatalf("%d of %d runs printed the identity of the file the flip swapped in", leaked, runs)
+	}
+}
+
+func lstatIno(t *testing.T, p string) FileID {
+	t.Helper()
+	fi, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := fi.Sys().(*syscall.Stat_t)
+	return FileID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}
+}
+
+// The LEAF exchanged with a FIFO or a symlink while the script runs. Separate
+// lookups for the type (-L, -d, -f) and for the identity (stat) can each see a
+// different file there: a FIFO's or a symlink's identity could be printed and
+// then mounted. The type and the identity must come from one lstat.
+func TestPathIDsScriptNeverPrintsTheIdentityOfAFileSwappedInForTheLeaf(t *testing.T) {
+	skipWithoutGNU(t)
+	for name, mk := range map[string]func(root string) string{
+		"fifo": func(root string) string {
+			p := filepath.Join(root, "par", "other")
+			if err := syscall.Mkfifo(p, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		},
+		"symlink": func(root string) string {
+			p := filepath.Join(root, "par", "other")
+			if err := os.Symlink(filepath.Join(root, "par", "target"), p); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := scriptTree(t)
+			for _, d := range []string{"par/leaf", "par/target"} {
+				if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			other := mk(root)
+			leaf := filepath.Join(root, "par", "leaf")
+			exchangeRace(t, leaf, other, leaf, lstatIno(t, leaf), lstatIno(t, other), 300)
+		})
+	}
+}
+
+// A parent that is a symlink to a real directory whose name ends in a newline:
+// command substitution strips trailing newlines, so comparing `$(pwd -P)` with
+// the listed parent would accept it.
+func TestPathIDsScriptRefusesAParentLinkToANewlineNamedDirectory(t *testing.T) {
+	skipWithoutGNU(t)
+	root := scriptTree(t)
+	if err := os.MkdirAll(filepath.Join(root, "team\n", "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("team\n", filepath.Join(root, "team")); err != nil {
+		t.Fatal(err)
+	}
+	listed := filepath.Join(root, "team", "docs")
+	if ids, err := vmWith(t, localSh{}).PathIDs(context.Background(), []string{listed}); err == nil || ids != nil {
+		t.Fatalf("%q must be refused: ids=%v err=%v", listed, ids, err)
+	}
+	// The real newline-named directory itself is a legitimate path.
+	real := filepath.Join(root, "team\n", "docs")
+	if ids, err := vmWith(t, localSh{}).PathIDs(context.Background(), []string{real}); err != nil || len(ids) != 1 || ids[0] != devIno(t, real) {
+		t.Fatalf("%q: ids=%v err=%v, want its identity", real, ids, err)
 	}
 }
 
