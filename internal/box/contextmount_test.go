@@ -282,8 +282,8 @@ func TestCheckContextPathIDOffLinux(t *testing.T) {
 // The refusal text says what the check found, on any platform: a mount of a box
 // this spawn created changed while it started, one of a reused box was replaced
 // since, a check that did not run claims no change, and a guard is a guard (a file
-// or folder), not the workspace. Only a workspace of a created box points to the
-// requirement that docker sees host files as they are.
+// or folder), not the workspace. Only a workspace of a created box, with no VM
+// hook, points to the requirement that docker sees host files as they are.
 func TestMountChangedTextMatchesTheCase(t *testing.T) {
 	const hint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
 		"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
@@ -323,7 +323,8 @@ func TestMountChangedTextMatchesTheCase(t *testing.T) {
 			"context_paths /srv/c: the in-box check could not run (docker exec: exit status 1); refusing", false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			err := mountChanged(c.mt, c.created, c.err)
+			m, _ := vmManager(t, nil, nil) // no VM hook: docker is the host's own
+			err := m.mountChanged(c.mt, c.created, c.err)
 			if err.Error() != c.want {
 				t.Fatalf("text:\n got  %q\n want %q", err, c.want)
 			}
@@ -364,5 +365,42 @@ func TestIdentityFailedOfContextMountsAloneIsTheContextRefusal(t *testing.T) {
 		if errors.Is(got, class) {
 			t.Errorf("err = %v, a context-only batch must not be %v", got, class)
 		}
+	}
+}
+
+// The hint to the README's Requirements is for a docker that is the host's own:
+// with a VM hook (macOS) the boxes run in CuliBox's own VM and it does not apply.
+// Only a workspace identity mismatch on a box this spawn created, with no hook,
+// carries it.
+func TestMountChangedHintIsOnlyWithoutAVMHook(t *testing.T) {
+	ws := Mount{Host: "/w/p", kind: mountWorkspace}
+	guard := Mount{Host: "/w/p/CLAUDE.md", kind: mountGuard}
+	for _, c := range []struct {
+		name    string
+		vm      bool
+		mt      Mount
+		created bool
+		err     error
+		hint    bool
+	}{
+		{"no hook, workspace, created", false, ws, true, nil, true},
+		{"hook, workspace, created", true, ws, true, nil, false},
+		{"no hook, workspace, reused", false, ws, false, nil, false},
+		{"hook, workspace, reused", true, ws, false, nil, false},
+		{"no hook, workspace, check could not run", false, ws, true, errors.New("x"), false},
+		{"no hook, guard, created", false, guard, true, nil, false},
+		{"hook, guard, created", true, guard, true, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var v *vmFake
+			if c.vm {
+				v = &vmFake{}
+			}
+			m, _ := vmManager(t, v, nil)
+			err := m.mountChanged(c.mt, c.created, c.err)
+			if got := strings.Contains(err.Error(), "see README, Requirements."); got != c.hint {
+				t.Fatalf("err = %v, hint = %v, want %v", err, got, c.hint)
+			}
+		})
 	}
 }

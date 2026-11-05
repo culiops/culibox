@@ -83,18 +83,18 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, cr
 		// no identity) is not a path that changed: mountChanged says so.
 		switch {
 		case err != nil:
-			return mountChanged(mt, created, err)
+			return m.mountChanged(mt, created, err)
 		case i >= len(lines):
-			return mountChanged(mt, created, errors.New("it printed no identity for this path"))
+			return m.mountChanged(mt, created, errors.New("it printed no identity for this path"))
 		}
 		got := strings.TrimSpace(lines[i])
 		if got == fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
 			continue
 		}
 		if !isIDLine(got) {
-			return mountChanged(mt, created, errors.New("it printed something that is not an identity"))
+			return m.mountChanged(mt, created, errors.New("it printed something that is not an identity"))
 		}
-		return mountChanged(mt, created, nil)
+		return m.mountChanged(mt, created, nil)
 	}
 	return nil
 }
@@ -127,7 +127,9 @@ func skipGuard(mt Mount, created bool) bool {
 // wsHostFilesHint ends the refusal of a workspace that a box created by this
 // spawn does not show as the checked folder: one such refusal is a race, but one
 // for every folder means docker does not see the host's files as they are, which
-// the README lists as a requirement.
+// the README lists as a requirement. Only where the boxes run in the host's own
+// docker (no VM hook, Options.VMIDs): with a hook they run in CuliBox's own VM
+// and that requirement does not apply.
 const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
 	"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
 
@@ -139,9 +141,9 @@ const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does
 // no checkErr the identity differs: created says the box is this spawn's, so the
 // mount changed while it started, and otherwise the box was reused and its mount
 // was replaced since it started. A workspace that differs in a box this spawn
-// created also carries wsHostFilesHint. A guard is named as one, and as a file or
+// created, with no VM hook, also carries wsHostFilesHint. A guard is named as one, and as a file or
 // folder, because it is not the workspace.
-func mountChanged(mt Mount, created bool, checkErr error) error {
+func (m *Manager) mountChanged(mt Mount, created bool, checkErr error) error {
 	var what, verdict string
 	switch mt.kind {
 	case mountWorkspace:
@@ -162,7 +164,7 @@ func mountChanged(mt Mount, created bool, checkErr error) error {
 	}
 	if mt.kind == mountWorkspace || mt.kind == mountGuard {
 		msg := what + " " + mt.Host + ": " + why + "; refusing"
-		if mt.kind == mountWorkspace && created && checkErr == nil {
+		if mt.kind == mountWorkspace && created && checkErr == nil && m.opts.VMIDs == nil {
 			msg += ". " + wsHostFilesHint
 		}
 		return &wsMountError{msg: msg}
