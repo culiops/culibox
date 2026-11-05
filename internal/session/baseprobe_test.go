@@ -104,7 +104,7 @@ func TestSpawnProbesBeforeBoxFor(t *testing.T) {
 	if !reflect.DeepEqual(lastBase, hooks.base) {
 		t.Fatalf("BoxFor got base %+v, want %+v", lastBase, hooks.base)
 	}
-	if got := hooks.order.got(); !reflect.DeepEqual(got, []string{"prepare", "probe", "boxfor", "wrap"}) {
+	if got := hooks.order.got(); !reflect.DeepEqual(got, []string{"prepare", "boxname", "probe", "boxfor", "acquire", "wrap"}) {
 		t.Fatalf("call order %q", got)
 	}
 	a, b := connInfo(t, s.Info(), "sbx-a"), connInfo(t, s.Info(), "sbx-b")

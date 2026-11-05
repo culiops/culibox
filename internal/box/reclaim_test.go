@@ -359,3 +359,33 @@ func TestReclaimKeepsTheOutputDirOfALiveBox(t *testing.T) {
 		t.Fatalf("a live box's out dir was removed: %v", err)
 	}
 }
+
+// The broker keeps one socket directory per box under <stateRoot>/broker/b. A
+// running box mounts it, and a directory that was removed and recreated would
+// not be visible through that bind mount, so the home sweep must never touch it,
+// even for the box whose home it removes.
+func TestReclaimNeverRemovesTheBrokerSocketDirs(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-aaaaaaaaaaaa"
+	home := seedHome(t, m, name, 40*24*time.Hour)
+	sockDir := filepath.Join(m.opts.StateRoot, "broker", "b", "aaaaaaaaaaaa")
+	if err := os.MkdirAll(sockDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sockDir, "s"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 1 {
+		t.Fatalf("reclaimed %+v, want the one stale home", done)
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("the stale home is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sockDir, "s")); err != nil {
+		t.Fatalf("the sweep removed the box's broker socket directory: %v", err)
+	}
+}

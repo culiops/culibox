@@ -80,6 +80,14 @@ type fakeBrokerHooks struct {
 	listings   []listingCall // WriteAWSListing calls
 	listErr    error
 	order      *callLog // optional: shared with fakeBoxes to pin call order
+
+	// The box's own broker socket (AcquireBox/AdoptBox/ReleaseBox), recorded in
+	// call order. A nil-error Acquire or Adopt must be paired with one Release.
+	acquired   []string
+	adopted    []string
+	released   []string
+	acquireErr error
+	adoptErr   error
 }
 
 type probeCall struct {
@@ -231,6 +239,40 @@ func (f *fakeBrokerHooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Re
 		env = append(env, broker.GitHubEnv(*bs.GitHub)...)
 	}
 	return []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}}, env, nil
+}
+
+func (f *fakeBrokerHooks) AcquireBox(name string) ([]box.Mount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order.add("acquire")
+	if f.acquireErr != nil {
+		return nil, f.acquireErr
+	}
+	f.acquired = append(f.acquired, name)
+	return []box.Mount{{Host: "/state/broker/b/" + name, Box: "/opt/agentbox-broker"}}, nil
+}
+
+func (f *fakeBrokerHooks) AdoptBox(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.adoptErr != nil {
+		return f.adoptErr
+	}
+	f.adopted = append(f.adopted, name)
+	return nil
+}
+
+func (f *fakeBrokerHooks) ReleaseBox(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, name)
+}
+
+// boxSockets is a snapshot of the broker-socket calls.
+func (f *fakeBrokerHooks) boxSockets() (acquired, adopted, released []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.acquired), slices.Clone(f.adopted), slices.Clone(f.released)
 }
 
 func (f *fakeBrokerHooks) CheckGitHub(config.GitHubBinding) error {

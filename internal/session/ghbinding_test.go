@@ -233,7 +233,10 @@ func TestSpawnAWSOnlyUnchanged(t *testing.T) {
 	if !slices.Equal(gotEnv, wantEnv) {
 		t.Fatalf("AWS-only env changed:\n got %#v\nwant %#v", gotEnv, wantEnv)
 	}
-	if want := []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}}; !slices.Equal(boxes.lastRO, want) {
+	// The binding dir as before, then the box's own broker socket directory
+	// (AcquireBox: the per-box socket that replaced the shared one).
+	if want := []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"},
+		{Host: "/state/broker/b/ab-box-test", Box: "/opt/agentbox-broker"}}; !slices.Equal(boxes.lastRO, want) {
 		t.Fatalf("AWS-only mounts = %#v, want %#v", boxes.lastRO, want)
 	}
 	if boxes.lastKey.Session != "" || boxes.lastKey.Account != "" || boxes.lastKey.Binding != "1130ffad2979" {
