@@ -104,7 +104,7 @@ func TestReadRateLimits_parsesByModel(t *testing.T) {
 	  "by_model":{"opus":{"updated_at":1785648700,"seven_day":{"used_percentage":76,"resets_at":1786107600}},
 	              "haiku":{"updated_at":1785648756,"seven_day":{"used_percentage":94,"resets_at":1786000000}}}}`), 0o644)
 	rl, ok := readRateLimits(f)
-	if !ok || rl.ModelFamily != "haiku" || len(rl.ByModel) != 2 {
+	if !ok || len(rl.ByModel) != 2 {
 		t.Fatalf("by_model not parsed: %+v ok=%v", rl, ok)
 	}
 	if o := rl.ByModel["opus"]; o.SevenDay == nil || o.SevenDay.UsedPercentage != 76 {

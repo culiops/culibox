@@ -28,13 +28,11 @@ type RateLimits struct {
 	UpdatedAt int64            `json:"updated_at,omitempty"`
 	FiveHour  *RateLimitWindow `json:"five_hour,omitempty"`
 	SevenDay  *RateLimitWindow `json:"seven_day,omitempty"`
-	// Model and ModelFamily name the model whose session wrote this snapshot;
-	// ByModel keeps the latest reading per model family. The quota can be
-	// reported per model bucket, so a reader that wants a stable number picks one
-	// bucket instead of interleaving whichever session rendered last.
-	Model       string                  `json:"model,omitempty"`
-	ModelFamily string                  `json:"model_family,omitempty"`
-	ByModel     map[string]BucketLimits `json:"by_model,omitempty"`
+	// ByModel is the latest reading per model family, written by agent-box's own
+	// statusLine script (which also records model and model_family for diagnosis;
+	// nothing here reads those). The quota may be per model bucket, so the client
+	// treats every bucket as one more reading and shows the highest live one.
+	ByModel map[string]BucketLimits `json:"by_model,omitempty"`
 	// Seen is filled by the daemon, never read from a file: the readings it has
 	// seen for each window that has not reset yet, one per resets_at (the highest
 	// percentage), so the client can show the highest of them even when the file
@@ -63,53 +61,99 @@ type BucketLimits struct {
 }
 
 const (
-	rateLimitsCacheMax   = 64 // paths remembered by the last-good cache
+	rateLimitsCacheMax   = 64 // sources remembered (see rlLastGood)
 	rateLimitsMaxBuckets = 8  // by_model entries kept per snapshot
 	rateLimitsSeenMax    = 4  // remembered readings per window (one per resets_at)
 )
 
-// rlEntry is what is remembered about one snapshot source (a file path, or a
-// box's snapshot): its last good snapshot, and the readings seen per window.
+// rlEntry is what is remembered about one snapshot source: a file path (its last
+// good snapshot, and for the default account's file the readings seen), a box's
+// snapshot (default account only), or a non-default account's pooled readings.
 type rlEntry struct {
 	last    RateLimits
 	hasLast bool
 	seen    [2]map[int64]SeenReading // five_hour, seven_day: by resets_at
+	acct    string                   // the account this source belongs to ("" = none)
+	box     bool                     // a box's snapshot: evicted before the rest
+	used    uint64                   // rlLastGood.tick when last used (LRU)
 }
 
-// rlLastGood is the daemon's memory of the snapshot sources, keyed by path (box
-// snapshots by "box\x00<box>\x00<account>"). At most rateLimitsCacheMax entries,
-// each holding at most 2 windows x rateLimitsSeenMax readings.
+// windowSpan is how long each window is: five_hour, seven_day.
+var windowSpan = [2]time.Duration{5 * time.Hour, 7 * 24 * time.Hour}
+
+// rlAcctKey is the memory key of a non-default account's pooled readings.
+func rlAcctKey(name string) string { return "acct\x00" + name }
+
+// rlLastGood is the daemon's memory of the quota sources, in process only (a
+// restart clears it). Keys: a file path; "acct\x00<name>" for a non-default
+// account's readings pooled over all its sources; "box\x00<box>\x00default" for a
+// default-account box. At most rateLimitsCacheMax entries, each holding at most
+// 2 windows x rateLimitsSeenMax readings.
+//
+// Known limit: the default account's remembered readings cannot be tied to a
+// credential. A host /login to another subscription is invisible to the daemon,
+// so the old subscription's readings stay until their window resets (at most 7
+// days) or the daemon restarts. A non-default account's are forgotten when it is
+// edited or deleted (forgetAccountQuota).
 var rlLastGood = struct {
-	mu sync.Mutex
-	m  map[string]*rlEntry
+	mu   sync.Mutex
+	m    map[string]*rlEntry
+	tick uint64
 }{m: map[string]*rlEntry{}}
 
-// rlEntryFor returns the entry for key, creating it. The caller holds rlLastGood.mu.
-// When the cache is full one arbitrary other entry is evicted: its source simply
-// starts remembering again on its next read.
-func rlEntryFor(key string) *rlEntry {
+// rlEntryFor returns the entry for key, creating it and marking it used. The
+// caller holds rlLastGood.mu. When the cache is full it evicts the least recently
+// used box entry (dead boxes go first, and a flood of boxes cannot push out the
+// host file); with no box entry, the least recently used of the rest. The evicted
+// source simply starts remembering again on its next read.
+func rlEntryFor(key string, box bool) *rlEntry {
+	rlLastGood.tick++
 	if e, ok := rlLastGood.m[key]; ok {
+		e.used = rlLastGood.tick
 		return e
 	}
 	if len(rlLastGood.m) >= rateLimitsCacheMax {
-		for k := range rlLastGood.m {
-			delete(rlLastGood.m, k)
-			break
+		victim, anyBox := "", false
+		for k, e := range rlLastGood.m {
+			switch {
+			case victim == "":
+			case e.box && !anyBox:
+			case e.box == anyBox && e.used < rlLastGood.m[victim].used:
+			default:
+				continue
+			}
+			victim, anyBox = k, e.box
 		}
+		delete(rlLastGood.m, victim)
 	}
-	e := &rlEntry{}
+	e := &rlEntry{box: box, used: rlLastGood.tick}
 	rlLastGood.m[key] = e
 	return e
+}
+
+// forgetAccountQuota drops everything remembered for a non-default account: its
+// pooled readings and the last good snapshot of its file. Called when the account
+// is edited (its token may have changed: the new credential has its own quota) or
+// deleted, so the old token's readings cannot linger for up to 7 days.
+func forgetAccountQuota(name string) {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	for k, e := range rlLastGood.m {
+		if e.acct == name || k == rlAcctKey(name) {
+			delete(rlLastGood.m, k)
+		}
+	}
 }
 
 // remember records every live reading of rl: its top-level windows and each
 // bucket's. Per window and resets_at only the highest percentage is kept (within
 // one window usage only rises, so the highest is never an overstatement). Readings
-// whose window has reset are dropped, and at most rateLimitsSeenMax remain per
-// window: the oldest resets_at are evicted first.
+// whose window has reset, or whose reset time is further away than the window is
+// long, are dropped, and at most rateLimitsSeenMax remain per window: the oldest
+// resets_at are evicted first.
 func (e *rlEntry) remember(rl RateLimits, now time.Time) {
 	add := func(i int, w *RateLimitWindow, updated int64) {
-		w = cleanWindow(w, now)
+		w = cleanWindow(w, now, windowSpan[i])
 		if w == nil {
 			return
 		}
@@ -221,8 +265,18 @@ func boundBuckets(m map[string]BucketLimits) map[string]BucketLimits {
 // rateLimitsCacheMax paths (the account count plus the default file).
 func readRateLimits(path string) (RateLimits, bool) { return readRateLimitsAt(path, time.Now()) }
 
-// readRateLimitsAt is readRateLimits with the clock passed in.
+// readRateLimitsAt is readRateLimits with the clock passed in. The file's own
+// entry remembers the readings seen (the default account's host file).
 func readRateLimitsAt(path string, now time.Time) (RateLimits, bool) {
+	return readSnapshot(path, "", true, now)
+}
+
+// readSnapshot is the reader behind readRateLimits. acct names the non-default
+// account the file belongs to ("" for the default account's file); remember says
+// whether the file's own entry keeps the readings seen. A non-default account's
+// readings are pooled over all its sources instead (mergeBoxRateLimits), so its
+// file is read with remember=false.
+func readSnapshot(path, acct string, remember bool, now time.Time) (RateLimits, bool) {
 	if path == "" {
 		return RateLimits{}, false
 	}
@@ -241,8 +295,12 @@ func readRateLimitsAt(path string, now time.Time) (RateLimits, bool) {
 	rlLastGood.mu.Lock()
 	defer rlLastGood.mu.Unlock()
 	if ok && rl.hasWindows() {
-		e := rlEntryFor(path)
+		e := rlEntryFor(path, false)
+		e.acct = acct
 		e.last, e.hasLast = rl, true
+		if !remember {
+			return rl, true
+		}
 		e.remember(rl, now)
 		return e.withSeen(rl, now), true
 	}
@@ -251,6 +309,10 @@ func readRateLimitsAt(path string, now time.Time) (RateLimits, bool) {
 		return RateLimits{}, false
 	}
 	if e, have := rlLastGood.m[path]; have && e.hasLast {
+		e.used = rlLastGood.tick
+		if !remember {
+			return e.last, true
+		}
 		return e.withSeen(e.last, now), true
 	}
 	return RateLimits{}, false
@@ -262,8 +324,9 @@ func readRateLimitsAt(path string, now time.Time) (RateLimits, bool) {
 // The account list is read on every call, so an account created while the daemon
 // runs shows its quota without a restart.
 func (s *Server) rateLimitsByAccount() map[string]RateLimits {
+	now := time.Now()
 	out := map[string]RateLimits{}
-	if rl, ok := readRateLimits(s.RateLimitsFile); ok {
+	if rl, ok := readRateLimitsAt(s.RateLimitsFile, now); ok {
 		out[account.Default] = rl
 	}
 	if s.Accounts != nil {
@@ -271,12 +334,12 @@ func (s *Server) rateLimitsByAccount() map[string]RateLimits {
 			if a.IsDefault {
 				continue
 			}
-			if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
+			if rl, ok := readSnapshot(filepath.Join(a.ConfigDir, account.RateLimitsName), a.Name, false, now); ok {
 				out[a.Name] = rl
 			}
 		}
 	}
-	s.mergeBoxRateLimits(out, time.Now())
+	s.mergeBoxRateLimits(out, now)
 	return out
 }
 
@@ -289,9 +352,11 @@ const (
 	// rateLimitsFutureSlack tolerates VM clock drift: a snapshot stamped further
 	// ahead of now than this is dropped, so a box cannot pin its value forever.
 	rateLimitsFutureSlack = 5 * time.Minute
-	// rateLimitsMaxReset bounds a plausible resets_at.
-	rateLimitsMaxReset = 400 * 24 * time.Hour
-	rateLimitsMinReset = 1e9 // unix seconds
+	// rateLimitsMinReset bounds a plausible resets_at from below (unix seconds).
+	// From above, a window cannot reset later than its own length from now
+	// (windowSpan, plus rateLimitsFutureSlack): a box cannot pin a reading for the
+	// whole account by claiming a reset months away.
+	rateLimitsMinReset = 1e9
 	// rateLimitsRecent is how fresh a box's default-account snapshot must be to
 	// compete on box name (see mergeBoxRateLimits).
 	rateLimitsRecent = 15 * time.Minute
@@ -320,6 +385,27 @@ const (
 //     inside the future slack cannot always beat a fresh snapshot. A tie keeps
 //     the existing source.
 func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
+	// Non-default accounts: every source of one account (its host file and each of
+	// its boxes) shares one memory, attached to whichever snapshot wins below.
+	pooled := map[string]bool{}
+	for name, rl := range out {
+		if name != account.Default {
+			rememberAccountReadings(name, rl, now)
+			pooled[name] = true
+		}
+	}
+	s.mergeBoxFiles(out, now, pooled)
+	for name := range pooled {
+		if rl, ok := out[name]; ok {
+			rl.Seen = accountSeen(name, now)
+			out[name] = rl
+		}
+	}
+}
+
+// mergeBoxFiles is the box part of mergeBoxRateLimits; pooled collects the
+// non-default accounts whose readings were pooled.
+func (s *Server) mergeBoxFiles(out map[string]RateLimits, now time.Time, pooled map[string]bool) {
 	if s.BoxFiles == nil {
 		return
 	}
@@ -339,11 +425,13 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 		if !ok {
 			continue
 		}
-		rl = rememberBoxReadings("box\x00"+f.Box+"\x00"+f.Account, rl, now)
 		if f.Account == account.Default { // no host default snapshot here
+			rl = rememberBoxReadings("box\x00"+f.Box+"\x00"+f.Account, rl, now)
 			defCands, defRLs = append(defCands, f), append(defRLs, rl)
 			continue
 		}
+		rememberAccountReadings(f.Account, rl, now)
+		pooled[f.Account] = true
 		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {
 			out[f.Account] = rl
 		}
@@ -388,9 +476,7 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 		rl.UpdatedAt = 0
 	}
 	rl.Seen = nil // daemon-filled only (rememberBoxReadings)
-	rl.FiveHour, rl.SevenDay = cleanWindow(rl.FiveHour, now), cleanWindow(rl.SevenDay, now)
-	// The model strings only ever select a bucket, so cap their length.
-	rl.Model, rl.ModelFamily = clip(rl.Model, 80), clip(rl.ModelFamily, 40)
+	rl.FiveHour, rl.SevenDay = cleanWindow(rl.FiveHour, now, windowSpan[0]), cleanWindow(rl.SevenDay, now, windowSpan[1])
 	rl.ByModel = sanitizeBuckets(rl.ByModel, now)
 	if !rl.hasWindows() {
 		return RateLimits{}, false
@@ -399,9 +485,10 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 }
 
 // cleanWindow clamps used_percentage to [0,100] and drops (nil) a window whose
-// resets_at is not a plausible unix time (>= 1e9 and <= now+400d).
-func cleanWindow(w *RateLimitWindow, now time.Time) *RateLimitWindow {
-	if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > now.Add(rateLimitsMaxReset).Unix() {
+// resets_at is not plausible: before 1e9, or further from now than the window is
+// long (span) plus rateLimitsFutureSlack.
+func cleanWindow(w *RateLimitWindow, now time.Time, span time.Duration) *RateLimitWindow {
+	if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > now.Add(span+rateLimitsFutureSlack).Unix() {
 		return nil
 	}
 	c := *w
@@ -427,7 +514,7 @@ func sanitizeBuckets(in map[string]BucketLimits, now time.Time) map[string]Bucke
 			continue
 		}
 		b.UpdatedAt = max(b.UpdatedAt, 0)
-		b.FiveHour, b.SevenDay = cleanWindow(b.FiveHour, now), cleanWindow(b.SevenDay, now)
+		b.FiveHour, b.SevenDay = cleanWindow(b.FiveHour, now, windowSpan[0]), cleanWindow(b.SevenDay, now, windowSpan[1])
 		if b.FiveHour != nil || b.SevenDay != nil {
 			out[clip(name, 40)] = b
 		}
@@ -438,14 +525,33 @@ func sanitizeBuckets(in map[string]BucketLimits, now time.Time) map[string]Bucke
 	return boundBuckets(out)
 }
 
-// rememberBoxReadings records a sanitized box snapshot's readings under key and
-// returns it carrying everything remembered for that source.
+// rememberBoxReadings records a sanitized default-account box snapshot's
+// readings under key (kept apart per box: the default account's sources can be
+// different subscriptions) and returns it carrying what is remembered for it.
 func rememberBoxReadings(key string, rl RateLimits, now time.Time) RateLimits {
 	rlLastGood.mu.Lock()
 	defer rlLastGood.mu.Unlock()
-	e := rlEntryFor(key)
+	e := rlEntryFor(key, true)
+	e.acct = account.Default
 	e.remember(rl, now)
 	return e.withSeen(rl, now)
+}
+
+// rememberAccountReadings records a snapshot of a non-default account (from its
+// host file or a box) into the account's one pooled memory.
+func rememberAccountReadings(name string, rl RateLimits, now time.Time) {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	e := rlEntryFor(rlAcctKey(name), false)
+	e.acct = name
+	e.remember(rl, now)
+}
+
+// accountSeen is the readings remembered for a non-default account.
+func accountSeen(name string, now time.Time) *SeenLimits {
+	rlLastGood.mu.Lock()
+	defer rlLastGood.mu.Unlock()
+	return rlEntryFor(rlAcctKey(name), false).seenLimits(now)
 }
 
 // clip truncates s to at most n bytes.

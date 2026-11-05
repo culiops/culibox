@@ -27,7 +27,7 @@ func boxFilesOf(files ...session.BoxFile) func(string, int64) []session.BoxFile 
 
 func TestSanitizeRateLimits(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	fut := now.Add(24 * time.Hour).Unix()
+	fut := now.Add(3 * time.Hour).Unix() // inside both windows: a 5h window cannot reset more than 5h away
 	win := func(p float64, r int64) *RateLimitWindow { return &RateLimitWindow{UsedPercentage: p, ResetsAt: r} }
 	cases := []struct {
 		name     string

@@ -113,6 +113,9 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, err.Error())
 			return
 		}
+		// The save may have changed the token (or re-pointed its secret): the new
+		// credential has its own quota, so the old readings must not linger.
+		forgetAccountQuota(name)
 		writeJSON(w, http.StatusOK, s.accountView(res))
 	case http.MethodDelete:
 		if who := s.accountInUse(name); who != "" {
@@ -128,6 +131,7 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, err.Error())
 			return
 		}
+		forgetAccountQuota(name) // its directory stays on disk, its readings must not
 		writeJSON(w, http.StatusOK, map[string]string{"left_on_disk": tildePath(s.Home, root)})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
