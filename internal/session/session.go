@@ -305,7 +305,7 @@ type ImportsResolver interface {
 
 // CloneHooks is what spawning a clone-mode session needs from the clone layer,
 // kept as an interface so this package does not import it. A nil CloneHooks
-// means clone mode is unavailable (Linux only), and clone profiles are refused.
+// means clone mode is unavailable, and clone profiles are refused.
 type CloneHooks interface {
 	// Prepare makes the clone ready on the host (creating it if absent) and
 	// returns the box identity and read-only mounts for it. withMemory adds the
@@ -1646,7 +1646,7 @@ func (m *Manager) SetEgressAll(all bool) {
 	m.mu.Unlock()
 }
 
-// SetClone installs the clone-mode hooks. Call once at boot (Linux), with
+// SetClone installs the clone-mode hooks. Call once at boot, with
 // SetBoxes. Nil means clone mode is unavailable: clone profiles are refused.
 func (m *Manager) SetClone(h CloneHooks) {
 	m.mu.Lock()
@@ -1911,7 +1911,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				box.ErrUnboxableWorkspace, spec.Agent)
 		}
 		if ch == nil {
-			return nil, fmt.Errorf("%w: clone mode is not available on this host (Linux only)", box.ErrBoxUnavailable)
+			return nil, fmt.Errorf("%w: clone mode is not available on this instance", box.ErrBoxUnavailable)
 		}
 		if absErr != nil || absCwd != cl.Dir {
 			return nil, fmt.Errorf("%w: profile %q runs only in its clone %s, not %s", box.ErrUnboxableWorkspace, spec.Agent, cl.Dir, spec.Cwd)
