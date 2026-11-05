@@ -48,7 +48,8 @@ const (
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
-	// signal: the last spawn, or the end of the last session. It is not a box name, so the reclaim sweep never considers it.
+	// signal: the last spawn, or the end of the last session. It is not a box
+	// name, so the reclaim sweep never considers it.
 	lastUsedDirName = ".lastused"
 
 	runtimeRunc   = "runc"
@@ -572,10 +573,11 @@ func (m *Manager) markerPath(boxName string) string {
 	return filepath.Join(m.opts.StateRoot, stateDirName, lastUsedDirName, boxName)
 }
 
-// touchMarker records that a session used this box now: a spawn landing, or the
-// last session ending. Best effort: a failure
-// here must never fail a spawn. The cost of losing it is a home that looks older
-// than it is, and the reclaim sweep refuses on two further grounds anyway.
+// touchMarker records that a session used this box now. It runs when a spawn
+// lands (ensure), when the last session is released (ReleaseBox) and when Sweep
+// clears a counter whose release never came. Best effort: a failure here must
+// never fail a spawn or a release. The cost of losing it is a home that looks
+// older than it is, and the reclaim sweep refuses on two further grounds anyway.
 func (m *Manager) touchMarker(boxName string) {
 	p := m.markerPath(boxName)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {

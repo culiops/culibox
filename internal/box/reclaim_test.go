@@ -1019,3 +1019,41 @@ func TestReleasingAnUnknownBoxWritesNoMarker(t *testing.T) {
 	m.ReleaseBox("ab-box-111111111111")
 	mustBeGone(t, m.markerPath("ab-box-111111111111"))
 }
+
+// flipCtx is done from its third Err call on. The loop checks once for the
+// .lastused directory and once at the top of the home, and the deadline then
+// passes in the middle of that home's work, which is the last one.
+type flipCtx struct {
+	context.Context
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *flipCtx) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.calls > 2 {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// A pass cut short by its deadline in the last home reports it. Otherwise it
+// returns no error, and the caller's log-on-change state reads that as a clean
+// pass and forgets a failure that is still there.
+func TestReclaimCutShortInTheLastHomeSaysSo(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ab-box-aaaaaaaaaaaa", 2*time.Hour)
+	seedCaches(t, dir)
+	done, err := m.ReclaimState(&flipCtx{Context: context.Background()}, DefaultStateTTL, DefaultCacheTTL)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a pass cut short by its deadline must say so: %v", err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("a cut-short pass pruned %+v", done)
+	}
+	for _, p := range wantCachePaths {
+		mustExist(t, filepath.Join(dir, p, "blob"))
+	}
+}

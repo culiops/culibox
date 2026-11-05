@@ -111,8 +111,7 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 	for _, e := range entries {
 		// The context bounds the file work too, not only the docker calls: a pass
 		// that is out of time stops here instead of walking the next home.
-		if err := ctx.Err(); err != nil {
-			errs = append(errs, err)
+		if ctx.Err() != nil {
 			break
 		}
 		name := e.Name()
@@ -155,6 +154,13 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration)
 		if reclaimed != nil {
 			out = append(out, *reclaimed)
 		}
+	}
+	// Said once, after the loop, because the deadline can pass anywhere in the
+	// last home's work and the loop then just ends: without this the pass would
+	// return no error, and the caller would read that as a clean one. A prune cut
+	// short in pruneOne has said it already.
+	if err := ctx.Err(); err != nil && !errors.Is(errors.Join(errs...), err) {
+		errs = append(errs, err)
 	}
 	errs = append(errs, m.pruneOrphanMarkers()...)
 	return out, errors.Join(errs...)
@@ -314,7 +320,8 @@ func plainPath(root *os.Root, rel string) bool {
 // os.Root resolves every path component of every open one by one, so the cost
 // grows with the square of the depth (measured: 1000 deep 6.7 s, 2000 deep 46 s),
 // on a pass that runs before the daemon serves and under opMu. Past the cap a
-// directory is not read; RemoveAll still removes it, which is linear.
+// directory is not read; RemoveAll still removes it, at far less cost than a
+// walk (measured: 0.12 s, 0.28 s and 0.85 s at 1000, 2000 and 4000 deep).
 const maxCacheDepth = 64
 
 // walkCache calls visit for every entry under rel, which has passed plainPath,
