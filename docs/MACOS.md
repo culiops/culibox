@@ -168,7 +168,11 @@ These limits are the same as on Linux and are not configurable.
   connection, so it is never used again. The relay is replaced once, so
   connections open through it drop once. On a VM that still needs the recreate
   above, CuliBox removes the old relay instead, so sessions running across that
-  upgrade also lose the credential broker until you recreate the VM.
+  upgrade also lose the credential broker until you recreate the VM. Until the
+  new version replaces it, the old relay still sends the old secret and what the
+  boxes send, tokens included, to whatever holds CuliBox's ports, so on a Mac
+  shared with other accounts, stop the box VM (`agent-box box stop`) or end the
+  boxed sessions before you stop the old CuliBox for this upgrade.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
@@ -206,11 +210,12 @@ The secret is 32 random bytes in `relay2.secret` in the data directory, readable
 only by you. CuliBox creates it on first start, keeps it across restarts, and
 hands it to the relay container through its environment, never on a command
 line. Another user account on the same Mac therefore cannot write a header the
-proxy or the broker accepts, and a process that takes one of CuliBox's ports
-while CuliBox is stopped or restarting gets only the relay's random challenge:
-no header, no token and nothing a box sent. The handshake has been exercised on
-Linux, between the relay script and CuliBox's listener code, but not yet on a
-real Mac.
+proxy or the broker accepts, and once the upgrade to this version has replaced
+the relay (see the upgrade note under [Every box](#every-box)), a process that
+takes one of CuliBox's ports while CuliBox is stopped or restarting gets only
+the relay's random challenge: no header, no token and nothing a box sent. The
+handshake has been exercised on Linux, between the relay script and CuliBox's
+listener code, but not yet on a real Mac.
 
 This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
