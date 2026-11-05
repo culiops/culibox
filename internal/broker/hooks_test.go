@@ -17,7 +17,7 @@ import (
 func testHooks(t *testing.T) Hooks {
 	t.Helper()
 	return Hooks{B: New(secret, nil, nil, &memRec{}), StateRoot: t.TempDir(),
-		EP: Endpoint{BoxURL: "unix:///opt/agentbox-broker/broker.sock"}}
+		EP: Endpoint{BoxURL: "unix:///opt/agentbox-broker/s"}}
 }
 
 func TestHooksBoxFor(t *testing.T) {
@@ -29,7 +29,7 @@ func TestHooksBoxFor(t *testing.T) {
 	if len(mounts) != 1 || mounts[0].Box != BoxDir {
 		t.Fatalf("mounts %+v: BoxFor returns the binding dir only; the box's own socket comes from AcquireBox", mounts)
 	}
-	if !slices.Contains(env, "AGENTBOX_BROKER=unix:///opt/agentbox-broker/broker.sock") {
+	if !slices.Contains(env, "AGENTBOX_BROKER=unix:///opt/agentbox-broker/s") {
 		t.Fatalf("env %q", env)
 	}
 }

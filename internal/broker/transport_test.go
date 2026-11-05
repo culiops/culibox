@@ -40,7 +40,7 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 	if ep.Boxes == nil {
 		t.Fatal("no per-box sockets on Linux")
 	}
-	if ep.BoxURL != "unix:///opt/agentbox-broker/broker.sock" {
+	if ep.BoxURL != "unix:///opt/agentbox-broker/s" {
 		t.Fatalf("box URL %q", ep.BoxURL)
 	}
 	ep.Listener.Close()
@@ -51,11 +51,11 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 	ep2.Listener.Close()
 }
 
-// 73 + 35 = 108: the per-box socket path would not fit in sun_path. Startup
+// 84 + 24 = 108: the per-box socket path would not fit in sun_path. Startup
 // refuses (fail closed, clear error) instead of listening on a shared socket
 // only: a bound session would then get no credentials at all, silently.
 func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
-	root := rootOfLen(t, 73)
+	root := rootOfLen(t, 84)
 	ep, err := Listen("linux", root, 9071)
 	if err == nil {
 		ep.Listener.Close()
@@ -68,9 +68,9 @@ func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
 		t.Fatal("a shared socket was left listening")
 	}
 	// One byte shorter fits.
-	ok, err := Listen("linux", rootOfLen(t, 72), 9071)
+	ok, err := Listen("linux", rootOfLen(t, 83), 9071)
 	if err != nil {
-		t.Fatalf("a 72 byte state root must work: %v", err)
+		t.Fatalf("an 83 byte state root must work: %v", err)
 	}
 	ok.Listener.Close()
 }

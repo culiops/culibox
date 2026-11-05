@@ -51,7 +51,7 @@ func rootOfLen(t *testing.T, n int) string {
 
 // perBoxSock is the socket path of box name under root.
 func perBoxSock(root, name string) string {
-	return filepath.Join(root, "broker", "bx", name[len(name)-12:], "broker.sock")
+	return filepath.Join(root, "broker", "b", name[len(name)-12:], "s")
 }
 
 // serveLog records the listeners handed to serve and serves each with a handler
@@ -117,14 +117,14 @@ func TestAcquireCreatesTheBoxsOwnSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (box.Mount{Host: filepath.Join(root, "broker", "bx", "0123456789ab"), Box: SockBoxDir}); m != want {
+	if want := (box.Mount{Host: filepath.Join(root, "broker", "b", "0123456789ab"), Box: SockBoxDir}); m != want {
 		t.Fatalf("mount = %+v, want %+v", m, want)
 	}
 	sock := perBoxSock(root, bx)
 	if fi, err := os.Stat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("socket %v %v", fi, err)
 	}
-	for _, d := range []string{filepath.Dir(sock), filepath.Join(root, "broker", "bx")} {
+	for _, d := range []string{filepath.Dir(sock), filepath.Join(root, "broker", "b")} {
 		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
 			t.Fatalf("%s: %v %v, want 0700", d, fi, err)
 		}
@@ -232,7 +232,7 @@ func TestAcquireRefusesANameThatIsNotABox(t *testing.T) {
 			t.Errorf("Acquire(%q) = %+v, want an error", bad, m)
 		}
 	}
-	if ents, _ := os.ReadDir(filepath.Join(root, "broker", "bx")); len(ents) != 0 {
+	if ents, _ := os.ReadDir(filepath.Join(root, "broker", "b")); len(ents) != 0 {
 		t.Fatalf("a refused name left %v behind", ents)
 	}
 	if log.count() != 0 {
@@ -245,12 +245,12 @@ func TestAcquireRefusesASymlinkedDir(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "broker"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, filepath.Join(root, "broker", "bx")); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(root, "broker", "b")); err != nil {
 		t.Fatal(err)
 	}
 	s, log := startedBoxSockets(t, root)
 	if m, err := s.Acquire(bx); err == nil {
-		t.Fatalf("a symlinked broker/bx was followed: %+v", m)
+		t.Fatalf("a symlinked broker/b was followed: %+v", m)
 	}
 	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
 		t.Fatalf("something was created through the symlink: %v", ents)
@@ -258,10 +258,10 @@ func TestAcquireRefusesASymlinkedDir(t *testing.T) {
 
 	// The leaf directory itself a symlink.
 	root2, elsewhere2 := shortDir(t), shortDir(t)
-	if err := os.MkdirAll(filepath.Join(root2, "broker", "bx"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root2, "broker", "b"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere2, filepath.Join(root2, "broker", "bx", "0123456789ab")); err != nil {
+	if err := os.Symlink(elsewhere2, filepath.Join(root2, "broker", "b", "0123456789ab")); err != nil {
 		t.Fatal(err)
 	}
 	s2, log2 := startedBoxSockets(t, root2)
@@ -276,10 +276,12 @@ func TestAcquireRefusesASymlinkedDir(t *testing.T) {
 	}
 }
 
-// 35 = len("/broker/bx/") + 12 + len("/broker.sock"). Linux's sun_path holds 108
-// bytes including the NUL, and Go refuses a 108 byte path.
+// 24 = len("/broker/b/") + 12 + len("/s"). Linux's sun_path holds 108 bytes
+// including the NUL, and Go refuses a 108 byte path. The per-box layout is kept
+// as short as the old shared socket's (len("/broker/sock/broker.sock") is also
+// 24), so a state root that worked before still works.
 func TestAcquireRefusesAPathOverTheUnixLimit(t *testing.T) {
-	over := rootOfLen(t, 108-35)
+	over := rootOfLen(t, 108-24)
 	s, log := startedBoxSockets(t, over)
 	_, err := s.Acquire(bx)
 	if err == nil {
@@ -295,7 +297,7 @@ func TestAcquireRefusesAPathOverTheUnixLimit(t *testing.T) {
 		t.Fatalf("a refused path must create nothing: %v", err)
 	}
 
-	atLimit := rootOfLen(t, 107-35)
+	atLimit := rootOfLen(t, 107-24)
 	s2, _ := startedBoxSockets(t, atLimit)
 	if _, err := s2.Acquire(bx); err != nil {
 		t.Fatalf("a 107 byte socket path must work: %v", err)

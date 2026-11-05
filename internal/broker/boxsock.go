@@ -21,20 +21,24 @@ import (
 const maxSockPath = 107
 
 const (
-	sockName = "broker.sock"
 	// sharedRel is the one socket every box used before the per-box sockets;
 	// boxesRel holds one directory per box, a SIBLING of sharedRel and never
 	// inside it: a box from before the change mounts the whole shared dir and
 	// runs as the daemon's uid, so anything under it would be reachable from
 	// every such box.
-	sharedRel = "broker/sock"
-	boxesRel  = "broker/bx"
+	sharedRel      = "broker/sock"
+	sharedSockName = "broker.sock"
+	// The per-box layout is <stateRoot>/broker/b/<12 hex>/s: as short as the
+	// shared socket's path (also 24 bytes after the state root), so a state root
+	// that worked before the per-box sockets still works.
+	boxesRel    = "broker/b"
+	boxSockName = "s"
 )
 
 // longestBoxSock is the per-box socket path of the longest possible name, so a
 // state root that cannot hold one is refused at startup.
 func longestBoxSock(stateRoot string) string {
-	return filepath.Join(stateRoot, filepath.FromSlash(boxesRel), "000000000000", sockName)
+	return filepath.Join(stateRoot, filepath.FromSlash(boxesRel), "000000000000", boxSockName)
 }
 
 // The presenter of a request is the box it came from, learned from the
@@ -135,7 +139,7 @@ func (s *BoxSockets) Acquire(boxName string) (box.Mount, error) {
 		bs.refs++
 		return box.Mount{Host: bs.dir, Box: SockBoxDir}, nil
 	}
-	l, dir, err := listenSocket(s.stateRoot, boxesRel+"/"+boxName[len(boxName)-12:])
+	l, dir, err := listenSocket(s.stateRoot, boxesRel+"/"+boxName[len(boxName)-12:], boxSockName)
 	if err != nil {
 		return box.Mount{}, err
 	}
@@ -175,14 +179,14 @@ func (s *BoxSockets) Close() {
 	}
 }
 
-// listenSocket binds a unix socket at <stateRoot>/<rel>/broker.sock: the
+// listenSocket binds a unix socket at <stateRoot>/<rel>/<name>: the
 // directories under stateRoot are created 0700 (each verified to be a plain
 // directory, so a planted symlink is refused instead of followed), a stale
 // socket is replaced, and the socket is 0600. Every write goes through os.Root.
 // It returns the directory (what a box mounts).
-func listenSocket(stateRoot, rel string) (l net.Listener, dir string, err error) {
+func listenSocket(stateRoot, rel, name string) (l net.Listener, dir string, err error) {
 	dir = filepath.Join(stateRoot, filepath.FromSlash(rel))
-	sock := filepath.Join(dir, sockName)
+	sock := filepath.Join(dir, name)
 	// Fail closed before anything is created: sun_path is short and the state
 	// root is user-configurable. Nothing is truncated or bound elsewhere.
 	if n := len(sock); n > maxSockPath {
@@ -208,7 +212,7 @@ func listenSocket(stateRoot, rel string) (l net.Listener, dir string, err error)
 			}
 		}
 	}
-	sockRel := rel + "/" + sockName
+	sockRel := rel + "/" + name
 	// A stale socket from a crash is replaced; the instance lock rules out a live peer.
 	if err := root.Remove(sockRel); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, "", fmt.Errorf("broker: removing stale socket: %w", err)

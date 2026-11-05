@@ -66,10 +66,10 @@ func listenLinux(stateRoot string) (Endpoint, error) {
 	if n := len(longestBoxSock(stateRoot)); n > maxSockPath {
 		return Endpoint{}, fmt.Errorf("broker: the data directory %s is too long for per-box sockets (%d bytes; a unix socket path holds at most %d). Use a shorter data directory", stateRoot, n, maxSockPath)
 	}
-	l, _, err := listenSocket(stateRoot, sharedRel)
+	l, _, err := listenSocket(stateRoot, sharedRel, sharedSockName)
 	if err != nil {
 		return Endpoint{}, err
 	}
-	return Endpoint{Listener: &sharedListener{l}, BoxURL: "unix://" + SockBoxDir + "/" + sockName,
+	return Endpoint{Listener: &sharedListener{l}, BoxURL: "unix://" + SockBoxDir + "/" + boxSockName,
 		Boxes: newBoxSockets(stateRoot)}, nil
 }

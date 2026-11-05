@@ -33,7 +33,7 @@ func boxSock(t *testing.T, svc *brokerService, box string) string {
 	if err != nil || len(m) != 1 {
 		t.Fatalf("AcquireBox(%s) = %+v, %v", box, m, err)
 	}
-	return filepath.Join(m[0].Host, "broker.sock")
+	return filepath.Join(m[0].Host, "s")
 }
 
 func wireBinding() *config.AWSBinding {
@@ -68,7 +68,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	dataDir := shortRoot(t) // holds broker/sock/broker.sock and broker/bx/<hex>/broker.sock
+	dataDir := shortRoot(t) // holds broker/sock/broker.sock and broker/b/<hex>/s
 
 	sessions := map[string]*session.Session{
 		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, AWS: wireBinding(), BrokerNonce: wireNonce},

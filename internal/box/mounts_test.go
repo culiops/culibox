@@ -534,7 +534,7 @@ func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
 	// The pre-#73 and the current broker.SockBoxDir (internal/broker cannot be
 	// imported from here).
 	old := Mount{Host: "/s/broker/sock", Box: "/opt/agentbox-sock"}
-	cur := Mount{Host: "/s/broker/bx/0123456789ab", Box: "/opt/agentbox-broker"}
+	cur := Mount{Host: "/s/broker/b/0123456789ab", Box: "/opt/agentbox-broker"}
 
 	t.Run("live", func(t *testing.T) {
 		m, f := newTestManagerWithFake(t)
