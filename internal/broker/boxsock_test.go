@@ -411,3 +411,15 @@ func TestSharedListenerRequestsArePresentedAsShared(t *testing.T) {
 		t.Fatalf("GET over the shared socket = %q, %v; want the shared presenter", body, err)
 	}
 }
+
+// cmd/agent-box logs a failed per-box listener by the box it names.
+func TestBoxListenerNamesItsBox(t *testing.T) {
+	var l net.Listener = &boxListener{box: bx}
+	n, ok := l.(interface{ BoxName() string })
+	if !ok || n.BoxName() != bx {
+		t.Fatalf("a per-box listener must name its box: %v %v", ok, n)
+	}
+	if _, ok := net.Listener(&sharedListener{}).(interface{ BoxName() string }); ok {
+		t.Fatal("the shared listener belongs to no box")
+	}
+}

@@ -73,6 +73,10 @@ type boxListener struct {
 	box string
 }
 
+// BoxName is the box this listener serves (cmd/agent-box logs a listener that
+// stops by it).
+func (l *boxListener) BoxName() string { return l.box }
+
 // sharedListener is the pre-#73 shared socket. Boxes started before the change
 // still mount its directory; the broker answers them with a respawn message.
 type sharedListener struct{ net.Listener }

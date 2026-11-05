@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -636,5 +637,59 @@ func TestStartBrokerSharedSocketTellsTheBoxToRespawn(t *testing.T) {
 	}
 	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), "denied_box") {
 		t.Fatalf("the refusal is not audited as denied_box: %s", raw)
+	}
+}
+
+// failListener is a listener whose Accept fails for good (not a close), the
+// way a socket that went bad would; box makes it look like a per-box listener.
+type failListener struct {
+	box string
+	err error
+}
+
+func (f failListener) Accept() (net.Conn, error) { return nil, f.err }
+func (f failListener) Close() error              { return nil }
+func (f failListener) Addr() net.Addr            { return &net.UnixAddr{Name: "test", Net: "unix"} }
+
+type namedFailListener struct{ failListener }
+
+func (f namedFailListener) BoxName() string { return f.box }
+
+// captureLog returns what log.Printf wrote while fn ran.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	fn()
+	return buf.String()
+}
+
+// A per-box socket that dies on its own is logged with its box, so the one
+// broken box can be told from a broker that stopped; fail closed either way (a
+// listener that is not serving answers nobody).
+func TestServeBrokerNamesTheBoxWhenItsSocketStops(t *testing.T) {
+	boom := errors.New("accept failed for good")
+	srv := &http.Server{}
+	got := captureLog(t, func() { serveBroker(srv, namedFailListener{failListener{box: wireBox, err: boom}}) })
+	if !strings.Contains(got, "broker socket for box "+wireBox+" stopped") || !strings.Contains(got, boom.Error()) {
+		t.Fatalf("log = %q, want the per-box message naming %s", got, wireBox)
+	}
+	if strings.Contains(got, "credential broker stopped") {
+		t.Fatalf("a per-box socket stopping is not the broker stopping: %q", got)
+	}
+
+	// Any other listener (the shared socket, the darwin TCP one) keeps the old message.
+	got = captureLog(t, func() { serveBroker(srv, failListener{err: boom}) })
+	if !strings.Contains(got, "credential broker stopped") || strings.Contains(got, "broker socket for box") {
+		t.Fatalf("log = %q, want the broker message", got)
+	}
+
+	// A listener that was closed (the box's last session left, or shutdown) is not an error.
+	for _, closed := range []error{http.ErrServerClosed, net.ErrClosed} {
+		got = captureLog(t, func() { serveBroker(srv, namedFailListener{failListener{box: wireBox, err: closed}}) })
+		if got != "" {
+			t.Fatalf("a closed listener (%v) was logged: %q", closed, got)
+		}
 	}
 }

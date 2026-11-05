@@ -93,10 +93,19 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 
 // serveBroker serves one listener until it closes. A listener closing is how a
 // box's socket ends (its last session left) or the daemon stops: not an error.
+// One that fails for another reason is logged, a per-box socket by its box so
+// the one broken box can be told from the broker stopping. Either way Serve has
+// closed it: nothing is served over it any more (fail closed).
 func serveBroker(srv *http.Server, l net.Listener) {
-	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		log.Printf("credential broker stopped: %v", err)
+	err := srv.Serve(l)
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return
 	}
+	if n, ok := l.(interface{ BoxName() string }); ok {
+		log.Printf("broker socket for box %s stopped: %v", n.BoxName(), err)
+		return
+	}
+	log.Printf("credential broker stopped: %v", err)
 }
 
 // startBroker brings the credential broker up: the persisted HMAC secret, the
