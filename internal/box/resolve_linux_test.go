@@ -151,3 +151,48 @@ func TestWrapRefusesGuardsDerivedInAFolderThatIsNotTheCheckedOne(t *testing.T) {
 		t.Fatalf("docker run called %d times for a refused workspace", len(f.runArgs))
 	}
 }
+
+// A path that changes while its identity is read is ErrWorkspaceMountChanged
+// even when, by the time the refusal is worded, the path no longer resolves and
+// the place it now leads is agent-box's data directory: the wording fallback
+// for a cwd that does not resolve is for the first resolution failing, not for
+// a later reading of a path that moved.
+func TestWrapNamesAChangedPathNotAnUnboxableOneWhenItAlsoVanishes(t *testing.T) {
+	f := newFake()
+	state := ctxTmp(t)
+	m, err := New(Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: "TEST", IdleTTL: time.Hour,
+		StateRoot: state, Client: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := ctxTmp(t)
+	parent := filepath.Join(root, "parent")
+	if err := os.MkdirAll(filepath.Join(parent, "ws"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// After the walk opens root, parent is swapped for a link into the state
+	// root, which has no ws: the walk fails, and so does every later resolution.
+	ctxWalkHook = func(dir string) {
+		if dir != root {
+			return
+		}
+		if err := os.Rename(parent, filepath.Join(root, "moved")); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(state, parent); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { ctxWalkHook = nil })
+
+	_, _, _, err = m.Wrap(context.Background(), filepath.Join(parent, "ws"), "s1", BoxKey{}, []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
+	}
+	if errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("err = %v, a spawn that raced is not an unboxable workspace", err)
+	}
+	if f.runs() != 0 {
+		t.Fatalf("docker run called %d times for a refused workspace", f.runs())
+	}
+}

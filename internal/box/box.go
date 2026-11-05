@@ -797,17 +797,21 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	// is checked, named, guarded, labelled and mounted), so a symlink in the path
 	// that changes after this point cannot make one of them look somewhere the
 	// others did not. cwd is only named in refusals.
-	ws, err := resolveWorkspace(cwd)
+	real, err := resolvePath(cwd)
 	if err != nil {
 		// A workspace that does not exist yet and overlaps a protected directory
 		// (a config dir not created yet) is still refused for that reason, which
 		// says what to do, before the plain resolve failure: as it always was.
-		// Nothing is created either way; this only words the refusal.
-		if _, perr := resolvePath(cwd); perr != nil {
-			if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
-				return nil, nil, "", errUnboxable(cwd, reason)
-			}
+		// Nothing is created either way; this only words the refusal. It is for a
+		// resolution that failed here, never for a path whose identity cannot be
+		// read below: that one changed, whatever it leads to now.
+		if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
+			return nil, nil, "", errUnboxable(cwd, reason)
 		}
+		return nil, nil, "", err
+	}
+	ws, err := workspaceAt(cwd, real)
+	if err != nil {
 		return nil, nil, "", err
 	}
 	if wrapResolvedHook != nil {

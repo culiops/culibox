@@ -39,12 +39,21 @@ func resolvePath(cwd string) (string, error) {
 }
 
 // resolveWorkspace resolves cwd once (resolvePath) and records the identity of
-// the result (workspaceID). Wrap runs it first and carries the result through.
+// the result (workspaceAt). Wrap runs the two steps itself, so that it can word
+// a resolution that failed differently from an identity that could not be read.
 func resolveWorkspace(cwd string) (workspace, error) {
 	real, err := resolvePath(cwd)
 	if err != nil {
 		return workspace{}, err
 	}
+	return workspaceAt(cwd, real)
+}
+
+// workspaceAt is the workspace for cwd that resolvePath resolved to real: real
+// with the identity of the directory it names, read by a walk that follows no
+// symlink. A failure here is a changed path (ErrWorkspaceMountChanged) or a
+// leaf that is not a directory, never a path that does not resolve.
+func workspaceAt(cwd, real string) (workspace, error) {
 	id, err := workspaceID(real)
 	if err != nil {
 		return workspace{}, err
