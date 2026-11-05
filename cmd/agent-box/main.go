@@ -652,14 +652,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		// On darwin with the VM stopped this waits for the first boxed spawn: it
 		// never starts the VM, and an unreachable docker must not read as "no
 		// boxes".
-		layer.bootReconcile(context.Background())
-		if runtime.GOOS == "linux" { // clone mode is Linux-only
-			sctx, scancel := context.WithTimeout(context.Background(), time.Minute)
-			if n := sweepCloneContainers(sctx, layer.cli.ListByLabel, layer.cli.Stop, cfg.BoxInstance()); n > 0 {
-				log.Printf("clone: removed %d leftover clone container(s)", n)
-			}
-			scancel()
-		}
+		bootReconcileAndSweep(context.Background(), layer, cfg.BoxInstance())
 		if egressSvc != nil {
 			warnBridgeBoxes(context.Background(), layer.cli, cfg.BoxInstance(), egressSvc.Svc.Network())
 		}

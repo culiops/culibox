@@ -259,6 +259,21 @@ func sweepCloneContainers(ctx context.Context, list func(context.Context, string
 	return n
 }
 
+// bootReconcileAndSweep is the box layer's boot pass (bootReconcile), then the
+// sweep of this instance's leftover clone containers, on the same docker. On
+// macOS both skip while the VM is stopped: no container runs in it then, and
+// one left from before the stop holds nothing until the VM starts (every clone
+// container is --rm, which docker also applies when it restarts).
+func bootReconcileAndSweep(ctx context.Context, l *boxLayer, instance string) {
+	if l.bootReconcile(ctx) {
+		sctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		if n := sweepCloneContainers(sctx, l.cli.ListByLabel, l.cli.Stop, instance); n > 0 {
+			log.Printf("clone: removed %d leftover clone container(s)", n)
+		}
+	}
+}
+
 // HostOrigin reads the host repo's origin URL. `of` passed checkOf in Prepare,
 // and is checked again here so this call never runs the host's git in a repo a
 // box can write.

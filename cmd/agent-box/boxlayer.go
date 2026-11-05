@@ -287,13 +287,15 @@ func (l *boxLayer) vmStopped(ctx context.Context) bool {
 
 // bootReconcile reaps this instance's orphaned boxes and their stale homes at
 // boot. With the VM stopped no box can be alive, so it waits for the first
-// boxed spawn, whose VM start runs the same pass (prepare).
-func (l *boxLayer) bootReconcile(ctx context.Context) {
+// boxed spawn, whose VM start runs the same pass (prepare). It reports whether
+// it ran: false only while the VM is stopped and its docker unreachable.
+func (l *boxLayer) bootReconcile(ctx context.Context) bool {
 	if l.vmStopped(ctx) {
 		log.Printf("box VM stopped: box reconcile and reclaim wait for the first boxed spawn")
-		return
+		return false
 	}
 	l.reconcileAndReclaim(ctx)
+	return true
 }
 
 // dailyReclaim is the reclaim ticker's pass. Silent while the VM is stopped:

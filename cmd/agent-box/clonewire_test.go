@@ -853,6 +853,37 @@ func TestSweepCloneContainers(t *testing.T) {
 	}
 }
 
+// The boot pass sweeps leftover clone containers wherever docker is reachable:
+// on Linux, and on macOS through the VM's docker while the VM runs. A stopped
+// VM is left alone: no container runs in it, and docker is not reachable.
+func TestBootSweepsCloneContainers(t *testing.T) {
+	sweep := "ps -a --filter label=" + clone.LabelCloneFetch + "=DEV"
+
+	lin := newFakeDocker(t)
+	ll, err := newBoxLayer(config.Config{DockerBin: lin.bin}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootReconcileAndSweep(context.Background(), ll, "DEV")
+	if !strings.Contains(lin.log(), sweep+" ") {
+		t.Errorf("linux: no clone sweep on the host docker:\n%s", lin.log())
+	}
+
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	bootReconcileAndSweep(context.Background(), l, "DEV")
+	vm := "--host unix://" + l.vm.Config().DockerSocket() + " --config " + l.vm.Config().DockerConfigDir() + " "
+	if !strings.Contains(d.log(), vm+sweep+" ") {
+		t.Errorf("darwin, VM running: no clone sweep on the VM's docker:\n%s", d.log())
+	}
+
+	l, fc, d = darwinLayer(t, false)
+	bootReconcileAndSweep(context.Background(), l, "DEV")
+	if strings.Contains(d.log(), " ps ") || fc.called("start") {
+		t.Errorf("darwin, VM stopped: the boot pass reached docker or started the VM:\n%s", d.log())
+	}
+}
+
 func TestCloneUnavailableReason(t *testing.T) {
 	for _, c := range []struct {
 		name string
