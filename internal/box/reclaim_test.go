@@ -967,3 +967,55 @@ func TestCacheBytesStopsWalkingWhenTheContextIsDone(t *testing.T) {
 		t.Fatalf("a home with no cache = %d, %v; want 0, false", size, found)
 	}
 }
+
+// "An hour after last use" means after the last session ended, not after the
+// last spawn: a three hour session that just ended must not lose its caches at
+// the next pass. The marker is only touched when a spawn lands, so ending the
+// last session has to touch it too.
+func TestReleasingTheLastSessionKeepsTheCachesForAnHour(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-eeeeeeeeeeee"
+	dir := seedHome(t, m, name, 3*time.Hour) // spawned three hours ago
+	seedCaches(t, dir)
+	m.acquire(name)
+	m.ReleaseBox(name) // the session ends now
+	if age, ok := m.homeAge(name); !ok || age > time.Minute {
+		t.Fatalf("the home is %v old right after its last session ended", age)
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("pruned the caches of a box whose session just ended: %+v", done)
+	}
+	for _, p := range wantCachePaths {
+		mustExist(t, filepath.Join(dir, p, "blob"))
+	}
+}
+
+// While another session is live the box is in use whatever the marker says, and
+// the marker only moves when the last one goes.
+func TestReleasingOneOfTwoSessionsLeavesTheMarkerAlone(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-ffffffffffff"
+	seedHome(t, m, name, 3*time.Hour)
+	m.acquire(name)
+	m.acquire(name)
+	m.ReleaseBox(name)
+	if age, ok := m.homeAge(name); !ok || age < 2*time.Hour {
+		t.Fatalf("a release that left a session running touched the marker: %v", age)
+	}
+	m.ReleaseBox(name)
+	if age, ok := m.homeAge(name); !ok || age > time.Minute {
+		t.Fatalf("the last release did not touch the marker: %v", age)
+	}
+}
+
+// A release of a name that was never acquired is not a use, and must not write a
+// marker for whatever string it was given.
+func TestReleasingAnUnknownBoxWritesNoMarker(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	m.ReleaseBox("ab-box-111111111111")
+	mustBeGone(t, m.markerPath("ab-box-111111111111"))
+}
