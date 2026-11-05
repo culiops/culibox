@@ -155,7 +155,8 @@ These limits are the same as on Linux and are not configurable.
   [Token binding](#token-binding)) still lets containers on the VM's default
   network reach the broker. `agent-box doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until
-  you do.
+  you do. Sessions still running in boxes after the upgrade lose the egress
+  proxy until then (the recreate ends them anyway), so end them first.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
