@@ -105,6 +105,7 @@ context) [ -f "$d/context" ] || { echo "cannot connect" >&2; exit 1; }; cat "$d/
 run|exec) [ -f "$d/sleep" ] && exec sleep 5; cat "$d/probe" 2>/dev/null ;;
 info) echo '{"runc":{}}' ;;
 rm) ;;
+inspect) cat "$d/inspect" 2>/dev/null ;;
 esac
 exit 0
 `
@@ -792,7 +793,7 @@ func TestPrepareMissingRemoteImageNeverPulls(t *testing.T) {
 	}
 }
 
-// Review focus 3: with the VM stopped, the boot pass and the daily reclaim
+// Review focus 3: with the VM stopped, the boot pass and the periodic reclaim
 // neither start the VM nor touch docker, and the sweep skips.
 func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {
 	l, fc, d := darwinLayer(t, false)
@@ -801,7 +802,7 @@ func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {
 		t.Fatal("a VM that is not running is stopped")
 	}
 	l.bootReconcile(ctx)
-	l.dailyReclaim(ctx)
+	l.periodicReclaim(ctx)
 	rep, err := l.boxes.Sweep(ctx, nil)
 	if err != nil || !rep.Skipped {
 		t.Fatalf("sweep with the VM stopped = %+v, %v; want skipped", rep, err)

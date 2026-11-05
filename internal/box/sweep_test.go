@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -142,5 +143,25 @@ func TestSweepOfAStoppedBoxKeepsItsCounterAgainstAStaleRelease(t *testing.T) {
 	m.mu.Unlock()
 	if n != 1 || armed {
 		t.Fatalf("the new session must keep the box: active=%d idleTimerArmed=%v", n, armed)
+	}
+}
+
+// A missed release is the other way a box's last session ends: the sweep clears
+// the counter, and that is when the box was last in use as far as anyone can
+// say, so the marker the caches are aged by moves then too.
+func TestSweepCorrectingADriftedCounterTouchesTheMarker(t *testing.T) {
+	m, f := sweepManager(t, true)
+	f.running["ab-box-leak"] = true
+	m.acquire("ab-box-leak")
+	_, _ = m.Sweep(context.Background(), map[string]int{})
+	if _, err := os.Stat(m.markerPath("ab-box-leak")); !os.IsNotExist(err) {
+		t.Fatalf("the first observation must not touch the marker: %v", err)
+	}
+	rep, _ := m.Sweep(context.Background(), map[string]int{})
+	if len(rep.Corrected) != 1 {
+		t.Fatalf("second consecutive observation must correct: %+v", rep)
+	}
+	if _, err := os.Stat(m.markerPath("ab-box-leak")); err != nil {
+		t.Fatalf("correcting the counter did not touch the marker: %v", err)
 	}
 }

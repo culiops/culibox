@@ -135,7 +135,7 @@ func TestReclaimRemovesAnAccountHomeLikeADefaultOne(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	name := mustAcctBoxName(t, m, t.TempDir(), "work")
 	dir := seedHome(t, m, name, 40*24*time.Hour)
-	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
