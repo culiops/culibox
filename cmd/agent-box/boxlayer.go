@@ -65,11 +65,12 @@ type boxLayer struct {
 	// second cache would never be cleared. nil only for a layer built by hand in
 	// a test.
 	addrs *boxaddr.Cache
-	// relayKey is the secret CuliBox's relay presents to the broker and the
-	// egress proxy ahead of the PROXY line (#114). One per data directory,
-	// loaded once per daemon start by loadRelayKey. Zero off darwin (Linux has
-	// no relay) and zero when relay.secret could not be read, in which case
-	// the darwin listeners and the relay refuse to start.
+	// relayKey is the secret CuliBox's relay and the broker and egress
+	// listeners prove to each other before the relay's PROXY line is read
+	// (#114, #118: it never crosses the wire). One per data directory, loaded
+	// once per daemon start by loadRelayKey. Zero off darwin (Linux has no
+	// relay) and zero when relay.secret could not be read, in which case the
+	// darwin listeners and the relay refuse to start.
 	relayKey proxyline.Key
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error

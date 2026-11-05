@@ -338,8 +338,14 @@ func TestServiceListenerLimitsConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c3.Close()
+	c3.SetDeadline(time.Now().Add(10 * time.Second))
 	go func() {
-		fmt.Fprint(c3, keyed("PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\nCONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"))
+		// The daemon has not accepted c3, so even the relay's handshake waits for
+		// a slot: it runs here, with the wait for the reply.
+		if err := relayHandshake(c3, addr, testRelayKey); err != nil {
+			return
+		}
+		fmt.Fprint(c3, "PROXY TCP4 172.29.72.5 172.29.72.1 40000 9072\r\nCONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
 		resp, err := http.ReadResponse(bufio.NewReader(c3), nil)
 		if err == nil && resp.StatusCode == 407 {
 			served.Store(true)

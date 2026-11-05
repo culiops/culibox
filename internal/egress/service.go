@@ -17,8 +17,9 @@ import (
 	"github.com/culiops/culibox/internal/proxyline"
 )
 
-// proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// relay key line and PROXY line; the relay writes both before any other byte.
+// proxyHeaderTimeout bounds how long a darwin connection may take to finish the
+// whole relay handshake and send its PROXY line; the relay does both before any
+// other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
@@ -43,9 +44,10 @@ type ServiceOptions struct {
 	// after the network is ensured and before anything else, so a failure keeps
 	// boxes off an egress path whose VM firewall rules no longer hold.
 	AfterNetwork func(ctx context.Context, n Net) error
-	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay presents
-	// before its PROXY line (#114). On darwin a zero key makes Ready refuse to
-	// listen: the PROXY line is never trusted on its own.
+	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay and this
+	// listener prove to each other before the relay's PROXY line is read (#114,
+	// #118). On darwin a zero key makes Ready refuse to listen: the PROXY line
+	// is never trusted on its own.
 	RelayKey proxyline.Key
 }
 
@@ -149,15 +151,15 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	// macOS trusts a PROXY line only behind the relay's key, so no key means no
-	// listener (fail closed and loud), never a header-only fallback.
+	// macOS trusts a PROXY line only from a relay that proved the key, so no key
+	// means no listener (fail closed and loud), never a header-only fallback.
 	if s.o.GOOS == "darwin" && s.o.RelayKey.IsZero() {
 		return Endpoint{}, errors.New("egress: no relay key; refusing to listen")
 	}
 	// The source check is on for both OSes. On macOS every box reaches the proxy
 	// through the relay, so the TCP peer is always loopback; the box address is
-	// the relay's PROXY line, which the wrapper below requires (behind the relay
-	// key) and vets.
+	// the relay's PROXY line, which the wrapper below requires (after the relay
+	// proved the key) and vets.
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {

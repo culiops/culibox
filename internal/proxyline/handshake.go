@@ -4,14 +4,16 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"regexp"
 )
 
-// The relay handshake replaces the static key line (Key.Preamble) with a mutual
+// The relay handshake replaces the static key line of #114 with a mutual
 // challenge-response, so the key never crosses the wire and the relay forwards
 // nothing until the listener has proven it holds the key. Every line has a
 // fixed length and uses lowercase hex only, so each side reads an exact byte
@@ -128,6 +130,69 @@ func RelayHandshake(rw io.ReadWriter, k Key, port uint16) error {
 
 	if _, err := rw.Write(relayProofLine(k, port, &nR, &nL)); err != nil {
 		return fmt.Errorf("proxyline: writing relay proof: %w", err)
+	}
+	return nil
+}
+
+// relayHelloRE is the only form a relay's hello may take: the prefix, a nonce of
+// 64 lowercase hex characters and CRLF.
+var relayHelloRE = regexp.MustCompile("^" + regexp.QuoteMeta(helloPrefix) + `[0-9a-f]{64}\r\n$`)
+
+// authenticate is the listener's half of the handshake (readHeader calls it,
+// after the loopback check, with the whole-phase deadline already set). It reads
+// the relay's hello, answers with the listener's proof and believes the relay
+// only when the relay's proof matches. Every read has a fixed length, through
+// c.br, so bytes that follow the relay's proof stay buffered for the PROXY line.
+// Writes go through the raw conn, not the gated c.Write.
+//
+// The only thing ever written before the relay's proof matches is the one proof
+// line, and only after a well-formed hello, so a peer that is not a relay hears
+// nothing. Every error wraps ErrHeader with a fixed text plus, at most, an
+// io/net error: until the relay's proof matches, the peer is not known to hold
+// the key, so nothing it sent goes into an error or a log line.
+func (c *conn) authenticate() error {
+	if c.o.Key.IsZero() {
+		return fmt.Errorf("%w: no relay key configured", ErrHeader)
+	}
+	// The relay dialed this listener's own port and both proofs bind it. A nil
+	// address is checked first, as peerIsLoopback does: this runs inside
+	// net/http's first RemoteAddr call, ahead of the recover in its serve loop,
+	// so a panic here would end the daemon.
+	local := c.Conn.LocalAddr()
+	if local == nil {
+		return fmt.Errorf("%w: no local address to take the port from", ErrHeader)
+	}
+	ap, err := netip.ParseAddrPort(local.String())
+	if err != nil {
+		return fmt.Errorf("%w: local address is not an address and port", ErrHeader)
+	}
+	port := ap.Port()
+
+	var hello [HelloLen]byte
+	if _, err := io.ReadFull(c.br, hello[:]); err != nil {
+		return fmt.Errorf("%w: relay hello: %w", ErrHeader, err)
+	}
+	if !relayHelloRE.Match(hello[:]) {
+		return fmt.Errorf("%w: relay hello malformed", ErrHeader)
+	}
+	// The pattern guarantees 64 lowercase hex characters, so the decode cannot fail.
+	var nR, nL [32]byte
+	hex.Decode(nR[:], hello[len(helloPrefix):len(helloPrefix)+64])
+	if _, err := rand.Read(nL[:]); err != nil {
+		return fmt.Errorf("%w: listener nonce: %w", ErrHeader, err)
+	}
+
+	if _, err := c.Conn.Write(listenerProofLine(c.o.Key, port, &nR, &nL)); err != nil {
+		return fmt.Errorf("%w: writing listener proof: %w", ErrHeader, err)
+	}
+	var got [RelayProofLen]byte
+	if _, err := io.ReadFull(c.br, got[:]); err != nil {
+		return fmt.Errorf("%w: relay proof: %w", ErrHeader, err)
+	}
+	// The whole line, compared in constant time: the encoding is canonical, so
+	// there is nothing to decode and nothing to normalise.
+	if subtle.ConstantTimeCompare(got[:], relayProofLine(c.o.Key, port, &nR, &nL)) != 1 {
+		return fmt.Errorf("%w: relay proof missing or wrong", ErrHeader)
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package boxvm
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -856,13 +856,13 @@ func relayScriptEnv(value string, set bool) []string {
 	return env
 }
 
-// startRelayScript runs the relay under node with key in its environment, on a
-// free loopback port forwarding to tport, and returns that port once the relay
-// says it listens. The key is never in argv.
-func startRelayScript(t *testing.T, node string, key proxyline.Key, tport int) int {
+// startRelayScript runs script (relayScript, or an older relay) under node with
+// key in its environment, on a free loopback port forwarding to tport, and
+// returns that port once the relay says it listens. The key is never in argv.
+func startRelayScript(t *testing.T, node, script string, key proxyline.Key, tport int) int {
 	t.Helper()
 	lport := freeTCPPort(t)
-	cmd := exec.Command(node, "-e", relayScript, "127.0.0.1", strconv.Itoa(lport), "127.0.0.1", strconv.Itoa(tport))
+	cmd := exec.Command(node, "-e", script, "127.0.0.1", strconv.Itoa(lport), "127.0.0.1", strconv.Itoa(tport))
 	cmd.Env = relayScriptEnv(key.Hex(), true)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -925,95 +925,15 @@ func TestRelayScriptWritesTheKeyLineAndHeaderInOneWrite(t *testing.T) {
 	}
 }
 
-func TestRelayScriptSendsTheKeyThenTheProxyHeader(t *testing.T) {
-	node := nodeOrSkip(t)
-	target, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { target.Close() })
-	tport := target.Addr().(*net.TCPAddr).Port
-	lport := startRelayScript(t, node, relayTestKey, tport)
+// v1RelayScript is the relay before #118: it writes the static key line and the
+// PROXY line to the listener without waiting for anything.
+const v1RelayScript = `const net=require("net");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K="AGENTBOX-RELAY "+k+"\r\n";const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write(K+"PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
 
-	type result struct {
-		key      []byte
-		src, dst netip.AddrPort
-		body     string
-		err      error
-	}
-	done := make(chan result, 1)
-	go func() {
-		c, err := target.Accept()
-		if err != nil {
-			done <- result{err: err}
-			return
-		}
-		defer c.Close()
-		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-		br := bufio.NewReader(c)
-		key := make([]byte, proxyline.PreambleLen)
-		if _, err := io.ReadFull(br, key); err != nil {
-			done <- result{err: err}
-			return
-		}
-		hdr, err := br.ReadBytes('\n')
-		if err != nil {
-			done <- result{err: err}
-			return
-		}
-		src, dst, err := proxyline.ParseV1(hdr)
-		if err != nil {
-			done <- result{err: err}
-			return
-		}
-		body := make([]byte, 4)
-		if _, err := io.ReadFull(br, body); err != nil {
-			done <- result{err: err}
-			return
-		}
-		_, err = c.Write([]byte("pong"))
-		done <- result{key: key, src: src, dst: dst, body: string(body), err: err}
-	}()
-
-	cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cl.Close()
-	_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := cl.Write([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
-	reply := make([]byte, 4)
-	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
-		t.Fatalf("client reply = %q, %v; want pong", reply, err)
-	}
-	r := <-done
-	if r.err != nil {
-		t.Fatalf("target side: %v", r.err)
-	}
-	if !bytes.Equal(r.key, relayTestKey.Preamble()) {
-		t.Error("the first 81 bytes are not the key line (bytes not printed)")
-	}
-	if r.src.Addr() != netip.MustParseAddr("127.0.0.1") {
-		t.Errorf("header src = %v, want 127.0.0.1", r.src)
-	}
-	if want := netip.MustParseAddrPort(fmt.Sprintf("127.0.0.1:%d", lport)); r.dst != want {
-		t.Errorf("header dst = %v, want %v", r.dst, want)
-	}
-	if want := cl.LocalAddr().(*net.TCPAddr).Port; int(r.src.Port()) != want {
-		t.Errorf("header src port = %d, want the client's %d", r.src.Port(), want)
-	}
-	if r.body != "ping" {
-		t.Errorf("payload after header = %q, want ping", r.body)
-	}
-}
-
-// The real listener, not a hand-rolled parser, accepts what the script sends:
-// the key line then the PROXY line make the connection's RemoteAddr the
-// client's, a relay on another key is refused (and counted), and bytes a client
-// sends that look like a key line and a header are only payload.
-func TestRelayScriptIsAcceptedByProxyline(t *testing.T) {
+// The v1 relay meets a v2 listener: its first 82 bytes are not a hello, so the
+// listener refuses it (counted), answers nothing, and the box's client sees the
+// connection close with no byte back. The v1 relay pipes the listener to the
+// client, so zero bytes at the client also prove the listener wrote nothing.
+func TestV1RelayIsRefusedByTheV2Listener(t *testing.T) {
 	node := nodeOrSkip(t)
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1028,120 +948,46 @@ func TestRelayScriptIsAcceptedByProxyline(t *testing.T) {
 	})
 	t.Cleanup(func() { target.Close() })
 	tport := raw.Addr().(*net.TCPAddr).Port
+	lport := startRelayScript(t, node, v1RelayScript, relayTestKey, tport)
 
-	type seen struct {
-		remote  string
-		payload string
-		err     error
-	}
-	var want atomic.Int32 // how many payload bytes the next accepted connection carries
-	conns := make(chan seen, 4)
+	read := make(chan error, 1)
 	go func() {
-		for {
-			c, err := target.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer c.Close()
-				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-				s := seen{remote: c.RemoteAddr().String()} // runs the handshake
-				buf := make([]byte, want.Load())
-				if _, err := io.ReadFull(c, buf); err != nil {
-					s.err = err
-					conns <- s
-					return
-				}
-				s.payload = string(buf)
-				_, s.err = c.Write([]byte("pong"))
-				conns <- s
-			}()
-		}
-	}()
-	next := func() seen {
-		t.Helper()
-		select {
-		case s := <-conns:
-			return s
-		case <-time.After(15 * time.Second):
-			t.Fatal("the target saw no connection")
-			return seen{}
-		}
-	}
-	dial := func(lport int) net.Conn {
-		t.Helper()
-		cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
+		c, err := target.Accept()
 		if err != nil {
-			t.Fatal(err)
+			read <- err
+			return
 		}
-		t.Cleanup(func() { cl.Close() })
-		_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
-		return cl
-	}
-	goodPort := startRelayScript(t, node, relayTestKey, tport)
+		defer c.Close()
+		_, err = c.Read(make([]byte, 16)) // runs the handshake
+		read <- err
+	}()
 
-	// 1. The relay's own key: accepted, and the source is the client's.
-	want.Store(4)
-	cl := dial(goodPort)
+	cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
 	if _, err := cl.Write([]byte("ping")); err != nil {
 		t.Fatal(err)
 	}
-	reply := make([]byte, 4)
-	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
-		t.Fatalf("client reply = %q, %v; want pong", reply, err)
-	}
-	s := next()
-	if s.err != nil || s.payload != "ping" {
-		t.Fatalf("target saw payload %q, err %v; want ping", s.payload, s.err)
-	}
-	if want := cl.LocalAddr().String(); s.remote != want {
-		t.Errorf("RemoteAddr = %s, want the client's %s", s.remote, want)
-	}
-	if n := refused.Load(); n != 0 {
-		t.Errorf("%d refusal(s) counted for a relay with the right key", n)
-	}
-
-	// 2. A relay started with another key: no answer, and one refusal counted.
-	badPort := startRelayScript(t, node, otherRelayKey, tport)
-	cl = dial(badPort)
-	if _, err := cl.Write([]byte("ping")); err != nil {
-		t.Fatal(err)
-	}
-	reply = make([]byte, 4)
-	if n, err := io.ReadFull(cl, reply); err == nil || string(reply[:n]) == "pong" {
-		t.Fatalf("a relay on the wrong key was answered: %q, %v", reply[:n], err)
-	}
-	if s := next(); s.err == nil {
-		t.Error("the target served a connection from a relay on the wrong key")
+	select {
+	case err := <-read:
+		if !errors.Is(err, proxyline.ErrHeader) {
+			t.Fatalf("the listener's Read = %v, want ErrHeader", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the listener never refused the v1 relay")
 	}
 	if n := refused.Load(); n != 1 {
 		t.Errorf("refusals counted = %d, want 1", n)
 	}
-
-	// 3. A client that sends its own key line and PROXY line through the right
-	// relay: still the client's address, and its bytes arrive as payload.
-	forged := string(otherRelayKey.Preamble()) + "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9072\r\n"
-	want.Store(int32(len(forged)))
-	cl = dial(goodPort)
-	if _, err := cl.Write([]byte(forged)); err != nil {
-		t.Fatal(err)
+	got, err := io.ReadAll(cl)
+	if len(got) != 0 {
+		t.Errorf("the client received %d bytes from a refused relay, want none", len(got))
 	}
-	reply = make([]byte, 4)
-	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
-		t.Fatalf("client reply = %q, %v; want pong", reply, err)
-	}
-	s = next()
-	if s.err != nil {
-		t.Fatalf("target side: %v", s.err)
-	}
-	if want := cl.LocalAddr().String(); s.remote != want {
-		t.Errorf("RemoteAddr = %s, want the client's %s: a forged header was believed", s.remote, want)
-	}
-	if s.payload != forged {
-		t.Error("the forged bytes did not arrive as the payload, unchanged (bytes not printed)")
-	}
-	if n := refused.Load(); n != 1 {
-		t.Errorf("refusals counted = %d, want still 1", n)
+	if err != nil && !errors.Is(err, syscall.ECONNRESET) {
+		t.Errorf("client read err = %v, want EOF or a reset", err)
 	}
 }
 
