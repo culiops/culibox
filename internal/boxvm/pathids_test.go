@@ -132,6 +132,26 @@ func TestPathIDsFailsClosed(t *testing.T) {
 	}
 }
 
+// The error becomes part of a refusal shown to the user and logged: it names the
+// position of a bad path, never a byte of it.
+func TestPathIDsErrorsCarryNoPath(t *testing.T) {
+	r := &sshRunner{}
+	v := vmWith(t, r)
+	_, err := v.PathIDs(context.Background(), []string{"/ok", "rel/secret-name $x"})
+	if err == nil {
+		t.Fatal("a relative path must be refused")
+	}
+	if strings.Contains(err.Error(), "secret-name") || strings.Contains(err.Error(), "rel/") {
+		t.Fatalf("error carries the path: %v", err)
+	}
+	if !strings.Contains(err.Error(), "path 2") {
+		t.Fatalf("error = %v, want it to name the position (path 2)", err)
+	}
+	if len(r.argv) != 0 {
+		t.Fatalf("a bad path must not reach the VM: %q", r.argv)
+	}
+}
+
 func TestPathIDsIgnoresNoiseAroundTheIdentityLines(t *testing.T) {
 	out := "WARN[0000] lima says something\nctxid 44:393\nctxid 16777232:153593034\nShared connection closed.\n"
 	v := vmWith(t, &sshRunner{out: out})

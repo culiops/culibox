@@ -21,14 +21,23 @@ type FileID struct{ Dev, Ino uint64 }
 // that `$(...)` cannot eat a newline the path ends in.
 //
 // Per path it prints `ctxid <dev>:<ino>` or stops with a one-line reason that
-// names the position, never the path. It refuses unless
-//   - realpath -e prints the path back unchanged: the path is absolute and
-//     clean and no component of it, the leaf included, is a symlink right now
-//     (a plain stat follows every symlink but the leaf's, so it alone would not
-//     do; this is the check CheckContextPathID's fd walk makes on Linux);
-//   - the leaf is a directory or a regular file (so no socket, FIFO or device);
-//   - stat before and after those checks gives one identity, so the path is the
-//     same file throughout them.
+// names the position, never the path. Each path runs in its own subshell, so
+// one path's cwd never reaches the next. The path is split into its parent d
+// and its leaf l, and the script refuses unless
+//   - the path is absolute and clean: d/l rebuilds it exactly, and l is not
+//     empty (a trailing slash, or "/" itself), "." or "..";
+//   - `cd -P` into d lands in a directory whose real path (`pwd -P`, the
+//     kernel's getcwd) is d itself: no parent component is a symlink, and the
+//     directory held now is the one that sits at d;
+//   - every check on the leaf is made on ./l inside that held directory, so
+//     the parents are never looked up again: it is not a symlink, it is a
+//     directory or a regular file (no socket, FIFO or device), and stat before
+//     and after those checks gives one identity.
+//
+// Resolving the whole path again for each check is what this replaces: GNU
+// stat follows every parent component, so a parent flipped between a real
+// directory and a symlink during the script could show a different directory
+// to each stat, and the script could print the symlink target's identity.
 //
 // stat -c %d:%i is what the in-box check prints (see Manager.checkMountIDs).
 // The exit status is not the only signal: PathIDs also demands one ctxid line
@@ -37,14 +46,23 @@ const pathIDsScript = `die() { echo "$1" >&2; exit 1; }
 i=0
 for e in @LIST@; do
 i=$((i+1))
+(
 p=$(printf %s "$e" | base64 -d; echo x); p=${p%x}
-a=$(stat -c %d:%i -- "$p" 2>/dev/null) || die "path $i: not found or unreadable"
-r=$(realpath -e -- "$p" 2>/dev/null) || die "path $i: not found or unreadable"
-[ "$r" = "$p" ] || die "path $i: a component is a symlink, or the path is not clean"
-[ -d "$p" ] || [ -f "$p" ] || die "path $i: not a directory or a regular file"
-b=$(stat -c %d:%i -- "$p" 2>/dev/null) || die "path $i: not found or unreadable"
+case $p in /*) ;; *) die "path $i: not an absolute path";; esac
+d=${p%/*}; l=${p##*/}
+[ -n "$d" ] || d=/
+case $l in ""|.|..) die "path $i: not a clean path";; esac
+if [ "$d" = / ]; then w=/$l; else w=$d/$l; fi
+[ "$w" = "$p" ] || die "path $i: not a clean path"
+cd -P "$d" 2>/dev/null || die "path $i: not found or unreadable"
+[ "$(pwd -P)" = "$d" ] || die "path $i: a parent directory is a symlink, or the path is not clean"
+a=$(stat -c %d:%i -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
+[ ! -L "./$l" ] || die "path $i: the path is a symlink"
+[ -d "./$l" ] || [ -f "./$l" ] || die "path $i: not a directory or a regular file"
+b=$(stat -c %d:%i -- "./$l" 2>/dev/null) || die "path $i: not found or unreadable"
 [ "$a" = "$b" ] || die "path $i: changed during the check"
 echo "ctxid $a"
+) || exit 1
 done
 `
 
@@ -57,9 +75,9 @@ var ctxIDLine = regexp.MustCompile(`^ctxid ([0-9]+):([0-9]+)$`)
 // stands in for the host's identity. Like InputRules it only asks: a stopped VM
 // is an error, never a start.
 //
-// It fails closed: an error for any path that is not absolute, is or is under a
-// symlink, is not a directory or a regular file, or whose identity changed
-// while it was read; and an error unless the output holds exactly one ctxid
+// It fails closed: an error for any path that is not absolute and clean, has a
+// symlink as a parent directory or as its leaf, is not a directory or a regular
+// file, or whose identity changed while it was read; and an error unless the output holds exactly one ctxid
 // line per path. paths travel base64-encoded inside a fixed script
 // (pathIDsScript), never as argv, so they are inert to a shell.
 func (v *VM) PathIDs(ctx context.Context, paths []string) ([]FileID, error) {
@@ -69,7 +87,9 @@ func (v *VM) PathIDs(ctx context.Context, paths []string) ([]FileID, error) {
 	words := make([]string, len(paths))
 	for i, p := range paths {
 		if !filepath.IsAbs(p) {
-			return nil, fmt.Errorf("reading file identities in the box VM: %q is not an absolute path", p)
+			// The position, never the path: the refusal built from this error
+			// must not carry a byte of a path into a log or a page.
+			return nil, fmt.Errorf("reading file identities in the box VM: path %d is not an absolute path", i+1)
 		}
 		words[i] = base64.StdEncoding.EncodeToString([]byte(p))
 	}
