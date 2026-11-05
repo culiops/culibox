@@ -228,3 +228,40 @@ test("a pane that is not the focused element never writes", () => {
   try { osc("c;" + b64("hello")); } finally { console.warn = warn; }
   assert.deepStrictEqual(log.copied, []);
 });
+
+// --- what arms and disarms the window ----------------------------------------
+test("a press that does not open the window drops a release still pending", () => {
+  // A drag released outside the browser never delivers its mouseup; the next
+  // release anywhere, here a Shift+drag's (the user's own copy), must not arm.
+  const listeners = [];
+  global.IS_MAC = false;
+  global.document = {
+    addEventListener: (type, fn) => listeners.push([type, fn]),
+    removeEventListener: (type, fn) => { const i = listeners.findIndex((l) => l[0] === type && l[1] === fn); if (i >= 0) listeners.splice(i, 1); },
+  };
+  const tab = Object.create(TerminalTab.prototype);
+  Object.assign(tab, { gestureAt: 0, term: { modes: { mouseTrackingMode: "any" } } });
+  try {
+    tab.armOsc52(mouse());
+    tab.armOsc52(mouse({ shiftKey: true }));
+    for (const [type, fn] of listeners) if (type === "mouseup") fn();
+    assert.strictEqual(tab.gestureAt, 0);
+  } finally { delete global.IS_MAC; }
+});
+
+test("a reconnect forgets a gesture made before it", () => {
+  // connect() replays the session's output ring, which can hold an old OSC 52
+  // (or one the agent planted there): a click just before "Retry now" must not
+  // let the replay write the clipboard.
+  global.location = { protocol: "http:", host: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } };
+  const tab = Object.create(TerminalTab.prototype);
+  Object.assign(tab, {
+    id: "s1", gestureAt: Date.now(), term: { reset() {} },
+    clearRetry() {}, hideTrouble() {}, setStatus() {},
+  });
+  try {
+    tab.connect();
+    assert.strictEqual(tab.gestureAt, 0);
+  } finally { delete global.location; delete global.WebSocket; }
+});

@@ -355,10 +355,7 @@ class TerminalTab {
     // pane. A press that becomes a long drag would otherwise expire before the
     // copy it asked for.
     this.gestureAt = 0;
-    termEl.addEventListener("mousedown", (e) => {
-      if (!osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
-      document.addEventListener("mouseup", () => { this.gestureAt = Date.now(); }, { once: true, capture: true });
-    });
+    termEl.addEventListener("mousedown", (e) => this.armOsc52(e));
     if (this.term.parser && this.term.parser.registerOscHandler) {
       // true = consumed: xterm has no OSC 52 handler of its own to fall back to.
       this.term.parser.registerOscHandler(52, (data) => { this.onOsc52(data); return true; });
@@ -485,6 +482,19 @@ class TerminalTab {
   }
   resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }
 
+  // armOsc52 is the press half of the gesture: a press osc52Gesture accepts
+  // opens the window on its release. Every press first drops a release still
+  // pending from an earlier one: a mouseup can be lost (a drag released outside
+  // the browser), and the next release anywhere, even a Shift+drag's, must not
+  // arm on its behalf.
+  armOsc52(e) {
+    if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
+    this.osc52Up = null;
+    if (!osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
+    this.osc52Up = () => { this.osc52Up = null; this.gestureAt = Date.now(); };
+    document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
   // onOsc52 handles the program asking to write the clipboard (OSC 52): how
   // Claude Code's fullscreen copies its own selection. osc52Decision is the gate;
   // an accepted write spends the gesture, so one drag or Ctrl+C buys one copy.
@@ -518,6 +528,9 @@ class TerminalTab {
 
   connect() {
     this.term.reset();
+    // The output ring replays from here, and it can hold an old OSC 52: a
+    // gesture made before the reconnect must not let the replay write.
+    this.gestureAt = 0;
     this.clearRetry();
     this.hideTrouble();
     this.setStatus("connecting…");
