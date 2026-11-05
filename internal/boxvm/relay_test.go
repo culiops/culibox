@@ -905,9 +905,10 @@ func TestRelayScriptRefusesToStartWithoutAKey(t *testing.T) {
 			if first, _, _ := strings.Cut(string(out), "\n"); first != "ERR KEY missing or malformed" {
 				t.Fatalf("first stdout line = %q, want %q", first, "ERR KEY missing or malformed")
 			}
-			if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), time.Second); err == nil {
-				c.Close()
-				t.Fatal("a relay with no key listens")
+			// The process has exited, so a dial afterwards would prove nothing:
+			// what shows it never listened is that it never said so.
+			if strings.Contains(string(out), "listening") {
+				t.Fatalf("a relay with no key reported a listener: %q", out)
 			}
 		})
 	}
