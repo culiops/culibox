@@ -2017,7 +2017,7 @@ async function togglePeek(li, s) {
     if (await postReplyable(s.id, want)) {
       s.replyable = want;
       // The server's reply_ready moves with replyable: fetch the list now, so
-      // the row (rowSig) rebuilds this composer with it rather than one poll late.
+      // composer.refresh() (which reads the live copy) sees it at once.
       await refreshSessions();
     } else {
       cb.checked = !want; // the server is the truth; put the box back

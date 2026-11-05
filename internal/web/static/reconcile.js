@@ -95,8 +95,6 @@ function rowSig(s, local) {
     v.id, v.parent_id || "", l.shellLabel || "", v.name || "", v.agent || "", v.cwd || "", v.runtime || "",
     v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
-    // The composer's gate (sendState): it flips true a few seconds after a turn ends.
-    v.reply_ready === true,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
     l.boxRuntime || "", !!l.replies, !!l.sending, !!l.expanded, !!l.answering, !!l.elev,
     // The AWS chip (label, prod, the amber write state) and the SSO card's text
