@@ -283,15 +283,15 @@ a git config `include`, and so on). What it covers and what it does not is in
 check as on Linux that the mounted path is the one that was checked, with the
 identity read a different way. An inode number on the Mac is not the one the
 box sees through the VM's file share, so on macOS the identity is read inside
-the VM, by a short script run over one `colima ssh` per spawn with context
-paths. It enters the parent directory (`cd -P`) and refuses unless that
-directory's real path is the listed parent, so a symlink in any parent is
-refused. It then reads the last component inside that directory with one
-`lstat` (type and identity together) and refuses a symlink, a FIFO, a socket, a
-device or anything else that is not a directory or regular file. It is a shell
-script (`cd -P`, `pwd -P`, `stat`), not the descriptor walk Linux uses, and a
-real directory moved into place before it reads is taken as the path you
-listed.
+the VM, by a short script run over one `colima ssh` per boxed spawn (the same
+script reads the workspace, see [Workspace identity](#workspace-identity)). It
+enters the parent directory (`cd -P`) and refuses unless that directory's real
+path is the listed parent, so a symlink in any parent is refused. It then
+reads the last component inside that directory with one `lstat` (type and
+identity together) and refuses a symlink, a FIFO, a socket, a device or anything
+else that is not a directory or regular file. It is a shell script (`cd -P`,
+`pwd -P`, `stat`), not the descriptor walk Linux uses, and a real directory
+moved into place before it reads is taken as the path you listed.
 
 - Measured on a Mac (colima 0.8.1, virtiofs): the device and inode the VM
   reports for a path are the ones the box's bind mount shows, and are stable
@@ -300,9 +300,42 @@ listed.
   parent directory flipped between a directory and a symlink, and against the last
   component exchanged for a FIFO or a symlink, each in a loop.
 - Not yet tested on a Mac: that `colima ssh` passes the script to the VM
-  unchanged (if it does not, spawns with context paths are refused, not let
+  unchanged (if it does not, every boxed spawn is refused, not let
   through), the script on the VM itself, and that the identity stays stable
   across a VM restart.
+
+### Workspace identity
+
+When a box starts, CuliBox checks inside it that the workspace mount shows the
+folder that passed the checks, and, for a box it creates, that each in-place
+guard shows the file or directory it was derived from (see
+[Security model](SECURITY.md#known-limits)). As with context paths, the
+identity is read inside the VM, because an inode number on the Mac is not the
+one the box sees. The workspace is read by the context-path script, in the same
+single `colima ssh` per spawn, so every boxed spawn now makes one, with or
+without context paths. The comparison inside the box is one `docker exec`, so a
+plain boxed spawn, without context paths, makes that too.
+
+- Known limit: on macOS the host's own reading of the workspace folder, the one
+  the folder opened to derive the guards is compared with, is an `lstat`, which
+  follows the folders above it. A parent swapped for a link between resolving
+  the folder and that reading is not seen by this comparison (Linux walks the
+  path without following links). The VM's read of the workspace and the
+  comparison inside the box still refuse a mount that is not the folder that
+  was checked.
+- A workspace typed in a case or Unicode form other than the one on disk may be
+  refused: a macOS volume ignores case and treats an accented letter in its
+  composed and decomposed forms as the same name, while the script compares the
+  path as given with the real path. The spawn is refused, not let through. Open
+  the folder by its exact name, as `ls` shows it.
+- Not yet measured on a Mac: that the identity the VM reports for the workspace
+  and for the guards is the one the box shows (measured for context paths
+  above, on colima 0.8.1), how often a case or Unicode spelling of a workspace
+  is refused in practice, and what the extra `colima ssh` and `docker exec` add
+  to a spawn.
+- Tested only on Linux, against a stand-in for the VM read: the order of the
+  read and of the box's creation, that the workspace is first in it, and the
+  refusal and removal of a box whose mount changed.
 
 ## Behind a TLS-inspecting proxy
 

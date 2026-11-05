@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -37,9 +38,10 @@ type ctxMountError struct{ ctxPathError }
 
 func (e *ctxMountError) Is(target error) bool { return target == ErrContextMountChanged }
 
-func ctxMountChanged(p, extra string) error {
-	return &ctxMountError{ctxPathError{"context_paths " + p +
-		": the mounted path is not the checked one (it changed while the box started); refusing" + extra}}
+// ctxMountChanged is the refusal for context path p, with why saying what the
+// in-box check found. Its text is "context_paths <p>: <why>; refusing".
+func ctxMountChanged(p, why string) error {
+	return &ctxMountError{ctxPathError{"context_paths " + p + ": " + why + "; refusing"}}
 }
 
 // FileID is a file's identity on its filesystem. A bind mount shares its
@@ -48,42 +50,126 @@ func ctxMountChanged(p, extra string) error {
 type FileID struct{ Dev, Ino uint64 }
 
 // checkMountIDs compares, inside the running box name, the identity of every
-// extra mount that carries an ID with the one recorded on the host (Linux) or
-// read in the box VM (macOS, see fillVMIDs). Docker follows symlinks in a bind
-// source, so a path flipped to a link between that read and `docker run` would
-// mount the link's target; this catches it before the agent starts. One
-// `docker exec` for all of them, paths as argv (no shell). Mounts without an ID
-// cost nothing. Caller holds opMu.
-func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Mount) error {
-	var ms []Mount
-	for _, mt := range extraRO {
-		if mt.ID != nil {
-			ms = append(ms, mt)
+// mount in ms that carries an ID with the one recorded on the host (Linux) or
+// read in the box VM (macOS, see fillVMIDs). ms is the workspace first, then the
+// extra mounts. Docker follows symlinks in a bind source, so a path flipped to a
+// link between that read and `docker run` would mount the link's target; this
+// catches it before the agent starts. One `docker exec` for all of them, paths
+// as argv (no shell). Mounts without an ID cost nothing. The guards of the
+// workspace are compared only when this spawn created the box (see
+// skipGuard). Caller holds opMu.
+func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, created bool) error {
+	var checked []Mount
+	for _, mt := range ms {
+		if mt.ID != nil && !skipGuard(mt, created) {
+			checked = append(checked, mt)
 		}
 	}
-	if len(ms) == 0 {
+	if len(checked) == 0 {
 		return nil
 	}
 	// /usr/bin/stat by absolute path: a bare "stat" resolves through the box PATH,
 	// which has the agent-writable ~/go/bin ahead of /usr/bin, so the agent could
 	// plant a stat that prints whatever identity the check expects.
 	args := []string{"exec", name, "/usr/bin/stat", "-c", "%d:%i", "--"}
-	for _, mt := range ms {
+	for _, mt := range checked {
 		args = append(args, mt.Box)
 	}
 	// Stdout only: stderr noise on a successful exec would shift the lines below.
 	out, err := m.opts.Client.Stdout(ctx, args)
-	extra := ""
-	if err != nil {
-		extra = fmt.Sprintf(" (in-box check failed: %v)", err)
-	}
 	lines := strings.Split(out, "\n")
-	for i, mt := range ms {
-		if err != nil || i >= len(lines) || strings.TrimSpace(lines[i]) != fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
-			return ctxMountChanged(mt.Host, extra)
+	for i, mt := range checked {
+		// A check that did not run (the exec failed, or its answer is missing or
+		// no identity) is not a path that changed: mountChanged says so.
+		switch {
+		case err != nil:
+			return m.mountChanged(mt, created, err)
+		case i >= len(lines):
+			return m.mountChanged(mt, created, errors.New("it printed no identity for this path"))
 		}
+		got := strings.TrimSpace(lines[i])
+		if got == fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
+			continue
+		}
+		if !isIDLine(got) {
+			return m.mountChanged(mt, created, errors.New("it printed something that is not an identity"))
+		}
+		return m.mountChanged(mt, created, nil)
 	}
 	return nil
+}
+
+// isIDLine reports whether s has the shape of one line of the in-box stat,
+// "<dev>:<ino>" in decimal.
+func isIDLine(s string) bool {
+	dev, ino, ok := strings.Cut(s, ":")
+	if !ok {
+		return false
+	}
+	for _, n := range []string{dev, ino} {
+		if _, err := strconv.ParseUint(n, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// skipGuard is true for a guard mount of a box this spawn did not create. A
+// file bind mount pins the inode it was made with, and an editor that saves
+// CLAUDE.md by rename leaves the host's file with another identity while the
+// running box keeps the old one: comparing a guard on reuse would refuse the next
+// session after any such save. The workspace directory is not replaced by normal
+// work, so it is compared every time.
+func skipGuard(mt Mount, created bool) bool {
+	return mt.kind == mountGuard && !created
+}
+
+// wsHostFilesHint ends the refusal of a workspace that a box created by this
+// spawn does not show as the checked folder: one such refusal is a race, but one
+// for every folder means docker does not see the host's files as they are, which
+// the README lists as a requirement. Only where the boxes run in the host's own
+// docker (no VM hook, Options.VMIDs): with a hook they run in CuliBox's own VM
+// and that requirement does not apply.
+const wsHostFilesHint = "If this repeats for every folder, CuliBox's docker does not see host files as they are " +
+	"(for example Docker Desktop for Linux or a remote docker host); see README, Requirements."
+
+// mountChanged is the refusal for a mount the in-box check did not confirm: the
+// workspace (and a guard of it) is a mount-changed refusal of the workspace,
+// anything else is a context-path one. The text matches what was found.
+// checkErr is why the check could not run (the exec failed, or its answer is
+// missing or is no identity), and then nothing is claimed to have changed. With
+// no checkErr the identity differs: created says the box is this spawn's, so the
+// mount changed while it started, and otherwise the box was reused and its mount
+// was replaced since it started. A workspace that differs in a box this spawn
+// created, with no VM hook, also carries wsHostFilesHint. A guard is named as one, and as a file or
+// folder, because it is not the workspace.
+func (m *Manager) mountChanged(mt Mount, created bool, checkErr error) error {
+	var what, verdict string
+	switch mt.kind {
+	case mountWorkspace:
+		what, verdict = "workspace", "the mounted folder is not the one that was checked"
+	case mountGuard:
+		what, verdict = "guard", "the mounted file or folder is not the one that was checked"
+	default:
+		what, verdict = "context_paths", "the mounted path is not the checked one"
+	}
+	var why string
+	switch {
+	case checkErr != nil:
+		why = fmt.Sprintf("the in-box check could not run (%v)", checkErr)
+	case created:
+		why = verdict + " (it changed while the box started)"
+	default:
+		why = verdict + " (it was replaced since the box started)"
+	}
+	if mt.kind == mountWorkspace || mt.kind == mountGuard {
+		msg := what + " " + mt.Host + ": " + why + "; refusing"
+		if mt.kind == mountWorkspace && created && checkErr == nil && m.opts.VMIDs == nil {
+			msg += ". " + wsHostFilesHint
+		}
+		return &wsMountError{msg: msg}
+	}
+	return ctxMountChanged(mt.Host, why)
 }
 
 // ctxIdentityFailed is the refusal when the box VM could not give the identity
@@ -99,41 +185,111 @@ func ctxIdentityFailed(paths []string, err error) error {
 		": the box VM could not confirm the path (" + err.Error() + "); refusing"}}
 }
 
+// identityFailed is the refusal when the box VM could not give the identity of
+// the mounts ms (the batch it was asked about). A batch of context mounts alone
+// is ctxIdentityFailed. One with the workspace (or a guard of it) in it names the
+// workspace, is ErrWorkspaceMountChanged and ErrBoxUnavailable, and, when
+// context mounts were read with it, names them too and is also the context
+// refusal (ErrContextMountChanged, ErrUnboxableWorkspace): the VM read them
+// together, so the failure cannot be told apart.
+func identityFailed(ms []Mount, err error) error {
+	var wsPath string
+	var ctx []string
+	for _, mt := range ms {
+		switch {
+		case mt.kind == mountWorkspace:
+			wsPath = mt.Host
+		case mt.kind == mountGuard:
+			if wsPath == "" {
+				wsPath = mt.Host
+			}
+		default:
+			ctx = append(ctx, mt.Host)
+		}
+	}
+	if wsPath == "" {
+		return ctxIdentityFailed(ctx, err)
+	}
+	msg := "the box VM could not confirm workspace " + wsPath
+	var also []error
+	if len(ctx) > 0 {
+		msg += " and context_paths " + strings.Join(ctx, ", ")
+		also = []error{ErrContextMountChanged, ErrUnboxableWorkspace}
+	}
+	return &wsMountError{msg: msg + " (" + err.Error() + "); refusing", also: also}
+}
+
 // fillVMIDs gives every CheckID mount that has no ID its identity from
-// Options.VMIDs, and returns extraRO with those IDs set (a copy; the caller's
-// slice is never written to). Mounts that already carry an ID, and mounts that
-// are not CheckID, are not asked about. It is one VMIDs call for all of them,
-// and none when there is nothing to ask or no hook (Linux records the identity
-// on the host), so it can run again for the same spawn at no cost. Fail closed:
-// an error or a wrong count refuses the spawn. Caller holds opMu.
-func (m *Manager) fillVMIDs(ctx context.Context, extraRO []Mount) ([]Mount, error) {
+// Options.VMIDs, and returns ms with those IDs set (a copy; the caller's slice
+// is never written to). Mounts that already carry an ID, mounts that are not
+// CheckID, and the guards of a box this spawn did not create (skipGuard), are
+// not asked about. It is one VMIDs call for all of them, and none when there is
+// nothing to ask or no hook (Linux records the identity on the host), so it can
+// run again for the same spawn at no cost. Fail closed: an error or a wrong
+// count refuses the spawn. Caller holds opMu.
+func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount, created bool) ([]Mount, error) {
 	if m.opts.VMIDs == nil {
-		return extraRO, nil
+		return ms, nil
 	}
 	var at []int
+	var asked []Mount
 	var paths []string
-	for i, mt := range extraRO {
-		if mt.CheckID && mt.ID == nil {
+	for i, mt := range ms {
+		if mt.CheckID && mt.ID == nil && !skipGuard(mt, created) {
 			at = append(at, i)
+			asked = append(asked, mt)
 			paths = append(paths, mt.Host)
 		}
 	}
 	if len(at) == 0 {
-		return extraRO, nil
+		return ms, nil
 	}
 	ids, err := m.opts.VMIDs(ctx, paths)
 	if err == nil && len(ids) != len(paths) {
 		err = fmt.Errorf("got %d identities for %d paths", len(ids), len(paths))
 	}
 	if err != nil {
-		return nil, ctxIdentityFailed(paths, err)
+		return nil, identityFailed(asked, err)
 	}
-	out := slices.Clone(extraRO)
+	out := slices.Clone(ms)
 	for k, i := range at {
 		id := ids[k]
 		out[i].ID = &id
 	}
 	return out, nil
+}
+
+// vmView is ms as the box's identity check sees it. With a VM hook (macOS) the
+// identity of a guard is the VM's to read, never the host's inode, which is not
+// the one the box shows (Options.VMIDs): it returns a copy with the ID cleared on
+// every guard. Without the hook it is ms itself.
+func (m *Manager) vmView(ms []Mount) []Mount {
+	if m.opts.VMIDs == nil {
+		return ms
+	}
+	out := slices.Clone(ms)
+	for i := range out {
+		if out[i].kind == mountGuard {
+			out[i].ID = nil
+		}
+	}
+	return out
+}
+
+// withWorkspace is the batch of the workspace mount and the extra mounts, the
+// workspace first. A new slice: the caller's is never written to.
+func withWorkspace(wsm Mount, extraRO []Mount) []Mount {
+	return append([]Mount{wsm}, extraRO...)
+}
+
+// fillMountIDs is fillVMIDs over the workspace mount and extraRO as one batch,
+// so the VM is asked once, the workspace first, and gives both back.
+func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount, created bool) (Mount, []Mount, error) {
+	all, err := m.fillVMIDs(ctx, withWorkspace(wsm, extraRO), created)
+	if err != nil {
+		return wsm, extraRO, err
+	}
+	return all[0], all[1:], nil
 }
 
 // refuseMountChanged handles a box that failed checkMountIDs. A box this spawn
