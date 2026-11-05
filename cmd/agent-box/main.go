@@ -469,8 +469,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		// Not fatal (D8): without the key the darwin listeners and the relay
 		// refuse, so every boxed spawn on this Mac says why instead.
 		if err := l.loadRelayKey(); err != nil {
-			log.Printf("relay key unavailable (%v); every boxed spawn on this Mac is refused until %s can be read",
-				err, filepath.Join(dataDir, relaySecretFile))
+			log.Printf("relay key unavailable: %v; every boxed spawn on this Mac is refused until that is fixed", err)
 		}
 		mgr.SetBoxes(boxes)
 		boxRuntime = boxes.Runtime()

@@ -275,6 +275,73 @@ func TestLoadRelayKeyRefusesAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// The shared helper words its read error for the cookie secret and the layer's
+// log line must not repeat that: the error has to name relay.secret and what
+// fixes it, for an unreadable file and for an all-zero one (where the fix is to
+// delete the file, not to make it readable).
+func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
+	darwinFresh := func(t *testing.T, dir string) *boxLayer {
+		t.Helper()
+		l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}, dir, dir, "darwin", &fakeColima{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	t.Run("unreadable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a mode 000 file")
+		}
+		dir := shortRoot(t)
+		path := filepath.Join(dir, relaySecretFile)
+		if err := os.WriteFile(path, bytes.Repeat([]byte{7}, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(path, 0o600) })
+		err := darwinFresh(t, dir).loadRelayKey()
+		if err == nil {
+			t.Fatal("an unreadable relay.secret must be an error")
+		}
+		for _, want := range []string{"relay secret", path, "permission denied", "fix its permissions"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error lacks %q: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "cookie") {
+			t.Errorf("error is worded for the cookie secret: %v", err)
+		}
+	})
+	t.Run("all zero", func(t *testing.T) {
+		dir := shortRoot(t)
+		path := filepath.Join(dir, relaySecretFile)
+		if err := os.WriteFile(path, make([]byte, 32), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		l := darwinFresh(t, dir)
+		err := l.loadRelayKey()
+		if err == nil {
+			t.Fatal("an all-zero relay.secret must be an error")
+		}
+		for _, want := range []string{"relay secret", path, "all zero", "delete it"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error lacks %q: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "cookie") || strings.Contains(err.Error(), "readable") {
+			t.Errorf("error sends the user to the wrong fix: %v", err)
+		}
+		if !l.relayKey.IsZero() {
+			t.Error("the key must stay zero after a failed load")
+		}
+		if b, rerr := os.ReadFile(path); rerr != nil || !bytes.Equal(b, make([]byte, 32)) {
+			t.Errorf("the all-zero file was replaced (read err %v)", rerr)
+		}
+	})
+}
+
 func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 	root := t.TempDir()
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, nil)

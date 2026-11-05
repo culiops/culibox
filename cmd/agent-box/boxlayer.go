@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"path/filepath"
 	"time"
@@ -90,11 +91,20 @@ func (l *boxLayer) loadRelayKey() error {
 	path := filepath.Join(l.dataDir, relaySecretFile)
 	sec, err := auth.NewCookieAuth(path)
 	if err != nil {
-		return err
+		// The helper words its error for the cookie secret and repeats the path.
+		// Keep only the OS error and say what this file is and what fixes it.
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return fmt.Errorf("relay secret %s cannot be read or created (%w); fix its permissions, or delete it to have CuliBox create a new one", path, err)
 	}
 	k, err := proxyline.KeyFromBytes(sec.Secret())
 	if err != nil {
-		return fmt.Errorf("relay key %s: %w", path, err)
+		// The helper only returns 32 bytes, so what KeyFromBytes refuses is an
+		// all-zero file, which no listener accepts as a key. It is readable, so
+		// the fix is a new file.
+		return fmt.Errorf("relay secret %s is all zero, which is not a key; delete it and restart CuliBox to create a new one", path)
 	}
 	l.relayKey = k
 	return nil
