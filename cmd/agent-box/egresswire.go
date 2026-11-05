@@ -159,7 +159,8 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 		// live, and a Ready that fails here refuses the spawn. Nothing else may
 		// call Ensure.
 		relay := &boxvm.Relay{VM: layer.vm, Docker: layer.cli, Image: layer.image, Instance: cfg.BoxInstance(),
-			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid()}
+			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid(),
+			Key: layer.relayKey}
 		opts.AfterNetwork = func(ctx context.Context, n egress.Net) error { return relay.Ensure(ctx, n.Gateway) }
 	}
 	svc := egress.NewService(opts)

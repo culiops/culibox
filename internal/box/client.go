@@ -67,6 +67,21 @@ func (c CLIClient) RunInput(ctx context.Context, args []string, stdin string) (s
 	return strings.TrimSpace(string(out)), nil
 }
 
+// RunEnv is run with extra environment variables for the docker child only
+// (added to the daemon's own environment; the daemon's is never changed). It
+// exists to hand a secret to `docker run -e NAME` without putting the value in
+// argv (world-readable through ps). The error carries the command's output but
+// never env, and env is not logged here.
+func (c CLIClient) RunEnv(ctx context.Context, args, env []string) (string, error) {
+	cmd := c.command(ctx, args...)
+	cmd.Env = append(cmd.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Stdout is run with stdout alone as the answer. Stderr only enters the error:
 // a docker CLI or context warning beside a successful command must not be read
 // as part of what the command printed.

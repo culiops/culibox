@@ -2,6 +2,7 @@ package boxvm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,14 +75,37 @@ type fakeDocker struct {
 	// warn simulates a docker CLI warning on stderr: Run (combined output)
 	// prefixes it to every answer, Stdout never sees it.
 	warn string
+	// envs is the env of each RunEnv call, in call order; its argv is in calls.
+	// runViaRun is every `run` that went through plain Run instead: the relay
+	// key must never be one of them.
+	envs      [][]string
+	runViaRun [][]string
 }
 
 func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
-	if args[0] == "rm" {
+	switch args[0] {
+	case "rm":
 		f.mu.Lock()
 		f.rmCtxErr = append(f.rmCtxErr, ctx.Err())
 		f.mu.Unlock()
+	case "run":
+		f.mu.Lock()
+		f.runViaRun = append(f.runViaRun, append([]string(nil), args...))
+		f.mu.Unlock()
 	}
+	out, err := f.answer(args)
+	if err == nil && f.warn != "" {
+		out = f.warn + "\n" + out
+	}
+	return out, err
+}
+
+// RunEnv is Run with the child's extra environment, which is recorded apart
+// from argv.
+func (f *fakeDocker) RunEnv(ctx context.Context, args, env []string) (string, error) {
+	f.mu.Lock()
+	f.envs = append(f.envs, append([]string(nil), env...))
+	f.mu.Unlock()
 	out, err := f.answer(args)
 	if err == nil && f.warn != "" {
 		out = f.warn + "\n" + out
@@ -157,9 +183,27 @@ func (f *fakeDocker) find(sub string) [][]string {
 	return out
 }
 
+// relayKeyOf is a test key; no two seeds give the same one.
+func relayKeyOf(seed byte) proxyline.Key {
+	var raw [32]byte
+	for i := range raw {
+		raw[i] = seed + byte(i)
+	}
+	k, err := proxyline.KeyFromBytes(raw[:])
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+var (
+	relayTestKey  = relayKeyOf(0x41)
+	otherRelayKey = relayKeyOf(0x42)
+)
+
 func testRelay(vm fakeVM, d *fakeDocker) *Relay {
 	return &Relay{VM: vm, Docker: d, Image: "agent-box/box:test", Instance: "prod", EgressPort: 9072, BrokerPort: 9071,
-		UID: 501, GID: 20, ReadyTimeout: 300 * time.Millisecond}
+		UID: 501, GID: 20, Key: relayTestKey, ReadyTimeout: 300 * time.Millisecond}
 }
 
 var gw = netip.MustParseAddr(EgressGateway)
@@ -387,7 +431,7 @@ func TestEnsureStartsTheRelay(t *testing.T) {
 	for _, want := range []string{
 		" -d ", " --init ", " --name agentbox-relay-prod ", " --network host ", " --entrypoint node ",
 		" --cap-drop=ALL ", " --security-opt no-new-privileges ", " --read-only ", " --pids-limit 64 ",
-		" --pull=never ", " --user 501:20 ",
+		" --pull=never ", " --user 501:20 ", " -e " + RelayKeyEnv + " ",
 		" io.culiops.agent-box.relay=prod ", " io.culiops.agent-box.relay-config=" + r.configHash(gw) + " ",
 	} {
 		if !strings.Contains(joined, want) {
@@ -400,6 +444,13 @@ func TestEnsureStartsTheRelay(t *testing.T) {
 	}
 	if strings.Contains(joined, "--restart") {
 		t.Error("the relay must not restart on its own: Ensure owns its lifecycle")
+	}
+	for _, c := range d.calls {
+		for _, a := range c {
+			if strings.Contains(a, r.Key.Hex()) {
+				t.Fatalf("a docker argv (%s) carries the relay key", c[0])
+			}
+		}
 	}
 	if strings.Contains(joined, "io.culiops.agent-box.instance") {
 		t.Error("the instance label would let box reconcile reap the relay")
@@ -602,17 +653,18 @@ func TestConfigHashCoversWhatTheRelayDoes(t *testing.T) {
 func TestConfigHashCoversEveryRunArg(t *testing.T) {
 	r := testRelay(fakeVM{}, nil)
 	args := r.runArgs(gw)
-	h := hashArgs(args)
+	hashOf := func(a []string) string { return hashWithKeyID(r, a) }
+	h := hashOf(args)
 	if r.configHash(gw) != h {
-		t.Fatal("configHash is not the hash of runArgs")
+		t.Fatal("configHash is not the hash of runArgs plus the key id")
 	}
 	for i := range args {
 		mod := append([]string(nil), args...)
 		mod[i] += "x"
-		if hashArgs(mod) == h {
+		if hashOf(mod) == h {
 			t.Errorf("changing arg %d (%q) leaves the hash unchanged", i, args[i])
 		}
-		if hashArgs(append(append([]string(nil), args[:i]...), args[i+1:]...)) == h {
+		if hashOf(append(append([]string(nil), args[:i]...), args[i+1:]...)) == h {
 			t.Errorf("dropping arg %d (%q) leaves the hash unchanged", i, args[i])
 		}
 	}
@@ -620,6 +672,127 @@ func TestConfigHashCoversEveryRunArg(t *testing.T) {
 		if strings.HasPrefix(a, relayConfigLabel) {
 			t.Fatalf("runArgs carries the hash label: %q", a)
 		}
+	}
+}
+
+// hashWithKeyID is the config hash of an argv for r: the argv plus the id of
+// r's key, which is what configHash adds to runArgs.
+func hashWithKeyID(r *Relay, args []string) string {
+	return hashArgs(append(append([]string(nil), args...), "relay-key-id="+r.Key.ID()))
+}
+
+// The key reaches the relay through the docker child's environment, by name:
+// argv is world-readable, so neither it nor a label may carry the value.
+func TestRunArgsNeverCarryTheKey(t *testing.T) {
+	r := testRelay(fakeVM{}, nil)
+	args := r.runArgs(gw, "--label", relayConfigLabel+"="+r.configHash(gw))
+	image := slices.Index(args, r.Image)
+	if image < 0 {
+		t.Fatal("no image in the run argv")
+	}
+	named := false
+	for i := 0; i+1 < image; i++ {
+		if args[i] == "-e" && args[i+1] == RelayKeyEnv {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("the run flags lack the adjacent pair -e %s", RelayKeyEnv)
+	}
+	for i, a := range args {
+		if strings.Contains(a, r.Key.Hex()) {
+			t.Errorf("argv element %d carries the relay key", i)
+		}
+		if strings.Contains(a, "relay-key-id") {
+			t.Errorf("argv element %d carries the key id; it belongs in the hash only", i)
+		}
+	}
+}
+
+func TestRelayKeyEnvIsTheDocumentedName(t *testing.T) {
+	if RelayKeyEnv != "AGENTBOX_RELAY_KEY" {
+		t.Fatalf("RelayKeyEnv = %q", RelayKeyEnv)
+	}
+	if !strings.Contains(relayScript, "process.env."+RelayKeyEnv) {
+		t.Fatal("the relay script does not read the variable Ensure sets")
+	}
+}
+
+// A relay started with another key must be replaced, so the key's id feeds the
+// config hash even though the run argv (which carries only the variable's
+// name) is the same.
+func TestConfigHashChangesWithTheKey(t *testing.T) {
+	a, b := testRelay(fakeVM{}, nil), testRelay(fakeVM{}, nil)
+	b.Key = otherRelayKey
+	if !slices.Equal(a.runArgs(gw), b.runArgs(gw)) {
+		t.Fatal("the key changed the run argv: it must not be in it")
+	}
+	if a.configHash(gw) == b.configHash(gw) {
+		t.Fatal("two relays with different keys share a config hash; a relay on the old key would be kept")
+	}
+	if a.configHash(gw) != testRelay(fakeVM{}, nil).configHash(gw) {
+		t.Fatal("the config hash is not stable for one key")
+	}
+	if h := a.configHash(gw); strings.Contains(h, a.Key.Hex()) || len(h) != 16 {
+		t.Fatalf("config hash %q is not a 16-character hash", h)
+	}
+}
+
+func TestEnsurePassesTheKeyOnlyInTheEnvironment(t *testing.T) {
+	d := &fakeDocker{logs: bothListening}
+	r := testRelay(fakeVM{out: goodRules}, d)
+	if err := r.Ensure(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.runViaRun) != 0 {
+		t.Fatal("the relay was started through Run, which carries no environment")
+	}
+	if len(d.find("run")) != 1 {
+		t.Fatalf("run calls = %v", d.find("run"))
+	}
+	want := RelayKeyEnv + "=" + r.Key.Hex()
+	if len(d.envs) != 1 || len(d.envs[0]) != 1 || d.envs[0][0] != want {
+		t.Fatalf("RunEnv environments = %d call(s), want exactly one holding only %s (values are not printed)", len(d.envs), RelayKeyEnv)
+	}
+}
+
+func TestEnsureReplacesARelayStartedWithAnotherKey(t *testing.T) {
+	old := testRelay(fakeVM{}, nil)
+	old.Key = otherRelayKey
+	d := &fakeDocker{inspect: "true\t" + old.configHash(gw) + "\n", logs: bothListening}
+	if err := testRelay(fakeVM{out: goodRules}, d).Ensure(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.subcommands(), ","); got != "inspect,rm,run,logs" {
+		t.Fatalf("calls = %s, want the old relay removed and a new one started", got)
+	}
+}
+
+// countingVM counts the firewall reads Ensure makes.
+type countingVM struct{ reads int }
+
+func (c *countingVM) FilterRules(context.Context) (string, error) {
+	c.reads++
+	return goodRules, nil
+}
+
+// A zero key is refused before the VM or docker is touched (D8): the relay
+// would otherwise start and have nothing to present, and the egress listener's
+// own zero-key refusal only comes after Ensure.
+func TestEnsureRefusesWithoutAKey(t *testing.T) {
+	vm := &countingVM{}
+	d := &fakeDocker{logs: bothListening}
+	r := &Relay{VM: vm, Docker: d, Image: "agent-box/box:test", Instance: "prod", EgressPort: 9072, BrokerPort: 9071,
+		UID: 501, GID: 20, ReadyTimeout: 300 * time.Millisecond}
+	err := r.Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "relay key") {
+		t.Fatalf("err = %v, want a refusal that names the relay key", err)
+	}
+	if vm.reads != 0 {
+		t.Errorf("the VM's firewall was read %d time(s) before the key check", vm.reads)
+	}
+	if len(d.calls) != 0 || len(d.envs) != 0 || len(d.runViaRun) != 0 {
+		t.Errorf("docker was called: %v", d.subcommands())
 	}
 }
 
@@ -637,26 +810,48 @@ func TestRelayScriptParses(t *testing.T) {
 	}
 }
 
-func TestRelayScriptSendsProxyHeader(t *testing.T) {
+func nodeOrSkip(t *testing.T) string {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH")
 	}
-	target, err := net.Listen("tcp", "127.0.0.1:0")
+	return node
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { target.Close() })
-	tport := target.Addr().(*net.TCPAddr).Port
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
 
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+// relayScriptEnv is this process's environment without the relay key variable,
+// plus the variable set to value when set is true.
+func relayScriptEnv(value string, set bool) []string {
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, RelayKeyEnv+"=") {
+			env = append(env, e)
+		}
 	}
-	lport := free.Addr().(*net.TCPAddr).Port
-	free.Close()
+	if set {
+		env = append(env, RelayKeyEnv+"="+value)
+	}
+	return env
+}
 
+// startRelayScript runs the relay under node with key in its environment, on a
+// free loopback port forwarding to tport, and returns that port once the relay
+// says it listens. The key is never in argv.
+func startRelayScript(t *testing.T, node string, key proxyline.Key, tport int) int {
+	t.Helper()
+	lport := freeTCPPort(t)
 	cmd := exec.Command(node, "-e", relayScript, "127.0.0.1", strconv.Itoa(lport), "127.0.0.1", strconv.Itoa(tport))
+	cmd.Env = relayScriptEnv(key.Hex(), true)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -665,14 +860,70 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-
 	want := fmt.Sprintf("listening 127.0.0.1:%d", lport)
 	line, err := bufio.NewReader(stdout).ReadString('\n')
 	if err != nil || strings.TrimSpace(line) != want {
 		t.Fatalf("relay stdout = %q, %v; want %q", line, err, want)
 	}
+	return lport
+}
+
+// A relay without a well-formed key must not start: it would forward
+// connections the listeners all refuse. It says why, on the line Ensure reads.
+func TestRelayScriptRefusesToStartWithoutAKey(t *testing.T) {
+	node := nodeOrSkip(t)
+	for name, env := range map[string][]string{
+		"unset":     relayScriptEnv("", false),
+		"empty":     relayScriptEnv("", true),
+		"malformed": relayScriptEnv("abc", true),
+		"uppercase": relayScriptEnv(strings.Repeat("A", 64), true),
+		"too long":  relayScriptEnv(strings.Repeat("a", 65), true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			lport, tport := freeTCPPort(t), freeTCPPort(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, node, "-e", relayScript, "127.0.0.1", strconv.Itoa(lport), "127.0.0.1", strconv.Itoa(tport))
+			cmd.Env = env
+			out, err := cmd.Output()
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+				t.Fatalf("exit = %v, want exit code 1 (stdout %q)", err, out)
+			}
+			if first, _, _ := strings.Cut(string(out), "\n"); first != "ERR KEY missing or malformed" {
+				t.Fatalf("first stdout line = %q, want %q", first, "ERR KEY missing or malformed")
+			}
+			if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), time.Second); err == nil {
+				c.Close()
+				t.Fatal("a relay with no key listens")
+			}
+		})
+	}
+}
+
+// Key line and PROXY line leave in one write (so one segment on loopback and
+// the key can never be separated from its header by a failure in between).
+func TestRelayScriptWritesTheKeyLineAndHeaderInOneWrite(t *testing.T) {
+	if n := strings.Count(relayScript, "u.write("); n != 1 {
+		t.Fatalf("the relay writes upstream in %d place(s) before piping, want exactly one", n)
+	}
+	if !strings.Contains(relayScript, `u.write(K+"PROXY TCP4 "`) {
+		t.Fatal("the upstream write does not put the key line K ahead of the PROXY line")
+	}
+}
+
+func TestRelayScriptSendsTheKeyThenTheProxyHeader(t *testing.T) {
+	node := nodeOrSkip(t)
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { target.Close() })
+	tport := target.Addr().(*net.TCPAddr).Port
+	lport := startRelayScript(t, node, relayTestKey, tport)
 
 	type result struct {
+		key      []byte
 		src, dst netip.AddrPort
 		body     string
 		err      error
@@ -687,6 +938,11 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 		defer c.Close()
 		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 		br := bufio.NewReader(c)
+		key := make([]byte, proxyline.PreambleLen)
+		if _, err := io.ReadFull(br, key); err != nil {
+			done <- result{err: err}
+			return
+		}
 		hdr, err := br.ReadBytes('\n')
 		if err != nil {
 			done <- result{err: err}
@@ -703,7 +959,7 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 			return
 		}
 		_, err = c.Write([]byte("pong"))
-		done <- result{src: src, dst: dst, body: string(body), err: err}
+		done <- result{key: key, src: src, dst: dst, body: string(body), err: err}
 	}()
 
 	cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
@@ -723,6 +979,9 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 	if r.err != nil {
 		t.Fatalf("target side: %v", r.err)
 	}
+	if !bytes.Equal(r.key, relayTestKey.Preamble()) {
+		t.Error("the first 81 bytes are not the key line (bytes not printed)")
+	}
 	if r.src.Addr() != netip.MustParseAddr("127.0.0.1") {
 		t.Errorf("header src = %v, want 127.0.0.1", r.src)
 	}
@@ -734,6 +993,142 @@ func TestRelayScriptSendsProxyHeader(t *testing.T) {
 	}
 	if r.body != "ping" {
 		t.Errorf("payload after header = %q, want ping", r.body)
+	}
+}
+
+// The real listener, not a hand-rolled parser, accepts what the script sends:
+// the key line then the PROXY line make the connection's RemoteAddr the
+// client's, a relay on another key is refused (and counted), and bytes a client
+// sends that look like a key line and a header are only payload.
+func TestRelayScriptIsAcceptedByProxyline(t *testing.T) {
+	node := nodeOrSkip(t)
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused atomic.Int32
+	target := proxyline.Wrap(raw, proxyline.Options{
+		Key:        relayTestKey,
+		Allow:      func(netip.Addr) bool { return true },
+		Timeout:    5 * time.Second,
+		KeyRefused: func() { refused.Add(1) },
+	})
+	t.Cleanup(func() { target.Close() })
+	tport := raw.Addr().(*net.TCPAddr).Port
+
+	type seen struct {
+		remote  string
+		payload string
+		err     error
+	}
+	var want atomic.Int32 // how many payload bytes the next accepted connection carries
+	conns := make(chan seen, 4)
+	go func() {
+		for {
+			c, err := target.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+				s := seen{remote: c.RemoteAddr().String()} // runs the handshake
+				buf := make([]byte, want.Load())
+				if _, err := io.ReadFull(c, buf); err != nil {
+					s.err = err
+					conns <- s
+					return
+				}
+				s.payload = string(buf)
+				_, s.err = c.Write([]byte("pong"))
+				conns <- s
+			}()
+		}
+	}()
+	next := func() seen {
+		t.Helper()
+		select {
+		case s := <-conns:
+			return s
+		case <-time.After(15 * time.Second):
+			t.Fatal("the target saw no connection")
+			return seen{}
+		}
+	}
+	dial := func(lport int) net.Conn {
+		t.Helper()
+		cl, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lport), 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cl.Close() })
+		_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
+		return cl
+	}
+	goodPort := startRelayScript(t, node, relayTestKey, tport)
+
+	// 1. The relay's own key: accepted, and the source is the client's.
+	want.Store(4)
+	cl := dial(goodPort)
+	if _, err := cl.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client reply = %q, %v; want pong", reply, err)
+	}
+	s := next()
+	if s.err != nil || s.payload != "ping" {
+		t.Fatalf("target saw payload %q, err %v; want ping", s.payload, s.err)
+	}
+	if want := cl.LocalAddr().String(); s.remote != want {
+		t.Errorf("RemoteAddr = %s, want the client's %s", s.remote, want)
+	}
+	if n := refused.Load(); n != 0 {
+		t.Errorf("%d refusal(s) counted for a relay with the right key", n)
+	}
+
+	// 2. A relay started with another key: no answer, and one refusal counted.
+	badPort := startRelayScript(t, node, otherRelayKey, tport)
+	cl = dial(badPort)
+	if _, err := cl.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	reply = make([]byte, 4)
+	if n, err := io.ReadFull(cl, reply); err == nil || string(reply[:n]) == "pong" {
+		t.Fatalf("a relay on the wrong key was answered: %q, %v", reply[:n], err)
+	}
+	if s := next(); s.err == nil {
+		t.Error("the target served a connection from a relay on the wrong key")
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("refusals counted = %d, want 1", n)
+	}
+
+	// 3. A client that sends its own key line and PROXY line through the right
+	// relay: still the client's address, and its bytes arrive as payload.
+	forged := string(otherRelayKey.Preamble()) + "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9072\r\n"
+	want.Store(int32(len(forged)))
+	cl = dial(goodPort)
+	if _, err := cl.Write([]byte(forged)); err != nil {
+		t.Fatal(err)
+	}
+	reply = make([]byte, 4)
+	if _, err := io.ReadFull(cl, reply); err != nil || string(reply) != "pong" {
+		t.Fatalf("client reply = %q, %v; want pong", reply, err)
+	}
+	s = next()
+	if s.err != nil {
+		t.Fatalf("target side: %v", s.err)
+	}
+	if want := cl.LocalAddr().String(); s.remote != want {
+		t.Errorf("RemoteAddr = %s, want the client's %s: a forged header was believed", s.remote, want)
+	}
+	if s.payload != forged {
+		t.Error("the forged bytes did not arrive as the payload, unchanged (bytes not printed)")
+	}
+	if n := refused.Load(); n != 1 {
+		t.Errorf("refusals counted = %d, want still 1", n)
 	}
 }
 
@@ -756,7 +1151,7 @@ func TestDarwinRelayReplacedWhenScriptChanges(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("relayScript appears %d times in the run argv", n)
 	}
-	if hashArgs(old) == r.configHash(gw) {
+	if hashWithKeyID(r, old) == r.configHash(gw) {
 		t.Fatal("the pre-#71 relay has the same config hash as the current one; it would not be replaced")
 	}
 }
