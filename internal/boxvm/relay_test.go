@@ -1832,6 +1832,87 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 	}
 }
 
+// boundNotListening holds a loopback TCP port with a socket that is bound and
+// never listens, and returns the port: a connect to it is refused, and nothing
+// else can bind it until the test ends, so no port is closed and bound again.
+func boundNotListening(t *testing.T) int {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Close(fd) })
+	if err := syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := sa.(*syscall.SockaddrInet4).Port
+	if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 2*time.Second); err == nil {
+		c.Close()
+		t.Fatal("setup: a bound socket that never listens accepted a connection")
+	} else if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("setup: dial = %v, want connection refused", err)
+	}
+	return port
+}
+
+// The most common real path: CuliBox is stopped, so the relay's dial is refused,
+// or something on the port accepts and closes at once. The box's connection ends
+// at once with nothing back, well before the relay's 5 s limit, the relay prints
+// nothing (startRelayScript checks its output when the test ends) and the same
+// relay serves the next good connection on its other port.
+func TestRelayScriptEndsTheBoxWhenTheUpstreamIsGone(t *testing.T) {
+	node := nodeOrSkip(t)
+	for name, upstream := range map[string]func(t *testing.T) int{
+		"refused": boundNotListening,
+		"accepts and closes": func(t *testing.T) int {
+			l := listenLoopback(t)
+			t.Cleanup(func() { l.Close() })
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					c.Close()
+				}
+			}()
+			return listenerPort(l)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			up := upstream(t)
+			var n atomic.Int32
+			gp, goodSeen, goodRefused := wrappedTarget(t, relayTestKey, listenLoopback(t), &n)
+			ports := startRelayScript(t, node, relayScript, relayTestKey, up, gp)
+
+			reply, elapsed := boxCall(t, ports[0], "ping")
+			if len(reply) != 0 {
+				t.Errorf("the box received %q, want nothing", reply)
+			}
+			if elapsed > 2*time.Second {
+				t.Errorf("the box call ended after %v, want at once, well before the relay's 5 s limit", elapsed)
+			}
+
+			n.Store(4)
+			reply, _ = boxCall(t, ports[1], "ping")
+			if string(reply) != "pong" {
+				t.Fatalf("after the gone upstream, a good call got %q, want pong", reply)
+			}
+			if s := nextSeen(t, goodSeen); s.err != nil || s.payload != "ping" {
+				t.Errorf("good target saw payload %q, err %v", s.payload, s.err)
+			}
+			if got := goodRefused.Load(); got != 0 {
+				t.Errorf("the good listener counted %d refusals, want 0", got)
+			}
+		})
+	}
+}
+
 // Each connection gets its own nonce: three calls to a peer that answers
 // nothing usable record three different hellos.
 func TestRelayScriptNoncesAreFresh(t *testing.T) {
