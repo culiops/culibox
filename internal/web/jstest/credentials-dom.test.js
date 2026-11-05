@@ -653,3 +653,37 @@ test("a frame that finds the body unmeasurable (the tab was hidden after the obs
   assert.ok(sameNodes(body.children, kept), "0 wide reads as tables, and must not flip a hidden tab");
   assert.strictEqual(p.shape().tables, 0);
 });
+
+// A repaint held for the unlock field is made when focus leaves it, but not over what was
+// typed there: clicking Unlock moves focus first (mousedown), and the repaint, running
+// before the click, wiped the passphrase and the button along with it.
+test("a repaint held for the unlock field does not wipe a passphrase typed while it was held", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  const field = body.querySelectorAll(".storepass")[0];
+  assert.ok(field, "the unlock form is painted");
+  p.box.storeUnlockFocused = () => true; // the user clicked into the field
+  p.resizeTo(500); // dragged the window across the threshold: the repaint is held
+  assert.ok(p.shape().tables > 0, "held");
+  field.value = "typed-passphrase";
+  p.box.storeUnlockFocused = () => false; // mousedown on Unlock: focus has left the field
+  const kept = body.children.slice();
+  p.box.credFocusLeft(); // the body's focusout, a tick later
+  assert.ok(sameNodes(body.children, kept), "the form and its Unlock button are still the ones on screen");
+  assert.strictEqual(field.value, "typed-passphrase");
+  field.value = ""; // submitted (the field is cleared on every attempt), or the user cleared it
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "nothing left to lose: the held repaint is made");
+});
+
+test("a repaint held for the unlock field is still made when nothing was typed", () => {
+  const p = livePage(900);
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  p.box.storeUnlockFocused = () => true;
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "held");
+  p.box.storeUnlockFocused = () => false;
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "focus left an empty field: repainted");
+});

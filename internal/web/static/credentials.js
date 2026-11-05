@@ -1323,11 +1323,17 @@ function credWireHeld(host) {
 }
 
 // credFocusLeft: focus left something in the body. A repaint held for the unlock
-// field is made now; otherwise a width repaint that was held back (see
-// credWidthHold) gets another look.
+// field is made now, unless something is typed there (credWidthHold): focus leaves
+// the field on the mousedown of the Unlock button, and a repaint before the click
+// would wipe the passphrase and the button with it. Otherwise a width repaint that
+// was held back gets another look.
 function credFocusLeft() {
-  if (credRepaintHeld && credView) renderCredentials(credView);
-  else credRepaintForWidth();
+  const host = document.getElementById("creds-body");
+  if (credRepaintHeld && credView) {
+    if (!host || !credWidthHold(host)) renderCredentials(credView);
+  } else {
+    credRepaintForWidth();
+  }
 }
 
 // credWidthHold: what a repaint for a new width must not replace. A Delete
