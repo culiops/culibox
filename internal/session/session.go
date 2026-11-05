@@ -1496,8 +1496,10 @@ type Manager struct {
 	// contextCheck is the on-disk check of one context path (existence,
 	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
 	// with context_paths is refused rather than mounted unchecked.
-	// It returns the path's host identity (box.CheckContextPathID; nil where
-	// no in-box comparison is made), read by the same walk that refused symlinks.
+	// It returns the path's host identity (box.CheckContextPathID), read by the
+	// same walk that refused symlinks. Nil on macOS: a Mac inode number is not
+	// the one the box sees, so the box layer reads the identity inside the VM
+	// instead (box.Mount.CheckID, box.Options.VMIDs).
 	contextCheck func(path string) (*box.FileID, error)
 
 	// boxedRecorder persists a workspace as box-written before a boxed Wrap
@@ -2269,8 +2271,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				// The identity the check's own no-symlink walk saw. Docker follows
 				// symlinks in a bind source, so a path or parent swapped after the
 				// check mounts something else; Wrap compares the identity inside the
-				// running box before the agent starts (nil off Linux: no comparison).
-				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: ids[i]})
+				// running box before the agent starts. On macOS the walk records none
+				// (ids[i] is nil): CheckID has the box layer read it inside the VM
+				// before the mount (box.Options.VMIDs) and compare the same way.
+				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: ids[i], CheckID: true})
 			}
 			key.Context = config.ContextHash(ctxPaths)
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
