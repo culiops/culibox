@@ -208,7 +208,9 @@ hands it to the relay container through its environment, never on a command
 line. Another user account on the same Mac therefore cannot write a header the
 proxy or the broker accepts, and a process that takes one of CuliBox's ports
 while CuliBox is stopped or restarting gets only the relay's random challenge:
-no header, no token and nothing a box sent.
+no header, no token and nothing a box sent. The handshake has been exercised on
+Linux, between the relay script and CuliBox's listener code, but not yet on a
+real Mac.
 
 This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
@@ -228,16 +230,18 @@ The handshake proofs bind the port, not the address. That is enough only while
 the box VM's host agent (lima, under colima) dials CuliBox at `127.0.0.1`. If it
 dialed another address, a process bound to that address could sit between the
 relay and CuliBox's listener, and the listener would answer the relay's
-challenge through it. Only protecting the stream after the handshake would
-close that, and this version does not. That the host agent dials `127.0.0.1` is
-inferred, not measured; the batched Mac test (row M26) checks it.
+challenge through it. Such a process would see the session tokens and the rest
+of the stream, and could alter it. Only protecting the stream after the
+handshake would close that, and this version does not. That the host agent dials
+`127.0.0.1` is inferred, and not yet measured on a Mac.
 
-Before this version, the box VM also let any container on its default Docker
-network (not the egress network) reach the broker's port directly, without the
-relay, and so write the header too. A VM set up before this version keeps that
-firewall rule until it is recreated: `agent-box doctor` fails "box VM
-firewall", and every boxed spawn is refused until you run
-`agent-box box setup -recreate`.
+An earlier version's firewall rule let any container on the box VM's default
+Docker network (not the egress network) reach the broker's port directly,
+without the relay. With the handshake such a container can still reach the port,
+but it cannot pass the handshake, so it cannot write a header the broker
+accepts. A VM set up before the broker fix keeps that firewall rule until it is
+recreated: `agent-box doctor` fails "box VM firewall", and every boxed spawn is
+refused until you run `agent-box box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -267,9 +271,10 @@ While CuliBox is not listening on its ports (stopped, restarting, or its
 listeners refused to start, for example because `relay2.secret` could not be
 loaded or a port could not be bound), boxes cannot reach the proxy or the
 broker, and whatever else holds those ports gets only the relay's challenge. If
-another process holds one of the ports, CuliBox's log says so and names the
-command that finds it (`lsof -nP -iTCP:<port> -sTCP:LISTEN`); the broker stays
-off until CuliBox restarts, and the proxy tries again at the next boxed spawn.
+another process holds one of the ports, CuliBox's log or the spawn refusal says
+so and names the command that finds it (`lsof -nP -iTCP:<port> -sTCP:LISTEN`);
+the broker stays off until CuliBox restarts, and the proxy tries again at the
+next boxed spawn.
 
 ### In-place guard
 
