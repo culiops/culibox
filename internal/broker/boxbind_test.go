@@ -359,3 +359,74 @@ func TestSharedSocketRefusesEveryRequest(t *testing.T) {
 		})
 	}
 }
+
+// Nothing is served over the shared socket, not even a route the broker does
+// not have: a box from before the per-box sockets gets the respawn message
+// whatever it asks for, and the row is still denied_box.
+func TestSharedSocketRefusesNonCredentialRoutesToo(t *testing.T) {
+	shared := func(ctx context.Context) context.Context { return withShared(ctx) }
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/"}, {http.MethodPost, "/"},
+		{http.MethodGet, "/v1/x"}, {http.MethodPost, "/v1/x"},
+		{http.MethodGet, "/v1/credentials"}, // the wrong method for a real route
+		{http.MethodDelete, "/v1/static/token"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			e := boxSetup(t, map[string]SessionView{"s": boxedSession()})
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r = r.WithContext(shared(r.Context()))
+			r.Header.Set("Authorization", "Bearer "+tokA("s"))
+			w := httptest.NewRecorder()
+			e.b.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusForbidden || errorText(t, w) != sharedSocketReply {
+				t.Fatalf("status %d body %s", w.Code, w.Body)
+			}
+			provider := ""
+			switch tc.path {
+			case "/v1/static/token":
+				provider = ProviderStatic
+			}
+			oneRow(t, e.rec, "s", OutcomeDeniedBox, provider, whySharedSocket)
+			if n := e.lookups.Load(); n != 0 || e.minted() != 0 {
+				t.Fatalf("lookups %d, credentials %d on the shared socket", n, e.minted())
+			}
+		})
+	}
+}
+
+// The box is the listener's, never the source address: a request on box A's
+// own socket that presents box B's token is refused even when a box source that
+// vouches for every address is installed (the macOS check must never widen
+// what a per-box socket decided), and the source is not even consulted.
+func TestPerBoxListenerWinsOverTheBoxSource(t *testing.T) {
+	for _, cp := range credPaths {
+		t.Run(cp.name, func(t *testing.T) {
+			src := &fakeBoxSource{ok: func(string, netip.Addr) bool { return true }}
+			e := boxSetup(t, map[string]SessionView{"s": boxedSession()})
+			e.b.SetBoxSource(src)
+			w := present(e.b, cp, tokA("s"), fromBox(otherBox)) // httptest's RemoteAddr parses: the source would say yes
+			if w.Code != http.StatusForbidden || errorText(t, w) != cp.uniform {
+				t.Fatalf("status %d body %s", w.Code, w.Body)
+			}
+			oneRow(t, e.rec, "s", OutcomeDeniedBox, cp.provider, whyOtherBox)
+			if got := src.calls(); len(got) != 0 {
+				t.Fatalf("the source was consulted for a request that arrived on a per-box socket: %v", got)
+			}
+			if n := e.minted(); n != 0 {
+				t.Fatalf("a credential was fetched (%d calls)", n)
+			}
+
+			// And the other way: the owning box's own socket is served even when
+			// the source says no to every address.
+			no := &fakeBoxSource{ok: func(string, netip.Addr) bool { return false }}
+			e2 := boxSetup(t, map[string]SessionView{"s": boxedSession()})
+			e2.b.SetBoxSource(no)
+			if w := present(e2.b, cp, tokA("s"), fromBox(ownBox)); w.Code != http.StatusOK {
+				t.Fatalf("the owning box's own socket: status %d: %s", w.Code, w.Body)
+			}
+			if got := no.calls(); len(got) != 0 {
+				t.Fatalf("the source was consulted on the owning box's socket: %v", got)
+			}
+		})
+	}
+}
