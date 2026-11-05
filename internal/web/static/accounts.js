@@ -452,7 +452,7 @@ async function acctTokenSave(a, inp, btn) {
     }
   }
   await loadAccounts(); // also re-reads the store, which is in use now
-  setAcctNote("Token saved for \"" + a.name + "\". New sessions under it use the token.");
+  setAcctNote("Token saved for \"" + a.name + "\". New sessions under it use the token. The quota meter can keep showing the old token's numbers while its sessions run, until that window resets.");
 }
 
 // acctTokenRemove unlinks the token and, when it is the account's own value,

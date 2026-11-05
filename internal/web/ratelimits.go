@@ -100,8 +100,14 @@ func rlAcctKey(name string) string { return "acct\x00" + name }
 // Known limit: the default account's remembered readings cannot be tied to a
 // credential. A host /login to another subscription is invisible to the daemon,
 // so the old subscription's readings stay until their window resets (at most 7
-// days) or the daemon restarts. A non-default account's are forgotten when it is
-// edited or deleted (forgetAccountQuota).
+// days) or the daemon restarts. A non-default account's are forgotten when its
+// token changes through the daemon, or it is deleted (accountTokenChanged), with a
+// cutoff that ignores older readings. That cannot cover: a session still running
+// on the OLD token (host or boxed) that renders again, which writes old-token
+// readings stamped after the cutoff; buckets copied forward in a reused box; and a
+// token change the daemon never sees (agent-box store set, a /login, an external
+// secret_sources rotation). The remembered maximum then holds the old number until
+// the old sessions stop and that window resets (a restart clears the in-memory part).
 var rlLastGood = struct {
 	mu   sync.Mutex
 	m    map[string]*rlEntry
