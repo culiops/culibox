@@ -120,6 +120,11 @@ func TestAcquireCreatesTheBoxsOwnSocket(t *testing.T) {
 	if want := (box.Mount{Host: filepath.Join(root, "broker", "b", "0123456789ab"), Box: SockBoxDir}); m != want {
 		t.Fatalf("mount = %+v, want %+v", m, want)
 	}
+	// The directory the box manager checks a box against is this one: both come
+	// from the same definition.
+	if m.Host != box.BrokerDir(root, bx) || m.Box != box.BrokerMountDest {
+		t.Fatalf("mount %+v is not what the box manager expects: %s at %s", m, box.BrokerDir(root, bx), box.BrokerMountDest)
+	}
 	sock := perBoxSock(root, bx)
 	if fi, err := os.Stat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("socket %v %v", fi, err)

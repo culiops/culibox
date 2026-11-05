@@ -31,7 +31,7 @@ const (
 	// The per-box layout is <stateRoot>/broker/b/<12 hex>/s: as short as the
 	// shared socket's path (also 24 bytes after the state root), so a state root
 	// that worked before the per-box sockets still works.
-	boxesRel    = "broker/b"
+	boxesRel    = box.BrokerDirRel
 	boxSockName = "s"
 )
 

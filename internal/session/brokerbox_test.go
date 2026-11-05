@@ -95,8 +95,15 @@ func TestBoundSpawnNamesItsBoxBeforeTheBrokerMount(t *testing.T) {
 				t.Fatalf("call order %v: want boxname < boxfor < acquire < wrap", got)
 			}
 			// The name was asked about the SAME key Wrap got: complete before the name.
-			if !reflect.DeepEqual(boxes.nameKey, boxes.lastKey) {
-				t.Fatalf("BoxName was asked about %+v but Wrap got %+v", boxes.nameKey, boxes.lastKey)
+			// Wrap's key also carries the name the broker mount was prepared for, so
+			// Wrap can refuse to create any other box with it.
+			if boxes.lastKey.Expect != "ab-box-test" {
+				t.Fatalf("Wrap's key Expect = %q, want the planned box ab-box-test", boxes.lastKey.Expect)
+			}
+			wrapKey := boxes.lastKey
+			wrapKey.Expect = ""
+			if !reflect.DeepEqual(boxes.nameKey, wrapKey) {
+				t.Fatalf("BoxName was asked about %+v but Wrap got %+v", boxes.nameKey, wrapKey)
 			}
 			tc.check(t, boxes.nameKey, s.ID)
 			if acq, _, rel := hooks.boxSockets(); !slices.Equal(acq, []string{"ab-box-test"}) || len(rel) != 0 {

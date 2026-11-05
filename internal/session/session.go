@@ -2184,6 +2184,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			if plannedBox, nerr = boxes.BoxName(spec.Cwd, key); nerr != nil {
 				return nil, fmt.Errorf("spawn %s: naming its box: %w", spec.Agent, nerr)
 			}
+			// Wrap computes the name again from the workspace path. It is told this
+			// one, and refuses before it creates anything if the two differ (a
+			// symlink on the path flipped in between): a box made with the mounts
+			// prepared for another box would be taken for that box.
+			key.Expect = plannedBox
 			if bs.GitHub != nil {
 				// Doctor-style and secret-free, so its message can be shown as is.
 				if err := brk.CheckGitHub(*bs.GitHub); err != nil {

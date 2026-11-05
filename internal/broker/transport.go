@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/netlimit"
 	"github.com/culiops/culibox/internal/proxyline"
@@ -18,7 +19,7 @@ import (
 // is what stops a box from before the change from being reused silently for a
 // new bound spawn (an idle one is recreated, a live one refuses the spawn and
 // names the missing mount).
-const SockBoxDir = "/opt/agentbox-broker"
+const SockBoxDir = box.BrokerMountDest
 
 // proxyHeaderTimeout bounds how long a darwin connection may take to send its
 // PROXY line; the relay writes it before any other byte.
