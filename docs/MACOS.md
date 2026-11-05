@@ -272,7 +272,8 @@ listeners refused to start, for example because `relay2.secret` could not be
 loaded or a port could not be bound), boxes cannot reach the proxy or the
 broker, and whatever else holds those ports gets only the relay's challenge. If
 another process holds one of the ports, CuliBox's log or the spawn refusal says
-so and names the command that finds it (`lsof -nP -iTCP:<port> -sTCP:LISTEN`);
+so and names the command that finds it (`sudo lsof -nP -iTCP:<port> -sTCP:LISTEN`;
+without `sudo`, `lsof` does not list another account's process);
 the broker stays off until CuliBox restarts, and the proxy tries again at the
 next boxed spawn.
 

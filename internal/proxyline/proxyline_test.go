@@ -596,7 +596,7 @@ func TestExplainBindError(t *testing.T) {
 	for _, want := range []string{
 		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
 		"gets nothing from the boxes",
-		fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+		fmt.Sprintf("sudo lsof -nP -iTCP:%d -sTCP:LISTEN", port),
 		bindErr.Error(),
 	} {
 		if !strings.Contains(got.Error(), want) {

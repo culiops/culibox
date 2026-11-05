@@ -606,7 +606,7 @@ func TestListenDarwinNamesAProcessOnItsPort(t *testing.T) {
 	}
 	for _, want := range []string{
 		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
-		fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+		fmt.Sprintf("sudo lsof -nP -iTCP:%d -sTCP:LISTEN", port),
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q: %v", want, err)
