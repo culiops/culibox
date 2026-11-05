@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput } = require("../static/peek.js");
+const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput, optinChecked } = require("../static/peek.js");
 
 test("peekState distinguishes the empty cases", () => {
   // 200 with text: normal
@@ -83,20 +83,48 @@ test("sendState: a waiting session the server is not ready for says it is finish
 test("sheetGateInput: the poll's live copy wins over the copy the sheet opened with", () => {
   const opened = { id: "a", replyable: false, activity: "waiting", need: "turn", reply_ready: false };
   const live = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
-  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }, live], opened, false)), { enabled: true, reason: "" });
+  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }, live], opened, false, true)), { enabled: true, reason: "" });
 });
 
-test("sheetGateInput: falls back to the opened copy when the list does not have the session", () => {
+test("sheetGateInput: before the list has ever loaded, the opened copy decides", () => {
   const opened = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: false };
-  assert.deepEqual(sheetGateInput([], opened, false),
+  assert.deepEqual(sheetGateInput([], opened, false, false),
     { replyable: true, activity: "waiting", pending: false, need: "turn", reply_ready: false });
 });
 
-test("sheetGateInput: pending is the /peek flag or an ask", () => {
+test("sheetGateInput: a loaded list without the session closes the gate as ended", () => {
+  const opened = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }], opened, false, true)),
+    { enabled: false, reason: "Session has ended — there is nothing listening." });
+  assert.deepEqual(sendState(sheetGateInput([], { ...opened, replyable: false }, false, true)),
+    { enabled: false, reason: "Session has ended — there is nothing listening." }, "ended, not 'enable replies'");
+});
+
+test("sheetGateInput: pending is the /peek flag or an ask (an older server without reply_ready)", () => {
   const s = { id: "a", replyable: true, activity: "waiting", need: "turn" };
-  assert.strictEqual(sheetGateInput([s], s, true).pending, true);
-  assert.strictEqual(sheetGateInput([{ ...s, need: "ask" }], s, false).pending, true);
-  assert.strictEqual(sheetGateInput([s], s, false).pending, false);
+  assert.strictEqual(sheetGateInput([s], s, true, true).pending, true);
+  assert.strictEqual(sheetGateInput([{ ...s, need: "ask" }], s, false, true).pending, true);
+  assert.strictEqual(sheetGateInput([s], s, false, true).pending, false);
+});
+
+test("sheetGateInput: with reply_ready the /peek flag frozen at open no longer closes the gate", () => {
+  // The server's reply_ready already includes the pending check (replyGate):
+  // a tool call that ended after the sheet opened must not keep Send shut.
+  const live = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([live], live, true, true)), { enabled: true, reason: "" });
+  // An ask is still pending whatever reply_ready says.
+  assert.strictEqual(sheetGateInput([{ ...live, need: "ask" }], live, false, true).pending, true);
+});
+
+// The sheet's "Enable replies" box follows the server's replyable from the
+// poll (another tab or device can change it), except while its own POST is in
+// flight, when the operator's tick stands.
+test("optinChecked: follows the live replyable unless an opt-in POST is in flight", () => {
+  const s = { id: "a" };
+  assert.strictEqual(optinChecked([{ id: "a", replyable: true }], s, false, false), true);
+  assert.strictEqual(optinChecked([{ id: "a", replyable: false }], s, false, true), false);
+  assert.strictEqual(optinChecked([{ id: "a", replyable: false }], s, true, true), true, "in flight: keep the tick");
+  assert.strictEqual(optinChecked([], s, false, true), true, "not listed: leave it");
 });
 
 test("sendState: a refusal that is not a finishing turn gets neutral words, never 'try again'", () => {

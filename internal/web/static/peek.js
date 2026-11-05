@@ -87,12 +87,29 @@ function sendState(s) {
 
 // sheetGateInput: sendState's input for a reply control that outlives one poll
 // (the mobile reply sheet). It reads the poll's live copy of the session from
-// `list` when there is one, else `s`, the copy the control was opened with —
-// a frozen copy keeps Send shut after reply_ready or an opt-in turns true.
-// pending is the /peek flag; an ask is pending too.
-function sheetGateInput(list, s, pending) {
-  const v = (Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null) || s || {};
-  return { replyable: v.replyable, activity: v.activity, pending: !!pending || v.need === "ask", need: v.need, reply_ready: v.reply_ready };
+// `list` — a frozen copy keeps Send shut after reply_ready or an opt-in turns
+// true. Before the list has ever loaded (`loaded` false) `s`, the copy the
+// control was opened with, decides; once it has, a session missing from it is
+// gone and the gate closes as ended. pending is the /peek flag, frozen when
+// the sheet fetched it, so it counts only without reply_ready: the server's
+// verdict already includes the pending check. An ask is pending either way.
+function sheetGateInput(list, s, pending, loaded) {
+  const live = Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null;
+  if (!live && loaded) return { replyable: true, activity: "done", pending: false, need: "", reply_ready: false };
+  const v = live || s || {};
+  return {
+    replyable: v.replyable, activity: v.activity, need: v.need, reply_ready: v.reply_ready,
+    pending: (typeof v.reply_ready === "boolean" ? false : !!pending) || v.need === "ask",
+  };
+}
+
+// optinChecked: what the reply sheet's "Enable replies" box shows on a poll
+// repaint — the live replyable from `list` (another tab or device can change
+// it), unless its own opt-in POST is in flight (`busy`), when the operator's
+// tick stands. A session the list does not have leaves `checked` as it is.
+function optinChecked(list, s, busy, checked) {
+  const live = !busy && Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null;
+  return live ? !!live.replyable : !!checked;
 }
 
 // notWaitingReason phrases a non-waiting activity. Branching matters: "wait
@@ -126,5 +143,5 @@ function offerEnableReplies(s) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput };
+  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput, optinChecked };
 }

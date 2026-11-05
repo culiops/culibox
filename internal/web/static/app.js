@@ -5973,6 +5973,7 @@ function openReplySheet(s) {
     const repliesOn = globalThis.repliesEnabled === true;
     const qkButtons = [];
     let ta = null, send = null, note = null, optin = null, qk = null;
+    let optinCb = null, optinBusy = false; // the opt-in box, and whether its POST is in flight
 
     // Enable-replies toggle (I1 regression fix). Replyable defaults false and
     // the ONLY control that grants it is this checkbox — pre-5c it lived in
@@ -5993,9 +5994,11 @@ function openReplySheet(s) {
       const optinText = document.createElement("span");
       optinText.textContent = "Enable replies for this session";
       optin.append(cb, optinText);
+      optinCb = cb;
       cb.onchange = async () => {
         const want = cb.checked;
         let changed = false;
+        optinBusy = true;
         try {
           const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
             method: "POST",
@@ -6011,7 +6014,7 @@ function openReplySheet(s) {
         }
         // refresh() gates on the poll's copy (sheetGateInput): fetch it now so
         // the new replyable and the server's reply_ready land before it runs.
-        if (changed) await refreshSessions();
+        try { if (changed) await refreshSessions(); } finally { optinBusy = false; }
         refresh();
       };
 
@@ -6074,7 +6077,7 @@ function openReplySheet(s) {
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
       if (!repliesOn) return; // read-only sheet: no Send, quick replies or caption to paint
-      const st = sendState(sheetGateInput(lastSessions, s, pendingNow));
+      const st = sendState(sheetGateInput(lastSessions, s, pendingNow, sessionsLoaded));
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
       // The quick replies are controls too — a session that is not
@@ -6108,7 +6111,7 @@ function openReplySheet(s) {
     // blocks a second one from the sheet too.
     function doSend(text) {
       if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-      const st = sendState(sheetGateInput(lastSessions, s, pendingNow));
+      const st = sendState(sheetGateInput(lastSessions, s, pendingNow, sessionsLoaded));
       if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
       pendingSends.add(s.id);
       send.disabled = true;
@@ -6131,6 +6134,7 @@ function openReplySheet(s) {
     repaintReplySheet = () => {
       const dlg = document.getElementById("sheet-modal");
       if (!dlg || !dlg.open || !box.isConnected) { repaintReplySheet = null; return; }
+      if (optinCb) optinCb.checked = optinChecked(lastSessions, s, optinBusy, optinCb.checked);
       refresh();
     };
 
