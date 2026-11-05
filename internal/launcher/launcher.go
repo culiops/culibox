@@ -193,8 +193,9 @@ type accountRefresher interface {
 }
 
 var (
-	// ErrCodexAccount: codex accounts validate and are stored, but cannot spawn yet.
-	ErrCodexAccount = errors.New("codex accounts are not supported yet")
+	// ErrCodexAccount: codex accounts validate and are stored, so old configs
+	// still load, but never spawn: Codex support is dropped (#89).
+	ErrCodexAccount = errors.New("codex accounts are not supported")
 	// ErrAccountConflict wraps every refusal to mix an account with a profile
 	// that would carry another login's credentials. Safe to show the caller.
 	ErrAccountConflict = errors.New("account conflict")

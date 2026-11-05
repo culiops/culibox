@@ -441,3 +441,11 @@ func TestBuild_BoxedSpawnDoesNotRefreshTheAccount(t *testing.T) {
 		t.Fatalf("a boxed spawn refreshed the host-side account dir: %v", ra.refreshed)
 	}
 }
+
+// Codex support is dropped (#89), so the refusal states a fact and promises
+// nothing ("not supported yet" read as a plan).
+func TestErrCodexAccountPromisesNothing(t *testing.T) {
+	if got, want := ErrCodexAccount.Error(), "codex accounts are not supported"; got != want {
+		t.Fatalf("ErrCodexAccount = %q, want %q", got, want)
+	}
+}

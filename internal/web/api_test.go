@@ -131,7 +131,7 @@ func TestAPI_SpawnAccountRefusalsAreShown(t *testing.T) {
 		err  error
 		want string
 	}{
-		{launcher.ErrCodexAccount, "codex accounts are not supported yet"},
+		{launcher.ErrCodexAccount, "codex accounts are not supported"},
 		{fmt.Errorf("%w %q", account.ErrUnknown, "ghost"), `unknown account "ghost"`},
 		{fmt.Errorf("%w: profile %q carries secret X", launcher.ErrAccountConflict, "p"), "account conflict: profile \"p\" carries secret X"},
 	}
