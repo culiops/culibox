@@ -540,7 +540,8 @@ class TerminalTab {
   // an accepted write spends the gesture, so one drag or Ctrl+C buys one copy.
   // Every copy is announced: the toast is how a user notices a write they did
   // not expect. Drops are silent on screen (an agent must not be able to spam
-  // toasts) and logged once per tab.
+  // toasts) and logged once per tab, except "format", which spends the gesture
+  // and shows one warning.
   onOsc52(data) {
     const v = osc52Decision(data, {
       now: Date.now(),
@@ -601,6 +602,8 @@ class TerminalTab {
       if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.term.focus();
     };
     ws.onmessage = (ev) => {
+      // Like onclose: only the current socket is this tab's output.
+      if (this.ws !== ws) return;
       const data = typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data);
       if (this.holdForReplay(rp, data)) this.term.write(data, () => { rp.hold--; });
       else this.term.write(data);
@@ -962,19 +965,22 @@ function osc52SelectHint() {
 // paste can hide a command behind:
 //   - a CR that is not half of a CRLF: it returns the cursor to column 0 of
 //     the shell it is pasted into, so what follows overwrites what was shown
-//   - any Unicode format character (\p{Cf}), which draws nothing or reorders
-//     what is drawn: the bidi embeddings and overrides U+202A-202E, the isolates
-//     U+2066-2069, zero-width space/non-joiner/joiner U+200B-200D, word joiner
-//     U+2060, BOM U+FEFF, and also LRM/RLM U+200E/200F and ALM U+061C (they
-//     reorder neighbouring punctuation the same way an embedding does), plus
-//     soft hyphen, the invisible math operators and tag characters, which hide
-//     text the same way. The category is used instead of a list because the
-//     threat is "invisible", which is what Cf means, so a character added to
-//     Unicode later is covered too.
+//   - any Unicode format character (general category Cf): the bidi embeddings
+//     and overrides U+202A-202E, the isolates U+2066-2069, LRM/RLM U+200E/200F
+//     and ALM U+061C (they reorder neighbouring punctuation the way an embedding
+//     does), zero-width space/non-joiner/joiner U+200B-200D, word joiner U+2060,
+//     BOM U+FEFF, soft hyphen, the invisible math operators and the tag
+//     characters. This is the category, not "everything invisible": it still
+//     lets through what Unicode files elsewhere (variation selectors, U+034F,
+//     U+180B-180D, the Hangul fillers) and it also refuses a few visible Cf
+//     marks (the Arabic number signs from U+0600). The category is used instead
+//     of a list so a format character added to Unicode later is covered too.
+//   - the line and paragraph separators U+2028 and U+2029 (category Zl and Zp):
+//     a renderer may break a line there that a shell does not
 // Cost, accepted: emoji ZWJ sequences (a family, a profession) and the tag
 // flags are refused as a whole. Shift+drag (Option+drag on macOS) still copies
 // them: that is the user's own selection, which this screen does not touch.
-const OSC52_FORMAT = /\r(?!\n)|\p{Cf}/u;
+const OSC52_FORMAT = /\r(?!\n)|[\p{Cf}\u2028\u2029]/u;
 
 // osc52Lines counts the lines in a copied text, for the toast. A trailing line
 // break ends the last line instead of starting an empty one, so a selection that
@@ -998,8 +1004,9 @@ function osc52Lines(text) {
 // are not UTF-8. Text with control characters other than tab and line breaks is
 // refused: a selection off a screen never has them, and ESC is how a pasted
 // payload breaks out of bracketed paste in a terminal that does not filter it.
-// Text with a lone CR or an invisible format character (OSC52_FORMAT) is refused
-// too, as "format": the one refusal the page shows, and only after the gate.
+// Text with a lone CR, a Unicode format character or a line/paragraph separator
+// (OSC52_FORMAT) is refused too, as "format": the one refusal the page shows,
+// and only after the gate.
 // The gate runs before decoding, so a flood of writes costs a comparison each.
 function osc52Decision(data, st) {
   const i = data.indexOf(";");

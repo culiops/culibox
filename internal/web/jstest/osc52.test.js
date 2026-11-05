@@ -107,7 +107,7 @@ test("a write carrying control characters is dropped", () => {
 
 // A selection taken off a terminal screen is cells of printable characters and
 // line breaks. A CR that is not half of a CRLF returns the cursor to column 0 of
-// the shell it is pasted into, and the invisible format characters (bidi
+// the shell it is pasted into, and the Unicode format characters (bidi
 // overrides and isolates, zero-width joiners) change what a line looks like
 // without changing what runs. A paste into a shell without bracketed paste can
 // then carry a command the user never saw, so these are refused whole.
@@ -126,6 +126,15 @@ test("a write with a bidi or zero-width format character is refused as format", 
   ];
   for (const cp of cps) {
     const s = "echo ok " + String.fromCodePoint(cp) + "# hidden";
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, "U+" + cp.toString(16));
+  }
+});
+
+// U+2028 and U+2029 are line breaks to a renderer that honours them and nothing
+// to a shell: a pasted line can look split while the shell sees one line.
+test("a line or paragraph separator is refused as format", () => {
+  for (const cp of [0x2028, 0x2029]) {
+    const s = "echo ok" + String.fromCodePoint(cp) + "rm -rf ~";
     assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, "U+" + cp.toString(16));
   }
 });
@@ -534,6 +543,44 @@ test("a stale parse callback from an earlier connection does not release the new
     r.click();
     assert.strictEqual(r.tab.gestureAt, 0);
     r.done();                     // the second one
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// The press, not only the release, checks the hold: a press made during the
+// replay whose release lands after the replay was parsed must not arm either
+// (the user pressed while the screen was still the old output).
+test("a press made during the replay cannot arm on a release after it was parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52(mouse());      // press while the replay is queued
+    r.done();                     // the replay is parsed
+    for (const [type, fn] of [...r.listeners]) if (type === "mouseup") fn();
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+// connect() replaces the socket, but the old one can still deliver a frame it
+// had already received. It is not this connection's output: it must not be
+// written, and it must not take the place of the first frame (the replay).
+test("a frame from a replaced socket is not written and does not touch the new hold", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    const old = r.tab.ws;
+    r.tab.connect();
+    old.onmessage(r.frame("\x1bc" + "stale frame"));
+    assert.strictEqual(r.queue.length, 0, "the stale frame was written");
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.ws.onmessage(r.frame("the real ring"));
+    assert.strictEqual(r.queue.length, 1);
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "the new replay is still being parsed");
+    r.done();
     r.click();
     assert.ok(r.tab.gestureAt > 0);
   } finally { r.cleanup(); }
