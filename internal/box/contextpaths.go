@@ -89,9 +89,11 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Moun
 // ctxIdentityFailed is the refusal when the box VM could not give the identity
 // of the context mounts at paths: the same ErrContextMountChanged family, so
 // the session and web layers show it like the other context refusals. The
-// reason (VM output only, never a path byte) says whether a path is a symlink,
-// is missing or the VM did not answer. The refusal names every path of the
-// batch: the VM read them together.
+// reason is the VM read's own error: fixed messages that name a position, never
+// a path, saying whether a path is a symlink, is missing or the VM did not
+// answer (plus, when the exec itself failed, the first line colima printed,
+// passed through as it came). The refusal names every path of the batch: the
+// VM read them together.
 func ctxIdentityFailed(paths []string, err error) error {
 	return &ctxMountError{ctxPathError{"context_paths " + strings.Join(paths, ", ") +
 		": the box VM could not confirm the path (" + err.Error() + "); refusing"}}
