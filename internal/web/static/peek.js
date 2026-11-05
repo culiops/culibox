@@ -63,12 +63,53 @@ function sendState(s) {
   if (s.pending) {
     return { enabled: false, reason: "Session is inside a tool call. Open the tab to answer it." };
   }
+  // reply_ready is the server's own SendMessage verdict (List): when present it
+  // decides. The dot can read waiting (the agent's status says the turn ended)
+  // a few seconds before the server takes a reply (its screen is still
+  // settling), and a background shell reads working while the agent takes one.
+  // An older server does not send it; the activity decides there, as before.
+  if (typeof s.reply_ready === "boolean") {
+    if (s.reply_ready) return { enabled: true, reason: "" };
+    if (s.activity !== "waiting") return { enabled: false, reason: notWaitingReason(s.activity) };
+    // need "turn" means the server read the transcript, so the refusal is the
+    // short settle after a turn. Anything else (an unreadable transcript is
+    // permanent, or the caller does not say) gets words that promise nothing.
+    if (s.need === "turn") return { enabled: false, reason: "Session is finishing its turn — try again in a moment." };
+    return { enabled: false, reason: "Session is not ready for a message right now." };
+  }
   // Not needsYou on purpose: a send is only accepted while the agent itself is
   // waiting (the server's canReply), and an expired sign-in does not change that.
   if (s.activity !== "waiting") {
     return { enabled: false, reason: notWaitingReason(s.activity) };
   }
   return { enabled: true, reason: "" };
+}
+
+// sheetGateInput: sendState's input for a reply control that outlives one poll
+// (the mobile reply sheet). It reads the poll's live copy of the session from
+// `list` — a frozen copy keeps Send shut after reply_ready or an opt-in turns
+// true. Before the list has ever loaded (`loaded` false) `s`, the copy the
+// control was opened with, decides; once it has, a session missing from it is
+// gone and the gate closes as ended. pending is the /peek flag, frozen when
+// the sheet fetched it, so it counts only without reply_ready: the server's
+// verdict already includes the pending check. An ask is pending either way.
+function sheetGateInput(list, s, pending, loaded) {
+  const live = Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null;
+  if (!live && loaded) return { replyable: true, activity: "done", pending: false, need: "", reply_ready: false };
+  const v = live || s || {};
+  return {
+    replyable: v.replyable, activity: v.activity, need: v.need, reply_ready: v.reply_ready,
+    pending: (typeof v.reply_ready === "boolean" ? false : !!pending) || v.need === "ask",
+  };
+}
+
+// optinChecked: what the reply sheet's "Enable replies" box shows on a poll
+// repaint — the live replyable from `list` (another tab or device can change
+// it), unless its own opt-in POST is in flight (`busy`), when the operator's
+// tick stands. A session the list does not have leaves `checked` as it is.
+function optinChecked(list, s, busy, checked) {
+  const live = !busy && Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null;
+  return live ? !!live.replyable : !!checked;
 }
 
 // notWaitingReason phrases a non-waiting activity. Branching matters: "wait
@@ -102,5 +143,5 @@ function offerEnableReplies(s) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies };
+  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput, optinChecked };
 }

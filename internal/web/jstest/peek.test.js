@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies } = require("../static/peek.js");
+const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput, optinChecked } = require("../static/peek.js");
 
 test("peekState distinguishes the empty cases", () => {
   // 200 with text: normal
@@ -67,6 +67,92 @@ test("sendState reports pending before activity, matching canReply", () => {
   const st = sendState({ replyable: true, activity: "working", pending: true });
   assert.equal(st.enabled, false);
   assert.equal(st.reason, "Session is inside a tool call. Open the tab to answer it.");
+});
+
+// reply_ready is the server's own SendMessage verdict (List). When present it
+// decides, so the control never offers a send the server refuses nor blocks
+// one it accepts; an older server that does not send it keeps today's gate.
+test("sendState: a waiting session the server is not ready for says it is finishing its turn", () => {
+  const st = sendState({ replyable: true, activity: "waiting", pending: false, need: "turn", reply_ready: false });
+  assert.deepEqual(st, { enabled: false, reason: "Session is finishing its turn — try again in a moment." });
+});
+
+// The mobile reply sheet outlives many polls: it must gate on the poll's live
+// copy of the session, not the copy it was opened with, or Send stays shut
+// after reply_ready (or an opt-in) turns true until the sheet is reopened.
+test("sheetGateInput: the poll's live copy wins over the copy the sheet opened with", () => {
+  const opened = { id: "a", replyable: false, activity: "waiting", need: "turn", reply_ready: false };
+  const live = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }, live], opened, false, true)), { enabled: true, reason: "" });
+});
+
+test("sheetGateInput: before the list has ever loaded, the opened copy decides", () => {
+  const opened = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: false };
+  assert.deepEqual(sheetGateInput([], opened, false, false),
+    { replyable: true, activity: "waiting", pending: false, need: "turn", reply_ready: false });
+});
+
+test("sheetGateInput: a loaded list without the session closes the gate as ended", () => {
+  const opened = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }], opened, false, true)),
+    { enabled: false, reason: "Session has ended — there is nothing listening." });
+  assert.deepEqual(sendState(sheetGateInput([], { ...opened, replyable: false }, false, true)),
+    { enabled: false, reason: "Session has ended — there is nothing listening." }, "ended, not 'enable replies'");
+});
+
+test("sheetGateInput: pending is the /peek flag or an ask (an older server without reply_ready)", () => {
+  const s = { id: "a", replyable: true, activity: "waiting", need: "turn" };
+  assert.strictEqual(sheetGateInput([s], s, true, true).pending, true);
+  assert.strictEqual(sheetGateInput([{ ...s, need: "ask" }], s, false, true).pending, true);
+  assert.strictEqual(sheetGateInput([s], s, false, true).pending, false);
+});
+
+test("sheetGateInput: with reply_ready the /peek flag frozen at open no longer closes the gate", () => {
+  // The server's reply_ready already includes the pending check (replyGate):
+  // a tool call that ended after the sheet opened must not keep Send shut.
+  const live = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([live], live, true, true)), { enabled: true, reason: "" });
+  // An ask is still pending whatever reply_ready says.
+  assert.strictEqual(sheetGateInput([{ ...live, need: "ask" }], live, false, true).pending, true);
+});
+
+// The sheet's "Enable replies" box follows the server's replyable from the
+// poll (another tab or device can change it), except while its own POST is in
+// flight, when the operator's tick stands.
+test("optinChecked: follows the live replyable unless an opt-in POST is in flight", () => {
+  const s = { id: "a" };
+  assert.strictEqual(optinChecked([{ id: "a", replyable: true }], s, false, false), true);
+  assert.strictEqual(optinChecked([{ id: "a", replyable: false }], s, false, true), false);
+  assert.strictEqual(optinChecked([{ id: "a", replyable: false }], s, true, true), true, "in flight: keep the tick");
+  assert.strictEqual(optinChecked([], s, false, true), true, "not listed: leave it");
+});
+
+test("sendState: a refusal that is not a finishing turn gets neutral words, never 'try again'", () => {
+  // need "turn" is the server saying it read the transcript: without it (an
+  // unreadable transcript is a permanent refusal) or unknown, do not promise.
+  for (const need of ["", undefined, "sso"]) {
+    assert.deepEqual(sendState({ replyable: true, activity: "waiting", pending: false, need, reply_ready: false }),
+      { enabled: false, reason: "Session is not ready for a message right now." }, String(need));
+  }
+});
+
+test("sendState: the server's ready verdict opens a session the dot shows working (background shell)", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "working", pending: false, reply_ready: true }), { enabled: true, reason: "" });
+});
+
+test("sendState: a working session the server refuses keeps the activity's own words", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "working", pending: false, reply_ready: false }),
+    { enabled: false, reason: "Session is working — wait until it stops." });
+});
+
+test("sendState: opt-in and pending still come first whatever reply_ready says", () => {
+  assert.equal(sendState({ replyable: false, activity: "waiting", reply_ready: true }).reason, "Enable replies for this session first.");
+  assert.equal(sendState({ replyable: true, activity: "waiting", pending: true, reply_ready: true }).enabled, false);
+});
+
+test("sendState: without reply_ready (an older server) the activity decides, as before", () => {
+  assert.deepEqual(sendState({ replyable: true, activity: "waiting", pending: false }), { enabled: true, reason: "" });
+  assert.equal(sendState({ replyable: true, activity: "working", pending: false }).enabled, false);
 });
 
 test("notWaitingReason does not tell a dead session to keep working", () => {

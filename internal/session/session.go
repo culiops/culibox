@@ -95,6 +95,17 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 	return "idle"
 }
 
+// quietActivity is what Info's activity would read for this live session once
+// its PTY has gone silent ("waiting" for an agent given a turn, else "idle"),
+// and how long the PTY has been silent. regActivity uses the first when the
+// registry says the turn has ended, the second to distrust a stale busy.
+func (s *Session) quietActivity() (string, time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	return activityOf(false, false, 0, time.Time{}, now, idleThreshold, s.agentKind, s.submitted), now.Sub(s.lastActivityAt)
+}
+
 // recordActivity reports whether output observed at `now` should count as agent
 // activity: it does, unless `now` is still at or inside the muted window set by a
 // control-action repaint (see muteActivity).
@@ -115,6 +126,58 @@ func (s *Session) noteOutput(now time.Time) {
 // Caller holds s.mu.
 func (s *Session) muteActivity(now time.Time) {
 	s.activityMutedUntil = now.Add(attachRepaintGrace)
+}
+
+// inputMuteMax is the input-mute budget per idleThreshold window: viewer input
+// may keep activity muted for at most this long in each window, so at least
+// 7 s of every 10 s is unmuted and real work on the PTY fallback always shows,
+// however the input is spaced (a per-run cap let input every 1.01 s mute ~99%
+// of the time, since each write just past the grace began a new run).
+const inputMuteMax = 3 * time.Second
+
+// noteInput mutes activity for viewer input written at now (see Write): up to
+// attachRepaintGrace past now, drawn from the current window's budget. The
+// window starts at the first input after the previous one ended and lasts
+// idleThreshold; a pause does not refill it. It never shortens a longer mute
+// already set by a resize or forced redraw.
+//
+// A write holding '\r' or '\n' is a submitted line, not an echo: it mutes
+// nothing and ends the mute its keystrokes started (and any resize mute, which
+// at worst reads as work just as the agent starts some), so the line's echo
+// and the agent's start of work count. That also makes a second SendMessage
+// right after see "working". Caller holds s.mu.
+func (s *Session) noteInput(now time.Time, p []byte) {
+	if bytes.ContainsAny(p, "\r\n") {
+		s.endInputMute()
+		return
+	}
+	if now.Sub(s.inputBudgetStart) >= idleThreshold {
+		s.inputBudgetStart, s.inputMuteUsed = now, 0
+	}
+	from := now
+	if s.inputMuteUntil.After(from) {
+		from = s.inputMuteUntil // already muted up to here: only the extension costs budget
+	}
+	grant := now.Add(attachRepaintGrace).Sub(from)
+	if left := inputMuteMax - s.inputMuteUsed; grant > left {
+		grant = left
+	}
+	if grant <= 0 {
+		return
+	}
+	s.inputMuteUsed += grant
+	s.inputMuteUntil = from.Add(grant)
+	if s.inputMuteUntil.After(s.activityMutedUntil) {
+		s.activityMutedUntil = s.inputMuteUntil
+	}
+}
+
+// endInputMute ends any activity mute now (a submitted line or a control
+// action: what follows is the agent's reaction). The window's budget is not
+// refilled. Caller holds s.mu.
+func (s *Session) endInputMute() {
+	s.activityMutedUntil = time.Time{}
+	s.inputMuteUntil = time.Time{}
 }
 
 // Backend is an optional session-persistence layer (abduco). When a Manager has
@@ -592,10 +655,20 @@ type Info struct {
 	// says is blocked on a prompt (see needOf) — it never lowers it. That raise
 	// happens only in List, the same way Claude below is only filled there: a
 	// Get/Spawn response is never rendered as a row, so it carries the
-	// un-raised value.
+	// un-raised value. In List the agent's own live status, when it reports
+	// one, decides it (regActivity).
 	Activity string `json:"activity"`
-	Name     string `json:"name"`              // mutable display label (id is the stable key)
-	Runtime  string `json:"runtime,omitempty"` // box | host
+	// ActivitySource says what decided Activity for a live session in List:
+	// "agent" (the agent's own status report) or "pty" (the PTY-silence
+	// fallback, which output blips can flip; the client debounces only it).
+	ActivitySource string `json:"activity_source,omitempty"`
+	// ReplyReady is whether SendMessage would accept a reply right now (the
+	// same replyGate), so the UI offers exactly the sends the server takes.
+	// Filled only in List; absent elsewhere, so a client can tell "not ready"
+	// from "an older server that does not say".
+	ReplyReady *bool  `json:"reply_ready,omitempty"`
+	Name       string `json:"name"`              // mutable display label (id is the stable key)
+	Runtime    string `json:"runtime,omitempty"` // box | host
 	// ParentID is the session this one is a companion shell of ("" = top-level).
 	ParentID string `json:"parent_id,omitempty"`
 	// Options are the per-spawn option overrides this session started with
@@ -848,8 +921,11 @@ type Session struct {
 	// (resize/forced-redraw on attach), not agent work, so it must not count as
 	// activity. Guarded by mu.
 	activityMutedUntil time.Time
-	exitCode           int  // agent exit code; meaningful only when exitCodeKnown
-	exitCodeKnown      bool // true only for ephemeral sessions (cmd IS the agent)
+	inputBudgetStart   time.Time     // start of the current input-mute budget window (noteInput; mu)
+	inputMuteUsed      time.Duration // input mute granted in that window (noteInput; mu)
+	inputMuteUntil     time.Time     // end of the latest input mute (noteInput; mu)
+	exitCode           int           // agent exit code; meaningful only when exitCodeKnown
+	exitCodeKnown      bool          // true only for ephemeral sessions (cmd IS the agent)
 	removed            chan struct{}
 	removedOnce        sync.Once
 	detachedCh         chan struct{} // closed when the session goes detached (agent alive, pipe lost)
@@ -1099,7 +1175,29 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 // Write sends input to the PTY. An Enter anywhere in p marks the session as
 // having been given a turn (see submitted). Focus reports, CPR/DA replies and
 // text without Enter do not count: xterm emits the former on its own.
-func (s *Session) Write(p []byte) (int, error) {
+//
+// A write without Enter also mutes activity for attachRepaintGrace (budgeted
+// per window, see noteInput): a TUI repaints within milliseconds of a
+// focus/mouse report or a keystroke (measured, #77), and that echo is the
+// viewer's doing, not agent work. The mute is set BEFORE the bytes reach the
+// PTY so the echo cannot land ahead of it. A submitted line is never muted, so
+// the agent's start of work counts at once. A live registry status overrides
+// all of this (regActivity); the mute matters for the PTY fallback.
+func (s *Session) Write(p []byte) (int, error) { return s.write(p, false) }
+
+// writeAction writes a control action's key (Interrupt's Esc/Ctrl+C, Answer's
+// 1/Esc). Like a submitted line it is never muted and ends any input mute:
+// the agent's reaction to it is real activity.
+func (s *Session) writeAction(p []byte) (int, error) { return s.write(p, true) }
+
+func (s *Session) write(p []byte, action bool) (int, error) {
+	s.mu.Lock()
+	if action {
+		s.endInputMute()
+	} else {
+		s.noteInput(time.Now(), p)
+	}
+	s.mu.Unlock()
 	n, err := s.ptmx.Write(p)
 	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
 		s.markSubmitted()
@@ -2696,9 +2794,16 @@ func (m *Manager) List() []Info {
 		complete bool
 	}
 	histories := map[string]history{}
+	type ptyQuiet struct {
+		act    string        // the silent-PTY activity
+		silent time.Duration // how long the PTY has been silent
+	}
+	quiet := map[string]ptyQuiet{} // per session, for regActivity
+	var repliesOn bool
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		repliesOn = m.repliesOn
 		o := make([]Info, 0, len(m.sessions))
 		for _, s := range m.sessions {
 			i := s.Info()
@@ -2710,6 +2815,8 @@ func (m *Manager) List() []Info {
 				ids, complete := s.conversations()
 				histories[i.ID] = history{ids, complete}
 			}
+			q, silent := s.quietActivity()
+			quiet[i.ID] = ptyQuiet{q, silent}
 			o = append(o, i)
 		}
 		return o
@@ -2729,10 +2836,21 @@ func (m *Manager) List() []Info {
 			c := costSrc.CostOf(h.ids)
 			out[i].CostUSD = &c
 		}
-		p, ok, blocked := m.peekAndBlocked(out[i].ID)
+		p, ok, reg := m.peekAndReg(out[i].ID)
+		blocked := reg == regStatusWaiting
 		if ok {
 			out[i].Summary = summaryLine(p.Text)
 		}
+		q := quiet[out[i].ID]
+		// SendMessage's own verdict, judged on the PTY activity BEFORE the
+		// registry folds into it. A non-agent session has no transcript, so
+		// replyGate refuses it as SendMessage's agent check does.
+		ready := repliesOn
+		if ready {
+			ready, _ = replyGate(out[i].Replyable, out[i].Activity, reg, q.silent, p, ok)
+		}
+		out[i].ReplyReady = &ready
+		out[i].Activity, out[i].ActivitySource = regActivity(out[i].Activity, q.act, reg, q.silent)
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull

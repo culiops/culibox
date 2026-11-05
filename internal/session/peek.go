@@ -556,6 +556,21 @@ func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	return true, ""
 }
 
+// replyGate is SendMessage's whole per-session verdict after the kill-switch
+// and agent checks, shared with List's reply_ready so the UI offers exactly
+// the sends the server accepts. ptyAct is Info's PTY-recency activity, reg the
+// live registry status, silent how long the PTY has been quiet. Fails CLOSED
+// with no transcript ("no_transcript"): without ground truth about the turn,
+// the pending guard cannot hold.
+func replyGate(replyable bool, ptyAct, reg string, silent time.Duration, p Peek, havePeek bool) (bool, string) {
+	if !havePeek {
+		return false, "no_transcript"
+	}
+	// blocked joins pending: the registry can see a prompt before (or without)
+	// the transcript's tool_use, and a line typed into a prompt answers it.
+	return canReply(replyable, replyActivity(ptyAct, reg, silent), p.Pending || reg == regStatusWaiting)
+}
+
 // needOf is the attention decision for one listed session, pure so every
 // combination is table-testable. activity is what Info computed from PTY
 // silence; blocked is Claude Code's own live registry saying the session sits
@@ -672,10 +687,20 @@ func (m *Manager) PeekFor(id string) (Peek, bool) {
 // session is sitting on a prompt. blocked can be true with ok=false (registry
 // readable, transcript not).
 func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
+	p, ok, reg := m.peekAndReg(id)
+	return p, ok, reg == regStatusWaiting
+}
+
+// peekAndReg is PeekFor plus the live registry entry's status ("" when no
+// entry validated). List feeds the status to regActivity.
+func (m *Manager) peekAndReg(id string) (Peek, bool, string) {
 	l, bound := m.boundTranscript(id)
-	blocked := l.reg != nil && l.reg.Status == regStatusWaiting
+	var reg string
+	if l.reg != nil {
+		reg = l.reg.Status
+	}
 	if !bound {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	var f *os.File
 	var fi, tailFi os.FileInfo // fi keys the cache; tailFi sizes the tail read
@@ -683,14 +708,14 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 		// Host tier, unchanged: one stat, and the file is opened only on a miss.
 		var err error
 		if fi, err = os.Stat(l.path); err != nil {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
-			return p, true, blocked
+			return p, true, reg
 		}
 		var ok bool
 		if f, tailFi, ok = l.openTranscript(); !ok {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		defer f.Close()
 	} else {
@@ -698,27 +723,27 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 		// so no stat of a box-chosen path ever runs outside the guard.
 		var ok bool
 		if f, fi, ok = l.openTranscript(); !ok {
-			return Peek{}, false, blocked
+			return Peek{}, false, reg
 		}
 		defer f.Close()
 		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
-			return p, true, blocked
+			return p, true, reg
 		}
 		tailFi = fi
 	}
 	b, cut, err := readUsageTail(f, tailFi)
 	if err != nil {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	p, ok := parsePeekTailCut(b, cut, l.created)
 	if !ok {
-		return Peek{}, false, blocked
+		return Peek{}, false, reg
 	}
 	if p.AskFull != "" {
 		p.askSrcPath, p.askSrcMTime, p.askSrcSize = l.path, fi.ModTime(), fi.Size()
 	}
 	m.peekStore(id, l.path, fi.ModTime(), fi.Size(), p)
-	return p, true, blocked
+	return p, true, reg
 }
 
 // SendMessage types one line into a session's PTY, followed by Enter.
@@ -763,14 +788,14 @@ func (m *Manager) SendMessage(id, text string) error {
 	// pending=false PASSED the third guard — so the one state the guard exists
 	// to catch (no ground truth about the agent's turn) was also the state that
 	// waved the message through.
-	p, havePeek, blocked := m.peekAndBlocked(id)
-	if !havePeek {
-		return ErrNoTranscript
-	}
-	// blocked joins pending: the registry can see a prompt before (or without)
-	// the transcript's tool_use, and a line typed into a prompt answers it.
-	if ok, why := canReply(info.Replyable, info.Activity, p.Pending || blocked); !ok {
+	p, havePeek, reg := m.peekAndReg(id)
+	// The registry may only tighten the PTY verdict here (replyActivity): a
+	// busy turn is never typed into, and a forged idle never loosens it.
+	_, silent := s.quietActivity()
+	if ok, why := replyGate(info.Replyable, info.Activity, reg, silent, p, havePeek); !ok {
 		switch why {
+		case "no_transcript":
+			return ErrNoTranscript
 		case "not_replyable":
 			return ErrNotReplyable
 		case "not_waiting":

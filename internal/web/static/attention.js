@@ -127,16 +127,40 @@ function faviconHref(n) {
   return n > 0 ? "/favicon-needs.svg" : "/favicon.svg";
 }
 
+// NEEDS_REARM_MS: how long a session must stop needing you before needing you
+// again is a NEW waiting period (and a new notification). A false "working"
+// from a repaint read as work is visible for about 7-13 s (the server's 10 s
+// silence threshold plus the 3 s poll, #77), so 15 s rides it out. It applies
+// only to a session whose activity_source is "pty" (the silence fallback); the
+// agent's own status has no blips, so its quick second prompt always fires.
+// The cost on the fallback: a real turn shorter than this, answered from
+// another tab or device, re-enters the same period and does not notify again.
+const NEEDS_REARM_MS = 15000;
+
 // needsTransitions: which sessions STARTED needing you since the last poll.
-// prevIds === null means "first poll after load": it only seeds, so a reload
-// never re-announces sessions that were already waiting.
-function needsTransitions(prevIds, sessions) {
-  const next = new Set();
+// prev === null means "first poll after load": it only seeds, so a reload
+// never re-announces sessions that were already waiting. prev/next are
+// { ids, away }: ids needed you on that poll; away maps an id that stopped
+// needing you to when it was first seen not needing you. One waiting period
+// fires once: a pty-sourced session that needs you again before NEEDS_REARM_MS
+// has passed since it left is the same period (an output blip), not a new
+// one. now is the poll's time in ms.
+function needsTransitions(prev, sessions, now) {
+  const next = { ids: new Set(), away: new Map() };
   const fired = [];
   for (const s of Array.isArray(sessions) ? sessions : []) {
-    if (!needsYou(s)) continue;
-    next.add(s.id);
-    if (prevIds && !prevIds.has(s.id)) fired.push(s);
+    const was = !!prev && prev.ids.has(s.id);
+    const left = prev ? prev.away.get(s.id) : undefined;
+    // Only the PTY-silence fallback blips. The agent's own status flips
+    // exactly at turn boundaries, so a quick second prompt there is real.
+    const sameWait = s.activity_source === "pty" && left !== undefined && now - left < NEEDS_REARM_MS;
+    if (!needsYou(s)) {
+      if (was) next.away.set(s.id, now);
+      else if (sameWait) next.away.set(s.id, left);
+      continue;
+    }
+    next.ids.add(s.id);
+    if (prev && !was && !sameWait) fired.push(s);
   }
   return { next, fired };
 }
@@ -193,9 +217,9 @@ function notifyBody(s) {
 // a notification on reload. Not loaded: hand prevIds back untouched (still
 // null on the very first call) so the real first successful poll still gets
 // needsTransitions's own "first poll" seed-only behaviour.
-function notifyPoll(loaded, prevIds, sessions) {
+function notifyPoll(loaded, prevIds, sessions, now) {
   if (!loaded) return { next: prevIds, fired: [] };
-  return needsTransitions(prevIds, sessions);
+  return needsTransitions(prevIds, sessions, now);
 }
 
 // utf8Bytes: a string's UTF-8 bytes, by hand. A lone surrogate becomes
@@ -315,7 +339,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

@@ -205,7 +205,8 @@ func (s *Session) escGate() error {
 
 // Interrupt stops what a live session is doing. It needs no reply opt-in: it
 // can only stop work, never start it (End session is equally unguarded).
-// Session.Write marks submitted only on \r, which neither key contains. An
+// writeAction (Session.Write minus the input mute) marks submitted only on \r,
+// which neither key contains. An
 // agent's Esc goes through escGate; a shell's Ctrl+C never does.
 func (m *Manager) Interrupt(id string) error {
 	m.mu.Lock()
@@ -233,7 +234,7 @@ func (m *Manager) Interrupt(id string) error {
 			return err
 		}
 	}
-	_, err := s.Write(key)
+	_, err := s.writeAction(key)
 	return err
 }
 
@@ -389,7 +390,7 @@ func (m *Manager) Answer(id, choice, askSHA256 string) error {
 			return err
 		}
 	}
-	if _, err := s.Write(key); err != nil {
+	if _, err := s.writeAction(key); err != nil {
 		return err
 	}
 	s.lastAnswered = cur
