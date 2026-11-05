@@ -2675,7 +2675,7 @@
       #pf-options .fcol:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
       #pf-options input[type="checkbox"] { width: var(--tap); height: var(--tap); margin: 0; flex: none; }
       .pitem { min-height: var(--tap); }
-      .plist-foot .btn, #pf-env-add, #pf-secret-add, #pf-gh-add { min-height: var(--tap); }
+      .plist-foot .btn, #pf-env-add, #pf-secret-add, #pf-gh-add, #pf-stale-reload { min-height: var(--tap); }
       /* GitHub owner rows: the frow stacks, so the card's remove button goes
          full width under its fields instead of hanging off a column. */
       /* The desktop row is align-items:flex-start, which in this column-stacked

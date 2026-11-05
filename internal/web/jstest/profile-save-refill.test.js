@@ -156,3 +156,21 @@ test("the stale banner is in the editor markup, above the dialog's error line", 
   assert.ok(HTML.indexOf('id="pf-stale"') < HTML.indexOf('id="settings-err"'));
   assert.match(HTML, /<div class="warnbox" id="pf-stale" role="alert" hidden>/);
 });
+
+// Measured on a phone viewport: Load latest was 24px tall while every other
+// button in the editor is 44. The floor is the page's --tap, inside the
+// max-width 700px block like the editor's other mobile buttons, so desktop is
+// unchanged.
+test("Load latest takes the mobile tap floor", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "static", "app.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = /([^{}]*#pf-stale-reload[^{}]*)\{([^{}]*)\}/.exec(css);
+  assert.ok(rule, "no rule names #pf-stale-reload");
+  assert.match(rule[2], /min-height:\s*var\(--tap\)/);
+  // The rule sits inside an open @media (max-width: 700px) block.
+  const before = css.slice(0, rule.index);
+  const media = before.lastIndexOf("@media");
+  assert.ok(media >= 0 && /^@media \(max-width: 700px\)/.test(before.slice(media)), "the rule is not under @media (max-width: 700px)");
+  const between = before.slice(media);
+  const open = (between.match(/\{/g) || []).length - (between.match(/\}/g) || []).length;
+  assert.ok(open >= 1, "the @media (max-width: 700px) block is already closed before the rule");
+});
