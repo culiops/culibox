@@ -163,6 +163,11 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
+		// Only macOS has a relay in front of the port, so only there does a
+		// bind conflict need saying who may hold it (#118); Linux's text is as it was.
+		if s.o.GOOS == "darwin" {
+			err = proxyline.ExplainBindError(s.o.Port, err)
+		}
 		return Endpoint{}, fmt.Errorf("egress: listen %s: %w", addr, err)
 	}
 	// Whatever Listen did, the socket must be where listenAddr said: never wider.

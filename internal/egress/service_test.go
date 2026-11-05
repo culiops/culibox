@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -789,5 +790,61 @@ func TestReadySkipsAfterNetworkWhenTheNetworkFails(t *testing.T) {
 	}
 	if called {
 		t.Fatal("hook ran against a refused network")
+	}
+}
+
+// D9 (#118): when another process holds the loopback port on macOS, Ready says
+// so (it gets nothing from the boxes; here is how to find it), and nothing new
+// listens. The caller's behaviour is unchanged: the error still comes back and
+// a later Ready retries.
+func TestReadyDarwinNamesAProcessOnItsPort(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: newFakeDocker(), GOOS: "darwin", Instance: "DEV", Port: port,
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: net.Listen, RelayKey: testRelayKey})
+	defer s.Close(context.Background())
+	_, err = s.Ready(context.Background())
+	if err == nil {
+		t.Fatal("Ready listened on a port another process holds")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
+		fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("error lost its cause: %v", err)
+	}
+	s.mu.Lock()
+	listening := s.ln != nil
+	s.mu.Unlock()
+	if listening {
+		t.Error("a failed bind left a listener behind")
+	}
+}
+
+// D11 (#118): Linux has no relay and no imposter on the loopback, so its bind
+// error text stays exactly what it was.
+func TestReadyLinuxBindErrorUnchanged(t *testing.T) {
+	bind := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+	f, lr := newFakeDocker(), &listenRec{err: bind}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	_, err := s.Ready(context.Background())
+	if err == nil {
+		t.Fatal("Ready succeeded although Listen failed")
+	}
+	if strings.Contains(err.Error(), "another process holds") {
+		t.Errorf("linux error carries the macOS explanation: %v", err)
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) || !strings.HasPrefix(err.Error(), "egress: listen 172.") {
+		t.Errorf("linux error changed: %v", err)
 	}
 }

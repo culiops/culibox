@@ -94,7 +94,7 @@ func listenDarwin(port int, relayKey proxyline.Key, maxConns, maxPerSource int) 
 	}
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
+		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, proxyline.ExplainBindError(port, err))
 	}
 	p := l.Addr().(*net.TCPAddr).Port
 	l = netlimit.Listener(l, maxConns)

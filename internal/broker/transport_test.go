@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -586,5 +587,32 @@ func TestListenDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
 			t.Fatalf("closing a connection never freed its source's slot: %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestListenDarwinNamesAProcessOnItsPort: when something else holds the port the
+// bind fails, and the error says another process has it, that it gets nothing
+// from the boxes, and how to find it.
+func TestListenDarwinNamesAProcessOnItsPort(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+	_, err = listenDarwin(port, testRelayKey, 2, 2)
+	if err == nil {
+		t.Fatal("listenDarwin bound a port another process holds")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
+		fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("error lost its cause: %v", err)
 	}
 }

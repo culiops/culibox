@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -96,6 +97,22 @@ func ParseV1(line []byte) (src, dst netip.AddrPort, err error) {
 		ports[i] = uint16(n)
 	}
 	return netip.AddrPortFrom(addrs[0], ports[0]), netip.AddrPortFrom(addrs[1], ports[1]), nil
+}
+
+// ExplainBindError says what a failed bind on a darwin listener means. When
+// err is "address already in use", another process holds 127.0.0.1:port. The
+// relay in the VM forwards a box's connection only after the listener proves it
+// holds the relay key, so that process gets nothing from the boxes; but the boxes
+// cannot reach this service until it is gone, and if it is not an earlier CuliBox
+// still running it may be posing as CuliBox. The message names that, and how to
+// find the process. It never guesses who holds the port. Any other error,
+// and nil, is returned unchanged. The result wraps err, so callers add their
+// own context with %w.
+func ExplainBindError(port int, err error) error {
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		return err
+	}
+	return fmt.Errorf("%w; another process holds 127.0.0.1:%d. It gets nothing from the boxes (the relay forwards a box's connection only after the listener proves it holds the relay key), but boxes cannot reach this service until it is gone. If it is not an earlier CuliBox still running, it may be posing as CuliBox; find it with: lsof -nP -iTCP:%d -sTCP:LISTEN", err, port, port)
 }
 
 // Options configures Wrap.

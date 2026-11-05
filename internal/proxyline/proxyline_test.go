@@ -2,6 +2,7 @@ package proxyline
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -571,5 +572,41 @@ func TestInSubnetNotGateway(t *testing.T) {
 		if got := InSubnetNotGateway(c.subnet, c.gw)(a); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestExplainBindError: a bind that lost the port to another process says so
+// (and that the process gets nothing from the boxes, and how to find it); any
+// other error passes through untouched.
+func TestExplainBindError(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+	_, bindErr := net.Listen("tcp", held.Addr().String())
+	if !errors.Is(bindErr, syscall.EADDRINUSE) {
+		t.Fatalf("setup: second bind gave %v, want EADDRINUSE", bindErr)
+	}
+	got := ExplainBindError(port, bindErr)
+	if !errors.Is(got, syscall.EADDRINUSE) {
+		t.Errorf("explained error lost the cause: %v", got)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
+		"gets nothing from the boxes",
+		fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+		bindErr.Error(),
+	} {
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("explained error lacks %q: %v", want, got)
+		}
+	}
+	if got := ExplainBindError(1, io.EOF); got != io.EOF {
+		t.Errorf("a non-bind error changed: %v", got)
+	}
+	if got := ExplainBindError(1, nil); got != nil {
+		t.Errorf("nil became %v", got)
 	}
 }
