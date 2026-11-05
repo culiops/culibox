@@ -984,7 +984,8 @@ class Cell {
     const side = el("div");
     side.className = "ph-side";
     const tabs = el("div");
-    tabs.className = "ph-tabs";
+    const defs = paneTabs(!!term);
+    tabs.className = paneTabsClass(defs);
     tabs.setAttribute("role", "group");
     tabs.setAttribute("aria-label", "Pane views");
     // Terminal, Activity and Access are the pane's views (.on, one of the
@@ -1004,7 +1005,7 @@ class Cell {
       return b;
     };
     // A pane of files has no session to describe: Files alone (paneTabs).
-    for (const def of paneTabs(!!term)) {
+    for (const def of defs) {
       const b = tabButton(def);
       if (def.id === "terminal") {
         b.className = "ph-tab" + (t === term && this.view === "terminal" ? " on" : "");

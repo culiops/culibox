@@ -173,7 +173,7 @@ const headerRule = (has) => containerRules().find((r) => has.test(r.body));
 test("the pane header's container thresholds are ordered and above the widths where each look fits", () => {
   const compact = headerRule(/\.ph-sep\s*\{/);
   const icons = headerRule(/\.ph-lbl\s*\{/);
-  const collapse = headerRule(/^\s*\.ph-tabs\s*\{/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
   const floor = headerRule(/^\s*\.ph-shell\s*\{/);
   assert.ok(compact && icons && collapse && floor, "the compact, icon, collapse and + Shell floor rules each exist");
   assert.ok(floor.px < collapse.px && collapse.px < icons.px && icons.px < compact.px, "floor < collapse < icons < compact");
@@ -186,9 +186,9 @@ test("the pane header's container thresholds are ordered and above the widths wh
 // four tabs hide there. + Shell (25.4 px) beside the 140 px name column and ⋯
 // fits from a 223 px pane (203 content), measured; below it, both go.
 test("in a narrow pane only the tabs hide; + Shell stays down to the width where it fits", () => {
-  const collapse = headerRule(/^\s*\.ph-tabs\s*\{/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
   const floor = headerRule(/^\s*\.ph-shell\s*\{/);
-  assert.ok(/^\s*\.ph-tabs\s*\{\s*display:\s*none;?\s*\}\s*$/.test(collapse.body), "the collapse rule hides the tabs and nothing else");
+  assert.ok(/^\s*\.ph-tabs:not\(\.one\)\s*\{\s*display:\s*none;?\s*\}\s*$/.test(collapse.body), "the collapse rule hides the tabs of a group of several, and nothing else");
   assert.ok(/^\s*\.ph-shell\s*\{\s*display:\s*none;?\s*\}\s*$/.test(floor.body), "the floor rule hides + Shell");
   assert.ok(floor.px >= 203, "+ Shell needs 203 px of content box: never shown in less");
   assert.ok(floor.px < 230, "a 250 px pane (230 content) still shows + Shell");
@@ -225,4 +225,23 @@ test("the AWS connection name is allowed to wrap (a nowrap name overflowed the t
 test("the credentials store strip's buttons wrap instead of spilling out of the strip", () => {
   const rules = rulesFor("#page-host > #settings-modal.as-page #creds .cstrip .btn");
   assert.ok(rules.some((b) => /white-space:\s*normal/.test(b) && /max-width:\s*100%/.test(b)), "wrap, inside the strip's width");
+});
+
+// #123: the 318px rule is sized for FOUR icons beside the name's room. A pane of files
+// has one tab (24px), which fits far below it: the group is marked `one` (paneTabsClass)
+// and the rule leaves it alone, or the Files tab was gone from every 271-338px pane.
+test("the narrow-pane collapse spares a one-tab group (a pane of files keeps its Files tab)", () => {
+  assert.ok(headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/), "the collapse rule is scoped to groups that are not `one`");
+  assert.ok(!headerRule(/^\s*\.ph-tabs\s*\{\s*display:\s*none/), "no rule hides every .ph-tabs");
+});
+
+// Measured: with + Shell and the 140px name column, one icon tab is clipped in a pane
+// narrower than 249px (content box 229) except 224-230, clean from 249. Below that it
+// hides too (8px of slack), or the lone Files tab is cut in half.
+test("a one-tab group hides only below the width where its single icon stops fitting", () => {
+  const floor = headerRule(/^\s*\.ph-tabs\.one\s*\{\s*display:\s*none;?\s*\}\s*$/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
+  assert.ok(floor, "a rule hides the one-tab group in a very narrow pane");
+  assert.ok(floor.px >= 229, "the icon is clipped up to a 248px pane (228 content): never shown in less");
+  assert.ok(floor.px < collapse.px, "and it lasts far below the width four icons need");
 });

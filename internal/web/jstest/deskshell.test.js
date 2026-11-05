@@ -503,3 +503,11 @@ test("paneTabs for a pane of files has Files alone: no session to describe", () 
   assert.deepEqual(t.map((x) => x.label), ["Files"]);
   assert.strictEqual(t[0].icon, "files");
 });
+
+// paneTabsClass: the class of the tab group. A group of ONE tab (a pane of files) is
+// marked, so the narrow-pane rule that hides four icons leaves it alone (#123).
+test("paneTabsClass marks a one-tab group, and only that", () => {
+  assert.strictEqual(d.paneTabsClass(d.paneTabs(false)), "ph-tabs one");
+  assert.strictEqual(d.paneTabsClass(d.paneTabs(true)), "ph-tabs");
+  assert.strictEqual(d.paneTabsClass([]), "ph-tabs");
+});

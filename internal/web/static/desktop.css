@@ -369,9 +369,16 @@
   /* Too narrow for four icons beside the name's room (a 338px pane or less, 318px
      of content box): dot, name, chip, + and ⋯. Files and Activity stay one click
      away in the pane's ⋯ menu (Open files here, Context by tool), Access in the
-     palette. */
+     palette. A pane of files has ONE tab (paneTabsClass marks it `one`), which fits
+     in far less: it stays, or the pane loses its only header control (#123). */
   @container (max-width: 318px) {
-    .ph-tabs { display: none; }
+    .ph-tabs:not(.one) { display: none; }
+  }
+  /* The one-tab group's own floor. Beside the name's 140px, + Shell and ⋯ its 24px
+     icon is clipped in a pane narrower than 249px (229px of content box), so below
+     it the tab hides too. 236px leaves 8px of slack: Files shows from a 257px pane. */
+  @container (max-width: 236px) {
+    .ph-tabs.one { display: none; }
   }
   /* + Shell (25px, the compact "+" above) fits beside the name's 140px and ⋯ from
      a 223px pane (203px of content box); below it, the name keeps its room and
