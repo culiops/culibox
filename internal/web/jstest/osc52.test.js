@@ -4,7 +4,7 @@
 // copy in that same, visible, focused pane (see osc52Decision).
 const test = require("node:test");
 const assert = require("node:assert");
-const { osc52Decision, osc52Gesture } = require("../static/terminal-tab.js");
+const { osc52Decision, osc52Gesture, osc52Lines } = require("../static/terminal-tab.js");
 
 // b64 builds the payload the way Claude Code does: base64 of the UTF-8 bytes.
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
@@ -105,6 +105,71 @@ test("a write carrying control characters is dropped", () => {
   assert.deepStrictEqual(osc52Decision("c;" + b64("héllo € 👍"), live), { action: "write", text: "héllo € 👍" });
 });
 
+// A selection taken off a terminal screen is cells of printable characters and
+// line breaks. A CR that is not half of a CRLF returns the cursor to column 0 of
+// the shell it is pasted into, and the Unicode format characters (bidi
+// overrides and isolates, zero-width joiners) change what a line looks like
+// without changing what runs. A paste into a shell without bracketed paste can
+// then carry a command the user never saw, so these are refused whole.
+test("a write with a lone CR is refused as format", () => {
+  for (const s of ["a\rb", "a\r", "\rrm -rf ~\n", "a\r\r\nb", "line one\nline two\r"]) {
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, JSON.stringify(s));
+  }
+});
+
+test("a write with a bidi or zero-width format character is refused as format", () => {
+  const cps = [
+    0x202a, 0x202b, 0x202c, 0x202d, 0x202e,         // embeddings and overrides
+    0x2066, 0x2067, 0x2068, 0x2069,                 // isolates
+    0x200b, 0x200c, 0x200d, 0x2060, 0xfeff,         // zero-width space, non-joiner, joiner, word joiner, BOM
+    0x200e, 0x200f, 0x061c,                         // LRM, RLM, ALM
+  ];
+  for (const cp of cps) {
+    const s = "echo ok " + String.fromCodePoint(cp) + "# hidden";
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, "U+" + cp.toString(16));
+  }
+});
+
+// U+2028 and U+2029 are line breaks to a renderer that honours them and nothing
+// to a shell: a pasted line can look split while the shell sees one line.
+test("a line or paragraph separator is refused as format", () => {
+  for (const cp of [0x2028, 0x2029]) {
+    const s = "echo ok" + String.fromCodePoint(cp) + "rm -rf ~";
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, "U+" + cp.toString(16));
+  }
+});
+
+test("ordinary multi-line text, tabs and non-ASCII still copy", () => {
+  const texts = [
+    "a\nb\nc",
+    "a\r\nb\r\n",                      // CRLF is two characters of one line break
+    "col1\tcol2\n",
+    "Tiếng Việt: ắ ằ ẳ ẵ ặ đ Đ",          // precomposed
+    "Vie\u0302\u0323t Nam e\u0302\u0301",  // decomposed: combining marks are not format characters
+    "héllo € 👍 日本語 مرحبا",
+  ];
+  for (const s of texts) {
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "write", text: s }, JSON.stringify(s));
+  }
+});
+
+// The screen runs only after the gesture gate, so an agent that never got a
+// gesture learns nothing from it and cannot make the page show anything.
+test("a format payload outside a live window is dropped by the gate, not refused", () => {
+  const data = "c;" + b64("a\rb");
+  assert.deepStrictEqual(osc52Decision(data, { ...live, armedAt: 0 }), { action: "drop", reason: "no-gesture" });
+  assert.deepStrictEqual(osc52Decision(data, { ...live, focused: false }), { action: "drop", reason: "unfocused" });
+  assert.deepStrictEqual(osc52Decision(data, { ...live, visible: false }), { action: "drop", reason: "hidden" });
+});
+
+// How many lines a copy had, for the toast. A trailing line break ends the last
+// line rather than starting an empty one, so what a user sees as "3 lines" (a
+// selection that ends at the end of a row) counts 3.
+test("osc52Lines counts lines, and a trailing line break adds none", () => {
+  const cases = [["hello", 1], ["a\nb\nc", 3], ["a\nb\n", 2], ["a\r\nb\r\n", 2], ["a\r\nb", 2], ["a\n\nb", 3], ["a\n\n", 2], ["\n", 1], [" ", 1]];
+  for (const [s, n] of cases) assert.strictEqual(osc52Lines(s), n, JSON.stringify(s));
+});
+
 // An empty payload is a "clear the clipboard" request. Nothing the user asked
 // for, and wiping what they copied elsewhere is the agent's call only in name.
 test("an empty write is not honoured", () => {
@@ -185,14 +250,65 @@ test("one gesture allows one write, and the copy is announced", () => {
   osc("c;" + b64("hello"));
   osc("c;" + b64("swapped"));
   assert.deepStrictEqual(log.copied, ["hello"]);
-  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 5 characters from the agent"]);
+  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 1 line from the agent"]);
   assert.strictEqual(log.focused, 1); // the copy textarea took focus; it is given back
 });
 
-test("the toast counts characters, not UTF-16 units", () => {
+test("the toast says how many lines were copied", () => {
+  for (const [text, msg] of [
+    ["one", "Copied 1 line from the agent"],
+    ["a\nb\nc", "Copied 3 lines from the agent"],
+    ["a\r\nb\r\n", "Copied 2 lines from the agent"],
+  ]) {
+    const { log, osc } = harness();
+    osc("c;" + b64(text));
+    assert.deepStrictEqual(log.toasts.map((t) => t[0]), [msg], JSON.stringify(text));
+  }
+});
+
+// The toast carries a count and fixed words only. Nothing the agent sent is ever
+// put in it, and showToast sets it through textContent, so it is not parsed.
+test("the toast never carries the agent's text", () => {
   const { log, osc } = harness();
-  osc("c;" + b64("👍"));
-  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 1 character from the agent"]);
+  osc("c;" + b64("<img src=x onerror=alert(1)>\nsecond"));
+  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 2 lines from the agent"]);
+});
+
+test("showToast renders its message through textContent", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/shell.js"), "utf8");
+  const start = src.indexOf("function showToast(");
+  assert.ok(start >= 0, "showToast found");
+  const body = src.slice(start, src.indexOf("\nfunction ", start + 1));
+  assert.match(body, /getElementById\("toast-msg"\)\.textContent = msg/);
+  assert.doesNotMatch(body, /innerHTML|outerHTML|insertAdjacentHTML/);
+});
+
+// A refused payload is the one case where the page shows something the agent
+// caused after the gesture gate has already passed, so it must cost the gesture:
+// one click buys at most one toast, however many sequences follow it.
+test("a refused write warns once, copies nothing and spends the gesture", () => {
+  const { tab, log, osc } = harness();
+  const warn = console.warn; console.warn = () => {};
+  try {
+    osc("c;" + b64("echo hi\r"));
+    osc("c;" + b64("echo hi\r"));
+    osc("c;" + b64("echo \u202ehi"));
+  } finally { console.warn = warn; }
+  assert.deepStrictEqual(log.copied, []);
+  assert.strictEqual(log.toasts.length, 1);
+  assert.strictEqual(log.toasts[0][1].warn, true);
+  assert.doesNotMatch(log.toasts[0][0], /^Copied/);
+  assert.doesNotMatch(log.toasts[0][0], /echo/);
+  assert.strictEqual(tab.gestureAt, 0);
+});
+
+test("a refused write names the way out when the page has one", () => {
+  const { log, osc } = harness();
+  global.IS_MAC = false;
+  global.scEntry = () => ({ text: { mac: "Option+drag", other: "Shift+drag" } });
+  const warn = console.warn; console.warn = () => {};
+  try { osc("c;" + b64("a\rb")); } finally { console.warn = warn; delete global.scEntry; delete global.IS_MAC; }
+  assert.match(log.toasts[0][0], /Shift\+drag/);
 });
 
 test("a write the browser refuses says so instead of claiming a copy", () => {
@@ -264,4 +380,288 @@ test("a reconnect forgets a gesture made before it", () => {
     tab.connect();
     assert.strictEqual(tab.gestureAt, 0);
   } finally { delete global.location; delete global.WebSocket; }
+});
+
+// --- the replay after a (re)connect -------------------------------------------
+// The server answers a new socket with the session's output ring in ONE frame
+// (Session.Subscribe + deliver), then live frames, with nothing that marks where
+// the replay ends. The ring can hold an old OSC 52, so no gesture may count from
+// connect() until xterm has parsed that first frame, and a ring resync mid-stream
+// (a frame that starts with RIS, ESC c) holds the same way. The rig models
+// xterm's write queue: write(data, cb) parks the frame, and the test decides
+// when "xterm" has parsed it (done), which is when its callback fires.
+function replayRig() {
+  const listeners = [];
+  const log = { copied: [], toasts: [] };
+  const textarea = {};
+  global.IS_MAC = false;
+  global.location = { protocol: "http:", host: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } };
+  global.document = {
+    hasFocus: () => true, activeElement: textarea, visibilityState: "visible",
+    addEventListener: (type, fn) => listeners.push([type, fn]),
+    removeEventListener: (type, fn) => { const i = listeners.findIndex((l) => l[0] === type && l[1] === fn); if (i >= 0) listeners.splice(i, 1); },
+  };
+  global.copyText = (text, done) => { log.copied.push(text); done(true); };
+  global.showToast = (msg, opts) => log.toasts.push([msg, opts || {}]);
+  const queue = [];
+  const term = {
+    textarea, modes: { mouseTrackingMode: "none" }, reset() {}, focus() {},
+    write(data, cb) { queue.push({ data, cb }); },
+  };
+  const tab = Object.create(TerminalTab.prototype);
+  Object.assign(tab, {
+    id: "s1", gestureAt: 0, term, termEl: { clientWidth: 800, clientHeight: 400 },
+    clearRetry() {}, hideTrouble() {}, setStatus() {},
+  });
+  const frame = (s) => ({ data: new TextEncoder().encode(s).buffer });
+  const pressRelease = () => {
+    tab.armOsc52(mouse());
+    for (const [type, fn] of [...listeners]) if (type === "mouseup") fn();
+  };
+  return {
+    tab, log, queue, listeners, frame,
+    click: pressRelease,
+    // done: xterm finished parsing the oldest queued frame.
+    done: () => { const w = queue.shift(); if (w.cb) w.cb(); },
+    osc: (text) => tab.onOsc52("c;" + b64(text)),
+    cleanup: () => { for (const k of ["IS_MAC", "location", "WebSocket", "document", "copyText", "showToast"]) delete global[k]; },
+  };
+}
+
+test("a click while the replay is still being parsed never lets the old OSC 52 write", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("\x1b[?1003h...scrolled output..."));
+    // Mid-replay the program's mouse mode is on (the replay switched it on, or
+    // earlier queued output did) and the user clicks before the parse is over.
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    r.osc("old secret planted in the ring");
+    assert.deepStrictEqual(r.log.copied, []);
+    assert.strictEqual(r.tab.gestureAt, 0);
+    // Replay parsed: now a click counts and the program's reply is honoured.
+    r.done();
+    r.click();
+    r.osc("fresh copy");
+    assert.deepStrictEqual(r.log.copied, ["fresh copy"]);
+  } finally { r.cleanup(); }
+});
+
+test("gestures are ignored from connect() until the first frame has been parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.strictEqual(r.tab.gestureAt, 0, "before the first frame has even arrived");
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "frame queued, not yet parsed");
+    r.done();
+    r.click();
+    assert.ok(r.tab.gestureAt > 0, "parsed");
+  } finally { r.cleanup(); }
+});
+
+test("a press made before a reconnect cannot arm on its release during the replay", () => {
+  const r = replayRig();
+  try {
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52(mouse());      // press; the release is still to come
+    r.tab.connect();              // the socket dropped and came back meanwhile
+    r.tab.ws.onmessage(r.frame("ring"));
+    for (const [type, fn] of [...r.listeners]) if (type === "mouseup") fn();
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("Ctrl+C while the replay is being parsed does not open the window", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.strictEqual(r.tab.gestureAt, 0);
+    r.done();
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.ok(r.tab.gestureAt > 0);
+    r.tab.gestureAt = 0;
+    r.tab.armOsc52Key(key({ ctrlKey: true, shiftKey: true })); // not a gesture at all
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("live frames after the replay do not hold gestures", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.done();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.ws.onmessage(r.frame("spinner tick")); // live, queued, not parsed yet
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// A viewer that fell behind the ring is resynced with ESC c + the whole ring: the
+// same old output, in the middle of the stream.
+test("a ring resync mid-stream drops the open window and holds gestures until parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.done();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+    r.tab.ws.onmessage(r.frame("\x1bc" + "ring again"));
+    assert.strictEqual(r.tab.gestureAt, 0, "a window opened before the resync is closed");
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "held while it is parsed");
+    r.done();
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// A parse callback that outlives its connection (xterm still had the old
+// socket's frame queued when connect() ran again) must not release the new hold.
+test("a stale parse callback from an earlier connection does not release the new replay hold", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("first ring"));
+    r.tab.connect();              // retry before xterm parsed it
+    r.tab.ws.onmessage(r.frame("second ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.done();                     // the FIRST connection's callback
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0);
+    r.done();                     // the second one
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// The press, not only the release, checks the hold: a press made during the
+// replay whose release lands after the replay was parsed must not arm either
+// (the user pressed while the screen was still the old output).
+test("a press made during the replay cannot arm on a release after it was parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52(mouse());      // press while the replay is queued
+    r.done();                     // the replay is parsed
+    for (const [type, fn] of [...r.listeners]) if (type === "mouseup") fn();
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+// connect() replaces the socket, but the old one can still deliver a frame it
+// had already received. It is not this connection's output: it must not be
+// written, and it must not take the place of the first frame (the replay).
+test("a frame from a replaced socket is not written and does not touch the new hold", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    const old = r.tab.ws;
+    r.tab.connect();
+    old.onmessage(r.frame("\x1bc" + "stale frame"));
+    assert.strictEqual(r.queue.length, 0, "the stale frame was written");
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.ws.onmessage(r.frame("the real ring"));
+    assert.strictEqual(r.queue.length, 1);
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "the new replay is still being parsed");
+    r.done();
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// --- a release left pending by a press that never finished --------------------
+// Built through the real constructor, with the browser and xterm replaced by
+// stubs, because the document listener that clears a stale release is installed
+// there and must be gone again after dispose().
+function builtTab() {
+  const listeners = []; // what the tab has on the document right now
+  const element = () => {
+    const handlers = {};
+    return {
+      handlers, className: "", clientWidth: 0, clientHeight: 0, firstChild: null,
+      append() {}, insertBefore() {}, remove() {}, closest: () => null, querySelector: () => null,
+      addEventListener(type, fn) { (handlers[type] = handlers[type] || []).push(fn); },
+      removeEventListener() {},
+    };
+  };
+  const textarea = {};
+  global.IS_MAC = false;
+  global.window = { innerWidth: 1200 };
+  global.location = { protocol: "http:", host: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } close() {} };
+  global.api = () => Promise.resolve([]);
+  global.document = {
+    createElement: element, hasFocus: () => true, activeElement: textarea, visibilityState: "visible",
+    addEventListener: (type, fn, opts) => listeners.push([type, fn, !!(opts === true || (opts && opts.capture))]),
+    removeEventListener: (type, fn, opts) => {
+      const cap = !!(opts === true || (opts && opts.capture));
+      const i = listeners.findIndex((l) => l[0] === type && l[1] === fn && l[2] === cap);
+      if (i >= 0) listeners.splice(i, 1);
+    },
+  };
+  global.Terminal = class {
+    constructor() { this.modes = { mouseTrackingMode: "any" }; this.parser = { registerOscHandler() {} }; this.textarea = textarea; this.rows = 24; this.cols = 80; }
+    loadAddon() {} open() {} onData() {} attachCustomKeyEventHandler() {} registerLinkProvider() {}
+    reset() {} dispose() {} focus() {} write() {}
+  };
+  global.FitAddon = { FitAddon: class { fit() {} } };
+  global.WebglAddon = { WebglAddon: class {} };
+  const tab = new TerminalTab("s1", "one");
+  tab.replay.hold = 0; // connect() holds gestures for the replay; this is about what follows it
+  return {
+    tab, listeners,
+    docDown: () => { for (const [type, fn, cap] of [...listeners]) if (type === "mousedown" && cap) fn({ type: "mousedown" }); },
+    docUp: () => { for (const [type, fn, cap] of [...listeners]) if (type === "mouseup" && cap) fn({ type: "mouseup" }); },
+    paneDown: (o) => { for (const fn of tab.termEl.handlers.mousedown) fn(mouse(o)); },
+    cleanup: () => { for (const k of ["IS_MAC", "window", "location", "WebSocket", "api", "document", "Terminal", "FitAddon", "WebglAddon"]) delete global[k]; },
+  };
+}
+
+test("a press anywhere in the document drops a release still pending", () => {
+  const r = builtTab();
+  try {
+    r.paneDown();   // a press the program receives: its release would arm the window
+    // The release is lost; the user then presses a control that cancels its own
+    // mousedown, so no pane sees it. Only the document (capture) can.
+    r.docDown();
+    r.docUp();      // a later release, e.g. of a drag started in the page chrome
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("a press in this pane still arms its own release", () => {
+  const r = builtTab();
+  try {
+    // A real press reaches the document in the capture phase before the pane.
+    r.docDown(); r.paneDown();
+    r.docUp();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+test("dispose removes every document listener the tab added", () => {
+  const r = builtTab();
+  try {
+    r.paneDown();   // leaves a release pending as well
+    assert.ok(r.listeners.length >= 2, "the tab is listening: " + r.listeners.map((l) => l[0]));
+    r.tab.dispose();
+    assert.deepStrictEqual(r.listeners.map((l) => l[0]), []);
+  } finally { r.cleanup(); }
 });

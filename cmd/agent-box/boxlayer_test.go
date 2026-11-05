@@ -184,7 +184,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shared != nil || len(o.DockerArgs) != 0 {
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shared != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -214,6 +214,45 @@ func TestBoxLayerOptionsCarryLimits(t *testing.T) {
 		if o.PidsLimit != 2048 || o.TmpSize != "2g" || o.Memory != "3g" || o.CPUs != 1.5 {
 			t.Errorf("%s: limits not carried: pids=%d tmp=%q mem=%q", goos, o.PidsLimit, o.TmpSize, o.Memory)
 		}
+	}
+}
+
+// #72: on macOS the context-path identity is read inside the VM (a Mac inode is
+// not the one virtiofs shows the box), through one `colima ssh` that never
+// starts the VM. Linux records it on the host and carries no hook (see
+// TestLinuxLayerHasNoVMAndNoDockerArgs).
+func TestDarwinLayerReadsContextIdentitiesInTheVM(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	o := l.options(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"})
+	if o.VMIDs == nil {
+		t.Fatal("darwin options must carry the VM identity hook")
+	}
+	fc.mu.Lock()
+	fc.rules = "ctxid 44:393\nctxid 16777232:7\n"
+	fc.calls = nil
+	fc.mu.Unlock()
+	ids, err := o.VMIDs(context.Background(), []string{"/Users/u/docs", "/Users/u/Tài liệu $x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []box.FileID{{Dev: 44, Ino: 393}, {Dev: 16777232, Ino: 7}}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids = %+v, want %+v", ids, want)
+	}
+	fc.mu.Lock()
+	calls := append([]string(nil), fc.calls...)
+	fc.mu.Unlock()
+	if len(calls) != 1 || !strings.HasPrefix(calls[0], "ssh --profile agent-box -- sh -c ") {
+		t.Fatalf("colima calls = %q, want exactly one ssh and no start", calls)
+	}
+	if strings.Contains(calls[0], "Tài") || strings.Contains(calls[0], "$x") {
+		t.Fatalf("a path reached the VM shell in the clear: %q", calls[0])
+	}
+	// A VM answer that is not one identity per path is an error, never a guess.
+	fc.mu.Lock()
+	fc.rules = "ctxid 44:393\n"
+	fc.mu.Unlock()
+	if ids, err := o.VMIDs(context.Background(), []string{"/a", "/b"}); err == nil || ids != nil {
+		t.Fatalf("a short VM answer must fail closed: ids=%v err=%v", ids, err)
 	}
 }
 

@@ -86,7 +86,7 @@ func TestSpawnContextPathsMounts(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 
-	want := box.Mount{Host: "/srv/b/docs", Box: "/srv/b/docs"}
+	want := box.Mount{Host: "/srv/b/docs", Box: "/srv/b/docs", CheckID: true}
 	if !slices.Contains(boxes.lastRO, want) {
 		t.Fatalf("Wrap extraRO = %+v, want it to hold %+v", boxes.lastRO, want)
 	}
@@ -297,7 +297,7 @@ func TestSpawnContextMountsDoNotWriteIntoBundleArray(t *testing.T) {
 			t.Fatalf("the bundle's backing array was written at %d: %+v", i+1, mt)
 		}
 	}
-	want := []box.Mount{backing[0], {Host: "/srv/b/docs", Box: "/srv/b/docs"}, {Host: "/srv/b/notes", Box: "/srv/b/notes"}}
+	want := []box.Mount{backing[0], {Host: "/srv/b/docs", Box: "/srv/b/docs", CheckID: true}, {Host: "/srv/b/notes", Box: "/srv/b/notes", CheckID: true}}
 	if !slices.Equal(boxes.lastRO, want) {
 		t.Fatalf("Wrap extraRO = %+v, want %+v", boxes.lastRO, want)
 	}
@@ -319,14 +319,14 @@ func TestSpawnContextMountsCarryCheckedIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	want := []box.Mount{
-		{Host: "/srv/b/docs", Box: "/srv/b/docs", ID: &box.FileID{Dev: 11, Ino: 3}},
-		{Host: "/srv/b/notes", Box: "/srv/b/notes", ID: &box.FileID{Dev: 12, Ino: 4}},
+		{Host: "/srv/b/docs", Box: "/srv/b/docs", ID: &box.FileID{Dev: 11, Ino: 3}, CheckID: true},
+		{Host: "/srv/b/notes", Box: "/srv/b/notes", ID: &box.FileID{Dev: 12, Ino: 4}, CheckID: true},
 	}
 	if len(boxes.lastRO) != len(want) {
 		t.Fatalf("Wrap extraRO = %+v, want %+v", boxes.lastRO, want)
 	}
 	for i, mt := range boxes.lastRO {
-		if mt.Host != want[i].Host || mt.Box != want[i].Box || mt.ID == nil || *mt.ID != *want[i].ID {
+		if mt.Host != want[i].Host || mt.Box != want[i].Box || mt.CheckID != want[i].CheckID || mt.ID == nil || *mt.ID != *want[i].ID {
 			t.Fatalf("mount %d = %+v (ID %+v), want %+v (ID %+v)", i, mt, mt.ID, want[i], want[i].ID)
 		}
 	}

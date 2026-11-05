@@ -193,7 +193,8 @@ func TestContextMountNoIDNoExec(t *testing.T) {
 	}
 }
 
-// Off Linux no identity is recorded, so no in-box comparison is made.
+// Off Linux the host records no identity (on macOS the VM read supplies one, see
+// contextvm_test.go), so CheckContextPathID itself returns nil.
 func TestCheckContextPathIDOffLinux(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("Linux records the identity (contextid_linux_test.go)")

@@ -221,6 +221,33 @@ a git config `include`, and so on). What it covers and what it does not is in
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.
 
+### Context paths
+
+`context_paths` (see [Reading other repos](CONTEXT-PATHS.md)) makes the same
+check as on Linux that the mounted path is the one that was checked, with the
+identity read a different way. An inode number on the Mac is not the one the
+box sees through the VM's file share, so on macOS the identity is read inside
+the VM, by a short script run over one `colima ssh` per spawn with context
+paths. It enters the parent directory (`cd -P`) and refuses unless that
+directory's real path is the listed parent, so a symlink in any parent is
+refused. It then reads the last component inside that directory with one
+`lstat` (type and identity together) and refuses a symlink, a FIFO, a socket, a
+device or anything else that is not a directory or regular file. It is a shell
+script (`cd -P`, `pwd -P`, `stat`), not the descriptor walk Linux uses, and a
+real directory moved into place before it reads is taken as the path you
+listed.
+
+- Measured on a Mac (colima 0.8.1, virtiofs): the device and inode the VM
+  reports for a path are the ones the box's bind mount shows, and are stable
+  across repeat reads.
+- Tested only on Linux, with dash and GNU coreutils like the VM's: the script against a
+  parent directory flipped between a directory and a symlink, and against the last
+  component exchanged for a FIFO or a symlink, each in a loop.
+- Not yet tested on a Mac: that `colima ssh` passes the script to the VM
+  unchanged (if it does not, spawns with context paths are refused, not let
+  through), the script on the VM itself, and that the identity stays stable
+  across a VM restart.
+
 ## Behind a TLS-inspecting proxy
 
 Some company networks (for example Zscaler or Netskope) decrypt HTTPS and

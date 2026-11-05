@@ -356,13 +356,19 @@ class TerminalTab {
     // copy it asked for.
     this.gestureAt = 0;
     termEl.addEventListener("mousedown", (e) => this.armOsc52(e));
+    // Any press in the page, in this pane or not, ends a release still pending
+    // from an earlier press (see armOsc52). Heard on the document in the capture
+    // phase, so a control that cancels its own mousedown cannot hide the press.
+    // Removed in dispose(): one listener per live tab, none left behind.
+    this.onDocMouseDown = () => this.dropOsc52Release();
+    document.addEventListener("mousedown", this.onDocMouseDown, true);
     if (this.term.parser && this.term.parser.registerOscHandler) {
       // true = consumed: xterm has no OSC 52 handler of its own to fall back to.
       this.term.parser.registerOscHandler(52, (data) => { this.onOsc52(data); return true; });
     }
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      if (osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) this.gestureAt = Date.now();
+      this.armOsc52Key(e);
       const act = termKeyAction(e, IS_MAC, this.term.hasSelection());
       if (act === "copy") {
         e.preventDefault();
@@ -486,13 +492,47 @@ class TerminalTab {
   // opens the window on its release. Every press first drops a release still
   // pending from an earlier one: a mouseup can be lost (a drag released outside
   // the browser), and the next release anywhere, even a Shift+drag's, must not
-  // arm on its behalf.
+  // arm on its behalf. A press in ANOTHER pane or control does the same through
+  // the document listener (onDocMouseDown), which runs first on a press here.
   armOsc52(e) {
+    this.dropOsc52Release();
+    if (this.replaying() || !osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
+    // The release checks again: a press made before a reconnect can end inside
+    // the replay it did not see.
+    this.osc52Up = () => { this.osc52Up = null; if (!this.replaying()) this.gestureAt = Date.now(); };
+    document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
+  // dropOsc52Release forgets a release that a press is still waiting on.
+  dropOsc52Release() {
     if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
     this.osc52Up = null;
-    if (!osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
-    this.osc52Up = () => { this.osc52Up = null; this.gestureAt = Date.now(); };
-    document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
+  // armOsc52Key is the keyboard half: an exact Ctrl+C opens the window at once.
+  armOsc52Key(e) {
+    if (!this.replaying() && osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) this.gestureAt = Date.now();
+  }
+
+  // replaying reports whether this connection's replay (see connect) has not
+  // been parsed yet. While it has not, no gesture counts, so an OSC 52 still
+  // sitting in it can never be answered by a click the user made during it.
+  replaying() { return !!this.replay && this.replay.hold > 0; }
+
+  // holdForReplay says whether a frame is old output that gestures must wait
+  // for, and takes the hold when it is. The first frame already has its hold
+  // (connect took it). A later frame is old output only when it is a ring
+  // resync: a viewer that fell behind the ring is sent RIS (ESC c) plus the
+  // whole ring (Session.deliver). Any other frame is live and holds nothing. A
+  // live frame that happens to start with ESC c only costs one parse of waiting.
+  // A resync also closes a window opened before it: the old output follows.
+  holdForReplay(rp, data) {
+    if (rp.first) { rp.first = false; return true; }
+    const resync = typeof data === "string" ? data.startsWith("\x1bc") : data.length > 1 && data[0] === 0x1b && data[1] === 0x63;
+    if (!resync) return false;
+    rp.hold++;
+    this.gestureAt = 0;
+    return true;
   }
 
   // onOsc52 handles the program asking to write the clipboard (OSC 52): how
@@ -500,7 +540,8 @@ class TerminalTab {
   // an accepted write spends the gesture, so one drag or Ctrl+C buys one copy.
   // Every copy is announced: the toast is how a user notices a write they did
   // not expect. Drops are silent on screen (an agent must not be able to spam
-  // toasts) and logged once per tab.
+  // toasts) and logged once per tab, except "format", which spends the gesture
+  // and shows one warning.
   onOsc52(data) {
     const v = osc52Decision(data, {
       now: Date.now(),
@@ -510,27 +551,42 @@ class TerminalTab {
     });
     if (v.action !== "write") {
       if (v.reason !== "read" && !this.warnedOsc52) { this.warnedOsc52 = true; console.warn("dropped an OSC 52 clipboard write:", v.reason); }
+      // The one drop that is shown. "format" is only reached once the gesture
+      // gate has passed, so showing it hands the agent nothing it could not get
+      // by asking right after a click anyway, as long as it costs the gesture:
+      // one click buys at most one toast, and the next sequence is "no-gesture",
+      // silent as before. The text is fixed; nothing the agent sent is echoed.
+      if (v.reason === "format") {
+        this.gestureAt = 0;
+        if (typeof showToast === "function") showToast("Not copied: the agent's text has hidden characters." + osc52SelectHint(), { warn: true });
+      }
       return;
     }
     this.gestureAt = 0;
-    const n = [...v.text].length;
+    const n = osc52Lines(v.text);
     copyText(v.text, (ok) => {
       this.term.focus();
       if (typeof showToast !== "function") return;
-      if (ok) { showToast(`Copied ${n} character${n === 1 ? "" : "s"} from the agent`); return; }
-      // The way out is the terminal's own selection, named as the help screen
-      // names it (a help-only row, so shortcutHint has no chord to render).
-      const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
-      const how = sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
-      showToast("The browser blocked the agent's copy." + how, { warn: true });
+      if (ok) { showToast(`Copied ${n} line${n === 1 ? "" : "s"} from the agent`); return; }
+      showToast("The browser blocked the agent's copy." + osc52SelectHint(), { warn: true });
     });
   }
 
   connect() {
     this.term.reset();
-    // The output ring replays from here, and it can hold an old OSC 52: a
-    // gesture made before the reconnect must not let the replay write.
+    // The server answers a new socket with its output ring, which can hold an old
+    // OSC 52 (a copy from hours ago, or one the agent planted). It arrives as ONE
+    // frame, the first on the socket when the ring is not empty (Session.Subscribe
+    // and deliver), and nothing marks where it ends, so the first frame is taken
+    // for the replay whether or not it is: gestures do not count from here until
+    // xterm has parsed it, and a gesture made before the reconnect is forgotten.
+    // xterm queues a frame and parses it later, so a click can land between the
+    // frame arriving and its OSC 52 being parsed; that interval is what this
+    // closes. The state belongs to this connection: a parse callback that
+    // outlives it must not release the next one.
     this.gestureAt = 0;
+    const rp = { hold: 1, first: true };
+    this.replay = rp;
     this.clearRetry();
     this.hideTrouble();
     this.setStatus("connecting…");
@@ -546,8 +602,11 @@ class TerminalTab {
       if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.term.focus();
     };
     ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") this.term.write(ev.data);
-      else this.term.write(new Uint8Array(ev.data));
+      // Like onclose: only the current socket is this tab's output.
+      if (this.ws !== ws) return;
+      const data = typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data);
+      if (this.holdForReplay(rp, data)) this.term.write(data, () => { rp.hold--; });
+      else this.term.write(data);
     };
     // Schedule the retry FIRST, then diagnose. The loop must never depend on a
     // network call completing: a wedged page (unanswered auth challenge) leaves
@@ -779,6 +838,8 @@ class TerminalTab {
   dispose() {
     this.closed = true;
     this.clearRetry();
+    if (this.onDocMouseDown) document.removeEventListener("mousedown", this.onDocMouseDown, true);
+    this.dropOsc52Release();
     if (this.resizeObserver) { try { this.resizeObserver.disconnect(); } catch (_) {} }
     if (this._fitRaf) { try { cancelAnimationFrame(this._fitRaf); } catch (_) {} this._fitRaf = 0; }
     this.hideTrouble();
@@ -892,6 +953,42 @@ const OSC52_WINDOW_MS = 1500;
 // own 10 MB limit on a sequence.
 const OSC52_MAX_BYTES = 1024 * 1024;
 
+// osc52SelectHint names the way out of a refused or blocked agent copy: the
+// terminal's own selection, as the help screen names it (a help-only row, so
+// shortcutHint has no chord to render). "" when the page has no such row.
+function osc52SelectHint() {
+  const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
+  return sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
+}
+
+// OSC52_FORMAT matches what a selection off a terminal screen never holds and a
+// paste can hide a command behind:
+//   - a CR that is not half of a CRLF: it returns the cursor to column 0 of
+//     the shell it is pasted into, so what follows overwrites what was shown
+//   - any Unicode format character (general category Cf): the bidi embeddings
+//     and overrides U+202A-202E, the isolates U+2066-2069, LRM/RLM U+200E/200F
+//     and ALM U+061C (they reorder neighbouring punctuation the way an embedding
+//     does), zero-width space/non-joiner/joiner U+200B-200D, word joiner U+2060,
+//     BOM U+FEFF, soft hyphen, the invisible math operators and the tag
+//     characters. This is the category, not "everything invisible": it still
+//     lets through what Unicode files elsewhere (variation selectors, U+034F,
+//     U+180B-180D, the Hangul fillers) and it also refuses a few visible Cf
+//     marks (the Arabic number signs from U+0600). The category is used instead
+//     of a list so a format character added to Unicode later is covered too.
+//   - the line and paragraph separators U+2028 and U+2029 (category Zl and Zp):
+//     a renderer may break a line there that a shell does not
+// Cost, accepted: emoji ZWJ sequences (a family, a profession) and the tag
+// flags are refused as a whole. Shift+drag (Option+drag on macOS) still copies
+// them: that is the user's own selection, which this screen does not touch.
+const OSC52_FORMAT = /\r(?!\n)|[\p{Cf}\u2028\u2029]/u;
+
+// osc52Lines counts the lines in a copied text, for the toast. A trailing line
+// break ends the last line instead of starting an empty one, so a selection that
+// runs to the end of a row reads as the rows the user saw.
+function osc52Lines(text) {
+  return text.replace(/\r?\n$/, "").split(/\r?\n/).length;
+}
+
 // osc52Decision decides what to do with an OSC 52 sequence (`Pc;Pd`): the
 // program asking to write, or read, the user's clipboard. The program is the
 // agent, which is untrusted, so a write is honoured only inside the window
@@ -899,7 +996,7 @@ const OSC52_MAX_BYTES = 1024 * 1024;
 // arrives; st = {now, armedAt, focused, visible}. Returns
 //   {action: "write", text}  copy text
 //   {action: "drop", reason} ignore it: read | hidden | unfocused | no-gesture |
-//                            empty | too-large | invalid | control
+//                            empty | too-large | invalid | control | format
 // A read (`Pd = ?`) is refused before anything else: answering it would hand
 // the clipboard (a password, a token) to the agent.
 //
@@ -907,6 +1004,9 @@ const OSC52_MAX_BYTES = 1024 * 1024;
 // are not UTF-8. Text with control characters other than tab and line breaks is
 // refused: a selection off a screen never has them, and ESC is how a pasted
 // payload breaks out of bracketed paste in a terminal that does not filter it.
+// Text with a lone CR, a Unicode format character or a line/paragraph separator
+// (OSC52_FORMAT) is refused too, as "format": the one refusal the page shows,
+// and only after the gate.
 // The gate runs before decoding, so a flood of writes costs a comparison each.
 function osc52Decision(data, st) {
   const i = data.indexOf(";");
@@ -929,6 +1029,7 @@ function osc52Decision(data, st) {
     return { action: "drop", reason: "invalid" };
   }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text)) return { action: "drop", reason: "control" };
+  if (OSC52_FORMAT.test(text)) return { action: "drop", reason: "format" };
   return { action: "write", text };
 }
 
@@ -968,5 +1069,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }
