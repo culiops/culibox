@@ -217,3 +217,12 @@ test("the AWS connection name is allowed to wrap (a nowrap name overflowed the t
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-main").some((b) => /overflow-wrap:\s*break-word/.test(b)), "and breaks between words first");
 });
+
+// #123: .btn is nowrap (primitives.css), so in the store strip a 701px window (the strip's
+// body is 178px wide there) pushed "Create the encrypted store" (186px) 25px past its
+// warning box, and again inside the passphrase form it opens. Wrapping the label is what
+// every other button does when it has to.
+test("the credentials store strip's buttons wrap instead of spilling out of the strip", () => {
+  const rules = rulesFor("#page-host > #settings-modal.as-page #creds .cstrip .btn");
+  assert.ok(rules.some((b) => /white-space:\s*normal/.test(b) && /max-width:\s*100%/.test(b)), "wrap, inside the strip's width");
+});

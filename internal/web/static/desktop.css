@@ -1322,6 +1322,10 @@
   #page-host > #settings-modal.as-page #creds .hint { font-size: 12.5px; line-height: 1.6; }
   #page-host > #settings-modal.as-page #creds .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
   #page-host > #settings-modal.as-page #creds .btn:hover { background: var(--line); }
+  /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
+     encrypted store" (186px) spilled past the warning box, in the strip and again in
+     the passphrase form it opens. The label wraps inside the strip instead. */
+  #page-host > #settings-modal.as-page #creds .cstrip .btn { max-width: 100%; white-space: normal; }
   #page-host > #settings-modal.as-page #creds .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
   #page-host > #settings-modal.as-page #creds .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page #creds .btn.dgr:hover { background: var(--danger-tint); }
