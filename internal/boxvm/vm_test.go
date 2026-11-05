@@ -344,7 +344,7 @@ func TestProvisionWritesYAMLAndStampAndDetectsDrift(t *testing.T) {
 	}
 }
 
-// Doctor's "predates egress control" reason hangs on this: a size change is
+// Doctor's provision-drift Fail hangs on this: a size change is
 // drift but not provision drift; a VM with no provision stamp (set up before it
 // existed) or a stale one is provision drift.
 func TestProvisionDriftIsSeparateFromOtherDrift(t *testing.T) {
@@ -403,16 +403,17 @@ func TestStateFilesAreOwnerOnly(t *testing.T) {
 	}
 }
 
-func TestInputRulesRunsIptablesOverColimaSSH(t *testing.T) {
+// The whole filter table in one ssh: the relay checks INPUT and DOCKER-USER.
+func TestFilterRulesRunsIptablesOverColimaSSH(t *testing.T) {
 	r := &fakeRunner{}
 	v := setUpVM(t, r)
 	r.mu.Lock()
 	r.calls = nil
 	r.mu.Unlock()
-	if _, err := v.InputRules(context.Background()); err != nil {
+	if _, err := v.FilterRules(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(r.calls, "|"), "ssh --profile agent-box -- sudo iptables -w -S INPUT"; got != want {
+	if got, want := strings.Join(r.calls, "|"), "ssh --profile agent-box -- sudo iptables -w -S"; got != want {
 		t.Fatalf("calls = %q, want %q (it must never start the VM)", got, want)
 	}
 	if !slices.Equal(r.envs["ssh"], v.env()) {

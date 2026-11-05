@@ -78,7 +78,7 @@ var ctxIDLine = regexp.MustCompile(`^ctxid ([0-9]+):([0-9]+)$`)
 // from ONE `colima ssh` for all of them. On macOS an inode number from the Mac
 // is not the one virtiofs shows the VM and the box, but the VM's is the box's
 // (spiked on colima 0.8.1: the VM and the container bind view agree), so this
-// stands in for the host's identity. Like InputRules it only asks: a stopped VM
+// stands in for the host's identity. Like FilterRules it only asks: a stopped VM
 // is an error, never a start.
 //
 // It fails closed: an error for any path that is not absolute and clean (or

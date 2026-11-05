@@ -13,12 +13,21 @@ import (
 	"sync"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/netlimit"
 )
 
 // maxSockPath is the longest absolute unix socket path that can be bound. Linux
 // sun_path is 108 bytes including the NUL; Go refuses a 108 byte path
 // (syscall_linux.go), so 107 is the most that works.
 const maxSockPath = 107
+
+// maxSockConns caps the open connections on each Linux broker socket (each
+// per-box socket, and the shared one). One box is one listener here, so this
+// is the darwin per-source cap (maxDarwinPerSource), for the same reason:
+// requests are short, and without a cap an agent could hold idle connections
+// to its own socket until the daemon ran out of file descriptors, which takes
+// down the UI and every PTY.
+const maxSockConns = 64
 
 const (
 	// sharedRel is the one socket every box used before the per-box sockets;
@@ -147,7 +156,7 @@ func (s *BoxSockets) Acquire(boxName string) (box.Mount, error) {
 	if err != nil {
 		return box.Mount{}, err
 	}
-	bl := &boxListener{Listener: l, box: boxName}
+	bl := &boxListener{Listener: netlimit.Listener(l, maxSockConns), box: boxName}
 	s.socks[boxName] = &boxSock{l: bl, dir: dir, refs: 1}
 	s.serve(bl)
 	return box.Mount{Host: dir, Box: SockBoxDir}, nil

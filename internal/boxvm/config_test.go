@@ -328,9 +328,8 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 // the chain was in.
 func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
 	gw := "192.168.5.9"
-	// The broker's TCP port is re-inserted last, so it sits above DNS and the DROP.
+	// No TCP port passes: the broker is reached through the relay only (#113).
 	want := []string{
-		"-d " + gw + " -p tcp --dport 9071 -j RETURN",
 		"-d " + gw + " -p udp --dport 53 -j RETURN",
 		"-d " + gw + " -j DROP",
 	}
@@ -354,7 +353,13 @@ func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
 	}
 }
 
-func TestProvisionLetsTheBrokerPortThroughBeforeTheGatewayDrop(t *testing.T) {
+// VMs provisioned before #113 let the broker's TCP port through the gateway
+// DROP for every container on the VM's default network, which reached the
+// broker directly instead of through the relay and could write its own PROXY
+// line. The relay does not need the rule (its dial is the VM's own OUTPUT, never
+// DOCKER-USER), so the script only deletes it now, wherever it sits and however
+// often it was inserted.
+func TestProvisionDeletesTheOldBrokerReturn(t *testing.T) {
 	gw := "192.168.5.2"
 	broker := "-d " + gw + " -p tcp --dport 9071 -j RETURN"
 	dns := "-d " + gw + " -p udp --dport 53 -j RETURN"
@@ -362,12 +367,21 @@ func TestProvisionLetsTheBrokerPortThroughBeforeTheGatewayDrop(t *testing.T) {
 	for name, seed := range map[string][]string{
 		"fresh boot":             nil,
 		"provisioned before M3":  {dns, drop},
+		"provisioned before 113": {broker, dns, drop},
 		"broker rule below DROP": {dns, drop, broker},
+		"broker rule twice":      {broker, broker, dns, drop},
 	} {
-		got := runProvision(t, gw, seed, 2)
-		want := []string{broker, dns, drop}
-		if strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Errorf("%s:\n got %q\nwant %q", name, got, want)
+		for _, runs := range []int{1, 2} {
+			got := runProvision(t, gw, seed, runs)
+			want := []string{dns, drop}
+			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("%s, %d run(s):\n got %q\nwant %q", name, runs, got, want)
+			}
+			for _, port := range []int{9071, 9072, 53, 443} {
+				if v := verdict(t, got, pkt{"172.17.0.5", gw, "tcp", port}); v != "DROP" {
+					t.Errorf("%s: a default-bridge container reaches the gateway on tcp/%d: %s", name, port, v)
+				}
+			}
 		}
 	}
 	if strings.Contains(provisionScript(9071, 9072), "tcp --dport 53") {
@@ -375,16 +389,21 @@ func TestProvisionLetsTheBrokerPortThroughBeforeTheGatewayDrop(t *testing.T) {
 	}
 }
 
-func TestProvisionUsesTheConfiguredBrokerPort(t *testing.T) {
-	gw := "192.168.5.2"
-	got := runProvision(t, gw, nil, 1)
-	if got[0] != "-d "+gw+" -p tcp --dport 9071 -j RETURN" {
-		t.Fatalf("default port: %q", got)
-	}
+// The delete carries the configured broker port, and nothing inserts a TCP
+// pass-through any more.
+func TestProvisionDeletesTheBrokerReturnForTheConfiguredPort(t *testing.T) {
 	y, err := Config{Root: "/Users/a/.local/share/agent-box", Home: "/Users/a", ColimaBin: "/c", DockerBin: "/d",
 		CPUs: 4, MemoryGiB: 4, BrokerPort: 9100, EgressPort: 9072}.YAML()
-	if err != nil || !strings.Contains(string(y), "--dport 9100 -j RETURN") || strings.Contains(string(y), "9071") {
-		t.Fatalf("yaml must carry the configured port: %v\n%s", err, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(y), `iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport 9100 -j RETURN`) || strings.Contains(string(y), "9071") {
+		t.Fatalf("yaml must delete the rule for the configured port:\n%s", y)
+	}
+	for _, line := range strings.Split(string(y), "\n") {
+		if strings.Contains(line, "-I DOCKER-USER") && strings.Contains(line, "tcp") {
+			t.Fatalf("a TCP pass-through is still inserted: %q", line)
+		}
 	}
 }
 
@@ -568,7 +587,7 @@ func TestProvisionKeepsAForwardDropForTheEgressSubnet(t *testing.T) {
 	}{
 		{pkt{"172.29.72.5", "1.1.1.1", "tcp", 443}, "DROP"},
 		{pkt{"172.29.72.5", gw, "tcp", 9072}, "DROP"},
-		{pkt{"172.17.0.5", gw, "tcp", 9071}, "RETURN"},
+		{pkt{"172.17.0.5", gw, "tcp", 9071}, "DROP"},
 	} {
 		if got := verdict(t, chain, c.p); got != c.want {
 			t.Errorf("%+v: %s, want %s\nchain:\n%s", c.p, got, c.want, strings.Join(chain, "\n"))
@@ -649,7 +668,7 @@ func TestYAMLWithoutCAUnchanged(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("YAML with no CA changed:\n%s\nwant\n%s", got, want)
 	}
-	if h := yamlHash(got); h != "7e1deba79e51d99dc098c175e459e0e01194133692892d1c7437ddcf5aa7a5f9" {
+	if h := yamlHash(got); h != "d01514795989199211b2e3389c79ce910a53942f372974c683248a44b9884e2f" {
 		t.Fatalf("hash %s is not the pre-feature hash", h)
 	}
 	c := testCfg()

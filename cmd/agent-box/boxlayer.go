@@ -303,7 +303,7 @@ func (l *boxLayer) recreateHint() string {
 	if l.vm == nil || !l.vm.Drifted() {
 		return ""
 	}
-	return " (the box VM's provision config is out of date, so its egress rules may be missing; run `agent-box box setup -recreate`)"
+	return " (the box VM's provision config is out of date, so its firewall rules may be too; run `agent-box box setup -recreate`)"
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it
