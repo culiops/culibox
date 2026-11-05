@@ -55,10 +55,10 @@ These files sit in the data directory (default `~/.local/share/agent-box`).
 
 - New login token: delete `login.token` and restart.
 - Log out every browser: delete `cookie.secret` and restart.
-- New relay secret (what the box VM's relay shows the proxy and the broker):
-  delete `relay.secret` and restart. The relay is replaced when CuliBox starts
-  with the box VM running, or at the next boxed spawn, so connections open
-  through it drop once.
+- New relay secret (what the box VM's relay and CuliBox's proxy and broker
+  prove to each other): delete `relay2.secret` and restart. The relay is
+  replaced when CuliBox starts with the box VM running, or at the next boxed
+  spawn, so connections open through it drop once.
 
 ## Boxed tier (contained sessions)
 
@@ -163,11 +163,12 @@ These limits are the same as on Linux and are not configurable.
   proxy until then (the recreate ends them anyway), so end them first.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards. Upgrading to the version with the
-  relay secret (see [Token binding](#token-binding)) replaces the relay once, so
+  relay handshake (see [Token binding](#token-binding)) creates a new secret in
+  `relay2.secret` and deletes `relay.secret`. The old secret was sent on every
+  connection, so it is never used again. The relay is replaced once, so
   connections open through it drop once. On a VM that still needs the recreate
-  above, the old relay is kept and the proxy and the broker refuse its
-  connections, so sessions running across that upgrade also lose the credential
-  broker until you recreate the VM.
+  above, CuliBox removes the old relay instead, so sessions running across that
+  upgrade also lose the credential broker until you recreate the VM.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
@@ -190,26 +191,36 @@ These limits are the same as on Linux and are not configurable.
 
 ### Token binding
 
-The relay starts every connection it forwards with two lines: a secret, then a
-header (PROXY protocol v1) naming the box's own address. The proxy and the
-broker on your Mac accept a connection only when the secret matches and the
-header names an address inside the box subnet other than the gateway, so a box's
-token is refused when another box presents it. Any other connection is closed
-without an answer, and CuliBox's log counts such refusals at most once a minute.
+The relay and CuliBox's proxy and broker on your Mac first prove to each other
+that they hold the same secret, without sending it: each side answers a fresh
+random challenge from the other with a keyed hash of it (HMAC-SHA256). Until the
+listener has answered correctly the relay sends nothing else, no header and no
+byte from the box, and it gives up after 5 seconds. Then it sends a header
+(PROXY protocol v1) naming the box's own address. The proxy and the broker
+accept a connection only when the relay's answer is right and the header names
+an address inside the box subnet other than the gateway, so a box's token is
+refused when another box presents it. Any other connection is closed without a
+response, and CuliBox's log counts such refusals at most once a minute.
 
-The secret is 32 random bytes in `relay.secret` in the data directory, readable
+The secret is 32 random bytes in `relay2.secret` in the data directory, readable
 only by you. CuliBox creates it on first start, keeps it across restarts, and
 hands it to the relay container through its environment, never on a command
-line. While CuliBox holds its loopback ports, another user account on the same
-Mac therefore cannot write a header the proxy or the broker accepts. The end of
-this section covers when CuliBox does not hold them.
+line. Another user account on the same Mac therefore cannot write a header the
+proxy or the broker accepts, and a process that takes one of CuliBox's ports
+while CuliBox is stopped or restarting gets only the relay's random challenge:
+no header, no token and nothing a box sent.
 
 This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
 token taken from a box its requests then count as that box's; such a process is
 inside your trust boundary anyway. Anything that can read your Mac's loopback
-traffic, such as root, sees the secret and the session tokens alike. A process
-under any account can still open connections that take up the proxy's and the
+traffic (root, or any account allowed to capture packets, for example through
+Wireshark's ChmodBPF) sees the session tokens and everything sent after the
+handshake in cleartext. It does not see the secret, and what it sees does not
+let it open a connection that the proxy or the broker take for the relay's.
+Loopback traffic is not encrypted, though, so treat such an account like root:
+it may be able to tamper with a connection that is already open. A process under
+any account can still open connections that take up the proxy's and the
 broker's shared connection slots until they time out; that can delay boxes, not
 impersonate them.
 
@@ -239,18 +250,18 @@ presented from the wrong box (403).
 
 What stays: sessions that share a box (the same profile and binding) can read
 each other's token; code planted into the owning box, for example through a
-shared workspace, runs with that box's access; a process running as you on
-your Mac that holds a session's token (see above); and the time CuliBox is not
-listening on its ports.
+shared workspace, runs with that box's access; a process running as you on your
+Mac that holds a session's token, and an account that can read loopback traffic
+(see above); and while CuliBox does not hold its ports, boxes cannot reach the
+proxy or the broker.
 
 While CuliBox is not listening on its ports (stopped, restarting, or its
-listeners refused to start, for example because `relay.secret` could not be
-loaded or a port could not be bound), the relay in the box VM keeps forwarding.
-Whatever else holds those ports receives what boxes send, session tokens and the
-relay secret included, and because the secret is kept across restarts it stays
-valid until you rotate it. On a Mac shared with other accounts, stop the box VM
-before stopping CuliBox, and delete `relay.secret` if another account may have
-held those ports.
+listeners refused to start, for example because `relay2.secret` could not be
+loaded or a port could not be bound), boxes cannot reach the proxy or the
+broker, and whatever else holds those ports gets only the relay's challenge. If
+another process holds one of the ports, CuliBox's log says so and names the
+command that finds it (`lsof -nP -iTCP:<port> -sTCP:LISTEN`); the broker stays
+off until CuliBox restarts, and the proxy tries again at the next boxed spawn.
 
 ### In-place guard
 
