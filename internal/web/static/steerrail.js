@@ -796,7 +796,7 @@ function renderMsgSection(s) {
     // /peek, and the server refuses a reply to it (409). Treating that one
     // case as pending keeps this gate honest without a fetch; POST /message
     // re-checks server-side either way, and the note says what the server said.
-    const st = sendState({ replyable: now.replyable, activity: now.activity, pending: now.need === "ask", reply_ready: now.reply_ready });
+    const st = sendState({ replyable: now.replyable, activity: now.activity, pending: now.need === "ask", need: now.need, reply_ready: now.reply_ready });
     const closed = !st.enabled || (typeof pendingSends !== "undefined" && pendingSends.has(s.id));
     input.disabled = closed;
     send.disabled = closed;

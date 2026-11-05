@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies } = require("../static/peek.js");
+const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput } = require("../static/peek.js");
 
 test("peekState distinguishes the empty cases", () => {
   // 200 with text: normal
@@ -73,8 +73,39 @@ test("sendState reports pending before activity, matching canReply", () => {
 // decides, so the control never offers a send the server refuses nor blocks
 // one it accepts; an older server that does not send it keeps today's gate.
 test("sendState: a waiting session the server is not ready for says it is finishing its turn", () => {
-  const st = sendState({ replyable: true, activity: "waiting", pending: false, reply_ready: false });
+  const st = sendState({ replyable: true, activity: "waiting", pending: false, need: "turn", reply_ready: false });
   assert.deepEqual(st, { enabled: false, reason: "Session is finishing its turn — try again in a moment." });
+});
+
+// The mobile reply sheet outlives many polls: it must gate on the poll's live
+// copy of the session, not the copy it was opened with, or Send stays shut
+// after reply_ready (or an opt-in) turns true until the sheet is reopened.
+test("sheetGateInput: the poll's live copy wins over the copy the sheet opened with", () => {
+  const opened = { id: "a", replyable: false, activity: "waiting", need: "turn", reply_ready: false };
+  const live = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: true };
+  assert.deepEqual(sendState(sheetGateInput([{ id: "b" }, live], opened, false)), { enabled: true, reason: "" });
+});
+
+test("sheetGateInput: falls back to the opened copy when the list does not have the session", () => {
+  const opened = { id: "a", replyable: true, activity: "waiting", need: "turn", reply_ready: false };
+  assert.deepEqual(sheetGateInput([], opened, false),
+    { replyable: true, activity: "waiting", pending: false, need: "turn", reply_ready: false });
+});
+
+test("sheetGateInput: pending is the /peek flag or an ask", () => {
+  const s = { id: "a", replyable: true, activity: "waiting", need: "turn" };
+  assert.strictEqual(sheetGateInput([s], s, true).pending, true);
+  assert.strictEqual(sheetGateInput([{ ...s, need: "ask" }], s, false).pending, true);
+  assert.strictEqual(sheetGateInput([s], s, false).pending, false);
+});
+
+test("sendState: a refusal that is not a finishing turn gets neutral words, never 'try again'", () => {
+  // need "turn" is the server saying it read the transcript: without it (an
+  // unreadable transcript is a permanent refusal) or unknown, do not promise.
+  for (const need of ["", undefined, "sso"]) {
+    assert.deepEqual(sendState({ replyable: true, activity: "waiting", pending: false, need, reply_ready: false }),
+      { enabled: false, reason: "Session is not ready for a message right now." }, String(need));
+  }
 });
 
 test("sendState: the server's ready verdict opens a session the dot shows working (background shell)", () => {

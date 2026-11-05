@@ -70,8 +70,12 @@ function sendState(s) {
   // An older server does not send it; the activity decides there, as before.
   if (typeof s.reply_ready === "boolean") {
     if (s.reply_ready) return { enabled: true, reason: "" };
-    if (s.activity === "waiting") return { enabled: false, reason: "Session is finishing its turn — try again in a moment." };
-    return { enabled: false, reason: notWaitingReason(s.activity) };
+    if (s.activity !== "waiting") return { enabled: false, reason: notWaitingReason(s.activity) };
+    // need "turn" means the server read the transcript, so the refusal is the
+    // short settle after a turn. Anything else (an unreadable transcript is
+    // permanent, or the caller does not say) gets words that promise nothing.
+    if (s.need === "turn") return { enabled: false, reason: "Session is finishing its turn — try again in a moment." };
+    return { enabled: false, reason: "Session is not ready for a message right now." };
   }
   // Not needsYou on purpose: a send is only accepted while the agent itself is
   // waiting (the server's canReply), and an expired sign-in does not change that.
@@ -79,6 +83,16 @@ function sendState(s) {
     return { enabled: false, reason: notWaitingReason(s.activity) };
   }
   return { enabled: true, reason: "" };
+}
+
+// sheetGateInput: sendState's input for a reply control that outlives one poll
+// (the mobile reply sheet). It reads the poll's live copy of the session from
+// `list` when there is one, else `s`, the copy the control was opened with —
+// a frozen copy keeps Send shut after reply_ready or an opt-in turns true.
+// pending is the /peek flag; an ask is pending too.
+function sheetGateInput(list, s, pending) {
+  const v = (Array.isArray(list) && s ? list.find((x) => x && x.id === s.id) : null) || s || {};
+  return { replyable: v.replyable, activity: v.activity, pending: !!pending || v.need === "ask", need: v.need, reply_ready: v.reply_ready };
 }
 
 // notWaitingReason phrases a non-waiting activity. Branching matters: "wait
@@ -112,5 +126,5 @@ function offerEnableReplies(s) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies };
+  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies, sheetGateInput };
 }

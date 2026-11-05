@@ -1345,7 +1345,7 @@ function buildReplyStrip(tab) {
   let sending = false;
   const paint = () => {
     const s = lastSessions.find((x) => x.id === tab.id);
-    const st = sendState(s ? { replyable: s.replyable, activity: s.activity, pending: knownPending || s.need === "ask", reply_ready: s.reply_ready } : null);
+    const st = sendState(s ? { replyable: s.replyable, activity: s.activity, pending: knownPending || s.need === "ask", need: s.need, reply_ready: s.reply_ready } : null);
     // st is the GATE's verdict and is what post() checks; `closed` is what the
     // controls wear. They differ only while a send is in flight.
     const closed = !st.enabled || sending;
