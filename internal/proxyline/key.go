@@ -13,9 +13,12 @@ import (
 // only from a connection that began with it, so another process on the Mac
 // cannot claim a box's address just by reaching the loopback port.
 //
-// The key is 32 random bytes. Only Hex and Preamble yield the material; every
-// formatting verb prints the redacted ID instead, so a stray log line or error
-// string cannot leak it.
+// The key is 32 random bytes. Only Hex and Preamble yield the material. String
+// and GoString print the redacted ID, and fmt calls them for every verb when the
+// Key is the operand itself or sits in an exported struct field, slice element
+// or map value. fmt cannot call a method on an unexported struct field, so a Key
+// held in one is printed as its raw bytes by %v, %+v and %x: never format a
+// struct that keeps a Key in an unexported field.
 type Key [32]byte
 
 // PreambleLen is the length of Key.Preamble: the prefix, 64 hex characters and

@@ -83,6 +83,34 @@ func TestKeyNeverFormatsItsBytes(t *testing.T) {
 	}
 }
 
+// The redaction rests on fmt calling Key.String, which fmt only does for a Key
+// it can reach through an exported path. Pin both halves, so the doc on Key
+// stays true: an exported field, slice element and map value print the ID, and
+// an unexported field does not (the limitation the doc names).
+func TestKeyRedactionStopsAtUnexportedFields(t *testing.T) {
+	k := keyOf(9)
+	type exported struct{ K Key }
+	for name, arg := range map[string]any{
+		"exported field": exported{k},
+		"slice element":  []Key{k},
+		"map value":      map[string]Key{"k": k},
+	} {
+		for _, verb := range []string{"%v", "%+v", "%x"} {
+			if got := fmt.Sprintf(verb, arg); strings.Contains(got, k.Hex()) || strings.Contains(got, fmt.Sprint([]byte(k[:]))) {
+				t.Errorf("%s: %s printed the key's bytes", name, verb)
+			}
+		}
+	}
+
+	type unexported struct{ k Key }
+	u := unexported{k}
+	for verb, leaked := range map[string]string{"%v": fmt.Sprint([]byte(k[:])), "%x": k.Hex()} {
+		if got := fmt.Sprintf(verb, u); !strings.Contains(got, leaked) {
+			t.Errorf("an unexported Key field is now redacted by %s; update the doc on Key (limitation gone): %s", verb, got)
+		}
+	}
+}
+
 type refusalClock struct {
 	mu sync.Mutex
 	t  time.Time
