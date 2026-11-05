@@ -1288,6 +1288,128 @@ func TestEnsureReplacesAV1Relay(t *testing.T) {
 	}
 }
 
+// #118: an egress Ready that is not listening yet sweeps the relay before it
+// ensures the network, because a Ready that fails there never reaches Ensure. A
+// relay that is not current (a v1 one, another key, a stopped one) is removed; a
+// current one is kept (#113: a transient failure must not cut live sessions);
+// an absent one is fine. The sweep never reads the VM's rules.
+func TestRemoveStaleRemovesOnlyARelayThatIsNotCurrent(t *testing.T) {
+	other := testRelay(fakeVM{}, nil)
+	other.Key = otherRelayKey
+	for name, tc := range map[string]struct {
+		inspect func(r *Relay) string
+		want    string
+	}{
+		"a v1 relay":          {func(r *Relay) string { return "true\t" + v1RelayHash(t, r) + "\n" }, "inspect,rm"},
+		"another key":         {func(r *Relay) string { return "true\t" + other.configHash(gw) + "\n" }, "inspect,rm"},
+		"stopped but current": {func(r *Relay) string { return "false\t" + r.configHash(gw) + "\n" }, "inspect,rm"},
+		"current":             {func(r *Relay) string { return "true\t" + r.configHash(gw) + "\n" }, "inspect"},
+		"absent":              {func(*Relay) string { return "" }, "inspect"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vm := &countingVM{}
+			r := testRelay(fakeVM{}, nil)
+			r.VM = vm
+			d := &fakeDocker{}
+			r.Docker = d
+			d.inspect = tc.inspect(r)
+			if err := r.RemoveStale(context.Background()); err != nil {
+				t.Fatalf("RemoveStale: %v", err)
+			}
+			if got := strings.Join(d.subcommands(), ","); got != tc.want {
+				t.Fatalf("calls = %q, want %q", got, tc.want)
+			}
+			if rm := d.find("rm"); len(rm) > 0 && strings.Join(rm[0], " ") != "rm -f agentbox-relay-prod" {
+				t.Fatalf("rm = %v", rm)
+			}
+			if vm.reads != 0 {
+				t.Errorf("the sweep read the VM's rules %d time(s)", vm.reads)
+			}
+		})
+	}
+}
+
+// The sweep judges a relay against the hash Ensure starts it with: a relay this
+// Ensure just started is current for RemoveStale, so a Ready that fails before
+// Ensure never cuts a working relay.
+func TestRemoveStaleKeepsTheRelayEnsureStarted(t *testing.T) {
+	r := testRelay(fakeVM{out: goodRules}, nil)
+	d := &fakeDocker{logs: bothListening}
+	r.Docker = d
+	if err := r.Ensure(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	runs := d.find("run")
+	if len(runs) != 1 {
+		t.Fatalf("Ensure ran %d relay(s), want 1", len(runs))
+	}
+	label := ""
+	for _, a := range runs[0] {
+		if v, ok := strings.CutPrefix(a, relayConfigLabel+"="); ok {
+			label = v
+		}
+	}
+	if label == "" {
+		t.Fatal("the relay was started without its config label")
+	}
+	d2 := &fakeDocker{inspect: "true\t" + label + "\n"}
+	r.Docker = d2
+	if err := r.RemoveStale(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d2.subcommands(), ","); got != "inspect" {
+		t.Fatalf("calls = %q, want the relay Ensure started inspected and kept", got)
+	}
+}
+
+// When docker cannot say what runs, or cannot remove it, the sweep says so (the
+// caller logs it and goes on); nothing is removed on a failed inspect. The error
+// never carries the key.
+func TestRemoveStaleReportsDockerFailures(t *testing.T) {
+	inspErr := errors.New("Cannot connect to the Docker daemon")
+	d := &fakeDocker{inspErr: inspErr}
+	r := testRelay(fakeVM{}, d)
+	err := r.RemoveStale(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "inspecting the relay") || !errors.Is(err, inspErr) {
+		t.Fatalf("err = %v, want the failed inspect", err)
+	}
+	if got := strings.Join(d.subcommands(), ","); got != "inspect" {
+		t.Fatalf("calls = %q, want one inspect and nothing removed", got)
+	}
+	if strings.Contains(err.Error(), r.Key.Hex()) {
+		t.Error("the sweep's error carries the relay key (not printed)")
+	}
+
+	rmErr := errors.New("permission denied")
+	d = &fakeDocker{rmErr: rmErr}
+	r = testRelay(fakeVM{}, d)
+	d.inspect = "true\t" + v1RelayHash(t, r) + "\n"
+	err = r.RemoveStale(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "removing the relay") || !errors.Is(err, rmErr) {
+		t.Fatalf("err = %v, want the failed removal", err)
+	}
+}
+
+// Without a key the sweep does nothing: Ensure's zero-key path already removes
+// any relay. Without the fields the hash is made of it cannot tell a current
+// relay from a stale one, so it asks docker nothing and says why, as Ensure does.
+func TestRemoveStaleWithoutAKeyOrFieldsAsksDockerNothing(t *testing.T) {
+	d := &fakeDocker{inspect: "true\tdeadbeef\n"}
+	r := testRelay(fakeVM{}, d)
+	r.Key = proxyline.Key{}
+	if err := r.RemoveStale(context.Background()); err != nil {
+		t.Fatalf("zero key: %v", err)
+	}
+	r = testRelay(fakeVM{}, d)
+	r.Image = ""
+	if err := r.RemoveStale(context.Background()); err == nil || err.Error() != "relay: image, instance and both ports are required" {
+		t.Fatalf("missing image: err = %v", err)
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("docker was called: %v", d.subcommands())
+	}
+}
+
 // targetSeen is what a wrapped target saw on one accepted connection.
 type targetSeen struct {
 	remote  string // RemoteAddr, which runs the handshake

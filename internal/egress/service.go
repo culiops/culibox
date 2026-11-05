@@ -44,6 +44,12 @@ type ServiceOptions struct {
 	// after the network is ensured and before anything else, so a failure keeps
 	// boxes off an egress path whose VM firewall rules no longer hold.
 	AfterNetwork func(ctx context.Context, n Net) error
+	// SweepRelay (darwin only; nil on Linux) runs on a Ready call that is not
+	// listening yet, before the network is ensured, and removes a relay that is
+	// not current (#118): a Ready that fails before AfterNetwork never reaches the
+	// relay's own checks. Its error is logged and Ready goes on, because
+	// AfterNetwork still decides the normal path.
+	SweepRelay func(ctx context.Context) error
 	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay and this
 	// listener prove to each other before the relay's PROXY line is read (#114,
 	// #118). On darwin a zero key makes Ready refuse to listen: the PROXY line
@@ -116,9 +122,10 @@ func (s *Service) Exists(ctx context.Context) bool {
 	return err == nil && ok
 }
 
-// Ready is idempotent: it ensures the network (refusing a wrong one), runs
-// AfterNetwork on every call right after that, before anything else (under the
-// service lock, so Close may wait for it), refreshes
+// Ready is idempotent: on darwin, while it is not listening yet, it first runs
+// SweepRelay (a failure there is logged, never returned); it ensures the network
+// (refusing a wrong one), runs AfterNetwork on every call right after that,
+// before anything else (under the service lock, so Close may wait for it), refreshes
 // the host's own addresses (every call, so an address that appears later is
 // refused too), points the proxy at the network, and starts listening once. Any failure leaves nothing listening
 // that was not already, and a later call retries.
@@ -127,6 +134,16 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	defer s.mu.Unlock()
 	if s.closed {
 		return Endpoint{}, errors.New("egress: service is closed")
+	}
+	// Not listening yet: a relay an earlier CuliBox left that is not current goes
+	// before anything can fail (#118). A Ready that fails at the network never
+	// reaches AfterNetwork, and such a relay would keep forwarding the boxes'
+	// egress to a port this daemon does not hold. Once listening this is skipped,
+	// so the steady state costs nothing.
+	if s.ln == nil && s.o.GOOS == "darwin" && s.o.SweepRelay != nil {
+		if err := s.o.SweepRelay(ctx); err != nil {
+			log.Printf("egress: could not remove a relay that is not current (%v); going on, the relay is checked again once the network is ready", err)
+		}
 	}
 	n, err := EnsureNetwork(ctx, s.o.Docker, s.Network(), s.o.Instance, s.o.Want)
 	if err != nil {

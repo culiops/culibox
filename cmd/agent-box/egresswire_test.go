@@ -263,7 +263,9 @@ func goodFilterRules(egressPort, brokerPort int) string {
 
 // relayDarwin is a darwin layer whose VM runs and whose egress network exists,
 // with a docker that records every call and answers the relay's: no relay
-// container yet, and a log that reports both listeners.
+// container yet, and a log that reports both listeners. A test can write
+// "$d/net" (the network's inspect JSON) or "$d/relay" (what the relay's inspect
+// prints) to change those answers.
 func relayDarwin(t *testing.T, rules string, egressPort, brokerPort int) (*boxLayer, *fakeColima, *fakeDocker) {
 	t.Helper()
 	l, fc, d := darwinLayer(t, false)
@@ -282,8 +284,8 @@ echo "$*" >> "$d/log"
 while [ "$1" = --host ] || [ "$1" = --config ]; do shift 2; done
 case "$1 $2" in
 "network ls") echo agentbox-egress-default ;;
-"network inspect") printf '{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false"},"IPAM":{"Config":[{"Subnet":"` + boxvm.EgressSubnet + `","Gateway":"` + boxvm.EgressGateway + `"}]}}' ;;
-"inspect --type") echo "Error: No such object" >&2; exit 1 ;;
+"network inspect") [ -f "$d/net" ] && { cat "$d/net"; exit 0; }; printf '{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false"},"IPAM":{"Config":[{"Subnet":"` + boxvm.EgressSubnet + `","Gateway":"` + boxvm.EgressGateway + `"}]}}' ;;
+"inspect --type") [ -f "$d/relay" ] && { cat "$d/relay"; exit 0; }; echo "Error: No such object" >&2; exit 1 ;;
 "run -d") printf %s "$AGENTBOX_RELAY_KEY" > "$d/relaykey" ;;
 "logs agentbox-relay-default") echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(egressPort) + `"; echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(brokerPort) + `" ;;
 esac
@@ -416,6 +418,101 @@ func TestStartEgressDarwinStaleBrokerRuleStartsNoRelay(t *testing.T) {
 	}
 	if _, err := svc.Svc.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "box setup -recreate") {
 		t.Errorf("a bound spawn must be refused until the VM is recreated: %v", err)
+	}
+}
+
+// openEgressNet is an egress network's inspect JSON with inter-container
+// traffic on and no --internal: Ready's network check refuses it.
+const openEgressNet = `{"Internal":false,"IPAM":{"Config":[{"Subnet":"` + boxvm.EgressSubnet + `","Gateway":"` + boxvm.EgressGateway + `"}]}}`
+
+// #118: a darwin Ready that fails at the network never reaches the relay's own
+// checks, so the relay is swept first. A relay that is not current (here one with
+// another config label, as a relay from before #118 has) is inspected and
+// removed before the network is ensured, and Ready still returns the network's
+// refusal. The VM's rules are never read: Ready stopped before the relay hook.
+func TestStartEgressDarwinSweepsAStaleRelayWhenTheNetworkIsRefused(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)
+	if err := os.WriteFile(filepath.Join(d.dir, "net"), []byte(openEgressNet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.dir, "relay"), []byte("true\tdeadbeefdeadbeef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatalf("a refused network must not fail the daemon: %v", err)
+	}
+	defer svc.Stop(context.Background())
+	if _, err := svc.Svc.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "internal=false") {
+		t.Fatalf("Ready: err = %v, want the network's refusal", err)
+	}
+	out := d.log()
+	if strings.Contains(out, "COLIMA ssh") || strings.Contains(out, "run -d") {
+		t.Fatalf("Ready went past a refused network:\n%s", out)
+	}
+	// Boot and the call above: each Ready inspects the relay, removes it, then
+	// looks at the network (Exists at boot looks once more before that).
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var seq []string
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "inspect --type container") && strings.HasSuffix(line, " agentbox-relay-default"):
+			seq = append(seq, "inspect-relay")
+		case strings.Contains(line, "rm -f agentbox-relay-default"):
+			seq = append(seq, "rm-relay")
+		case strings.Contains(line, "network ls"):
+			seq = append(seq, "network")
+		}
+	}
+	want := "network,inspect-relay,rm-relay,network,inspect-relay,rm-relay,network"
+	if got := strings.Join(seq, ","); got != want {
+		t.Fatalf("docker sequence = %s, want %s:\n%s", got, want, out)
+	}
+	if strings.Contains(out, l.relayKey.Hex()) || strings.Contains(buf.String(), l.relayKey.Hex()) {
+		t.Error("the relay key reached a docker argv or the log (not printed)")
+	}
+}
+
+// The sweep keeps a current relay: the one Ensure starts carries the hash the
+// sweep computes for the provisioned gateway, so a later daemon whose Ready fails
+// at the network leaves it running (#113: live sessions keep the broker).
+func TestStartEgressDarwinSweepKeepsTheCurrentRelay(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, goodFilterRules(ep, bp), ep, bp)
+	cfg := config.Config{EgressPort: ep, BrokerPort: bp}
+	first, err := startEgress(t.TempDir(), l, cfg, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Stop(context.Background())
+	m := regexp.MustCompile(`--label io\.culiops\.agent-box\.relay-config=([0-9a-f]+) `).FindStringSubmatch(d.log())
+	if m == nil {
+		t.Fatalf("the first daemon started no labelled relay:\n%s", d.log())
+	}
+	if err := os.WriteFile(filepath.Join(d.dir, "relay"), []byte("true\t"+m[1]+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.dir, "net"), []byte(openEgressNet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(d.dir, "log")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := startEgress(t.TempDir(), l, cfg, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Stop(context.Background())
+	out := d.log()
+	if !strings.Contains(out, "inspect --type container") {
+		t.Fatalf("the second daemon's Ready did not look at the relay:\n%s", out)
+	}
+	if strings.Contains(out, "rm -f agentbox-relay-") {
+		t.Fatalf("the sweep removed the current relay:\n%s", out)
 	}
 }
 

@@ -288,9 +288,9 @@ func (r *Relay) inspectRelay(ctx context.Context) (string, error) {
 }
 
 // removeUnlessCurrent is the refusal path that keeps a relay running only when
-// it can be vouched for (D7): cause is returned either way, and the relay is
-// removed unless it runs with the current config hash (same script, flags and
-// key). A relay with another hash may be one from before #118, which does not
+// it can be vouched for (D7): cause is returned either way (RemoveStale passes
+// nil), and the relay is removed unless it runs with the current config hash
+// (same script, flags and key). A relay with another hash may be one from before #118, which does not
 // authenticate the listener, and the v2 listeners refuse it anyway. A current
 // relay stays because the refusals that come here (rules unreadable, DOCKER-USER
 // refused) can be a transient ssh failure that must not cut live sessions. When
@@ -314,10 +314,37 @@ func (r *Relay) removeUnlessCurrent(ctx context.Context, gw netip.Addr, cause er
 	}
 }
 
-// Ensure makes the relay run for gateway gw, or returns an error. On a refusal
-// the only relay left running is one it can vouch for, a current one on the two
-// paths below that keep it; a relay that is not current is removed, unless docker
-// itself fails to inspect or remove it, and then the error says so. Without a
+// RemoveStale removes the relay unless it runs with the current config for the
+// provisioned gateway (EgressGateway), the one Ensure accepts. An egress Ready
+// that is not listening yet calls it before it ensures the network (#118): a
+// Ready that fails there, or anywhere before Ensure, never reaches Ensure's
+// refusals, and during an upgrade a relay from before #118 would keep
+// forwarding the boxes' egress to a port CuliBox does not hold. A current relay
+// is kept (#113: a transient failure must not cut live sessions), an absent one
+// is fine, and the VM's rules are not read (Ensure still reads them on every
+// Ready). Without a key it does nothing: Ensure's zero-key path removes any
+// relay. Without the fields the hash is made of it asks docker nothing and
+// refuses as Ensure does, since it could not tell a current relay from a stale
+// one. An error means docker could not inspect or remove the relay.
+func (r *Relay) RemoveStale(ctx context.Context) error {
+	if r.Key.IsZero() {
+		return nil
+	}
+	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
+		return errors.New("relay: image, instance and both ports are required")
+	}
+	return r.removeUnlessCurrent(ctx, netip.MustParseAddr(EgressGateway), nil)
+}
+
+// Ensure makes the relay run for gateway gw, or returns an error. On the
+// refusals below that judge the running relay (no key, INPUT rules wrong or
+// unreadable, DOCKER-USER refused, a relay that failed to start or listen) the
+// only relay left running is one it can vouch for, a current one on the two
+// that keep it; a relay that is not current is removed, unless docker itself
+// fails to inspect or remove it, and then the error says so. The other refusals
+// (missing fields, a foreign gateway, a failed inspect or removal of the old
+// relay on the main path) leave whatever runs; an egress Ready that is not
+// listening sweeps it with RemoveStale before it gets here. Without a
 // key it removes any relay and refuses, without reading the VM's rules: no
 // listener binds without a key, so the removal cuts nothing that works, and a
 // relay left running could be one from before #118. The INPUT rules are checked

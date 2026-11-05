@@ -848,3 +848,105 @@ func TestReadyLinuxBindErrorUnchanged(t *testing.T) {
 		t.Errorf("linux error changed: %v", err)
 	}
 }
+
+// sweepRec records SweepRelay calls and how many docker calls had run before
+// each one.
+type sweepRec struct {
+	f      *fakeDocker
+	err    error
+	calls  int
+	before []int
+}
+
+func (r *sweepRec) sweep(context.Context) error {
+	r.f.mu.Lock()
+	r.before = append(r.before, len(r.f.calls))
+	r.f.mu.Unlock()
+	r.calls++
+	return r.err
+}
+
+func darwinSweepService(f *fakeDocker, lr *listenRec, sw *sweepRec) *Service {
+	return NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
+		Want: Want{Subnet: "172.29.72.0/24"}, Listen: lr.listen, RelayKey: testRelayKey, SweepRelay: sw.sweep})
+}
+
+// #118: a darwin Ready that is not listening yet sweeps a relay that is not
+// current before it ensures the network. A Ready that fails at the network never
+// reaches AfterNetwork (the relay's own checks), so without the sweep a relay
+// from an earlier CuliBox would keep forwarding the boxes' egress to a port this
+// one does not hold. Ready still returns the network's error.
+func TestReadyDarwinSweepsTheRelayBeforeTheNetwork(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	f.nets["agentbox-egress-DEV"] = inspectJSON("agentbox-egress-DEV", false, [2]string{"172.30.0.0/16", "172.30.0.1"})
+	sw := &sweepRec{f: f}
+	after := false
+	s := darwinSweepService(f, lr, sw)
+	s.o.AfterNetwork = func(context.Context, Net) error { after = true; return nil }
+	defer s.Close(context.Background())
+	_, err := s.Ready(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "has subnet 172.30.0.0/16") {
+		t.Fatalf("err = %v, want the network's refusal", err)
+	}
+	if sw.calls != 1 || sw.before[0] != 0 {
+		t.Fatalf("sweeps = %d (docker calls before each: %v), want one before the network is looked at", sw.calls, sw.before)
+	}
+	if after || lr.count() != 0 {
+		t.Fatalf("Ready went on past a refused network: AfterNetwork=%v listens=%d", after, lr.count())
+	}
+}
+
+// A sweep that fails (docker could not inspect or remove the relay) does not
+// block Ready: it is logged with a fixed text and the wrapped error, and the
+// relay's own checks in AfterNetwork still decide.
+func TestReadyDarwinSweepFailureIsLoggedAndReadyGoesOn(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f, lr := newFakeDocker(), &listenRec{}
+	sw := &sweepRec{f: f, err: errors.New("inspecting the relay: Cannot connect to the Docker daemon")}
+	s := darwinSweepService(f, lr, sw)
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatalf("a failed sweep blocked Ready: %v", err)
+	}
+	if lr.count() != 1 {
+		t.Fatalf("listens = %d, want 1", lr.count())
+	}
+	if got := buf.String(); !strings.Contains(got, "egress: could not remove a relay that is not current") ||
+		!strings.Contains(got, "Cannot connect to the Docker daemon") {
+		t.Fatalf("the sweep failure is not logged: %q", got)
+	}
+}
+
+// Once listening, Ready does not sweep: the steady state costs nothing, and
+// AfterNetwork still runs on every call.
+func TestReadyDarwinSkipsTheSweepWhileListening(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	sw := &sweepRec{f: f}
+	s := darwinSweepService(f, lr, sw)
+	defer s.Close(context.Background())
+	for i := 0; i < 3; i++ {
+		if _, err := s.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sw.calls != 1 {
+		t.Fatalf("sweeps = %d over three Ready calls, want 1 (only before the first listen)", sw.calls)
+	}
+}
+
+// Linux has no relay: Ready never sweeps, even with a hook set.
+func TestReadyLinuxNeverSweeps(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	sw := &sweepRec{f: f}
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen, SweepRelay: sw.sweep})
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sw.calls != 0 {
+		t.Fatalf("linux swept a relay %d time(s)", sw.calls)
+	}
+}
