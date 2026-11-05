@@ -555,17 +555,17 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 
-	// Clone mode (Linux only). The profile list is read through the launcher on
-	// every call, so a profile saved after boot is covered. Before Reconcile,
-	// like the box hooks. Hooks are installed on Linux even when clone creation
-	// is unavailable (no layer, no git): the host-tier box-owned guard needs
-	// neither. The interface must never hold a nil *cloneHooks, so SetClone runs
-	// only for a real value.
-	h, err := newCloneHooks(runtime.GOOS, layer, home, bundleSrc, dataDir, cfg.BoxInstance(), protected, lnch.Clones)
+	// Clone mode (Linux and macOS). The profile list is read through the
+	// launcher on every call, so a profile saved after boot is covered. Before
+	// Reconcile, like the box hooks. Hooks are installed even when clone
+	// creation is unavailable (no layer, no git): the host-tier box-owned guard
+	// needs neither. The interface must never hold a nil *cloneHooks, so
+	// SetClone runs only for a real value.
+	h, err := newCloneHooks(layer, home, bundleSrc, dataDir, cfg.BoxInstance(), protected, lnch.Clones)
 	if err != nil {
 		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
 	}
-	if h != nil { // non-nil on Linux even when unavailable: the box-owned guard stays on
+	if h != nil { // non-nil even when unavailable: the box-owned guard stays on
 		mgr.SetClone(h)
 	}
 
@@ -781,7 +781,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Protected:        protected,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       boxRuntime,
-		CloneUnavailable: cloneUnavailableReason(runtime.GOOS, h),
+		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
 

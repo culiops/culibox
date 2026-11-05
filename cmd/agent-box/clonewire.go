@@ -41,6 +41,11 @@ type cloneHooks struct {
 	// "" when it can. BoxOwned needs neither, so it always works.
 	unavailable string
 
+	// shared is the box VM's shared directories (macOS), nil without a VM. The
+	// VM's docker sees nothing else, so a clone_of or clone dir outside them is
+	// refused (checkShared).
+	shared []string
+
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
 	prepare func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) // swappable for tests
@@ -67,6 +72,9 @@ func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory boo
 	}
 	if !usableDir(c.Dir) {
 		return box.CloneMounts{}, false, fmt.Errorf("%w: clone dir %q is not an absolute clean path", box.ErrUnboxableWorkspace, c.Dir)
+	}
+	if err := h.checkShared(c); err != nil {
+		return box.CloneMounts{}, false, err
 	}
 	// A clone_of the box can write is a host code-execution path (it plants
 	// .git hooks the host's fetch then fires): refuse it before anything is
@@ -383,12 +391,38 @@ func (h *cloneHooks) checkOf(of string) error {
 	return nil
 }
 
-// cloneSaveCheck is the save-time check of a clone profile's repo: the disk
-// box-owned clone_of refusal, then the disk checks of clone.CheckProfile. h is nil
-// where clone mode does not exist (not Linux), which leaves only CheckProfile.
+// checkShared refuses a clone_of or clone dir the box VM does not share; with
+// no VM (shared nil) docker sees the host's own paths and nothing is refused.
+// The VM's docker resolves every mount inside the VM, as spelled, so a path
+// outside the shares fails only at box start, after the clone was made, with
+// docker's error as the only explanation. Both the spelling and its resolved
+// form must be shared: a symlink inside a share may lead out of it.
+func (h *cloneHooks) checkShared(c config.Clone) error {
+	if h.shared == nil {
+		return nil
+	}
+	for _, f := range []struct{ field, path string }{{"clone_of", c.Of}, {"default_cwd", c.Dir}} {
+		real := f.path
+		if r, err := filepath.EvalSymlinks(f.path); err == nil {
+			real = r
+		}
+		if !box.UnderMount(f.path, h.shared) || !box.UnderMount(real, h.shared) {
+			return fmt.Errorf("%w: %s %s is not under the box VM's shared directories (%s), so docker cannot see it; keep the repo and its copy under your home directory",
+				box.ErrUnboxableWorkspace, f.field, f.path, strings.Join(h.shared, ", "))
+		}
+	}
+	return nil
+}
+
+// cloneSaveCheck is the save-time check of a clone profile's repo: the VM
+// share check and the disk box-owned clone_of refusal, then the disk checks of
+// clone.CheckProfile. h is nil only in tests, which leaves only CheckProfile.
 func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) func(config.Clone) error {
 	return func(c config.Clone) error {
 		if h != nil {
+			if err := h.checkShared(c); err != nil {
+				return err
+			}
 			if err := h.checkOf(c.Of); err != nil {
 				return err
 			}
@@ -400,10 +434,10 @@ func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) fu
 // contextSaveCheck is the save-time (and spawn-time) check of one context_paths
 // entry: the disk checks of box.CheckContextPath, then the box-owned refusal.
 // A clone is written by its box, so another box's context would be read from
-// files that box controls. h is nil where clone mode does not exist (not
-// Linux), which leaves only CheckContextPath. shared is the box VM's shared
-// directories, nil when there is no VM. It returns the identity
-// box.CheckContextPathID recorded, which the spawn hands to the box layer.
+// files that box controls. h is nil only in tests, which leaves only
+// CheckContextPath. shared is the box VM's shared directories, nil when there
+// is no VM. It returns the identity box.CheckContextPathID recorded, which the
+// spawn hands to the box layer.
 func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared []string) func(string) (*box.FileID, error) {
 	return func(p string) (*box.FileID, error) {
 		id, err := box.CheckContextPathID(p, home, protected, shared)
@@ -511,26 +545,24 @@ func (h *cloneHooks) record(dir string) error {
 
 // cloneUnavailableReason is why clone mode cannot run on this instance, or ""
 // when it can. Published in /api/meta so the profile editor can say so before a
-// session fails. Clone mode is Linux-only, so a non-Linux host has no hooks.
-func cloneUnavailableReason(goos string, h *cloneHooks) string {
-	if goos != "linux" || h == nil {
-		return "private copies need Linux for now"
+// session fails. The daemon always has hooks; nil only reads as unavailable.
+func cloneUnavailableReason(h *cloneHooks) string {
+	if h == nil {
+		return "clone mode is not set up on this instance"
 	}
 	return h.unavailable
 }
 
-// newCloneHooks builds the clone-mode hooks. Clone mode is Linux-only in
-// Phase A, so it returns nil, nil elsewhere. On Linux it ALWAYS returns hooks:
-// the host-tier box-owned guard (BoxOwned) needs neither the box layer nor git,
-// and must stay on when docker is down or git is missing. When Prepare cannot
-// run (no layer, no git) the hooks are still returned, with a non-nil error
-// saying why, and Prepare refuses with box.ErrBoxUnavailable. memRoot is the
-// config bundle source ("" with the bundle off), absolute when set. instance
-// is this daemon's box instance label, which the refresh compares boxes by.
-func newCloneHooks(goos string, layer *boxLayer, home, memRoot, dataDir, instance string, protected []box.ProtectedDir, clones func() []config.Clone) (*cloneHooks, error) {
-	if goos != "linux" {
-		return nil, nil
-	}
+// newCloneHooks builds the clone-mode hooks, on Linux and macOS alike: what
+// differs is the box layer's (its docker flags and VM shares). It ALWAYS
+// returns hooks: the host-tier box-owned guard (BoxOwned) needs neither the
+// box layer nor git, and must stay on when docker is down or git is missing.
+// When Prepare cannot run (no layer, no git) the hooks are still returned, with
+// a non-nil error saying why, and Prepare refuses with box.ErrBoxUnavailable.
+// memRoot is the config bundle source ("" with the bundle off), absolute when
+// set. instance is this daemon's box instance label, which the refresh
+// compares boxes by.
+func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, protected []box.ProtectedDir, clones func() []config.Clone) (*cloneHooks, error) {
 	h := &cloneHooks{
 		env:      clone.Env{Home: home, Protected: protected, MemoryRoot: memRoot, DataDir: dataDir},
 		clones:   clones,
@@ -545,7 +577,13 @@ func newCloneHooks(goos string, layer *boxLayer, home, memRoot, dataDir, instanc
 		h.unavailable = "no containment layer"
 		return h, errors.New(h.unavailable)
 	}
-	h.docker = clone.ExecDocker{Bin: layer.dockerBin}
+	// The layer's global flags: on macOS they pin every clone container to the
+	// box VM's docker, where the clone is shared; without them a call reaches
+	// the user's own daemon.
+	h.docker = clone.ExecDocker{Bin: layer.dockerBin, Args: layer.dockerArgs}
+	if layer.vm != nil {
+		h.shared = layer.vm.Config().Mounts()
+	}
 	h.image = layer.image
 	cli := layer.cli
 	h.listBoxes = func(ctx context.Context) ([]box.BoxInfo, error) {
