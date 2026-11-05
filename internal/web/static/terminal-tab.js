@@ -510,19 +510,24 @@ class TerminalTab {
     });
     if (v.action !== "write") {
       if (v.reason !== "read" && !this.warnedOsc52) { this.warnedOsc52 = true; console.warn("dropped an OSC 52 clipboard write:", v.reason); }
+      // The one drop that is shown. "format" is only reached once the gesture
+      // gate has passed, so showing it hands the agent nothing it could not get
+      // by asking right after a click anyway, as long as it costs the gesture:
+      // one click buys at most one toast, and the next sequence is "no-gesture",
+      // silent as before. The text is fixed; nothing the agent sent is echoed.
+      if (v.reason === "format") {
+        this.gestureAt = 0;
+        if (typeof showToast === "function") showToast("Not copied: the agent's text has hidden characters." + osc52SelectHint(), { warn: true });
+      }
       return;
     }
     this.gestureAt = 0;
-    const n = [...v.text].length;
+    const n = osc52Lines(v.text);
     copyText(v.text, (ok) => {
       this.term.focus();
       if (typeof showToast !== "function") return;
-      if (ok) { showToast(`Copied ${n} character${n === 1 ? "" : "s"} from the agent`); return; }
-      // The way out is the terminal's own selection, named as the help screen
-      // names it (a help-only row, so shortcutHint has no chord to render).
-      const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
-      const how = sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
-      showToast("The browser blocked the agent's copy." + how, { warn: true });
+      if (ok) { showToast(`Copied ${n} line${n === 1 ? "" : "s"} from the agent`); return; }
+      showToast("The browser blocked the agent's copy." + osc52SelectHint(), { warn: true });
     });
   }
 
@@ -892,6 +897,39 @@ const OSC52_WINDOW_MS = 1500;
 // own 10 MB limit on a sequence.
 const OSC52_MAX_BYTES = 1024 * 1024;
 
+// osc52SelectHint names the way out of a refused or blocked agent copy: the
+// terminal's own selection, as the help screen names it (a help-only row, so
+// shortcutHint has no chord to render). "" when the page has no such row.
+function osc52SelectHint() {
+  const sel = typeof scEntry === "function" ? scEntry("term.select") : null;
+  return sel ? ` Select with ${sel.text[IS_MAC ? "mac" : "other"]} to copy instead.` : "";
+}
+
+// OSC52_FORMAT matches what a selection off a terminal screen never holds and a
+// paste can hide a command behind:
+//   - a CR that is not half of a CRLF: it returns the cursor to column 0 of
+//     the shell it is pasted into, so what follows overwrites what was shown
+//   - any Unicode format character (\p{Cf}), which draws nothing or reorders
+//     what is drawn: the bidi embeddings and overrides U+202A-202E, the isolates
+//     U+2066-2069, zero-width space/non-joiner/joiner U+200B-200D, word joiner
+//     U+2060, BOM U+FEFF, and also LRM/RLM U+200E/200F and ALM U+061C (they
+//     reorder neighbouring punctuation the same way an embedding does), plus
+//     soft hyphen, the invisible math operators and tag characters, which hide
+//     text the same way. The category is used instead of a list because the
+//     threat is "invisible", which is what Cf means, so a character added to
+//     Unicode later is covered too.
+// Cost, accepted: emoji ZWJ sequences (a family, a profession) and the tag
+// flags are refused as a whole. Shift+drag (Option+drag on macOS) still copies
+// them: that is the user's own selection, which this screen does not touch.
+const OSC52_FORMAT = /\r(?!\n)|\p{Cf}/u;
+
+// osc52Lines counts the lines in a copied text, for the toast. A trailing line
+// break ends the last line instead of starting an empty one, so a selection that
+// runs to the end of a row reads as the rows the user saw.
+function osc52Lines(text) {
+  return text.replace(/\r?\n$/, "").split(/\r?\n/).length;
+}
+
 // osc52Decision decides what to do with an OSC 52 sequence (`Pc;Pd`): the
 // program asking to write, or read, the user's clipboard. The program is the
 // agent, which is untrusted, so a write is honoured only inside the window
@@ -899,7 +937,7 @@ const OSC52_MAX_BYTES = 1024 * 1024;
 // arrives; st = {now, armedAt, focused, visible}. Returns
 //   {action: "write", text}  copy text
 //   {action: "drop", reason} ignore it: read | hidden | unfocused | no-gesture |
-//                            empty | too-large | invalid | control
+//                            empty | too-large | invalid | control | format
 // A read (`Pd = ?`) is refused before anything else: answering it would hand
 // the clipboard (a password, a token) to the agent.
 //
@@ -907,6 +945,8 @@ const OSC52_MAX_BYTES = 1024 * 1024;
 // are not UTF-8. Text with control characters other than tab and line breaks is
 // refused: a selection off a screen never has them, and ESC is how a pasted
 // payload breaks out of bracketed paste in a terminal that does not filter it.
+// Text with a lone CR or an invisible format character (OSC52_FORMAT) is refused
+// too, as "format": the one refusal the page shows, and only after the gate.
 // The gate runs before decoding, so a flood of writes costs a comparison each.
 function osc52Decision(data, st) {
   const i = data.indexOf(";");
@@ -929,6 +969,7 @@ function osc52Decision(data, st) {
     return { action: "drop", reason: "invalid" };
   }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text)) return { action: "drop", reason: "control" };
+  if (OSC52_FORMAT.test(text)) return { action: "drop", reason: "format" };
   return { action: "write", text };
 }
 
@@ -968,5 +1009,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

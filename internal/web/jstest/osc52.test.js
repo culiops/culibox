@@ -4,7 +4,7 @@
 // copy in that same, visible, focused pane (see osc52Decision).
 const test = require("node:test");
 const assert = require("node:assert");
-const { osc52Decision, osc52Gesture } = require("../static/terminal-tab.js");
+const { osc52Decision, osc52Gesture, osc52Lines } = require("../static/terminal-tab.js");
 
 // b64 builds the payload the way Claude Code does: base64 of the UTF-8 bytes.
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
@@ -105,6 +105,62 @@ test("a write carrying control characters is dropped", () => {
   assert.deepStrictEqual(osc52Decision("c;" + b64("héllo € 👍"), live), { action: "write", text: "héllo € 👍" });
 });
 
+// A selection taken off a terminal screen is cells of printable characters and
+// line breaks. A CR that is not half of a CRLF returns the cursor to column 0 of
+// the shell it is pasted into, and the invisible format characters (bidi
+// overrides and isolates, zero-width joiners) change what a line looks like
+// without changing what runs. A paste into a shell without bracketed paste can
+// then carry a command the user never saw, so these are refused whole.
+test("a write with a lone CR is refused as format", () => {
+  for (const s of ["a\rb", "a\r", "\rrm -rf ~\n", "a\r\r\nb", "line one\nline two\r"]) {
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, JSON.stringify(s));
+  }
+});
+
+test("a write with a bidi or zero-width format character is refused as format", () => {
+  const cps = [
+    0x202a, 0x202b, 0x202c, 0x202d, 0x202e,         // embeddings and overrides
+    0x2066, 0x2067, 0x2068, 0x2069,                 // isolates
+    0x200b, 0x200c, 0x200d, 0x2060, 0xfeff,         // zero-width space, non-joiner, joiner, word joiner, BOM
+    0x200e, 0x200f, 0x061c,                         // LRM, RLM, ALM
+  ];
+  for (const cp of cps) {
+    const s = "echo ok " + String.fromCodePoint(cp) + "# hidden";
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "drop", reason: "format" }, "U+" + cp.toString(16));
+  }
+});
+
+test("ordinary multi-line text, tabs and non-ASCII still copy", () => {
+  const texts = [
+    "a\nb\nc",
+    "a\r\nb\r\n",                      // CRLF is two characters of one line break
+    "col1\tcol2\n",
+    "Tiếng Việt: ắ ằ ẳ ẵ ặ đ Đ",          // precomposed
+    "Vie\u0302\u0323t Nam e\u0302\u0301",  // decomposed: combining marks are not format characters
+    "héllo € 👍 日本語 مرحبا",
+  ];
+  for (const s of texts) {
+    assert.deepStrictEqual(osc52Decision("c;" + b64(s), live), { action: "write", text: s }, JSON.stringify(s));
+  }
+});
+
+// The screen runs only after the gesture gate, so an agent that never got a
+// gesture learns nothing from it and cannot make the page show anything.
+test("a format payload outside a live window is dropped by the gate, not refused", () => {
+  const data = "c;" + b64("a\rb");
+  assert.deepStrictEqual(osc52Decision(data, { ...live, armedAt: 0 }), { action: "drop", reason: "no-gesture" });
+  assert.deepStrictEqual(osc52Decision(data, { ...live, focused: false }), { action: "drop", reason: "unfocused" });
+  assert.deepStrictEqual(osc52Decision(data, { ...live, visible: false }), { action: "drop", reason: "hidden" });
+});
+
+// How many lines a copy had, for the toast. A trailing line break ends the last
+// line rather than starting an empty one, so what a user sees as "3 lines" (a
+// selection that ends at the end of a row) counts 3.
+test("osc52Lines counts lines, and a trailing line break adds none", () => {
+  const cases = [["hello", 1], ["a\nb\nc", 3], ["a\nb\n", 2], ["a\r\nb\r\n", 2], ["a\r\nb", 2], ["a\n\nb", 3], ["a\n\n", 2], ["\n", 1], [" ", 1]];
+  for (const [s, n] of cases) assert.strictEqual(osc52Lines(s), n, JSON.stringify(s));
+});
+
 // An empty payload is a "clear the clipboard" request. Nothing the user asked
 // for, and wiping what they copied elsewhere is the agent's call only in name.
 test("an empty write is not honoured", () => {
@@ -185,14 +241,65 @@ test("one gesture allows one write, and the copy is announced", () => {
   osc("c;" + b64("hello"));
   osc("c;" + b64("swapped"));
   assert.deepStrictEqual(log.copied, ["hello"]);
-  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 5 characters from the agent"]);
+  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 1 line from the agent"]);
   assert.strictEqual(log.focused, 1); // the copy textarea took focus; it is given back
 });
 
-test("the toast counts characters, not UTF-16 units", () => {
+test("the toast says how many lines were copied", () => {
+  for (const [text, msg] of [
+    ["one", "Copied 1 line from the agent"],
+    ["a\nb\nc", "Copied 3 lines from the agent"],
+    ["a\r\nb\r\n", "Copied 2 lines from the agent"],
+  ]) {
+    const { log, osc } = harness();
+    osc("c;" + b64(text));
+    assert.deepStrictEqual(log.toasts.map((t) => t[0]), [msg], JSON.stringify(text));
+  }
+});
+
+// The toast carries a count and fixed words only. Nothing the agent sent is ever
+// put in it, and showToast sets it through textContent, so it is not parsed.
+test("the toast never carries the agent's text", () => {
   const { log, osc } = harness();
-  osc("c;" + b64("👍"));
-  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 1 character from the agent"]);
+  osc("c;" + b64("<img src=x onerror=alert(1)>\nsecond"));
+  assert.deepStrictEqual(log.toasts.map((t) => t[0]), ["Copied 2 lines from the agent"]);
+});
+
+test("showToast renders its message through textContent", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/shell.js"), "utf8");
+  const start = src.indexOf("function showToast(");
+  assert.ok(start >= 0, "showToast found");
+  const body = src.slice(start, src.indexOf("\nfunction ", start + 1));
+  assert.match(body, /getElementById\("toast-msg"\)\.textContent = msg/);
+  assert.doesNotMatch(body, /innerHTML|outerHTML|insertAdjacentHTML/);
+});
+
+// A refused payload is the one case where the page shows something the agent
+// caused after the gesture gate has already passed, so it must cost the gesture:
+// one click buys at most one toast, however many sequences follow it.
+test("a refused write warns once, copies nothing and spends the gesture", () => {
+  const { tab, log, osc } = harness();
+  const warn = console.warn; console.warn = () => {};
+  try {
+    osc("c;" + b64("echo hi\r"));
+    osc("c;" + b64("echo hi\r"));
+    osc("c;" + b64("echo \u202ehi"));
+  } finally { console.warn = warn; }
+  assert.deepStrictEqual(log.copied, []);
+  assert.strictEqual(log.toasts.length, 1);
+  assert.strictEqual(log.toasts[0][1].warn, true);
+  assert.doesNotMatch(log.toasts[0][0], /^Copied/);
+  assert.doesNotMatch(log.toasts[0][0], /echo/);
+  assert.strictEqual(tab.gestureAt, 0);
+});
+
+test("a refused write names the way out when the page has one", () => {
+  const { log, osc } = harness();
+  global.IS_MAC = false;
+  global.scEntry = () => ({ text: { mac: "Option+drag", other: "Shift+drag" } });
+  const warn = console.warn; console.warn = () => {};
+  try { osc("c;" + b64("a\rb")); } finally { console.warn = warn; delete global.scEntry; delete global.IS_MAC; }
+  assert.match(log.toasts[0][0], /Shift\+drag/);
 });
 
 test("a write the browser refuses says so instead of claiming a copy", () => {
