@@ -623,14 +623,23 @@ func TestWrapOneDeadlineCoversTheWholeHandshake(t *testing.T) {
 	})
 }
 
-// The relay proved the key and then said nothing: the PROXY line is missing,
-// which is a header failure at the timeout and not a key refusal.
+// The relay proves the key and then says nothing: the PROXY line is missing,
+// which is a header failure and not a key refusal. The PROXY line shares the
+// handshake's one deadline: the relay's hello comes 200 ms in and the handshake
+// is over a moment later, so a connection that is closed at about Timeout (300 ms
+// from accept) was held to the deadline set at the start, and one closed at
+// 500 ms got a fresh deadline for the PROXY line.
 func TestWrapHandshakeThenSilenceIsNotAKeyRefusal(t *testing.T) {
 	const timeout = 300 * time.Millisecond
 	var r refusals
 	l := listenOpts(t, r.opts(testKey, timeout))
+	port := portOf(l)
 	cl := dial(t, l)
-	relayWrite(t, cl, "")
+	cl.SetDeadline(time.Now().Add(10 * time.Second))
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		RelayHandshake(cl, testKey, port)
+	}()
 	sc := accept(t, l)
 	start := time.Now()
 	err := readRefused(t, sc)
@@ -638,8 +647,8 @@ func TestWrapHandshakeThenSilenceIsNotAKeyRefusal(t *testing.T) {
 	if !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatalf("err = %v, want a timeout", err)
 	}
-	if el := time.Since(start); el < 200*time.Millisecond || el > 700*time.Millisecond {
-		t.Fatalf("closed after %v, want about %v", el, timeout)
+	if el := time.Since(start); el < 250*time.Millisecond || el > 450*time.Millisecond {
+		t.Fatalf("closed after %v, want about %v (the PROXY line shares the handshake's deadline)", el, timeout)
 	}
 	if got := r.n.Load(); got != 0 {
 		t.Fatalf("KeyRefused called %d times for a relay that proved the key", got)
