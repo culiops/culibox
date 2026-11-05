@@ -15,22 +15,36 @@ import (
 )
 
 // relayScript is the whole relay: one TCP listener per (listen port, target
-// host, target port) triple on the bind address, piped through. Every
-// upstream connection first carries the relay key line ("AGENTBOX-RELAY <64
-// hex>\r\n", 81 bytes) and then a PROXY v1 line ("PROXY TCP4 <box-ip> <bind>
-// <box-port> <listen-port>\r\n") naming the box that connected, in one write.
-// The host listeners accept the PROXY line only behind the key, so they can tell
-// boxes apart while another process on the Mac cannot claim a box's address
-// (#114); the relay itself makes every box arrive from loopback (#71). The key
-// comes from the environment (RelayKeyEnv), never argv; without a well-formed
-// one the script prints "ERR KEY missing or malformed" and exits 1 before it
-// listens. A peer that is not a plain IPv4 address is dropped. It prints
-// "listening BIND:PORT" per port, and "ERR PORT CODE" then exits 1 on a listen
-// error, which is all Ensure reads (never a dial: the INPUT rules also drop the
-// VM's own connections to the gateway). Run as `node -e <script> BIND LPORT
-// THOST TPORT ...`, where argv.slice(1) is the arguments after the script
-// (measured on the Mac).
-const relayScript = `const net=require("net");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K="AGENTBOX-RELAY "+k+"\r\n";const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer(c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const u=net.connect(tp,th);u.write(K+"PROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c);c.on("error",()=>u.destroy());u.on("error",()=>c.destroy())}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
+// host, target port) triple on the bind address, piped through once the host
+// listener has proven it holds the relay key. Per connection it dials the
+// target, writes the hello ("AGENTBOX-RELAY2 <64 hex nonce>\r\n", 82 bytes),
+// reads exactly one proof line (131 bytes) and checks its MAC under the key for
+// the target port, and only then writes its own proof, the PROXY v1 line
+// ("PROXY TCP4 <box-ip> <bind> <box-port> <listen-port>\r\n") naming the box
+// that connected, in one write, and pipes the box through. The wire format and
+// both MACs are proxyline/handshake.go's (its RelayHandshake is this half in Go,
+// and the end-to-end tests run the two against each other). The key never
+// crosses the wire, so a process that holds the target port while CuliBox does
+// not learns nothing it can reuse, and the host listeners tell boxes apart (#114)
+// while the relay makes every box arrive from loopback (#71).
+//
+// The box socket is created paused (pauseOnConnect), so its bytes stay in the
+// kernel until the proof verifies: before that the target receives the hello and
+// nothing else, no PROXY line and no box byte. A proof that is wrong, longer than
+// 131 bytes or malformed destroys both sockets, as does an upstream that closes
+// or errors first and a 5 s timer from accept that the proof has not stopped
+// (a late proof is a wrong one). Hostile upstream bytes never throw: the regexp
+// fixes both fields to 64 hex characters before they are decoded and compared
+// with timingSafeEqual. Nothing is logged per connection: Ensure reads this
+// process's stdout and treats any "ERR " line as fatal. The key comes from the
+// environment (RelayKeyEnv), never argv; without a well-formed one the script
+// prints "ERR KEY missing or malformed" and exits 1 before it listens. A peer
+// that is not a plain IPv4 address is dropped. It prints "listening BIND:PORT"
+// per port, and "ERR PORT CODE" then exits 1 on a listen error, which is all
+// Ensure reads (never a dial: the INPUT rules also drop the VM's own connections
+// to the gateway). Run as `node -e <script> BIND LPORT THOST TPORT ...`, where
+// argv.slice(1) is the arguments after the script (measured on the Mac).
+const relayScript = `const net=require("net"),C=require("crypto");const k=process.env.AGENTBOX_RELAY_KEY||"";if(!/^[0-9a-f]{64}$/.test(k)){console.log("ERR KEY missing or malformed");process.exit(1)}const K=Buffer.from(k,"hex");const mac=(l,p,r,n)=>{const b=Buffer.alloc(2);b.writeUInt16BE(p);return C.createHmac("sha256",K).update(Buffer.concat([Buffer.from("culibox relay2 "+l+"\0"),b,r,n])).digest()};const a=process.argv.slice(1);const bind=a[0];for(let i=1;i+2<a.length;i+=3){const lp=+a[i],th=a[i+1],tp=+a[i+2];net.createServer({pauseOnConnect:true},c=>{let s=String(c.remoteAddress||"");if(s.startsWith("::ffff:"))s=s.slice(7);if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(s)||!c.remotePort){c.destroy();return}const r=C.randomBytes(32),u=net.connect(tp,th);let g=Buffer.alloc(0),ok=false;const end=()=>{clearTimeout(t);c.destroy();u.destroy()};const t=setTimeout(end,5e3);c.on("error",end);u.on("error",end);u.on("close",()=>{if(!ok)end()});const h=d=>{g=Buffer.concat([g,d]);if(g.length<131)return;const m=/^([0-9a-f]{64}) ([0-9a-f]{64})\r\n$/.exec(g.toString("latin1"));if(g.length>131||!m)return end();const n=Buffer.from(m[1],"hex");if(!C.timingSafeEqual(Buffer.from(m[2],"hex"),mac("listener",tp,r,n)))return end();ok=true;clearTimeout(t);u.removeListener("data",h);u.write(mac("relay",tp,r,n).toString("hex")+"\r\nPROXY TCP4 "+s+" "+bind+" "+c.remotePort+" "+lp+"\r\n");c.pipe(u);u.pipe(c)};u.on("data",h);u.write("AGENTBOX-RELAY2 "+r.toString("hex")+"\r\n")}).on("error",e=>{console.log("ERR "+lp+" "+e.code);process.exit(1)}).listen(lp,bind,()=>console.log("listening "+bind+":"+lp))}`
 
 // RelayKeyEnv is the environment variable the relay container reads its key
 // from. `docker run -e RelayKeyEnv` (the name alone) takes the value from the
@@ -181,8 +195,10 @@ type Relay struct {
 	EgressPort      int
 	BrokerPort      int
 	UID, GID        int
-	// Key is the relay key the container presents ahead of every PROXY line.
-	// Required: Ensure refuses the zero Key before it touches the VM.
+	// Key is the relay key the container proves to every host listener, and
+	// requires the listener to prove, before it forwards a byte (the key itself
+	// never crosses the wire). Required: Ensure removes any relay and refuses the
+	// zero Key before it reads the VM's rules.
 	Key          proxyline.Key
 	ReadyTimeout time.Duration // default 10s
 }
@@ -263,26 +279,100 @@ func (r *Relay) remove(ctx context.Context) error {
 	return nil
 }
 
-// Ensure makes the relay run for gateway gw, or returns an error and leaves no
-// relay behind. Without a key it refuses before it touches the VM or docker
-// (the relay would have nothing to present, and the listeners refuse it all).
-// The INPUT rules are checked live first, every time: they are what keeps an
-// unfenced box off the relay, so a VM without them gets no relay.
+// inspectRelay is `docker inspect` of the relay container as
+// "<running>\t<relay-config label>", or docker's error ("No such container" when
+// the relay is absent).
+func (r *Relay) inspectRelay(ctx context.Context) (string, error) {
+	return r.dockerStdout(ctx, "inspect", "--type", "container", "--format",
+		`{{.State.Running}}`+"\t"+`{{index .Config.Labels "`+relayConfigLabel+`"}}`, RelayName(r.Instance))
+}
+
+// removeUnlessCurrent is the refusal path that keeps a relay running only when
+// it can be vouched for (D7): cause is returned either way (RemoveStale passes
+// nil), and the relay is removed unless it runs with the current config hash
+// (same script, flags and key). A relay with another hash may be one from before #118, which does not
+// authenticate the listener, and the v2 listeners refuse it anyway. A current
+// relay stays because the refusals that come here (rules unreadable, DOCKER-USER
+// refused) can be a transient ssh failure that must not cut live sessions. When
+// docker cannot say what runs, nothing is removed and the error says so. The
+// inspect runs on a context that outlives the caller's cancellation, like the
+// removal it gates (still bounded by relayDockerTimeout): an ssh timeout is what
+// makes the rules unreadable, and at boot the same shared deadline has usually
+// ended the caller's context by then, which must not leave a pre-#118 relay up.
+func (r *Relay) removeUnlessCurrent(ctx context.Context, gw netip.Addr, cause error) error {
+	out, err := r.inspectRelay(context.WithoutCancel(ctx))
+	switch {
+	case err == nil:
+		if strings.TrimSpace(out) == "true\t"+r.configHash(gw) {
+			return cause
+		}
+		return r.removeAlso(ctx, cause)
+	case strings.Contains(err.Error(), "No such"):
+		return cause
+	default:
+		return errors.Join(cause, fmt.Errorf("inspecting the relay: %w", err))
+	}
+}
+
+// RemoveStale removes the relay unless it runs with the current config for the
+// provisioned gateway (EgressGateway), the one Ensure accepts. An egress Ready
+// that is not listening yet calls it before it ensures the network (#118): a
+// Ready that fails there, or anywhere before Ensure, never reaches Ensure's
+// refusals, and during an upgrade a relay from before #118 would keep
+// forwarding the boxes' egress to a port CuliBox does not hold. A current relay
+// is kept (#113: a transient failure must not cut live sessions), an absent one
+// is fine, and the VM's rules are not read (Ensure still reads them on every
+// Ready). Without a key it does nothing: Ensure's zero-key path removes any
+// relay. Without the fields the hash is made of it asks docker nothing and
+// refuses as Ensure does, since it could not tell a current relay from a stale
+// one. An error means docker could not inspect or remove the relay.
+func (r *Relay) RemoveStale(ctx context.Context) error {
+	if r.Key.IsZero() {
+		return nil
+	}
+	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
+		return errors.New("relay: image, instance and both ports are required")
+	}
+	return r.removeUnlessCurrent(ctx, netip.MustParseAddr(EgressGateway), nil)
+}
+
+// Ensure makes the relay run for gateway gw, or returns an error. On the
+// refusals below that judge the running relay (no key, INPUT rules wrong or
+// unreadable, DOCKER-USER refused, a relay that failed to start or listen) the
+// only relay left running is one it can vouch for, a current one on the two
+// that keep it; a relay that is not current is removed, unless docker itself
+// fails to inspect or remove it, and then the error says so. The other refusals
+// (missing fields, a foreign gateway, a failed inspect or removal of the old
+// relay on the main path) leave whatever runs; an egress Ready that is not
+// listening sweeps it with RemoveStale before it gets here. Without a
+// key it removes any relay and refuses, without reading the VM's rules: no
+// listener binds without a key, so the removal cuts nothing that works, and a
+// relay left running could be one from before #118. The INPUT rules are checked
+// live first, every time: they are what keeps an unfenced box off the relay, so
+// a VM without them gets no relay.
 //
 // INPUT rules read and wrong: the relay is removed. Rules that could not be
-// read (colima ssh error, timeout): this Ready is refused but a running relay is
-// left alone. The relay only ever started after the rules were verified this
-// boot; a VM reboot or dockerd restart stops it (no restart policy); and a
-// transient ssh failure must not cut every live fenced session's proxy and
-// broker. A DOCKER-USER chain that lets TCP past the relay or lacks the gateway
-// DROP (CheckDockerUserRules) is refused the same way, relay kept: that path does not go through the relay,
-// so removing it would close nothing. Within one daemon run, live sessions keep
-// their proxy and broker; a daemon that starts on such a VM never starts its
-// egress listener (Ready fails before it), so they keep only the broker until
-// the VM is recreated, which ends them anyway.
+// read (colima ssh error, timeout): this Ready is refused, and a running relay
+// is kept only if it is current (same script, flags and key: it proves itself to
+// the listeners); any other is removed, because during an upgrade it may be a
+// relay that does not authenticate the listener (#118). The relay only ever
+// started after the rules were verified this boot, a VM reboot or dockerd
+// restart stops it (no restart policy), and a transient ssh failure must not cut
+// every live fenced session's proxy and broker, so a current relay stays. A
+// DOCKER-USER chain that lets TCP past the relay or lacks the gateway DROP
+// (CheckDockerUserRules) is refused the same way, a current relay kept and any
+// other removed: that path does not go through the relay, so removing a current
+// one would close nothing. Within one daemon run, live sessions keep their proxy
+// and broker; a daemon that starts on such a VM never starts its egress listener
+// (Ready fails before it), so they keep only the broker until the VM is
+// recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Key.IsZero() {
-		return fmt.Errorf("relay: no relay key; CuliBox could not load relay.secret at start (its log says why)")
+		err := fmt.Errorf("relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)")
+		if r.Instance != "" && r.Docker != nil {
+			return r.removeAlso(ctx, err)
+		}
+		return err
 	}
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")
@@ -292,19 +382,18 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	}
 	rules, err := r.VM.FilterRules(ctx)
 	if err != nil {
-		return fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err)
+		return r.removeUnlessCurrent(ctx, gw, fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err))
 	}
 	if err := CheckInputRules(rules, r.EgressPort, r.BrokerPort); err != nil {
 		// Read and wrong: nothing may keep relaying without the rules.
 		return r.removeAlso(ctx, err)
 	}
 	if err := CheckDockerUserRules(rules); err != nil {
-		return err
+		return r.removeUnlessCurrent(ctx, gw, err)
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
-	out, err := r.dockerStdout(ctx, "inspect", "--type", "container", "--format",
-		`{{.State.Running}}`+"\t"+`{{index .Config.Labels "`+relayConfigLabel+`"}}`, name)
+	out, err := r.inspectRelay(ctx)
 	switch {
 	case err == nil:
 		if strings.TrimSpace(out) == "true\t"+hash {

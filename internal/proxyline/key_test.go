@@ -41,16 +41,10 @@ func TestKeyFromBytesNeeds32NonZeroBytes(t *testing.T) {
 	}
 }
 
-func TestKeyPreambleIsTheWireFormat(t *testing.T) {
+func TestKeyHexIsTheRelayEnvFormat(t *testing.T) {
 	k := keyOf(1)
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(k.Hex()) {
 		t.Fatalf("Hex is not 64 lowercase hex characters: %q", k.Hex())
-	}
-	if want := "AGENTBOX-RELAY " + k.Hex() + "\r\n"; string(k.Preamble()) != want {
-		t.Fatalf("Preamble = %q, want %q", k.Preamble(), want)
-	}
-	if len(k.Preamble()) != PreambleLen {
-		t.Fatalf("len(Preamble) = %d, want %d", len(k.Preamble()), PreambleLen)
 	}
 }
 

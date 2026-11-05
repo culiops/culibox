@@ -36,8 +36,55 @@ func relayKeyOf(seed byte) proxyline.Key {
 	return k
 }
 
-// keyed is h as the relay sends it: the key line, then h.
-func keyed(h string) string { return string(testRelayKey.Preamble()) + h }
+// relayHandshake runs the relay's half of the handshake on c against the
+// listener at addr (the relay dials the port it forwards to, so the port is
+// addr's).
+func relayHandshake(c net.Conn, addr string, k proxyline.Key) error {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return err
+	}
+	return proxyline.RelayHandshake(c, k, ap.Port())
+}
+
+// rawConn dials addr and sends nothing. It has a deadline, so a listener that
+// never answers fails the test instead of hanging it.
+func rawConn(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	return c
+}
+
+// relayConn dials addr and runs the relay's handshake under k, failing the
+// test if it does not complete. The PROXY line and the request follow.
+func relayConn(t *testing.T, addr string, k proxyline.Key) net.Conn {
+	t.Helper()
+	c := rawConn(t, addr)
+	if err := relayHandshake(c, addr, k); err != nil {
+		t.Fatalf("relay handshake: %v", err)
+	}
+	return c
+}
+
+// wrongKeyConn dials addr and runs the handshake under wrongRelayKey, which
+// must fail: the listener's proof does not verify under it, so the relay stops
+// before it proves anything. The caller sends its bytes anyway.
+func wrongKeyConn(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c := rawConn(t, addr)
+	if err := relayHandshake(c, addr, wrongRelayKey); err == nil {
+		t.Fatal("a relay on the wrong key passed the listener's proof")
+	}
+	return c
+}
+
+// v1KeyLine is the static key line the relay wrote before #118.
+func v1KeyLine(k proxyline.Key) string { return "AGENTBOX-RELAY " + k.Hex() + "\r\n" }
 
 // darwinService wires a darwin-shaped Service (real loopback listener, source
 // check on, relay key and PROXY header required) around the harness's proxy and
@@ -56,19 +103,14 @@ func darwinService(t *testing.T, p *Proxy) string {
 	return fmt.Sprintf("127.0.0.1:%d", ep.Port)
 }
 
-// A client that sends the key but no PROXY line is closed without an HTTP
-// response.
+// A client that proves the key but sends no PROXY line is closed without an
+// HTTP response.
 func TestDarwinProxyNeedsHeader(t *testing.T) {
 	h, _, _ := boundHarness(t)
 	addr := darwinService(t, h.p)
-	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
-	fmt.Fprint(c, keyed(fmt.Sprintf("CONNECT extra.example.org:443 HTTP/1.1\r\nHost: extra.example.org:443\r\nProxy-Authorization: %s\r\n\r\n",
-		basic("s1", h.tok("s1", nonceA)))))
+	c := relayConn(t, addr, testRelayKey)
+	fmt.Fprintf(c, "CONNECT extra.example.org:443 HTTP/1.1\r\nHost: extra.example.org:443\r\nProxy-Authorization: %s\r\n\r\n",
+		basic("s1", h.tok("s1", nonceA)))
 	b, err := io.ReadAll(c)
 	if len(b) != 0 {
 		t.Fatalf("got a response without a PROXY line: %q (err %v)", b, err)
@@ -87,13 +129,8 @@ func TestDarwinTokenFromOtherBoxRefused(t *testing.T) {
 	addr := darwinService(t, h.p)
 
 	do := func(src string) int {
-		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
-		c.SetDeadline(time.Now().Add(5 * time.Second))
-		fmt.Fprint(c, keyed(fmt.Sprintf("PROXY TCP4 %s 172.29.72.1 40000 9072\r\n", src)))
+		c := relayConn(t, addr, testRelayKey)
+		fmt.Fprintf(c, "PROXY TCP4 %s 172.29.72.1 40000 9072\r\n", src)
 		fmt.Fprintf(c, "CONNECT extra.example.org:443 HTTP/1.1\r\nHost: extra.example.org:443\r\nProxy-Authorization: %s\r\n\r\n",
 			basic("s1", h.tok("s1", nonceA)))
 		resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "CONNECT"})
@@ -116,10 +153,11 @@ func TestDarwinTokenFromOtherBoxRefused(t *testing.T) {
 	}
 }
 
-// #114: the relay's PROXY line is believed only behind the relay key. A process
-// on the Mac that dials the loopback port and names the bound box's own address,
-// with that box's valid token, gets no byte back and no dial without the key or
-// with another key; the same request behind the right key is served.
+// #114, #118: the relay's PROXY line is believed only after the relay proved the
+// key. A process on the Mac that dials the loopback port and names the bound
+// box's own address, with that box's valid token, gets no byte back and no dial
+// without the key, with the v1 key line the relay sent before #118, or with
+// another key; the same request behind the right key is served.
 func TestDarwinProxyNeedsTheRelayKey(t *testing.T) {
 	h, ips, _ := boundHarness(t)
 	ips.set("box-1", "172.29.72.5")
@@ -129,14 +167,11 @@ func TestDarwinProxyNeedsTheRelayKey(t *testing.T) {
 		return fmt.Sprintf("CONNECT extra.example.org:443 HTTP/1.1\r\nHost: extra.example.org:443\r\nProxy-Authorization: %s\r\n\r\n",
 			basic("s1", h.tok("s1", nonceA)))
 	}
-	send := func(preamble string) (*http.Response, []byte, error) {
-		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
+	// send writes head, the own PROXY line and the CONNECT on c, and reads the
+	// reply; when there is none it returns what came back instead.
+	send := func(c net.Conn, head string) (*http.Response, []byte, error) {
 		defer c.Close()
-		c.SetDeadline(time.Now().Add(5 * time.Second))
-		fmt.Fprint(c, preamble+own+connect())
+		fmt.Fprint(c, head+own+connect())
 		br := bufio.NewReader(c)
 		resp, err := http.ReadResponse(br, &http.Request{Method: "CONNECT"})
 		if err != nil {
@@ -146,11 +181,13 @@ func TestDarwinProxyNeedsTheRelayKey(t *testing.T) {
 		return resp, nil, nil
 	}
 
-	for name, preamble := range map[string]string{
-		"no key":    "",
-		"wrong key": string(wrongRelayKey.Preamble()),
+	for name, open := range map[string]func() (net.Conn, string){
+		"no key":      func() (net.Conn, string) { return rawConn(t, addr), "" },
+		"v1 key line": func() (net.Conn, string) { return rawConn(t, addr), v1KeyLine(testRelayKey) },
+		"wrong key":   func() (net.Conn, string) { return wrongKeyConn(t, addr), "" },
 	} {
-		resp, rest, err := send(preamble)
+		c, head := open()
+		resp, rest, err := send(c, head)
 		if err == nil {
 			t.Fatalf("%s: answered %d", name, resp.StatusCode)
 		}
@@ -162,7 +199,7 @@ func TestDarwinProxyNeedsTheRelayKey(t *testing.T) {
 		t.Fatal("dialled for a connection without the relay key")
 	}
 
-	resp, _, err := send(string(testRelayKey.Preamble()))
+	resp, _, err := send(relayConn(t, addr, testRelayKey), "")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("right key: %v %v", resp, err)
 	}
@@ -186,12 +223,8 @@ func TestServiceDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
 	addr := fmt.Sprintf("127.0.0.1:%d", ep.Port)
 	const bareConnect = "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"
 	dial := func(src string, port int) net.Conn {
-		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { c.Close() })
-		fmt.Fprint(c, keyed(fmt.Sprintf("PROXY TCP4 %s 172.29.72.1 %d 9072\r\n", src, port)))
+		c := relayConn(t, addr, testRelayKey)
+		fmt.Fprintf(c, "PROXY TCP4 %s 172.29.72.1 %d 9072\r\n", src, port)
 		return c
 	}
 	// send writes a bare CONNECT on c and gives the reply 2 s.
@@ -212,7 +245,7 @@ func TestServiceDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
 
 	var held []net.Conn
 	for i := 0; i < 3; i++ {
-		// Only the PROXY line: the connection stays open and holds its slot.
+		// Only the handshake and the PROXY line: the connection stays open and holds its slot.
 		held = append(held, dial("172.29.72.9", 40000+i))
 	}
 	time.Sleep(200 * time.Millisecond) // the server admits them on their own goroutines

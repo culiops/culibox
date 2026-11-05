@@ -10,12 +10,13 @@ import (
 	"time"
 )
 
-// Key is the secret CuliBox's own relay presents, ahead of the PROXY line, to
-// the host listeners it dials. A listener that wants a key trusts a PROXY line
-// only from a connection that began with it, so another process on the Mac
+// Key is the secret CuliBox's own relay and the host listeners it dials prove to
+// each other that they hold, ahead of the PROXY line (handshake.go): the key
+// itself never crosses the wire. A listener that wants a key trusts a PROXY line
+// only from a connection whose relay proved it, so another process on the Mac
 // cannot claim a box's address just by reaching the loopback port.
 //
-// The key is 32 random bytes. Only Hex and Preamble yield the material. Format
+// The key is 32 random bytes. Only Hex yields the material. Format
 // writes the redacted ID (String, or GoString for %#v) for every verb, so a Key
 // that is the operand itself, or that sits in an exported struct field, slice
 // element or map value, never prints its bytes under %v, %s, %q, %x, %d, %o, %b
@@ -23,12 +24,6 @@ import (
 // one is printed as its raw bytes: never format a struct that keeps a Key in an
 // unexported field.
 type Key [32]byte
-
-// PreambleLen is the length of Key.Preamble: the prefix, 64 hex characters and
-// CRLF.
-const PreambleLen = 81
-
-const preamblePrefix = "AGENTBOX-RELAY "
 
 // KeyFromBytes returns the key held by b. It errors unless b is exactly 32
 // bytes and not all zero (the zero Key is the "no key" value, which listeners
@@ -51,12 +46,6 @@ func (k Key) IsZero() bool { return k == Key{} }
 // Hex returns the key as 64 lowercase hex characters: the value the relay
 // receives in its environment.
 func (k Key) Hex() string { return hex.EncodeToString(k[:]) }
-
-// Preamble returns the 81 bytes the relay writes before the PROXY line:
-// "AGENTBOX-RELAY <64 hex>\r\n".
-func (k Key) Preamble() []byte {
-	return []byte(preamblePrefix + k.Hex() + "\r\n")
-}
 
 // ID returns a short, domain-separated fingerprint of the key: the first 16
 // hex characters of sha256("culibox relay key id\x00" || key). It identifies
@@ -87,11 +76,11 @@ func (k Key) Format(f fmt.State, verb rune) {
 	io.WriteString(f, k.String())
 }
 
-// RefusalLog counts connections a listener refused for lacking the relay key
-// and logs a summary at most once per interval. A refused connection is closed
-// silently (no audit row: it has no session), so this one line is how a
-// probing local process, or a relay still holding an old key, becomes visible.
-// It never sees what the refused connection sent.
+// RefusalLog counts connections a listener refused because their relay did not
+// prove the relay key, and logs a summary at most once per interval. A refused
+// connection is closed (no audit row: it has no session), so this one line is
+// how a probing local process, a relay started with an old key, or a relay from
+// before #118 becomes visible. It never sees what the refused connection sent.
 type RefusalLog struct {
 	listener string
 	every    time.Duration

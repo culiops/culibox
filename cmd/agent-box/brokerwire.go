@@ -155,7 +155,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 // vstore leaves the references refusing, exactly as without a store. addrs is
 // the layer's box-address cache, which decides the box of a request that
 // arrives on no per-box socket (macOS); nil leaves every such request refused.
-// relayKey is the key the relay presents on macOS (the layer's); the darwin
+// relayKey is the key the relay proves on macOS (the layer's); the darwin
 // listener refuses to open without it, and Linux ignores it.
 func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken,
