@@ -58,7 +58,7 @@ func TestBoxTierRows(t *testing.T) {
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
 		{"provision drift fails with the firewall reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
-			`its firewall rules changed in this version; run "agent-box box setup -recreate"`},
+			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "agent-box box setup -recreate"`},
 		{"stale VM firewall fails", func(f *boxFacts) {
 			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `agent-box box setup -recreate`")
 		}, Fail, "FAIL box VM firewall: the box VM's firewall lets containers"},
@@ -108,7 +108,7 @@ func TestBoxTierUncheckedContextIsNotAPass(t *testing.T) {
 // The live firewall check has its own row when it ran, and none when it did
 // not (VM stopped).
 func TestBoxTierFirewallRow(t *testing.T) {
-	if d := detail(boxTierResults("darwin", ok(), tokenOK)); !strings.Contains(d, "PASS box VM firewall") {
+	if d := detail(boxTierResults("darwin", ok(), tokenOK)); !strings.Contains(d, "PASS box VM firewall: the relay's rules are in place and no DOCKER-USER rule lets TCP past the gateway DROP") {
 		t.Fatalf("a verified firewall deserves its own PASS row:\n%s", d)
 	}
 	f := ok()

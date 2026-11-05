@@ -169,7 +169,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
 	if f.Drifted && f.ProvisionDrifted {
-		out = append(out, Result{Fail, "box VM config", "this VM was set up by an older version and its firewall rules changed in this version; run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
+		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
 	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
@@ -205,7 +205,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		case f.FirewallErr != nil:
 			out = append(out, Result{Fail, "box VM firewall", f.FirewallErr.Error()})
 		default:
-			out = append(out, Result{Pass, "box VM firewall", "boxes reach the Mac only through the relay"})
+			out = append(out, Result{Pass, "box VM firewall", "the relay's rules are in place and no DOCKER-USER rule lets TCP past the gateway DROP"})
 		}
 	}
 	stopped()

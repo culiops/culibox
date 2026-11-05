@@ -50,10 +50,10 @@ func RelayName(instance string) string {
 }
 
 // errRulesMissing is the one message for a VM whose INPUT chain is not the one
-// provisioning writes. Option (a) VMs and VMs provisioned before the egress
-// rules existed end up here.
+// provisioning writes. Option (a) VMs, VMs provisioned before the egress rules
+// existed, and VMs provisioned for other ports end up here.
 func errRulesMissing(why string) error {
-	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes; run `agent-box box setup -recreate`", why)
+	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes, or broker_port or egress_port changed since setup; run `agent-box box setup -recreate`", why)
 }
 
 // CheckInputRules verifies that the first four rules of the INPUT chain in
@@ -235,7 +235,10 @@ func (r *Relay) remove(ctx context.Context) error {
 // transient ssh failure must not cut every live fenced session's proxy and
 // broker. A DOCKER-USER rule that lets TCP past the relay (CheckDockerUserRules)
 // is refused the same way, relay kept: that path does not go through the relay,
-// so removing it would cut live sessions and close nothing.
+// so removing it would close nothing. Within one daemon run, live sessions keep
+// their proxy and broker; a daemon that starts on such a VM never starts its
+// egress listener (Ready fails before it), so they keep only the broker until
+// the VM is recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")

@@ -60,9 +60,10 @@ type Endpoint struct {
 // does not resolve: the relay on the network's gateway forwards the broker port
 // to the Mac's loopback, so boxes are handed the gateway address. The relay
 // prepends a PROXY line naming the box, and the listener refuses any connection
-// without one that names an address inside the box subnet (not the gateway):
-// anything else on the Mac that dials the loopback port is closed unanswered,
-// and RemoteAddr is the box's address, as on Linux. The token guards the rest.
+// without one that names an address inside the box subnet (not the gateway), so
+// RemoteAddr is the box's address. The line is not authenticated: any process on
+// the Mac that dials the loopback port can write one (docs/MACOS.md, Token
+// binding), which Linux's per-box sockets do not allow. The token guards the rest.
 func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 	if goos == "darwin" {
 		return listenDarwin(port, maxDarwinConns, maxDarwinPerSource)
