@@ -175,7 +175,10 @@ func TestWrapDeliversBytesAfterHeader(t *testing.T) {
 }
 
 func TestWrapRejectsMissingHeader(t *testing.T) {
-	l := listen(t, allowAll, 5*time.Second)
+	// The key matched and the PROXY line is missing: a header refusal, not a
+	// key refusal, so KeyRefused must stay silent.
+	var r refusals
+	l := listenOpts(t, r.opts(testKey, 5*time.Second))
 	cl := dial(t, l)
 	if _, err := cl.Write([]byte(keyed("CONNECT x:443 HTTP/1.1\r\n\r\n"))); err != nil {
 		t.Fatal(err)
@@ -197,10 +200,17 @@ func TestWrapRejectsMissingHeader(t *testing.T) {
 	if _, err := cl.Read(make([]byte, 1)); err != io.EOF {
 		t.Fatalf("client read err = %v, want EOF", err)
 	}
+	if got := r.n.Load(); got != 0 {
+		t.Fatalf("KeyRefused called %d times for a connection that had the right key", got)
+	}
 }
 
 func TestWrapRejectsDisallowedSource(t *testing.T) {
-	l := listen(t, func(netip.Addr) bool { return false }, 5*time.Second)
+	// The key matched and the source is not allowed: not a key refusal.
+	var r refusals
+	o := r.opts(testKey, 5*time.Second)
+	o.Allow = func(netip.Addr) bool { return false }
+	l := listenOpts(t, o)
 	cl := dial(t, l)
 	if _, err := cl.Write([]byte(keyed(goodHeader + "x"))); err != nil {
 		t.Fatal(err)
@@ -208,6 +218,9 @@ func TestWrapRejectsDisallowedSource(t *testing.T) {
 	sc := accept(t, l)
 	if _, err := sc.Read(make([]byte, 1)); !errors.Is(err, ErrHeader) {
 		t.Fatalf("Read err = %v, want ErrHeader", err)
+	}
+	if got := r.n.Load(); got != 0 {
+		t.Fatalf("KeyRefused called %d times for a connection that had the right key", got)
 	}
 }
 
