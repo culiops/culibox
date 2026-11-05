@@ -11,7 +11,9 @@ import "io/fs"
 func leafID(string) (*FileID, error) { return nil, nil }
 
 // workspaceID and fileInfoID are Linux only for the same reason: the workspace's
-// identity on macOS is read in the VM (Options.VMIDs), never on the host.
+// identity on macOS is read in the VM (Options.VMIDs), never on the host. The
+// host's own reading (workspace.HostID, hostWorkspaceID) exists on every OS but
+// is only ever compared with another host reading.
 func workspaceID(string) (*FileID, error) { return nil, nil }
 
 func fileInfoID(fs.FileInfo) *FileID { return nil }

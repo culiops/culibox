@@ -36,6 +36,9 @@ func TestResolveWorkspaceIsTheRealDirectoryAndItsIdentity(t *testing.T) {
 	if ws.ID == nil || *ws.ID != lstatID(t, dir) {
 		t.Fatalf("ws.ID = %+v, want the directory's %+v", ws.ID, lstatID(t, dir))
 	}
+	if ws.HostID == nil || *ws.HostID != *ws.ID {
+		t.Fatalf("ws.HostID = %+v, want ID %+v: where the host records one, it is the host reading", ws.HostID, ws.ID)
+	}
 }
 
 func TestResolveWorkspaceRefusesAFile(t *testing.T) {
@@ -61,7 +64,7 @@ func TestInPlaceMountsAtRefusesARootThatIsNotTheResolvedOne(t *testing.T) {
 		}
 	}
 	id := lstatID(t, checked)
-	_, err := inPlaceMountsAt(workspace{Given: opened, Path: opened, ID: &id})
+	_, err := inPlaceMountsAt(workspace{Given: opened, Path: opened, HostID: &id})
 	if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
 	}
@@ -78,7 +81,7 @@ func TestInPlaceMountsAtRefusesARootThatIsNotTheResolvedOne(t *testing.T) {
 func TestInPlaceMountsAtAcceptsTheResolvedRoot(t *testing.T) {
 	ws := ctxTmp(t)
 	id := lstatID(t, ws)
-	got, err := inPlaceMountsAt(workspace{Given: ws, Path: ws, ID: &id})
+	got, err := inPlaceMountsAt(workspace{Given: ws, Path: ws, HostID: &id})
 	if err != nil {
 		t.Fatal(err)
 	}

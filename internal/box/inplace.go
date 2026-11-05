@@ -49,11 +49,13 @@ func inPlaceMounts(ws string) ([]Mount, error) {
 	return inPlaceMountsAt(workspace{Given: ws, Path: ws})
 }
 
-// inPlaceMountsAt is inPlaceMounts for a workspace Wrap resolved once. When the
-// resolution recorded an identity, the folder opened here must be that
-// directory: opening ws.Path again follows whatever its components are now, so
-// a component re-pointed since the resolution would otherwise have the guards
-// derived (and a .claude created) in a folder that was never checked.
+// inPlaceMountsAt is inPlaceMounts for a workspace Wrap resolved once. The
+// resolution recorded the host's reading of its identity (HostID, on every OS):
+// the folder opened here must be that directory. Opening ws.Path again follows
+// whatever its components are now, so a component re-pointed since the
+// resolution would otherwise have the guards derived (and a .claude created) in a
+// folder that was never checked. Both are host readings, so a Mac's inode
+// numbers do not matter here.
 func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 	ws := wsp.Path
 	root, err := os.OpenRoot(ws)
@@ -61,12 +63,12 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 		return nil, refuseInPlace("%s cannot be opened to derive its read-only guards (%v). %s", ws, err, inPlaceTrustedHost)
 	}
 	defer root.Close()
-	if wsp.ID != nil {
+	if wsp.HostID != nil {
 		fi, err := root.Stat(".")
 		if err != nil {
 			return nil, wsChanged(ws, fmt.Sprintf("the folder opened to derive its guards cannot be read (%v)", err))
 		}
-		if got := fileInfoID(fi); got == nil || *got != *wsp.ID {
+		if got := hostFileID(fi); got == nil || *got != *wsp.HostID {
 			return nil, wsChanged(ws, "the folder opened to derive its guards is not the one that was checked")
 		}
 	}

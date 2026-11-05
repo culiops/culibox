@@ -810,7 +810,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		}
 		return nil, nil, "", err
 	}
-	ws, err := workspaceAt(cwd, real)
+	ws, err := workspaceAt(cwd, real, workspaceID)
 	if err != nil {
 		return nil, nil, "", err
 	}

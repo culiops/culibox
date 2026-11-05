@@ -3,7 +3,10 @@ package box
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // workspace is a workspace directory resolved once. The protected check, the box
@@ -21,6 +24,12 @@ type workspace struct {
 	// symlink (workspaceID). Nil when the host records none (macOS: the box VM
 	// reads it).
 	ID *FileID
+	// HostID is the host's own reading of Path's identity, on every OS: ID where
+	// the host records one (Linux), else an Lstat of Path (macOS, hostWorkspaceID).
+	// A Mac inode number is not the one the box sees, so HostID is never compared
+	// with anything read in the box; it is only compared with another host
+	// reading: the folder the in-place guards are derived in (inPlaceMountsAt).
+	HostID *FileID
 }
 
 // resolvePath is cwd made absolute and symlink-resolved: the one spelling a
@@ -46,19 +55,62 @@ func resolveWorkspace(cwd string) (workspace, error) {
 	if err != nil {
 		return workspace{}, err
 	}
-	return workspaceAt(cwd, real)
+	return workspaceAt(cwd, real, workspaceID)
 }
 
 // workspaceAt is the workspace for cwd that resolvePath resolved to real: real
-// with the identity of the directory it names, read by a walk that follows no
-// symlink. A failure here is a changed path (ErrWorkspaceMountChanged) or a
-// leaf that is not a directory, never a path that does not resolve.
-func workspaceAt(cwd, real string) (workspace, error) {
-	id, err := workspaceID(real)
+// with the identity of the directory it names. idOf reads it by a walk that
+// follows no symlink (workspaceID; nil, nil where the host records none). A
+// failure is a changed path (ErrWorkspaceMountChanged) or a leaf that is not a
+// directory, never a path that does not resolve. Where idOf gives no identity the
+// host's own reading is still taken (hostWorkspaceID), so every OS is held to the
+// folder it resolved.
+func workspaceAt(cwd, real string, idOf func(string) (*FileID, error)) (workspace, error) {
+	id, err := idOf(real)
 	if err != nil {
 		return workspace{}, err
 	}
-	return workspace{Given: cwd, Path: real, ID: id}, nil
+	host := id
+	if host == nil {
+		if host, err = hostWorkspaceID(real); err != nil {
+			return workspace{}, err
+		}
+	}
+	return workspace{Given: cwd, Path: real, ID: id, HostID: host}, nil
+}
+
+// hostWorkspaceID is the host's identity reading of the workspace directory p
+// (already resolved) where the no-follow walk of workspaceID is not available:
+// an Lstat, with the same refusals for a leaf that has become a symlink or
+// vanished, and for one that is not a directory. It cannot see a parent swapped
+// since the resolution that precedes it, which the walk can.
+func hostWorkspaceID(p string) (*FileID, error) {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return nil, wsChanged(p, fmt.Sprintf("it cannot be read (%v)", err))
+	}
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return nil, wsChanged(p, "its path is now a symlink")
+	case !fi.IsDir():
+		return nil, fmt.Errorf("%w: %s: it is not a directory", ErrUnboxableWorkspace, p)
+	}
+	id := hostFileID(fi)
+	if id == nil {
+		return nil, wsChanged(p, "it cannot be read (the host gave no identity)")
+	}
+	return id, nil
+}
+
+// hostFileID is the identity the host's stat reports for fi, on any OS, nil when
+// it carries none. Unlike fileInfoID it is not nil on macOS, so it is only for
+// comparing two readings made on the host (see workspace.HostID).
+func hostFileID(fi fs.FileInfo) *FileID {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	return &FileID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}
 }
 
 // wrapResolvedHook, when set (tests only), runs in Wrap right after
