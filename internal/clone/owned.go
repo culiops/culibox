@@ -23,8 +23,20 @@ import (
 // clone, a dangling link into it, or a path under it that does not exist yet is
 // still inside. A path that cannot be resolved for any other reason (EACCES,
 // ELOOP, ENOTDIR) is reported as owned: this check fails closed.
+//
+// An existing clone dir is also compared by identity with cwd and each of its
+// existing ancestors: on a case-insensitive filesystem (macOS APFS by default)
+// ~/Box-Clones/x is ~/box-clones/x, a spelling no string compare matches.
 func BoxOwned(cwd string, clones []config.Clone) (string, bool) {
+	return boxOwned(cwd, clones, os.Stat)
+}
+
+// boxOwned is BoxOwned with the stat it compares identities by.
+func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo, error)) (string, bool) {
 	cwdSp, cwdErr := spellings(cwd)
+	var ids []fs.FileInfo // cwd's existing ancestors, read once, on first need
+	var idsErr error
+	idsRead := false
 	for _, c := range clones {
 		if c.Dir == "" {
 			continue
@@ -40,16 +52,59 @@ func BoxOwned(cwd string, clones []config.Clone) (string, bool) {
 			return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
 				cwd + " in case it is inside it (use agent-box clone fetch)", true
 		}
+		inside := false
 		for _, p := range cwdSp {
 			for _, d := range dirSp {
-				if under(p, d) {
-					return cwd + " is inside the box-owned clone " + c.Dir +
-						"; host tools must never run there (use agent-box clone fetch)", true
-				}
+				inside = inside || under(p, d)
 			}
+		}
+		if !inside {
+			if !idsRead {
+				ids, idsErr = ancestorIDs(cwdSp[len(cwdSp)-1], stat)
+				idsRead = true
+			}
+			if idsErr != nil {
+				return cwd + " cannot be resolved (" + idsErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
+					c.Dir + " (use agent-box clone fetch)", true
+			}
+			id, err := stat(c.Dir)
+			switch {
+			case err == nil:
+				for _, a := range ids {
+					inside = inside || os.SameFile(a, id)
+				}
+			case !errors.Is(err, fs.ErrNotExist): // a clone not made yet has no identity
+				return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
+					cwd + " in case it is inside it (use agent-box clone fetch)", true
+			}
+		}
+		if inside {
+			return cwd + " is inside the box-owned clone " + c.Dir +
+				"; host tools must never run there (use agent-box clone fetch)", true
 		}
 	}
 	return "", false
+}
+
+// ancestorIDs is the identity of p (absolute, symlinks resolved) and of each of
+// its ancestors that exists. A missing one is skipped (a tail not created yet);
+// any other stat failure is an error, so the caller fails closed.
+func ancestorIDs(p string, stat func(string) (fs.FileInfo, error)) ([]fs.FileInfo, error) {
+	var out []fs.FileInfo
+	for {
+		fi, err := stat(p)
+		switch {
+		case err == nil:
+			out = append(out, fi)
+		case !errors.Is(err, fs.ErrNotExist):
+			return nil, err
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return out, nil
+		}
+		p = parent
+	}
 }
 
 // spellings is p cleaned, plus its resolved form when that differs.
