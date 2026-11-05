@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -150,6 +151,18 @@ func shortRoot(t *testing.T) string {
 	return d
 }
 
+// freshDarwinLayer builds a darwin layer over dir and does NOT load the relay
+// key, so a test can arrange the data directory before the first load (which
+// darwinLayer has already done).
+func freshDarwinLayer(t *testing.T, dir string) *boxLayer {
+	t.Helper()
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}, dir, dir, "darwin", &fakeColima{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
 // darwinLayer builds a darwin layer over the fakes, with the VM set up (its
 // stamp written) unless notSetUp.
 func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDocker) {
@@ -180,8 +193,12 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 }
 
 // #114: the macOS daemon keeps one relay key per data directory, in
-// relay.secret, so the relay and the listeners agree on it across restarts.
+// relay2.secret, so the relay and the listeners agree on it across restarts.
 func TestDarwinLayerLoadsOneRelayKeyPerDataDir(t *testing.T) {
+	// The docs name this file (#118: v1's relay.secret is retired).
+	if relaySecretFile != "relay2.secret" {
+		t.Fatalf("relaySecretFile = %q, want relay2.secret", relaySecretFile)
+	}
 	l, _, _ := darwinLayer(t, false)
 	if l.relayKey.IsZero() {
 		t.Fatal("relay key is zero: loadRelayKey did not set it")
@@ -192,14 +209,14 @@ func TestDarwinLayerLoadsOneRelayKeyPerDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Errorf("relay.secret mode = %v, want 0600", info.Mode().Perm())
+		t.Errorf("relay2.secret mode = %v, want 0600", info.Mode().Perm())
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(b) != 32 || !bytes.Equal(b, l.relayKey[:]) {
-		t.Fatalf("relay.secret is %d bytes and does not equal the key", len(b))
+		t.Fatalf("relay2.secret is %d bytes and does not equal the key", len(b))
 	}
 
 	// A second layer on the same root gets the same key.
@@ -221,8 +238,16 @@ func TestDarwinLayerLoadsOneRelayKeyPerDataDir(t *testing.T) {
 	}
 }
 
+// D11: Linux has no relay and no relay key, so it gets no relay2.secret, and the
+// retirement of v1's file is darwin only: a relay.secret that sits in a Linux
+// data dir is not CuliBox's to delete.
 func TestLinuxLayerHasNoRelayKey(t *testing.T) {
 	root := t.TempDir()
+	planted := bytes.Repeat([]byte{7}, 32)
+	old := filepath.Join(root, "relay.secret")
+	if err := os.WriteFile(old, planted, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -233,8 +258,107 @@ func TestLinuxLayerHasNoRelayKey(t *testing.T) {
 	if !l.relayKey.IsZero() {
 		t.Error("linux layer carries a relay key")
 	}
-	if _, err := os.Stat(filepath.Join(root, relaySecretFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("linux wrote %s (stat err %v)", relaySecretFile, err)
+	if _, err := os.Stat(filepath.Join(root, "relay2.secret")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("linux wrote relay2.secret (stat err %v)", err)
+	}
+	got, err := os.ReadFile(old)
+	if err != nil || !bytes.Equal(got, planted) {
+		t.Errorf("linux changed relay.secret (read err %v, %d bytes)", err, len(got))
+	}
+}
+
+// #118 (D6): v1 sent the relay key in clear on every connection, so it may have
+// leaked. It is never loaded again: the first load deletes the old file and the
+// key lives in a new one, with a new random value.
+func TestDarwinLayerRetiresTheV1RelaySecret(t *testing.T) {
+	dir := shortRoot(t)
+	planted := bytes.Repeat([]byte{7}, 32)
+	old := filepath.Join(dir, "relay.secret") // the name already installed Macs have
+	if err := os.WriteFile(old, planted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := freshDarwinLayer(t, dir)
+	if err := l.loadRelayKey(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("relay.secret still exists (stat err %v)", err)
+	}
+	path := filepath.Join(dir, "relay2.secret")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("relay2.secret mode = %v, want 0600", info.Mode().Perm())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) != 32 || !bytes.Equal(b, l.relayKey[:]) {
+		t.Fatalf("relay2.secret is %d bytes and does not equal the key", len(b))
+	}
+	if bytes.Equal(l.relayKey[:], planted) {
+		t.Error("the key is the retired v1 key")
+	}
+
+	// A restart finds nothing to retire and keeps the key.
+	again := freshDarwinLayer(t, dir)
+	if err := again.loadRelayKey(); err != nil {
+		t.Fatal(err)
+	}
+	if again.relayKey != l.relayKey {
+		t.Error("the second load changed the key")
+	}
+}
+
+// No relay.secret (a new install, or the second start) is the normal case: the
+// retirement says nothing.
+func TestLoadRelayKeyIgnoresAMissingRetiredFile(t *testing.T) {
+	l := freshDarwinLayer(t, shortRoot(t))
+	var err error
+	logged := captureLog(t, func() { err = l.loadRelayKey() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.relayKey.IsZero() {
+		t.Fatal("the key is zero")
+	}
+	if logged != "" {
+		t.Errorf("loadRelayKey logged on a clean first start: %q", logged)
+	}
+}
+
+// Deleting v1's file is best effort: a failure is logged (without any key) and
+// the load of the new key carries on.
+func TestLoadRelayKeyLogsAFailedRetirement(t *testing.T) {
+	dir := shortRoot(t)
+	old := filepath.Join(dir, "relay.secret")
+	// A non-empty directory cannot be removed by os.Remove, as root too.
+	if err := os.MkdirAll(filepath.Join(old, "keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l := freshDarwinLayer(t, dir)
+	var err error
+	out := captureLog(t, func() { err = l.loadRelayKey() })
+	if err != nil {
+		t.Fatalf("a failed retirement must not fail the load: %v", err)
+	}
+	if l.relayKey.IsZero() {
+		t.Fatal("the key is zero after a failed retirement")
+	}
+	for _, want := range []string{"relay: could not remove the retired", old, "it is no longer used"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q: %q", want, out)
+		}
+	}
+	if strings.Contains(out, hex.EncodeToString(l.relayKey[:])) {
+		t.Errorf("the log holds the key: %q", out)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "relay2.secret"))
+	if err != nil || !bytes.Equal(b, l.relayKey[:]) {
+		t.Errorf("relay2.secret was not created with the key (read err %v)", err)
 	}
 }
 
@@ -276,18 +400,10 @@ func TestLoadRelayKeyRefusesAnUnreadableFile(t *testing.T) {
 }
 
 // The shared helper words its read error for the cookie secret and the layer's
-// log line must not repeat that: the error has to name relay.secret and what
+// log line must not repeat that: the error has to name relay2.secret and what
 // fixes it, for an unreadable file and for an all-zero one (where the fix is to
 // delete the file, not to make it readable).
 func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
-	darwinFresh := func(t *testing.T, dir string) *boxLayer {
-		t.Helper()
-		l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}, dir, dir, "darwin", &fakeColima{}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return l
-	}
 	t.Run("unreadable", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root reads a mode 000 file")
@@ -301,7 +417,7 @@ func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { os.Chmod(path, 0o600) })
-		err := darwinFresh(t, dir).loadRelayKey()
+		err := freshDarwinLayer(t, dir).loadRelayKey()
 		if err == nil {
 			t.Fatal("an unreadable relay.secret must be an error")
 		}
@@ -320,7 +436,7 @@ func TestLoadRelayKeyErrorsNameTheRelaySecretAndItsFix(t *testing.T) {
 		if err := os.WriteFile(path, make([]byte, 32), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		l := darwinFresh(t, dir)
+		l := freshDarwinLayer(t, dir)
 		err := l.loadRelayKey()
 		if err == nil {
 			t.Fatal("an all-zero relay.secret must be an error")

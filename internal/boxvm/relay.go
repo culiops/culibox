@@ -298,7 +298,7 @@ func (r *Relay) remove(ctx context.Context) error {
 // the VM is recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Key.IsZero() {
-		return fmt.Errorf("relay: no relay key; CuliBox could not load relay.secret at start (its log says why)")
+		return fmt.Errorf("relay: no relay key; CuliBox could not load relay2.secret at start (its log says why)")
 	}
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")

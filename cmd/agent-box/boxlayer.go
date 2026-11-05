@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -69,25 +70,41 @@ type boxLayer struct {
 	// listeners prove to each other before the relay's PROXY line is read
 	// (#114, #118: it never crosses the wire). One per data directory, loaded
 	// once per daemon start by loadRelayKey. Zero off darwin (Linux has no
-	// relay) and zero when relay.secret could not be read, in which case the
+	// relay) and zero when relay2.secret could not be read, in which case the
 	// darwin listeners and the relay refuse to start.
 	relayKey proxyline.Key
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 }
 
-// relaySecretFile is the relay key's file in the data directory.
-const relaySecretFile = "relay.secret"
+// relaySecretFile is the relay key's file in the data directory. The name pairs
+// with the AGENTBOX-RELAY2 hello: it is the key of the challenge-response
+// handshake, where the key never crosses the wire (#118).
+const relaySecretFile = "relay2.secret"
+
+// retiredRelaySecretFile is the v1 relay key's file. v1 sent that key in clear
+// on every connection, so whatever held a port while CuliBox did not, or read
+// the loopback interface, may have learned it. It is never loaded again:
+// loadRelayKey deletes it. A new file name, not a stamp inside the old file,
+// because auth.NewCookieAuth owns the 32-byte format and replaces anything that
+// is not exactly that.
+const retiredRelaySecretFile = "relay.secret"
 
 // loadRelayKey reads, or creates, the relay key for this data directory and
-// sets l.relayKey. Off darwin (no VM, so no relay) it does nothing. It uses the
-// same helper and protection as broker.secret and cookie.secret: 32 random
-// bytes, mode 0600 in the 0700 data directory, an unreadable existing file is an
-// error and is never overwritten. An error leaves the key zero, and a zero key
-// fails closed everywhere it is used.
+// sets l.relayKey. Off darwin (no VM, so no relay) it does nothing, and leaves
+// any relay.secret there alone. On darwin it first deletes the retired v1 key
+// file (best effort: a failure is logged, without any key, and the load goes
+// on). It uses the same helper and protection as broker.secret and
+// cookie.secret: 32 random bytes, mode 0600 in the 0700 data directory, an
+// unreadable existing file is an error and is never overwritten. An error
+// leaves the key zero, and a zero key fails closed everywhere it is used.
 func (l *boxLayer) loadRelayKey() error {
 	if l.vm == nil {
 		return nil
+	}
+	retired := filepath.Join(l.dataDir, retiredRelaySecretFile)
+	if err := os.Remove(retired); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("relay: could not remove the retired %s (%v); it is no longer used", retired, err)
 	}
 	path := filepath.Join(l.dataDir, relaySecretFile)
 	sec, err := auth.NewCookieAuth(path)
