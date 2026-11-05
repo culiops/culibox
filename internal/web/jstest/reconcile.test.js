@@ -150,6 +150,15 @@ test("rowSig changes on every field a row or card renders, and only those", () =
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");
 });
 
+test("rowSig moves with reply_ready: the card's composer opens once the server is ready (#77)", () => {
+  // In the seconds after a turn ends the card renders with reply_ready=false;
+  // without this, nothing else changes when it turns true and Send stays shut.
+  const base = { id: "a", name: "n", activity: "waiting", need: "turn", replyable: true, reply_ready: false };
+  const s0 = rowSig(base, {});
+  assert.notStrictEqual(rowSig(Object.assign({}, base, { reply_ready: true }), {}), s0);
+  assert.strictEqual(rowSig(Object.assign({}, base, { reply_ready: undefined }), {}), s0, "absent reads as not ready");
+});
+
 test("rowSig moves with cost_usd, and an absent cost differs from a zero cost", () => {
   const base = { id: "a", name: "n", activity: "working" };
   const s0 = rowSig(base, {});
