@@ -195,3 +195,31 @@ func TestNoAutoReturnRequiresCloneOf(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// On macOS APFS ignores case, so /Users/me/App/box is inside /Users/me/app.
+// A plain string compare let a clone land inside the repo it copies.
+func TestPathOverlapFoldsCase(t *testing.T) {
+	if !pathOverlapFold("/Users/me/app", "/Users/me/App/box", true) {
+		t.Error("fold: case-variant child not seen as overlap")
+	}
+	if !pathOverlapFold("/Users/me/App", "/users/me/app", true) {
+		t.Error("fold: case-variant equal paths not seen as overlap")
+	}
+	if pathOverlapFold("/Users/me/app", "/Users/me/App-box", true) {
+		t.Error("fold: prefix sibling seen as overlap")
+	}
+	if pathOverlapFold("/Users/me/app", "/Users/me/App/box", false) {
+		t.Error("no fold: case-variant paths must stay distinct on a case-sensitive host")
+	}
+}
+
+func TestValidateCloneRefusesCaseVariantOverlapWhenFolding(t *testing.T) {
+	old := foldPaths
+	foldPaths = true
+	t.Cleanup(func() { foldPaths = old })
+	a := cloneAgent()
+	a.DefaultCwd = strings.ToUpper(a.CloneOf) + "/clone"
+	if err := validateClone(a); err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("case-variant clone inside clone_of: got %v; want overlap refusal", err)
+	}
+}
