@@ -144,6 +144,9 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 	if l.vm != nil {
 		o.Prepare = l.prepare
 		o.Verify = l.verify
+		// #72: the context-path identity, read in the VM (Linux records it on the
+		// host and needs no hook).
+		o.VMIDs = l.vmIDs
 		o.Shared = l.vm.Config().Mounts()
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
@@ -209,6 +212,28 @@ func (l *boxLayer) verify(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
 	return nil
+}
+
+// vmIDsTimeout bounds the VM identity read of a boxed spawn's context paths.
+// The box manager runs it under its operation lock, so a wedged `colima ssh`
+// must not hold every other spawn. A var so a test can shorten it.
+var vmIDsTimeout = 30 * time.Second
+
+// vmIDs is box.Options.VMIDs on macOS: the identity of each path as the VM
+// sees it, which is the one the box's bind mount shows (a Mac inode number is
+// not). It only asks; a stopped VM is an error, never a start.
+func (l *boxLayer) vmIDs(ctx context.Context, paths []string) ([]box.FileID, error) {
+	ctx, cancel := context.WithTimeout(ctx, vmIDsTimeout)
+	defer cancel()
+	ids, err := l.vm.PathIDs(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]box.FileID, len(ids))
+	for i, id := range ids {
+		out[i] = box.FileID{Dev: id.Dev, Ino: id.Ino}
+	}
+	return out, nil
 }
 
 // execNode runs `node -e <script>` in the named box and returns its stdout.

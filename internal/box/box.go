@@ -77,9 +77,16 @@ type Mount struct {
 	// CLAUDE.md import is one.
 	Yield bool
 	// ID, when set, is Host's identity when it was last checked (a context
-	// path on Linux). Once the box runs, ensure refuses it unless Box shows the
-	// same identity inside it (checkMountIDs).
+	// path, on Linux read on the host). Once the box runs, ensure refuses it
+	// unless Box shows the same identity inside it (checkMountIDs).
 	ID *FileID
+	// CheckID marks a mount whose identity must be checked even though the host
+	// recorded none (a context path on macOS, where a host inode number is not
+	// the one the box sees). With no ID and Options.VMIDs set, ensure reads the
+	// identity inside the VM before the mount is made, and checkMountIDs then
+	// compares it like any other. Only context mounts set it: a config overlay
+	// or guard mount is never refused for being a symlink.
+	CheckID bool
 }
 
 // State is what docker says about a box container. Stopped is not Missing: an
@@ -234,6 +241,13 @@ type Options struct {
 
 	Prepare func(ctx context.Context) error             // before any docker call of a boxed spawn
 	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
+	// VMIDs reads the identity of each host path as the docker daemon's kernel
+	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
+	// not the one virtiofs shows the box). ensure calls it, once, for the mounts
+	// that are CheckID with no ID, before the box is created. An error or a
+	// wrong count refuses the spawn. nil = such mounts are not checked (Linux
+	// records the identity on the host itself).
+	VMIDs func(ctx context.Context, paths []string) ([]FileID, error)
 	// Shared lists the host directories the docker daemon can see; a workspace
 	// outside them is refused. nil = every path is visible.
 	Shared []string
@@ -966,6 +980,14 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return fmt.Errorf("%w: %v", ErrBoxUnavailable, err)
 		}
+		// The identity of each context mount as the VM sees it (macOS), taken as
+		// late as it can be and still before the mount exists: a path flipped
+		// after this makes docker mount something the in-box check below sees as
+		// another file. A box reused instead takes it just before that check.
+		if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive, bundle, memory)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
@@ -981,7 +1003,13 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		}
 	}
 	// The box runs, created or reused; the agent has not started. A mount that
-	// is not the checked path is refused here, before anything runs in it.
+	// is not the checked path is refused here, before anything runs in it. A
+	// reused box has had no VM identity read yet (a created one has, above, and
+	// this is then a no-op): the box's mount is old, the path's identity is now.
+	if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+		m.rearmIfIdle(name)
+		return err
+	}
 	if err := m.checkMountIDs(ctx, name, extraRO); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
 	}
