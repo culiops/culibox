@@ -15,7 +15,8 @@ function isClaudeBinName(bin) {
 }
 
 // promptFieldVisible: the server says which agents take a first message
-// (ProfileView.accepts_prompt) — codex does not, so its profiles hide it.
+// (ProfileView.accepts_prompt) — a shell or other non-claude bin does not, so its
+// profiles hide it.
 function promptFieldVisible(profile) {
   return !!(profile && profile.accepts_prompt);
 }
