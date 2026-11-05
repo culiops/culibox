@@ -33,6 +33,12 @@ const proxyHeaderTimeout = 5 * time.Second
 // network could open connections until the daemon ran out of file descriptors.
 const maxDarwinConns = 256
 
+// maxDarwinPerSource is how many of those one source address (one box) may hold
+// at once (decided: 64, a quarter of the total). The relay forwards every box's
+// connections, bound or not, so without it one box that opens maxDarwinConns
+// idle connections stalls every other box's credential calls.
+const maxDarwinPerSource = 64
+
 // Endpoint is how boxes reach the broker on this OS.
 type Endpoint struct {
 	// Listener: darwin, the relay-facing TCP listener. Linux, the shared socket
@@ -59,16 +65,17 @@ type Endpoint struct {
 // and RemoteAddr is the box's address, as on Linux. The token guards the rest.
 func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 	if goos == "darwin" {
-		return listenDarwin(port, maxDarwinConns)
+		return listenDarwin(port, maxDarwinConns, maxDarwinPerSource)
 	}
 	return listenLinux(stateRoot)
 }
 
 // listenDarwin is the Mac's broker listener: TCP on the loopback, at most
-// maxConns raw connections open, then the PROXY wrapper. The cap goes UNDER the
-// wrapper so a connection that never sends its PROXY line still holds its slot
-// (until the header timeout) instead of being free to pile up.
-func listenDarwin(port, maxConns int) (Endpoint, error) {
+// maxConns raw connections open, then the PROXY wrapper, then at most
+// maxPerSource open connections for any one source address. The total cap goes
+// UNDER the wrapper so a connection that never sends its PROXY line still holds
+// its slot (until the header timeout) instead of being free to pile up.
+func listenDarwin(port, maxConns, maxPerSource int) (Endpoint, error) {
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
@@ -76,6 +83,10 @@ func listenDarwin(port, maxConns int) (Endpoint, error) {
 	p := l.Addr().(*net.TCPAddr).Port
 	l = netlimit.Listener(l, maxConns)
 	l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
+	// Above the wrapper: the source is the PROXY header's, known only once the
+	// header was read (in the conn's own goroutine). A conn that has not shown it
+	// yet is held by the total cap alone.
+	l = netlimit.PerSource(l, maxPerSource)
 	return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
 }
 

@@ -258,7 +258,7 @@ func rawPost(t *testing.T, addr, prefix, path, tok, body string) (int, string, e
 // (the cap sits under the PROXY wrapper, so a connection that never sends its
 // header still holds its slot until the header timeout).
 func TestListenDarwinCapsConnections(t *testing.T) {
-	ep, err := listenDarwin(0, 2)
+	ep, err := listenDarwin(0, 2, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 		return netip.Addr{}, errors.New("no such box")
 	}
 	b.SetBoxSource(boxaddr.New(context.Background(), lookup, time.Now))
-	ep, err := listenDarwin(0, maxDarwinConns)
+	ep, err := listenDarwin(0, maxDarwinConns, maxDarwinPerSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,5 +363,82 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 	rec.mu.Unlock()
 	if n != 2 {
 		t.Fatalf("a connection with no PROXY line wrote a row: %d rows", n)
+	}
+}
+
+func TestMaxDarwinPerSourceIsBounded(t *testing.T) {
+	if maxDarwinPerSource <= 0 || maxDarwinPerSource >= maxDarwinConns {
+		t.Fatalf("maxDarwinPerSource = %d, maxDarwinConns = %d: one source must not be able to take them all", maxDarwinPerSource, maxDarwinConns)
+	}
+}
+
+// keepAliveGet is one served request on a conn that stays open behind a PROXY
+// line for src, like a box's client holding its connection idle.
+func keepAliveGet(t *testing.T, addr, src string) (net.Conn, string, error) {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	fmt.Fprintf(c, "PROXY TCP4 %s 172.29.72.1 40000 9071\r\nGET / HTTP/1.1\r\nHost: b\r\n\r\n", src)
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
+	if err != nil {
+		c.Close()
+		return nil, "", err
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return c, string(b), nil
+}
+
+// One box, bound or not, must not be able to take the whole connection budget
+// with idle connections and stall every other box's credential calls: a source
+// holds at most its share, another source still gets in, and a slot comes back
+// when its holder closes.
+func TestListenDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
+	ep, err := listenDarwin(0, 256, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(r.RemoteAddr)) })}
+	go srv.Serve(ep.Listener)
+	t.Cleanup(func() { srv.Close(); ep.Listener.Close() })
+	addr := ep.Listener.Addr().String()
+
+	var held []net.Conn
+	for i := 0; i < 3; i++ {
+		c, body, err := keepAliveGet(t, addr, "172.29.72.9")
+		if err != nil || body != "172.29.72.9:40000" {
+			t.Fatalf("conn %d from the source: %q %v", i, body, err)
+		}
+		held = append(held, c)
+		t.Cleanup(func() { c.Close() })
+	}
+	if c, body, err := keepAliveGet(t, addr, "172.29.72.9"); err == nil {
+		c.Close()
+		t.Fatalf("a fourth connection from a source capped at three was served: %q", body)
+	}
+	other, body, err := keepAliveGet(t, addr, "172.29.72.10")
+	if err != nil || body != "172.29.72.10:40000" {
+		t.Fatalf("another source was crowded out: %q %v", body, err)
+	}
+	other.Close()
+
+	held[0].Close() // its holder is gone; the server notices and frees the slot
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		c, body, err := keepAliveGet(t, addr, "172.29.72.9")
+		if err == nil {
+			c.Close()
+			if body != "172.29.72.9:40000" {
+				t.Fatalf("body %q", body)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("closing a connection never freed its source's slot: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
