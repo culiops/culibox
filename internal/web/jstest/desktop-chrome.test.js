@@ -170,15 +170,28 @@ function containerRules() {
 }
 const headerRule = (has) => containerRules().find((r) => has.test(r.body));
 
-test("the pane header's three container thresholds are ordered and above the widths where each look fits", () => {
+test("the pane header's container thresholds are ordered and above the widths where each look fits", () => {
   const compact = headerRule(/\.ph-sep\s*\{/);
   const icons = headerRule(/\.ph-lbl\s*\{/);
-  const collapse = headerRule(/\.ph-tabs, \.ph-shell\s*\{/);
-  assert.ok(compact && icons && collapse, "the compact, icon and collapse rules each exist");
-  assert.ok(collapse.px < icons.px && icons.px < compact.px, "collapse < icons < compact");
+  const collapse = headerRule(/^\s*\.ph-tabs\s*\{/);
+  const floor = headerRule(/^\s*\.ph-shell\s*\{/);
+  assert.ok(compact && icons && collapse && floor, "the compact, icon, collapse and + Shell floor rules each exist");
+  assert.ok(floor.px < collapse.px && collapse.px < icons.px && icons.px < compact.px, "floor < collapse < icons < compact");
   assert.ok(collapse.px >= 310, "icons need 310 px of content box: never shown in less");
   assert.ok(icons.px >= 420, "text tabs need 420 px of content box: never shown in less");
   assert.ok(compact.px >= 548, "the hover icons clip the wide look up to a 568 px pane (548 content)");
+});
+
+// The founder chose "dot, name, chip, + and ⋯" for a 250-338 px pane: only the
+// four tabs hide there. + Shell (25.4 px) beside the 140 px name column and ⋯
+// fits from a 223 px pane (203 content), measured; below it, both go.
+test("in a narrow pane only the tabs hide; + Shell stays down to the width where it fits", () => {
+  const collapse = headerRule(/^\s*\.ph-tabs\s*\{/);
+  const floor = headerRule(/^\s*\.ph-shell\s*\{/);
+  assert.ok(/^\s*\.ph-tabs\s*\{\s*display:\s*none;?\s*\}\s*$/.test(collapse.body), "the collapse rule hides the tabs and nothing else");
+  assert.ok(/^\s*\.ph-shell\s*\{\s*display:\s*none;?\s*\}\s*$/.test(floor.body), "the floor rule hides + Shell");
+  assert.ok(floor.px >= 203, "+ Shell needs 203 px of content box: never shown in less");
+  assert.ok(floor.px < 230, "a 250 px pane (230 content) still shows + Shell");
 });
 
 test("below the icon threshold every tab shows its icon and hides its label", () => {
