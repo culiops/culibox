@@ -200,8 +200,9 @@ without an answer, and CuliBox's log counts such refusals at most once a minute.
 The secret is 32 random bytes in `relay.secret` in the data directory, readable
 only by you. CuliBox creates it on first start, keeps it across restarts, and
 hands it to the relay container through its environment, never on a command
-line. Another user account on the same Mac therefore cannot write a header the
-proxy or the broker accepts.
+line. While CuliBox holds its loopback ports, another user account on the same
+Mac therefore cannot write a header the proxy or the broker accepts. The end of
+this section covers when CuliBox does not hold them.
 
 This is still weaker than on Linux, where the box is known from the socket a
 request arrives on. A process running as you can read the secret, and with a
@@ -238,8 +239,18 @@ presented from the wrong box (403).
 
 What stays: sessions that share a box (the same profile and binding) can read
 each other's token; code planted into the owning box, for example through a
-shared workspace, runs with that box's access; and a process running as you on
-your Mac that holds a session's token (see above).
+shared workspace, runs with that box's access; a process running as you on
+your Mac that holds a session's token (see above); and the time CuliBox is not
+listening on its ports.
+
+While CuliBox is not listening on its ports (stopped, restarting, or its
+listeners refused to start, for example because `relay.secret` could not be
+loaded or a port could not be bound), the relay in the box VM keeps forwarding.
+Whatever else holds those ports receives what boxes send, session tokens and the
+relay secret included, and because the secret is kept across restarts it stays
+valid until you rotate it. On a Mac shared with other accounts, stop the box VM
+before stopping CuliBox, and delete `relay.secret` if another account may have
+held those ports.
 
 ### In-place guard
 
