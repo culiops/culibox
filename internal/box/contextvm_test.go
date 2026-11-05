@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -119,7 +120,8 @@ func TestVMIDsAreTakenOnceBeforeTheBoxIsCreatedAndCompared(t *testing.T) {
 	sf := &statFake{out: "44:393\n44:394"}
 	m, f := vmManager(t, v, sf)
 	ms := checkMounts(2)
-	name, err := wrapWith(m, t.TempDir(), "s1", ms)
+	dir := ctxTmp(t)
+	name, err := wrapWith(m, dir, "s1", ms)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +129,8 @@ func TestVMIDsAreTakenOnceBeforeTheBoxIsCreatedAndCompared(t *testing.T) {
 	if got := v.order(); got != "vmids,run,stat" {
 		t.Fatalf("order = %q, want vmids,run,stat", got)
 	}
-	if v.n() != 1 || !slices.Equal(v.calls[0], []string{"/srv/ctx0", "/srv/ctx1"}) {
-		t.Fatalf("hook calls = %v, want one call with both paths", v.calls)
+	if v.n() != 1 || !slices.Equal(v.calls[0], []string{dir, "/srv/ctx0", "/srv/ctx1"}) {
+		t.Fatalf("hook calls = %v, want one call with the workspace and both paths", v.calls)
 	}
 	if sf.n() != 1 {
 		t.Fatalf("in-box stat ran %d times, want 1: the VM ids must feed the existing compare", sf.n())
@@ -153,7 +155,7 @@ func TestVMIDsMismatchWithTheMountRemovesTheCreatedBox(t *testing.T) {
 	v := &vmFake{ids: []FileID{{44, 393}, {44, 394}}}
 	sf := &statFake{out: "44:393\n44:999"}
 	m, f := vmManager(t, v, sf)
-	_, err := wrapWith(m, t.TempDir(), "s1", checkMounts(2))
+	_, err := wrapWith(m, ctxTmp(t), "s1", checkMounts(2))
 	if err == nil || !errors.Is(err, ErrContextMountChanged) || !errors.Is(err, ErrUnboxableWorkspace) {
 		t.Fatalf("err = %v, want ErrContextMountChanged and ErrUnboxableWorkspace", err)
 	}
@@ -174,11 +176,16 @@ func TestVMIDsErrorRefusesBeforeAnyBoxIsCreated(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sf := &statFake{out: "44:393\n44:394"}
 			m, f := vmManager(t, v, sf)
-			_, err := wrapWith(m, t.TempDir(), "s1", checkMounts(2))
+			_, err := wrapWith(m, ctxTmp(t), "s1", checkMounts(2))
 			if err == nil || !errors.Is(err, ErrContextMountChanged) || !errors.Is(err, ErrUnboxableWorkspace) {
 				t.Fatalf("err = %v, want ErrContextMountChanged and ErrUnboxableWorkspace", err)
 			}
-			for _, want := range []string{"context_paths /srv/ctx0, /srv/ctx1: ", "refusing"} {
+			// The workspace is in the same read, so it is named with the context
+			// paths, and the refusal is its class too.
+			if !errors.Is(err, ErrWorkspaceMountChanged) {
+				t.Fatalf("err = %v, want ErrWorkspaceMountChanged too", err)
+			}
+			for _, want := range []string{"workspace ", " and context_paths /srv/ctx0, /srv/ctx1 (", "refusing"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("err = %v, want %q", err, want)
 				}
@@ -198,9 +205,14 @@ func TestVMIDsErrorRefusesBeforeAnyBoxIsCreated(t *testing.T) {
 func TestVMIDsErrorSaysWhyAndNamesNoValue(t *testing.T) {
 	v := &vmFake{err: errors.New("reading file identities in the box VM: colima ssh: exit status 1: path 1: a component is a symlink")}
 	m, _ := vmManager(t, v, &statFake{})
-	_, err := wrapWith(m, t.TempDir(), "s1", checkMounts(1))
+	dir := ctxTmp(t)
+	_, err := wrapWith(m, dir, "s1", checkMounts(1))
 	if err == nil || !strings.Contains(err.Error(), "a component is a symlink") {
 		t.Fatalf("err = %v, want the VM's reason in it", err)
+	}
+	want := "the box VM could not confirm workspace " + dir + " and context_paths /srv/ctx0 (" + v.err.Error() + "); refusing"
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
 	}
 }
 
@@ -215,11 +227,12 @@ func TestVMIDsSkipMountsThatNeedNoneOrHaveOne(t *testing.T) {
 			{Host: "/srv/ctx1", Box: "/srv/ctx1", CheckID: true},
 			{Host: "/srv/overlay", Box: "/srv/overlay", Optional: true}, // not a context mount: never checked
 		}
-		if _, err := wrapWith(m, t.TempDir(), "s1", ms); err != nil {
+		dir := ctxTmp(t)
+		if _, err := wrapWith(m, dir, "s1", ms); err != nil {
 			t.Fatal(err)
 		}
-		if v.n() != 1 || !slices.Equal(v.calls[0], []string{"/srv/ctx1"}) {
-			t.Fatalf("hook calls = %v, want one call for /srv/ctx1 only", v.calls)
+		if v.n() != 1 || !slices.Equal(v.calls[0], []string{dir, "/srv/ctx1"}) {
+			t.Fatalf("hook calls = %v, want one call for the workspace and /srv/ctx1 only", v.calls)
 		}
 		if sf.n() != 1 || !slices.Contains(sf.calls[0], "/srv/ctx1") || slices.Contains(sf.calls[0], "/srv/overlay") {
 			t.Fatalf("in-box stat calls = %v, want the two checked mounts and not the overlay", sf.calls)
@@ -232,36 +245,52 @@ func TestVMIDsSkipMountsThatNeedNoneOrHaveOne(t *testing.T) {
 		for i := range ms {
 			ms[i].CheckID = true
 		}
-		if _, err := wrapWith(m, t.TempDir(), "s1", ms); err != nil {
+		dir := ctxTmp(t)
+		if _, err := wrapWith(m, dir, "s1", ms); err != nil {
 			t.Fatal(err)
 		}
-		if v.n() != 0 {
-			t.Fatalf("hook called %d times for mounts that carry an ID", v.n())
+		if v.n() != 1 || !slices.Equal(v.calls[0], []string{dir}) {
+			t.Fatalf("hook calls = %v, want one call for the workspace alone: the context mounts carry an ID", v.calls)
 		}
 	})
-	t.Run("plain mounts so no hook call", func(t *testing.T) {
+	t.Run("plain mounts so the workspace alone is asked", func(t *testing.T) {
 		v := &vmFake{}
 		sf := &statFake{}
 		m, _ := vmManager(t, v, sf)
-		if _, err := wrapWith(m, t.TempDir(), "s1", []Mount{{Host: "/srv/a", Box: "/srv/a"}}); err != nil {
+		dir := ctxTmp(t)
+		name, err := wrapWith(m, dir, "s1", []Mount{{Host: "/srv/a", Box: "/srv/a"}})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if v.n() != 0 || sf.n() != 0 {
-			t.Fatalf("hook=%d stat=%d for a mount nobody asked to check", v.n(), sf.n())
+		if v.n() != 1 || !slices.Equal(v.calls[0], []string{dir}) {
+			t.Fatalf("hook calls = %v, want one call for the workspace alone", v.calls)
+		}
+		if want := inBoxStatArgv(name, dir); sf.n() != 1 || !slices.Equal(sf.calls[0], want) {
+			t.Fatalf("in-box stat calls = %v, want one that lists only the workspace: %v", sf.calls, want)
 		}
 	})
 }
 
-// Without the hook (Linux, which records the identity on the host) a mount with
-// no ID is unchecked, exactly as before.
-func TestNoVMIDsHookLeavesMountsUnchecked(t *testing.T) {
+// Without the hook (Linux, which records the identity on the host) a context
+// mount with no ID is unchecked, exactly as before. The workspace is checked by
+// the identity the host recorded for it, and nothing else is in the exec.
+func TestNoVMIDsHookLeavesContextMountsUnchecked(t *testing.T) {
 	sf := &statFake{}
 	m, _ := vmManager(t, nil, sf)
-	if _, err := wrapWith(m, t.TempDir(), "s1", checkMounts(1)); err != nil {
+	dir := ctxTmp(t)
+	name, err := wrapWith(m, dir, "s1", checkMounts(1))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if sf.n() != 0 {
-		t.Fatalf("in-box stat ran %d times with no hook and no ID", sf.n())
+	want := 0 // macOS records no workspace identity either, and has the hook
+	if runtime.GOOS == "linux" {
+		want = 1
+	}
+	if sf.n() != want {
+		t.Fatalf("in-box stat ran %d times with no hook and no context ID, want %d (the workspace only)", sf.n(), want)
+	}
+	if want == 1 && !slices.Equal(sf.calls[0], inBoxStatArgv(name, dir)) {
+		t.Fatalf("in-box stat = %v, want only the workspace: %v", sf.calls[0], inBoxStatArgv(name, dir))
 	}
 }
 

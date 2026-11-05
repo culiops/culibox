@@ -58,6 +58,18 @@ func resolveWorkspace(cwd string) (workspace, error) {
 	return workspaceAt(cwd, real, workspaceID)
 }
 
+// mount is the workspace as an identity-checked mount: the folder bound at its
+// own path, carrying the identity that was recorded for it. With vm set the
+// identity is the box VM's to read (Options.VMIDs is the kernel view the box
+// shows), so none is carried.
+func (ws workspace) mount(vm bool) Mount {
+	mt := Mount{Host: ws.Path, Box: ws.Path, ID: ws.ID, CheckID: true, kind: mountWorkspace}
+	if vm {
+		mt.ID = nil
+	}
+	return mt
+}
+
 // workspaceAt is the workspace for cwd that resolvePath resolved to real: real
 // with the identity of the directory it names. idOf reads it by a walk that
 // follows no symlink (workspaceID; nil, nil where the host records none). A
@@ -127,15 +139,20 @@ var ErrWorkspaceMountChanged = errors.New("workspace mount is not the checked pa
 // wsMountError is the ErrWorkspaceMountChanged refusal. It is not an
 // ErrUnboxableWorkspace: the folder is fine and the start raced, so a retry may
 // succeed.
-type wsMountError struct{ msg string }
+type wsMountError struct {
+	msg string
+	// also are further errors it is, for a refusal that covers more than the
+	// workspace (identityFailed with context mounts in the same batch).
+	also []error
+}
 
 func (e *wsMountError) Error() string { return e.msg }
 func (e *wsMountError) Unwrap() []error {
-	return []error{ErrBoxUnavailable, ErrWorkspaceMountChanged}
+	return append([]error{ErrBoxUnavailable, ErrWorkspaceMountChanged}, e.also...)
 }
 
 // wsChanged is the refusal for a workspace p that is not the checked path, with
 // why saying how. Its text is "workspace <p>: <why>; refusing".
 func wsChanged(p, why string) error {
-	return &wsMountError{"workspace " + p + ": " + why + "; refusing"}
+	return &wsMountError{msg: "workspace " + p + ": " + why + "; refusing"}
 }

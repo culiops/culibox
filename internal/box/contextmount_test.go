@@ -73,6 +73,16 @@ func (s *statFake) n() int {
 	return len(s.calls)
 }
 
+// wsStat is what the workspace puts at the front of an in-box stat for a
+// manager with no VM hook: its path where the host records its identity (Linux),
+// nothing where it does not (macOS reads it in the VM, see contextvm_test.go).
+func wsStat(dir string) []string {
+	if runtime.GOOS == "linux" {
+		return []string{dir}
+	}
+	return nil
+}
+
 func ctxMounts(ids ...FileID) []Mount {
 	var out []Mount
 	for i, id := range ids {
@@ -89,11 +99,12 @@ func TestContextMountMatchStartsTheBox(t *testing.T) {
 	sf := &statFake{out: "10:20\n11:21"}
 	sf.install(f)
 	ms := ctxMounts(FileID{10, 20}, FileID{11, 21})
-	_, _, name, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{Context: "c"}, []string{"claude"}, nil, ms)
+	dir := ctxTmp(t)
+	_, _, name, err := m.Wrap(context.Background(), dir, "s1", BoxKey{Context: "c"}, []string{"claude"}, nil, ms)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"exec", name, "/usr/bin/stat", "-c", "%d:%i", "--", "/srv/ctx0", "/srv/ctx1"}
+	want := inBoxStatArgv(name, append(wsStat(dir), "/srv/ctx0", "/srv/ctx1")...)
 	if sf.n() != 1 || !slices.Equal(sf.calls[0], want) {
 		t.Fatalf("in-box stat calls = %v, want one: %v", sf.calls, want)
 	}
@@ -114,26 +125,40 @@ func TestContextMountMismatchRemovesACreatedBox(t *testing.T) {
 		err       error
 		bad       string // the path the refusal must name
 		extra     string
+		// wsFirst: the refusal is the workspace's. A stat that fails as a whole
+		// says nothing about which mount is wrong, so the first of the batch is
+		// named, and the workspace leads it where the host records its identity.
+		wsFirst bool
 	}{
-		{"second differs", "10:20\n11:99", nil, "/srv/ctx1", ""},
-		{"first differs", "10:21\n11:21", nil, "/srv/ctx0", ""},
-		{"short output", "10:20", nil, "/srv/ctx1", ""},
-		{"stat failed", "", errors.New("docker exec: exit status 1: stat: cannot statx"), "/srv/ctx0", "in-box check failed"},
+		{"second differs", "10:20\n11:99", nil, "/srv/ctx1", "", false},
+		{"first differs", "10:21\n11:21", nil, "/srv/ctx0", "", false},
+		{"short output", "10:20", nil, "/srv/ctx1", "", false},
+		{"stat failed", "", errors.New("docker exec: exit status 1: stat: cannot statx"), "/srv/ctx0", "in-box check failed", runtime.GOOS == "linux"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m, f := newTestManagerWithFake(t)
 			sf := &statFake{out: c.out, err: c.err}
 			sf.install(f)
-			_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{Context: "c"}, []string{"claude"}, nil,
+			dir := ctxTmp(t)
+			_, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{Context: "c"}, []string{"claude"}, nil,
 				ctxMounts(FileID{10, 20}, FileID{11, 21}))
 			if err == nil {
 				t.Fatal("a box whose mount is not the checked path started")
 			}
-			if !errors.Is(err, ErrContextMountChanged) || !errors.Is(err, ErrUnboxableWorkspace) {
-				t.Fatalf("err = %v, want ErrContextMountChanged and ErrUnboxableWorkspace", err)
-			}
-			if want := "context_paths " + c.bad + ": " + changedMsg; !strings.Contains(err.Error(), want) {
-				t.Fatalf("err = %v, want %q", err, want)
+			if c.wsFirst {
+				if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
+					t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable", err)
+				}
+				if want := "workspace " + dir + ": the mounted folder is not the one that was checked"; !strings.Contains(err.Error(), want) {
+					t.Fatalf("err = %v, want %q", err, want)
+				}
+			} else {
+				if !errors.Is(err, ErrContextMountChanged) || !errors.Is(err, ErrUnboxableWorkspace) {
+					t.Fatalf("err = %v, want ErrContextMountChanged and ErrUnboxableWorkspace", err)
+				}
+				if want := "context_paths " + c.bad + ": " + changedMsg; !strings.Contains(err.Error(), want) {
+					t.Fatalf("err = %v, want %q", err, want)
+				}
 			}
 			if c.extra != "" && !strings.Contains(err.Error(), c.extra) {
 				t.Fatalf("err = %v, want %q", err, c.extra)
@@ -207,17 +232,24 @@ func TestContextMountMismatchRemovesAnIdleReusedBox(t *testing.T) {
 }
 
 // Mounts without an ID (every non-context mount, and context mounts where the
-// check is not made) cost no docker call.
-func TestContextMountNoIDNoExec(t *testing.T) {
+// check is not made) cost no docker call of their own: the one exec lists the
+// workspace alone, or nothing where the host records no workspace identity.
+func TestContextMountWithoutIDIsNotInTheExec(t *testing.T) {
 	m, f := newTestManagerWithFake(t)
 	sf := &statFake{}
 	sf.install(f)
+	dir := ctxTmp(t)
 	ms := []Mount{{Host: "/srv/a", Box: "/srv/a"}}
-	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{Context: "c"}, []string{"claude"}, nil, ms); err != nil {
+	_, _, name, err := m.Wrap(context.Background(), dir, "s1", BoxKey{Context: "c"}, []string{"claude"}, nil, ms)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if sf.n() != 0 {
-		t.Fatalf("stat ran %d times for mounts without an ID", sf.n())
+	if ws := wsStat(dir); len(ws) == 0 {
+		if sf.n() != 0 {
+			t.Fatalf("stat ran %d times for mounts without an ID", sf.n())
+		}
+	} else if want := inBoxStatArgv(name, ws...); sf.n() != 1 || !slices.Equal(sf.calls[0], want) {
+		t.Fatalf("in-box stat calls = %v, want one that lists only the workspace: %v", sf.calls, want)
 	}
 }
 

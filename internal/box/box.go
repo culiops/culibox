@@ -84,10 +84,24 @@ type Mount struct {
 	// recorded none (a context path on macOS, where a host inode number is not
 	// the one the box sees). With no ID and Options.VMIDs set, ensure reads the
 	// identity inside the VM before the mount is made, and checkMountIDs then
-	// compares it like any other. Only context mounts set it: a config overlay
-	// or guard mount is never refused for being a symlink.
+	// compares it like any other. Context mounts set it, and so does the
+	// workspace mount ensure adds (never a caller's mount): a config overlay is
+	// never refused for being a symlink.
 	CheckID bool
+	// kind says what the mount is for, which only decides the refusal when its
+	// identity does not match (mountChanged). Unexported, so a caller outside
+	// this package cannot mark its mount as the workspace.
+	kind mountKind
 }
+
+// mountKind is what an identity-checked mount stands for.
+type mountKind uint8
+
+const (
+	mountExtra     mountKind = iota // a caller's mount, a context path
+	mountWorkspace                  // the workspace
+	mountGuard                      // an in-place guard of the workspace
+)
 
 // State is what docker says about a box container. Stopped is not Missing: an
 // exited container keeps its name, so treating it as absent makes the next
@@ -247,10 +261,11 @@ type Options struct {
 	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
 	// VMIDs reads the identity of each host path as the docker daemon's kernel
 	// sees it, in order (on macOS: inside the VM, since a Mac inode number is
-	// not the one virtiofs shows the box). ensure calls it, once, for the mounts
-	// that are CheckID with no ID, before the box is created. An error or a
-	// wrong count refuses the spawn. nil = such mounts are not checked (Linux
-	// records the identity on the host itself).
+	// not the one virtiofs shows the box). ensure calls it, once, for the
+	// workspace (always asked, first) and the mounts that are CheckID with no ID,
+	// before the box is created. An error or a wrong count refuses the spawn.
+	// nil = such mounts are not checked (Linux records the identity on the host
+	// itself, the workspace's included).
 	VMIDs func(ctx context.Context, paths []string) ([]FileID, error)
 	// Shared lists the host directories the docker daemon can see; a workspace
 	// outside them is refused. nil = every path is visible.
@@ -920,6 +935,11 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
+	// The workspace is checked like a context mount: what the box shows at its
+	// path must be the directory that was resolved and checked. With a VM hook
+	// the identity is the VM's, whatever the host recorded.
+	wsm := ws.mount(m.opts.VMIDs != nil)
+
 	m.mu.Lock()
 	if t, ok := m.timers[name]; ok {
 		t.Stop()
@@ -1076,11 +1096,12 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return fmt.Errorf("%w: %v", ErrBoxUnavailable, err)
 		}
-		// The identity of each context mount as the VM sees it (macOS), taken as
-		// late as it can be and still before the mount exists: a path flipped
-		// after this makes docker mount something the in-box check below sees as
-		// another file. A box reused instead takes it just before that check.
-		if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+		// The identity of the workspace and of each context mount as the VM sees
+		// it (macOS), taken as late as it can be and still before the mount
+		// exists: a path flipped after this makes docker mount something the
+		// in-box check below sees as another file. A box reused instead takes it
+		// just before that check. One read for all of them, the workspace first.
+		if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
@@ -1098,15 +1119,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.markVerified(name)
 		}
 	}
-	// The box runs, created or reused; the agent has not started. A mount that
-	// is not the checked path is refused here, before anything runs in it. A
-	// reused box has had no VM identity read yet (a created one has, above, and
-	// this is then a no-op): the box's mount is old, the path's identity is now.
-	if extraRO, err = m.fillVMIDs(ctx, extraRO); err != nil {
+	// The box runs, created or reused; the agent has not started. The workspace
+	// or a mount that is not the checked path is refused here, before anything
+	// runs in it. A reused box has had no VM identity read yet (a created one
+	// has, above, and this is then a no-op): the box's mount is old, the path's
+	// identity is now.
+	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
-	if err := m.checkMountIDs(ctx, name, extraRO); err != nil {
+	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO)); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
