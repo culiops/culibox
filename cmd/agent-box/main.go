@@ -1088,7 +1088,7 @@ func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
 // reports what it freed. internal/box returns results rather than logging so its
 // decisions stay testable without a daemon; the printing belongs here.
 func reclaimBoxState(ctx context.Context, boxes *box.Manager) {
-	done, err := boxes.ReclaimState(ctx, box.DefaultStateTTL)
+	done, err := boxes.ReclaimState(ctx, box.DefaultStateTTL, box.DefaultStateTTL)
 	for _, r := range done {
 		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
 			r.Box, int(r.Age.Hours()/24), r.Bytes/(1024*1024))

@@ -12,29 +12,62 @@ import (
 )
 
 // DefaultStateTTL is how long an unused box home survives. A workspace untouched
-// for a month has no resume worth keeping, and each home costs tens of megabytes
-// of regenerable npm cache.
+// for a month has no resume worth keeping, but the login and the resume history in
+// its .claude are cheap and worth having until then. The regenerable caches in it
+// are not cheap, and go sooner: see DefaultCacheTTL.
 const DefaultStateTTL = 30 * 24 * time.Hour
 
-// Reclaimed describes one box home the sweep removed. The package returns this
-// rather than logging it: every decision here is unit-tested without a daemon,
-// which is only true while it imports no logger.
+// DefaultCacheTTL is how long a dead box keeps its regenerable caches. A Go
+// workspace leaves gigabytes behind (a build cache of 3.6 to 5.5 GiB per home was
+// measured, 18 GiB of it in 20 hours on one host), so thirty days of them filled
+// a disk. An hour keeps the cache warm for someone who comes straight back, and
+// anything later pays one rebuild.
+const DefaultCacheTTL = time.Hour
+
+// cachePaths are the only paths pruneOne removes from a home that is past
+// DefaultCacheTTL but not yet past DefaultStateTTL: caches a tool rebuilds by
+// itself. The list is spelled out, never derived (no "everything under .cache"):
+// what a home holds besides these is a resume, a login or a user's file.
+//
+//   - .cache/go-build and go/pkg/mod: GOCACHE and GOMODCACHE as the box image
+//     sets them,
+//   - .npm: npm's cache,
+//   - .claude/security/agent-sdk-venv: the Python venv the security-guidance
+//     plugin builds at session start when it is missing.
+var cachePaths = []string{
+	".cache/go-build",
+	"go/pkg/mod",
+	".npm",
+	".claude/security/agent-sdk-venv",
+}
+
+// Reclaimed describes one box home the sweep removed, or whose caches it pruned.
+// The package returns this rather than logging it: every decision here is
+// unit-tested without a daemon, which is only true while it imports no logger.
 type Reclaimed struct {
-	Box   string
-	Age   time.Duration
+	Box string
+	Age time.Duration
+	// Bytes is what the sweep freed: the whole home, or with Caches the files
+	// under the allowlisted paths as measured before the removal (an upper bound
+	// when a path would not go and the error says so).
 	Bytes int64
+	// Caches is true when only the allowlisted caches were removed and the home
+	// itself stays.
+	Caches bool
 }
 
 // ReclaimState removes the host homes of boxes that no longer exist and have not
-// been used for ttl.
+// been used for ttl, and removes only the regenerable caches (cachePaths) of
+// those unused for cacheTTL but not yet ttl. A cacheTTL that is not shorter than
+// ttl turns the pruning off.
 //
-// A home is removed only when all four hold, checked in this order because the
+// A home is touched only when all four hold, checked in this order because the
 // cheap and certain tests come first:
 //
 //  1. its name is one this package generates,
 //  2. no container of this instance still carries that name,
 //  3. no live session is counted against it,
-//  4. it is older than ttl.
+//  4. it is older than ttl (removed whole) or cacheTTL (caches only).
 //
 // Grounds 2 and 3 are checked twice: once cheaply against a snapshot to decide
 // whether a candidate is worth walking and stat-ing at all, and again — for
@@ -44,16 +77,16 @@ type Reclaimed struct {
 // RemoveAll racing that mount would delete files out from under a live
 // container. Holding opMu across the whole sweep would block every spawn for
 // as long as the slowest directory walk takes, so the lock is scoped to one
-// candidate's decide-and-remove instead. dirBytes runs BEFORE opMu is taken —
-// it is only a report number, and a slightly stale byte count is an acceptable
-// cost to keep the walk off the lock.
+// candidate's decide-and-remove instead. dirBytes and cacheBytes run BEFORE
+// opMu is taken — they are only a report number, and a slightly stale byte count
+// is an acceptable cost to keep the walk off the lock.
 //
 // A removal that fails is recorded and the sweep continues: one stubborn
 // directory — a root-owned leftover from before mountpoints were pre-created —
 // must not stop the rest. The failures come back joined so the caller can name
 // them. Escalating to remove them is deliberately not done: running a root
 // container over host state is the hole this package exists to close.
-func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclaimed, error) {
+func (m *Manager) ReclaimState(ctx context.Context, ttl, cacheTTL time.Duration) ([]Reclaimed, error) {
 	root := filepath.Join(m.opts.StateRoot, stateDirName)
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -85,16 +118,30 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclai
 		if live > 0 {
 			continue
 		}
-		if age, ok := m.homeAge(name); !ok || age < ttl {
+		// min: a cacheTTL that is not shorter than ttl must not postpone the
+		// removal of a home that is past ttl.
+		age, ok := m.homeAge(name)
+		if !ok || age < min(ttl, cacheTTL) {
 			continue
 		}
 		dir := m.stateDir(name)
-		size := dirBytes(dir)
-
-		reclaimed, err := m.reclaimOne(ctx, name, dir, ttl, size)
+		var reclaimed *Reclaimed
+		var err error
+		if age >= ttl {
+			reclaimed, err = m.reclaimOne(ctx, name, dir, ttl, dirBytes(dir))
+		} else {
+			// Nothing to prune is the usual case on every pass after the first,
+			// and costs a few lstats instead of taking opMu.
+			size := cacheBytes(dir)
+			if size == 0 {
+				continue
+			}
+			reclaimed, err = m.pruneOne(ctx, name, dir, cacheTTL, size)
+		}
+		// A prune can both free something and fail on another path, so the two
+		// are recorded independently.
 		if err != nil {
 			errs = append(errs, err)
-			continue
 		}
 		if reclaimed != nil {
 			out = append(out, *reclaimed)
@@ -104,19 +151,17 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclai
 	return out, errors.Join(errs...)
 }
 
-// reclaimOne re-checks a single candidate under opMu and removes its home if
-// it is still, in fact, unused. Every ground is re-read here rather than trusted
-// from the snapshot. A nil, nil return means the box came back to life since the
-// snapshot and was correctly left alone — not an error.
-func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Duration, size int64) (*Reclaimed, error) {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
-
+// stillUnused re-reads, for one candidate, every ground the snapshot in
+// ReclaimState established, and reports the home's age and whether the home is
+// in fact still unused for at least minAge. The caller holds opMu and keeps
+// holding it across whatever it then does to the home. Every ground is re-read
+// rather than trusted from the snapshot.
+func (m *Manager) stillUnused(ctx context.Context, name string, minAge time.Duration) (time.Duration, bool) {
 	m.mu.Lock()
 	live := m.active[name]
 	m.mu.Unlock()
 	if live > 0 {
-		return nil, nil
+		return 0, false
 	}
 	// Closes the hole the initial ListByLabel snapshot cannot: a session may
 	// have spawned and already released between the snapshot and here, leaving
@@ -124,7 +169,7 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	// its idle timer. When Inspect cannot say for certain, do not delete.
 	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil || st == StateRunning {
-		return nil, nil
+		return 0, false
 	}
 	// The age from the snapshot is just as stale as the other two grounds were.
 	// A spawn landing in that window touches the marker, and its container can
@@ -132,19 +177,160 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	// removed — leaving a home used seconds ago condemned on a month-old
 	// reading. The marker is the record of that use, so read it again here.
 	age, ok := m.homeAge(name)
-	if !ok || age < ttl {
+	if !ok || age < minAge {
+		return 0, false
+	}
+	return age, true
+}
+
+// reclaimOne re-checks a single candidate under opMu and removes its home if
+// it is still, in fact, unused. A nil, nil return means the box came back to life
+// since the snapshot and was correctly left alone — not an error.
+func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Duration, size int64) (*Reclaimed, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	age, ok := m.stillUnused(ctx, name, ttl)
+	if !ok {
 		return nil, nil
 	}
 
 	// The out dir sits beside the home, not in it, so it goes separately. Both
 	// are attempted whatever the first returns: a stubborn home must not keep
 	// the screenshots alive too.
-	err = errors.Join(os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name))))
+	err := errors.Join(os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name))))
 	if err != nil {
 		return nil, fmt.Errorf("box: reclaiming %s: %w", name, err)
 	}
 	_ = os.Remove(m.markerPath(name))
 	return &Reclaimed{Box: name, Age: age, Bytes: size}, nil
+}
+
+// pruneOne removes the cachePaths of a home that is unused but younger than the
+// state TTL, under the same opMu and the same re-checks as reclaimOne. A nil, nil
+// return means the box came back to life since the snapshot, or there was nothing
+// left to remove. The result and the error can both be set: a path that will not
+// go does not stop the others, and what did go is still reported.
+//
+// Every filesystem call goes through an os.Root on the home, which refuses a
+// path that escapes it. That is not enough alone: a link that stays inside the
+// root (.x -> .claude) IS followed, so a removal of ".x/sub" deletes
+// ".claude/sub". plainPath therefore refuses any path with a symlink in it, and
+// RemoveAll then only ever sees real directories, removing a link it meets
+// inside the tree as the link it is.
+//
+// Neither the home's own mtime nor the marker is the prune's to move. Unlinking
+// .npm from the home changes the home's mtime, which is the age of a home with no
+// marker, so that mtime is put back and a prune never makes a home look used.
+func (m *Manager) pruneOne(ctx context.Context, name, dir string, cacheTTL time.Duration, size int64) (*Reclaimed, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	age, ok := m.stillUnused(ctx, name, cacheTTL)
+	if !ok {
+		return nil, nil
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("box: pruning caches of %s: %w", name, err)
+	}
+	defer root.Close()
+	home, err := root.Lstat(".")
+	if err != nil {
+		return nil, fmt.Errorf("box: pruning caches of %s: %w", name, err)
+	}
+
+	var errs []error
+	removed := false
+	for _, p := range cachePaths {
+		if !plainPath(root, p) {
+			continue
+		}
+		makeRemovable(root, p)
+		if err := root.RemoveAll(p); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p, err))
+			continue
+		}
+		removed = true
+	}
+	if _, err := os.Stat(m.markerPath(name)); err != nil {
+		// A zero time leaves the access time as it is; only the mtime is read.
+		if err := root.Chtimes(".", time.Time{}, home.ModTime()); err != nil {
+			errs = append(errs, fmt.Errorf("restoring the age of the home: %w", err))
+		}
+	}
+
+	var out *Reclaimed
+	if removed {
+		out = &Reclaimed{Box: name, Age: age, Bytes: size, Caches: true}
+	}
+	if len(errs) > 0 {
+		return out, fmt.Errorf("box: pruning caches of %s: %w", name, errors.Join(errs...))
+	}
+	return out, nil
+}
+
+// plainPath reports whether every component of rel (slash-separated, relative to
+// root) exists and is a real directory. Lstat is what makes this a symlink check:
+// it stops at a link instead of resolving it, and by the time a component is
+// checked everything before it is known not to be one, so nothing here is
+// followed on the way down.
+func plainPath(root *os.Root, rel string) bool {
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		fi, err := root.Lstat(strings.Join(parts[:i+1], "/"))
+		if err != nil || !fi.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+// makeRemovable gives the owner full access to every directory under rel, which
+// has passed plainPath. A Go module cache written without -modcacherw is 0555
+// directories of 0444 files, and none of it can be unlinked until its
+// directories are writable again. The chmod comes BEFORE WalkDir reads a
+// directory, so even one with no read bit can be listed. A chmod that fails is
+// ignored: if it mattered, RemoveAll fails right after with the real cause (a
+// directory owned by another uid), and that is the error worth reporting.
+func makeRemovable(root *os.Root, rel string) {
+	_ = fs.WalkDir(root.FS(), rel, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
+			_ = root.Chmod(p, fi.Mode().Perm()|0o700)
+		}
+		return nil
+	})
+}
+
+// cacheBytes sums the regular-file bytes under the cachePaths of dir that
+// pruneOne would remove. It only reads, so it runs before opMu like dirBytes; it
+// is also what keeps every pass after the first cheap: a home with nothing left
+// to prune returns 0 and is never locked.
+func cacheBytes(dir string) int64 {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return 0
+	}
+	defer root.Close()
+	var total int64
+	for _, p := range cachePaths {
+		if !plainPath(root, p) {
+			continue
+		}
+		_ = fs.WalkDir(root.FS(), p, func(_ string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			if fi, err := d.Info(); err == nil {
+				total += fi.Size()
+			}
+			return nil
+		})
+	}
+	return total
 }
 
 // isBoxName matches only what boxName produces: the prefix plus 12 hex digits.
