@@ -885,10 +885,29 @@ func (l *lockedBuf) String() string {
 // have printed nothing but its "listening" lines and nothing at all on stderr:
 // Ensure treats any "ERR " line as fatal, and a per-connection line or an
 // uncaught exception would mean the relay does something it must not.
+//
+// The relay is a separate process, so its listen ports cannot be held by the
+// test until it binds them: they are picked free and bound a moment later, and a
+// parallel test can take one in between. The relay then says so loudly ("ERR
+// <port> EADDRINUSE", and exits), and the start is repeated on fresh ports, up
+// to five times. Any other output, or a start that never finishes, fails.
 func startRelayScript(t *testing.T, node, script string, key proxyline.Key, tports ...int) []int {
 	t.Helper()
+	const attempts = 5
+	for attempt := 1; ; attempt++ {
+		if lports, ok := tryStartRelayScript(t, node, script, key, tports, attempt < attempts); ok {
+			return lports
+		}
+	}
+}
+
+// tryStartRelayScript is one start of startRelayScript. It reports ok=false,
+// with the process gone, only when retry is true and the relay lost the race for
+// one of its listen ports.
+func tryStartRelayScript(t *testing.T, node, script string, key proxyline.Key, tports []int, retry bool) (lports []int, ok bool) {
+	t.Helper()
 	args := []string{"-e", script, "127.0.0.1"}
-	lports := make([]int, len(tports))
+	lports = make([]int, len(tports))
 	want := make([]string, len(tports))
 	used := map[int]bool{}
 	for i, tp := range tports {
@@ -909,33 +928,47 @@ func startRelayScript(t *testing.T, node, script string, key proxyline.Key, tpor
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	lines := func() []string {
-		var got []string
-		for _, l := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-			if l != "" {
-				got = append(got, strings.TrimSpace(l))
-			}
-		}
-		sort.Strings(got)
-		return got
-	}
+	started := false // set once every port is listening: only then is the output judged
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		if got := lines(); !slices.Equal(got, want) {
+		if !started {
+			return
+		}
+		if got := outputLines(stdout.String()); !slices.Equal(got, want) {
 			t.Errorf("relay stdout lines = %q, want exactly %q", got, want)
 		}
 		if e := stderr.String(); e != "" {
 			t.Errorf("relay stderr = %q, want nothing", e)
 		}
 	})
-	for deadline := time.Now().Add(10 * time.Second); !slices.Equal(lines(), want); {
-		if time.Now().After(deadline) {
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		got := outputLines(stdout.String())
+		if slices.Equal(got, want) {
+			started = true
+			return lports, true
+		}
+		if retry && strings.Contains(stdout.String(), " EADDRINUSE") && stderr.String() == "" {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, false
+		}
+		if time.Now().After(deadline) || strings.Contains(stdout.String(), "ERR ") {
 			t.Fatalf("relay stdout = %q (stderr %q); want %q", stdout.String(), stderr.String(), want)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	return lports
+}
+
+// outputLines is the non-empty lines of a relay's output, sorted.
+func outputLines(out string) []string {
+	var got []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			got = append(got, l)
+		}
+	}
+	sort.Strings(got)
+	return got
 }
 
 // A relay without a well-formed key must not start: it would forward
@@ -1121,6 +1154,9 @@ func wrappedTarget(t *testing.T, key proxyline.Key, raw net.Listener, n *atomic.
 	return raw.Addr().(*net.TCPAddr).Port, conns, refused
 }
 
+// listenerPort is the port a loopback listener holds.
+func listenerPort(l net.Listener) int { return l.Addr().(*net.TCPAddr).Port }
+
 func listenLoopback(t *testing.T) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1179,29 +1215,17 @@ func (c *chunkConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// impostorOn listens on 127.0.0.1:port, where a relay's target would be, and
-// for every connection records each byte received until EOF, an error or 10 s,
-// while behave runs on the connection. behave returns when it is done; the
-// connection stays open until the peer closes it or the 10 s end, so a silent
-// behave holds the relay's connection like a peer that never answers. The
-// channel gets one recording per connection, once the connection has ended.
-func impostorOn(t *testing.T, port int, behave func(net.Conn)) <-chan []byte {
+// impostorOn serves l, a loopback listener the test already holds where a
+// relay's target would be (its port is passed to the relay), and for every
+// connection records each byte received until EOF, an error or 10 s, while
+// behave runs on the connection. behave returns when it is done; the connection
+// stays open until the peer closes it or the 10 s end, so a silent behave holds
+// the relay's connection like a peer that never answers. The channel gets one
+// recording per connection, once the connection has ended. l is closed when the
+// test ends. It is a listener, not a port number: a port closed and bound again
+// can be taken by a parallel test in between.
+func impostorOn(t *testing.T, l net.Listener, behave func(net.Conn)) <-chan []byte {
 	t.Helper()
-	// The port was a moment ago another listener's (freeTCPPort, or the replay
-	// case's first target). A listener closed while a parallel test forks a node
-	// process keeps the port for the few milliseconds the child holds the
-	// inherited descriptor, so a bind that says "in use" is retried briefly.
-	var l net.Listener
-	var err error
-	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		l, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err == nil || !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
-			break
-		}
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() { l.Close() })
 	recs := make(chan []byte, 16)
 	go func() {
@@ -1363,10 +1387,12 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 	// A well-formed-looking proof line: the right shape, no key behind it.
 	shaped := strings.Repeat("a", 64) + " " + strings.Repeat("b", 64) + "\r\n"
 
-	type setupFn func(t *testing.T) (port int, behave func(net.Conn), after func(t *testing.T))
+	// Every case holds its listener from the moment it is bound until the test
+	// ends, so no port is ever released and bound again.
+	type setupFn func(t *testing.T) (l net.Listener, behave func(net.Conn), after func(t *testing.T))
 	simple := func(behave func(net.Conn)) setupFn {
-		return func(t *testing.T) (int, func(net.Conn), func(*testing.T)) {
-			return freeTCPPort(t), behave, func(*testing.T) {}
+		return func(t *testing.T) (net.Listener, func(net.Conn), func(*testing.T)) {
+			return listenLoopback(t), behave, func(*testing.T) {}
 		}
 	}
 	cases := []struct {
@@ -1380,11 +1406,28 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 		{"short then silent", true, simple(func(c net.Conn) { _, _ = c.Write([]byte(strings.Repeat("x", 100))) })},
 		// A listener's proof captured from an earlier handshake answers every
 		// hello: the relay's nonce is fresh, so it cannot match.
-		{"replay", false, func(t *testing.T) (int, func(net.Conn), func(*testing.T)) {
-			raw := listenLoopback(t)
-			var n atomic.Int32
-			port, _, _ := wrappedTarget(t, relayTestKey, raw, &n)
-			cl, err := net.DialTimeout("tcp", raw.Addr().String(), 5*time.Second)
+		//
+		// Phase 1 is a wrapped target on the impostor's own port that accepts one
+		// connection, runs the handshake against it and keeps the listener's 131
+		// bytes. It then simply stops accepting: the listener is never closed and
+		// bound again, it is handed to the impostor, so the port is held from the
+		// first bind to the last use.
+		{"replay", false, func(t *testing.T) (net.Listener, func(net.Conn), func(*testing.T)) {
+			l := listenLoopback(t)
+			target := proxyline.Wrap(l, proxyline.Options{
+				Key:     relayTestKey,
+				Allow:   func(netip.Addr) bool { return true },
+				Timeout: 5 * time.Second,
+			})
+			go func() {
+				c, err := target.Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				c.RemoteAddr() // runs the handshake
+			}()
+			cl, err := net.DialTimeout("tcp", l.Addr().String(), 5*time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1393,14 +1436,13 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 			err = proxyline.RelayHandshake(struct {
 				io.Reader
 				io.Writer
-			}{io.TeeReader(cl, &tee), cl}, relayTestKey, uint16(port))
+			}{io.TeeReader(cl, &tee), cl}, relayTestKey, uint16(listenerPort(l)))
 			cl.Close()
-			raw.Close()
 			if err != nil || tee.Len() != proxyline.ListenerProofLen {
 				t.Fatalf("phase 1: handshake = %v, captured %d bytes, want %d", err, tee.Len(), proxyline.ListenerProofLen)
 			}
 			captured := tee.Bytes()
-			return port, func(c net.Conn) {
+			return l, func(c net.Conn) {
 				if _, err := io.ReadFull(c, make([]byte, proxyline.HelloLen)); err == nil {
 					_, _ = c.Write(captured)
 				}
@@ -1408,7 +1450,7 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 		}},
 		// A real listener on the same key, on another port, answers the hello
 		// the relay sent: its proof is for its own port, so the relay refuses it.
-		{"reflect", false, func(t *testing.T) (int, func(net.Conn), func(*testing.T)) {
+		{"reflect", false, func(t *testing.T) (net.Listener, func(net.Conn), func(*testing.T)) {
 			var n atomic.Int32
 			n.Store(4)
 			realPort, realSeen, realRefused := wrappedTarget(t, relayTestKey, listenLoopback(t), &n)
@@ -1432,7 +1474,7 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 				_, _ = c.Write(proof)
 				_, _ = io.Copy(up, c) // anything more, until the relay gives up
 			}
-			return freeTCPPort(t), behave, func(t *testing.T) {
+			return listenLoopback(t), behave, func(t *testing.T) {
 				if s := nextSeen(t, realSeen); !errors.Is(s.err, proxyline.ErrHeader) {
 					t.Errorf("the real listener's conn ended with %v, want ErrHeader", s.err)
 				}
@@ -1445,8 +1487,9 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ip, behave, after := tc.setup(t)
-			recs := impostorOn(t, ip, behave)
+			l, behave, after := tc.setup(t)
+			ip := listenerPort(l)
+			recs := impostorOn(t, l, behave)
 			var n atomic.Int32
 			gp, goodSeen, goodRefused := wrappedTarget(t, relayTestKey, listenLoopback(t), &n)
 			ports := startRelayScript(t, node, relayScript, relayTestKey, ip, gp)
@@ -1488,8 +1531,9 @@ func TestRelayScriptSendsNothingToAnImpostor(t *testing.T) {
 // nothing usable record three different hellos.
 func TestRelayScriptNoncesAreFresh(t *testing.T) {
 	node := nodeOrSkip(t)
-	ip := freeTCPPort(t)
-	recs := impostorOn(t, ip, func(c net.Conn) {
+	l := listenLoopback(t)
+	ip := listenerPort(l)
+	recs := impostorOn(t, l, func(c net.Conn) {
 		_, _ = c.Write([]byte(strings.Repeat("x", proxyline.ListenerProofLen)))
 	})
 	lport := startRelayScript(t, node, relayScript, relayTestKey, ip)[0]
