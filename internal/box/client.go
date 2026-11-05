@@ -163,6 +163,25 @@ func parseMounts(out string) []string {
 	return dsts
 }
 
+// BindSource is the host path of the named box's bind mount at dst, or "" when
+// it has none, from docker inspect.
+func (c CLIClient) BindSource(ctx context.Context, name, dst string) (string, error) {
+	out, err := c.Stdout(ctx, []string{"inspect", "--type", "container", "--format", bindSourcesFormat, name})
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "|", 3)
+		if len(parts) == 3 && parts[0] == "bind" && parts[1] == dst {
+			return parts[2], nil
+		}
+	}
+	return "", nil
+}
+
+// bindSourcesFormat prints one "type|destination|source" line per mount.
+const bindSourcesFormat = `{{range .Mounts}}{{.Type}}|{{.Destination}}|{{.Source}}{{"\n"}}{{end}}`
+
 // ListBoxes returns every container carrying the label, running or not.
 func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, error) {
 	out, err := c.run(ctx, "ps", "-a", "--filter", "label="+label, "--format", boxListFormat)

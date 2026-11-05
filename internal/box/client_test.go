@@ -261,3 +261,32 @@ func TestStdoutErrorCarriesStderr(t *testing.T) {
 		t.Fatalf("err = %v, want the stderr text in the error", err)
 	}
 }
+
+// BindSource asks docker for the host path of the one mount at a destination:
+// the box's own broker directory is told from another box's by it.
+func TestBindSourceReadsTheSourceOfTheMountAtADestination(t *testing.T) {
+	const out = "bind|/w|/h/w\nbind|/opt/agentbox-broker|/s/broker/b/0123456789ab\ntmpfs|/tmp|\nvolume|/v|/var/lib/docker/v"
+	cases := []struct {
+		name, dst, stdout, errs string
+		code                    int
+		want                    string
+		err                     bool
+	}{
+		{"found", "/opt/agentbox-broker", out, "", 0, "/s/broker/b/0123456789ab", false},
+		{"other mount", "/w", out, "", 0, "/h/w", false},
+		{"absent", "/opt/nothing", out, "", 0, "", false},
+		{"a volume is not a bind", "/v", out, "", 0, "", false},
+		{"daemon down", "/opt/agentbox-broker", "", "Cannot connect to the Docker daemon", 1, "", true},
+	}
+	for _, c := range cases {
+		bin, log := fakeDockerStderr(t, map[string]string{"inspect": c.stdout}, map[string]string{"inspect": c.errs}, map[string]int{"inspect": c.code})
+		got, err := CLIClient{Bin: bin}.BindSource(context.Background(), "ab-box-x", c.dst)
+		if got != c.want || (err != nil) != c.err {
+			t.Fatalf("%s: got (%q, %v), want (%q, err=%v)", c.name, got, err, c.want, c.err)
+		}
+		b, _ := os.ReadFile(log)
+		if !strings.Contains(string(b), "{{.Source}}") || !strings.HasSuffix(strings.TrimSpace(string(b)), "ab-box-x") {
+			t.Fatalf("%s: the inspect must ask for the sources of box ab-box-x: %s", c.name, b)
+		}
+	}
+}

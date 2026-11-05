@@ -534,7 +534,13 @@ func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
 	// The pre-#73 and the current broker.SockBoxDir (internal/broker cannot be
 	// imported from here).
 	old := Mount{Host: "/s/broker/sock", Box: "/opt/agentbox-sock"}
-	cur := Mount{Host: "/s/broker/b/0123456789ab", Box: "/opt/agentbox-broker"}
+	curFor := func(m *Manager, dir string) Mount {
+		name, err := m.BoxName(dir, BoxKey{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Mount{Host: BrokerDir(m.opts.StateRoot, name), Box: "/opt/agentbox-broker"}
+	}
 
 	t.Run("live", func(t *testing.T) {
 		m, f := newTestManagerWithFake(t)
@@ -543,7 +549,7 @@ func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
 		if _, _, _, err := m.Wrap(ctx, dir, "old-1", BoxKey{}, []string{"bash"}, nil, []Mount{old}); err != nil {
 			t.Fatal(err)
 		}
-		_, _, _, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{cur})
+		_, _, _, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{curFor(m, dir)})
 		if !errors.Is(err, ErrBoxUnavailable) {
 			t.Fatalf("want ErrBoxUnavailable for a live pre-#73 box, got %v", err)
 		}
@@ -564,7 +570,7 @@ func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
 			t.Fatal(err)
 		}
 		m.ReleaseBox(name)
-		_, _, name2, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{cur})
+		_, _, name2, err := m.Wrap(ctx, dir, "new-1", BoxKey{}, []string{"bash"}, nil, []Mount{curFor(m, dir)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -575,8 +581,8 @@ func TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently(t *testing.T) {
 			t.Fatalf("want the idle pre-#73 box removed and recreated: stops=%d runs=%d", f.stops(), f.runs())
 		}
 		last := f.runArgs[len(f.runArgs)-1]
-		if !hasDst(last, cur.Box) || hasDst(last, old.Box) {
-			t.Fatalf("recreated box must mount %s and not %s: %v", cur.Box, old.Box, last)
+		if !hasDst(last, curFor(m, dir).Box) || hasDst(last, old.Box) {
+			t.Fatalf("recreated box must mount %s and not %s: %v", curFor(m, dir).Box, old.Box, last)
 		}
 	})
 }

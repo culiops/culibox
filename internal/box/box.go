@@ -220,6 +220,10 @@ type Client interface {
 	// ones created by an older build included. Mounts are nil unless running.
 	// The third value is the box's extraca.Label value, "" when it has none.
 	InspectMounts(ctx context.Context, name string) (State, []string, string, error)
+	// BindSource is the host path of the running box's bind mount at the in-box
+	// destination dst ("" when it has none). Only the broker's mount is read this
+	// way (reuseBrokerDir), so a box pays the extra call only when it has one.
+	BindSource(ctx context.Context, name, dst string) (string, error)
 }
 
 // Options configures a Manager.
@@ -400,6 +404,25 @@ func (m *Manager) egressConfig() Egress {
 // Runtime reports the detected isolation runtime, for the UI badge.
 func (m *Manager) Runtime() string { return m.runtime }
 
+// BrokerMountDest is where a bound box's own broker socket directory is mounted
+// inside the box, and BrokerDirRel is where those directories live under the
+// state root, one per box name. The broker creates them; the box manager only
+// checks that a box mounts its OWN: the broker takes the box for whoever's
+// directory a request arrives through. BrokerMountDest is not the path boxes
+// used before the per-box directories (reuseMounts compares in-box destinations
+// only, so a new path is what keeps an older box from being reused silently).
+const (
+	BrokerMountDest = "/opt/agentbox-broker"
+	BrokerDirRel    = "broker/b"
+)
+
+// BrokerDir is box name's broker socket directory under stateRoot: the last 12
+// hex digits of the name, so the path is as short as a unix socket needs.
+// name must pass IsBoxName.
+func BrokerDir(stateRoot, name string) string {
+	return filepath.Join(stateRoot, filepath.FromSlash(BrokerDirRel), name[len(name)-12:])
+}
+
 // BoxKey is everything besides the workspace that decides which box a session
 // runs in. Account is the agent account name ("" or "default" for the default
 // account). Binding is the hash of the session's AWS binding (config.AWSBinding
@@ -420,8 +443,14 @@ func (m *Manager) Runtime() string { return m.runtime }
 // repo's files.
 type BoxKey struct {
 	Account, Binding, Session string
-	PartialMounts             bool
-	Clone                     *CloneMounts
+	// Expect is the box name the caller prepared things for before calling Wrap
+	// (its broker socket directory, named by BoxName). Not identity. When set, Wrap
+	// refuses, before anything is created, unless the name it computes is exactly
+	// this one: a workspace path that changed in between must not start another
+	// box with the mounts prepared for this one.
+	Expect        string
+	PartialMounts bool
+	Clone         *CloneMounts
 	// Context is config.ContextHash of the profile's context_paths ("" = none).
 	// It is part of the identity for the same reason Clone's hash is: reuseMounts
 	// compares in-box destinations only, so a changed list must not land in a box
@@ -750,6 +779,17 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", err
 	}
+	// Before anything exists: the caller prepared this box's broker socket
+	// directory for the name it asked for. If a symlink on the workspace path was
+	// repointed since, the name differs, and a box created now would carry
+	// another box's directory and be taken for that box.
+	if key.Expect != "" && name != key.Expect {
+		return nil, nil, "", fmt.Errorf("%w: the box for %s is %s, not %s, which this spawn's broker access was prepared for (the workspace path changed in between); not starting",
+			ErrBoxUnavailable, cwd, name, key.Expect)
+	}
+	if err := m.checkBrokerMount(name, extraRO); err != nil {
+		return nil, nil, "", err
+	}
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
@@ -897,6 +937,14 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		if st, err = m.reuseMounts(ctx, name, cwd, have, extraRO, partial); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		// reuseMounts compares destinations only, so a box that mounts ANOTHER
+		// box's broker directory looks just like one that mounts its own.
+		if st == StateRunning {
+			if st, err = m.reuseBrokerDir(ctx, name, extraRO); err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
 		}
 		// The bundle mounts at one fixed destination, so reuseMounts cannot see a
 		// stale CA set; the label can (also for a box from before extra CAs).
@@ -1117,6 +1165,68 @@ func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []stri
 	}
 	if err := m.removeIdle(ctx, name); err != nil {
 		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with this session's mounts: %w", name, err)
+	}
+	return StateMissing, nil
+}
+
+// sameDir: a and b name the same directory, spelled alike or through symlinks.
+// An unresolvable path matches only an identical spelling.
+func sameDir(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	ra, ea := filepath.EvalSymlinks(a)
+	rb, eb := filepath.EvalSymlinks(b)
+	return ea == nil && eb == nil && ra == rb
+}
+
+// wantsBrokerDir: the spawn asks for the broker socket directory mount.
+func wantsBrokerDir(extraRO []Mount) bool {
+	return slices.ContainsFunc(extraRO, func(mt Mount) bool { return filepath.Clean(mt.Box) == BrokerMountDest })
+}
+
+// checkBrokerMount refuses a spawn whose broker socket directory is not box
+// name's own. The broker takes a box for whoever's directory a request arrives
+// through, so a box created with another's would be taken for it: a token that
+// leaked from that box would work from this one.
+func (m *Manager) checkBrokerMount(name string, extraRO []Mount) error {
+	own := BrokerDir(m.opts.StateRoot, name)
+	for _, mt := range extraRO {
+		if filepath.Clean(mt.Box) == BrokerMountDest && !sameDir(mt.Host, own) {
+			return fmt.Errorf("%w: the broker socket directory %s offered for box %s is not that box's own (%s); not starting",
+				ErrBoxUnavailable, mt.Host, name, own)
+		}
+	}
+	return nil
+}
+
+// reuseBrokerDir decides whether a running box mounts its own broker socket
+// directory, the way reuseMounts does for mounts: the same directory reuses it;
+// another box's removes an idle box (it is recreated with its own) and refuses
+// with the remedy while sessions are live in it. A spawn without a broker mount
+// asks for nothing; a box whose mount cannot be read is refused (fail closed).
+// Caller holds opMu.
+func (m *Manager) reuseBrokerDir(ctx context.Context, name string, extraRO []Mount) (State, error) {
+	if !wantsBrokerDir(extraRO) {
+		return StateRunning, nil
+	}
+	src, err := m.opts.Client.BindSource(ctx, name, BrokerMountDest)
+	if err != nil {
+		return StateRunning, fmt.Errorf("%w: box %s: reading its broker mount: %v", ErrBoxUnavailable, name, err)
+	}
+	if own := BrokerDir(m.opts.StateRoot, name); src != "" && sameDir(src, own) {
+		return StateRunning, nil
+	}
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if live > 0 {
+		return StateRunning, fmt.Errorf("%w: box %s mounts a broker socket directory that is not its own and still runs %d session(s); end them, then spawn again",
+			ErrBoxUnavailable, name, live)
+	}
+	if err := m.removeIdle(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with its own broker socket directory: %w", name, err)
 	}
 	return StateMissing, nil
 }
