@@ -20,18 +20,14 @@ import (
 
 func noClones() []config.Clone { return nil }
 
-func TestNewCloneHooksLinuxOnly(t *testing.T) {
+func TestNewCloneHooks(t *testing.T) {
 	home, data := t.TempDir(), t.TempDir()
 
-	if h, err := newCloneHooks("darwin", &boxLayer{}, home, "", data, "DEV", nil, noClones); h != nil || err != nil {
-		t.Fatalf("darwin: got %v, %v; want nil, nil", h, err)
-	}
-
-	// Linux without a layer: hooks are still installed (the box-owned guard
-	// needs no layer), the error says why, and Prepare refuses.
-	h, err := newCloneHooks("linux", nil, home, "", data, "DEV", nil, noClones)
+	// Without a layer: hooks are still installed (the box-owned guard needs no
+	// layer), the error says why, and Prepare refuses.
+	h, err := newCloneHooks(nil, home, "", data, "DEV", nil, noClones)
 	if err == nil || h == nil {
-		t.Fatalf("linux without a layer: got %v, %v; want hooks and an error", h, err)
+		t.Fatalf("without a layer: got %v, %v; want hooks and an error", h, err)
 	}
 	dir := filepath.Join(home, "clone")
 	if _, owned := h.BoxOwned(dir); owned {
@@ -48,7 +44,7 @@ func TestNewCloneHooksLinuxOnly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
-	h, err = newCloneHooks("linux", &boxLayer{dockerBin: "/usr/bin/docker", image: "img:1"}, home, "", data, "DEV", nil, noClones)
+	h, err = newCloneHooks(&boxLayer{dockerBin: "/usr/bin/docker", image: "img:1"}, home, "", data, "DEV", nil, noClones)
 	if err != nil || h == nil || h.unavailable != "" {
 		t.Fatalf("linux with a layer: got %v, %v; want ready hooks", h, err)
 	}
@@ -56,6 +52,28 @@ func TestNewCloneHooksLinuxOnly(t *testing.T) {
 		h.dataDir != data || h.listBoxes == nil || h.refresh == nil {
 		t.Fatalf("refresh wiring: docker=%v image=%q instance=%q dataDir=%q listBoxes=%v refresh=%v",
 			h.docker, h.image, h.instance, h.dataDir, h.listBoxes != nil, h.refresh != nil)
+	}
+}
+
+// On macOS the clone containers (refresh, return listing) must run on the box
+// VM's docker, never the user's own daemon: a darwin layer's hooks carry the
+// VM's global docker flags on every call.
+func TestNewCloneHooksDarwinRunsOnTheVMDocker(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	l, _, d := darwinLayer(t, false)
+	h, err := newCloneHooks(l, t.TempDir(), "", t.TempDir(), "DEV", nil, noClones)
+	if err != nil || h == nil || h.unavailable != "" {
+		t.Fatalf("darwin with a layer: got %v, %v; want ready hooks", h, err)
+	}
+	if err := h.docker.Remove(context.Background(), "agent-box-clonerefresh-x"); err != nil {
+		t.Fatal(err)
+	}
+	want := "--host unix://" + l.vm.Config().DockerSocket() + " --config " + l.vm.Config().DockerConfigDir() + " rm -f agent-box-clonerefresh-x"
+	lines := strings.Split(strings.TrimSpace(d.log()), "\n")
+	if got := lines[len(lines)-1]; got != want {
+		t.Fatalf("clone docker call = %q, want %q", got, want)
 	}
 }
 
@@ -252,6 +270,96 @@ func TestCloneSaveCheckRefusesBoxOwnedCloneOf(t *testing.T) {
 	err := check(config.Clone{Of: otherClone, Dir: filepath.Join(home, "work", "mine")})
 	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") {
 		t.Fatalf("save of a profile cloning another clone: want the box-owned refusal, got %v", err)
+	}
+}
+
+// darwinCloneHooks are newCloneHooks over a darwin layer whose VM shares only
+// its root (the fake home), with Prepare's clone step replaced by a recorder.
+func darwinCloneHooks(t *testing.T) (h *cloneHooks, shared string, called *bool) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	l, _, _ := darwinLayer(t, false)
+	shared = l.vm.Config().Root
+	h, err := newCloneHooks(l, shared, "", t.TempDir(), "DEV", nil, noClones)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called = new(bool)
+	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
+		*called = true
+		return box.CloneMounts{}, false, nil
+	}
+	return h, shared, called
+}
+
+// gitRepo makes dir a directory holding an empty .git directory, enough for
+// clone.CheckProfile.
+func gitRepo(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// The box VM sees only the directories it shares. A clone_of or clone dir
+// outside them is refused before anything is recorded or created, at spawn
+// and at save, naming the field and the shares.
+func TestCloneRefusesPathsTheVMDoesNotShare(t *testing.T) {
+	h, shared, called := darwinCloneHooks(t)
+	outside := t.TempDir()
+	link := filepath.Join(shared, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, filepath.Join(outside, "repo"))
+	in := gitRepo(t, filepath.Join(shared, "repo"))
+	for _, c := range []struct {
+		name  string
+		clone config.Clone
+		field string
+	}{
+		{"clone_of outside", config.Clone{Of: filepath.Join(outside, "repo"), Dir: filepath.Join(shared, "c1")}, "clone_of"},
+		{"clone_of through a link out", config.Clone{Of: filepath.Join(link, "repo"), Dir: filepath.Join(shared, "c2")}, "clone_of"},
+		{"clone dir outside", config.Clone{Of: in, Dir: filepath.Join(outside, "c3")}, "default_cwd"},
+	} {
+		_, _, err := h.Prepare(context.Background(), c.clone, false)
+		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), c.field+" ") || !strings.Contains(err.Error(), "("+shared+")") {
+			t.Errorf("%s: Prepare = %v; want a refusal naming %s and the shares", c.name, err, c.field)
+		}
+		if *called {
+			t.Errorf("%s: the clone was made", c.name)
+		}
+		if _, owned := h.BoxOwned(c.clone.Dir); owned {
+			t.Errorf("%s: a refused clone dir was recorded", c.name)
+		}
+		if err := cloneSaveCheck(h, shared, nil)(c.clone); err == nil || !strings.Contains(err.Error(), c.field+" ") {
+			t.Errorf("%s: save check = %v; want a refusal naming %s", c.name, err, c.field)
+		}
+	}
+
+	ok := config.Clone{Of: in, Dir: filepath.Join(shared, "copy")}
+	if err := cloneSaveCheck(h, shared, nil)(ok); err != nil {
+		t.Fatalf("shared paths: save check = %v", err)
+	}
+	if _, _, err := h.Prepare(context.Background(), ok, false); err != nil || !*called {
+		t.Fatalf("shared paths: Prepare = %v, called = %v", err, *called)
+	}
+}
+
+// Without a VM (Linux) docker sees the host's own paths: nothing is refused for
+// where it lives.
+func TestCloneWithoutAVMHasNoShareCheck(t *testing.T) {
+	home := t.TempDir()
+	h := testHooks(t, noClones)
+	c := config.Clone{Of: gitRepo(t, filepath.Join(t.TempDir(), "repo")), Dir: filepath.Join(t.TempDir(), "copy")}
+	if err := cloneSaveCheck(h, home, nil)(c); err != nil {
+		t.Fatalf("save check = %v", err)
+	}
+	if _, _, err := h.Prepare(context.Background(), c, false); err != nil {
+		t.Fatalf("Prepare = %v", err)
 	}
 }
 
@@ -745,19 +853,48 @@ func TestSweepCloneContainers(t *testing.T) {
 	}
 }
 
+// The boot pass sweeps leftover clone containers wherever docker is reachable:
+// on Linux, and on macOS through the VM's docker while the VM runs. A stopped
+// VM is left alone: no container runs in it, and docker is not reachable.
+func TestBootSweepsCloneContainers(t *testing.T) {
+	sweep := "ps -a --filter label=" + clone.LabelCloneFetch + "=DEV"
+
+	lin := newFakeDocker(t)
+	ll, err := newBoxLayer(config.Config{DockerBin: lin.bin}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootReconcileAndSweep(context.Background(), ll, "DEV")
+	if !strings.Contains(lin.log(), sweep+" ") {
+		t.Errorf("linux: no clone sweep on the host docker:\n%s", lin.log())
+	}
+
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	bootReconcileAndSweep(context.Background(), l, "DEV")
+	vm := "--host unix://" + l.vm.Config().DockerSocket() + " --config " + l.vm.Config().DockerConfigDir() + " "
+	if !strings.Contains(d.log(), vm+sweep+" ") {
+		t.Errorf("darwin, VM running: no clone sweep on the VM's docker:\n%s", d.log())
+	}
+
+	l, fc, d = darwinLayer(t, false)
+	bootReconcileAndSweep(context.Background(), l, "DEV")
+	if strings.Contains(d.log(), " ps ") || fc.called("start") {
+		t.Errorf("darwin, VM stopped: the boot pass reached docker or started the VM:\n%s", d.log())
+	}
+}
+
 func TestCloneUnavailableReason(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		goos string
 		h    *cloneHooks
 		want string
 	}{
-		{"not linux", "darwin", nil, "private copies need Linux for now"},
-		{"linux without hooks", "linux", nil, "private copies need Linux for now"},
-		{"linux, no layer", "linux", &cloneHooks{unavailable: "no containment layer"}, "no containment layer"},
-		{"linux, available", "linux", &cloneHooks{}, ""},
+		{"no hooks", nil, "clone mode is not set up on this instance"},
+		{"no layer", &cloneHooks{unavailable: "no containment layer"}, "no containment layer"},
+		{"available", &cloneHooks{}, ""},
 	} {
-		if got := cloneUnavailableReason(c.goos, c.h); got != c.want {
+		if got := cloneUnavailableReason(c.h); got != c.want {
 			t.Errorf("%s: cloneUnavailableReason = %q, want %q", c.name, got, c.want)
 		}
 	}
