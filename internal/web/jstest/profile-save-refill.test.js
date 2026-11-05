@@ -123,7 +123,8 @@ test("saveProfile shows a stale save on the banner before the per-block lines", 
 
 test("saveProfile refreshes the list when the name turned out to be taken", () => {
   const b = body("saveProfile");
-  assert.match(b, /profile_exists[\s\S]*loadProfiles\(/);
+  // Anchored to the branch itself: the success path below also calls loadProfiles(.
+  assert.match(b, /if \(e\.code === "profile_exists"\) await loadProfiles\(false\);/);
 });
 
 test("fillForm hides the stale banner: any load clears it", () => {

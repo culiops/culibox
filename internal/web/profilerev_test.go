@@ -161,10 +161,17 @@ func TestUpdateOfASeedWithItsRevCreatesTheOverride(t *testing.T) {
 	if _, ok := fs.m["bash"]; !ok {
 		t.Fatal("the override was not stored")
 	}
+	found := false
 	for _, v := range pm.Views() {
-		if v.Name == "bash" && !v.Editable {
-			t.Fatal("the overridden seed should now be editable")
+		if v.Name == "bash" {
+			found = true
+			if !v.Editable {
+				t.Fatal("the overridden seed should now be editable")
+			}
 		}
+	}
+	if !found {
+		t.Fatal("no view is named bash: the check above did not run")
 	}
 }
 
