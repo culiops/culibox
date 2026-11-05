@@ -46,11 +46,30 @@ func refuseInPlace(format string, a ...any) error {
 // All access inside ws goes through an os.Root, so a symlink the box planted
 // is never followed out of it.
 func inPlaceMounts(ws string) ([]Mount, error) {
+	return inPlaceMountsAt(workspace{Given: ws, Path: ws})
+}
+
+// inPlaceMountsAt is inPlaceMounts for a workspace Wrap resolved once. When the
+// resolution recorded an identity, the folder opened here must be that
+// directory: opening ws.Path again follows whatever its components are now, so
+// a component re-pointed since the resolution would otherwise have the guards
+// derived (and a .claude created) in a folder that was never checked.
+func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
+	ws := wsp.Path
 	root, err := os.OpenRoot(ws)
 	if err != nil {
 		return nil, refuseInPlace("%s cannot be opened to derive its read-only guards (%v). %s", ws, err, inPlaceTrustedHost)
 	}
 	defer root.Close()
+	if wsp.ID != nil {
+		fi, err := root.Stat(".")
+		if err != nil {
+			return nil, wsChanged(ws, fmt.Sprintf("the folder opened to derive its guards cannot be read (%v)", err))
+		}
+		if got := fileInfoID(fi); got == nil || *got != *wsp.ID {
+			return nil, wsChanged(ws, "the folder opened to derive its guards is not the one that was checked")
+		}
+	}
 
 	// 1. Submodules: a submodule's .git file sits outside the guarded .git, and
 	// host git recurses into it (D11).
