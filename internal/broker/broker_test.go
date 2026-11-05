@@ -93,18 +93,33 @@ func binding() *config.AWSBinding {
 		Region: "ap-southeast-1", S3Read: []string{"culishop-tfstate"}}
 }
 
+// testBox is the box the test sessions run in and the test requests come from.
+const testBox = "ab-box-0123456789ab"
+
+// withTestBox puts a view in testBox unless the test chose a box for it.
+func withTestBox(l Lookup) Lookup {
+	return func(id string) (SessionView, bool) {
+		sv, ok := l(id)
+		if ok && sv.Box == "" {
+			sv.Box = testBox
+		}
+		return sv, ok
+	}
+}
+
 func setup(t *testing.T, sessions map[string]SessionView) (*Broker, *fakeMinter, *memRec, *time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
 	fm := &fakeMinter{now: func() time.Time { return now }}
 	rec := &memRec{}
-	b := New(secret, func(id string) (SessionView, bool) { s, ok := sessions[id]; return s, ok }, fm, rec)
+	b := New(secret, withTestBox(func(id string) (SessionView, bool) { s, ok := sessions[id]; return s, ok }), fm, rec)
 	b.now = func() time.Time { return now }
 	return b, fm, rec, &now
 }
 
 func call(b *Broker, tok string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", nil)
+	r = r.WithContext(withBox(r.Context(), testBox)) // arrives on testBox's own socket
 	if tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)
 	}
@@ -712,6 +727,7 @@ func liveConns() SessionView {
 
 func callBody(b *Broker, tok, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", strings.NewReader(body))
+	r = r.WithContext(withBox(r.Context(), testBox))
 	if tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)
 	}

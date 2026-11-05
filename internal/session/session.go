@@ -201,6 +201,10 @@ type Boxes interface {
 	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
 	// error carries a user-facing remedy.
 	Prepare(ctx context.Context) error
+	// BoxName is the name Wrap will give the box for (cwd, key): the same
+	// function, so a caller can prepare something for the box (its broker
+	// socket) before it exists. The key must be complete.
+	BoxName(cwd string, key box.BoxKey) (string, error)
 	Wrap(ctx context.Context, cwd, sessionID string, key box.BoxKey, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
@@ -468,6 +472,18 @@ type BrokerHooks interface {
 	// base is the spawn's base-role probe results (nil without AWS), which the
 	// box's aws.json carries per connection.
 	BoxFor(bs config.Bindings, base map[string]awsprobe.Result) (mounts []box.Mount, env []string, err error)
+	// AcquireBox takes a reference on the named box's own broker socket and
+	// returns the read-only mount that carries it into the box (none on macOS,
+	// where the box is identified per request). Every call that returns a nil
+	// error is paired with exactly one ReleaseBox: on every spawn failure after
+	// it, and when the session ends.
+	AcquireBox(boxName string) ([]box.Mount, error)
+	// AdoptBox is AcquireBox for a live session restored after a daemon restart:
+	// the socket returns in the directory the running box already mounts. Paired
+	// with ReleaseBox like AcquireBox.
+	AdoptBox(boxName string) error
+	// ReleaseBox drops one reference; at zero the box's socket closes.
+	ReleaseBox(boxName string)
 	// ProbeBase checks, at spawn, whether each bound AWS base role can write.
 	// The map is keyed "" for the legacy binding, else by connection name, and
 	// never nil. A warning, never a gate: any failure is an unverified result.
@@ -889,6 +905,11 @@ type Session struct {
 	// click cannot start two replacements. Guarded by mu.
 	restarting bool
 
+	// brokerBox is the box whose broker socket this session holds a reference on
+	// ("" = none: an unbound session, or a restored one whose adopt failed, which
+	// therefore never releases another session's reference). Set before
+	// publication and never mutated.
+	brokerBox string
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
 	// abandoned by the retention goroutine entirely — so both must be able to
@@ -2115,9 +2136,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var ssoInfo map[string]ssoSpawnInfo // the sso_direct gate's per-key info
 	watched := false
 	started := false
+	// heldBrokerBox is the box whose broker socket this spawn took a reference
+	// on. Until the session is published every way out gives it back (the defer
+	// below); after that the session owns it and gives it back when it ends.
+	var heldBrokerBox string
 	defer func() {
 		if watched && !started {
 			brk.Forget(id)
+		}
+		if heldBrokerBox != "" && !started {
+			brk.ReleaseBox(heldBrokerBox)
 		}
 	}()
 
@@ -2134,9 +2162,33 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports}
+		if len(ctxPaths) > 0 {
+			key.Context = config.ContextHash(ctxPaths)
+		}
 		var bm []box.Mount
 		var benv, penv []string
+		var plannedBox string // the box this bound spawn's broker socket is prepared for
 		if bs.Any() {
+			// The box's name is its key's hash, so the key is completed first and
+			// the name asked for here, before the broker mount is built. Wrap must
+			// then report this same name (checked below), or the spawn is refused.
+			key.Binding = bs.Hash()
+			if (binding != nil && binding.Elevate != nil) || slices.ContainsFunc(awsConns, func(c config.AWSConnection) bool { return c.Elevate != nil }) {
+				// An elevatable binding (or any elevatable connection) gets a box of its own (M3b §7.1):
+				// processes in a shared box can read each other's broker token
+				// from /proc, and an elevated token must not be readable by
+				// another session.
+				key.Session = id
+			}
+			var nerr error
+			if plannedBox, nerr = boxes.BoxName(spec.Cwd, key); nerr != nil {
+				return nil, fmt.Errorf("spawn %s: naming its box: %w", spec.Agent, nerr)
+			}
+			// Wrap computes the name again from the workspace path. It is told this
+			// one, and refuses before it creates anything if the two differ (a
+			// symlink on the path flipped in between): a box made with the mounts
+			// prepared for another box would be taken for that box.
+			key.Expect = plannedBox
 			if bs.GitHub != nil {
 				// Doctor-style and secret-free, so its message can be shown as is.
 				if err := brk.CheckGitHub(*bs.GitHub); err != nil {
@@ -2180,6 +2232,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, fmt.Errorf("spawn %s: preparing %s access: %w", spec.Agent, bindingNames(bs), err)
 			}
 			nonce = brk.NewNonce()
+			sm, err := brk.AcquireBox(plannedBox)
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing %s access: %w", spec.Agent, bindingNames(bs), err)
+			}
+			heldBrokerBox = plannedBox
+			bm = append(slices.Clip(bm), sm...) // never write into the hooks' own array
 		}
 		if needEgress {
 			// The proxy URL carries a token derived from this nonce, so a
@@ -2234,14 +2292,6 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				}
 			}
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
-			key.Binding = bs.Hash()
-			if (binding != nil && binding.Elevate != nil) || slices.ContainsFunc(awsConns, func(c config.AWSConnection) bool { return c.Elevate != nil }) {
-				// An elevatable binding (or any elevatable connection) gets a box of its own (M3b §7.1):
-				// processes in a shared box can read each other's broker token
-				// from /proc, and an elevated token must not be readable by
-				// another session.
-				key.Session = id
-			}
 		} else if needEgress {
 			// Open mode: the same proxy env, no broker. The profile's own proxy
 			// settings are stripped so each name is set exactly once.
@@ -2276,7 +2326,6 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				// before the mount (box.Options.VMIDs) and compare the same way.
 				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: ids[i], CheckID: true})
 			}
-			key.Context = config.ContextHash(ctxPaths)
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
 			log.Printf("session %s (profile %s): context paths %v", id, spec.Agent, ctxPaths)
 		}
@@ -2305,6 +2354,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// disable containment entirely.
 			return nil, fmt.Errorf("session: starting box for %q: %w (spawn with runtime %q to run on the host instead)",
 				spec.Cwd, err, config.RuntimeHost)
+		}
+		if heldBrokerBox != "" && name != heldBrokerBox {
+			// Fail closed: the socket mounted into this box was prepared for another
+			// box's name. Give back what Wrap took (the defer gives back the socket).
+			m.releaseBoxNamed(name)
+			return nil, fmt.Errorf("%w: spawn %s: box %s is not %s, the box its broker access was prepared for; not starting",
+				box.ErrBoxUnavailable, spec.Agent, name, heldBrokerBox)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
 		exclusive = key.Session != ""
@@ -2413,6 +2469,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressAllow, sess.EgressOpen = egressAllow, egressOpen
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
+	sess.brokerBox = heldBrokerBox // published: the session now owns the reference
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
 	sess.ContextPaths = slices.Clone(ctxPaths)
@@ -2677,7 +2734,24 @@ func (m *Manager) releaseSessionBox(s *Session) {
 	if s.Runtime != config.RuntimeBox {
 		return
 	}
-	s.releaseOnce.Do(func() { m.releaseBoxNamed(s.Box) })
+	s.releaseOnce.Do(func() {
+		m.releaseBoxNamed(s.Box)
+		m.brokerReleaseBox(s)
+	})
+}
+
+// brokerReleaseBox gives back the reference on the box's broker socket that the
+// session holds, if it holds one. Called once, from releaseSessionBox.
+func (m *Manager) brokerReleaseBox(s *Session) {
+	if s.brokerBox == "" {
+		return
+	}
+	m.mu.Lock()
+	brk := m.broker
+	m.mu.Unlock()
+	if brk != nil {
+		brk.ReleaseBox(s.brokerBox)
+	}
 }
 
 // startProcess creates the OS process + PTY for a session. With a backend the
@@ -3198,10 +3272,32 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 			bin = b
 		}
 	}
+	// A restored bound session's box gets its broker socket back, BEFORE the
+	// session is published: the socket returns in the directory the running box
+	// already mounts. The reference is held for the session's life. If the adopt
+	// fails the session holds nothing (so its end releases nothing, which would
+	// close a socket another session in the box relies on) and its credential
+	// requests are refused until it is respawned. Nothing between here and
+	// publication can fail, so a held reference always reaches a session.
+	heldBox := ""
+	if runtime == config.RuntimeBox && md.Box != "" &&
+		(config.Bindings{AWS: md.AWS, AWSConns: md.AWSConns, GitHub: md.GitHub, Tokens: md.Tokens}).Any() {
+		m.mu.Lock()
+		abrk := m.broker
+		m.mu.Unlock()
+		if abrk != nil {
+			if err := abrk.AdoptBox(md.Box); err != nil {
+				log.Printf("session %s: broker socket for box %s: %v (its credential requests are refused until it is respawned)", id, md.Box, err)
+			} else {
+				heldBox = md.Box
+			}
+		}
+	}
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
 	sess.Box = md.Box
+	sess.brokerBox = heldBox
 	sess.Bin = bin
 	sess.Account = md.Account
 	sess.ConfigDir = md.ConfigDir

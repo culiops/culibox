@@ -129,7 +129,7 @@ func TestReasonIsCountedInCharactersAndStoredWhole(t *testing.T) {
 	}
 	defer a.Close()
 	now := time.Unix(1_800_000_000, 0)
-	b := New(secret, func(string) (SessionView, bool) { return liveElev(), true }, &fakeMinter{now: func() time.Time { return now }}, auditRec{a})
+	b := New(secret, withTestBox(func(string) (SessionView, bool) { return liveElev(), true }), &fakeMinter{now: func() time.Time { return now }}, auditRec{a})
 	b.now = func() time.Time { return now }
 	withTimers(b)
 	reason := strings.Repeat("ệ", 200) // 3 bytes each: 600 bytes
@@ -352,7 +352,7 @@ func TestUnauditedExtendRemovesTheOverlay(t *testing.T) {
 }
 
 func TestNoApprovalRecorderRefusesEveryGrant(t *testing.T) {
-	b := New(secret, func(string) (SessionView, bool) { return liveElev(), true }, &fakeMinter{now: time.Now}, onlyRows{})
+	b := New(secret, withTestBox(func(string) (SessionView, bool) { return liveElev(), true }), &fakeMinter{now: time.Now}, onlyRows{})
 	if _, err := b.Elevate("aws-1", cookie(60)); !errors.Is(err, ErrElevateRefused) {
 		t.Fatalf("got %v", err)
 	}
@@ -382,7 +382,7 @@ func blockedBroker(t *testing.T) (*Broker, *blockRec, *time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
 	rec := &blockRec{memRec: &memRec{}, entered: make(chan struct{}), release: make(chan struct{})}
-	b := New(secret, func(string) (SessionView, bool) { return liveElev(), true }, &fakeMinter{now: func() time.Time { return now }}, rec)
+	b := New(secret, withTestBox(func(string) (SessionView, bool) { return liveElev(), true }), &fakeMinter{now: func() time.Time { return now }}, rec)
 	b.now = func() time.Time { return now }
 	withTimers(b)
 	return b, rec, &now

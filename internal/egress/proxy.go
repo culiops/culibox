@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/hostmatch"
 	"github.com/culiops/culibox/internal/proxyline"
@@ -86,6 +87,9 @@ type Options struct {
 	// on, a principal is accepted only from its own box's address. nil → the
 	// one Service installs (docker inspect); none at all refuses every CONNECT.
 	BoxAddr func(ctx context.Context, box string) (netip.Addr, error)
+	// BoxAddrs is a box-address cache shared with another component (the
+	// credential broker). nil → the proxy builds its own from BoxAddr and Now.
+	BoxAddrs *boxaddr.Cache
 }
 
 type Stats struct {
@@ -119,9 +123,8 @@ type Proxy struct {
 	probes      map[string]*probePrincipal
 	denied      map[deniedKey]*deniedState
 	lastPrune   time.Time
-	boxAddr     func(ctx context.Context, box string) (netip.Addr, error)
-	boxAddrs    map[string]*boxAddrEntry // box name → its last looked-up address
-	sidBox      map[string]string        // session id → its box, so Forget can drop the entry
+	addrs       *boxaddr.Cache    // box name → its address on the egress network (own lock; may be shared)
+	sidBox      map[string]string // session id → its box, so Forget can drop the entry
 }
 
 type tunnel struct {
@@ -187,8 +190,11 @@ func New(o Options) *Proxy {
 	}
 	p := &Proxy{o: o, open: map[string]int{}, tunnels: map[*tunnel]struct{}{}, stats: map[string]*Stats{}, epoch: map[string]uint64{},
 		probes: map[string]*probePrincipal{}, denied: map[deniedKey]*deniedState{},
-		boxAddr: o.BoxAddr, boxAddrs: map[string]*boxAddrEntry{}, sidBox: map[string]string{}}
+		sidBox: map[string]string{}}
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	if p.addrs = o.BoxAddrs; p.addrs == nil {
+		p.addrs = boxaddr.New(p.ctx, o.BoxAddr, o.Now)
+	}
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 8 << 10,
 		IdleTimeout: 30 * time.Second}
 	return p

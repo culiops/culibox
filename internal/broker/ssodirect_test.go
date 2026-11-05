@@ -259,7 +259,7 @@ func TestServeSSODirectNoAccountRefuses(t *testing.T) {
 	b, _, rec, _ := ssoDirectSetup(t, g)
 	sv := ssoDirectLive()
 	sv.AWS.SourceProfile = "static"
-	b.lookup = func(string) (SessionView, bool) { return sv, true }
+	b.lookup = withTestBox(func(string) (SessionView, bool) { return sv, true })
 	w := call(b, tokA("s-1"))
 	if w.Code == 200 || len(g.calls) != 0 {
 		t.Fatalf("status %d gates %d", w.Code, len(g.calls))
@@ -276,7 +276,7 @@ func TestServeSSODirectAccountReadFailureIsUnverified(t *testing.T) {
 	b, _, rec, _ := ssoDirectSetup(t, g)
 	sv := ssoDirectLive()
 	sv.AWS.SourceProfile = "gone-from-the-file"
-	b.lookup = func(string) (SessionView, bool) { return sv, true }
+	b.lookup = withTestBox(func(string) (SessionView, bool) { return sv, true })
 	w := call(b, tokA("s-1"))
 	var body struct{ Error string }
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
@@ -314,7 +314,7 @@ func TestServeSSODirectNamedConnection(t *testing.T) {
 	sv := live()
 	sv.AWS = nil
 	sv.AWSConns = []config.AWSConnection{{Name: "ro", AWSBinding: *ssoDirectBinding()}}
-	b.lookup = func(string) (SessionView, bool) { return sv, true }
+	b.lookup = withTestBox(func(string) (SessionView, bool) { return sv, true })
 	r := callBody(b, tokA("s-1"), `{"name":"ro"}`)
 	if r.Code != 200 || fm.callCount() != 1 || len(g.calls) != 1 {
 		t.Fatalf("status %d: %s", r.Code, r.Body)
@@ -376,7 +376,7 @@ func TestCheckSSODirect(t *testing.T) {
 
 // callCtx is call with the request's context.
 func callCtx(ctx context.Context, b *Broker, tok string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", nil).WithContext(ctx)
+	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", nil).WithContext(withBox(ctx, testBox))
 	r.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
 	b.Handler().ServeHTTP(w, r)

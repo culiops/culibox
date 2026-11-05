@@ -40,6 +40,9 @@ type SessionView struct {
 	Nonce string
 	Boxed bool
 	Live  bool
+	// Box is the container the session runs in (Session.Box). A token is honoured
+	// only from this box; "" (no box known) refuses every request.
+	Box string
 	// Exclusive: the session's box is its own (an elevate binding); a grant is
 	// refused without it.
 	Exclusive bool
@@ -126,6 +129,10 @@ type Broker struct {
 	// resolve reads a static token's value at fetch time; set before the broker
 	// serves (SetResolver), credref.Default{} until then.
 	resolve credref.Resolver
+	// boxSrc tells which box a request without a per-box listener came from
+	// (macOS: the relay's PROXY source); set before the broker serves
+	// (SetBoxSource). nil refuses every such request.
+	boxSrc BoxSource
 
 	mu        sync.Mutex
 	cache     map[connKey]cached
@@ -309,7 +316,15 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("/v1/credentials", b.serveCredentials)
 	mux.HandleFunc("/v1/github/token", b.serveGitHubToken)
 	mux.HandleFunc("/v1/static/token", b.serveStaticToken)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Everything on the shared socket (boxes from before the per-box
+		// sockets) is refused with a respawn message, whatever the path.
+		if _, shared := presenterOf(r.Context()); shared {
+			b.serveShared(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
@@ -332,8 +347,8 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	// A nonce mismatch must NOT forget: the live session under this id is someone
 	// else's, and a stale token must not reset its cache or rate-limit window.
-	if reason := refusalReason(sv, found, nonce, kindAWS); reason != "" {
-		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: OutcomeDeniedSession, Error: reason})
+	if o, why := b.refusal(r, sv, found, nonce, kindAWS); o != "" {
+		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: o, Error: why})
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
 		return
 	}

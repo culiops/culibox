@@ -26,15 +26,49 @@ func (h Hooks) Token(id, nonce string) string { return h.B.Token(id, nonce) }
 
 // BoxFor writes the binding's per-binding files and returns the mounts and env
 // a bound box needs. base is the spawn's base-role probe results (nil without
-// AWS), which aws.json carries per connection. It never modifies the
-// endpoint's own mount slice.
+// AWS), which aws.json carries per connection. The box's own broker socket is
+// not here: AcquireBox hands it out once the box's name is known.
 func (h Hooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Result) ([]box.Mount, []string, error) {
 	dir, err := EnsureBindingDirWith(h.StateRoot, bs, base)
 	if err != nil {
 		return nil, nil, err
 	}
-	mounts := append([]box.Mount{{Host: dir, Box: BoxDir}}, h.EP.Mounts...)
-	return mounts, BoxEnv(bs, h.EP.BoxURL), nil
+	return []box.Mount{{Host: dir, Box: BoxDir}}, BoxEnv(bs, h.EP.BoxURL), nil
+}
+
+// AcquireBox takes a reference on box boxName's own broker socket and returns
+// the read-only mount that carries it into the box. Linux: the per-box socket
+// directory. darwin: nil, nil (the box is identified per request; there is
+// nothing to mount or hold). Every call that returns a nil error must be paired
+// with exactly one ReleaseBox.
+func (h Hooks) AcquireBox(boxName string) ([]box.Mount, error) {
+	if h.EP.Boxes == nil {
+		return nil, nil
+	}
+	m, err := h.EP.Boxes.Acquire(boxName)
+	if err != nil {
+		return nil, err
+	}
+	return []box.Mount{m}, nil
+}
+
+// AdoptBox is AcquireBox for a live session found again after a restart: the
+// socket comes back in the directory the running box already mounts, so the
+// mount is not needed. Paired with ReleaseBox like AcquireBox.
+func (h Hooks) AdoptBox(boxName string) error {
+	if h.EP.Boxes == nil {
+		return nil
+	}
+	_, err := h.EP.Boxes.Acquire(boxName)
+	return err
+}
+
+// ReleaseBox drops one reference taken by AcquireBox or AdoptBox. At zero the
+// box's socket closes.
+func (h Hooks) ReleaseBox(boxName string) {
+	if h.EP.Boxes != nil {
+		h.EP.Boxes.Release(boxName)
+	}
 }
 
 // WriteAWSListing rewrites aws.json in the binding's existing dir with new

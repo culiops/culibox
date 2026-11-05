@@ -36,7 +36,7 @@ func ssoSetup(t *testing.T) (*Broker, *keyedMinter, *memRec) {
 	other.AWS = binding()
 	other.AWS.SourceProfile = "company"
 	sessions := map[string]SessionView{"a-1": live(), "b-1": two, "c-1": other}
-	b.lookup = func(id string) (SessionView, bool) { s, ok := sessions[id]; return s, ok }
+	b.lookup = withTestBox(func(id string) (SessionView, bool) { s, ok := sessions[id]; return s, ok })
 	km := &keyedMinter{fakeMinter: fm, keys: map[string]string{"sandbox-admin": "example-sso", "sandbox-ro": "example-sso", "company": "corp-sso"}}
 	b.minter = km
 	return b, km, rec

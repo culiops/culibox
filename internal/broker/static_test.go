@@ -66,6 +66,7 @@ func staticSetup(t *testing.T, sessions map[string]SessionView) (*Broker, *fakeR
 
 func staticCall(b *Broker, tok, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/v1/static/token", strings.NewReader(body))
+	r = r.WithContext(withBox(r.Context(), testBox))
 	if tok != "" {
 		r.Header.Set("Authorization", "Bearer "+tok)
 	}

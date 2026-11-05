@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/netlimit"
 	"github.com/culiops/culibox/internal/proxyline"
 )
 
@@ -162,7 +163,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	// The raw-connection limit counts before the header is read, so a silent
 	// client cannot hold more than its slot. darwin only: Linux boxes connect
 	// directly from their own address.
-	l = limitListener(l, s.maxConns)
+	l = netlimit.Listener(l, s.maxConns)
 	if s.o.GOOS == "darwin" {
 		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(n.Subnet, n.Gateway), proxyHeaderTimeout)
 	}

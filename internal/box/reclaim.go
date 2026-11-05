@@ -167,6 +167,11 @@ func isBoxName(s string) bool {
 	return true
 }
 
+// IsBoxName reports whether s is a name BoxName/Wrap can produce: the prefix plus
+// 12 lowercase hex digits. Anything that becomes a path component on the host
+// (the broker's per-box socket directory) must pass it first.
+func IsBoxName(s string) bool { return isBoxName(s) }
+
 // homeAge reports how long since the box was last used. The marker is the real
 // signal; a home without one predates the marker and falls back to its own
 // mtime, which is safe only because the caller has already refused every home
