@@ -362,7 +362,7 @@ class TerminalTab {
     }
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      if (osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) this.gestureAt = Date.now();
+      this.armOsc52Key(e);
       const act = termKeyAction(e, IS_MAC, this.term.hasSelection());
       if (act === "copy") {
         e.preventDefault();
@@ -490,9 +490,37 @@ class TerminalTab {
   armOsc52(e) {
     if (this.osc52Up) document.removeEventListener("mouseup", this.osc52Up, true);
     this.osc52Up = null;
-    if (!osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
-    this.osc52Up = () => { this.osc52Up = null; this.gestureAt = Date.now(); };
+    if (this.replaying() || !osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) return;
+    // The release checks again: a press made before a reconnect can end inside
+    // the replay it did not see.
+    this.osc52Up = () => { this.osc52Up = null; if (!this.replaying()) this.gestureAt = Date.now(); };
     document.addEventListener("mouseup", this.osc52Up, { once: true, capture: true });
+  }
+
+  // armOsc52Key is the keyboard half: an exact Ctrl+C opens the window at once.
+  armOsc52Key(e) {
+    if (!this.replaying() && osc52Gesture(e, this.term.modes.mouseTrackingMode, IS_MAC)) this.gestureAt = Date.now();
+  }
+
+  // replaying reports whether this connection's replay (see connect) has not
+  // been parsed yet. While it has not, no gesture counts, so an OSC 52 still
+  // sitting in it can never be answered by a click the user made during it.
+  replaying() { return !!this.replay && this.replay.hold > 0; }
+
+  // holdForReplay says whether a frame is old output that gestures must wait
+  // for, and takes the hold when it is. The first frame already has its hold
+  // (connect took it). A later frame is old output only when it is a ring
+  // resync: a viewer that fell behind the ring is sent RIS (ESC c) plus the
+  // whole ring (Session.deliver). Any other frame is live and holds nothing. A
+  // live frame that happens to start with ESC c only costs one parse of waiting.
+  // A resync also closes a window opened before it: the old output follows.
+  holdForReplay(rp, data) {
+    if (rp.first) { rp.first = false; return true; }
+    const resync = typeof data === "string" ? data.startsWith("\x1bc") : data.length > 1 && data[0] === 0x1b && data[1] === 0x63;
+    if (!resync) return false;
+    rp.hold++;
+    this.gestureAt = 0;
+    return true;
   }
 
   // onOsc52 handles the program asking to write the clipboard (OSC 52): how
@@ -533,9 +561,19 @@ class TerminalTab {
 
   connect() {
     this.term.reset();
-    // The output ring replays from here, and it can hold an old OSC 52: a
-    // gesture made before the reconnect must not let the replay write.
+    // The server answers a new socket with its output ring, which can hold an old
+    // OSC 52 (a copy from hours ago, or one the agent planted). It arrives as ONE
+    // frame, the first on the socket when the ring is not empty (Session.Subscribe
+    // and deliver), and nothing marks where it ends, so the first frame is taken
+    // for the replay whether or not it is: gestures do not count from here until
+    // xterm has parsed it, and a gesture made before the reconnect is forgotten.
+    // xterm queues a frame and parses it later, so a click can land between the
+    // frame arriving and its OSC 52 being parsed; that interval is what this
+    // closes. The state belongs to this connection: a parse callback that
+    // outlives it must not release the next one.
     this.gestureAt = 0;
+    const rp = { hold: 1, first: true };
+    this.replay = rp;
     this.clearRetry();
     this.hideTrouble();
     this.setStatus("connecting…");
@@ -551,8 +589,9 @@ class TerminalTab {
       if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.term.focus();
     };
     ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") this.term.write(ev.data);
-      else this.term.write(new Uint8Array(ev.data));
+      const data = typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data);
+      if (this.holdForReplay(rp, data)) this.term.write(data, () => { rp.hold--; });
+      else this.term.write(data);
     };
     // Schedule the retry FIRST, then diagnose. The loop must never depend on a
     // network call completing: a wedged page (unanswered auth challenge) leaves

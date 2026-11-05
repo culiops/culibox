@@ -372,3 +372,169 @@ test("a reconnect forgets a gesture made before it", () => {
     assert.strictEqual(tab.gestureAt, 0);
   } finally { delete global.location; delete global.WebSocket; }
 });
+
+// --- the replay after a (re)connect -------------------------------------------
+// The server answers a new socket with the session's output ring in ONE frame
+// (Session.Subscribe + deliver), then live frames, with nothing that marks where
+// the replay ends. The ring can hold an old OSC 52, so no gesture may count from
+// connect() until xterm has parsed that first frame, and a ring resync mid-stream
+// (a frame that starts with RIS, ESC c) holds the same way. The rig models
+// xterm's write queue: write(data, cb) parks the frame, and the test decides
+// when "xterm" has parsed it (done), which is when its callback fires.
+function replayRig() {
+  const listeners = [];
+  const log = { copied: [], toasts: [] };
+  const textarea = {};
+  global.IS_MAC = false;
+  global.location = { protocol: "http:", host: "h" };
+  global.WebSocket = class { constructor(url) { this.url = url; } };
+  global.document = {
+    hasFocus: () => true, activeElement: textarea, visibilityState: "visible",
+    addEventListener: (type, fn) => listeners.push([type, fn]),
+    removeEventListener: (type, fn) => { const i = listeners.findIndex((l) => l[0] === type && l[1] === fn); if (i >= 0) listeners.splice(i, 1); },
+  };
+  global.copyText = (text, done) => { log.copied.push(text); done(true); };
+  global.showToast = (msg, opts) => log.toasts.push([msg, opts || {}]);
+  const queue = [];
+  const term = {
+    textarea, modes: { mouseTrackingMode: "none" }, reset() {}, focus() {},
+    write(data, cb) { queue.push({ data, cb }); },
+  };
+  const tab = Object.create(TerminalTab.prototype);
+  Object.assign(tab, {
+    id: "s1", gestureAt: 0, term, termEl: { clientWidth: 800, clientHeight: 400 },
+    clearRetry() {}, hideTrouble() {}, setStatus() {},
+  });
+  const frame = (s) => ({ data: new TextEncoder().encode(s).buffer });
+  const pressRelease = () => {
+    tab.armOsc52(mouse());
+    for (const [type, fn] of [...listeners]) if (type === "mouseup") fn();
+  };
+  return {
+    tab, log, queue, listeners, frame,
+    click: pressRelease,
+    // done: xterm finished parsing the oldest queued frame.
+    done: () => { const w = queue.shift(); if (w.cb) w.cb(); },
+    osc: (text) => tab.onOsc52("c;" + b64(text)),
+    cleanup: () => { for (const k of ["IS_MAC", "location", "WebSocket", "document", "copyText", "showToast"]) delete global[k]; },
+  };
+}
+
+test("a click while the replay is still being parsed never lets the old OSC 52 write", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("\x1b[?1003h...scrolled output..."));
+    // Mid-replay the program's mouse mode is on (the replay switched it on, or
+    // earlier queued output did) and the user clicks before the parse is over.
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    r.osc("old secret planted in the ring");
+    assert.deepStrictEqual(r.log.copied, []);
+    assert.strictEqual(r.tab.gestureAt, 0);
+    // Replay parsed: now a click counts and the program's reply is honoured.
+    r.done();
+    r.click();
+    r.osc("fresh copy");
+    assert.deepStrictEqual(r.log.copied, ["fresh copy"]);
+  } finally { r.cleanup(); }
+});
+
+test("gestures are ignored from connect() until the first frame has been parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.strictEqual(r.tab.gestureAt, 0, "before the first frame has even arrived");
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "frame queued, not yet parsed");
+    r.done();
+    r.click();
+    assert.ok(r.tab.gestureAt > 0, "parsed");
+  } finally { r.cleanup(); }
+});
+
+test("a press made before a reconnect cannot arm on its release during the replay", () => {
+  const r = replayRig();
+  try {
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52(mouse());      // press; the release is still to come
+    r.tab.connect();              // the socket dropped and came back meanwhile
+    r.tab.ws.onmessage(r.frame("ring"));
+    for (const [type, fn] of [...r.listeners]) if (type === "mouseup") fn();
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("Ctrl+C while the replay is being parsed does not open the window", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.strictEqual(r.tab.gestureAt, 0);
+    r.done();
+    r.tab.armOsc52Key(key({ ctrlKey: true }));
+    assert.ok(r.tab.gestureAt > 0);
+    r.tab.gestureAt = 0;
+    r.tab.armOsc52Key(key({ ctrlKey: true, shiftKey: true })); // not a gesture at all
+    assert.strictEqual(r.tab.gestureAt, 0);
+  } finally { r.cleanup(); }
+});
+
+test("live frames after the replay do not hold gestures", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.done();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.tab.ws.onmessage(r.frame("spinner tick")); // live, queued, not parsed yet
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// A viewer that fell behind the ring is resynced with ESC c + the whole ring: the
+// same old output, in the middle of the stream.
+test("a ring resync mid-stream drops the open window and holds gestures until parsed", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("ring"));
+    r.done();
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+    r.tab.ws.onmessage(r.frame("\x1bc" + "ring again"));
+    assert.strictEqual(r.tab.gestureAt, 0, "a window opened before the resync is closed");
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0, "held while it is parsed");
+    r.done();
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
+
+// A parse callback that outlives its connection (xterm still had the old
+// socket's frame queued when connect() ran again) must not release the new hold.
+test("a stale parse callback from an earlier connection does not release the new replay hold", () => {
+  const r = replayRig();
+  try {
+    r.tab.connect();
+    r.tab.ws.onmessage(r.frame("first ring"));
+    r.tab.connect();              // retry before xterm parsed it
+    r.tab.ws.onmessage(r.frame("second ring"));
+    r.tab.term.modes.mouseTrackingMode = "any";
+    r.done();                     // the FIRST connection's callback
+    r.click();
+    assert.strictEqual(r.tab.gestureAt, 0);
+    r.done();                     // the second one
+    r.click();
+    assert.ok(r.tab.gestureAt > 0);
+  } finally { r.cleanup(); }
+});
