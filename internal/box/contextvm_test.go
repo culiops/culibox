@@ -29,7 +29,27 @@ func (v *vmFake) hook(_ context.Context, paths []string) ([]FileID, error) {
 	if v.err != nil {
 		return nil, v.err
 	}
-	return slices.Clone(v.ids), nil
+	// A path under /srv/ takes the next of ids, in order; any other (the
+	// workspace) is a real path and reads as the host sees it. Ids left over are
+	// appended, and a path with no id left gets none, so a wrong count is still
+	// one the hook can return.
+	ids := slices.Clone(v.ids)
+	var out []FileID
+	for _, p := range paths {
+		if strings.HasPrefix(p, "/srv/") {
+			if len(ids) > 0 {
+				out = append(out, ids[0])
+				ids = ids[1:]
+			}
+			continue
+		}
+		id, err := hostID(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return append(out, ids...), nil
 }
 
 func (v *vmFake) logged(s string) {

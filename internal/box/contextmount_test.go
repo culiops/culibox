@@ -29,8 +29,36 @@ func (s *statFake) install(f *fakeClient) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.calls = append(s.calls, slices.Clone(args))
-		return s.out, true, s.err
+		return s.reply(f, args), true, s.err
 	}
+}
+
+// reply is the stdout of one stat exec, one line per path in argv order: a path
+// under /srv/ takes the next line of out, any other (the workspace) is answered
+// by the fake client as the box would show it (inBoxStat). A path with no line of
+// out left ends the reply there, as a short output does. Caller holds s.mu.
+func (s *statFake) reply(f *fakeClient, args []string) string {
+	if len(args) < 7 {
+		return s.out
+	}
+	scripted := strings.Split(s.out, "\n")
+	var lines []string
+	for _, p := range args[6:] {
+		if strings.HasPrefix(p, "/srv/") {
+			if len(scripted) == 0 || scripted[0] == "" {
+				break
+			}
+			lines = append(lines, scripted[0])
+			scripted = scripted[1:]
+			continue
+		}
+		out, err := f.inBoxStat([]string{"exec", args[1], "/usr/bin/stat", "-c", "%d:%i", "--", p})
+		if err != nil {
+			break
+		}
+		lines = append(lines, out)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *statFake) set(out string, err error) {
