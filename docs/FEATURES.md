@@ -13,7 +13,7 @@ Every feature in detail. The [README](../README.md) has the one-line summary.
 
 - **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the CuliBox daemon. On restart, CuliBox re-attaches. Closing the browser or the terminal that runs `agent-box serve` does not kill sessions.
 - **Steer from the UI.** Interrupt a session, restart an exited one (Claude Code sessions on the host tier resume the same conversation), and, if `"replies_enabled": true` is set in config.json (off by default; restart to apply), answer permission prompts or send a one-line reply from the needs-you card. This is limited to Claude Code sessions.
-- **Profiles.** Agents are defined in the config file or created at runtime in the UI, with launch options (flags and env vars) as toggles on the spawn form. A quick-shell profile is detected from `$SHELL`.
+- **Profiles.** Agents are defined in the config file or created at runtime in the UI, with launch options (flags and env vars) as toggles on the spawn form. A quick-shell profile is detected from `$SHELL`. A save made from a stale editor is refused, so an older tab or another device cannot overwrite a newer change.
 - **Files.** Browse, search, view, edit, upload, and download folders as an archive, with size and file-count caps.
 
 ## Contain

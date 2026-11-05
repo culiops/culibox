@@ -20,8 +20,9 @@ function editorState(view) {
 
 // What Save does with the form. selected is the saved profile the editor is on,
 // "" for a draft. A saved profile is always updated under its own name; a draft
-// is always created, and refused when a stored profile already has its name
-// (the server's Save is an upsert, so a POST would silently overwrite it).
+// is always created, and refused here when a stored profile already has its name
+// (the server refuses it too, 409 profile_exists, but the list on screen may be
+// stale, so the editor says so before sending).
 function saveTarget(selected, formName, existing) {
   if (selected) return { method: "PUT", name: selected };
   if ((existing || []).includes(formName)) return { error: 'A profile named "' + formName + '" already exists. Pick another name.' };
@@ -450,6 +451,67 @@ function egressToSend(visible, text, open) {
   return out;
 }
 
+// withRev: the body of a save of a stored profile. The revision is the one the
+// form was opened at (the server adds it to every profile it returns), and the
+// server refuses the save when the profile is no longer at it. Without a loaded
+// revision (a draft, or nothing loaded) the body carries no rev key at all, so
+// the server's own answer to a missing one stands. Never mutates p.
+function withRev(p, loaded) {
+  const out = Object.assign({}, p);
+  if (loaded && typeof loaded.rev === "string" && loaded.rev) out.rev = loaded.rev;
+  return out;
+}
+
+// schemaPin holds the profile schema a page read at load (/api/meta's
+// profile_schema: the server's fingerprint of the profile fields it knows). The
+// first usable value pinned wins and nothing moves it afterwards, so a page
+// loaded before an update keeps the old value for as long as it is open, and the
+// server, which now holds the new one, refuses its saves (a form that predates a
+// field would otherwise drop that field). One pin per page.
+function schemaPin() {
+  let pinned = "";
+  return {
+    pin(v) {
+      if (!pinned && typeof v === "string" && v) pinned = v;
+      return pinned;
+    },
+    get() { return pinned; },
+  };
+}
+
+// withSchema: a save body plus the schema the page pinned, for POST and PUT
+// alike. With nothing pinned the body carries no schema key at all, so the
+// server's own answer to a missing one stands. Never mutates body.
+function withSchema(body, schema) {
+  const out = Object.assign({}, body);
+  if (typeof schema === "string" && schema) out.schema = schema;
+  return out;
+}
+
+// staleSave: what to show when a save is refused because the profile changed
+// after the form was opened (409 profile_changed), or null for any other
+// failure. Only that one refusal gets a banner with Load latest: the others
+// (a taken name, a hand-edited profiles file, a missing revision, a page from
+// before an update) are not cured by reloading the profile, so they keep the
+// ordinary failure line.
+function staleSave(err) {
+  if (!err || err.status !== 409 || err.code !== "profile_changed") return null;
+  // A profile deleted meanwhile has no saved version to load: Load latest opens
+  // a blank draft. The server marks that case (body.gone), so the text names
+  // what each button really does.
+  const gone = !!err.body && err.body.gone === true;
+  const what = gone
+    ? "Duplicate saves them as a new profile, Load latest clears the form."
+    : "Load latest replaces them with the saved version.";
+  // The server's messages are Go error strings, which start lowercase; on the
+  // banner the message opens a sentence.
+  const msg = String(err.message);
+  return {
+    message: msg.charAt(0).toUpperCase() + msg.slice(1) + ". Your edits are still here; " + what,
+    button: "Load latest",
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave };
 }

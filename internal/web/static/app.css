@@ -609,6 +609,11 @@
       font-size: 11.5px; padding: 11px 12px; line-height: 1.6; margin-top: 14px;
     }
     .warnbox[hidden] { display: none; }
+    /* A save the server refused as stale: the message, then Load latest. The id
+       rule sets display, which would beat the [hidden] above, hence its own. */
+    #pf-stale { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+    #pf-stale[hidden] { display: none; }
+    #pf-stale span { flex: 1 1 240px; overflow-wrap: anywhere; }
     .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
@@ -2670,7 +2675,7 @@
       #pf-options .fcol:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
       #pf-options input[type="checkbox"] { width: var(--tap); height: var(--tap); margin: 0; flex: none; }
       .pitem { min-height: var(--tap); }
-      .plist-foot .btn, #pf-env-add, #pf-secret-add, #pf-gh-add { min-height: var(--tap); }
+      .plist-foot .btn, #pf-env-add, #pf-secret-add, #pf-gh-add, #pf-stale-reload { min-height: var(--tap); }
       /* GitHub owner rows: the frow stacks, so the card's remove button goes
          full width under its fields instead of hanging off a column. */
       /* The desktop row is align-items:flex-start, which in this column-stacked

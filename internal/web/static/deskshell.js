@@ -271,14 +271,16 @@ function deskHash(str) {
 }
 
 // emptyStateModel: which empty state the pane area shows. "first": nothing has
-// ever been set up (no sessions and only built-in profiles, which the server
-// marks editable:false). "none": anything else with no pane open (the caller
-// only asks when that is so), including sessions that exist while the profiles
-// are still loading: a blank pane would be worse than "No session open".
-// null while the session list is unknown (null), or while profiles have not
-// loaded and there are no sessions, so the first-run screen never flashes at
-// someone with custom profiles or live sessions. profiles: up
-// to three recently spawned profile names that still exist.
+// ever been set up (no sessions, and every profile is one CuliBox built in: the
+// server marks those source:"builtin"). A profile from the user's config.json
+// ("config") or saved in the UI ("runtime") is the user's own, so it is never
+// first run, and neither is a profile with no source. "none": anything else
+// with no pane open (the caller only asks when that is so), including sessions
+// that exist while the profiles are still loading: a blank pane would be worse
+// than "No session open". null while the session list is unknown (null), or
+// while profiles have not loaded and there are no sessions, so the first-run
+// screen never flashes at someone with custom profiles or live sessions.
+// profiles: up to three recently spawned profile names that still exist.
 function emptyStateModel({ sessions, profiles, recent }) {
   const ps = Array.isArray(profiles) ? profiles : [];
   const have = new Set(ps.map((p) => p.name));
@@ -290,7 +292,7 @@ function emptyStateModel({ sessions, profiles, recent }) {
   let kind = "none";
   if (!hasSessions) {
     if (!ps.length) kind = null;
-    else if (ps.every((p) => p.builtin === true || !p.editable)) kind = "first";
+    else if (ps.every((p) => p.source === "builtin")) kind = "first";
   }
   return { kind, profiles: names };
 }

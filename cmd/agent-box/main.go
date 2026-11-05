@@ -697,6 +697,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	// What CuliBox added itself is "builtin" in the profile list; config.json's own
+	// agents are "config" (#15). Derived every boot, never written to a file.
+	pm.SetBuiltin(builtinProfileNames(doctorIn.Source, cfg.Agents, agents))
 	recordBoxedProfiles(boxedReg, lnch.Clones(), lnch.BoxedDefaultCwds())
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	if h != nil {
