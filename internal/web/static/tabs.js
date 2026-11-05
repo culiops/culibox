@@ -988,37 +988,49 @@ class Cell {
     tabs.setAttribute("role", "group");
     tabs.setAttribute("aria-label", "Pane views");
     // Terminal, Activity and Access are the pane's views (.on, one of the
-    // three); Files is the drawer's toggle (.open, paintDrawerTabs).
-    if (term) {
-      const tt = el("button", "Terminal");
-      tt.className = "ph-tab" + (t === term && this.view === "terminal" ? " on" : "");
-      tt.onclick = (e) => {
-        e.stopPropagation();
-        // Terminal means "show me the agent": its tab, and no drawer or view over it.
-        if (typeof closeDrawerFor === "function") closeDrawerFor(sid);
-        if (this.activeTab !== term) this.activate(term);
-        else this.setView("terminal");
-      };
-      tabs.append(tt);
-    }
-    const files = el("button", "Files");
-    files.className = "ph-tab";
-    files.dataset.k = "files";
-    files.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
-    tabs.append(files);
-    // A pane of files has no session to describe: no Activity, no Access.
-    for (const [kind, label] of term ? [["activity", "Activity"], ["access", "Access"]] : []) {
-      const b = el("button", label);
-      b.className = "ph-tab" + (this.view === kind ? " on" : "");
-      b.dataset.v = kind;
-      b.setAttribute("aria-pressed", this.view === kind ? "true" : "false");
-      b.onclick = (e) => {
-        e.stopPropagation();
-        // A keyboard press on an unfocused pane focuses it first (a mouse press
-        // already has), so the view and the keyboard land on the same pane.
-        if (focusedCell !== this) setFocusedCell(this);
-        this.toggleView(kind);
-      };
+    // three); Files is the drawer's toggle (.open, paintDrawerTabs). Each tab is
+    // ONE button holding its icon and its label: a narrow pane shows the icon
+    // (CSS, desktop.css), so the tab keeps its name either way (#13).
+    const tabButton = (def) => {
+      const b = el("button");
+      b.title = def.label;
+      b.setAttribute("aria-label", def.label);
+      const ico = el("span");
+      ico.className = "ph-ico";
+      ico.append(tabIcon(def.icon));
+      const lbl = el("span", def.label);
+      lbl.className = "ph-lbl";
+      b.append(ico, lbl);
+      return b;
+    };
+    // A pane of files has no session to describe: Files alone (paneTabs).
+    for (const def of paneTabs(!!term)) {
+      const b = tabButton(def);
+      if (def.id === "terminal") {
+        b.className = "ph-tab" + (t === term && this.view === "terminal" ? " on" : "");
+        b.onclick = (e) => {
+          e.stopPropagation();
+          // Terminal means "show me the agent": its tab, and no drawer or view over it.
+          if (typeof closeDrawerFor === "function") closeDrawerFor(sid);
+          if (this.activeTab !== term) this.activate(term);
+          else this.setView("terminal");
+        };
+      } else if (def.id === "files") {
+        b.className = "ph-tab";
+        b.dataset.k = "files";
+        b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+      } else {
+        b.className = "ph-tab" + (this.view === def.id ? " on" : "");
+        b.dataset.v = def.id;
+        b.setAttribute("aria-pressed", this.view === def.id ? "true" : "false");
+        b.onclick = (e) => {
+          e.stopPropagation();
+          // A keyboard press on an unfocused pane focuses it first (a mouse press
+          // already has), so the view and the keyboard land on the same pane.
+          if (focusedCell !== this) setFocusedCell(this);
+          this.toggleView(def.id);
+        };
+      }
       tabs.append(b);
     }
     const sep = el("span");
@@ -1224,6 +1236,39 @@ function dockIcon(kind) {
     add("path", { d: "M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5" });
   } else {
     add("path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" });
+  }
+  return svg;
+}
+
+// tabIcon: the pane header's tab glyphs as inline SVG, in dockIcon's style, for a
+// pane too narrow for the tab's word (#13). Terminal a window with a prompt, Files
+// a folder, Activity a pulse line, Access a shield with a tick. The tab's title and
+// aria-label carry the meaning; the glyph is decoration.
+function tabIcon(kind) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 14 14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const add = (tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    svg.append(n);
+  };
+  if (kind === "terminal") {
+    add("rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" });
+    add("path", { d: "M4 5.8l2 1.7-2 1.7M7.6 9.3H10" });
+  } else if (kind === "files") {
+    add("path", { d: "M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z" });
+  } else if (kind === "activity") {
+    add("path", { d: "M1 7.5h2.6l1.5-4.2 3 8.4 1.7-4.2H13" });
+  } else {
+    add("path", { d: "M7 1.5l4.5 1.7v3.7c0 2.6-1.9 4.4-4.5 5.6-2.6-1.2-4.5-3-4.5-5.6V3.2z" });
+    add("path", { d: "M5 7l1.5 1.5L9.2 5.7" });
   }
   return svg;
 }

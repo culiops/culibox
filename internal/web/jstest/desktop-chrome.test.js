@@ -151,3 +151,46 @@ test("desktop.css does not bound the info body by the viewport", () => {
   const r = rulesFor("#ask-modal.info #ask-body").join(" ");
   assert.ok(!/100dvh|100vh/.test(r), "viewport bound would ignore the dialog's 88vh cap");
 });
+
+// The pane header's three container queries (#13), measured on the bar's content
+// box (cell width minus 20): below ICONS_MAX every tab is an icon, below
+// COLLAPSE_MAX the tab group is gone, below COMPACT_MAX the text tabs tighten.
+// The floors are measured widths where the content stops fitting; a threshold
+// under its floor clips a control, one far above it hides room that was free.
+function containerRules() {
+  const out = [];
+  const re = /@container\s*\(max-width:\s*(\d+)px\)\s*\{/g;
+  let m;
+  while ((m = re.exec(block))) {
+    let depth = 1, i = re.lastIndex;
+    while (depth && i < block.length) { const ch = block[i++]; if (ch === "{") depth++; else if (ch === "}") depth--; }
+    out.push({ px: +m[1], body: block.slice(re.lastIndex, i - 1).replace(/\s+/g, " ") });
+  }
+  return out;
+}
+const headerRule = (has) => containerRules().find((r) => has.test(r.body));
+
+test("the pane header's three container thresholds are ordered and above the widths where each look fits", () => {
+  const compact = headerRule(/\.ph-sep\s*\{/);
+  const icons = headerRule(/\.ph-lbl\s*\{/);
+  const collapse = headerRule(/\.ph-tabs, \.ph-shell\s*\{/);
+  assert.ok(compact && icons && collapse, "the compact, icon and collapse rules each exist");
+  assert.ok(collapse.px < icons.px && icons.px < compact.px, "collapse < icons < compact");
+  assert.ok(collapse.px >= 310, "icons need 310 px of content box: never shown in less");
+  assert.ok(icons.px >= 420, "text tabs need 420 px of content box: never shown in less");
+  assert.ok(compact.px >= 548, "the hover icons clip the wide look up to a 568 px pane (548 content)");
+});
+
+test("below the icon threshold every tab shows its icon and hides its label", () => {
+  const icons = headerRule(/\.ph-lbl\s*\{/);
+  assert.ok(/\.ph-lbl\s*\{[^}]*display:\s*none/.test(icons.body), "label hidden");
+  assert.ok(/\.ph-ico\s*\{[^}]*display:\s*block/.test(icons.body), "icon shown");
+  assert.ok(/\.ph-tab\s*\{[^}]*padding:\s*5px\s*[;}]/.test(icons.body), "5 px all round: a 24 px square like the other header icons");
+  assert.ok(/\.cell-bar:has\(\.ph-max\.pin\) \.ph-shell\s*\{[^}]*display:\s*none/.test(icons.body), "a maximized pane's pinned button gives + Shell's room");
+});
+
+test("the icon is hidden and sized by default, so a wide header is unchanged", () => {
+  assert.ok(rulesFor(".ph-ico").some((b) => /display:\s*none/.test(b)), "hidden by default");
+  assert.ok(rulesFor(".ph-ico svg").some((b) => /display:\s*block/.test(b) && /width:\s*14px/.test(b) && /height:\s*14px/.test(b)));
+  assert.ok(rulesFor(".ph-tab").some((b) => /display:\s*inline-flex/.test(b) && /align-items:\s*center/.test(b)));
+});
