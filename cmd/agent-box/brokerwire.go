@@ -15,6 +15,7 @@ import (
 
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/awsprobe"
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
@@ -116,15 +117,17 @@ func serveBroker(srv *http.Server, l net.Listener) {
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken) (*brokerService, error) {
-	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil)
+	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil, nil)
 }
 
 // startBrokerWithStore is startBroker with the daemon's encrypted store, which
 // serves `store` value references for static tokens and GitHub App keys. A nil
-// vstore leaves the references refusing, exactly as without a store.
+// vstore leaves the references refusing, exactly as without a store. addrs is
+// the layer's box-address cache, which decides the box of a request that
+// arrives on no per-box socket (macOS); nil leaves every such request refused.
 func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken,
-	vstore *secretstore.Store) (*brokerService, error) {
+	vstore *secretstore.Store, addrs *boxaddr.Cache) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -173,6 +176,13 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 	brk.SetGitHub(minter)
 	if vstore != nil {
 		brk.SetResolver(credref.Default{Store: vstore})
+	}
+	// Only a real cache: a nil *Cache inside the interface would panic on the
+	// first request instead of refusing. No goos branch: a Linux request always
+	// arrives on a per-box (or the shared) socket, which decides before this is
+	// consulted.
+	if addrs != nil {
+		brk.SetBoxSource(addrs)
 	}
 
 	ep, err := broker.Listen(goos, stateRoot, port)

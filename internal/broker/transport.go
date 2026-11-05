@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/netlimit"
 	"github.com/culiops/culibox/internal/proxyline"
 )
 
@@ -22,6 +23,14 @@ const SockBoxDir = "/opt/agentbox-broker"
 // proxyHeaderTimeout bounds how long a darwin connection may take to send its
 // PROXY line; the relay writes it before any other byte.
 const proxyHeaderTimeout = 5 * time.Second
+
+// maxDarwinConns caps the raw connections the darwin listener holds at once
+// (inferred, not measured): requests are short (5 s for the PROXY line, 5 s for
+// the headers, 30 s to write), and mints are rate-limited per session (10 a
+// minute for AWS, 60 for static tokens), so this is half the egress proxy's cap,
+// which also has to carry long tunnels. Without a cap any box on the egress
+// network could open connections until the daemon ran out of file descriptors.
+const maxDarwinConns = 256
 
 // Endpoint is how boxes reach the broker on this OS.
 type Endpoint struct {
@@ -49,15 +58,24 @@ type Endpoint struct {
 // and RemoteAddr is the box's address, as on Linux. The token guards the rest.
 func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 	if goos == "darwin" {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
-		}
-		p := l.Addr().(*net.TCPAddr).Port
-		l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
-		return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
+		return listenDarwin(port, maxDarwinConns)
 	}
 	return listenLinux(stateRoot)
+}
+
+// listenDarwin is the Mac's broker listener: TCP on the loopback, at most
+// maxConns raw connections open, then the PROXY wrapper. The cap goes UNDER the
+// wrapper so a connection that never sends its PROXY line still holds its slot
+// (until the header timeout) instead of being free to pile up.
+func listenDarwin(port, maxConns int) (Endpoint, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
+	}
+	p := l.Addr().(*net.TCPAddr).Port
+	l = netlimit.Listener(l, maxConns)
+	l = proxyline.Wrap(l, proxyline.InSubnetNotGateway(netip.MustParsePrefix(boxvm.EgressSubnet), netip.MustParseAddr(boxvm.EgressGateway)), proxyHeaderTimeout)
+	return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
 }
 
 func listenLinux(stateRoot string) (Endpoint, error) {

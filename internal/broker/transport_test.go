@@ -3,16 +3,19 @@ package broker
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
 )
 
@@ -227,5 +230,138 @@ func TestListenDarwinRequiresHeader(t *testing.T) {
 		if body, err := rawGet(t, addr, prefix); err == nil {
 			t.Errorf("%s: served %q", name, body)
 		}
+	}
+}
+
+// rawPost is rawGet for a POST with a bearer token: status and body, or the
+// error when the connection was closed unanswered.
+func rawPost(t *testing.T, addr, prefix, path, tok, body string) (int, string, error) {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "%sPOST %s HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		prefix, path, tok, len(body), body)
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "POST"})
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b), nil
+}
+
+// The darwin listener holds at most n raw connections, silent ones included
+// (the cap sits under the PROXY wrapper, so a connection that never sends its
+// header still holds its slot until the header timeout).
+func TestListenDarwinCapsConnections(t *testing.T) {
+	ep, err := listenDarwin(0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(r.RemoteAddr)) })}
+	go srv.Serve(ep.Listener)
+	t.Cleanup(func() { srv.Close(); ep.Listener.Close() })
+	addr := ep.Listener.Addr().String()
+
+	var idle []net.Conn
+	for i := 0; i < 2; i++ {
+		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, c)
+		t.Cleanup(func() { c.Close() })
+	}
+	third, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	third.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprint(third, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\nGET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n")
+	got := make(chan string, 1)
+	go func() {
+		resp, err := http.ReadResponse(bufio.NewReader(third), &http.Request{Method: "GET"})
+		if err != nil {
+			got <- "error: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		got <- string(b)
+	}()
+	select {
+	case r := <-got:
+		t.Fatalf("a third connection was served while two were held open: %q", r)
+	case <-time.After(300 * time.Millisecond):
+	}
+	idle[0].Close() // a slot frees
+	select {
+	case r := <-got:
+		if r != "172.29.72.9:40000" {
+			t.Fatalf("third connection got %q", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("closing a connection did not let the waiting one in")
+	}
+}
+
+func TestMaxDarwinConnsIsBounded(t *testing.T) {
+	if maxDarwinConns <= 0 || maxDarwinConns > 512 {
+		t.Fatalf("maxDarwinConns = %d", maxDarwinConns)
+	}
+}
+
+// macOS end to end over the real listener: the relay's PROXY source decides the
+// box. The box's own address gets the value; any other address, a bound box's or
+// an unbound one's, is refused as denied_box; no PROXY line is closed unanswered
+// and writes no row.
+func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
+	v := staticSession(grafanaEntry())
+	v.Box = ownBox
+	b, _, rec, _ := staticSetup(t, map[string]SessionView{"s": v})
+	lookup := func(_ context.Context, box string) (netip.Addr, error) {
+		if box == ownBox {
+			return netip.MustParseAddr("172.29.72.9"), nil
+		}
+		return netip.Addr{}, errors.New("no such box")
+	}
+	b.SetBoxSource(boxaddr.New(context.Background(), lookup, time.Now))
+	ep, err := listenDarwin(0, maxDarwinConns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: b.Handler(), BaseContext: BaseContext, ReadHeaderTimeout: 5 * time.Second}
+	go srv.Serve(ep.Listener)
+	t.Cleanup(func() { srv.Close(); ep.Listener.Close() })
+	addr := ep.Listener.Addr().String()
+	tok := tokA("s")
+
+	code, body, err := rawPost(t, addr, "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n", "/v1/static/token", tok, grafanaBody)
+	if err != nil || code != 200 || !strings.Contains(body, staticSecret) {
+		t.Fatalf("own address: %d %q %v", code, body, err)
+	}
+	code, body, err = rawPost(t, addr, "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n", "/v1/static/token", tok, grafanaBody)
+	if err != nil || code != 403 || strings.Contains(body, staticSecret) {
+		t.Fatalf("another box's address: %d %q %v", code, body, err)
+	}
+	rec.mu.Lock()
+	rows := append([]Row(nil), rec.rows...)
+	rec.mu.Unlock()
+	if len(rows) != 2 || rows[0].Outcome != OutcomeFetched || rows[1].Outcome != OutcomeDeniedBox || rows[1].SessionID != "s" {
+		t.Fatalf("rows = %+v, want fetched then denied_box", rows)
+	}
+	if _, _, err := rawPost(t, addr, "", "/v1/static/token", tok, grafanaBody); err == nil {
+		t.Fatal("a connection with no PROXY line was answered")
+	}
+	rec.mu.Lock()
+	n := len(rec.rows)
+	rec.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("a connection with no PROXY line wrote a row: %d rows", n)
 	}
 }

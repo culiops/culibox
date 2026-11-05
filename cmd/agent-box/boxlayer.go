@@ -9,6 +9,7 @@ import (
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxaddr"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
@@ -54,6 +55,12 @@ type boxLayer struct {
 	goos       string // runtime.GOOS as the layer was built
 	dataDir    string // the absolute data dir, for the store doctor and box setup read
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
+	// addrs is the one box-address cache the egress proxy and the credential
+	// broker share (both OSes). One instance on purpose: the proxy drops a box's
+	// entry when its session ends or a probe re-verifies a recreated box, and a
+	// second cache would never be cleared. nil only for a layer built by hand in
+	// a test.
+	addrs *boxaddr.Cache
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 }
@@ -99,6 +106,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		l.dockerArgs = vc.DockerArgs()
 	}
 	l.cli = box.CLIClient{Bin: bin, Args: l.dockerArgs}
+	l.addrs = newBoxAddrs(l.cli, cfg.BoxInstance())
 	l.img = boximage.Docker{Bin: bin, Args: l.dockerArgs}
 	o := l.options(cfg)
 	o.Protected = protected
