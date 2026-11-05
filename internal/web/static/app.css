@@ -2564,7 +2564,11 @@
       #foot-bug { height: auto; flex-wrap: wrap; padding: 8px 13px; }
       #bug-status { flex-basis: 100%; order: -1; }
       #bug-status:empty { display: none; }
-      #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
+      /* bottom: the nav (60) + 8, so a toast clears the nav on every screen even if
+         showToast (shell.js) cannot measure. The Terminal screen also stacks the
+         snippet row and the key bar above the nav, and the keyboard removes the
+         nav: placeToast sets the inline `bottom` from what is on screen (#111). */
+      #toast { right: 8px; left: 8px; max-width: none; bottom: 68px; }
       /* The Keyboard shortcuts help is pre-formatted text (white-space: pre above,
          so desktop keeps its aligned columns). On the phone showShortcuts() already
          stacks each row's keys over its description to fit the dialog; this is the

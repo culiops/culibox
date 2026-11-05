@@ -75,9 +75,22 @@ function keyboardOpen(innerHeight, vvHeight, minDelta) {
   return Number(innerHeight) - Number(vvHeight) >= minDelta;
 }
 
+// touchPrimary: is the primary input a finger (no hover, a coarse pointer)? The
+// toast that names a mouse gesture (Shift+drag) asks it, because a touch screen
+// has no such gesture to name (#111). matchMedia is passed in so this runs
+// without a window; a missing or throwing one is "no", the desktop default.
+function touchPrimary(matchMediaFn) {
+  try {
+    const q = matchMediaFn("(hover: none) and (pointer: coarse)");
+    return !!(q && q.matches);
+  } catch (_) {
+    return false;
+  }
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     KEY_BYTES, keyByte, ctrlByte, SNIPPETS, KEYBAR, KEYBAR_MORE, SYMBOL_TEXT,
-    gestureAxis, swipeIntent, keyboardOpen,
+    gestureAxis, swipeIntent, keyboardOpen, touchPrimary,
   };
 }
