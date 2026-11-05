@@ -403,3 +403,166 @@ test("strip, Linux: locked shows the unlock form, unlocked shows Lock now (uncha
   const none = stripOf(p, { initialized: false, locked: false, platform: "linux" });
   assert.deepEqual(btnTexts(none), ["Create the encrypted store"]);
 });
+
+// --- #27: a live window crossing the table/card width repaints ---------------------
+
+const liveView = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [tok("sentry-prod")], values: [], legacy_secrets: [], invalid: [] };
+
+// A page whose ResizeObserver is fake: `resizeTo` moves #creds-body and delivers the entry.
+function livePage(width, opts) {
+  const p = page({ width, ...(opts || {}) });
+  const observers = [];
+  p.box.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; this.targets = []; observers.push(this); }
+    observe(t) { this.targets.push(t); }
+    disconnect() {}
+  };
+  p.observers = observers;
+  // The repaint waits for the next frame (see credWatchWidth); `frame()` is that frame.
+  const frames = [];
+  p.box.requestAnimationFrame = (f) => { frames.push(f); return frames.length; };
+  p.frame = () => { while (frames.length) frames.shift()(); };
+  p.queued = () => frames.length;
+  p.deliver = (w, entryWidth) => {
+    p.byId["creds-body"].clientWidth = w;
+    for (const o of observers) o.cb([{ contentRect: { width: entryWidth === undefined ? w : entryWidth } }]);
+  };
+  p.resizeTo = (w, entryWidth) => { p.deliver(w, entryWidth); p.frame(); };
+  p.shape = () => ({ tables: p.byId["creds-body"].querySelectorAll("table").length, cards: p.byId["creds-body"].querySelectorAll(".ent").length });
+  return p;
+}
+
+test("the resize observer is wired once, to #creds-body, however often it paints", () => {
+  const p = livePage(900);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.observers.length, 1);
+  assert.deepStrictEqual(p.observers[0].targets, [p.byId["creds-body"]]);
+});
+
+test("narrowing a live page repaints the cards; widening it again brings the tables back", () => {
+  const p = livePage(900);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "opened wide: tables");
+  p.resizeTo(500);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "narrowed: cards, no table left to clip Edit and Delete");
+  p.resizeTo(900);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "widened: tables again");
+});
+
+test("the repaint is not made inside the observer callback (that raises the ResizeObserver loop error)", () => {
+  const p = livePage(900);
+  p.box.renderCredentials(liveView);
+  p.deliver(500);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "still the old paint while the callback runs");
+  assert.strictEqual(p.queued(), 1);
+  p.frame();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "painted on the frame");
+});
+
+test("a burst of observer callbacks costs one repaint per frame, and the last width wins", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  p.deliver(650); p.deliver(500); p.deliver(450);
+  assert.strictEqual(p.queued(), 1, "one frame requested, not three");
+  p.frame();
+  assert.ok(p.shape().cards > 0);
+  p.deliver(900); p.deliver(699); p.deliver(900); // ends where it started: nothing to change
+  p.frame();
+  assert.ok(p.shape().tables > 0, "ended wide: tables");
+  assert.ok(body.children.length > 0);
+});
+
+test("without requestAnimationFrame (a test, an old shell) the repaint still happens, on a timer", async () => {
+  const p = livePage(900);
+  p.box.requestAnimationFrame = undefined;
+  p.box.renderCredentials(liveView);
+  p.deliver(500);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+});
+
+test("the threshold is the painter's: 699 is cards, 700 is tables", () => {
+  const p = livePage(900);
+  p.box.renderCredentials(liveView);
+  p.resizeTo(699);
+  assert.strictEqual(p.shape().tables, 0);
+  p.resizeTo(700);
+  assert.ok(p.shape().tables > 0);
+});
+
+test("a resize that stays on one side of the threshold repaints nothing", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const first = body.children.slice();
+  for (const w of [901, 950, 1200, 705, 700]) p.resizeTo(w);
+  assert.strictEqual(body.children.length, first.length);
+  assert.ok(body.children.every((c, i) => c === first[i]), "the same nodes, not repainted");
+  p.resizeTo(400);
+  const cards = body.children.slice();
+  for (const w of [399, 300, 650, 699]) p.resizeTo(w);
+  assert.ok(body.children.every((c, i) => c === cards[i]), "cards stay as they were");
+});
+
+test("an unmeasurable entry (width 0: the tab is hidden) changes nothing", () => {
+  const p = livePage(500);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const first = body.children.slice();
+  p.resizeTo(0);
+  assert.ok(body.children.every((c, i) => c === first[i]));
+  assert.strictEqual(p.shape().tables, 0, "and not turned into tables by the 0");
+});
+
+test("a modal never repaints into tables, however wide it is dragged", () => {
+  const p = livePage(500, { asPage: false });
+  p.box.renderCredentials(liveView);
+  const first = p.byId["creds-body"].children.slice();
+  p.resizeTo(2000);
+  assert.ok(p.byId["creds-body"].children.every((c, i) => c === first[i]));
+  assert.strictEqual(p.shape().tables, 0);
+});
+
+test("with the Add / Edit view open, crossing the width does not replace it; leaving it paints the right mode", () => {
+  const vm = require("node:vm");
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const form = p.box.credEl("form", "add-token");
+  body.replaceChildren(form); // what the open view looks like: it owns the body
+  vm.runInContext('credForm = { kind: "token" }', p.box);
+  p.resizeTo(500);
+  assert.deepStrictEqual(body.children, [form], "the form is still the only thing there");
+  p.resizeTo(900);
+  p.resizeTo(500);
+  assert.deepStrictEqual(body.children, [form]);
+  vm.runInContext("credForm = null", p.box);
+  p.box.renderCredentials(liveView); // closing the form repaints from the cached view
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "closed at 500 wide: cards");
+});
+
+test("a held repaint (unlock field focused) is not forced by a resize, and still lands after", () => {
+  const vm = require("node:vm");
+  const p = livePage(900);
+  p.box.storeUnlockFocused = () => true;
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.shape().tables, 0, "nothing painted yet: the repaint is held");
+  p.box.storeUnlockFocused = () => false;
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0);
+  p.box.storeUnlockFocused = () => true;
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "held: the table the user is typing beside stays");
+  p.box.storeUnlockFocused = () => false;
+  p.resizeTo(480);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "released: the next resize paints the right mode");
+});
+
+test("no ResizeObserver (an old browser): painting still works and nothing throws", () => {
+  const p = page({ width: 900 });
+  p.box.renderCredentials(liveView);
+  assert.ok(p.byId["creds-body"].querySelectorAll("table").length > 0);
+});

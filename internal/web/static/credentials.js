@@ -183,6 +183,17 @@ function credDeleteText(kind, e) {
 // width, not the viewport's, because the sidebar is dragged between 200 and 560px.
 const CRED_TABLE_MIN_WIDTH = 700;
 
+// credTablesAt: the one rule for tables or cards. Only the desktop page draws
+// tables (a modal resized wide keeps its cards: the dialog must be a page). A body
+// that cannot be measured (0 wide: the tab is hidden) keeps tables, as it always
+// did, so a hidden tab never flips the mode. Pure, so the painter (credTableMode)
+// and the resize observer (credWatchWidth) cannot disagree about it.
+function credTablesAt(width, pageMode) {
+  if (!pageMode) return false;
+  if (!(width > 0)) return true;
+  return width >= CRED_TABLE_MIN_WIDTH;
+}
+
 const CRED_TABLE_HEADS = {
   aws: ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""],
   github: ["App", "Client ID · key", "Status", "Used by", ""],
@@ -798,7 +809,7 @@ if (typeof module !== "undefined" && module.exports) {
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
     GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
-    CRED_TABLE_MIN_WIDTH,
+    CRED_TABLE_MIN_WIDTH, credTablesAt,
   };
 }
 
@@ -814,6 +825,10 @@ let credForm = null;
 // done once the field lets go (see credWireHeld).
 let credRepaintHeld = false;
 let credHeldWired = false;
+// The mode (tables or cards) of the last paint, and whether the resize observer
+// is wired: see credWatchWidth.
+let credPaintedTables = false;
+let credWidthWatched = false;
 // The Add / Edit AWS view while it is open, else null. See awsOpenAdd.
 let awsFlow = null;
 
@@ -1007,15 +1022,13 @@ function credPageMode() {
 }
 
 // credTableMode: the desktop Settings page draws tables where the modal draws
-// cards, once the page has the room for them. A mobile modal resized wide keeps
-// its cards (the dialog must be a page). Read when the screen is painted: a
-// window dragged across the threshold repaints on the next load, as tables did.
-// A body that is not measurable (0 wide, the tab is hidden) keeps tables.
+// cards, once the page has the room for them (the rule is credTablesAt's). Read
+// when the screen is painted; a window dragged across the threshold afterwards is
+// caught by credWatchWidth, which repaints from the cached view, so a table is
+// never left clipping Edit and Delete in a body that has become too narrow.
 function credTableMode() {
-  if (!credPageMode()) return false;
   const body = document.getElementById("creds-body");
-  const w = body ? body.clientWidth : 0;
-  return !(w > 0) || w >= CRED_TABLE_MIN_WIDTH;
+  return credTablesAt(body ? body.clientWidth : 0, credPageMode());
 }
 
 // credEntryHost: where an entry's inline confirmation goes. A card is its own
@@ -1268,6 +1281,10 @@ function renderCredentials(view) {
   }
   credRepaintHeld = false;
   credWireHeld(host);
+  credWatchWidth(host);
+  // The mode this paint draws in (credSection and the table builders read the same
+  // credTableMode() a few lines below, in this same call), kept for credWatchWidth.
+  credPaintedTables = credTableMode();
   const nodes = [credStrip(view), ...credBanners(view)];
   const groups = credGroups(view);
   const hasTokens = groups.some((g) => g.key.startsWith("token:"));
@@ -1305,6 +1322,36 @@ function credWireHeld(host) {
   host.addEventListener("focusout", () => {
     setTimeout(() => { if (credRepaintHeld && credView) renderCredentials(credView); }, 0);
   });
+}
+
+// credWatchWidth: once, repaint from the cached view when the body crosses the
+// table/card width while the page stays open. Tables vs cards is decided per paint
+// (credTableMode), so a page opened wide and then narrowed kept its tables and
+// pushed Edit and Delete past the window. Watching the body, not the window,
+// because the sidebar is dragged too. Nothing happens per pixel: only a change of
+// mode repaints, and never a refetch. renderCredentials already declines while the
+// Add / Edit view is open and while the unlock field has focus, and the next paint
+// (closing the view, leaving the field) draws the right mode. A hidden tab
+// reports 0 wide: skipped, it must not flip anything.
+//
+// The repaint runs on the next frame, not inside the observer callback: a repaint
+// changes #creds-body's height, which the observer is also watching, and that
+// raises "ResizeObserver loop completed with undelivered notifications" on the
+// window (measured, Chromium). Frames coalesce: a drag asks once per frame at most.
+function credWatchWidth(host) {
+  if (credWidthWatched || typeof ResizeObserver !== "function") return;
+  credWidthWatched = true;
+  let queued = false;
+  const later = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (f) => setTimeout(f, 0);
+  new ResizeObserver((entries) => {
+    const e = entries[entries.length - 1];
+    if (!e || !(e.contentRect.width > 0) || queued) return;
+    queued = true;
+    later(() => {
+      queued = false;
+      if (credView && credTableMode() !== credPaintedTables) renderCredentials(credView);
+    });
+  }).observe(host);
 }
 
 function setCredErr(msg) {
