@@ -26,6 +26,11 @@ const (
 	// unverified): the credential was fetched on the host and never left it.
 	OutcomeDeniedNotReadOnly Outcome = "denied_not_read_only"
 
+	// A valid token presented from a box other than its session's (or from a
+	// box the broker could not identify, or over the shared socket that boxes
+	// from before the per-box sockets still mount). Provider says which path.
+	OutcomeDeniedBox Outcome = "denied_box"
+
 	// Base-role write probe: a mint made only to simulate the role's own write
 	// access. The credential never leaves the host.
 	OutcomeProbeMinted Outcome = "probe_minted"

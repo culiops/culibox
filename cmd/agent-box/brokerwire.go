@@ -87,7 +87,7 @@ func definedTokens(ts *tokenSet) func([]config.StaticToken) []config.StaticToken
 // removal from aws_connections), so unlike token entries they are passed through
 // without filtering.
 func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []config.StaticToken) broker.SessionView {
-	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
+	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, Box: s.Box, GitHub: s.GitHub,
 		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
 }
 

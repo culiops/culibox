@@ -189,8 +189,9 @@ func TestClientScriptAgainstBroker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: b.Handler()}
-	go srv.Serve(l)
+	// The listener is testBox's own, as a per-box socket is.
+	srv := &http.Server{Handler: b.Handler(), BaseContext: BaseContext}
+	go srv.Serve(&boxListener{Listener: l, box: testBox})
 	defer srv.Shutdown(context.Background())
 	dir, err := EnsureBindingDir(t.TempDir(), awsOnly(*binding()))
 	if err != nil {

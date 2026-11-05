@@ -33,6 +33,7 @@ func TestGitHubBodyStalledAcrossRevokeAllMintsNothing(t *testing.T) {
 	b, fg, rec, _ := ghSetup(t, map[string]SessionView{"s": ghLive()})
 	body := &signalReader{first: make(chan struct{}), release: make(chan struct{}), body: strings.NewReader(ghBody)}
 	r := httptest.NewRequest(http.MethodPost, "/v1/github/token", body)
+	r = r.WithContext(withBox(r.Context(), testBox))
 	r.Header.Set("Authorization", "Bearer "+tokA("s"))
 	w := httptest.NewRecorder()
 	done := make(chan struct{})

@@ -71,7 +71,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	dataDir := shortRoot(t) // holds broker/sock/broker.sock and broker/bx/<hex>/broker.sock
 
 	sessions := map[string]*session.Session{
-		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: wireNonce},
+		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, AWS: wireBinding(), BrokerNonce: wireNonce},
 		"claude-4": {ID: "claude-4", Agent: "claude", Runtime: config.RuntimeHost, AWS: wireBinding(), BrokerNonce: wireNonce},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
@@ -386,7 +386,7 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 		t.Skip("unix socket transport")
 	}
 	sessions := map[string]*session.Session{
-		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce,
+		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce,
 			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}},
 	}
 	get := func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok }
@@ -460,7 +460,7 @@ func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
 	}
 	kept, old := tokenEntry("kept", valFile), tokenEntry("old", valFile)
 	sessions := map[string]*session.Session{
-		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{kept, old}},
+		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{kept, old}},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
@@ -537,5 +537,104 @@ func TestBrokerSessionViewCarriesAWSConns(t *testing.T) {
 	v := brokerSessionView(s, definedTokens(nil))
 	if v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" || !v.Boxed || v.Nonce != wireNonce {
 		t.Fatalf("view = %+v", v)
+	}
+}
+
+func TestBrokerSessionViewCarriesBox(t *testing.T) {
+	s := boundSess("aws-1")
+	s.Box = wireBox
+	s.BrokerNonce = wireNonce
+	if v := brokerSessionView(s, definedTokens(nil)); v.Box != wireBox {
+		t.Fatalf("view.Box = %q, want the session's box %q: the broker compares it with the presenting box", v.Box, wireBox)
+	}
+	s.Box = ""
+	if v := brokerSessionView(s, definedTokens(nil)); v.Box != "" {
+		t.Fatalf("view.Box = %q for a session with no box", v.Box)
+	}
+}
+
+// postCredsBody is postCreds with the reply body.
+func postCredsBody(t *testing.T, sock, token string) (int, string) {
+	t.Helper()
+	c := &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}, Timeout: 10 * time.Second}
+	req, _ := http.NewRequest(http.MethodPost, "http://broker/v1/credentials", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// boxWireBroker starts a broker with one bound session, claude-3, in wireBox.
+func boxWireBroker(t *testing.T) (*brokerService, string) {
+	t.Helper()
+	dataDir := shortRoot(t)
+	sessions := map[string]*session.Session{
+		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, AWS: wireBinding(), BrokerNonce: wireNonce},
+	}
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(id string) (session.Info, bool) {
+			if _, ok := sessions[id]; !ok {
+				return session.Info{}, false
+			}
+			return session.Info{ID: id, AWS: &session.AWSInfo{Label: "x"}}, true
+		}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { svc.Stop(context.Background()) })
+	return svc, dataDir
+}
+
+// The box a token is presented from is the box whose socket it arrives on: the
+// token of a session in wireBox is refused on another box's socket, with an
+// audit row the session's Access tab shows, and no credential.
+func TestStartBrokerRefusesATokenOnAnotherBoxsSocket(t *testing.T) {
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	svc, _ := boxWireBroker(t)
+
+	tok := svc.Hooks.Token("claude-3", wireNonce)
+	other := boxSock(t, svc, "ab-box-bbbbbbbbbbbb")
+	if got := postCreds(t, other, tok); got != http.StatusForbidden {
+		t.Fatalf("a token presented on another box's socket: %d want 403", got)
+	}
+	st, ok := svc.Status.AWSStatus("claude-3")
+	if !ok {
+		t.Fatal("no status for a bound session")
+	}
+	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), "denied_box") {
+		t.Fatalf("the refusal is not audited as denied_box: %s", raw)
+	}
+	// The owning box's socket passes the box check and reaches the minter,
+	// which fails on the missing source profile: 502, not 403.
+	if got := postCreds(t, boxSock(t, svc, wireBox), tok); got != http.StatusBadGateway {
+		t.Fatalf("the owning box: %d want 502 from the minter", got)
+	}
+}
+
+// A box started before the per-box sockets still mounts the shared one. It is
+// refused with a message that says to respawn, and the row says why.
+func TestStartBrokerSharedSocketTellsTheBoxToRespawn(t *testing.T) {
+	svc, dataDir := boxWireBroker(t)
+
+	shared := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	code, body := postCredsBody(t, shared, svc.Hooks.Token("claude-3", wireNonce))
+	if code != http.StatusForbidden || !strings.Contains(body, "respawn this session") {
+		t.Fatalf("shared socket: %d %q, want 403 with the respawn message", code, body)
+	}
+	st, ok := svc.Status.AWSStatus("claude-3")
+	if !ok {
+		t.Fatal("no status for a bound session")
+	}
+	if raw, _ := json.Marshal(st); !strings.Contains(string(raw), "denied_box") {
+		t.Fatalf("the refusal is not audited as denied_box: %s", raw)
 	}
 }

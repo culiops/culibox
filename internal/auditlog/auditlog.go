@@ -431,7 +431,7 @@ func (r *Reader) Summary(from, to int64) (Summary, error) {
 		q   string
 	}{
 		{&s.Issued, `SELECT COUNT(*) FROM credential_audit WHERE ts BETWEEN ? AND ? AND outcome IN ('minted','fetched')`},
-		{&s.Refused, `SELECT (SELECT COUNT(*) FROM credential_audit WHERE ts BETWEEN ?1 AND ?2 AND outcome IN ('denied_token','denied_session','denied_scope','denied_not_read_only'))
+		{&s.Refused, `SELECT (SELECT COUNT(*) FROM credential_audit WHERE ts BETWEEN ?1 AND ?2 AND outcome IN ('denied_token','denied_session','denied_scope','denied_not_read_only','denied_box'))
 			+ (SELECT COUNT(*) FROM approval_audit WHERE ts BETWEEN ?1 AND ?2 AND action = 'refused')`},
 		{&s.Elevations, `SELECT COUNT(*) FROM approval_audit WHERE ts BETWEEN ? AND ? AND action = 'granted'`},
 	} {

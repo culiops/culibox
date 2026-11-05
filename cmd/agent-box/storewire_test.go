@@ -34,7 +34,7 @@ func TestBrokerServesStoreTokenAndHonoursLock(t *testing.T) {
 	entry := config.StaticToken{Name: "grafana", Value: config.KeyRef{Type: "store", ID: "grafana"}, Env: []string{"X_TOKEN"},
 		Egress: []config.TokenEgress{{Host: "x.example.com"}}}
 	sessions := map[string]*session.Session{
-		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{entry}},
+		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{entry}},
 	}
 	svc, err := startBrokerWithStore(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
@@ -68,7 +68,7 @@ func TestBrokerNilStoreRefusesStoreReference(t *testing.T) {
 	entry := config.StaticToken{Name: "grafana", Value: config.KeyRef{Type: "store", ID: "grafana"}, Env: []string{"X_TOKEN"},
 		Egress: []config.TokenEgress{{Host: "x.example.com"}}}
 	sessions := map[string]*session.Session{
-		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{entry}},
+		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, Box: wireBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{entry}},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
