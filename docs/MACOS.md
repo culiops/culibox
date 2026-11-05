@@ -224,6 +224,14 @@ any account can still open connections that take up the proxy's and the
 broker's shared connection slots until they time out; that can delay boxes, not
 impersonate them.
 
+The handshake proofs bind the port, not the address. That is enough only while
+the box VM's host agent (lima, under colima) dials CuliBox at `127.0.0.1`. If it
+dialed another address, a process bound to that address could sit between the
+relay and CuliBox's listener, and the listener would answer the relay's
+challenge through it. Only protecting the stream after the handshake would
+close that, and this version does not. That the host agent dials `127.0.0.1` is
+inferred, not measured; the batched Mac test (row M26) checks it.
+
 Before this version, the box VM also let any container on its default Docker
 network (not the egress network) reach the broker's port directly, without the
 relay, and so write the header too. A VM set up before this version keeps that
