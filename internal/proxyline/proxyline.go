@@ -118,12 +118,18 @@ type Options struct {
 // goroutine (on the first Read or RemoteAddr), never inside Accept, so a silent
 // client cannot stall the accept loop.
 func Wrap(l net.Listener, o Options) net.Listener {
-	return &listener{Listener: l, o: o}
+	ln := &listener{Listener: l, o: o}
+	if !o.Key.IsZero() {
+		// Built once: every connection compares against these same bytes.
+		ln.preamble = o.Key.Preamble()
+	}
+	return ln
 }
 
 type listener struct {
 	net.Listener
-	o Options
+	o        Options
+	preamble []byte // o.Key.Preamble(), nil for the zero Key
 }
 
 func (l *listener) Accept() (net.Conn, error) {
@@ -131,12 +137,13 @@ func (l *listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conn{Conn: c, o: l.o}, nil
+	return &conn{Conn: c, o: l.o, preamble: l.preamble}, nil
 }
 
 type conn struct {
 	net.Conn
-	o Options
+	o        Options
+	preamble []byte // the listener's, shared and never written
 
 	once sync.Once
 	br   *bufio.Reader
@@ -220,14 +227,14 @@ func (c *conn) readHeader() error {
 // with the key's own in constant time. Nothing it read is returned or put in an
 // error: a refused connection's bytes may be a guess at the key.
 func (c *conn) readKey() error {
-	if c.o.Key.IsZero() {
+	if c.preamble == nil { // Wrap leaves it nil for the zero Key
 		return fmt.Errorf("%w: no relay key configured", ErrHeader)
 	}
 	buf := make([]byte, PreambleLen)
 	if _, err := io.ReadFull(c.br, buf); err != nil {
 		return fmt.Errorf("%w: relay key line: %w", ErrHeader, err)
 	}
-	if subtle.ConstantTimeCompare(buf, c.o.Key.Preamble()) != 1 {
+	if subtle.ConstantTimeCompare(buf, c.preamble) != 1 {
 		return fmt.Errorf("%w: relay key missing or wrong", ErrHeader)
 	}
 	return nil
