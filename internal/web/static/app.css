@@ -160,9 +160,11 @@
        wins there, and this one wins everywhere above the breakpoint. */
     #limits { display: flex; align-items: center; gap: 14px; }
     /* Which agent account the meters belong to (non-default only), and a
-       reading older than ACCT_STALE_SEC dimmed so it never reads as current. */
+       meter whose own reading is older than ACCT_STALE_SEC dimmed, with its age as
+       text, so it never reads as current. */
     .acct-lab { color: var(--muted); font-size: 11px; white-space: nowrap; }
-    #limits.stale, #limits-mobile.stale, .acct-meters.stale { opacity: .5; }
+    .mtr.stale { opacity: .5; }
+    .mtr .acct-age { white-space: nowrap; }
     /* The meters cost ~376px of header that cannot shrink — the bar is flex:none
        and the reset text does not wrap — so below this width the header can only
        pay for them out of the app title, and further down it overflows and pushes

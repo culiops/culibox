@@ -42,6 +42,11 @@ test("the rail bar of a live window is not marked unknown", () => {
   assert.equal(bar.firstElementChild.style.width, "42%");
 });
 
+test("the rail bar copies a stale meter's dimming", () => {
+  assert.equal(paint(["mtr", "stale"]).classList.contains("stale"), true);
+  assert.equal(paint(["mtr"]).classList.contains("stale"), false);
+});
+
 test("the rail bar of a window past its reset is marked unknown, not drawn as a plain empty bar", () => {
   const bar = paint(["mtr", "unk"]);
   assert.equal(bar.classList.contains("unk"), true);

@@ -32,19 +32,37 @@ function acctBadge(session) {
   return { text: a, title: "Agent account: " + a };
 }
 
-// acctOptionLabel: the spawn select's text for one account. Quota numbers
-// older than ACCT_STALE_SEC (or with no timestamp) carry their age, so a
-// stale reading is never mistaken for a current one.
+// acctOptionLabel: the spawn select's text for one account. A reading older than
+// ACCT_STALE_SEC (or with no timestamp) carries its age, so a stale reading is
+// never mistaken for a current one. The age belongs to each window's own reading
+// (acctBestLimits can mix a fresh five-hour number with a two-day-old weekly
+// one): one trailing note when every live window is equally old, else per window.
 function acctOptionLabel(name, limits, nowSec) {
   limits = acctBestLimits(limits, nowSec);
-  const parts = [];
-  if (limits && limits.five_hour) parts.push(acctWinText("5h", limits.five_hour, nowSec));
-  if (limits && limits.seven_day) parts.push(acctWinText("wk", limits.seven_day, nowSec));
-  if (!parts.length) return name + " · no quota data";
-  let label = name + " · " + parts.join(" · ");
-  const note = acctAgeNote(acctLimitsAge(limits.updated_at, nowSec));
-  if (note) label += " (" + note + ")";
-  return label;
+  const wins = [];
+  if (limits && limits.five_hour) wins.push(["5h", limits.five_hour]);
+  if (limits && limits.seven_day) wins.push(["wk", limits.seven_day]);
+  if (!wins.length) return name + " · no quota data";
+  // A window past its reset shows no number, so it carries no age either.
+  const notes = wins.map(([, w]) => (acctWinReset(w, nowSec) ? "" : acctAgeNote(acctWinAge(w, limits, nowSec))));
+  const live = notes.filter((_, i) => !acctWinReset(wins[i][1], nowSec));
+  if (live.length && live.every((n) => n && n === live[0])) {
+    return name + " · " + wins.map(([l, w]) => acctWinText(l, w, nowSec)).join(" · ") + " (" + live[0] + ")";
+  }
+  return name + " · " + wins.map(([l, w], i) => acctWinText(l, w, nowSec) + (notes[i] ? " (" + notes[i] + ")" : "")).join(" · ");
+}
+
+// acctWinAge: the age of one window's reading. acctBestLimits stamps each window
+// with its own updated_at; a window without one (a legacy snapshot) takes the
+// snapshot's.
+function acctWinAge(win, limits, nowSec) {
+  const at = win && win.updated_at !== undefined ? win.updated_at : limits && limits.updated_at;
+  return acctLimitsAge(at, nowSec);
+}
+
+// acctWinReset: the window's reset time has passed (see meterModel).
+function acctWinReset(win, nowSec) {
+  return win.resets_at > 0 && win.resets_at <= nowSec;
 }
 
 // acctAgeNote: the visible age text for a stale reading ("7h old", "no data"),
@@ -57,7 +75,7 @@ function acctAgeNote(age) {
 // acctWinText: one window's text in the spawn select. A window past its reset
 // time has rolled over, so its old percentage is not shown (see meterModel).
 function acctWinText(label, win, nowSec) {
-  if (win.resets_at > 0 && win.resets_at <= nowSec) return label + " reset";
+  if (acctWinReset(win, nowSec)) return label + " reset";
   return label + " " + Math.round(win.used_percentage) + "%";
 }
 
@@ -99,10 +117,10 @@ function acctBestLimits(limits, nowSec) {
   for (const key of ["five_hour", "seven_day"]) {
     const c = pick(key);
     if (!c) continue;
-    out[key] = c.w;
+    out[key] = Object.assign({}, c.w, { updated_at: c.at }); // each window keeps its own age
     ats.push(c.at);
   }
-  out.updated_at = ats.length ? Math.min(...ats) : limits.updated_at;
+  out.updated_at = ats.length ? Math.min(...ats) : limits.updated_at; // the oldest shown
   return out;
 }
 
@@ -308,8 +326,6 @@ function acctRow(a, limits, now) {
   ag.className = "acct-age";
   ag.textContent = n ? "updated " + age.text : "no quota data yet: it appears after a session runs under this account";
   meters.appendChild(ag);
-  // Only numbers can be stale; "no quota data yet" is already the honest text.
-  if (n && age.stale) meters.classList.add("stale");
   li.appendChild(meters);
 
   if (!a.default) {
@@ -617,7 +633,7 @@ if (typeof document !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     ACCT_DEFAULT, ACCT_STALE_SEC, acctLimitsMap, acctFor, acctLimitsAge, acctBadge, acctOptionLabel,
-    acctAgeNote, acctBestLimits,
+    acctAgeNote, acctBestLimits, acctWinAge,
     acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText,
     acctTokenId, acctTokenOwned, acctTokenMode, acctTokenStateText, acctCanToken,
   };

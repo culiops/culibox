@@ -686,7 +686,7 @@ function paintRailMeters() {
     const row = rows.find((r) => r.firstElementChild && r.firstElementChild.textContent === bar.dataset.win);
     const fill = row && row.querySelector(".bar i");
     bar.hidden = !fill;
-    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); bar.classList.toggle("unk", row.classList.contains("unk")); any = true; }
+    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); bar.classList.toggle("unk", row.classList.contains("unk")); bar.classList.toggle("stale", row.classList.contains("stale")); any = true; }
   }
   box.hidden = !any;
 }
@@ -1355,6 +1355,10 @@ function renderRateLimitsInto(host, rl) {
     el.className = "mtr";
     if (m.hot) el.classList.add("hot");
     if (m.unknown) el.classList.add("unk");
+    // Staleness is per reading: the age belongs to this window's own number (a
+    // window past its reset shows none, so has none).
+    const note = m.unknown ? "" : acctAgeNote(acctWinAge(win, rl, now));
+    if (note) el.classList.add("stale");
     const name = document.createElement("span");
     name.textContent = m.label;
     const bar = document.createElement("span");
@@ -1369,9 +1373,15 @@ function renderRateLimitsInto(host, rl) {
     rs.className = "rs";
     rs.textContent = m.reset;
     el.append(name, bar, pc, rs);
+    if (note) {
+      const ag = document.createElement("span");
+      ag.className = "acct-age";
+      ag.textContent = note;
+      el.appendChild(ag);
+    }
     // The bar carries no text, so the meter needs an accessible name of its own.
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + m.reset);
+    el.setAttribute("aria-label", (m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + m.reset) + (note ? ", " + note : ""));
     host.appendChild(el);
     count++;
   }
@@ -1383,8 +1393,9 @@ function renderRateLimitsInto(host, rl) {
 // band (#limits-mobile, slice 5a). rl is /api/meta.rate_limits — a map keyed
 // by account (acctLimitsMap also takes the pre-accounts flat shape). The
 // account shown is the focused session's (headerAccount, accounts.js), else
-// the default; a non-default one is labelled, and a reading older than
-// ACCT_STALE_SEC is dimmed so it is never read as current. The mobile slot is
+// the default; a non-default one is labelled. A meter whose own reading is older
+// than ACCT_STALE_SEC is dimmed and carries its age (renderRateLimitsInto), so
+// it is never read as current. The mobile slot is
 // hidden by count rather than by html-string truthiness (there is no html
 // string — renderRateLimitsInto builds DOM nodes) so an absent reading
 // vanishes the band cleanly instead of leaving an empty 0% row.
@@ -1405,14 +1416,6 @@ function renderRateLimits(rl) {
       lab.className = "acct-lab";
       lab.textContent = name;
       host.prepend(lab);
-    }
-    host.classList.toggle("stale", !!(count && age.stale));
-    // A stale reading carries its age as visible text, not only in the tooltip.
-    if (count && age.stale) {
-      const ag = document.createElement("span");
-      ag.className = "acct-age";
-      ag.textContent = acctAgeNote(age);
-      host.appendChild(ag);
     }
     host.title = count ? (name + " · updated " + age.text) : "";
     if (id === "limits-mobile" || id === "limits-side") host.hidden = count === 0;
