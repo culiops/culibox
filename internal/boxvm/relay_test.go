@@ -115,7 +115,12 @@ func (f *fakeDocker) RunEnv(ctx context.Context, args, env []string) (string, er
 	return out, err
 }
 
+// Stdout honours its context as the docker CLI does: a command whose context
+// has ended does not run, so it is not recorded and returns the context's error.
 func (f *fakeDocker) Stdout(ctx context.Context, args []string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return f.answer(args)
 }
 
@@ -460,6 +465,52 @@ func TestEnsureReportsAnInspectFailureOnARefusal(t *testing.T) {
 			}
 			if got := strings.Join(d.subcommands(), ","); got != "inspect" {
 				t.Fatalf("calls = %s, want one inspect: nothing removed, nothing started", got)
+			}
+		})
+	}
+}
+
+// The refusals that keep a relay come from ssh timeouts as much as anything, and
+// at boot the same shared context budget that made the rules unreadable has
+// usually ended by the time the relay is inspected. The inspect that gates the
+// removal must not die with it, or a pre-#118 relay stays up exactly when D7
+// matters; the removal itself already outlives the caller's context. A current
+// relay is still kept (#113).
+func TestEnsureJudgesTheRelayEvenAfterTheContextEnded(t *testing.T) {
+	unreadable := fakeVM{err: errors.New("ssh: signal: killed")}
+	staleBroker := fakeVM{out: goodRules + staleBrokerReturn}
+	for name, tc := range map[string]struct {
+		vm      fakeVM
+		current bool
+		want    string
+	}{
+		"stale relay, rules unreadable":      {unreadable, false, "inspect,rm"},
+		"stale relay, DOCKER-USER refused":   {staleBroker, false, "inspect,rm"},
+		"current relay, rules unreadable":    {unreadable, true, "inspect"},
+		"current relay, DOCKER-USER refused": {staleBroker, true, "inspect"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := testRelay(tc.vm, nil)
+			label := v1RelayHash(t, r)
+			if tc.current {
+				label = r.configHash(gw)
+			}
+			d := &fakeDocker{inspect: "true\t" + label + "\n", logs: bothListening}
+			r.Docker = d
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := r.Ensure(ctx, gw); err == nil {
+				t.Fatal("Ensure reported ready on a refusal")
+			} else if strings.Contains(err.Error(), "inspecting the relay") {
+				t.Fatalf("the inspect failed on the ended context: %v", err)
+			}
+			if got := strings.Join(d.subcommands(), ","); got != tc.want {
+				t.Fatalf("calls = %q, want %q", got, tc.want)
+			}
+			for _, e := range d.rmCtxErr {
+				if e != nil {
+					t.Fatalf("rm ran on an ended context: %v", e)
+				}
 			}
 		})
 	}

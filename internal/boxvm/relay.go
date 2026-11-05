@@ -294,9 +294,13 @@ func (r *Relay) inspectRelay(ctx context.Context) (string, error) {
 // authenticate the listener, and the v2 listeners refuse it anyway. A current
 // relay stays because the refusals that come here (rules unreadable, DOCKER-USER
 // refused) can be a transient ssh failure that must not cut live sessions. When
-// docker cannot say what runs, nothing is removed and the error says so.
+// docker cannot say what runs, nothing is removed and the error says so. The
+// inspect runs on a context that outlives the caller's cancellation, like the
+// removal it gates (still bounded by relayDockerTimeout): an ssh timeout is what
+// makes the rules unreadable, and at boot the same shared deadline has usually
+// ended the caller's context by then, which must not leave a pre-#118 relay up.
 func (r *Relay) removeUnlessCurrent(ctx context.Context, gw netip.Addr, cause error) error {
-	out, err := r.inspectRelay(ctx)
+	out, err := r.inspectRelay(context.WithoutCancel(ctx))
 	switch {
 	case err == nil:
 		if strings.TrimSpace(out) == "true\t"+r.configHash(gw) {
@@ -310,12 +314,15 @@ func (r *Relay) removeUnlessCurrent(ctx context.Context, gw netip.Addr, cause er
 	}
 }
 
-// Ensure makes the relay run for gateway gw, or returns an error and leaves no
-// relay it cannot vouch for. Without a key it removes any relay and refuses,
-// without reading the VM's rules: no listener binds without a key, so the removal
-// cuts nothing that works, and a relay left running could be one from before #118.
-// The INPUT rules are checked live first, every time: they are what keeps an
-// unfenced box off the relay, so a VM without them gets no relay.
+// Ensure makes the relay run for gateway gw, or returns an error. On a refusal
+// the only relay left running is one it can vouch for, a current one on the two
+// paths below that keep it; a relay that is not current is removed, unless docker
+// itself fails to inspect or remove it, and then the error says so. Without a
+// key it removes any relay and refuses, without reading the VM's rules: no
+// listener binds without a key, so the removal cuts nothing that works, and a
+// relay left running could be one from before #118. The INPUT rules are checked
+// live first, every time: they are what keeps an unfenced box off the relay, so
+// a VM without them gets no relay.
 //
 // INPUT rules read and wrong: the relay is removed. Rules that could not be
 // read (colima ssh error, timeout): this Ready is refused, and a running relay
