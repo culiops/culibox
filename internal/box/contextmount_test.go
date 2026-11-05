@@ -339,3 +339,30 @@ func TestMountChangedTextMatchesTheCase(t *testing.T) {
 		})
 	}
 }
+
+// A Wrap batch always starts with the workspace, so the context-only branch of
+// identityFailed is not reached from it; this pins it directly. A batch of
+// context mounts alone is the context refusal of ctxIdentityFailed, same text,
+// and none of the workspace's classes.
+func TestIdentityFailedOfContextMountsAloneIsTheContextRefusal(t *testing.T) {
+	ms := []Mount{{Host: "/srv/a", Box: "/srv/a"}, {Host: "/srv/b", Box: "/srv/b"}}
+	cause := errors.New("path 1: a component is a symlink")
+	got := identityFailed(ms, cause)
+	want := ctxIdentityFailed([]string{"/srv/a", "/srv/b"}, cause)
+	if got.Error() != want.Error() {
+		t.Fatalf("text:\n got  %q\n want %q", got, want)
+	}
+	if wantText := "context_paths /srv/a, /srv/b: the box VM could not confirm the path (path 1: a component is a symlink); refusing"; got.Error() != wantText {
+		t.Fatalf("text = %q, want %q", got, wantText)
+	}
+	for _, class := range []error{ErrContextMountChanged, ErrUnboxableWorkspace} {
+		if !errors.Is(got, class) {
+			t.Errorf("err = %v, want it to be %v like ctxIdentityFailed's", got, class)
+		}
+	}
+	for _, class := range []error{ErrWorkspaceMountChanged, ErrBoxUnavailable} {
+		if errors.Is(got, class) {
+			t.Errorf("err = %v, a context-only batch must not be %v", got, class)
+		}
+	}
+}
