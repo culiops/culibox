@@ -273,7 +273,7 @@ moved into place before it reads is taken as the path you listed.
   parent directory flipped between a directory and a symlink, and against the last
   component exchanged for a FIFO or a symlink, each in a loop.
 - Not yet tested on a Mac: that `colima ssh` passes the script to the VM
-  unchanged (if it does not, spawns with context paths are refused, not let
+  unchanged (if it does not, every boxed spawn is refused, not let
   through), the script on the VM itself, and that the identity stays stable
   across a VM restart.
 
