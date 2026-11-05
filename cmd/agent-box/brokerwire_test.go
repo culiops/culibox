@@ -22,6 +22,20 @@ import (
 
 const wireNonce = "0123456789abcdef0123456789abcdef"
 
+// wireBox is the box the wire tests' sessions run in.
+const wireBox = "ab-box-0123456789ab"
+
+// boxSock takes svc's broker socket for box (what a bound spawn does) and
+// returns its path. The reference is never released: Stop closes every socket.
+func boxSock(t *testing.T, svc *brokerService, box string) string {
+	t.Helper()
+	m, err := svc.Hooks.AcquireBox(box)
+	if err != nil || len(m) != 1 {
+		t.Fatalf("AcquireBox(%s) = %+v, %v", box, m, err)
+	}
+	return filepath.Join(m[0].Host, "broker.sock")
+}
+
 func wireBinding() *config.AWSBinding {
 	return &config.AWSBinding{SourceProfile: "no-such-profile", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent",
 		Region: "ap-southeast-1", S3Read: []string{"culishop-tfstate"}}
@@ -54,7 +68,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	dataDir := shortRoot(t) // holds broker/sock/broker.sock
+	dataDir := shortRoot(t) // holds broker/sock/broker.sock and broker/bx/<hex>/broker.sock
 
 	sessions := map[string]*session.Session{
 		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: wireNonce},
@@ -85,9 +99,15 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "audit.db")); err != nil {
 		t.Fatalf("audit.db: %v", err)
 	}
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	if fi, err := os.Stat(sock); err != nil || fi.Mode().Perm() != 0o600 || fi.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("socket: %v %v", fi, err)
+	}
+	// The shared socket (the one boxes from before the per-box sockets mount)
+	// still exists too.
+	shared := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	if fi, err := os.Stat(shared); err != nil || fi.Mode().Perm() != 0o600 || fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("shared socket: %v %v", fi, err)
 	}
 
 	// The handler is attached and signs with the persisted secret.
@@ -119,10 +139,14 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 
 	svc.Stop(context.Background())
 	stopped = true
-	c, err := net.Dial("unix", sock)
-	if err == nil {
-		c.Close()
-		t.Error("broker still accepting after Stop")
+	for _, p := range []string{sock, shared} {
+		if c, err := net.Dial("unix", p); err == nil {
+			c.Close()
+			t.Errorf("broker still accepting on %s after Stop", p)
+		}
+	}
+	if _, err := os.Lstat(sock); err == nil {
+		t.Error("the per-box socket file survived Stop")
 	}
 }
 
@@ -389,7 +413,7 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer svc.Stop(context.Background())
-			sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+			sock := boxSock(t, svc, wireBox)
 			code, body := postGHToken(t, sock, svc.Hooks.Token("gh-1", wireNonce))
 			if code != tc.want {
 				t.Fatalf("status %d (%s), want %d", code, body, tc.want)
@@ -445,7 +469,7 @@ func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Stop(context.Background())
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	tok := svc.Hooks.Token("tok-1", wireNonce)
 
 	if code, body := postStaticToken(t, sock, tok, "kept"); code != http.StatusOK || !strings.Contains(body, "tok-SECRET-1234") {

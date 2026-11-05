@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -44,7 +43,7 @@ func TestBrokerServesStoreTokenAndHonoursLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Stop(context.Background())
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	tok := svc.Hooks.Token("tok-1", wireNonce)
 
 	if code, body := postStaticToken(t, sock, tok, "grafana"); code != http.StatusOK || !strings.Contains(body, "tok-STORED-5678") {
@@ -78,7 +77,7 @@ func TestBrokerNilStoreRefusesStoreReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Stop(context.Background())
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	if code, _ := postStaticToken(t, sock, svc.Hooks.Token("tok-1", wireNonce), "grafana"); code == http.StatusOK {
 		t.Fatalf("a store reference was served with no store (status %d)", code)
 	}

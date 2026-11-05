@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -90,7 +89,7 @@ func TestBrokerStopRevokesAll(t *testing.T) {
 			svc.Stop(context.Background())
 		}
 	}()
-	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	sock := boxSock(t, svc, wireBox)
 	fm := &stopMinter{sock: sock}
 	svc.Hooks.B.SetGitHub(fm)
 

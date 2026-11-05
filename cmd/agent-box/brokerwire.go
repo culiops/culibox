@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -90,6 +91,14 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
 }
 
+// serveBroker serves one listener until it closes. A listener closing is how a
+// box's socket ends (its last session left) or the daemon stops: not an error.
+func serveBroker(srv *http.Server, l net.Listener) {
+	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		log.Printf("credential broker stopped: %v", err)
+	}
+}
+
 // startBroker brings the credential broker up: the persisted HMAC secret, the
 // audit store, the listener and the HTTP server. dataDir holds broker.secret and
 // audit.db; stateRoot (symlink-resolved on darwin) holds the socket and the
@@ -162,12 +171,17 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		_ = audit.Close()
 		return nil, fmt.Errorf("%w: %v", errBrokerListen, err)
 	}
-	srv := &http.Server{Handler: brk.Handler(), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
-	go func() {
-		if err := srv.Serve(ep.Listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("credential broker stopped: %v", err)
-		}
-	}()
+	// BaseContext puts the listener's identity (a box's own socket, or the old
+	// shared one) into every request context: the broker learns which box
+	// presents a token from the socket it arrived on.
+	srv := &http.Server{Handler: brk.Handler(), BaseContext: broker.BaseContext,
+		ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
+	go serveBroker(srv, ep.Listener)
+	if ep.Boxes != nil {
+		// A listener per bound box, started as the session layer takes a box's
+		// socket and closed when its last session ends.
+		ep.Boxes.Start(func(l net.Listener) { go serveBroker(srv, l) })
+	}
 	// The aws CLI is resolved once. Without it the SSO card offers the host
 	// command only (the endpoint answers 502 with it).
 	var sso *ssologin.Runner
@@ -204,6 +218,9 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			// mints nothing, so no token can be issued past the revoke. The
 			// audit store is still open for its rows.
 			brk.RevokeAllGitHub(ctx)
+			if ep.Boxes != nil {
+				ep.Boxes.Close()
+			}
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}

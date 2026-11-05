@@ -17,12 +17,15 @@ import (
 )
 
 func TestListenLinuxUnixSocket(t *testing.T) {
-	root := t.TempDir()
+	root := shortDir(t)
 	ep, err := Listen("linux", root, 9071)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ep.Listener.Close()
+	defer ep.Boxes.Close()
+	// The shared socket is still there: boxes from before #73 mount its dir,
+	// and it answers them with a respawn message instead of a credential.
 	sock := filepath.Join(root, "broker", "sock", "broker.sock")
 	fi, err := os.Stat(sock)
 	if err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
@@ -31,9 +34,14 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 	if d, _ := os.Stat(filepath.Dir(sock)); d.Mode().Perm() != 0o700 {
 		t.Fatalf("socket dir perm %v", d.Mode().Perm())
 	}
-	if ep.BoxURL != "unix:///opt/agentbox-sock/broker.sock" || len(ep.Mounts) != 1 ||
-		ep.Mounts[0].Host != filepath.Dir(sock) || ep.Mounts[0].Box != SockBoxDir {
-		t.Fatalf("endpoint %+v", ep)
+	if _, ok := ep.Listener.(*sharedListener); !ok {
+		t.Fatalf("the shared listener is a %T, want *sharedListener", ep.Listener)
+	}
+	if ep.Boxes == nil {
+		t.Fatal("no per-box sockets on Linux")
+	}
+	if ep.BoxURL != "unix:///opt/agentbox-broker/broker.sock" {
+		t.Fatalf("box URL %q", ep.BoxURL)
 	}
 	ep.Listener.Close()
 	ep2, err := Listen("linux", root, 9071) // a stale socket from a crash is replaced
@@ -43,8 +51,46 @@ func TestListenLinuxUnixSocket(t *testing.T) {
 	ep2.Listener.Close()
 }
 
+// 73 + 35 = 108: the per-box socket path would not fit in sun_path. Startup
+// refuses (fail closed, clear error) instead of listening on a shared socket
+// only: a bound session would then get no credentials at all, silently.
+func TestListenLinuxRefusesAStateRootTooLongForPerBoxSockets(t *testing.T) {
+	root := rootOfLen(t, 73)
+	ep, err := Listen("linux", root, 9071)
+	if err == nil {
+		ep.Listener.Close()
+		t.Fatal("a state root that pushes the per-box socket path over the unix limit was accepted")
+	}
+	if !strings.Contains(err.Error(), "107") {
+		t.Fatalf("the error must name the limit: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "broker", "sock", "broker.sock")); err == nil {
+		t.Fatal("a shared socket was left listening")
+	}
+	// One byte shorter fits.
+	ok, err := Listen("linux", rootOfLen(t, 72), 9071)
+	if err != nil {
+		t.Fatalf("a 72 byte state root must work: %v", err)
+	}
+	ok.Listener.Close()
+}
+
+// Boxes created before the per-box sockets mount the shared broker/sock dir at
+// /opt/agentbox-sock. A new box mounts its own dir at a different in-box path:
+// box.reuseMounts compares in-box destinations only, so a changed destination
+// is what stops a pre-upgrade box from being reused silently for a new bound
+// spawn (see box.TestBoxFromBeforePerBoxSocketsIsNeverReusedSilently).
+func TestSockBoxDirIsNotThePreBindingDir(t *testing.T) {
+	if SockBoxDir == "/opt/agentbox-sock" {
+		t.Fatal("SockBoxDir is the pre-#73 path: an old box would be reused silently")
+	}
+	if SockBoxDir != "/opt/agentbox-broker" {
+		t.Fatalf("SockBoxDir = %q", SockBoxDir)
+	}
+}
+
 func TestListenLinuxServesOverTheSocket(t *testing.T) {
-	ep, err := Listen("linux", t.TempDir(), 9071)
+	ep, err := Listen("linux", shortDir(t), 9071)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +112,7 @@ func TestListenLinuxServesOverTheSocket(t *testing.T) {
 }
 
 func TestListenLinuxRefusesAPlantedSymlink(t *testing.T) {
-	root, elsewhere := t.TempDir(), t.TempDir()
+	root, elsewhere := shortDir(t), t.TempDir()
 	if err := os.Symlink(elsewhere, filepath.Join(root, "broker")); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +124,7 @@ func TestListenLinuxRefusesAPlantedSymlink(t *testing.T) {
 		t.Fatalf("something was created through the symlink: %v", ents)
 	}
 
-	root2 := t.TempDir()
+	root2 := shortDir(t)
 	if err := os.Mkdir(filepath.Join(root2, "broker"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +141,7 @@ func TestListenLinuxRefusesAPlantedSymlink(t *testing.T) {
 }
 
 func TestListenLinuxTightensALooseDir(t *testing.T) {
-	root := t.TempDir()
+	root := shortDir(t)
 	if err := os.MkdirAll(filepath.Join(root, "broker", "sock"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +164,8 @@ func TestListenDarwinLoopbackTCP(t *testing.T) {
 	if host := ep.Listener.Addr().String(); !strings.HasPrefix(host, "127.0.0.1:") {
 		t.Fatalf("darwin broker must bind loopback only, got %s", host)
 	}
-	if len(ep.Mounts) != 0 {
-		t.Fatalf("endpoint %+v", ep)
+	if ep.Boxes != nil {
+		t.Fatalf("darwin has no per-box sockets: %+v", ep)
 	}
 	// Boxes sit on the internal egress network; the relay on its gateway
 	// forwards the broker port to the Mac's loopback listener.
