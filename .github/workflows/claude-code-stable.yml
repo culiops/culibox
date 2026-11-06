@@ -1,0 +1,93 @@
+# Weekly check: is the npm `stable` dist-tag of Claude Code newer than the
+# version the box image pins (ARG CLAUDE_CODE_VERSION in docker/agent-box/Dockerfile)?
+#
+# It only REPORTS. When stable is newer it opens one issue (or updates the open
+# one); when the pin has caught up it closes that issue. It never edits the
+# Dockerfile, commits, pushes or builds: Claude Code runs with
+# --dangerously-skip-permissions in every box, so a bump is a reviewed human change
+# (edit the ARG, rebuild, re-pin the digest).
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - GITHUB_TOKEN is read-only except the issues write grant in the one job
+#   - both versions are checked against x.y.z before they reach a command or the
+#     issue text, so a strange registry answer can never inject anything
+name: claude-code-stable
+
+on:
+  schedule:
+    # Mondays 02:17 UTC (off the hour, when scheduled runs queue less).
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-code-stable
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare npm stable with the image pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+          pin=$(sed -n 's/^ARG CLAUDE_CODE_VERSION=//p' docker/agent-box/Dockerfile)
+          tags=$(curl -fsS --max-time 30 https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags)
+          stable=$(printf '%s' "$tags" | jq -r '.stable // empty')
+          latest=$(printf '%s' "$tags" | jq -r '.latest // empty')
+          for v in "$pin" "$stable"; do
+            if ! [[ "$v" =~ $semver ]]; then
+              echo "::error::not an x.y.z version: pin or stable (got '${v:0:40}')"
+              exit 1
+            fi
+          done
+          [[ "$latest" =~ $semver ]] || latest="unknown"
+          echo "pin=$pin stable=$stable latest=$latest" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          prefix="Box image: Claude Code stable"
+          open=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title | startswith(\"$prefix\"))][0].number // empty")
+
+          newest=$(printf '%s\n%s\n' "$pin" "$stable" | sort -V | tail -n1)
+          if [ "$stable" = "$pin" ] || [ "$newest" = "$pin" ]; then
+            echo "The image pin is current."
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "The image now pins $pin; npm stable is $stable. Closed by the weekly check."
+            fi
+            exit 0
+          fi
+
+          title="$prefix $stable is newer than the pinned $pin"
+          body=$(cat <<EOF
+          npm \`stable\` for @anthropic-ai/claude-code is **$stable**; the box image pins **$pin** (\`latest\` is $latest).
+
+          To bump (a reviewed change, never automatic):
+          1. Read the changes since $pin: https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md
+          2. In docker/agent-box/Dockerfile set \`ARG CLAUDE_CODE_VERSION=$stable\` and update the measured line above it.
+          3. Rebuild and check the image on the host, merge to main (box-image.yml publishes it), then pin the new digest in each instance's config.
+
+          This issue is updated by the weekly claude-code-stable workflow and closed once the pin catches up.
+          EOF
+          )
+          if [ -n "$open" ]; then
+            gh issue edit "$open" --title "$title" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

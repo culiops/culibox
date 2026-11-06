@@ -155,3 +155,56 @@ func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
 		t.Error(".gitignore must list docker/agent-box/extra-ca.pem")
 	}
 }
+
+const stableWorkflowPath = "../../.github/workflows/claude-code-stable.yml"
+
+// The weekly Claude Code check only REPORTS: it compares the npm `stable`
+// dist-tag with the Dockerfile pin and keeps one issue up to date. It must never
+// write code, push, or touch packages: a bump of the agent that runs with
+// --dangerously-skip-permissions in every box is a reviewed human change.
+func TestClaudeCodeStableWorkflowOnlyReports(t *testing.T) {
+	b, err := os.ReadFile(stableWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := string(b)
+
+	pinned := regexp.MustCompile(`uses: [\w./-]+@[0-9a-f]{40} # v\d`)
+	for _, line := range strings.Split(wf, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "uses:") && !strings.HasPrefix(trimmed, "#") && !pinned.MatchString(trimmed) {
+			t.Errorf("action not pinned by full commit sha with a version comment: %q", trimmed)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^permissions:\n  contents: read\n`).MatchString(wf) {
+		t.Error("top level must declare `permissions:` with `contents: read`")
+	}
+	if n := strings.Count(wf, "issues: write"); n != 1 {
+		t.Errorf("issues: write appears %d times, want 1 (the check job)", n)
+	}
+	check := jobBlock(t, wf, "check")
+	if !strings.Contains(check, "\n    permissions:\n") || !strings.Contains(check, "      issues: write\n") {
+		t.Error("job check must declare issues: write in its own permissions block")
+	}
+	for _, banned := range []string{
+		"pull_request", "write-all", "id-token: write", "contents: write", "packages: write",
+		"git push", "git commit", "github.event.", "secrets.",
+	} {
+		if strings.Contains(wf, banned) {
+			t.Errorf("workflow must not contain %q", banned)
+		}
+	}
+	for _, want := range []string{
+		"schedule:",
+		"workflow_dispatch:",
+		"persist-credentials: false",
+		"ARG CLAUDE_CODE_VERSION=",
+		"registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags",
+		// Both versions are checked against x.y.z before they reach a command or the issue.
+		`^[0-9]+\.[0-9]+\.[0-9]+$`,
+	} {
+		if !strings.Contains(wf, want) {
+			t.Errorf("workflow lacks %q", want)
+		}
+	}
+}
