@@ -327,11 +327,6 @@ func TestAttachedStaysTrueWhenOneViewerEvictsAnother(t *testing.T) {
 	}
 }
 
-// ForceRedraw must make a TUI that reads its size from an event loop see a
-// real change (#126). MEASURED: Claude Code skipped the repaint when the nudge
-// was undone at once (it read the size after the restore); with a 10 ms hold
-// it repainted. The nudge is one column narrower, so the in-between frame never
-// wraps in the viewer's wider grid.
 // holdFor sets redrawGap for one test; tests that touch it do not run in parallel.
 func holdFor(t *testing.T, d time.Duration) {
 	old := redrawGap
@@ -339,6 +334,11 @@ func holdFor(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { redrawGap = old })
 }
 
+// ForceRedraw must make a TUI that reads its size from an event loop see a
+// real change (#126). MEASURED: Claude Code skipped the repaint when the nudge
+// was undone at once (it read the size after the restore); with a 10 ms hold
+// it repainted. The nudge is one column narrower, so the in-between frame never
+// wraps in the viewer's wider grid.
 func TestForceRedrawHoldsANarrowerSizeThenRestores(t *testing.T) {
 	holdFor(t, 300*time.Millisecond) // "right after" must not race the restore on a loaded runner
 	s := startProc(t, 1<<12, "sleep", "5")
@@ -405,7 +405,10 @@ func TestForceRedrawALaterRedrawOwnsTheRestore(t *testing.T) {
 }
 
 // The restore fires on a timer, so it can run after the session closed its
-// PTY. It must neither panic nor reach a PTY that reuses the fd number.
+// PTY: it must not panic or resize the PTY that took the freed fd number. This
+// pins the after-Close outcome only; the race between reading the fd and a
+// concurrent Close cannot be hit deterministically (setPTYSize's held fd and
+// `go test -race` cover it).
 func TestForceRedrawRestoreAfterCloseTouchesNothing(t *testing.T) {
 	holdFor(t, 100*time.Millisecond)
 	s := startProc(t, 1<<12, "sleep", "5")
