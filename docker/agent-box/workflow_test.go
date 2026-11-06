@@ -102,10 +102,18 @@ func TestWorkflowSupplyChain(t *testing.T) {
 		"persist-credentials: false",
 		"docker/agent-box/**",
 		".github/workflows/box-image.yml",
+		// Layer cache in the registry, per arch. GitHub's Actions cache drops an
+		// entry unused for 7 days: the 2026-11-02 run came 8 days after the last one
+		// and hit 0 steps, so every layer was new and every host re-pulled ~4 GB.
+		"cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}",
+		"cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true",
 	} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("workflow lacks %q", want)
 		}
+	}
+	if strings.Contains(wf, "type=gha") {
+		t.Error("the layer cache must not use type=gha (entries expire after 7 days unused)")
 	}
 }
 
