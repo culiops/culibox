@@ -11,6 +11,21 @@ const css = fs.readFileSync(path.join(__dirname, "..", "static", "desktop.css"),
 const open = css.indexOf("@media (min-width: 701px) {");
 const block = css.slice(open); // the file is one block (desktop-scope.test.js)
 
+// splitTop: a selector list's selectors. Only a comma outside parentheses and brackets
+// separates two, so ":is(#creds, #cred-drawer) .x" is one selector.
+function splitTop(list) {
+  const out = [];
+  let depth = 0, from = 0;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "," && depth === 0) { out.push(list.slice(from, i)); from = i + 1; }
+  }
+  out.push(list.slice(from));
+  return out.map((s) => s.trim().replace(/\s+/g, " "));
+}
+
 // rulesFor: the declaration bodies of every rule whose selector list contains
 // `sel` exactly as one of its comma-separated selectors.
 function rulesFor(sel) {
@@ -18,11 +33,13 @@ function rulesFor(sel) {
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m;
   while ((m = re.exec(block))) {
-    const sels = m[1].split(",").map((s) => s.trim().replace(/\s+/g, " "));
-    if (sels.includes(sel)) out.push(m[2].replace(/\s+/g, " ").trim());
+    if (splitTop(m[1]).includes(sel)) out.push(m[2].replace(/\s+/g, " ").trim());
   }
   return out;
 }
+
+// The credentials rules are written for the tab and for the drawer the add flows also run in.
+const CREDS = "#page-host > #settings-modal.as-page :is(#creds, #cred-drawer)";
 
 test("desktop.css opens with the desktop media query", () => {
   assert.ok(open >= 0);
@@ -239,8 +256,8 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // the GitHub and token tables' (hyphens first, mid-word only past the column).
 test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {
   assert.ok(!/\[data-group="aws"\][^{}]*\.c-nm[^{}]*\{[^}]*white-space:\s*nowrap/.test(block), "no nowrap on the AWS name");
-  assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");
-  assert.ok(rulesFor("#page-host > #settings-modal.as-page #creds .ctab .c-main").some((b) => /overflow-wrap:\s*break-word/.test(b)), "and breaks between words first");
+  assert.ok(rulesFor(CREDS + " .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");
+  assert.ok(rulesFor(CREDS + " .ctab .c-main").some((b) => /overflow-wrap:\s*break-word/.test(b)), "and breaks between words first");
 });
 
 // A name with no hyphen (the name rule allows one: ^[a-z0-9][a-z0-9-]{0,62}$) has no break
@@ -252,9 +269,9 @@ test("the AWS connection name is allowed to wrap (a nowrap name overflowed the t
 // profile name splitting mid-word ("1234567890/12") is what the rule above them forbids.
 // So it is the first cell's .c-nm only.
 test("only the AWS connection name (first cell) may break anywhere, not the account id or Used by", () => {
-  const sel = '#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm';
+  const sel = CREDS + ' .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm';
   assert.ok(rulesFor(sel).some((b) => /overflow-wrap:\s*anywhere/.test(b)), "overflow-wrap: anywhere on the AWS name cell's name");
-  assert.ok(!rulesFor('#page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm').length, "no rule reaches every .c-nm of the AWS table");
+  assert.ok(!rulesFor(CREDS + ' .ctab-sec[data-group="aws"] .ctab .c-nm').length, "no rule reaches every .c-nm of the AWS table");
 });
 
 // #123: .btn is nowrap (primitives.css), so in the store strip a 701px window (the strip's
@@ -262,7 +279,7 @@ test("only the AWS connection name (first cell) may break anywhere, not the acco
 // warning box, and again inside the passphrase form it opens. Wrapping the label is what
 // every other button does when it has to.
 test("the credentials store strip's buttons wrap instead of spilling out of the strip", () => {
-  const rules = rulesFor("#page-host > #settings-modal.as-page #creds .cstrip .btn");
+  const rules = rulesFor(CREDS + " .cstrip .btn");
   assert.ok(rules.some((b) => /white-space:\s*normal/.test(b) && /max-width:\s*100%/.test(b)), "wrap, inside the strip's width");
 });
 

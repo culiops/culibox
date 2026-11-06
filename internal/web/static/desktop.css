@@ -56,7 +56,7 @@
   .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
 
   /* Secrets and key material are machine text. */
-  #creds textarea.fld, #creds .fld.secret-area { font-family: var(--font-mono); }
+  :is(#creds, #cred-drawer) textarea.fld, :is(#creds, #cred-drawer) .fld.secret-area { font-family: var(--font-mono); }
 
   /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
   /* The controls moved into the sidebar top and footer. #env-strip stays: it is
@@ -1313,42 +1313,42 @@
      locked, expired, not checked), red = write / prod / error, green = status;
      mono only for machine text (account ids, role names, client ids, env names,
      hosts). The card rules in app.css stay for the mobile modal. */
-  #page-host > #settings-modal.as-page #creds-body { gap: 14px; }
-  #page-host > #settings-modal.as-page #creds .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
-  #page-host > #settings-modal.as-page #creds .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
-  #page-host > #settings-modal.as-page #creds .cstrip .txt { font-size: 13px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .cstrip .txt b { color: var(--fg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #creds .cstrip.need .txt b { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
-  #page-host > #settings-modal.as-page #creds .st::before { display: none; }
-  #page-host > #settings-modal.as-page #creds .cstrip .st { gap: 7px; }
-  #page-host > #settings-modal.as-page #creds .cstrip .st::before { display: inline-block; }
-  #page-host > #settings-modal.as-page #creds .st.ready { color: var(--ok); }
-  #page-host > #settings-modal.as-page #creds .st.missing, #page-host > #settings-modal.as-page #creds .st.locked, #page-host > #settings-modal.as-page #creds .st.notset { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .st.invalid { color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .hint { font-size: 12.5px; line-height: 1.6; }
-  #page-host > #settings-modal.as-page #creds .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 14px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st::before { display: inline-block; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.ready { color: var(--ok); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: 12.5px; line-height: 1.6; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:hover { background: var(--line); }
   /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
      encrypted store" (186px) spilled past the warning box, in the strip and again in
      the passphrase form it opens. The label wraps inside the strip instead. */
-  #page-host > #settings-modal.as-page #creds .cstrip .btn { max-width: 100%; white-space: normal; }
-  #page-host > #settings-modal.as-page #creds .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #creds .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .btn.dgr:hover { background: var(--danger-tint); }
-  #page-host > #settings-modal.as-page #creds .warnbox, #page-host > #settings-modal.as-page #creds .amberbox, #page-host > #settings-modal.as-page #creds .confirm { border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
 
-  #page-host > #settings-modal.as-page #creds .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .hint, #page-host > #settings-modal.as-page #creds .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
-  #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab { width: 100%; border-collapse: collapse; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
   /* Names break between words, never inside one ("Missin/g"). */
-  #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
-  #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-nm { display: inline-block; max-width: 100%; }
   /* AWS sizes its columns to content, so its name must be allowed to wrap: a nowrap
      name held its column open past the section's box (a 30-character one cut Delete
      off at 1240px, a 60-character one scrolled the page). It breaks at hyphens first,
@@ -1357,60 +1357,61 @@
      min-content width, so it held the column open all the same: `anywhere` does. Only
      the name's own cell: every plain cell is a .c-nm, and the account id and Used by
      must not split mid-word. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm { overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm { overflow-wrap: anywhere; }
   /* Status wraps between words ("Stored (store locked)" stays in its column).
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
-  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: break-word; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .st { white-space: normal; overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv { overflow-wrap: normal; }
   /* The GitHub and token tables share one set of column starts (pg-2). AWS has
      its own columns and keeps the automatic layout. Every width is a share of the
      table: fixed px columns starved Used by to 0px below a ~1150px window. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-main { color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-main.mono { font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #creds .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-sub.mono { font-size: 11.5px; }
-  #page-host > #settings-modal.as-page #creds .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
-  #page-host > #settings-modal.as-page #creds .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.ok { color: var(--ok); }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.ok::before { content: "✓ "; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.warn { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.bad { color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act { justify-content: flex-end; }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-x > td { padding: 0; }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-ex > * { margin: 0 16px 12px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: 11.5px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.bad { color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-x > td { padding: 0; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
-  #page-host > #settings-modal.as-page #creds .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .vfold > summary::-webkit-details-marker { display: none; }
-  #page-host > #settings-modal.as-page #creds .vfold > summary::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page #creds .vfold[open] > summary::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
-  #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::-webkit-details-marker { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold[open] > summary::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .btn { align-self: flex-start; }
   /* The card's room is #creds-body (the window minus the sidebar, the nav and the
-     padding), which is 178px at 701px. app.css stacks a card in one column only for a
+     padding), which is 178px at 701px; the drawer's body, #cred-drawer-body, is a
+     container the same way. app.css stacks a card in one column only for a
      window of 700px or less, so between 701 and about 745 the info column was 18px next
      to Edit and Delete. The same three rules, keyed on the body like the table/card
      switch is: the two-column card measured clean down to a 227px body, 300px leaves room. */
-  #page-host > #settings-modal.as-page #creds-body { container-type: inline-size; }
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { container-type: inline-size; }
   @container (max-width: 300px) {
-    #page-host > #settings-modal.as-page #creds .ent { grid-template-columns: 1fr; padding: 12px; }
-    #page-host > #settings-modal.as-page #creds .ent-act { align-self: stretch; }
-    #page-host > #settings-modal.as-page #creds .ent-act .btn { flex: 1; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent { grid-template-columns: 1fr; padding: 12px; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act { align-self: stretch; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act .btn { flex: 1; }
   }
 
   /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */

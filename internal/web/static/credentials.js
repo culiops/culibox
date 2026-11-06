@@ -841,6 +841,15 @@ let credWidthWatched = false;
 let credFontsWatched = false;
 // The Add / Edit AWS view while it is open, else null. See awsOpenAdd.
 let awsFlow = null;
+// The host a token / GitHub App / GitHub-choice view was opened in (see credFlowStart), or null when
+// it is the Credentials tab's. credForm holds the non-secret state and must stay plain data, so the
+// elements live here: credFormOpts is the caller's `opts`, credFormBtns the Save and Cancel the view
+// drew into opts.foot.
+let credFormOpts = null;
+let credFormBtns = null;
+// Counts the flows dropped (credFlowDrop): a flow in a host that was waiting for the server when its
+// host went away sees the number move and opens nothing.
+let credHostSeq = 0;
 
 // Later flows register here by entry kind ("aws", "github", "token", "value"):
 // { add: fn(), edit: fn(entry), delete: fn(entry) }. A card shows an Edit or
@@ -1297,8 +1306,9 @@ function renderCredentials(view) {
   // gone. The cached view repainted for a new width is the same object and keeps it.
   if (view !== credView) credNeedW = 0;
   credView = view;
-  // The Add / Edit view owns the body until it is left; it reads credView when it needs it.
-  if (awsFlow || credForm) return;
+  // The Add / Edit view owns the body until it is left; it reads credView when it needs it. A view in
+  // a host (the drawer) does not own the tab's body.
+  if (credTabFlowOpen()) return;
   if (typeof storeUnlockFocused === "function" && storeUnlockFocused()) {
     // Held, not dropped: repaint as soon as the field lets go.
     credRepaintHeld = true;
@@ -1475,9 +1485,10 @@ function setCredErr(msg) {
 
 async function loadCredentials() {
   setCredErr("");
-  // Re-selecting the tab hides the Add / Edit footer; the view is still there.
-  if (awsFlow) awsShowFoot(true);
-  if (credForm) credFormFoot(true);
+  // Re-selecting the tab hides the Add / Edit footer; the view is still there. A flow in a host
+  // (the drawer) has its footer in the host, which the tab never hid.
+  if (awsFlow && !awsFlow.opts) awsShowFoot(true);
+  if (credForm && !credFormOpts) credFormFoot(true);
   // A muted "Loading credentials…" above whatever is already shown, only if the
   // two calls below outlast the pending delay. done() runs on every exit,
   // including the error return, so no line is left behind.
@@ -1530,8 +1541,13 @@ function awsShowFoot(on) {
   if (base) base.hidden = on;
 }
 
-function awsOpenAdd() {
-  awsFlow = { mode: "add", rows: [], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
+// awsOpenAdd(opts): the add view in the Credentials tab, or, given opts = { host, foot, onCreated(names,
+// kind), onClose() }, in a host of the caller's: the view draws into opts.host and its buttons into
+// opts.foot, leaves the tab's body, footers and list alone, and tells opts.onCreated every connection it
+// saved (kind "aws") before opts.onClose. See credFlowDone.
+function awsOpenAdd(opts) {
+  credFlowStart(opts);
+  awsFlow = { mode: "add", rows: [], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "", opts: opts || null, created: [] };
   awsPaintFlow();
   awsLoadProfiles(awsFlow);
 }
@@ -1574,6 +1590,14 @@ function awsRowState(row) {
 
 async function awsExit() {
   const f = awsFlow;
+  // In a host the way out waits for a save in flight, so the connection it is saving is reported
+  // (awsSaveAll leaves itself once it has answered).
+  if (f && f.opts && f.saving) return;
+  if (f && f.opts) {
+    credFlowDrop();
+    credFlowDone(f.opts, f.created, "aws");
+    return;
+  }
   if (f) for (const t of f.timers) clearInterval(t);
   awsFlow = null;
   awsShowFoot(false);
@@ -1581,8 +1605,8 @@ async function awsExit() {
 }
 
 function awsPaintFlow() {
-  const host = document.getElementById("creds-body");
   const f = awsFlow;
+  const host = f && f.opts ? f.opts.host : document.getElementById("creds-body");
   if (!host || !f) return;
   const edit = f.mode === "edit";
   const crumb = awsEl("div", "crumb");
@@ -1620,8 +1644,9 @@ function awsPaintFlow() {
   host.replaceChildren(...nodes);
   for (const r of f.rows) f.rowsHost.appendChild(awsBuildRow(r));
   awsPaintProfiles();
+  if (f.opts) awsBuildFoot(f);
   awsPaintFoot();
-  awsShowFoot(true);
+  if (!f.opts) awsShowFoot(true);
 }
 
 async function awsLoadProfiles(f) {
@@ -2306,13 +2331,29 @@ async function awsCheckAll() {
   }
 }
 
+// awsBuildFoot: the add view's buttons in a host's own footer, the same four as #foot-creds-add.
+function awsBuildFoot(f) {
+  const checkAll = awsBtn("Check all", "", () => awsCheckAll());
+  const note = awsEl("span", "grow hint");
+  note.setAttribute("role", "status");
+  const cancel = awsBtn("Cancel", "", () => awsExit());
+  const save = awsBtn("Save all", "pri off", () => awsSaveAll());
+  save.disabled = true;
+  f.foot = { checkAll, note, cancel, save };
+  f.opts.foot.replaceChildren(checkAll, note, cancel, save);
+}
+
 function awsPaintFoot() {
   const f = awsFlow;
   if (!f) return;
-  const sv = document.getElementById("aws-save");
-  const ca = document.getElementById("aws-check-all");
-  const note = document.getElementById("aws-foot-note");
+  const fe = f.foot || {
+    save: document.getElementById("aws-save"),
+    checkAll: document.getElementById("aws-check-all"),
+    note: document.getElementById("aws-foot-note"),
+  };
+  const sv = fe.save, ca = fe.checkAll, note = fe.note;
   if (!sv || !ca || !note) return;
+  if (fe.cancel) fe.cancel.disabled = f.saving;
   const states = f.rows.map(awsRowState);
   const waiting = states.filter((s) => s.needsAck).length;
   const ready = states.filter((s) => s.canSave).length;
@@ -2357,6 +2398,7 @@ async function awsSaveAll() {
       saved++;
       row.busy = "";
       if (f.mode === "add") {
+        f.created.push(row.name);
         f.selected.delete(row.pname);
         row.el.remove();
         f.rows.splice(f.rows.indexOf(row), 1);
@@ -2448,6 +2490,88 @@ async function credLoadTemplates() {
     credTemplates = res.templates || [];
   }
   return credTemplates;
+}
+
+// --- the add flows in a host of the caller's (the drawer over the profile page) ---------------
+//
+// awsOpenAdd, credTokenAdd, credAppForm and credGitHubChoose take opts = { host, foot, onCreated(names,
+// kind), onClose() }. Without opts they are the Credentials tab's views: the body #creds-body, the tab's
+// footers, loadCredentials on the way out. With opts they draw into opts.host and put their buttons in
+// opts.foot, and on the way out call opts.onCreated(names, kind) when something was created (kind is
+// "aws", "token" or "app"; names are the connection or token names the server holds now) and then
+// opts.onClose(). They never call loadCredentials or touch the tab's footers: the caller learns what
+// was made from onCreated. Leaving a flow without creating anything (Cancel, the crumb) calls only onClose.
+
+// credTabFlowOpen: an Add / Edit view is open in the Credentials tab (a view in a host is not).
+function credTabFlowOpen() {
+  return !!((awsFlow && !awsFlow.opts) || (credForm && !credFormOpts));
+}
+
+// credFlowDrop: forgets whichever Add / Edit view is open, reporting nothing: its timers stop and the
+// singletons clear. The caller of a flow in a host uses it when the host closes by itself (the drawer's
+// own close, Esc). A view left open in the tab loses its Add / Edit footers too (the tab's list footer
+// is not put back: when this runs another tab is the one showing; selecting Credentials again
+// reloads the list).
+function credFlowDrop() {
+  credHostSeq++;
+  const inTab = credTabFlowOpen();
+  const f = awsFlow;
+  if (f) for (const t of f.timers) clearInterval(t);
+  awsFlow = null;
+  credKeep(null);
+  credFormSubmit = null;
+  credFormErrEl = null;
+  credFormOpts = null;
+  credFormBtns = null;
+  if (inTab) {
+    for (const id of ["foot-creds-add", "foot-creds-form"]) {
+      const e = document.getElementById(id);
+      if (e) e.hidden = true;
+    }
+  }
+}
+
+// credFlowStart: a flow about to open in a host first drops what else is open (a view left open in the
+// tab, an earlier one in a host), so two views never share the singletons. The same host's own flow
+// moving on (GitHub: the choice, then the route picked) is not dropped.
+function credFlowStart(opts) {
+  if (opts && credFormOpts !== opts) credFlowDrop();
+}
+
+// credFlowDone: the way out of a flow in a host.
+function credFlowDone(opts, names, kind) {
+  if (names && names.length && typeof opts.onCreated === "function") opts.onCreated([...names], kind);
+  if (typeof opts.onClose === "function") opts.onClose();
+}
+
+// credHostErr: why a flow could not start, in the tab's error line or, in a host, in the host with a
+// Cancel that closes it.
+function credHostErr(opts, msg) {
+  if (!opts) { setCredErr(msg); return; }
+  const err = credEl("p", "ent-err", msg);
+  err.setAttribute("role", "alert");
+  opts.host.replaceChildren(err);
+  const cancel = credEl("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.onclick = () => { credFlowDrop(); credFlowDone(opts); };
+  opts.foot.replaceChildren(credEl("span", "grow"), cancel);
+}
+
+// credSaveBtn: the Save button of the open form view, wherever it is.
+function credSaveBtn() {
+  return credFormOpts ? (credFormBtns && credFormBtns.save) : document.getElementById("cred-form-save");
+}
+
+// credFormBuildFoot: a form view's Cancel and Save in a host's own footer, as #foot-creds-form has them.
+function credFormBuildFoot(opts, saveLabel) {
+  const cancel = credEl("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.onclick = () => credFormExit();
+  const save = credEl("button", "btn pri", saveLabel || "Save");
+  save.type = "button";
+  save.onclick = () => credFormRun();
+  credFormBtns = { save, cancel };
+  opts.foot.replaceChildren(credEl("span", "grow"), cancel, save);
 }
 
 function credFormFoot(on) {
@@ -2592,27 +2716,44 @@ function credStoreCreateNode(onDone, hold) {
 }
 
 // credOpenForm: show a form view. `meta` is the non-secret state kept (kind and
-// the like); `submit` runs on Save and returns true once the save worked.
-function credOpenForm(meta, crumbText, nodes, submit) {
-  const host = document.getElementById("creds-body");
+// the like); `submit` runs on Save and returns what it created once the save worked
+// ({ names, kind } for an add, which a flow in a host reports; true for the rest) and
+// false when it did not. `opts` is the host the view is drawn in (see above), else the tab.
+function credOpenForm(meta, crumbText, nodes, submit, opts) {
+  const host = opts ? opts.host : document.getElementById("creds-body");
   if (!host) return;
-  setCredErr("");
+  if (!opts) setCredErr("");
   credKeep(meta);
   credFormSubmit = submit;
   credFormBusy = false;
+  credFormOpts = opts || null;
   const crumb = credEl("div", "crumb");
   crumb.append(credLink("Credentials", () => credFormExit()), document.createTextNode(" / "), credEl("b", null, crumbText));
   const err = credEl("div", "ent-err");
   err.setAttribute("role", "alert");
   credFormErrEl = err;
   host.replaceChildren(crumb, ...nodes, err);
-  const save = document.getElementById("cred-form-save");
-  if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }
-  credFormFoot(true);
+  if (opts) {
+    credFormBuildFoot(opts, meta.saveLabel);
+  } else {
+    const save = document.getElementById("cred-form-save");
+    if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }
+    credFormFoot(true);
+  }
   if (host.parentElement) host.parentElement.scrollTop = 0;
 }
 
-async function credFormExit() {
+// credFormExit: leave the form view. `made` is what the submit reported ({ names, kind }), which a
+// view in a host passes on to opts.onCreated; the tab reloads its list instead.
+async function credFormExit(made) {
+  const opts = credFormOpts;
+  // In a host the way out waits for a save in flight, so what it creates is reported.
+  if (opts && credFormBusy) return;
+  if (opts) {
+    credFlowDrop();
+    credFlowDone(opts, made && made.names, made && made.kind);
+    return;
+  }
   credKeep(null);
   credFormSubmit = null;
   credFormErrEl = null;
@@ -2622,18 +2763,24 @@ async function credFormExit() {
 
 async function credFormRun() {
   if (!credFormSubmit || credFormBusy) return;
-  const save = document.getElementById("cred-form-save");
+  const submit = credFormSubmit;
+  const save = credSaveBtn();
+  const cancel = credFormBtns && credFormBtns.cancel;
   credFormBusy = true;
   if (save) save.disabled = true;
+  if (cancel) cancel.disabled = true;
   credFormErr("");
   let done = false;
   try {
-    done = await credFormSubmit();
+    done = await submit();
   } finally {
     credFormBusy = false;
     if (save) save.disabled = false;
+    if (cancel) cancel.disabled = false;
   }
-  if (done) await credFormExit();
+  // The host went away while it saved (credFlowDrop): nothing is left to leave or to tell.
+  if (credFormSubmit !== submit) return;
+  if (done) await credFormExit(done);
 }
 
 async function credSend(method, path, body) {
@@ -2777,15 +2924,27 @@ function credTokenDetails(t, taken) {
   };
 }
 
-async function credTokenAdd(group, startID) {
+// credTokenAdd: the Add token view, starting on the template `startID` or the group's provider. Given
+// opts (a host, see above) it first reads the store and the tokens already there (credRefreshView), which
+// the tab's own load has done by then; a missing store is the inline "Create the encrypted store" step,
+// and a locked one does not stop the add. It reports the names the server created, kind "token".
+async function credTokenAdd(group, startID, opts) {
+  credFlowStart(opts);
+  const seq = credHostSeq;
+  if (opts) {
+    await credRefreshView();
+    if (credHostSeq !== seq) return;
+  }
   let tpls;
   try {
     tpls = await credLoadTemplates();
   } catch (e) {
-    setCredErr("Could not load the token providers: " + credErrText(e, "token"));
+    if (credHostSeq !== seq) return;
+    credHostErr(opts, "Could not load the token providers: " + credErrText(e, "token"));
     return;
   }
-  if (!tpls.length) { setCredErr("There are no token providers to choose from."); return; }
+  if (credHostSeq !== seq) return;
+  if (!tpls.length) { credHostErr(opts, "There are no token providers to choose from."); return; }
   const want = group && group.key && group.key.startsWith("token:") ? group.key.slice(6) : "";
   const start = tpls.find((t) => startID && t.id === startID) || tpls.find((t) => want && t.provider === want && t.id !== "other") || (want ? tpls.find((t) => t.id === "other") : null) || tpls[0];
   const taken = (credView && credView.tokens ? credView.tokens : []).map((t) => t.name);
@@ -2822,23 +2981,25 @@ async function credTokenAdd(group, startID) {
     if (!body.name) { credFormErr("Give the token a name."); return false; }
     if (!det.ready()) { credFormErr("Create the encrypted store first. The value is stored in it."); return false; }
     if (body.values.some((v) => v === "")) { credFormErr("Paste the value to store."); return false; }
-    let ok = false;
+    let res = null;
     try {
-      await credSend("POST", "/api/credentials/tokens/from-template", body);
-      ok = true;
+      res = await credSend("POST", "/api/credentials/tokens/from-template", body);
     } catch (e) {
       credFormErr(credErrText(e, "token"));
+      return false;
     } finally {
       det.clearValues();
       body.values.fill("");
     }
-    return ok;
-  });
+    return { names: (res && res.names) || [], kind: "token" };
+  }, opts);
   select(start);
 }
 
-// credGitHubChoose: "Add GitHub" -- a token or an App, side by side.
-function credGitHubChoose() {
+// credGitHubChoose: "Add GitHub" -- a token or an App, side by side. Given opts (a host, see above) the
+// route picked runs in the same host and reports as it does: a token its names, an App its name.
+function credGitHubChoose(opts) {
+  credFlowStart(opts);
   const sec = credEl("section", "sec");
   sec.setAttribute("aria-label", "GitHub");
   const h = credEl("div", "sec-h");
@@ -2848,15 +3009,15 @@ function credGitHubChoose() {
     const b = credEl("button", "tile");
     b.type = "button";
     b.append(credEl("span", "n", c.title), credEl("span", "s", c.line));
-    b.onclick = () => (c.id === "pat" ? credTokenAdd({ key: "token:github" }, "github-pat") : credAppForm(null));
+    b.onclick = () => (c.id === "pat" ? credTokenAdd({ key: "token:github" }, "github-pat", opts) : credAppForm(null, opts));
     tiles.appendChild(b);
   }
   sec.append(h, tiles);
   credOpenForm({ kind: "github-choose", saveLabel: "Save" }, "Add GitHub", [sec], async () => {
     credFormErr("Choose a token or an App above.");
     return false;
-  });
-  const save = document.getElementById("cred-form-save");
+  }, opts);
+  const save = credSaveBtn();
   if (save) save.disabled = true;
 }
 
@@ -2901,7 +3062,15 @@ function credTokenEdit(entry) {
 
 const CRED_APP_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
-function credAppForm(entry) {
+// credAppForm: the GitHub App view, an Add (entry null) or an Edit. Given opts (a host, see above) it is
+// an Add: it first reads the store (credRefreshView) and reports the App's name, kind "app".
+async function credAppForm(entry, opts) {
+  credFlowStart(opts);
+  const seq = credHostSeq;
+  if (opts) {
+    await credRefreshView();
+    if (credHostSeq !== seq) return;
+  }
   const edit = !!entry;
   const uid = "cga";
   const sec = credEl("section", "sec");
@@ -2963,6 +3132,7 @@ function credAppForm(entry) {
     if (!edit && !(useFile ? form.path.trim() : form.key)) { credFormErr(useFile ? "Enter the path of the key file." : "Paste the App's private key."); return false; }
     if (!useFile && form.key && !credStoreReady()) { credFormErr("Create the encrypted store first. The key is stored in it."); return false; }
     const body = appBody(form);
+    const made = form.name.trim();
     form.key = "";
     let ok = false;
     try {
@@ -2975,8 +3145,8 @@ function credAppForm(entry) {
       valueFieldCleared(keyEl);
       delete body.private_key_value;
     }
-    return ok;
-  });
+    return ok && !edit ? { names: [made], kind: "app" } : ok;
+  }, opts);
 }
 
 // --- stored values ---------------------------------------------------------------

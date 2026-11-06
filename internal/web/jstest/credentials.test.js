@@ -574,8 +574,8 @@ test("table mode needs the as-page class and room in #creds-body; the card path 
 // environment") stays inside its column instead of printing over Used by.
 test("desktop creds table: status wraps at word boundaries only", () => {
   const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
-  const rule = css.match(/#creds \.ctab \.st \{([^}]*)\}/);
-  assert.ok(rule, "a #creds .ctab .st rule exists");
+  const rule = css.match(/:is\(#creds, #cred-drawer\) \.ctab \.st \{([^}]*)\}/);
+  assert.ok(rule, "a #creds .ctab .st rule exists (written for the drawer too)");
   assert.match(rule[1], /white-space:\s*normal/);
   assert.match(rule[1], /overflow-wrap:\s*break-word/);
   assert.doesNotMatch(rule[1], /nowrap|anywhere/);
@@ -603,15 +603,15 @@ test("the Profiles form clears a two-line footer from the width the footer wraps
 // same element the table/card switch measures.
 test("desktop creds cards stack when #creds-body is narrow, keyed on the body not the window", () => {
   const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
-  assert.match(css, /#creds-body\s*\{[^}]*container-type:\s*inline-size/);
+  assert.match(css, /#creds-body, [^{}]*#cred-drawer-body\s*\{[^}]*container-type:\s*inline-size/, "the drawer's body is a container too");
   const q = /@container\s*\(max-width:\s*(\d+)px\)\s*\{([^@]*?\n\s*\})/g;
   let found = null, m;
-  while ((m = q.exec(css))) if (/#creds \.ent \{[^}]*grid-template-columns:\s*1fr/.test(m[2])) found = m;
+  while ((m = q.exec(css))) if (/:is\(#creds, #cred-drawer\) \.ent \{[^}]*grid-template-columns:\s*1fr/.test(m[2])) found = m;
   assert.ok(found, "a @container rule stacks #creds .ent");
   const width = Number(found[1]);
   assert.ok(width > 227 && width < 700, "above the measured two-column floor (227px), below the table switch (700px)");
-  assert.match(found[2], /#creds \.ent-act \{[^}]*align-self:\s*stretch/);
-  assert.match(found[2], /#creds \.ent-act \.btn \{[^}]*flex:\s*1/);
+  assert.match(found[2], /:is\(#creds, #cred-drawer\) \.ent-act \{[^}]*align-self:\s*stretch/);
+  assert.match(found[2], /:is\(#creds, #cred-drawer\) \.ent-act \.btn \{[^}]*flex:\s*1/);
 });
 
 // The fixed-layout tables size every column as a share of the table: a px
@@ -974,4 +974,47 @@ test("credTablesAt: a hidden tab and a modal ignore the measured need", () => {
   assert.strictEqual(credTablesAt(NaN, true, 850), true);
   assert.strictEqual(credTablesAt(900, false, 0), false, "a modal never draws tables");
   assert.strictEqual(credTablesAt(900, false, 850), false);
+});
+
+// The add flows (credentials.js) also run in the drawer over the profile page (#cred-drawer,
+// spec 5.7), where they draw the same markup. Every rule written for #creds therefore names
+// :is(#creds, #cred-drawer), which has #creds's own specificity (an id), so no cascade changes
+// for the tab; #creds-body has a twin, #cred-drawer-body. The phone's block stays #creds only:
+// the drawer is desktop-only and the phone must not change.
+test("every #creds rule also applies to #cred-drawer", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const app = read("app.css"), desk = read("desktop.css");
+  // The credentials rules' phone block: the @media (max-width: 700px) that holds "#creds .btn { min-height".
+  const at = app.indexOf("#creds .btn { min-height");
+  const from = app.lastIndexOf("@media (max-width: 700px) {", at);
+  let depth = 0, to = from;
+  for (let i = app.indexOf("{", from); i < app.length; i++) {
+    if (app[i] === "{") depth++;
+    else if (app[i] === "}" && --depth === 0) { to = i + 1; break; }
+  }
+  assert.ok(at > 0 && from > 0 && to > at, "found the phone block of the credentials rules");
+  const phone = app.slice(from, to);
+  const base = app.slice(0, from) + app.slice(to);
+  const DRAWER = ":is(#creds, #cred-drawer)";
+  const bare = (css) => css.split(DRAWER).join("").match(/#creds(?![-\w])/g);
+  assert.strictEqual(bare(base), null, "app.css: no #creds selector outside the phone block that lacks the drawer");
+  assert.strictEqual(bare(desk), null, "desktop.css: no #creds selector that lacks the drawer");
+  assert.ok(base.split(DRAWER).length - 1 >= 100, "app.css writes its credentials rules for both");
+  assert.ok(desk.split(DRAWER).length - 1 >= 60, "desktop.css writes its credentials rules for both");
+  assert.ok(/#creds \.btn \{/.test(phone) && !/cred-drawer/.test(phone), "the phone block still says #creds only");
+  // #creds-body: every rule that names it names #cred-drawer-body in the same selector list.
+  for (const [name, css] of [["app.css", base], ["desktop.css", desk]]) {
+    const re = /([^{}]+)\{[^{}]*\}/g;
+    let m, seen = 0;
+    while ((m = re.exec(css))) {
+      if (!/#creds-body(?![-\w])/.test(m[1])) continue;
+      seen++;
+      assert.ok(/#cred-drawer-body(?![-\w])/.test(m[1]), name + ": #creds-body has a #cred-drawer-body twin in " + m[1].trim());
+    }
+    assert.ok(seen >= (name === "app.css" ? 1 : 2), name + ": the #creds-body rules were found");
+  }
+  // Same specificity as before: the drawer's selector is an id plus what followed it.
+  assert.match(base, /:is\(#creds, #cred-drawer\) \.ent \{/);
+  assert.match(desk, /#page-host > #settings-modal\.as-page :is\(#creds, #cred-drawer\) \.ent \{/);
 });
