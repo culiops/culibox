@@ -17,8 +17,10 @@
 //
 // The seams (spec 5.7): pfvOpenPicker(blockId) opens the "+ Add" picker of an open block and pfvClosePicker(blockId?) closes
 // it, giving focus back to the link; pfvAddRow(blockId, what) puts a pending row in, what being {kind: "folder" | "domain" |
-// "github"} for an input row or {kind: "aws" | "token", name} for a name the instance defines. The picker's "New ..." items
-// call pfvOpenDrawer(kind), kind "aws" | "github" | "token", when the page has that (the Credentials drawer). pfvConvertAws is
+// "github"} for an input row ({kind: "github", login: "app:<name>" | "token:<name>"} signs the new owner in with that login) or
+// {kind: "aws" | "token", name} for a name the instance defines. The picker's "New ..." items
+// call pfvOpenDrawer(kind, blockId), kind "aws" | "github" | "token", when the page has that (the Credentials drawer, profilepage.js;
+// what it creates comes back through pfvAddRow). pfvConvertAws is
 // the old-style AWS row's "Move to a saved connection" (today's convert).
 //
 // Every top-level name here starts with pfc/PFC_, except the seams above (the page scripts share one scope).
@@ -132,12 +134,13 @@ function pfcPickOption(rec, it) {
 }
 
 // pfcPickCreate: a "New ..." item opens the Credentials drawer for that kind (pfvOpenDrawer), which takes over from the picker.
-// While the page has no drawer the item does nothing. It is read off globalThis, the way the page reads what another script may
-// not have defined (a top-level function there is a property of it), so scripts/lint.sh does not take it for a name nobody defines.
+// A drawer that cannot open (false) leaves the choice as it was: the item does nothing. It is read off globalThis, the way the page
+// reads what another script may not have defined (a top-level function there is a property of it), so scripts/lint.sh does not take
+// it for a name nobody defines.
 function pfcPickCreate(rec, kind) {
   if (typeof globalThis.pfvOpenDrawer !== "function") return;
   pfcPickClose(rec);
-  globalThis.pfvOpenDrawer(kind);
+  if (globalThis.pfvOpenDrawer(kind, rec.id) === false) pfvOpenPicker(rec.id);
 }
 
 // pfcPickEnd: the picker is not asked for any more: what was typed in its filter and the height it was pinned at go with it.
@@ -562,7 +565,8 @@ function pfcCloudPick(rec) {
 }
 
 // pfcCloudAdd: pfvAddRow's hook. A name the instance defines goes in as a row (a removed one comes back); a GitHub owner
-// goes in as an input row signing in with the first login there is.
+// goes in as an input row signing in with the login it is given ("app:<name>" or "token:<name>", as pfcLogins lists them: the
+// drawer's new App or token), else with the first login there is.
 function pfcCloudAdd(rec, what) {
   const v = rec.values;
   if (what.kind === "aws" || what.kind === "token") {
@@ -577,7 +581,8 @@ function pfcCloudAdd(rec, what) {
   }
   if (what.kind === "github") {
     const logins = pfcLogins("");
-    v.gh.push({ fresh: true, owner: "", pick: logins.length ? logins[0].value : "", repos: "" });
+    const login = typeof what.login === "string" && /^(app|token):./.test(what.login) ? what.login : "";
+    v.gh.push({ fresh: true, owner: "", pick: login || (logins.length ? logins[0].value : ""), repos: "" });
     return "gh:" + (v.gh.length - 1) + ":owner";
   }
   return "";

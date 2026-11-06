@@ -1435,6 +1435,8 @@
     /* The desktop page's profile overview and its nav list (desktop.css shows them
        on the page above 700px); a phone keeps the form. */
     #pfv, #pf-navlist { display: none; }
+    /* The Credentials drawer over the profile page and its scrim (desktop.css shows them on the page, while the page has opened one). */
+    #cred-scrim, #cred-drawer { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;

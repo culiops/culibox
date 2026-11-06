@@ -214,6 +214,25 @@ test("desktop.css shows them on the page and takes the old list, form and footer
   assert.match(css, /#page-host > #settings-modal\.as-page > #foot-manage \{ display: none; \}/);
 });
 
+// The Credentials drawer over the profile page (Task 15): desktop markup that a phone never draws.
+test("base app.css hides the Credentials drawer and its scrim; desktop.css shows them only once the page has opened them", () => {
+  assert.match(stripComments(BASE_CSS), /#cred-scrim, #cred-drawer \{ display: none; \}/);
+  const css = stripComments(DESK_CSS);
+  // Fixed, over the whole page, above its own pickers (z 30) and below nothing of the page's.
+  assert.match(css, /#page-host > #settings-modal\.as-page > #cred-scrim:not\(\[hidden\]\) \{[^}]*position: fixed; inset: 0; z-index: 50;/);
+  const drawer = /#page-host > #settings-modal\.as-page > #cred-drawer:not\(\[hidden\]\) \{([^}]*)\}/.exec(css);
+  assert.ok(drawer, "the drawer rule");
+  assert.match(drawer[1], /position: fixed; top: 0; right: 0; bottom: 0; z-index: 51;/);
+  assert.match(drawer[1], /width: 540px/);
+  assert.match(drawer[1], /background: var\(--panel\)/);
+  assert.match(drawer[1], /border-radius: var\(--r-dlg\) 0 0 var\(--r-dlg\)/, "10px on the free edge");
+  // Every rule for the drawer's own parts is under the page (desktop-scope.test.js checks the one desktop block for the whole file);
+  // the `:is(#creds, #cred-drawer)` twins of the Credentials rules are the flows' and carry their own scope.
+  const own = [...css.matchAll(/(^|\n)\s*([^{}\n]*#cred-(?:drawer|scrim)[^{}\n]*)\{/g)].map((m) => m[2].trim()).filter((sel) => !sel.includes(":is(#creds, #cred-drawer)") && !sel.includes("#cred-drawer-body"));
+  assert.ok(own.length >= 6, "the drawer's own rules");
+  for (const sel of own) assert.match(sel, /^#page-host > #settings-modal\.as-page > #cred-/, "scoped: " + sel);
+});
+
 test("the page script is loaded after the read model and before app.js", () => {
   const order = [...HTML.matchAll(/<script src="\/([a-z-]+\.js)"/g)].map((m) => m[1]);
   assert.ok(order.indexOf("profilepage.js") > order.indexOf("profileview.js"), "after profileview.js");

@@ -1665,3 +1665,93 @@ test("credFlowBusy is true while a flow in a host saves, and only then", async (
   tabAnswer();
   await settle();
 });
+
+// --- Task 15: what the drawer needs from the flows: a label for the primary button, and a way to end the open flow ---------
+
+test("opts.saveLabel names the primary button of a flow in a host; without it the labels are as before", async () => {
+  // AWS: the label survives every repaint of the footer (ticking a row repaints it).
+  const p = page({ tab: true });
+  const a = hostOpts();
+  a.opts.saveLabel = "Save all and add";
+  p.box.reply = awsReply();
+  await awsTick(p, a.opts, "acme-dev");
+  assert.deepStrictEqual(btnLabels(a.opts.foot), ["Check all", "Cancel", "Save all and add"]);
+  btnIn(a.opts.foot, "Check all").onclick();
+  await settle();
+  assert.deepStrictEqual(btnLabels(a.opts.foot), ["Check all", "Cancel", "Save all and add"], "still, after a check");
+  p.box.credFlowDrop();
+  const plain = hostOpts();
+  await awsTick(p, plain.opts, "acme-dev");
+  assert.deepStrictEqual(btnLabels(plain.opts.foot), ["Check all", "Cancel", "Save all"], "no label given: the tab's own");
+  p.box.credFlowDrop();
+  // A form: the token form, the GitHub choice and the App form.
+  const tokenHost = hostOpts();
+  tokenHost.opts.saveLabel = "Save and add";
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", tokenHost.opts);
+  assert.deepStrictEqual(btnLabels(tokenHost.opts.foot), ["Cancel", "Save and add"]);
+  p.box.credFlowDrop();
+  const gh = hostOpts();
+  gh.opts.saveLabel = "Save and add";
+  p.box.credGitHubChoose(gh.opts);
+  assert.deepStrictEqual(btnLabels(gh.opts.foot), ["Cancel", "Save and add"], "the choice");
+  gh.opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.ok(gh.opts.host.textContent.includes("Add GitHub App"));
+  assert.deepStrictEqual(btnLabels(gh.opts.foot), ["Cancel", "Save and add"], "the route it moved on to keeps the label");
+  p.box.credFlowDrop();
+  const none = hostOpts();
+  await p.box.credTokenAdd(null, "sentry", none.opts);
+  assert.deepStrictEqual(btnLabels(none.opts.foot), ["Cancel", "Save"], "no label given: today's");
+});
+
+test("credFlowCancel ends the open flow in a host the way its Cancel does: names saved so far are reported, then it closes", async () => {
+  const p = page({ tab: true });
+  assert.strictEqual(p.box.credFlowCancel({}), false, "nothing is open");
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply((conn) => { if (conn.name === "acme-ops") throw Object.assign(new Error("A connection with this name already exists."), { status: 409, code: "exists" }); return {}; });
+  await awsReady(p, opts, "acme-dev", "acme-ops");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [], "still open: one row needs attention");
+  const other = hostOpts();
+  assert.strictEqual(p.box.credFlowCancel(other.opts), false, "another host's flow is not ended by this one's close");
+  assert.deepStrictEqual(events, []);
+  await p.box.credFlowCancel(opts);
+  assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], "one visit, saved 1 of 2: reported, then closed");
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.strictEqual(p.box.credFlowCancel(opts), false, "and nothing is left to end");
+});
+
+test("credFlowCancel on a form: closes without reporting, and the GitHub choice and its route are one flow", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.ok(p.box.credFlowCancel(opts));
+  assert.deepStrictEqual(events, [["close"]]);
+  assert.strictEqual(p.box.credState().form, null);
+  const gh = hostOpts();
+  p.box.credGitHubChoose(gh.opts);
+  gh.opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.ok(p.box.credFlowCancel(gh.opts));
+  assert.deepStrictEqual(gh.events, [["close"]], "closed once, from the route it had moved on to");
+  assert.strictEqual(p.box.credState().form, null);
+});
+
+test("credFlowCancel refuses while a flow in a host saves, so the name being saved is reported when the answer is in", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let release;
+  p.box.reply = awsReply(() => new Promise((r) => { release = () => r({}); }));
+  await awsReady(p, opts, "acme-dev");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowCancel(opts), false, "busy: it did not end the flow");
+  assert.deepStrictEqual(events, []);
+  release();
+  await settle();
+  assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], "the save ended it by itself, and reported");
+});

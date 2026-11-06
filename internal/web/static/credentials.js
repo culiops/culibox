@@ -1542,9 +1542,10 @@ function awsShowFoot(on) {
 }
 
 // awsOpenAdd(opts): the add view in the Credentials tab, or, given opts = { host, foot, onCreated(names,
-// kind), onClose() }, in a host of the caller's: the view draws into opts.host and its buttons into
-// opts.foot, leaves the tab's body, footers and list alone, and tells opts.onCreated every connection it
-// saved (kind "aws") before opts.onClose. See credFlowDone.
+// kind), onClose(), saveLabel }, in a host of the caller's: the view draws into opts.host and its buttons into
+// opts.foot (the primary one reading opts.saveLabel when there is one), leaves the tab's body, footers and
+// list alone, and tells opts.onCreated every connection it saved (kind "aws") before opts.onClose. See
+// credFlowDone.
 function awsOpenAdd(opts) {
   credFlowStart(opts);
   awsFlow = { mode: "add", rows: [], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "", opts: opts || null, created: [] };
@@ -2341,7 +2342,7 @@ function awsBuildFoot(f) {
   const note = awsEl("span", "grow hint");
   note.setAttribute("role", "status");
   const cancel = awsBtn("Cancel", "", () => (awsFlow === f ? awsExit() : undefined));
-  const save = awsBtn("Save all", "pri off", () => (awsFlow === f ? awsSaveAll() : undefined));
+  const save = awsBtn(f.opts.saveLabel || "Save all", "pri off", () => (awsFlow === f ? awsSaveAll() : undefined));
   save.disabled = true;
   f.foot = { checkAll, note, cancel, save };
   f.opts.foot.replaceChildren(checkAll, note, cancel, save);
@@ -2365,7 +2366,7 @@ function awsPaintFoot() {
   const edit = f.mode === "edit";
   ca.textContent = edit ? "Check" : "Check all";
   ca.disabled = !f.rows.length || f.saving;
-  sv.textContent = edit ? "Save" : "Save all";
+  sv.textContent = edit ? "Save" : (f.opts && f.opts.saveLabel) || "Save all";
   const off = f.saving || ready === 0 || waiting > 0;
   sv.disabled = off;
   sv.classList.toggle("off", off);
@@ -2499,7 +2500,8 @@ async function credLoadTemplates() {
 // --- the add flows in a host of the caller's (the drawer over the profile page) ---------------
 //
 // awsOpenAdd, credTokenAdd, credAppForm and credGitHubChoose take opts = { host, foot, onCreated(names,
-// kind), onClose() }. Without opts they are the Credentials tab's views: the body #creds-body, the tab's
+// kind), onClose(), saveLabel }. saveLabel, when given, is the primary button's text ("Save all" or "Save"
+// otherwise). Without opts they are the Credentials tab's views: the body #creds-body, the tab's
 // footers, loadCredentials on the way out. With opts they draw into opts.host and put their buttons in
 // opts.foot, and on the way out call opts.onCreated(names, kind) when something was created (kind is
 // "aws", "token" or "app"; names are the connection or token names the server holds now) and then
@@ -2557,6 +2559,19 @@ function credFlowDone(opts, names, kind) {
 // token is created all the same), so closing mid-save would lose the name.
 function credFlowBusy() {
   return !!((awsFlow && awsFlow.opts && awsFlow.saving) || (credFormOpts && credFormBusy));
+}
+
+// credFlowCancel: the host closing (the drawer's Esc, scrim or a way out of the page) ends the flow open in
+// `opts` the way its own Cancel does: what the visit saved is reported through opts.onCreated, then
+// opts.onClose runs. False, and nothing happens, when no flow is open in that host (a flow still reading
+// the server has not drawn anything: the host then calls credFlowDrop) or when it is saving (the answer
+// ends it, and reports it, by itself). The host's own onClose is where it tears itself down. The tab's
+// own views are not the host's to end.
+function credFlowCancel(opts) {
+  if (!opts || credFlowBusy()) return false;
+  if (awsFlow && awsFlow.opts === opts) { awsExit(); return true; }
+  if (credFormOpts === opts) { credFormExit(); return true; }
+  return false;
 }
 
 // credHostErr: why a flow could not start, in the tab's error line or, in a host, in the host with a
@@ -2769,7 +2784,7 @@ function credOpenForm(meta, crumbText, nodes, submit, opts) {
   credFormErrEl = err;
   host.replaceChildren(crumb, ...nodes, err);
   if (opts) {
-    credFormBuildFoot(opts, meta.saveLabel, submit);
+    credFormBuildFoot(opts, opts.saveLabel || meta.saveLabel, submit);
   } else {
     const save = document.getElementById("cred-form-save");
     if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }

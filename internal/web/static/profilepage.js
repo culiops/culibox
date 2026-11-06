@@ -25,8 +25,8 @@
 // form). edits holds one record per open block (see pfvNewEdit): that is where the
 // pending values live, so the page can rebuild a form from them. pending: some open
 // block differs from what is stored. saved: the blocks whose "Saved" shows for a
-// moment. warnings: the lines a successful save answered with. drawer: the credentials drawer is open (a later task
-// sets it). picker: the block whose "+ Add" choice is open, "" when none; it is read from the open blocks
+// moment. warnings: the lines a successful save answered with. drawer: the credentials drawer is open (pfvOpenDrawer
+// sets it, whichever way it closes clears it). picker: the block whose "+ Add" choice is open, "" when none; it is read from the open blocks
 // (rec.ui.picker, which is also what draws the choice), never kept beside them, so it can neither claim a picker
 // that a closed or redrawn block took with it nor miss one that is open. pfv-cloud.js's picker sets and clears
 // rec.ui.picker. pfvEscTarget reads both, so Esc goes to the innermost open layer.
@@ -991,6 +991,9 @@ function pfvEndEdits() {
 // question) or nothing changed (open blocks without changes simply end). Otherwise pfvLeaveGuard's promise.
 function pfvLeaving() {
   if (!pfvOnPage()) return true;
+  // An open drawer goes first, through the same close as its own Esc (R63): what its flow saved is added to the block, and a flow
+  // that is saving holds the page, as a promise of false (callers wait on a promise, never on a bare false).
+  if (pfvDrawer && !pfvCloseDrawer()) return Promise.resolve(false);
   if (pfvAnyDirty()) return pfvLeaveGuard("leave");
   pfvEndEdits();
   return true;
@@ -1021,6 +1024,213 @@ function pfvTabLeave(tab) {
   return tab === "manage" ? true : pfvLeaving();
 }
 
+// --- the Credentials drawer (spec 5.7) ---------------------------------------------------------------------------
+
+// The "New AWS connection...", "New GitHub App..." and "New token..." items of the "+ Add" picker open credentials.js's add flows in
+// a drawer over the page (index.html: #cred-scrim and #cred-drawer, whose body is where a flow draws itself, whose foot is where its
+// buttons go, and whose status line says why a close has to wait). The flows are handed `opts` = {host, foot, saveLabel, onCreated,
+// onClose} and know nothing of the page; what they made comes back through onCreated, and each name becomes a pending row of the block
+// the picker was in, saved only with that block's Save. While the drawer is open it is the page's top layer: the page behind it is
+// inert, Tab stays inside it, and Esc, the scrim and any way out of the page end the flow through its own Cancel (credFlowCancel), so a
+// visit that saved 1 of 2 connections still reports that one.
+// pfvDrawer: {kind, id, rec, parts, opts, inert, watch} while it is open, else null.
+let pfvDrawer = null;
+
+// The mockup's primary labels: the drawer also adds what it creates to the open block.
+const PFV_DRAWER_SAVE = { aws: "Save all and add", github: "Save and add", token: "Save and add" };
+const PFV_DRAWER_BUSY = "Wait for the save to finish, then close.";
+const PFV_DRAWER_CONTROLS = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function pfvDrawerParts() {
+  const parts = {};
+  for (const [k, id] of [["drawer", "cred-drawer"], ["scrim", "cred-scrim"], ["body", "cred-drawer-body"], ["foot", "cred-drawer-foot"], ["status", "cred-drawer-status"]]) {
+    parts[k] = document.getElementById(id);
+    if (!parts[k]) return null;
+  }
+  return parts;
+}
+
+// pfvDrawerStarter: the flow that makes a kind of credential, as a function of opts; null for a kind there is none of.
+// A token starts where the Credentials tab's own Add token does (no group, no provider chosen for the user).
+function pfvDrawerStarter(kind) {
+  if (kind === "aws" && typeof awsOpenAdd === "function") return (opts) => awsOpenAdd(opts);
+  if (kind === "github" && typeof credGitHubChoose === "function") return (opts) => credGitHubChoose(opts);
+  if (kind === "token" && typeof credTokenAdd === "function") return (opts) => credTokenAdd(null, undefined, opts);
+  return null;
+}
+
+// pfvOpenDrawer: the picker's "New ..." item. kind "aws" | "github" | "token"; blockId defaults to the open block, which has to be in
+// edit mode (that is where the picker lives). false when it opens nothing: no such block, a drawer open already, a kind it has no flow
+// for, or no drawer on the page.
+function pfvOpenDrawer(kind, blockId) {
+  const id = blockId || pfvState.openBlock;
+  const rec = pfvState.edits[id];
+  const parts = pfvDrawerParts();
+  const start = pfvDrawerStarter(kind);
+  if (pfvDrawer || !rec || !rec.fields || !parts || !start || !pfvOnPage()) return false;
+  const d = { kind, id, rec, parts, opts: null, inert: [], watch: null };
+  d.opts = {
+    host: parts.body, foot: parts.foot, saveLabel: PFV_DRAWER_SAVE[kind],
+    onCreated: (names, made) => pfvDrawerCreated(d, names, made),
+    onClose: () => pfvDrawerEnd(d, true),
+  };
+  pfvDrawer = d;
+  pfvState.drawer = true;
+  // Everything else on the page is inert: its controls cannot be reached by Tab or by a click while the drawer is over it.
+  const modal = document.getElementById("settings-modal");
+  d.inert = modal ? Array.from(modal.children).filter((n) => n !== parts.drawer && n !== parts.scrim) : [];
+  for (const n of d.inert) n.setAttribute("inert", "");
+  parts.scrim.onclick = () => { pfvCloseDrawer(); };
+  parts.scrim.hidden = false;
+  parts.drawer.hidden = false;
+  try {
+    start(d.opts);
+  } catch (e) {
+    pfvDrawerEnd(d, true);
+    throw e;
+  }
+  pfvDrawerFocus(d);
+  return true;
+}
+
+// pfvDrawerCreated: the flow made `names` (kind "aws" | "token" | "app", the flow's words). The page's credential lists are read
+// first, so no new row reads "Not found in Credentials" (pfcAfterConvert does the same); then each name is a pending row of the block
+// the drawer was opened from, if that block is still open as it was: a block that was closed or left meanwhile has nowhere to put
+// them (they are in Credentials all the same). From the GitHub drawer an App or a token is a new owner signing in with it, with the
+// owner and the repos left for the user to fill in.
+async function pfvDrawerCreated(d, names, kind) {
+  try {
+    await refreshCredLists();
+  } catch (_) {
+    // The rows go in all the same; they read as missing until the lists are read, which is what the page knows.
+  }
+  const rec = pfvState.edits[d.id];
+  if (rec !== d.rec || !rec.values) return;
+  for (const name of names) {
+    pfvAddRow(d.id, d.kind === "github" ? { kind: "github", login: (kind === "app" ? "app:" : "token:") + name } : { kind: kind === "aws" ? "aws" : "token", name });
+  }
+}
+
+// pfvDrawerEnd: the drawer is gone, however it went (a flow's onClose, pfvCloseDrawer, pfvDropDrawer): its host and foot are emptied so
+// nothing typed in it (a token's value, a passphrase) lingers in a hidden DOM, the page is live again, and focus goes back to the
+// block's "+ Add" link (`back`). Once only.
+function pfvDrawerEnd(d, back) {
+  if (pfvDrawer !== d) return;
+  pfvDrawer = null;
+  pfvState.drawer = false;
+  if (d.watch) d.watch.disconnect();
+  const p = d.parts;
+  p.body.replaceChildren();
+  p.foot.replaceChildren();
+  pfvDrawerSay("");
+  p.scrim.hidden = true;
+  p.drawer.hidden = true;
+  for (const n of d.inert) n.removeAttribute("inert");
+  const add = pfvState.edits[d.id] === d.rec && d.rec.fields ? d.rec.fields.add : null;
+  if (back && add && typeof add.focus === "function") add.focus();
+}
+
+// pfvDrawerSay: the line between the body and the foot ("" takes it away).
+function pfvDrawerSay(text) {
+  const el = document.getElementById("cred-drawer-status");
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = text === "";
+}
+
+// pfvCloseDrawer: Esc, the scrim and the way out of the page. The flow is ended through its own Cancel, which reports what it saved
+// (onCreated) and then closes the drawer (onClose); a flow that is not there to be asked (it was still reading the server) is dropped, so
+// it draws nothing into the emptied host. While a flow saves nothing closes: it would lose the name being saved, so the drawer says why.
+// true when it is closed (or was not open), false when it stays.
+function pfvCloseDrawer() {
+  const d = pfvDrawer;
+  if (!d) {
+    pfvState.drawer = false;
+    return true;
+  }
+  if (credFlowBusy()) {
+    pfvDrawerSay(PFV_DRAWER_BUSY);
+    return false;
+  }
+  credFlowCancel(d.opts);
+  if (pfvDrawer === d) {
+    credFlowDrop();
+    pfvDrawerEnd(d, true);
+  }
+  return true;
+}
+
+// pfvDropDrawer: the page is going whatever the user would say (the window crossed to a phone), so the drawer goes with it: nothing is
+// asked, nothing waits, and nothing is reported (the edit it would add to ends with the page).
+function pfvDropDrawer() {
+  const d = pfvDrawer;
+  if (!d) {
+    pfvState.drawer = false;
+    return;
+  }
+  credFlowDrop();
+  pfvDrawerEnd(d, false);
+}
+
+// pfvDrawerControls: what Tab reaches in the drawer, in order.
+function pfvDrawerControls(root) {
+  return Array.from(root.querySelectorAll(PFV_DRAWER_CONTROLS)).filter((n) => (typeof n.getClientRects === "function" ? n.getClientRects().length > 0 : n.hidden !== true));
+}
+
+// pfvDrawerFirst: the first control of what the flow drew, not counting its crumb (the first thing in the host, a link that leaves).
+function pfvDrawerFirst(parts) {
+  const crumb = parts.body.children[0];
+  return pfvDrawerControls(parts.drawer).find((n) => parts.body.contains(n) && !(crumb && crumb.contains(n))) || null;
+}
+
+// pfvDrawerFocus: focus goes into the drawer as it opens: the first control of the flow. A flow that has drawn nothing yet (it is
+// reading the server, or the host's profiles) leaves focus on the drawer itself, so Esc and Tab are already its own, and it moves to
+// the first control when one is drawn, if the user has not gone anywhere else meanwhile.
+function pfvDrawerFocus(d) {
+  const first = pfvDrawerFirst(d.parts);
+  if (first) {
+    first.focus();
+    return;
+  }
+  d.parts.drawer.focus();
+  if (typeof MutationObserver !== "function") return;
+  d.watch = new MutationObserver(() => {
+    if (pfvDrawer !== d || document.activeElement !== d.parts.drawer) {
+      d.watch.disconnect();
+      return;
+    }
+    const f = pfvDrawerFirst(d.parts);
+    if (!f) return;
+    d.watch.disconnect();
+    f.focus();
+  });
+  d.watch.observe(d.parts.body, { childList: true, subtree: true });
+}
+
+// pfvDrawerTab: Tab (and Shift+Tab) stays inside the open drawer: past the last control is the first, before the first is the last, and
+// a Tab with focus outside it (it fell to the body when the flow drew its next view) goes in. A question on screen keeps its own Tab.
+function pfvDrawerTab(ev) {
+  const d = pfvDrawer;
+  if (ev.key !== "Tab" || !d) return;
+  const ask = document.getElementById("ask-modal");
+  if (ask && ask.open) return;
+  const root = d.parts.drawer;
+  const list = pfvDrawerControls(root);
+  if (list.length === 0) {
+    ev.preventDefault();
+    root.focus();
+    return;
+  }
+  const first = list[0], last = list[list.length - 1], at = document.activeElement;
+  if (!at || !root.contains(at)) {
+    ev.preventDefault();
+    (ev.shiftKey ? last : first).focus();
+  } else if (ev.shiftKey ? at === first || at === root : at === last) {
+    ev.preventDefault();
+    (ev.shiftKey ? last : first).focus();
+  }
+}
+
 // --- Esc ----------------------------------------------------------------------------------------------
 
 // pfvFolderListOpen: a Workspace folder dropdown is open (the picker is on the record while its form stands).
@@ -1049,12 +1259,14 @@ function pfvPageLeave(why) {
   if (!pfvOnPage()) return true;
   // The window crossed to a phone: the page goes whatever the user would say, so nothing is asked and nothing is kept.
   if (why === "force") {
+    pfvDropDrawer();
     pfvEndEdits();
     return true;
   }
   if (why === "esc") {
     const at = pfvEscTarget();
     if (at !== "page") {
+      if (at === "drawer") pfvCloseDrawer();
       if (at === "picker") {
         pfvClosePicker();
         for (const r of Object.values(pfvState.edits)) if (r.ui && r.ui.folderPicker && typeof r.ui.folderPicker.close === "function") r.ui.folderPicker.close();
@@ -1909,4 +2121,6 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   document.addEventListener("click", (ev) => {
     if (pfvMenu && !pfvMenu.wrap.contains(ev.target)) pfvMenuClose(false);
   });
+  // Tab stays inside an open drawer, whichever control (or none) has focus.
+  document.addEventListener("keydown", pfvDrawerTab);
 }

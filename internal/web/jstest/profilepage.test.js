@@ -2171,7 +2171,7 @@ test("the create items call the Credentials drawer for their kind, once there is
   assert.ok(unsavedNote(t).hidden, "creating is not picking: no row is added here");
 });
 
-test("until the drawer exists a create item does nothing", async () => {
+test("a create item the page has no drawer for does nothing: the choice stays as it was", async () => {
   const t = pickPage();
   await openPicker(t);
   const rows = rowsOf(t, "cloud").length;
@@ -4678,4 +4678,488 @@ test("after Duplicate -> + New profile, Cancel goes back to the profile the copy
   assert.strictEqual(t.run("pfvState").page, "new");
   await btn(t, "Cancel").click();
   assert.strictEqual(t.run("pfvState").name, "infra-terraform", "not the first profile you own");
+});
+
+// --- Task 15: the Credentials drawer over the profile page (spec 5.7) ----------------------------------------------------
+
+// The page with the drawer's own parts (index.html's #cred-scrim and #cred-drawer, with its body, foot and status line) and the
+// page's other parts beside them, and stand-ins for the Credentials flows that record how they were started. The stand-ins end
+// the way credentials.js's do: credFlowCancel reports what the visit saved (st.saved, of kind st.kind) through onCreated, then onClose.
+const FOCUSABLE_TAGS = ["button", "input", "select", "textarea"];
+function drawerPage(over, doc) {
+  const t = pickPage(over, doc);
+  const scrim = new Node("div");
+  const drawer = new Node("aside");
+  const body = new Node("div"), foot = new Node("div"), status = new Node("p");
+  scrim.hidden = drawer.hidden = status.hidden = true;
+  drawer.setAttribute("tabindex", "-1");
+  drawer.append(body, foot, status);
+  const behind = [new Node("div"), new Node("nav"), new Node("div")];
+  t.els["settings-modal"].append(...behind, scrim, drawer);
+  Object.assign(t.els, { "cred-scrim": scrim, "cred-drawer": drawer, "cred-drawer-body": body, "cred-drawer-foot": foot, "cred-drawer-status": status });
+  // What the browser's querySelectorAll finds for the focus selector: the enabled controls and the links made tabbable.
+  drawer.selectors = [];
+  drawer.querySelectorAll = (sel) => {
+    drawer.selectors.push(sel);
+    return drawer.all((n) => (FOCUSABLE_TAGS.includes(n.tag) || (n.attrs.tabindex !== undefined && n.attrs.tabindex !== "-1")) && !n.disabled);
+  };
+  const st = { started: [], busy: false, drops: 0, cancels: 0, saved: [], kind: "aws", cur: null };
+  const control = (tag, text) => { const n = new Node(tag); if (text) n.own = text; return n; };
+  const draw = (kind, opts) => {
+    st.started.push({ kind, opts });
+    st.cur = opts;
+    const crumb = control("a", "Credentials");
+    crumb.className = "crumb";
+    crumb.setAttribute("tabindex", "0");
+    opts.host.replaceChildren(crumb, control("input"), control("button", "Tile"));
+    opts.foot.replaceChildren(control("button", "Cancel"), control("button", opts.saveLabel || "Save"));
+  };
+  t.box.awsOpenAdd = (opts) => draw("aws", opts);
+  t.box.credGitHubChoose = (opts) => draw("github", opts);
+  t.box.credTokenAdd = (group, start, opts) => { st.group = group; st.start = start; draw("token", opts); };
+  t.box.credFlowBusy = () => st.busy;
+  t.box.credFlowDrop = () => { st.drops++; st.cur = null; };
+  t.box.credFlowCancel = (opts) => {
+    if (st.busy || !st.cur || st.cur !== opts) return false;
+    st.cur = null;
+    st.cancels++;
+    if (st.saved.length) opts.onCreated(st.saved.slice(), st.kind);
+    opts.onClose();
+    return true;
+  };
+  return { t, st, drawer, scrim, body, foot, status, behind };
+}
+// The picker's "New ..." item of Cloud and tokens, from the read view.
+const openDrawerFrom = async (d, title) => {
+  await openPicker(d.t);
+  optBtn(d.t, "cloud", title).click();
+  return d.st.started[d.st.started.length - 1];
+};
+const SANDBOX = { name: "sandbox", account_id: "333333333333", region: "us-east-1" };
+// The server defines these once the flow has saved them: what refreshCredLists reads.
+const defineAfterRefresh = (t, over) => {
+  t.box.refreshCredLists = async () => {
+    t.calls.push("refreshCredLists");
+    if (over.aws) t.box.awscEntries = t.box.awscEntries.concat(over.aws);
+    if (over.tokens) t.box.stEntries = t.box.stEntries.concat(over.tokens);
+    if (over.apps) t.box.ghApps = t.box.ghApps.concat(over.apps);
+  };
+};
+const ownerRows = (t) => byCls(blockOf(t, "cloud"), "pfv-row").filter((r) => texts(r, "pfv-k")[0] === "GitHub");
+
+test("a created AWS connection becomes a pending row", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  defineAfterRefresh(t, { aws: [{ name: "lab", account_id: "555555555555", region: "eu-west-1" }] });
+  const flow = await openDrawerFrom(d, "New AWS connection…");
+  assert.strictEqual(flow.kind, "aws");
+  st.saved = ["lab"];
+  assert.strictEqual(rowFor(t, "cloud", "AWS", "lab"), undefined, "nothing yet");
+  assert.strictEqual(t.box.pfvCloseDrawer(), true);
+  await settle();
+  const row = rowFor(t, "cloud", "AWS", "lab");
+  assert.ok(row, "the connection is a row of the open block");
+  assert.deepStrictEqual(texts(row, "pfv-rsub"), ["account 555555555555, eu-west-1"], "defined by now: the read view's words, not Not found in Credentials");
+  assert.strictEqual(byCls(row, "pfv-miss").length, 0);
+  assert.strictEqual(unsavedNote(t).hidden, false, "it is pending");
+  assert.deepStrictEqual(t.calls.filter((c) => /^(PUT|POST)/.test(c)), [], "nothing is sent until the block's Save");
+  assert.ok(t.calls.indexOf("refreshCredLists") >= 0, "the lists were read before the row was drawn");
+  await saveBlock(t, "cloud");
+  assert.ok(t.box.puts[0].aws_connections.includes("lab"));
+});
+
+test("several AWS connections from one visit become several rows, each removable before Save", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  defineAfterRefresh(t, { aws: [{ name: "lab-a", account_id: "555555555555", region: "eu-west-1" }, { name: "lab-b", account_id: "666666666666", region: "eu-west-1" }] });
+  await openDrawerFrom(d, "New AWS connection…");
+  st.saved = ["lab-a", "lab-b"];
+  t.box.pfvCloseDrawer();
+  await settle();
+  assert.ok(rowFor(t, "cloud", "AWS", "lab-a"));
+  assert.ok(rowFor(t, "cloud", "AWS", "lab-b"));
+  assert.strictEqual(Node.focused, field(t, "rm:aws:lab-b"), "focus is on the last row added");
+  byText(rowFor(t, "cloud", "AWS", "lab-a"), "button", "Remove")[0].click();
+  assert.strictEqual(rowFor(t, "cloud", "AWS", "lab-a"), undefined, "a row that was only just added is deleted outright");
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["lab-b", "prod-read", "staging-read"]);
+});
+
+test("closing the drawer without creating changes nothing", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  await openDrawerFrom(d, "New AWS connection…");
+  const rows = rowsOf(t, "cloud").length;
+  t.calls.length = 0;
+  assert.strictEqual(t.box.pfvCloseDrawer(), true);
+  await settle();
+  assert.strictEqual(st.cancels, 1, "the flow was ended through its own Cancel path");
+  assert.strictEqual(rowsOf(t, "cloud").length, rows);
+  assert.strictEqual(unsavedNote(t).hidden, true);
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"), "the block is still open");
+  assert.deepStrictEqual(t.calls, [], "no refresh, no request");
+  assert.strictEqual(t.run("pfvState").pending, false);
+});
+
+test("the drawer opens from a create item of the picker with a host, a foot, a label and a way to report, and takes over the page", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st, drawer, scrim, body, foot, behind } = d;
+  const flow = await openDrawerFrom(d, "New AWS connection…");
+  assert.strictEqual(flow.opts.host, body);
+  assert.strictEqual(flow.opts.foot, foot);
+  assert.strictEqual(flow.opts.saveLabel, "Save all and add", "the mockup's label for AWS");
+  assert.strictEqual(typeof flow.opts.onCreated, "function");
+  assert.strictEqual(typeof flow.opts.onClose, "function");
+  assert.strictEqual(drawer.hidden, false);
+  assert.strictEqual(scrim.hidden, false);
+  assert.strictEqual(t.run("pfvState").drawer, true);
+  assert.strictEqual(t.box.pfvEscTarget(), "drawer");
+  assert.strictEqual(t.run("pfvState").picker, "", "the picker went when the drawer came");
+  assert.deepStrictEqual(behind.map((n) => n.attrs.inert), ["", "", ""], "the page behind it is inert");
+  assert.strictEqual(drawer.attrs.inert, undefined, "the drawer and its scrim are not");
+  assert.strictEqual(scrim.attrs.inert, undefined);
+  assert.strictEqual(st.started.length, 1);
+  // Only one at a time.
+  assert.strictEqual(t.box.pfvOpenDrawer("token"), false);
+  assert.strictEqual(st.started.length, 1);
+});
+
+test("each kind starts its own Credentials flow in the drawer; the primary button reads 'and add'", async () => {
+  const labels = {};
+  for (const [title, kind] of [["New AWS connection…", "aws"], ["New GitHub App…", "github"], ["New token…", "token"]]) {
+    const d = drawerPage({ awscEntries: PICK_AWS });
+    const flow = await openDrawerFrom(d, title);
+    assert.strictEqual(flow.kind, kind, title);
+    labels[kind] = flow.opts.saveLabel;
+    if (kind === "token") assert.deepStrictEqual([d.st.group, d.st.start], [null, undefined], "today's default start, not a provider chosen for the user");
+    assert.deepStrictEqual(d.foot.all((n) => n.tag === "button").map((n) => n.textContent), ["Cancel", labels[kind]]);
+  }
+  assert.deepStrictEqual(labels, { aws: "Save all and add", github: "Save and add", token: "Save and add" });
+});
+
+test("the drawer opens only while a block is open in edit mode", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  await d.t.box.pfvShow("aws-ops");
+  assert.strictEqual(d.t.box.pfvOpenDrawer("aws"), false, "the read view has no picker to ask from");
+  assert.strictEqual(d.t.box.pfvOpenDrawer("nonsense"), false);
+  assert.strictEqual(d.st.started.length, 0);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.strictEqual(d.t.run("pfvState").drawer, false);
+});
+
+test("a token made from New token… is a pending token row, one per name the server made", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t } = d;
+  defineAfterRefresh(t, { tokens: [{ name: "pd-eu", env: ["PAGERDUTY_TOKEN"], hosts: [{ host: "api.eu.pagerduty.com", port: 443 }] }, { name: "pd-us", env: ["PAGERDUTY_TOKEN"], hosts: [{ host: "api.pagerduty.com", port: 443 }] }] });
+  const flow = await openDrawerFrom(d, "New token…");
+  flow.opts.onCreated(["pd-eu", "pd-us"], "token");
+  flow.opts.onClose();
+  await settle();
+  for (const n of ["pd-eu", "pd-us"]) {
+    const row = rowFor(t, "cloud", "Token", n);
+    assert.ok(row, n);
+    assert.strictEqual(byCls(row, "pfv-miss").length, 0, n + " is listed by the time it is drawn");
+  }
+  assert.strictEqual(ownerRows(t).length, 1, "no GitHub owner was added");
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod", "pd-eu", "pd-us", "sentry-staging"]);
+});
+
+test("a GitHub App made from New GitHub App… is a new owner row with that App selected and the owner and repos left to the user", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t } = d;
+  defineAfterRefresh(t, { apps: ["new-app"] });
+  const flow = await openDrawerFrom(d, "New GitHub App…");
+  const owners = ownerRows(t).length;
+  flow.opts.onCreated(["new-app"], "app");
+  flow.opts.onClose();
+  await settle();
+  assert.strictEqual(ownerRows(t).length, owners + 1);
+  const g = t.run("pfvState").edits.cloud.values.gh;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(g[g.length - 1])), { fresh: true, owner: "", pick: "app:new-app", repos: "" });
+  assert.strictEqual(field(t, "gh:" + (g.length - 1) + ":pick").value, "app:new-app", "selected in the row's Sign in with");
+  assert.strictEqual(Node.focused, field(t, "gh:" + (g.length - 1) + ":owner"), "focus is on the owner, the first thing the user fills in");
+  // Left empty, the row is no change: Save sends no owner for it.
+  await saveBlock(t, "cloud");
+  assert.strictEqual(t.box.puts[0].github.owners.length, 1);
+});
+
+test("a GitHub personal access token made from New GitHub App… is a new owner row signing in with that token", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t } = d;
+  defineAfterRefresh(t, { tokens: [{ name: "gh-pat-2", provider: "github", hosts: [{ host: "api.github.com", port: 443 }] }] });
+  const flow = await openDrawerFrom(d, "New GitHub App…");
+  flow.opts.onCreated(["gh-pat-2"], "token");
+  flow.opts.onClose();
+  await settle();
+  const g = t.run("pfvState").edits.cloud.values.gh;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(g[g.length - 1])), { fresh: true, owner: "", pick: "token:gh-pat-2", repos: "" });
+  assert.strictEqual(rowFor(t, "cloud", "Token", "gh-pat-2"), undefined, "it is a GitHub owner, not a token row");
+});
+
+test("pfvAddRow takes the login a new GitHub owner signs in with, else the first one there is", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "github", login: "token:gh-pat" }), true);
+  assert.strictEqual(t.run("pfvState").edits.cloud.values.gh.pop().pick, "token:gh-pat");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "github", login: "app:later" }), true, "a login the lists do not hold yet stays selectable");
+  assert.strictEqual(t.run("pfvState").edits.cloud.values.gh.pop().pick, "app:later");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "github", login: "nonsense" }), true);
+  assert.strictEqual(t.run("pfvState").edits.cloud.values.gh.pop().pick, "app:acme-app", "not a login: the first there is, as before");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "github" }), true);
+  assert.strictEqual(t.run("pfvState").edits.cloud.values.gh.pop().pick, "app:acme-app");
+});
+
+test("the names are listed before their rows are drawn, and a block that went meanwhile gets nothing", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  let release;
+  t.box.refreshCredLists = () => new Promise((r) => { release = () => { t.box.awscEntries = t.box.awscEntries.concat([{ name: "lab", account_id: "555555555555", region: "eu-west-1" }]); r(); }; });
+  await openDrawerFrom(d, "New AWS connection…");
+  st.saved = ["lab"];
+  t.box.pfvCloseDrawer();
+  await settle();
+  assert.strictEqual(rowFor(t, "cloud", "AWS", "lab"), undefined, "the lists are still being read");
+  release();
+  await settle();
+  assert.strictEqual(byCls(rowFor(t, "cloud", "AWS", "lab"), "pfv-miss").length, 0);
+  // The same, but the block is closed while the lists are read: its rows have nowhere to go.
+  const e = drawerPage({ awscEntries: PICK_AWS });
+  let release2;
+  e.t.box.refreshCredLists = () => new Promise((r) => { release2 = r; });
+  await openDrawerFrom(e, "New AWS connection…");
+  e.st.saved = ["lab"];
+  e.t.box.pfvCloseDrawer();
+  clickBtn(blockOf(e.t, "cloud"), "Cancel");
+  assert.strictEqual(byCls(e.t.els["pfv-in"], "pfv-editing").length, 0);
+  release2();
+  await settle();
+  assert.strictEqual(byCls(e.t.els["pfv-in"], "pfv-editing").length, 0, "nothing reopened it");
+  assert.strictEqual(e.t.run("pfvState").pending, false);
+  // Opened again before the lists came back, the block is a new edit: the names are not put into it.
+  const g = drawerPage({ awscEntries: PICK_AWS });
+  let release3;
+  g.t.box.refreshCredLists = () => new Promise((r) => { release3 = r; });
+  await openDrawerFrom(g, "New AWS connection…");
+  g.st.saved = ["lab"];
+  g.t.box.pfvCloseDrawer();
+  clickBtn(blockOf(g.t, "cloud"), "Cancel");
+  clickBtn(blockOf(g.t, "cloud"), "Edit");
+  release3();
+  await settle();
+  assert.strictEqual(rowFor(g.t, "cloud", "AWS", "lab"), undefined, "not the block the drawer was opened from");
+  assert.strictEqual(g.t.run("pfvState").pending, false);
+  // And a failed read of the lists still adds the row (it reads as missing, which is true to what the page knows).
+  const f = drawerPage({ awscEntries: PICK_AWS });
+  f.t.box.refreshCredLists = async () => { throw new Error("offline"); };
+  await openDrawerFrom(f, "New AWS connection…");
+  f.st.saved = ["lab"];
+  f.t.box.pfvCloseDrawer();
+  await settle();
+  assert.ok(rowFor(f.t, "cloud", "AWS", "lab"));
+});
+
+test("every close empties the drawer's host and foot, hides it and its scrim, frees the page and gives focus back to + Add access", async () => {
+  const closers = {
+    "pfvCloseDrawer": (d) => d.t.box.pfvCloseDrawer(),
+    "the scrim": (d) => d.scrim.onclick({ target: d.scrim }),
+    "Esc": (d) => assert.strictEqual(d.t.box.pageLeaveHook("esc"), false),
+    "the flow's own Cancel": (d) => d.st.started[0].opts.onClose(),
+  };
+  for (const [how, close] of Object.entries(closers)) {
+    const d = drawerPage({ awscEntries: PICK_AWS });
+    await openDrawerFrom(d, "New token…");
+    d.body.append(new Node("input"));
+    assert.ok(d.body.children.length > 0 && d.foot.children.length > 0, how + ": drawn");
+    close(d);
+    await settle();
+    assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0], how + ": what was typed does not linger in a hidden DOM");
+    assert.strictEqual(d.drawer.hidden, true, how);
+    assert.strictEqual(d.scrim.hidden, true, how);
+    assert.strictEqual(d.t.run("pfvState").drawer, false, how);
+    assert.strictEqual(d.t.box.pfvEscTarget(), "page", how);
+    assert.deepStrictEqual(d.behind.map((n) => n.attrs.inert), [undefined, undefined, undefined], how + ": inert is lifted");
+    assert.strictEqual(Node.focused, field(d.t, "add"), how + ": focus is back on the link that led here");
+    assert.strictEqual(blockOf(d.t, "cloud").className.includes("pfv-editing"), true, how + ": the block is open");
+  }
+});
+
+test("Esc with the drawer open closes the drawer only, the next Esc is the page's", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  const asked = recordAsks(t, false);
+  await openDrawerFrom(d, "New AWS connection…");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false, "the page stays");
+  assert.strictEqual(st.cancels, 1);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.strictEqual(t.run("pfvState").openBlock, "cloud", "the block is open still");
+  assert.strictEqual(asked.length, 0);
+  // A picker open under it is the next layer, then the page.
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), true, "nothing changed: the page may go");
+});
+
+test("closing by Esc, the scrim or the flow's own Cancel after saving 1 of 2 still adds the saved name, once", async () => {
+  for (const how of ["Esc", "scrim", "crumb"]) {
+    const d = drawerPage({ awscEntries: PICK_AWS });
+    const { t, st } = d;
+    defineAfterRefresh(t, { aws: [{ name: "lab-a", account_id: "555555555555", region: "eu-west-1" }] });
+    await openDrawerFrom(d, "New AWS connection…");
+    st.saved = ["lab-a"];
+    if (how === "Esc") t.box.pageLeaveHook("esc");
+    else if (how === "scrim") d.scrim.onclick({ target: d.scrim });
+    else { st.cur = null; d.st.started[0].opts.onCreated(["lab-a"], "aws"); d.st.started[0].opts.onClose(); }
+    await settle();
+    assert.strictEqual(rowsOf(t, "cloud").filter((r) => (texts(r, "pfv-nm")[0] || "").startsWith("lab-a")).length, 1, how);
+    assert.strictEqual(d.drawer.hidden, true, how);
+  }
+});
+
+test("while a flow saves, a close is refused with a line that says why; once it has answered, the close goes through", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st, status } = d;
+  const asked = recordAsks(t, true);
+  await openDrawerFrom(d, "New AWS connection…");
+  st.busy = true;
+  assert.strictEqual(t.box.pfvCloseDrawer(), false);
+  assert.strictEqual(d.drawer.hidden, false, "still open");
+  assert.strictEqual(st.cancels, 0);
+  assert.strictEqual(status.hidden, false);
+  assert.ok(status.textContent.length > 0, "a short line says why");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  d.scrim.onclick({ target: d.scrim });
+  assert.strictEqual(d.drawer.hidden, false, "neither Esc nor the scrim closed it");
+  assert.strictEqual(st.drops, 0, "nothing was dropped under a save: its name would be lost");
+  assert.strictEqual(t.run("pfvState").drawer, true);
+  st.busy = false;
+  assert.strictEqual(t.box.pfvCloseDrawer(), true);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.strictEqual(status.hidden, true, "the line goes with it");
+  assert.strictEqual(status.textContent, "");
+  assert.strictEqual(asked.length, 0);
+});
+
+test("a close with no flow to end (it was still reading the server) drops the flow, so it draws nothing into the emptied host", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  await openDrawerFrom(d, "New token…");
+  st.cur = null;
+  assert.strictEqual(t.box.pfvCloseDrawer(), true);
+  assert.strictEqual(st.drops, 1);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0]);
+});
+
+test("another Settings tab, a session or a profile switch closes the drawer first, through the same path, then asks what it always asks", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  defineAfterRefresh(t, { aws: [{ name: "lab", account_id: "555555555555", region: "eu-west-1" }] });
+  recordAsks(t, true);
+  await openDrawerFrom(d, "New AWS connection…");
+  st.saved = ["lab"];
+  assert.strictEqual(t.box.pfvTabLeave("creds"), true, "nothing else holds changes: the tab may go once the drawer is closed");
+  assert.strictEqual(d.drawer.hidden, true, "the drawer is gone");
+  assert.strictEqual(st.cancels, 1, "through the flow's own Cancel");
+  // Busy: the page does not go, and the answer is a promise of false (shell.js waits on one), not a bare false.
+  const e = drawerPage({ awscEntries: PICK_AWS });
+  recordAsks(e.t, true);
+  await openDrawerFrom(e, "New AWS connection…");
+  e.st.busy = true;
+  const stay = e.t.box.pfvTabLeave("creds");
+  assert.ok(stay && typeof stay.then === "function", "a promise");
+  assert.strictEqual(await stay, false);
+  assert.strictEqual(e.drawer.hidden, false);
+  const close = e.t.box.pageLeaveHook("close");
+  assert.strictEqual(await close, false, "closing the page waits for the save too");
+  assert.strictEqual(e.drawer.hidden, false);
+  e.st.busy = false;
+  assert.strictEqual(await e.t.box.pageLeaveHook("close"), true, "answered: the drawer closes and the page may go (nothing was changed)");
+  assert.strictEqual(e.drawer.hidden, true);
+});
+
+test("a forced close (the window crossed to a phone) takes the drawer with the page: nothing is asked, nothing waits", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  await openDrawerFrom(d, "New AWS connection…");
+  st.busy = true;
+  assert.strictEqual(t.box.pageLeaveHook("force"), true);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.strictEqual(d.scrim.hidden, true);
+  assert.strictEqual(t.run("pfvState").drawer, false);
+  assert.strictEqual(st.drops, 1, "dropped, not reported: the edit it would have added to is gone");
+  assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0]);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+});
+
+test("Tab cycles inside the open drawer, and a Tab from outside it goes in", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, drawer } = d;
+  await openDrawerFrom(d, "New token…");
+  const keys = t.doc.listeners.keydown || [];
+  assert.ok(keys.length > 0, "the page listens for Tab on the document, so it also holds when focus fell to the body");
+  const press = (shift) => { let stopped = false; keys.forEach((f) => f({ key: "Tab", shiftKey: shift, preventDefault: () => { stopped = true; } })); return stopped; };
+  const list = drawer.querySelectorAll("");
+  const first = list[0], last = list[list.length - 1];
+  assert.ok(list.length >= 3 && first !== last);
+  last.focus();
+  assert.strictEqual(press(false), true);
+  assert.strictEqual(Node.focused, first, "past the last control is the first");
+  assert.strictEqual(press(true), true);
+  assert.strictEqual(Node.focused, last, "before the first is the last");
+  const mid = list[1];
+  mid.focus();
+  assert.strictEqual(press(false), false, "a Tab inside is the browser's own");
+  Node.focused = null;
+  assert.strictEqual(press(false), true);
+  assert.strictEqual(Node.focused, first, "from the page behind, into the drawer");
+  Node.focused = field(t, "add");
+  assert.strictEqual(press(true), true);
+  assert.strictEqual(Node.focused, last);
+  // Closed, it leaves Tab alone.
+  t.box.pfvCloseDrawer();
+  Node.focused = null;
+  assert.strictEqual(press(false), false);
+  // A question on screen is not the drawer's to steal Tab from.
+  const e = drawerPage({ awscEntries: PICK_AWS });
+  await openDrawerFrom(e, "New token…");
+  e.t.els["ask-modal"] = { open: true };
+  Node.focused = null;
+  let stopped = false;
+  (e.t.doc.listeners.keydown || []).forEach((f) => f({ key: "Tab", shiftKey: false, preventDefault: () => { stopped = true; } }));
+  assert.strictEqual(stopped, false);
+});
+
+test("focus goes into the drawer when it opens: the first control after the crumb, else the drawer itself", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  await openDrawerFrom(d, "New token…");
+  const inputs = d.body.all((n) => n.tag === "input");
+  assert.strictEqual(Node.focused, inputs[0], "not the crumb, which would close the drawer on Enter");
+  // A flow that has drawn nothing yet (it is reading the server): the drawer takes focus, so Esc and Tab are already its own.
+  const e = drawerPage({ awscEntries: PICK_AWS });
+  e.t.box.credTokenAdd = (g, s, opts) => { e.st.started.push({ kind: "token", opts }); e.st.cur = opts; };
+  await openDrawerFrom(e, "New token…");
+  assert.strictEqual(Node.focused, e.drawer);
+  assert.strictEqual(e.t.box.pfvEscTarget(), "drawer");
+});
+
+test("the drawer's markup: an aside after #manage inside the settings modal, not a .dbd or .dft, hidden until opened", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  const modal = html.slice(html.indexOf('<dialog id="settings-modal"'), html.indexOf("</dialog>", html.indexOf('<dialog id="settings-modal"')));
+  const at = modal.indexOf('<aside id="cred-drawer"');
+  assert.ok(at > modal.indexOf('id="manage"'), "after #manage");
+  assert.ok(modal.indexOf('id="cred-scrim"') > 0, "the scrim is in the modal too");
+  const tag = modal.slice(at, modal.indexOf(">", at) + 1);
+  assert.match(tag, /\bhidden\b/);
+  assert.match(tag, /role="dialog"/);
+  assert.match(tag, /aria-modal="true"/);
+  assert.match(tag, /tabindex="-1"/);
+  assert.match(tag, /aria-label="[^"]+"/);
+  assert.doesNotMatch(tag, /class="[^"]*\b(dbd|dft)\b/, "selectSettingsTab hides every .dbd and .dft that is not its tab");
+  const aside = modal.slice(at, modal.indexOf("</aside>", at));
+  assert.match(aside, /id="cred-drawer-body"/);
+  assert.match(aside, /id="cred-drawer-foot"/);
+  assert.match(aside, /id="cred-drawer-status"[^>]*role="status"[^>]*hidden/);
 });
