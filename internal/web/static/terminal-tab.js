@@ -29,6 +29,74 @@ function hasSize(w, h) {
   return w > 0 && h > 0;
 }
 
+// WEBGL_CAP: Chromium keeps 16 live WebGL contexts per page and, past that,
+// kills the OLDEST one. MEASURED (#127): with 19 tabs open, the three panes on
+// screen went blank while 15 hidden tabs kept theirs. At most 8 terminals are on
+// screen (4 panes, each with a docked shell), so 12 covers them plus the last
+// few hidden tabs, and stays under the browser's limit.
+const WEBGL_CAP = 12;
+
+// makeWebglPool hands WebGL renderers to the tabs most recently shown. A member
+// is { shown(), webglOn() -> bool, webglOff() }. acquire runs whenever a tab is
+// shown; past the cap it takes the renderer from the least recently shown member
+// that is NOT on screen, which falls back to xterm's DOM renderer (same buffer,
+// slower to paint) until it is shown again. With every holder on screen the new
+// tab gets the DOM renderer: an on-screen pane never pays for a newer one.
+function makeWebglPool(cap) {
+  const live = new Set(); // iteration order = least recently shown first
+  return {
+    acquire(m) {
+      if (live.has(m)) { live.delete(m); live.add(m); return true; }
+      if (live.size >= cap) {
+        let victim = null;
+        for (const o of live) if (!o.shown()) { victim = o; break; }
+        if (!victim) return false;
+        this.release(victim);
+      }
+      if (!m.webglOn()) return false;
+      live.add(m);
+      return true;
+    },
+    release(m) { live.delete(m); m.webglOff(); },
+    size() { return live.size; },
+  };
+}
+
+// loadWebgl loads a WebGL renderer into term, or answers null when the browser
+// cannot give one (no WebGL2, GPU blocklisted); the terminal then keeps the DOM
+// renderer. The browser drops a context past its cap, on a GPU reset or after
+// sleep; the addon waits 3 s for it to come back and then fires onContextLoss.
+// Unhandled, the pane stays a blank canvas until the page reloads (#127).
+function loadWebgl(term, Addon, onLoss) {
+  let a = null;
+  try {
+    a = new Addon();
+    a.onContextLoss(() => onLoss(a));
+    term.loadAddon(a);
+    return a;
+  } catch (_) {
+    dropWebgl(a);
+    return null;
+  }
+}
+
+// dropWebgl disposes a WebGL renderer and frees its context slot. dispose()
+// alone does not: MEASURED, the context counts against the browser's 16 until
+// it is garbage collected, so the next one created kills the oldest live pane.
+// _renderer._gl is the vendored addon's private field (xterm/addon-webgl.js);
+// without it this is the plain dispose it always was.
+function dropWebgl(a) {
+  if (!a) return;
+  const gl = a._renderer && a._renderer._gl;
+  try { a.dispose(); } catch (_) {}
+  try {
+    const ext = gl && gl.getExtension("WEBGL_lose_context");
+    if (ext) ext.loseContext();
+  } catch (_) {}
+}
+
+const webglPool = makeWebglPool(WEBGL_CAP);
+
 // TOUCH_SLOP_PX is how far a finger has to travel before the gesture counts as a
 // scroll rather than a tap. Under it the touch belongs to the browser: a tap is
 // what focuses the terminal and raises the on-screen keyboard.
@@ -305,7 +373,9 @@ class TerminalTab {
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
     this.term.open(termEl);
-    try { this.term.loadAddon(new WebglAddon.WebglAddon()); } catch (_) {}
+    // WebGL is loaded when the tab is first shown (fit), not here: see webglPool.
+    this.webgl = null;
+    this.webglBroken = false;
     this.disposeTouchScroll = installTouchScroll(this.term, termEl);
     if (typeof mobileActive === "function" && mobileActive(window.innerWidth) && typeof onTerminalSwipe === "function") {
       this.disposeSwipe = installSwipe(this.term, termEl, (dir) => onTerminalSwipe(dir));
@@ -685,7 +755,28 @@ class TerminalTab {
     // to fit; measuring it would send a bogus resize. The observer re-fires once
     // it gains a real size.
     if (!hasSize(this.termEl.clientWidth, this.termEl.clientHeight)) return;
+    // A sized fit is the one signal every show path gives (pane tab, dock,
+    // restore, phone): the ResizeObserver fires when the pane gains a size.
+    webglPool.acquire(this);
     try { this.fitAddon.fit(); this.sendResize(); } catch (_) {}
+  }
+
+  // webglPool member. Off = xterm's DOM renderer. A renderer that cannot start
+  // (no WebGL2) is not retried; a lost one is retried the next time it shows.
+  shown() { return hasSize(this.termEl.clientWidth, this.termEl.clientHeight); }
+
+  webglOn() {
+    if (this.webgl) return true;
+    if (this.closed || this.webglBroken || typeof WebglAddon === "undefined") return false;
+    this.webgl = loadWebgl(this.term, WebglAddon.WebglAddon, (a) => { if (this.webgl === a) webglPool.release(this); });
+    if (!this.webgl) this.webglBroken = true;
+    return !!this.webgl;
+  }
+
+  webglOff() {
+    const a = this.webgl;
+    this.webgl = null;
+    dropWebgl(a);
   }
 
   // Font size: setFontSize applies a size and re-fits (xterm recomputes cell
@@ -846,6 +937,7 @@ class TerminalTab {
     try { this.ws && this.ws.close(); } catch (_) {}
     if (this.disposeTouchScroll) { try { this.disposeTouchScroll(); } catch (_) {} }
     if (this.disposeSwipe) { try { this.disposeSwipe(); } catch (_) {} }
+    webglPool.release(this); // frees the context slot now, not at GC
     try { this.term.dispose(); } catch (_) {}
   }
 }
@@ -1078,5 +1170,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, makeWebglPool, WEBGL_CAP, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

@@ -488,3 +488,125 @@ test("a boxed session's workspace-relative token also carries alt", () => {
   const calls = clickWith("docs/a.md", "/home/u/repo", "", undefined, true);
   assert.deepStrictEqual(calls, [["/home/u/repo/docs/a.md", { alt: { base: "/home/u/repo", rel: "docs/a.md" } }]]);
 });
+
+// --- WebGL renderers (#127) ---------------------------------------------------
+// MEASURED in Chromium: 16 live WebGL contexts per page, and the 17th kills the
+// OLDEST, which were the panes on screen while hidden tabs kept theirs. A lost
+// pane painted nothing until reload. dispose() alone does not free a slot (the
+// context lives until GC); loseContext() does.
+const { makeWebglPool, WEBGL_CAP, loadWebgl, dropWebgl } = require("../static/terminal-tab.js");
+
+function member(name, shown = true, on = true) {
+  return {
+    name, isShown: shown, gl: false, offs: 0,
+    shown() { return this.isShown; },
+    webglOn() { if (on) this.gl = true; return on; },
+    webglOff() { this.gl = false; this.offs++; },
+  };
+}
+
+test("the WebGL cap leaves room for every on-screen pane under the browser's 16", () => {
+  assert.ok(WEBGL_CAP >= 8, "4 panes, each with a docked shell, are on screen at once");
+  assert.ok(WEBGL_CAP < 16, "Chromium kills the oldest context past 16");
+});
+
+test("a shown tab gets WebGL while the pool has room", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a");
+  assert.strictEqual(pool.acquire(a), true);
+  assert.strictEqual(a.gl, true);
+  assert.strictEqual(pool.size(), 1);
+  assert.strictEqual(pool.acquire(a), true, "showing it again keeps it");
+  assert.strictEqual(pool.size(), 1);
+});
+
+test("past the cap the least recently shown hidden tab gives its WebGL up", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b"), c = member("c");
+  pool.acquire(a); pool.acquire(b);
+  a.isShown = false; b.isShown = false;
+  pool.acquire(a); // a shown again more recently than b
+  assert.strictEqual(pool.acquire(c), true);
+  assert.strictEqual(b.gl, false, "b was the least recently shown");
+  assert.strictEqual(a.gl, true);
+  assert.strictEqual(c.gl, true);
+  assert.strictEqual(pool.size(), 2);
+});
+
+test("a pane on screen never loses its WebGL to a newer tab", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b", false), c = member("c");
+  pool.acquire(a); pool.acquire(b); // a is older but on screen, b is hidden
+  assert.strictEqual(pool.acquire(c), true);
+  assert.strictEqual(a.gl, true, "on screen: kept although oldest");
+  assert.strictEqual(b.gl, false);
+});
+
+test("when every holder is on screen the new tab keeps the DOM renderer", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b"), c = member("c");
+  pool.acquire(a); pool.acquire(b);
+  assert.strictEqual(pool.acquire(c), false);
+  assert.strictEqual(c.gl, false);
+  assert.strictEqual(a.gl && b.gl, true);
+  assert.strictEqual(pool.size(), 2);
+});
+
+test("a tab whose WebGL cannot start takes no slot", () => {
+  const pool = makeWebglPool(1);
+  const bad = member("bad", true, false), a = member("a");
+  assert.strictEqual(pool.acquire(bad), false);
+  assert.strictEqual(pool.size(), 0);
+  assert.strictEqual(pool.acquire(a), true);
+});
+
+test("release turns WebGL off and frees the slot", () => {
+  const pool = makeWebglPool(1);
+  const a = member("a"), b = member("b");
+  pool.acquire(a);
+  pool.release(a);
+  assert.strictEqual(a.gl, false);
+  assert.strictEqual(pool.size(), 0);
+  assert.strictEqual(pool.acquire(b), true);
+  assert.strictEqual(a.offs, 1);
+});
+
+function fakeAddonClass(log) {
+  return class {
+    constructor() { this.disposed = false; this._renderer = { _gl: { getExtension: (n) => (n === "WEBGL_lose_context" ? { loseContext: () => log.push("lose") } : null) } }; }
+    onContextLoss(fn) { this.lossFn = fn; return { dispose() {} }; }
+    dispose() { this.disposed = true; log.push("dispose"); }
+  };
+}
+
+test("loadWebgl loads the renderer and reports its context loss", () => {
+  const loaded = [];
+  const term = { loadAddon(a) { loaded.push(a); } };
+  let lost = null;
+  const a = loadWebgl(term, fakeAddonClass([]), (x) => { lost = x; });
+  assert.ok(a);
+  assert.deepStrictEqual(loaded, [a]);
+  a.lossFn(new Event("webglcontextlost"));
+  assert.strictEqual(lost, a, "the loss names the addon that lost it");
+});
+
+test("loadWebgl answers null when the browser has no WebGL2", () => {
+  const log = [];
+  const term = { loadAddon() { throw new Error("WebGL2 not supported"); } };
+  assert.strictEqual(loadWebgl(term, fakeAddonClass(log), () => {}), null);
+  assert.deepStrictEqual(log, ["dispose", "lose"], "a half-made renderer is still released");
+});
+
+test("dropWebgl disposes the renderer and then frees its context slot", () => {
+  const log = [];
+  const A = fakeAddonClass(log);
+  dropWebgl(new A());
+  assert.deepStrictEqual(log, ["dispose", "lose"]);
+});
+
+test("dropWebgl tolerates no addon, no renderer and a lost context", () => {
+  dropWebgl(null);
+  dropWebgl({ dispose() {} });
+  dropWebgl({ dispose() {}, _renderer: { _gl: { getExtension: () => null } } });
+  dropWebgl({ dispose() { throw new Error("already disposed"); }, _renderer: null });
+});
