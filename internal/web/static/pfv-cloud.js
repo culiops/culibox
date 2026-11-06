@@ -51,6 +51,13 @@ function pfcRows(id, over) {
   return b ? b.rows : [];
 }
 
+// pfcCounted: the list the server counted a refusal's [i] in (the field is its name: "aws_connections", "tokens", "context_paths",
+// "egress_allow"). A block that was part of the failing save sent the list its merge builds (`built`); one that was not (a repair
+// block, or one open and clean) had the stored list sent as it is, whatever order the store keeps it in. rec.sent says which.
+function pfcCounted(rec, c, field, built) {
+  return rec.sent === true ? built : Array.isArray(c.doc[field]) ? c.doc[field] : [];
+}
+
 function pfcRmButton(rec, what, key, removed, toggle) {
   const b = pfvMk("button", "pfv-rmbtn", removed ? "Undo" : "Remove");
   b.type = "button";
@@ -318,11 +325,13 @@ function pfcCloudDraw(rec, c) {
   const v = rec.values;
   const rows = pfcRows("cloud", { aws_connections: v.aws.map((e) => e.name), tokens: v.tokens.map((e) => e.name) });
   const list = pfvMk("div", "pfv-rows");
-  // A named row: the server names it by its place in the sorted list the save sends.
-  const named = (kind, key, field, arr, sent) => {
+  // A named row: the server names it by its place in the list the failing save carried (pfcCounted): sorted when this block
+  // sent it, as stored when another block's save did.
+  const named = (kind, key, field, arr, built) => {
+    const counted = pfcCounted(rec, c, field, built);
     for (const e of arr) {
       const gone = e.removed === true;
-      const at = sent.indexOf(e.name);
+      const at = counted.indexOf(e.name);
       list.append(pfcRowNode(rec, pfcRowOf(rows, kind, e.name), {
         removed: gone, key: "rm:" + key + ":" + e.name, toggle: () => pfcToggle(rec, arr, e),
         err: gone || at < 0 ? "" : pfvFerr(rec, field + "[" + at + "]"),
@@ -413,20 +422,24 @@ function pfcReachCheck(rec) {
   return null;
 }
 
-function pfcReachDraw(rec) {
+function pfcReachDraw(rec, c) {
   const v = rec.values;
   const stored = (l) => l.filter((e) => e.fresh !== true);
   const rows = pfcRows("reachable", { context_paths: stored(v.folders).map((e) => e.path), egress_allow: stored(v.domains).map((e) => e.host) });
   const list = pfvMk("div", "pfv-rows");
+  // The place the server counts an entry at (pfcCounted): in what this block's merge builds (blanks dropped, domains split and
+  // deduped) when it sent the save, else in the stored list.
   const sentFolder = pfcFolderSent(v);
-  const sentDomain = egressAllowFromText(pfcLive(v.domains).map((e) => e.host).join("\n"));
-  const domainAt = (e) => sentDomain.indexOf(egressAllowFromText(e.host)[0]);
+  const storedFolders = pfcCounted(rec, c, "context_paths", []);
+  const folderAt = (e) => (rec.sent === true ? (sentFolder.has(e) ? sentFolder.get(e) : -1) : storedFolders.indexOf(e.path));
+  const sentDomains = pfcCounted(rec, c, "egress_allow", egressAllowFromText(pfcLive(v.domains).map((e) => e.host).join("\n")));
+  const domainAt = (e) => sentDomains.indexOf(rec.sent === true ? egressAllowFromText(e.host)[0] : e.host);
   v.folders.forEach((e, i) => {
     if (e.fresh === true) return;
     const gone = e.removed === true;
     list.append(pfcRowNode(rec, pfcRowOf(rows, "Folder", e.path), {
       removed: gone, key: "rm:folder:" + i, toggle: () => pfcToggle(rec, v.folders, e),
-      err: gone || !sentFolder.has(e) ? "" : pfvFerr(rec, "context_paths[" + sentFolder.get(e) + "]"),
+      err: gone || folderAt(e) < 0 ? "" : pfvFerr(rec, "context_paths[" + folderAt(e) + "]"),
     }));
   });
   // What the original shares and the CLAUDE.md imports are set elsewhere: the row says where.
@@ -447,7 +460,7 @@ function pfcReachDraw(rec) {
     if (e.fresh !== true) return;
     list.append(pfcInputRow(rec, {
       kind: "Folder", label: "Folder the agent can read", entry: e, prop: "path", key: "folder:" + i, rmKey: "rm:folder:" + i,
-      errKey: sentFolder.has(e) ? "context_paths[" + sentFolder.get(e) + "]" : "", placeholder: "/home/you/other-repo/docs", hint: PFC_FOLDER_HINT,
+      errKey: folderAt(e) >= 0 ? "context_paths[" + folderAt(e) + "]" : "", placeholder: "/home/you/other-repo/docs", hint: PFC_FOLDER_HINT,
       toggle: () => pfcToggle(rec, v.folders, e),
     }));
   });

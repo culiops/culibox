@@ -1855,7 +1855,9 @@
   #page-host > #settings-modal.as-page #pfv .pfv-rmbtn { min-width: 54px; height: 20px; padding: 0 4px; text-align: right; border: 0; border-radius: var(--r-chip); background: none; color: var(--muted); font: 400 12px var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:hover { color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-removed :is(.pfv-nm, .pfv-rsub, .pfv-scope, .pfv-miss, .pfv-mono) { text-decoration: line-through; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed :is(.pfv-nm, .pfv-rsub, .pfv-scope, .pfv-mono) { text-decoration: line-through; color: var(--muted); }
+  /* "Not found in Credentials" stays red while its removal is pending (founder decision); the strike says it is pending. */
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-miss { text-decoration: line-through; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-act-link { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-tag { color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: 12px; line-height: 20px; color: var(--muted); }

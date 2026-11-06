@@ -719,10 +719,12 @@ function pfvEditCtx() {
 // message ({kind, text, target}). ferrs: refusals to draw under their input ({field, text}).
 // consumed: the fields the form drew an error for (the rest go to the top). fields: the controls
 // by field key (focus goes back to one after a redraw). ui: state of the form that is not a value.
+// sent: the block was part of the last save (pfvSaveBlock), so a refusal's list index counts in the list its merge
+// built; a block that was not (a repair block, or one open and clean) had its stored lists sent as they are.
 function pfvNewEdit(id, repair) {
   const ed = PFV_EDITORS[id];
   const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(values), repair: repair === true, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
+  return { id, values, init: pfvStable(values), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
 }
 
 // pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
@@ -1379,7 +1381,7 @@ async function pfvSaveBlock(id) {
   const name = pfvState.name;
   const c = pfvEditCtx();
   const ids = Object.keys(pfvState.edits).filter((i) => i === id || pfvEditDirty(pfvState.edits[i]));
-  for (const r of Object.values(pfvState.edits)) { r.ferrs = []; r.top = null; r.nudge = false; }
+  for (const r of Object.values(pfvState.edits)) { r.ferrs = []; r.top = null; r.nudge = false; r.sent = ids.includes(r.id); }
   for (const i of ids) {
     const r = pfvState.edits[i];
     const bad = pfvPreCheck(r, c);

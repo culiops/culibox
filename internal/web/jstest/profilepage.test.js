@@ -2168,6 +2168,114 @@ test("the old-style AWS row can be removed in the form, and the save drops the s
   assert.ok("aws" in again.box.puts[0], "an old-style setting that is not removed goes back as stored");
 });
 
+test("a missing credential stays red while its removal is pending: no rule that is about a removed row sets the colour of .pfv-miss", () => {
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const sets = (r, prop) => new RegExp("(?:^|[;\\s])" + prop + "\\s*:").test(r.body);
+  const miss = rules.filter((r) => /\.pfv-miss(?![\w-])/.test(r.sel));
+  assert.ok(miss.some((r) => !/\.pfv-removed/.test(r.sel) && /color:\s*var\(--red\)/.test(r.body)), "Not found in Credentials is red (the founder's decision)");
+  // The strike shows the removal is pending; the colour stays. A rule may strike it, none may recolour it.
+  const recolour = miss.filter((r) => /\.pfv-removed/.test(r.sel) && sets(r, "color"));
+  assert.deepStrictEqual(recolour.map((r) => r.sel), [], "a pending removal must not mute the red text");
+  assert.ok(miss.some((r) => /\.pfv-removed/.test(r.sel) && /line-through/.test(r.body)), "and it is struck through like the rest of the row");
+});
+
+// The server counts `aws_connections[i]` in the list the failing PUT carried: the stored one when another block saved, the one
+// the Cloud merge builds (sorted) when Cloud was part of the save. A stored list nobody sorted tells the two apart.
+const unsortedPage = (lists) => cloudPage(
+  { profiles: [PROFILES[0], cloudView(lists), PROFILES[2], PROFILES[3]] }, lists,
+);
+const undefinedRef = (field, name, table) => apiErr(400, { error: 'profile "aws-ops": ' + field + " " + JSON.stringify(name) + " is not defined in " + table, field });
+
+test("a refusal from another block's save lands under the row the server counted: the stored order, not the sorted one", async () => {
+  for (const [key, kind, table, first, second] of [["aws_connections", "AWS", "aws_connections", "staging-read", "prod-read"], ["tokens", "Token", "static_tokens", "sentry-staging", "grafana-prod"]]) {
+    const t = unsortedPage({ [key]: [first, second] });
+    await t.box.pfvShow("aws-ops");
+    clickBtn(blockOf(t, "agent"), "Edit");
+    pickModel(t, "claude-sonnet-5");
+    t.box.putFail = undefinedRef(key + "[0]", first, table);
+    await saveBlock(t, "agent");
+    assert.deepStrictEqual(t.box.puts[0][key], [first, second], "the agent's save carried the stored order");
+    assert.deepStrictEqual(Object.keys(t.run("pfvState").edits).sort(), ["agent", "cloud"]);
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", kind, first), "pfv-ferr"), ["Not found in Credentials. Remove it or create it."], key + ": the blamed row");
+    assert.deepStrictEqual(texts(rowFor(t, "cloud", kind, second), "pfv-ferr"), [], key + ": a good credential is not blamed");
+  }
+});
+
+test("a refusal from another block's save names a folder or a domain by its place in the stored list", async () => {
+  const folders = ["/home/you/a", "/home/you/b", "/home/you/c"];
+  const t = unsortedPage({ context_paths: folders, egress_allow: ["x.example.com", "y.example.com"] });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": context_paths[1] "/home/you/b": does not exist', field: "context_paths[1]" });
+  await saveBlock(t, "agent");
+  const folderErrs = folders.map((p) => texts(rowFor(t, "reachable", "Folder", p), "pfv-ferr"));
+  assert.deepStrictEqual(folderErrs, [[], ["This folder no longer exists. Remove it or pick another."], []]);
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": egress_allow[1] "y.example.com": must be a normalised lowercase hostname (no trailing dot, no IP literal) or *.host', field: "egress_allow[1]" });
+  await saveBlock(t, "agent");
+  assert.deepStrictEqual(["x.example.com", "y.example.com"].map((h) => texts(rowFor(t, "reachable", "Domain", h), "pfv-ferr").length), [0, 1]);
+});
+
+test("a refusal from Cloud's own save lands under the row of the sorted list it sent", async () => {
+  const t = unsortedPage({ aws_connections: ["staging-read", "prod-read"] });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  t.box.putFail = undefinedRef("aws_connections[0]", "prod-read", "aws_connections");
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read", "staging-read"], "Cloud sends its list sorted");
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "prod-read"), "pfv-ferr"), ["Not found in Credentials. Remove it or create it."]);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "staging-read"), "pfv-ferr"), []);
+});
+
+test("an unrelated block's save refused for a credential opens Cloud with the error under that row; Remove and Save send one PUT with both changes", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = undefinedRef("aws_connections[1]", "staging-read", "aws_connections");
+  assert.strictEqual(await saveBlock(t, "agent"), false);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits).sort(), ["agent", "cloud"], "the one-open-block rule yields to repair");
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "staging-read"), "pfv-ferr"), ["Not found in Credentials. Remove it or create it."]);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), ["Not saved: an AWS connection in Cloud and tokens needs a fix first. Show"]);
+  assert.ok(!/aws_connections/.test(t.els["pfv-in"].textContent), "no config keys on the page");
+  t.box.putFail = null;
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.strictEqual(t.box.puts.length, 2, "the refused PUT and one that went through");
+  assert.deepStrictEqual(t.box.puts[1].aws_connections, ["prod-read"]);
+  assert.strictEqual(t.box.puts[1].options.model, "claude-sonnet-5", "the Agent change went in the same PUT");
+  assert.deepStrictEqual(t.box.puts[1].tokens, ["grafana-prod", "sentry-staging"]);
+  assert.strictEqual(Object.keys(t.run("pfvState").edits).length, 0);
+});
+
+test("Discard after several removes and adds sends nothing and leaves the profile as stored", async () => {
+  const sandbox = { name: "sandbox", account_id: "333333333333", region: "eu-west-1" };
+  const t = cloudPage({ awscEntries: [...page().box.awscEntries, sandbox] });
+  await t.box.pfvShow("aws-ops");
+  const before = rowsOf(t, "cloud").map((r) => r.textContent);
+  const stored = JSON.stringify(t.run("pfvState").doc);
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  for (const [kind, name] of [["AWS", "staging-read"], ["Token", "grafana-prod"], ["GitHub", "culiops"]]) byText(rowFor(t, "cloud", kind, name), "button", "Remove")[0].click();
+  t.box.pfvAddRow("cloud", { kind: "aws", name: "sandbox" });
+  t.box.pfvAddRow("cloud", { kind: "github" });
+  typeInto(field(t, "gh:1:owner"), "acme-platform");
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  assert.strictEqual(t.run("pfvState").pending, true);
+  clickBtn(blockOf(t, "cloud"), "Discard");
+  assert.strictEqual(t.box.puts.length, 0, "nothing was sent");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  assert.deepStrictEqual(rowsOf(t, "cloud").map((r) => r.textContent), before, "the read view is as it was");
+  assert.strictEqual(JSON.stringify(t.run("pfvState").doc), stored, "so is the stored profile");
+  assert.ok(unsavedNote(t).hidden);
+  assert.strictEqual(t.run("pfvState").pending, false);
+  // Opened again, the form starts from what is stored: nothing struck, nothing added.
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-removed").length, 0);
+  assert.deepStrictEqual(rowsOf(t, "cloud").map((r) => texts(r, "pfv-k")[0]), ["AWS", "AWS", "GitHub", "Token", "Token"]);
+  assert.ok(unsavedNote(t).hidden);
+});
+
 test("every top-level name in pfv-cloud.js is unique across the page scripts", () => {
   const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
   const mine = names(fs.readFileSync(path.join(STATIC, "pfv-cloud.js"), "utf8"));
