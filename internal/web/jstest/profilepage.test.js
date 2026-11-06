@@ -2313,12 +2313,17 @@ const openAdv = async (t, name, doc) => {
 };
 const typeArgs = (t, text) => { const a = field(t, "args"); a.value = text; a.oninput(); };
 const advTick = (t, key, on) => { const c = field(t, key); c.checked = on; c.onchange(); };
-const envRowsOf = (t) => byCls(advOf(t), "kvrow");
+// The variables and secrets: rows of the page's grammar (a kind column, the content, Remove or Undo).
+const envRowsOf = (t) => byCls(advOf(t), "pfv-row");
+const rowInputs = (row) => row.all((n) => n.tag === "input");
+const rowName = (row) => rowInputs(row)[0];
+const rowRm = (row) => byCls(row, "pfv-rmbtn")[0];
 const typeRow = (row, name, value) => {
-  const k = byCls(row, "k")[0];
+  const k = rowName(row);
   k.value = name; k.oninput();
-  if (value !== undefined) { const v = byCls(row, "v")[0]; v.value = value; v.oninput(); }
+  if (value !== undefined) { const v = rowInputs(row)[1]; v.value = value; v.oninput(); }
 };
+const unsaved = (t) => !byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden;
 
 test("advanced opens by itself when something is set", async () => {
   // Nothing set: folded, with nothing to unfold; the Edit link opens the form all the same.
@@ -2338,7 +2343,7 @@ test("advanced opens by itself when something is set", async () => {
   clickBtn(advOf(set), "Edit");
   assert.ok(advOf(set).className.includes("pfv-editing"));
   assert.strictEqual(field(set, "args").value, "--verbose");
-  assert.deepStrictEqual(envRowsOf(set).map((r) => [byCls(r, "k")[0].value, byCls(r, "v")[0].value]), [["LOG_LEVEL", "debug"]]);
+  assert.deepStrictEqual(envRowsOf(set).map((r) => [rowInputs(r)[0].value, rowInputs(r)[1].value]), [["LOG_LEVEL", "debug"]]);
   // The first setting saved from "none set" opens the fold by itself, with no click.
   await openAdv(t, "aws-ops");
   typeArgs(t, "--verbose");
@@ -2380,7 +2385,7 @@ test("env row errors block save", async () => {
   await openAdv(t, "aws-ops");
   clickBtn(advOf(t), "+ Add variable");
   assert.strictEqual(envRowsOf(t).length, 1);
-  assert.strictEqual(Node.focused, byCls(envRowsOf(t)[0], "k")[0], "focus goes to the new row's name");
+  assert.strictEqual(Node.focused, rowName(envRowsOf(t)[0]), "focus goes to the new row's name");
   typeRow(envRowsOf(t)[0], "1BAD", "x");
   const want = ENVROWS.rowError([{ key: "1BAD", value: "x", kind: "literal" }]);
   assert.ok(want.length > 0);
@@ -2389,7 +2394,7 @@ test("env row errors block save", async () => {
   assert.deepStrictEqual(advErrs(t), [want], "the sentence is under the variables, inside the block");
   assert.deepStrictEqual(texts(advOf(t), "pfv-st-invalid"), ["One field needs a fix before this can save."]);
   assert.strictEqual(envRowsOf(t).length, 1, "what was typed is still there");
-  assert.strictEqual(byCls(envRowsOf(t)[0], "k")[0].value, "1BAD");
+  assert.strictEqual(rowName(envRowsOf(t)[0]).value, "1BAD");
   // Fixing the name takes the sentence away, and the same Save goes through.
   typeRow(envRowsOf(t)[0], "LEVEL");
   assert.deepStrictEqual(advErrs(t), [], "the refusal goes when the rows change");
@@ -2403,6 +2408,98 @@ test("env row errors block save", async () => {
   assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
   assert.deepStrictEqual(t.box.puts[0].env, { LEVEL: "x" });
   assert.deepStrictEqual(t.box.puts[0].secrets, ["LEVEL_FROM_STORE"]);
+  // Only the rows that stay are checked: a stored row whose name was broken blocks Save while it is there, and not once it is pending removal.
+  const g = page();
+  await openAdv(g, "aws-ops", { env: { OLD: "1", KEEP: "2" } });
+  typeRow(envRowsOf(g)[0], "1BAD");
+  assert.strictEqual(await clickBtn(advOf(g), "Save"), false);
+  assert.deepStrictEqual(advErrs(g), [ENVROWS.rowError([{ key: "1BAD", value: "1", kind: "literal" }])]);
+  rowRm(envRowsOf(g)[0]).click();
+  assert.deepStrictEqual(advErrs(g), [], "the refusal was about a row that is going");
+  assert.strictEqual(await clickBtn(advOf(g), "Save"), true);
+  assert.deepStrictEqual(g.box.puts[0].env, { KEEP: "2" });
+  // A name listed twice counts only among the rows that stay: remove A, add A again.
+  const d = page();
+  await openAdv(d, "aws-ops", { env: { A: "1" } });
+  rowRm(envRowsOf(d)[0]).click();
+  clickBtn(advOf(d), "+ Add variable");
+  typeRow(envRowsOf(d)[1], "A", "2");
+  assert.strictEqual(await clickBtn(advOf(d), "Save"), true);
+  assert.deepStrictEqual(d.box.puts[0].env, { A: "2" });
+});
+
+test("removing an env row is pending until save and undo restores it", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { env: { KEEP: "1", DROP: "2" }, secrets: ["TOKEN_NAME"] });
+  // The mockup's rows: the kind, then a name and a value (a secret: a name and where it is read from), then Remove.
+  const rows = envRowsOf(t);
+  assert.deepStrictEqual(rows.map((r) => texts(r, "pfv-k")[0]), ["Variable", "Variable", "Secret"]);
+  assert.deepStrictEqual(rowInputs(rows[0]).map((i) => [i.getAttribute("aria-label"), i.getAttribute("placeholder"), i.value]), [["Variable name", "NAME", "KEEP"], ["Value", "value", "1"]]);
+  assert.deepStrictEqual(rowInputs(rows[2]).map((i) => [i.getAttribute("aria-label"), i.getAttribute("placeholder"), i.value]), [["Secret name", "NAME", "TOKEN_NAME"]]);
+  assert.deepStrictEqual(texts(rows[2], "pfv-hint"), ["Read from the credential store when it starts"]);
+  assert.deepStrictEqual(rows.map((r) => rowRm(r).textContent), ["Remove", "Remove", "Remove"]);
+  assert.ok(rows.every((r) => !r.className.includes("pfv-removed")) && !unsaved(t));
+  // Edit the value, then Remove: the row stays, struck through, with Undo; the form holds a change; nothing is sent.
+  rowInputs(rows[1])[1].value = "3"; rowInputs(rows[1])[1].oninput();
+  rowRm(rows[1]).click();
+  let now = envRowsOf(t);
+  assert.strictEqual(now.length, 3, "the row is still listed");
+  assert.ok(now[1].className.includes("pfv-removed"));
+  assert.strictEqual(rowInputs(now[1]).length, 0, "its words, not inputs");
+  assert.deepStrictEqual(texts(now[1], "pfv-mono"), ["DROP", "3"]);
+  assert.strictEqual(rowRm(now[1]).textContent, "Undo");
+  assert.strictEqual(rowRm(now[1]).getAttribute("aria-label"), "Undo removing variable DROP");
+  assert.strictEqual(Node.focused, rowRm(now[1]), "focus stays on the button");
+  assert.ok(unsaved(t));
+  assert.strictEqual(t.box.puts.length, 0);
+  // Undo: the row is back as it was left, typed value included.
+  rowRm(now[1]).click();
+  now = envRowsOf(t);
+  assert.ok(!now[1].className.includes("pfv-removed"));
+  assert.deepStrictEqual(rowInputs(now[1]).map((i) => i.value), ["DROP", "3"]);
+  assert.strictEqual(rowRm(now[1]).textContent, "Remove");
+  rowInputs(now[1])[1].value = "2"; rowInputs(now[1])[1].oninput();
+  assert.ok(!unsaved(t), "removed and brought back, value put back: no change");
+  // A row added in this edit and then removed just disappears.
+  clickBtn(advOf(t), "+ Add variable");
+  assert.strictEqual(envRowsOf(t).length, 4);
+  rowRm(envRowsOf(t)[3]).click();
+  assert.strictEqual(envRowsOf(t).length, 3);
+  assert.ok(envRowsOf(t).every((r) => !r.className.includes("pfv-removed")));
+  assert.ok(!unsaved(t));
+  // Removed and saved: the row is not sent, the others are.
+  rowRm(envRowsOf(t)[1]).click();
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].env, { KEEP: "1" });
+  assert.deepStrictEqual(t.box.puts[0].secrets, ["TOKEN_NAME"]);
+  // The last row removed: it is still listed, struck, until Save; then env is gone.
+  const e = page();
+  await openAdv(e, "aws-ops", { env: { ONE: "1" } });
+  rowRm(envRowsOf(e)[0]).click();
+  assert.strictEqual(envRowsOf(e).length, 1);
+  assert.deepStrictEqual(texts(advOf(e), "pfv-hint").filter((x) => /^None/.test(x)), [], "the empty line waits for the save");
+  await clickBtn(advOf(e), "Save");
+  assert.ok(!("env" in e.box.puts[0]));
+});
+
+test("a removed secret is not sent", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { secrets: ["A_SECRET", "B_SECRET"], env: { KEEP: "1" } });
+  const secrets = () => envRowsOf(t).filter((r) => texts(r, "pfv-k")[0] === "Secret");
+  rowRm(secrets()[0]).click();
+  assert.ok(secrets()[0].className.includes("pfv-removed"));
+  assert.deepStrictEqual(texts(secrets()[0], "pfv-mono"), ["A_SECRET"], "a secret has only its name to strike");
+  assert.deepStrictEqual(texts(secrets()[0], "pfv-hint"), [], "and no line about where it is read from");
+  assert.strictEqual(rowRm(secrets()[0]).getAttribute("aria-label"), "Undo removing secret A_SECRET");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].secrets, ["B_SECRET"]);
+  assert.deepStrictEqual(t.box.puts[0].env, { KEEP: "1" });
+  // Every secret removed: the key goes.
+  const u = page();
+  await openAdv(u, "aws-ops", { secrets: ["ONLY"] });
+  rowRm(envRowsOf(u)[0]).click();
+  await clickBtn(advOf(u), "Save");
+  assert.ok(!("secrets" in u.box.puts[0]));
 });
 
 test("imports row hidden when bundling is off keeps imports_off", async () => {
@@ -2517,32 +2614,33 @@ test("Advanced: arguments are one per line, blanks dropped; emptying them remove
   assert.ok(!("args" in e.box.puts[0]));
 });
 
-test("Advanced: variables and secrets are rows; a secret has no value; removing the last one says the empty line", async () => {
+test("Advanced: an emptied list says its line, in the mockup's words for a box and for this machine; a blank row is not a variable", async () => {
   const t = page();
-  await openAdv(t, "aws-ops", { env: { KEEP: "1", DROP: "2" }, secrets: ["TOKEN_NAME"] });
-  assert.deepStrictEqual(envRowsOf(t).map((r) => byCls(r, "k")[0].value), ["KEEP", "DROP", "TOKEN_NAME"]);
-  assert.deepStrictEqual(texts(envRowsOf(t)[2], "v"), ["→ by reference"], "a secret is a name only");
-  byCls(envRowsOf(t)[1], "rm")[0].click();
+  await openAdv(t, "aws-ops", { env: { KEEP: "1" } });
   clickBtn(advOf(t), "+ Add variable");
-  typeRow(envRowsOf(t)[2], "ADDED", " v ");
+  typeRow(envRowsOf(t)[1], "ADDED", " v ");
   await clickBtn(advOf(t), "Save");
-  assert.deepStrictEqual(t.box.puts[0].env, { KEEP: "1", ADDED: "v" });
-  assert.deepStrictEqual(t.box.puts[0].secrets, ["TOKEN_NAME"]);
-  // Remove everything: the keys go, and the empty line is the mockup's.
-  const e = page();
-  await openAdv(e, "aws-ops", { env: { ONE: "1" } });
-  byCls(envRowsOf(e)[0], "rm")[0].click();
-  assert.strictEqual(envRowsOf(e).length, 0);
-  assert.deepStrictEqual(texts(advOf(e), "pfv-hint").filter((x) => /^None\./.test(x)), ["None. The agent gets the box's minimal environment."]);
-  assert.strictEqual(byCls(advOf(e), "kvempty").length, 0, "not envrows.js's own line");
-  await clickBtn(advOf(e), "Save");
-  assert.ok(!("env" in e.box.puts[0]) && !("secrets" in e.box.puts[0]));
+  assert.deepStrictEqual(t.box.puts[0].env, { KEEP: "1", ADDED: "v" }, "values are trimmed");
+  const none = page();
+  await openAdv(none, "aws-ops");
+  assert.deepStrictEqual(envRowsOf(none), []);
+  assert.deepStrictEqual(texts(advOf(none), "pfv-hint").filter((x) => /^None/.test(x)), ["None. The agent gets the box's minimal environment."]);
+  const host = page();
+  await openAdv(host, "runbook-host");
+  assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), ["None added on top of the starting environment."]);
+  // The line goes when a row is added and comes back when it is taken away again.
+  clickBtn(advOf(host), "+ Add secret");
+  assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), []);
+  assert.deepStrictEqual(texts(envRowsOf(host)[0], "pfv-k"), ["Secret"]);
+  rowRm(envRowsOf(host)[0]).click();
+  assert.deepStrictEqual(texts(advOf(host), "pfv-hint").filter((x) => /^None/.test(x)), ["None added on top of the starting environment."]);
   // A row added and left blank is not a variable.
   const b = page();
   await openAdv(b, "aws-ops");
   clickBtn(advOf(b), "+ Add variable");
+  clickBtn(advOf(b), "+ Add secret");
   assert.strictEqual(await clickBtn(advOf(b), "Save"), true);
-  assert.ok(!("env" in b.box.puts[0]));
+  assert.ok(!("env" in b.box.puts[0]) && !("secrets" in b.box.puts[0]));
 });
 
 test("Advanced: replies are offered for a claude command on an instance that has them, and the stored value is kept when they are not", async () => {
