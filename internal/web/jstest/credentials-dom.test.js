@@ -703,3 +703,121 @@ test("Cancel on a Delete confirmation makes a repaint held for new data, not onl
   assert.ok(/sentry-added/.test(body.textContent), "the new data is painted once the confirmation is gone");
   assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
 });
+
+// --- #27: a table is drawn only when it fits, measured from its content ---------------
+//
+// The browser knows what the fake DOM cannot: how wide a table section's content is. A
+// section here reports it the way a browser does: `clientWidth` is its box (the body's
+// width), `scrollWidth` is the larger of that and what `p.need()` says the content needs.
+// `paints` counts how often the body is replaced.
+
+function fitPage(width, need, opts) {
+  const p = livePage(width, opts);
+  const body = p.byId["creds-body"];
+  p.need = typeof need === "function" ? need : () => need;
+  const make = p.doc.createElement;
+  p.doc.createElement = (t) => {
+    const n = make(t);
+    if (t === "section") {
+      Object.defineProperty(n, "clientWidth", { get: () => body.clientWidth });
+      Object.defineProperty(n, "scrollWidth", { get: () => Math.max(body.clientWidth, p.need(body.clientWidth)) });
+    }
+    return n;
+  };
+  p.paints = 0;
+  const replace = body.replaceChildren.bind(body);
+  body.replaceChildren = (...a) => { p.paints++; return replace(...a); };
+  p.needW = () => vm.runInContext("credNeedW", p.box);
+  return p;
+}
+
+test("a table paint that overflows its section ends in cards, and remembers how much room the table needs", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards: the table did not fit");
+  assert.strictEqual(p.needW(), 800 + 23 + 2, "the body's width, plus the overflow, plus 2px to spare");
+  assert.ok(p.paints <= 2, "at most one extra paint, not a loop: " + p.paints);
+  assert.strictEqual(p.paints, 2);
+});
+
+test("a table that fits stays a table and learns nothing", () => {
+  const p = fitPage(800, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0);
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("a width repaint from the cached view uses the need it learned: tables from it up, cards below, no measuring", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(824);
+  assert.strictEqual(p.shape().tables, 0, "824 is below the learned 825: still cards, nothing repainted");
+  assert.strictEqual(p.paints, 0);
+  p.resizeTo(825);
+  assert.ok(p.shape().tables > 0, "825 draws tables again");
+  assert.strictEqual(p.paints, 1, "one paint: it fits, so there is nothing to measure twice");
+  p.resizeTo(1400);
+  assert.ok(p.shape().tables > 0);
+  p.resizeTo(700);
+  assert.strictEqual(p.shape().tables, 0, "and cards below it again, as the floor says");
+  assert.strictEqual(p.needW(), 825, "the need was kept across the width repaints");
+});
+
+test("new data (a new view object) forgets the need, so tables are tried again at the current width", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.needW(), 825);
+  p.need = () => 700; // the long row is gone from the new data
+  p.paints = 0;
+  p.box.renderCredentials({ ...liveView });
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "tables again: the cache of what did not fit is not kept for other data");
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("repainting the same view object keeps the need (a width repaint is not new data)", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.needW(), 825);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+  assert.strictEqual(p.paints, 1, "cards straight away, no table to measure first");
+});
+
+test("content that overflows at every width costs one extra paint per call, never a loop", () => {
+  const p = fitPage(900, (w) => w + 50);
+  for (const w of [900, 1400, 5000, 701]) {
+    p.byId["creds-body"].clientWidth = w;
+    p.paints = 0;
+    p.box.renderCredentials({ ...liveView }); // new data each time: a fresh try
+    assert.strictEqual(p.paints, 2, "table, then cards, at " + w);
+    assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards at " + w);
+    assert.strictEqual(p.needW(), w + 52);
+  }
+  // The last paint learned 753. Dragging back and forth: one try at 900 (a table, then cards,
+  // which raises the need to 952), and every later flip is decided by what it learned.
+  p.paints = 0;
+  for (const w of [900, 400, 900, 400, 900]) p.resizeTo(w);
+  assert.strictEqual(p.paints, 2, "one table-then-cards try, then no repaint at all");
+  assert.strictEqual(p.needW(), 952);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+});
+
+test("a hidden tab (0 wide) is not measured and keeps tables, as before", () => {
+  const p = fitPage(0, (w) => w + 50);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0);
+  assert.strictEqual(p.needW(), 0, "an overflow read against a 0 wide body means nothing");
+  assert.strictEqual(p.paints, 1);
+});
+
+test("a modal draws cards without measuring anything", () => {
+  const p = fitPage(2000, (w) => w + 50, { asPage: false });
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});

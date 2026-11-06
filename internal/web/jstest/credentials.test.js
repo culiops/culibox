@@ -562,6 +562,8 @@ test("table mode needs the as-page class and room in #creds-body; the card path 
   // The rule itself is credTablesAt's (pure, and what the resize observer asks too).
   assert.ok(/creds-body/.test(body("credTableMode")) && /credTablesAt\(/.test(body("credTableMode")));
   assert.ok(/CRED_TABLE_MIN_WIDTH/.test(body("credTablesAt")));
+  // ... and the content decides above that floor: the measured need goes in with the width (#27).
+  assert.ok(/credNeedW/.test(body("credTableMode")), "credTableMode hands the measured need to the rule");
   assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "not keyed on the window width");
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
@@ -947,4 +949,29 @@ test("credTablesAt: tables from 700 up, cards below (the measured threshold)", (
   assert.strictEqual(credTablesAt(700, true), true);
   assert.strictEqual(credTablesAt(1440, true), true);
   assert.strictEqual(credTablesAt(1, true), false);
+});
+
+// --- #27: the width a table needs is measured, the 700 is only a floor ---------------
+
+test("credTablesAt: a measured need raises the bar above the floor", () => {
+  assert.strictEqual(credTablesAt(800, true, 0), true, "nothing measured: the floor alone");
+  assert.strictEqual(credTablesAt(800, true, 850), false, "the content needs 850, the body has 800");
+  assert.strictEqual(credTablesAt(849, true, 850), false);
+  assert.strictEqual(credTablesAt(850, true, 850), true);
+  assert.strictEqual(credTablesAt(900, true, 850), true);
+});
+
+test("credTablesAt: the floor stays under a measured need (the token tables' fixed layout needs it)", () => {
+  assert.strictEqual(credTablesAt(650, true, 0), false);
+  assert.strictEqual(credTablesAt(650, true, 500), false, "a need below the floor does not lower it");
+  assert.strictEqual(credTablesAt(700, true, 500), true);
+  assert.strictEqual(credTablesAt(650, true, undefined), false);
+  assert.strictEqual(credTablesAt(650, true, NaN), false);
+});
+
+test("credTablesAt: a hidden tab and a modal ignore the measured need", () => {
+  assert.strictEqual(credTablesAt(0, true, 850), true, "0 wide: the tab is hidden, tables as before");
+  assert.strictEqual(credTablesAt(NaN, true, 850), true);
+  assert.strictEqual(credTablesAt(900, false, 0), false, "a modal never draws tables");
+  assert.strictEqual(credTablesAt(900, false, 850), false);
 });
