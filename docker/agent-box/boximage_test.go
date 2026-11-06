@@ -376,8 +376,8 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 18 {
-		t.Errorf("found %d downloads, want at least 18 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana)", downloads)
+	if downloads < 20 {
+		t.Errorf("found %d downloads, want at least 20 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana, duckdb, s5cmd)", downloads)
 	}
 	// The Sentry and Atlassian servers come from npm and PyPI, not curl: their
 	// pins are checked in TestDockerfilePinsMCPServers. No uv is downloaded in
@@ -775,6 +775,8 @@ var toolBatch = []struct{ arg, check string }{
 	{"JSONNET", "jsonnet --version"},
 	{"JSONNET", "jsonnetfmt --version"},
 	{"GRAFANA_MCP", "mcp-grafana --version"},
+	{"DUCKDB", "duckdb --version"},
+	{"S5CMD", "s5cmd version"},
 }
 
 func TestDockerfileInstallsToolBatch(t *testing.T) {
@@ -808,7 +810,7 @@ func TestDockerfileAptExtras(t *testing.T) {
 			continue
 		}
 		ok := true
-		for _, pkg := range []string{"make", "openssl", "dnsutils", "netcat-openbsd"} {
+		for _, pkg := range []string{"make", "openssl", "dnsutils", "netcat-openbsd", "python3-pytest"} {
 			if !regexp.MustCompile(`\s` + pkg + `(\s|$)`).MatchString(in) {
 				ok = false
 			}
@@ -820,7 +822,7 @@ func TestDockerfileAptExtras(t *testing.T) {
 			return
 		}
 	}
-	t.Error("no single RUN apt-get install names make, openssl, dnsutils and netcat-openbsd")
+	t.Error("no single RUN apt-get install names make, openssl, dnsutils, netcat-openbsd and python3-pytest")
 }
 
 // Pins that move often sit after the marker so a bump rebuilds only the tail;

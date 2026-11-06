@@ -277,7 +277,7 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 
 # --- Claude Code ---
 # @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
-# at (measured 2026-10-19: stable 2.1.292, latest 2.1.303). The `stable` tag is the
+# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
 # deliberate exception to the two-week rule: Anthropic's own soak period stands in
 # for ours, and it is a deliberate downgrade from `latest`. Self-update is off
 # (DISABLE_UPDATES above), so the image is the only way this version moves.
@@ -286,16 +286,17 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # never lands in a layer.
 # To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
 # CLAUDE_CODE_VERSION to `stable`, rebuild.
-ARG CLAUDE_CODE_VERSION=2.1.292
+ARG CLAUDE_CODE_VERSION=2.1.311
 RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
 # make, dnsutils (dig) and netcat-openbsd (nc) are absent from the slim base;
 # openssl is already there (named so the dependency is written down); xz-utils is
-# needed to unpack the shellcheck release (.tar.xz). They follow the base's apt
-# snapshot (see "base image" above).
+# needed to unpack the shellcheck release (.tar.xz); python3-pytest runs Python test
+# suites (culiops-skills' analytics tests). They follow the base's apt snapshot
+# (see "base image" above).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      make openssl dnsutils netcat-openbsd xz-utils \
+      make openssl dnsutils netcat-openbsd xz-utils python3-pytest \
     && rm -rf /var/lib/apt/lists/*
 
 # --- zsh and offline ops tools ---
@@ -442,6 +443,46 @@ RUN set -eu; \
     install -m 0755 /tmp/jsonnet/jsonnet /tmp/jsonnet/jsonnetfmt /usr/local/bin/; rm -rf /tmp/jsonnet /tmp/jsonnet.tar.gz; \
     jsonnet --version | grep -q "v${JSONNET_VERSION}"; \
     jsonnetfmt --version | grep -q "v${JSONNET_VERSION}"
+
+# --- S3 log analytics tools ---
+# The culiops-skills sre-investigate S3-log module shells out to the duckdb and
+# s5cmd CLIs; a box cannot fetch GitHub release assets at runtime, so they ship here.
+# DuckDB CLI 2.0.0 (released 2026-10-21; the module needs 1.4.0 or later and is
+# tested on 2.0.0). The release has no checksums file, so the sums are the GitHub
+# asset `digest` fields (and match what was computed from the download):
+#   gh api repos/duckdb/duckdb/releases/tags/v2.0.0 --jq '.assets[]|.name+" "+.digest'
+ARG DUCKDB_VERSION=2.0.0
+ARG DUCKDB_SHA256_AMD64=c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc
+ARG DUCKDB_SHA256_ARM64=859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=amd64; sum="$DUCKDB_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$DUCKDB_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-${a}.tar.gz" -o /tmp/duckdb.tar.gz; \
+    echo "${sum}  /tmp/duckdb.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/duckdb; tar -C /tmp/duckdb -xzf /tmp/duckdb.tar.gz; \
+    install -m 0755 /tmp/duckdb/duckdb /usr/local/bin/duckdb; rm -rf /tmp/duckdb /tmp/duckdb.tar.gz; \
+    duckdb --version | grep -q "v${DUCKDB_VERSION}"
+
+# s5cmd 2.3.0 (released 2024-12-16; the module needs 2.2.0 or later). Sums from the
+# release's s5cmd_checksums.txt:
+#   https://github.com/peak/s5cmd/releases/download/v2.3.0/s5cmd_checksums.txt
+ARG S5CMD_VERSION=2.3.0
+ARG S5CMD_SHA256_AMD64=de0fdbfa3aceae55e069ba81a0fc17b2026567637603734a387b2fca06c299b4
+ARG S5CMD_SHA256_ARM64=1439f0d00ecedcd2a2f1f2c6749bbb0152b2257bf5086f29646ec8ae38798e24
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=64bit; sum="$S5CMD_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$S5CMD_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VERSION}/s5cmd_${S5CMD_VERSION}_Linux-${a}.tar.gz" -o /tmp/s5cmd.tar.gz; \
+    echo "${sum}  /tmp/s5cmd.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/s5cmd; tar -C /tmp/s5cmd -xzf /tmp/s5cmd.tar.gz; \
+    install -m 0755 /tmp/s5cmd/s5cmd /usr/local/bin/s5cmd; rm -rf /tmp/s5cmd /tmp/s5cmd.tar.gz; \
+    s5cmd version | grep -q "v${S5CMD_VERSION}"
 
 # --- tflint + its AWS ruleset ---
 # tflint 0.64.0 (released 2026-07-17). Sums from the release's checksums.txt, which
