@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,7 +161,7 @@ func TestListenLinuxTightensALooseDir(t *testing.T) {
 }
 
 // testRelayKey is the relay key every darwin test listener wants; the relay
-// writes it ahead of the PROXY line. wrongRelayKey is another one.
+// proves it before its PROXY line is read. wrongRelayKey is another one.
 var (
 	testRelayKey  = mustRelayKey(0x31)
 	wrongRelayKey = mustRelayKey(0x32)
@@ -178,13 +179,59 @@ func mustRelayKey(seed byte) proxyline.Key {
 	return k
 }
 
-// withKey is h as the relay sends it: the key line, then h.
-func withKey(h string) string { return string(testRelayKey.Preamble()) + h }
+// proxyLine is the PROXY line the relay writes for a box at src.
+func proxyLine(src string) string {
+	return "PROXY TCP4 " + src + " 172.29.72.1 40000 9071\r\n"
+}
 
-// keyed is what the relay writes for a box at src: the key line, then the
-// PROXY line naming the box.
-func keyed(src string) string {
-	return withKey("PROXY TCP4 " + src + " 172.29.72.1 40000 9071\r\n")
+// v1KeyLine is the static key line the relay wrote before #118.
+func v1KeyLine(k proxyline.Key) string { return "AGENTBOX-RELAY " + k.Hex() + "\r\n" }
+
+// relayHandshake runs the relay's half of the handshake on c against the
+// listener at addr (the relay dials the port it forwards to, so the port is
+// addr's).
+func relayHandshake(c net.Conn, addr string, k proxyline.Key) error {
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return err
+	}
+	return proxyline.RelayHandshake(c, k, ap.Port())
+}
+
+// rawConn dials addr and sends nothing. It has a deadline, so a listener that
+// never answers fails the test instead of hanging it.
+func rawConn(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	return c
+}
+
+// relayConn dials addr and runs the relay's handshake under k, failing the
+// test if it does not complete. The PROXY line and the request follow.
+func relayConn(t *testing.T, addr string, k proxyline.Key) net.Conn {
+	t.Helper()
+	c := rawConn(t, addr)
+	if err := relayHandshake(c, addr, k); err != nil {
+		t.Fatalf("relay handshake: %v", err)
+	}
+	return c
+}
+
+// wrongKeyConn dials addr and runs the handshake under wrongRelayKey, which
+// must fail: the listener's proof does not verify under it, so the relay stops
+// before it proves anything. The caller sends its bytes anyway.
+func wrongKeyConn(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c := rawConn(t, addr)
+	if err := relayHandshake(c, addr, wrongRelayKey); err == nil {
+		t.Fatal("a relay on the wrong key passed the listener's proof")
+	}
+	return c
 }
 
 func TestListenDarwinLoopbackTCP(t *testing.T) {
@@ -221,15 +268,12 @@ func darwinBroker(t *testing.T) string {
 	return ep.Listener.Addr().String()
 }
 
-func rawGet(t *testing.T, addr, prefix string) (string, error) {
+// rawGet is one GET on c after head (the PROXY line, when the test sends one):
+// the body, or the error when the connection was closed unanswered. It closes c.
+func rawGet(t *testing.T, c net.Conn, head string) (string, error) {
 	t.Helper()
-	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
-	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n", prefix)
+	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n", head)
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
 	if err != nil {
 		return "", err
@@ -244,36 +288,31 @@ func rawGet(t *testing.T, addr, prefix string) (string, error) {
 // becomes the request's RemoteAddr.
 func TestListenDarwinRequiresHeader(t *testing.T) {
 	addr := darwinBroker(t)
-	body, err := rawGet(t, addr, keyed("172.29.72.9"))
+	body, err := rawGet(t, relayConn(t, addr, testRelayKey), proxyLine("172.29.72.9"))
 	if err != nil || body != "172.29.72.9:40000" {
 		t.Fatalf("with header: body %q err %v", body, err)
 	}
-	for name, prefix := range map[string]string{
-		"key but no header": withKey(""),
-		"gateway":           keyed("172.29.72.1"),
-		"outside":           keyed("10.1.2.3"),
-		"loopback":          keyed("127.0.0.1"),
-		"garbage":           withKey("PROXY nonsense\r\n"),
-		"unspecified":       keyed("0.0.0.0"),
+	for name, head := range map[string]string{
+		"key but no header": "",
+		"gateway":           proxyLine("172.29.72.1"),
+		"outside":           proxyLine("10.1.2.3"),
+		"loopback":          proxyLine("127.0.0.1"),
+		"garbage":           "PROXY nonsense\r\n",
+		"unspecified":       proxyLine("0.0.0.0"),
 	} {
-		if body, err := rawGet(t, addr, prefix); err == nil {
+		if body, err := rawGet(t, relayConn(t, addr, testRelayKey), head); err == nil {
 			t.Errorf("%s: served %q", name, body)
 		}
 	}
 }
 
 // rawPost is rawGet for a POST with a bearer token: status and body, or the
-// error when the connection was closed unanswered.
-func rawPost(t *testing.T, addr, prefix, path, tok, body string) (int, string, error) {
+// error when the connection was closed unanswered. It closes c.
+func rawPost(t *testing.T, c net.Conn, head, path, tok, body string) (int, string, error) {
 	t.Helper()
-	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(5 * time.Second))
 	fmt.Fprintf(c, "%sPOST %s HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-		prefix, path, tok, len(body), body)
+		head, path, tok, len(body), body)
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "POST"})
 	if err != nil {
 		return 0, "", err
@@ -311,9 +350,15 @@ func TestListenDarwinCapsConnections(t *testing.T) {
 	}
 	defer third.Close()
 	third.SetDeadline(time.Now().Add(10 * time.Second))
-	fmt.Fprint(third, keyed("172.29.72.9")+"GET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n")
 	got := make(chan string, 1)
 	go func() {
+		// The listener has not accepted this connection, so even the relay's
+		// handshake waits for a slot: it runs here, with the wait for the reply.
+		if err := relayHandshake(third, addr, testRelayKey); err != nil {
+			got <- "error: " + err.Error()
+			return
+		}
+		fmt.Fprint(third, proxyLine("172.29.72.9")+"GET / HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n")
 		resp, err := http.ReadResponse(bufio.NewReader(third), &http.Request{Method: "GET"})
 		if err != nil {
 			got <- "error: " + err.Error()
@@ -378,11 +423,11 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 	addr, rec := darwinBoundBroker(t)
 	tok := tokA("s")
 
-	code, body, err := rawPost(t, addr, keyed("172.29.72.9"), "/v1/static/token", tok, grafanaBody)
+	code, body, err := rawPost(t, relayConn(t, addr, testRelayKey), proxyLine("172.29.72.9"), "/v1/static/token", tok, grafanaBody)
 	if err != nil || code != 200 || !strings.Contains(body, staticSecret) {
 		t.Fatalf("own address: %d %q %v", code, body, err)
 	}
-	code, body, err = rawPost(t, addr, keyed("172.29.72.10"), "/v1/static/token", tok, grafanaBody)
+	code, body, err = rawPost(t, relayConn(t, addr, testRelayKey), proxyLine("172.29.72.10"), "/v1/static/token", tok, grafanaBody)
 	if err != nil || code != 403 || strings.Contains(body, staticSecret) {
 		t.Fatalf("another box's address: %d %q %v", code, body, err)
 	}
@@ -392,7 +437,7 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 	if len(rows) != 2 || rows[0].Outcome != OutcomeFetched || rows[1].Outcome != OutcomeDeniedBox || rows[1].SessionID != "s" {
 		t.Fatalf("rows = %+v, want fetched then denied_box", rows)
 	}
-	if _, _, err := rawPost(t, addr, withKey(""), "/v1/static/token", tok, grafanaBody); err == nil {
+	if _, _, err := rawPost(t, relayConn(t, addr, testRelayKey), "", "/v1/static/token", tok, grafanaBody); err == nil {
 		t.Fatal("a connection with the key and no PROXY line was answered")
 	}
 	rec.mu.Lock()
@@ -403,20 +448,23 @@ func TestDarwinTokenBoundToItsBoxAddress(t *testing.T) {
 	}
 }
 
-// #114: the PROXY line is believed only after the relay key. A process on the
-// Mac that dials the loopback port and names the bound box's own address, with a
-// valid token, gets no answer without the key or with another key, writes no
-// audit row, and the same request behind the right key is served.
+// #114, #118: the PROXY line is believed only after the relay proved the key. A
+// process on the Mac that dials the loopback port and names the bound box's own
+// address, with a valid token, gets no answer without the key, with the v1 key
+// line the relay sent before #118, or with another key, writes no audit row, and
+// the same request behind the right key is served.
 func TestListenDarwinNeedsTheRelayKey(t *testing.T) {
 	addr, rec := darwinBoundBroker(t)
 	tok := tokA("s")
-	own := "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
+	own := proxyLine("172.29.72.9")
 
-	for name, prefix := range map[string]string{
-		"no key":    own,
-		"wrong key": string(wrongRelayKey.Preamble()) + own,
+	for name, open := range map[string]func() (net.Conn, string){
+		"no key":      func() (net.Conn, string) { return rawConn(t, addr), own },
+		"v1 key line": func() (net.Conn, string) { return rawConn(t, addr), v1KeyLine(testRelayKey) + own },
+		"wrong key":   func() (net.Conn, string) { return wrongKeyConn(t, addr), own },
 	} {
-		if code, body, err := rawPost(t, addr, prefix, "/v1/static/token", tok, grafanaBody); err == nil {
+		c, head := open()
+		if code, body, err := rawPost(t, c, head, "/v1/static/token", tok, grafanaBody); err == nil {
 			t.Errorf("%s: answered %d %q", name, code, body)
 		}
 	}
@@ -427,7 +475,7 @@ func TestListenDarwinNeedsTheRelayKey(t *testing.T) {
 		t.Fatalf("a refused connection wrote %d audit rows", n)
 	}
 
-	code, body, err := rawPost(t, addr, withKey(own), "/v1/static/token", tok, grafanaBody)
+	code, body, err := rawPost(t, relayConn(t, addr, testRelayKey), own, "/v1/static/token", tok, grafanaBody)
 	if err != nil || code != 200 || !strings.Contains(body, staticSecret) {
 		t.Fatalf("right key: %d %q %v", code, body, err)
 	}
@@ -473,16 +521,14 @@ func TestMaxDarwinPerSourceIsBounded(t *testing.T) {
 	}
 }
 
-// keepAliveGet is one served request on a conn that stays open behind a PROXY
-// line for src, like a box's client holding its connection idle.
+// keepAliveGet is one served request on a conn that stays open behind the relay
+// handshake and a PROXY line for src, like a box's client holding its
+// connection idle.
 func keepAliveGet(t *testing.T, addr, src string) (net.Conn, string, error) {
 	t.Helper()
-	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := relayConn(t, addr, testRelayKey)
 	c.SetDeadline(time.Now().Add(3 * time.Second))
-	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\n\r\n", keyed(src))
+	fmt.Fprintf(c, "%sGET / HTTP/1.1\r\nHost: b\r\n\r\n", proxyLine(src))
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "GET"})
 	if err != nil {
 		c.Close()
@@ -541,5 +587,32 @@ func TestListenDarwinOneSourceCannotCrowdOutAnother(t *testing.T) {
 			t.Fatalf("closing a connection never freed its source's slot: %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestListenDarwinNamesAProcessOnItsPort: when something else holds the port the
+// bind fails, and the error says another process has it, that it gets nothing
+// from the boxes, and how to find it.
+func TestListenDarwinNamesAProcessOnItsPort(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := held.Addr().(*net.TCPAddr).Port
+	_, err = listenDarwin(port, testRelayKey, 2, 2)
+	if err == nil {
+		t.Fatal("listenDarwin bound a port another process holds")
+	}
+	for _, want := range []string{
+		fmt.Sprintf("another process holds 127.0.0.1:%d", port),
+		fmt.Sprintf("sudo lsof -nP -iTCP:%d -sTCP:LISTEN", port),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("error lost its cause: %v", err)
 	}
 }

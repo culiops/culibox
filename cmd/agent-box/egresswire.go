@@ -157,11 +157,13 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 		// Ready runs this on every call, under its lock: the relay is started
 		// only after the VM's firewall rules (INPUT and DOCKER-USER) are read back
 		// live, and a Ready that fails here refuses the spawn. Nothing else may
-		// call Ensure.
+		// call Ensure. While it is not listening, Ready first sweeps a relay that
+		// is not current (#118), also under its lock.
 		relay := &boxvm.Relay{VM: layer.vm, Docker: layer.cli, Image: layer.image, Instance: cfg.BoxInstance(),
 			EgressPort: cfg.EgressPortOrDefault(), BrokerPort: cfg.BrokerPortOrDefault(), UID: os.Getuid(), GID: os.Getgid(),
 			Key: layer.relayKey}
 		opts.AfterNetwork = func(ctx context.Context, n egress.Net) error { return relay.Ensure(ctx, n.Gateway) }
+		opts.SweepRelay = relay.RemoveStale
 	}
 	svc := egress.NewService(opts)
 	// Learn the host's own addresses once now; Ready refreshes them on every

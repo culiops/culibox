@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
@@ -65,28 +67,48 @@ type boxLayer struct {
 	// second cache would never be cleared. nil only for a layer built by hand in
 	// a test.
 	addrs *boxaddr.Cache
-	// relayKey is the secret CuliBox's relay presents to the broker and the
-	// egress proxy ahead of the PROXY line (#114). One per data directory,
-	// loaded once per daemon start by loadRelayKey. Zero off darwin (Linux has
-	// no relay) and zero when relay.secret could not be read, in which case
-	// the darwin listeners and the relay refuse to start.
+	// relayKey is the secret CuliBox's relay and the broker and egress
+	// listeners prove to each other before the relay's PROXY line is read
+	// (#114, #118: it never crosses the wire). One per data directory, loaded
+	// once per daemon start by loadRelayKey. Zero off darwin (Linux has no
+	// relay) and zero when relay2.secret could not be read, in which case the
+	// darwin listeners and the relay refuse to start.
 	relayKey proxyline.Key
+	// reclaimErr remembers the last reclaim error that was logged, so one that
+	// is still there on the next pass is not logged again.
+	reclaimErr logOnChange
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 }
 
-// relaySecretFile is the relay key's file in the data directory.
-const relaySecretFile = "relay.secret"
+// relaySecretFile is the relay key's file in the data directory. The name pairs
+// with the AGENTBOX-RELAY2 hello: it is the key of the challenge-response
+// handshake, where the key never crosses the wire (#118).
+const relaySecretFile = "relay2.secret"
+
+// retiredRelaySecretFile is the v1 relay key's file. v1 sent that key in clear
+// on every connection, so whatever held a port while CuliBox did not, or read
+// the loopback interface, may have learned it. It is never loaded again:
+// loadRelayKey deletes it. A new file name, not a stamp inside the old file,
+// because auth.NewCookieAuth owns the 32-byte format and replaces anything that
+// is not exactly that.
+const retiredRelaySecretFile = "relay.secret"
 
 // loadRelayKey reads, or creates, the relay key for this data directory and
-// sets l.relayKey. Off darwin (no VM, so no relay) it does nothing. It uses the
-// same helper and protection as broker.secret and cookie.secret: 32 random
-// bytes, mode 0600 in the 0700 data directory, an unreadable existing file is an
-// error and is never overwritten. An error leaves the key zero, and a zero key
-// fails closed everywhere it is used.
+// sets l.relayKey. Off darwin (no VM, so no relay) it does nothing, and leaves
+// any relay.secret there alone. On darwin it first deletes the retired v1 key
+// file (best effort: a failure is logged, without any key, and the load goes
+// on). It uses the same helper and protection as broker.secret and
+// cookie.secret: 32 random bytes, mode 0600 in the 0700 data directory, an
+// unreadable existing file is an error and is never overwritten. An error
+// leaves the key zero, and a zero key fails closed everywhere it is used.
 func (l *boxLayer) loadRelayKey() error {
 	if l.vm == nil {
 		return nil
+	}
+	retired := filepath.Join(l.dataDir, retiredRelaySecretFile)
+	if err := os.Remove(retired); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("relay: could not remove the retired %s (%v); it is no longer used", retired, err)
 	}
 	path := filepath.Join(l.dataDir, relaySecretFile)
 	sec, err := auth.NewCookieAuth(path)
@@ -376,15 +398,21 @@ func (l *boxLayer) bootReconcile(ctx context.Context) bool {
 	return true
 }
 
-// dailyReclaim is the reclaim ticker's pass. Silent while the VM is stopped:
-// that is a normal state and must not log once a day.
-func (l *boxLayer) dailyReclaim(ctx context.Context) {
+// reclaimEvery is how often the ticker runs a reclaim pass. Hourly because the
+// caches of a dead box go an hour after its last use (box.DefaultCacheTTL), so a
+// longer period would only delay them; a pass with nothing to do costs a
+// directory listing and one docker call.
+const reclaimEvery = time.Hour
+
+// periodicReclaim is the reclaim ticker's pass. Silent while the VM is stopped:
+// that is a normal state and must not log once an hour.
+func (l *boxLayer) periodicReclaim(ctx context.Context) {
 	if l.vmStopped(ctx) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, vmStartPassTimeout)
 	defer cancel()
-	reclaimBoxState(ctx, l.boxes)
+	l.reclaimBoxState(ctx)
 }
 
 // reconcileAndReclaim runs AFTER session reconcile (at boot) or right after a
@@ -396,5 +424,57 @@ func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 	if err := l.boxes.Reconcile(ctx); err != nil {
 		log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
 	}
-	reclaimBoxState(ctx, l.boxes)
+	l.reclaimBoxState(ctx)
+}
+
+// reclaimBoxState removes the host homes of boxes that are gone and unused, and
+// the caches of those unused for an hour, and reports what it freed.
+// internal/box returns results rather than logging so its decisions stay
+// testable without a daemon; the printing belongs here.
+func (l *boxLayer) reclaimBoxState(ctx context.Context) {
+	done, err := l.boxes.ReclaimState(ctx, box.DefaultStateTTL, box.DefaultCacheTTL)
+	for _, r := range done {
+		mib := r.Bytes / (1024 * 1024)
+		if r.Caches {
+			log.Printf("pruned caches of box state %s: unused for %s, %d MiB freed",
+				r.Box, r.Age.Round(time.Minute), mib)
+			continue
+		}
+		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
+			r.Box, int(r.Age.Hours()/24), mib)
+	}
+	if err == nil {
+		l.reclaimErr.changed("") // a clean pass: the same error later is news again
+		return
+	}
+	// The same failure comes back every hour until someone fixes it, and says
+	// the same thing each time.
+	if l.reclaimErr.changed(err.Error()) {
+		log.Printf("box state reclaim: %v. What it names stays (a whole home, or a cache "+
+			"path inside one); usually a directory a box left unwritable (chmod it back), "+
+			"otherwise a file owned by another uid or an old root-owned stub, which has to be "+
+			"removed as its owner. New boxes create neither. Logged once while it stays the "+
+			"same.", err)
+	}
+}
+
+// logOnChange tells a periodic pass whether to log an error: the first time it
+// appears, and again when it changes, but not while the same one repeats. The
+// hourly reclaim would otherwise log a stuck directory 24 times a day.
+type logOnChange struct {
+	mu   sync.Mutex
+	last string
+}
+
+// changed reports whether msg differs from the last one seen and remembers it.
+// The empty message stands for a clean pass: it resets, so the same error
+// coming back later is logged again, and it is never itself worth logging.
+func (l *logOnChange) changed(msg string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if msg == l.last {
+		return false
+	}
+	l.last = msg
+	return msg != ""
 }

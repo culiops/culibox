@@ -326,3 +326,106 @@ func TestAttachedStaysTrueWhenOneViewerEvictsAnother(t *testing.T) {
 		t.Fatal("the evicted viewer's cleanup cleared the replacement's slot")
 	}
 }
+
+// holdFor sets redrawGap for one test; tests that touch it do not run in parallel.
+func holdFor(t *testing.T, d time.Duration) {
+	old := redrawGap
+	redrawGap = d
+	t.Cleanup(func() { redrawGap = old })
+}
+
+// ForceRedraw must make a TUI that reads its size from an event loop see a
+// real change (#126). MEASURED: Claude Code skipped the repaint when the nudge
+// was undone at once (it read the size after the restore); with a 10 ms hold
+// it repainted. The nudge is one column narrower, so the in-between frame never
+// wraps in the viewer's wider grid.
+func TestForceRedrawHoldsANarrowerSizeThenRestores(t *testing.T) {
+	holdFor(t, 300*time.Millisecond) // "right after" must not race the restore on a loaded runner
+	s := startProc(t, 1<<12, "sleep", "5")
+	if err := s.Resize(30, 100); err != nil {
+		t.Fatal(err)
+	}
+	s.ForceRedraw()
+	if ws, _ := pty.GetsizeFull(s.ptmx); ws.Rows != 30 || ws.Cols != 99 {
+		t.Fatalf("right after ForceRedraw: %dx%d, want 30x99 held", ws.Rows, ws.Cols)
+	}
+	if !waitSize(s, 30, 100, 2*time.Second) {
+		ws, _ := pty.GetsizeFull(s.ptmx)
+		t.Fatalf("size not restored: %dx%d", ws.Rows, ws.Cols)
+	}
+}
+
+func TestForceRedrawRestoresTheLatestSize(t *testing.T) {
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(30, 100)
+	s.ForceRedraw()
+	_ = s.Resize(40, 120) // the viewer resized during the hold: its size wins
+	time.Sleep(3 * redrawGap)
+	if ws, _ := pty.GetsizeFull(s.ptmx); ws.Rows != 40 || ws.Cols != 120 {
+		t.Fatalf("after the hold: %dx%d, want the latest 40x120", ws.Rows, ws.Cols)
+	}
+}
+
+func TestForceRedrawLeavesAOneColumnPTYAlone(t *testing.T) {
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(10, 1)
+	s.ForceRedraw()
+	time.Sleep(3 * redrawGap)
+	if ws, _ := pty.GetsizeFull(s.ptmx); ws.Rows != 10 || ws.Cols != 1 {
+		t.Fatalf("got %dx%d, want 10x1 untouched", ws.Rows, ws.Cols)
+	}
+}
+
+func waitSize(s *Session, rows, cols uint16, d time.Duration) bool {
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if ws, err := pty.GetsizeFull(s.ptmx); err == nil && ws.Rows == rows && ws.Cols == cols {
+			return true
+		}
+	}
+	return false
+}
+
+// Two redraws in a row (a daemon-restart reattach, then the viewer's first
+// resize): the first one's restore must not cut the second one's hold short,
+// or the agent may read the size after it and skip the repaint again.
+func TestForceRedrawALaterRedrawOwnsTheRestore(t *testing.T) {
+	holdFor(t, 400*time.Millisecond)
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(30, 100)
+	s.ForceRedraw()
+	time.Sleep(200 * time.Millisecond)
+	s.ForceRedraw()
+	time.Sleep(300 * time.Millisecond) // past the first restore, inside the second hold
+	if ws, _ := pty.GetsizeFull(s.ptmx); ws.Cols != 99 {
+		t.Fatalf("inside the second hold: %d cols, want 99", ws.Cols)
+	}
+	if !waitSize(s, 30, 100, 2*time.Second) {
+		t.Fatal("the second redraw did not restore")
+	}
+}
+
+// The restore fires on a timer, so it can run after the session closed its
+// PTY: it must not panic or resize the PTY that took the freed fd number. This
+// pins the after-Close outcome only; the race between reading the fd and a
+// concurrent Close cannot be hit deterministically (setPTYSize's held fd and
+// `go test -race` cover it).
+func TestForceRedrawRestoreAfterCloseTouchesNothing(t *testing.T) {
+	holdFor(t, 100*time.Millisecond)
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(30, 100)
+	s.ForceRedraw()
+	_ = s.ptmx.Close()
+	other, tty, err := pty.Open() // likely takes the number just freed
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	defer tty.Close()
+	if err := pty.Setsize(other, &pty.Winsize{Rows: 7, Cols: 33}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * redrawGap)
+	if ws, _ := pty.GetsizeFull(other); ws.Rows != 7 || ws.Cols != 33 {
+		t.Fatalf("another PTY was resized to %dx%d", ws.Rows, ws.Cols)
+	}
+}

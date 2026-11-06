@@ -1,36 +1,40 @@
 // Package proxyline wraps a net.Listener so that every accepted connection
-// must begin with CuliBox's relay key line and then a strict PROXY protocol v1
-// (TCP4) header, and reports the header's source as RemoteAddr.
+// must first complete CuliBox's relay handshake and then begin with a strict
+// PROXY protocol v1 (TCP4) header, and reports the header's source as
+// RemoteAddr.
 //
 // It exists for macOS, where boxes reach host services through a relay in the
-// colima VM and therefore arrive from 127.0.0.1. The relay writes the key line
-// (Key.Preamble) and then the header. The host listener reads the key line
-// first and compares it in constant time; only a connection that presented the
-// right key has its header parsed and believed, and then only from a loopback
-// peer and only when the caller's allow function accepts the claimed source.
-// Every failure closes the connection with nothing written back (fail closed).
+// colima VM and therefore arrive from 127.0.0.1. The listener and the relay
+// prove to each other that they hold the relay key (handshake.go): the relay
+// opens with a hello, the listener answers with a proof, and only when that
+// verifies does the relay send its own proof and then the header. The key never
+// crosses the wire, and the listener writes nothing but its proof line before
+// the relay's proof matches. Only a connection whose relay proved the key has
+// its header parsed and believed, and then only from a loopback peer and only
+// when the caller's allow function accepts the claimed source. Every failure
+// closes the connection (fail closed).
 //
 // The key keeps another process on the Mac from claiming a box's address just
-// by reaching the loopback port. It is not a boundary against your own user: a
-// process running as you can read the key from the daemon's data directory
-// (docs/MACOS.md).
+// by reaching the loopback port, and keeps the relay from handing a box's bytes
+// to whatever holds the port. It is not a boundary against your own user: a
+// process running as you can still read the key from the daemon's data
+// directory (docs/MACOS.md).
 package proxyline
 
 import (
 	"bufio"
-	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
-// ErrHeader is returned (possibly wrapped) when the relay key line or the PROXY
+// ErrHeader is returned (possibly wrapped) when the relay handshake or the PROXY
 // header is missing, malformed or wrong, the header is from a disallowed
 // source, or the peer is not loopback.
 var ErrHeader = errors.New("proxyline: missing or invalid PROXY header")
@@ -95,41 +99,54 @@ func ParseV1(line []byte) (src, dst netip.AddrPort, err error) {
 	return netip.AddrPortFrom(addrs[0], ports[0]), netip.AddrPortFrom(addrs[1], ports[1]), nil
 }
 
+// ExplainBindError says what a failed bind on a darwin listener means. When
+// err is "address already in use", another process holds 127.0.0.1:port. The
+// relay in the VM forwards a box's connection only after the listener proves it
+// holds the relay key, so that process gets nothing from the boxes; but the boxes
+// cannot reach this service until it is gone, and if it is not an earlier CuliBox
+// still running it may be posing as CuliBox. The message names that, and how to
+// find the process (with sudo: an unprivileged lsof on macOS does not list
+// another account's sockets). It never guesses who holds the port. Any other error,
+// and nil, is returned unchanged. The result wraps err, so callers add their
+// own context with %w.
+func ExplainBindError(port int, err error) error {
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		return err
+	}
+	return fmt.Errorf("%w; another process holds 127.0.0.1:%d. It gets nothing from the boxes (the relay forwards a box's connection only after the listener proves it holds the relay key), but boxes cannot reach this service until it is gone. If it is not an earlier CuliBox still running, it may be posing as CuliBox; find it with: sudo lsof -nP -iTCP:%d -sTCP:LISTEN", err, port, port)
+}
+
 // Options configures Wrap.
 type Options struct {
-	// Key is the relay key a connection must present before its PROXY line is
-	// read. The zero Key refuses every connection: a listener with no key has
-	// nothing to compare, and must not fall back to trusting the header alone.
+	// Key is the relay key a connection's relay must prove it holds, and the
+	// listener proves it holds, before the PROXY line is read. The zero Key
+	// refuses every connection: a listener with no key has nothing to prove,
+	// and must not fall back to trusting the header alone.
 	Key Key
 	// Allow is called with the header's source address; nil rejects everything.
 	Allow func(netip.Addr) bool
-	// Timeout bounds the whole handshake: one read deadline covers the key line
-	// and the PROXY line together.
+	// Timeout bounds the whole handshake: one deadline covers the relay's
+	// hello, both proofs and the PROXY line together.
 	Timeout time.Duration
 	// KeyRefused, when set, is called once for a connection that came from a
-	// loopback peer but did not present the key (short read, EOF, timeout,
-	// wrong bytes, or a zero Key). It is told nothing about what was sent, and
-	// is not called for a non-loopback peer or after the key matched.
+	// loopback peer but did not complete the handshake (short read, EOF,
+	// timeout, malformed hello, wrong proof, a failed write, or a zero Key). It
+	// is told nothing about what was sent, and is not called for a non-loopback
+	// peer or after the relay's proof matched.
 	KeyRefused func()
 }
 
-// Wrap returns a listener whose accepted connections require the relay key line
-// and then a PROXY v1 header. Both are read lazily in the connection's own
-// goroutine (on the first Read or RemoteAddr), never inside Accept, so a silent
-// client cannot stall the accept loop.
+// Wrap returns a listener whose accepted connections require the relay
+// handshake and then a PROXY v1 header. Both are read lazily in the
+// connection's own goroutine (on the first Read or RemoteAddr), never inside
+// Accept, so a silent client cannot stall the accept loop.
 func Wrap(l net.Listener, o Options) net.Listener {
-	ln := &listener{Listener: l, o: o}
-	if !o.Key.IsZero() {
-		// Built once: every connection compares against these same bytes.
-		ln.preamble = o.Key.Preamble()
-	}
-	return ln
+	return &listener{Listener: l, o: o}
 }
 
 type listener struct {
 	net.Listener
-	o        Options
-	preamble []byte // o.Key.Preamble(), nil for the zero Key
+	o Options
 }
 
 func (l *listener) Accept() (net.Conn, error) {
@@ -137,22 +154,22 @@ func (l *listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conn{Conn: c, o: l.o, preamble: l.preamble}, nil
+	return &conn{Conn: c, o: l.o}, nil
 }
 
 type conn struct {
 	net.Conn
-	o        Options
-	preamble []byte // the listener's, shared and never written
+	o Options
 
 	once sync.Once
 	br   *bufio.Reader
 	addr net.Addr // header source once validated; nil otherwise
 	err  error    // sticky header failure
 
-	mu       sync.Mutex // guards the caller's read deadline across the header phase
-	ready    bool
-	deadline time.Time
+	mu        sync.Mutex // guards the caller's deadlines across the header phase
+	ready     bool
+	deadline  time.Time // the caller's read deadline
+	wdeadline time.Time // the caller's write deadline
 }
 
 // handshake reads and validates the header exactly once. If anything goes
@@ -176,9 +193,11 @@ func (c *conn) handshake() {
 		ok = true
 		c.mu.Lock()
 		c.ready = true
-		// Restore the caller's deadline (zero clears ours), under the lock so
-		// a concurrent SetReadDeadline cannot be overwritten by a stale value.
+		// Restore the caller's deadlines (zero clears ours), under the lock so
+		// a concurrent SetReadDeadline or SetWriteDeadline cannot be
+		// overwritten by a stale value.
 		c.Conn.SetReadDeadline(c.deadline)
+		c.Conn.SetWriteDeadline(c.wdeadline)
 		c.mu.Unlock()
 	})
 }
@@ -187,12 +206,13 @@ func (c *conn) readHeader() error {
 	if !peerIsLoopback(c.Conn.RemoteAddr()) {
 		return fmt.Errorf("%w: peer %v is not loopback", ErrHeader, c.Conn.RemoteAddr())
 	}
-	// One deadline for the key line and the PROXY line.
-	if err := c.Conn.SetReadDeadline(time.Now().Add(c.o.Timeout)); err != nil {
+	// One deadline, read and write, for the whole phase: hello, both proofs and
+	// the PROXY line.
+	if err := c.Conn.SetDeadline(time.Now().Add(c.o.Timeout)); err != nil {
 		return fmt.Errorf("%w: %w", ErrHeader, err)
 	}
 	c.br = bufio.NewReaderSize(c.Conn, 4096)
-	if err := c.readKey(); err != nil {
+	if err := c.authenticate(); err != nil {
 		if c.o.KeyRefused != nil {
 			c.o.KeyRefused()
 		}
@@ -223,23 +243,6 @@ func (c *conn) readHeader() error {
 	return nil
 }
 
-// readKey reads the relay key line, exactly PreambleLen bytes, and compares it
-// with the key's own in constant time. Nothing it read is returned or put in an
-// error: a refused connection's bytes may be a guess at the key.
-func (c *conn) readKey() error {
-	if c.preamble == nil { // Wrap leaves it nil for the zero Key
-		return fmt.Errorf("%w: no relay key configured", ErrHeader)
-	}
-	buf := make([]byte, PreambleLen)
-	if _, err := io.ReadFull(c.br, buf); err != nil {
-		return fmt.Errorf("%w: relay key line: %w", ErrHeader, err)
-	}
-	if subtle.ConstantTimeCompare(buf, c.preamble) != 1 {
-		return fmt.Errorf("%w: relay key missing or wrong", ErrHeader)
-	}
-	return nil
-}
-
 func peerIsLoopback(a net.Addr) bool {
 	if a == nil {
 		return false
@@ -259,8 +262,9 @@ func (c *conn) Read(p []byte) (int, error) {
 	return c.br.Read(p)
 }
 
-// Write is gated by the same handshake as Read: nothing is ever written to a
-// peer whose header has not been validated.
+// Write is gated by the same handshake as Read: nothing but the handshake's own
+// proof line is written to a peer whose relay proof has not matched, and nothing
+// at all to one whose header has not been validated.
 func (c *conn) Write(p []byte) (int, error) {
 	c.handshake()
 	if c.err != nil {
@@ -301,7 +305,7 @@ func (c *conn) RemoteAddr() net.Addr {
 }
 
 // SetReadDeadline records the caller's deadline; it is applied immediately
-// only once the header phase (which owns the deadline) is over.
+// only once the header phase (which owns the deadlines) is over.
 func (c *conn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -312,9 +316,22 @@ func (c *conn) SetReadDeadline(t time.Time) error {
 	return c.Conn.SetReadDeadline(t)
 }
 
+// SetWriteDeadline records the caller's deadline like SetReadDeadline: the
+// handshake writes the listener's proof under its own, and the caller's applies
+// once the header phase is over.
+func (c *conn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.wdeadline = t
+	if !c.ready {
+		return nil
+	}
+	return c.Conn.SetWriteDeadline(t)
+}
+
 func (c *conn) SetDeadline(t time.Time) error {
 	if err := c.SetReadDeadline(t); err != nil {
 		return err
 	}
-	return c.Conn.SetWriteDeadline(t)
+	return c.SetWriteDeadline(t)
 }

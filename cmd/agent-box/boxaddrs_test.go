@@ -93,18 +93,35 @@ var testRelayKey = func() proxyline.Key {
 	return k
 }()
 
-// rawPostProxy is one POST over TCP behind a PROXY line: status and body, or the
-// error when the connection was closed unanswered.
-func rawPostProxy(t *testing.T, addr, prefix, path, tok, body string) (int, string, error) {
+// relayConn dials addr and runs the relay's handshake under testRelayKey, as the
+// relay does: the port is the one it dialed, which is addr's. The PROXY line
+// and the request follow. The conn has a deadline, so a listener that never
+// answers fails the test instead of hanging it.
+func relayConn(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	t.Cleanup(func() { c.Close() })
 	c.SetDeadline(time.Now().Add(5 * time.Second))
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proxyline.RelayHandshake(c, testRelayKey, ap.Port()); err != nil {
+		t.Fatalf("relay handshake: %v", err)
+	}
+	return c
+}
+
+// rawPostProxy is one POST on c, a relay conn, behind head (a PROXY line): status
+// and body, or the error when the connection was closed unanswered. It closes c.
+func rawPostProxy(t *testing.T, c net.Conn, head, path, tok, body string) (int, string, error) {
+	t.Helper()
+	defer c.Close()
 	fmt.Fprintf(c, "%sPOST %s HTTP/1.1\r\nHost: b\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-		prefix, path, tok, len(body), body)
+		head, path, tok, len(body), body)
 	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "POST"})
 	if err != nil {
 		return 0, "", err
@@ -134,10 +151,9 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 		}
 		return netip.Addr{}, errors.New("no such box")
 	}
-	// The relay writes its key line ahead of the PROXY line (#114).
-	preamble := string(testRelayKey.Preamble())
-	own := preamble + "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
-	other := preamble + "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n"
+	// The relay proves its key (#118), then writes the PROXY line.
+	own := "PROXY TCP4 172.29.72.9 172.29.72.1 40000 9071\r\n"
+	other := "PROXY TCP4 172.29.72.10 172.29.72.1 40000 9071\r\n"
 	const path, body = "/v1/static/token", `{"name":"kept"}`
 
 	dir := shortRoot(t)
@@ -149,10 +165,10 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 	defer svc.Stop(context.Background())
 	addr := svc.Hooks.EP.Listener.Addr().String()
 	tok := svc.Hooks.Token("tok-1", wireNonce)
-	if code, b, err := rawPostProxy(t, addr, own, path, tok, body); err != nil || code != http.StatusOK || !strings.Contains(b, "tok-SECRET-1234") {
+	if code, b, err := rawPostProxy(t, relayConn(t, addr), own, path, tok, body); err != nil || code != http.StatusOK || !strings.Contains(b, "tok-SECRET-1234") {
 		t.Fatalf("own address: %d %q %v", code, b, err)
 	}
-	if code, b, err := rawPostProxy(t, addr, other, path, tok, body); err != nil || code != http.StatusForbidden || strings.Contains(b, "tok-SECRET-1234") {
+	if code, b, err := rawPostProxy(t, relayConn(t, addr), other, path, tok, body); err != nil || code != http.StatusForbidden || strings.Contains(b, "tok-SECRET-1234") {
 		t.Fatalf("another address: %d %q %v", code, b, err)
 	}
 
@@ -164,7 +180,7 @@ func TestStartBrokerDarwinBindsTokensToTheBoxAddress(t *testing.T) {
 	defer svc2.Stop(context.Background())
 	addr2 := svc2.Hooks.EP.Listener.Addr().String()
 	tok2 := svc2.Hooks.Token("tok-1", wireNonce)
-	if code, _, err := rawPostProxy(t, addr2, own, path, tok2, body); err != nil || code != http.StatusForbidden {
+	if code, _, err := rawPostProxy(t, relayConn(t, addr2), own, path, tok2, body); err != nil || code != http.StatusForbidden {
 		t.Fatalf("no box source: %d %v, want 403", code, err)
 	}
 }

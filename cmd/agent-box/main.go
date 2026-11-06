@@ -662,10 +662,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			warnBridgeBoxes(context.Background(), layer.cli, cfg.BoxInstance(), egressSvc.Svc.Network())
 		}
 		go func() {
-			t := time.NewTicker(24 * time.Hour)
+			t := time.NewTicker(reclaimEvery)
 			defer t.Stop()
 			for range t.C {
-				layer.dailyReclaim(context.Background())
+				layer.periodicReclaim(context.Background())
 			}
 		}()
 		// Reconcile covers a daemon restart only. The sweep covers what happens
@@ -1081,22 +1081,6 @@ func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
 	}
 	if err != nil {
 		log.Printf("box sweep: %v", err)
-	}
-}
-
-// reclaimBoxState removes the host homes of boxes that are gone and unused, and
-// reports what it freed. internal/box returns results rather than logging so its
-// decisions stay testable without a daemon; the printing belongs here.
-func reclaimBoxState(ctx context.Context, boxes *box.Manager) {
-	done, err := boxes.ReclaimState(ctx, box.DefaultStateTTL)
-	for _, r := range done {
-		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
-			r.Box, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
-	}
-	if err != nil {
-		log.Printf("box state reclaim: %v. The home stays; usually a directory a box "+
-			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
-			"to be removed as its owner. New boxes create neither.", err)
 	}
 }
 

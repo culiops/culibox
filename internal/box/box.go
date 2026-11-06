@@ -48,7 +48,8 @@ const (
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
-	// signal. It is not a box name, so the reclaim sweep never considers it.
+	// signal: the last spawn, or the end of the last session. It is not a box
+	// name, so the reclaim sweep never considers it.
 	lastUsedDirName = ".lastused"
 
 	runtimeRunc   = "runc"
@@ -572,9 +573,11 @@ func (m *Manager) markerPath(boxName string) string {
 	return filepath.Join(m.opts.StateRoot, stateDirName, lastUsedDirName, boxName)
 }
 
-// touchMarker records that a session used this box now. Best effort: a failure
-// here must never fail a spawn. The cost of losing it is a home that looks older
-// than it is, and the reclaim sweep refuses on two further grounds anyway.
+// touchMarker records that a session used this box now. It runs when a spawn
+// lands (ensure), when the last session is released (ReleaseBox) and when Sweep
+// clears a counter whose release never came. Best effort: a failure here must
+// never fail a spawn or a release. The cost of losing it is a home that looks
+// older than it is, and the reclaim sweep refuses on two further grounds anyway.
 func (m *Manager) touchMarker(boxName string) {
 	p := m.markerPath(boxName)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -1526,19 +1529,36 @@ func (m *Manager) ReleaseBox(name string) {
 	if name == "" {
 		return
 	}
+	if m.release(name) {
+		// The reclaim sweep ages a home by this marker, and a box was last used
+		// when its last session ended, not when that session started: a long
+		// session must not look an hour idle the moment it ends. Outside mu, like
+		// ensure's call, because it is file I/O. A box that is removed at once
+		// (exclusive) outlives this by a docker call, and reclaim only looks at
+		// boxes whose container is gone.
+		m.touchMarker(name)
+	}
+}
+
+// release drops one session's count and, when that was the last, arms the idle
+// timer. It reports whether a counted session was the last one released, which
+// is the only time the box was just used.
+func (m *Manager) release(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.active[name] > 0 {
+	counted := m.active[name] > 0
+	if counted {
 		m.active[name]--
 	}
 	if m.active[name] > 0 {
-		return
+		return false
 	}
 	delete(m.active, name)
 	if t, ok := m.timers[name]; ok {
 		t.Stop()
 	}
 	m.timers[name] = time.AfterFunc(m.idleTTL(name), func() { m.stopIfIdle(name) })
+	return counted
 }
 
 // stopIfIdle re-checks under the lock, so a session started during the idle
@@ -1689,6 +1709,9 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 			name := b.Name
 			m.timers[name] = time.AfterFunc(m.idleTTL(name), func() { m.stopIfIdle(name) })
 			m.mu.Unlock()
+			// The release that never came is when the box's last session ended as
+			// far as anyone can tell: ReleaseBox's marker, for the same reason.
+			m.touchMarker(name)
 			rep.Corrected = append(rep.Corrected, SweepAction{b.Name,
 				fmt.Sprintf("counter said %d live session(s), the registry says 0 on two sweeps; idle timer armed", count)})
 		}

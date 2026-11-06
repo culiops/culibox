@@ -488,3 +488,270 @@ test("a boxed session's workspace-relative token also carries alt", () => {
   const calls = clickWith("docs/a.md", "/home/u/repo", "", undefined, true);
   assert.deepStrictEqual(calls, [["/home/u/repo/docs/a.md", { alt: { base: "/home/u/repo", rel: "docs/a.md" } }]]);
 });
+
+// --- WebGL renderers (#127) ---------------------------------------------------
+// MEASURED in Chromium: 16 live WebGL contexts per page, and the 17th kills the
+// OLDEST, which were the panes on screen while hidden tabs kept theirs. A lost
+// pane painted nothing until reload. dispose() alone does not free a slot (the
+// context lives until GC); loseContext() does.
+const { makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl } = require("../static/terminal-tab.js");
+
+function member(name, shown = true, on = true) {
+  return {
+    name, isShown: shown, gl: false, offs: 0,
+    shown() { return this.isShown; },
+    webglOn() { if (on) this.gl = true; return on; },
+    webglOff() { this.gl = false; this.offs++; },
+  };
+}
+
+const DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+const ANDROID_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+
+test("the WebGL cap leaves room for every on-screen pane under the browser's 16", () => {
+  assert.ok(webglCapFor(DESKTOP_UA) >= 8, "4 panes, each with a docked shell, are on screen at once");
+  assert.ok(webglCapFor(DESKTOP_UA) < 16, "Chromium kills the oldest context past 16");
+});
+
+test("on Android the WebGL cap stays under Chromium's 8 there", () => {
+  assert.ok(webglCapFor(ANDROID_UA) < 8);
+  assert.ok(webglCapFor(ANDROID_UA) >= 1);
+  assert.strictEqual(webglCapFor(""), webglCapFor(DESKTOP_UA), "no user agent: the desktop cap");
+});
+
+// dropWebgl reaches the context through the vendored addon's private fields.
+// If a re-vendor renames them it silently falls back to a plain dispose, the
+// slot waits for GC, and #127 comes back under churn: pin them here.
+test("the vendored WebGL addon still keeps its context where dropWebgl looks", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/xterm/addon-webgl.js"), "utf8");
+  assert.ok(src.includes("this._renderer=this._register(new"), "addon._renderer");
+  assert.ok(src.includes('this._gl=this._canvas.getContext("webgl2"'), "renderer._gl");
+});
+
+test("a shown tab gets WebGL while the pool has room", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a");
+  assert.strictEqual(pool.acquire(a), true);
+  assert.strictEqual(a.gl, true);
+  assert.strictEqual(pool.size(), 1);
+  assert.strictEqual(pool.acquire(a), true, "showing it again keeps it");
+  assert.strictEqual(pool.size(), 1);
+});
+
+test("past the cap the least recently shown hidden tab gives its WebGL up", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b"), c = member("c");
+  pool.acquire(a); pool.acquire(b);
+  a.isShown = false; b.isShown = false;
+  pool.acquire(a); // a shown again more recently than b
+  assert.strictEqual(pool.acquire(c), true);
+  assert.strictEqual(b.gl, false, "b was the least recently shown");
+  assert.strictEqual(a.gl, true);
+  assert.strictEqual(c.gl, true);
+  assert.strictEqual(pool.size(), 2);
+});
+
+test("a pane on screen never loses its WebGL to a newer tab", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b", false), c = member("c");
+  pool.acquire(a); pool.acquire(b); // a is older but on screen, b is hidden
+  assert.strictEqual(pool.acquire(c), true);
+  assert.strictEqual(a.gl, true, "on screen: kept although oldest");
+  assert.strictEqual(b.gl, false);
+});
+
+test("when every holder is on screen the new tab keeps the DOM renderer", () => {
+  const pool = makeWebglPool(2);
+  const a = member("a"), b = member("b"), c = member("c");
+  pool.acquire(a); pool.acquire(b);
+  assert.strictEqual(pool.acquire(c), false);
+  assert.strictEqual(c.gl, false);
+  assert.strictEqual(a.gl && b.gl, true);
+  assert.strictEqual(pool.size(), 2);
+});
+
+test("a tab whose WebGL cannot start takes no slot", () => {
+  const pool = makeWebglPool(1);
+  const bad = member("bad", true, false), a = member("a");
+  assert.strictEqual(pool.acquire(bad), false);
+  assert.strictEqual(pool.size(), 0);
+  assert.strictEqual(pool.acquire(a), true);
+});
+
+test("release turns WebGL off and frees the slot", () => {
+  const pool = makeWebglPool(1);
+  const a = member("a"), b = member("b");
+  pool.acquire(a);
+  pool.release(a);
+  assert.strictEqual(a.gl, false);
+  assert.strictEqual(pool.size(), 0);
+  assert.strictEqual(pool.acquire(b), true);
+  assert.strictEqual(a.offs, 1);
+});
+
+function fakeAddonClass(log) {
+  return class {
+    constructor() { this.disposed = false; this._renderer = { _gl: { getExtension: (n) => (n === "WEBGL_lose_context" ? { loseContext: () => log.push("lose") } : null) } }; }
+    onContextLoss(fn) { this.lossFn = fn; return { dispose() {} }; }
+    dispose() { this.disposed = true; log.push("dispose"); }
+  };
+}
+
+test("loadWebgl loads the renderer and reports its context loss", () => {
+  const loaded = [];
+  const term = { loadAddon(a) { loaded.push(a); } };
+  let lost = null;
+  const a = loadWebgl(term, fakeAddonClass([]), (x) => { lost = x; });
+  assert.ok(a);
+  assert.deepStrictEqual(loaded, [a]);
+  a.lossFn(new Event("webglcontextlost"));
+  assert.strictEqual(lost, a, "the loss names the addon that lost it");
+});
+
+test("loadWebgl answers null when the browser has no WebGL2", () => {
+  const log = [];
+  const term = { loadAddon() { throw new Error("WebGL2 not supported"); } };
+  assert.strictEqual(loadWebgl(term, fakeAddonClass(log), () => {}), null);
+  assert.deepStrictEqual(log, ["dispose", "lose"], "a half-made renderer is still released");
+});
+
+test("dropWebgl disposes the renderer and then frees its context slot", () => {
+  const log = [];
+  const A = fakeAddonClass(log);
+  dropWebgl(new A());
+  assert.deepStrictEqual(log, ["dispose", "lose"]);
+});
+
+test("dropWebgl tolerates no addon, no renderer and a lost context", () => {
+  dropWebgl(null);
+  dropWebgl({ dispose() {} });
+  dropWebgl({ dispose() {}, _renderer: { _gl: { getExtension: () => null } } });
+  dropWebgl({ dispose() { throw new Error("already disposed"); }, _renderer: null });
+});
+
+// TerminalTab as a pool member: shown when sized, a lost renderer gives its
+// slot back, a late loss from a renderer already dropped changes nothing.
+function webglTab() {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const tab = Object.create(TerminalTab.prototype);
+  tab.termEl = { clientWidth: 800, clientHeight: 400 };
+  tab.term = { rows: 24, cols: 80, loadAddon() {} };
+  tab.fitAddon = { fit() {} };
+  tab.ws = null;
+  tab.closed = false;
+  tab.webgl = null;
+  tab.webglBroken = false;
+  return tab;
+}
+
+test("a shown terminal draws with WebGL and falls back when its context is lost", () => {
+  global.WebglAddon = { WebglAddon: fakeAddonClass([]) };
+  try {
+    const tab = webglTab();
+    const before = webglPool.size();
+    tab.fit();
+    assert.ok(tab.webgl, "a sized fit takes a renderer");
+    assert.strictEqual(webglPool.size(), before + 1);
+    tab.webgl.lossFn();
+    assert.strictEqual(tab.webgl, null, "lost: back to the DOM renderer");
+    assert.strictEqual(webglPool.size(), before, "and the slot is free");
+    tab.fit();
+    assert.ok(tab.webgl, "retried the next time it shows");
+    webglPool.release(tab);
+  } finally { delete global.WebglAddon; }
+});
+
+test("a loss reported by a renderer the tab already dropped is ignored", () => {
+  global.WebglAddon = { WebglAddon: fakeAddonClass([]) };
+  try {
+    const tab = webglTab();
+    tab.fit();
+    const old = tab.webgl;
+    webglPool.release(tab);
+    tab.fit();
+    const now = tab.webgl;
+    old.lossFn();
+    assert.strictEqual(tab.webgl, now);
+    webglPool.release(tab);
+  } finally { delete global.WebglAddon; }
+});
+
+test("a closed tab, or one whose WebGL already failed, takes no slot and evicts nobody", () => {
+  const log = [];
+  let made = 0;
+  global.WebglAddon = { WebglAddon: class extends fakeAddonClass(log) { constructor() { super(); made++; } } };
+  try {
+    const before = webglPool.size();
+    const broken = webglTab();
+    broken.term.loadAddon = () => { throw new Error("WebGL2 not supported"); };
+    broken.fit(); // the first try is the only one
+    assert.strictEqual(broken.webglBroken, true);
+    assert.strictEqual(webglPool.size(), before);
+    // A full pool of hidden holders: any acquire would evict one of them.
+    const cap = webglCapFor(typeof navigator !== "undefined" ? navigator.userAgent : "");
+    const holders = [];
+    while (webglPool.size() < cap) {
+      const h = member("h" + holders.length, false);
+      webglPool.acquire(h);
+      holders.push(h);
+    }
+    const full = webglPool.size();
+    const closed = webglTab();
+    closed.closed = true;
+    made = 0;
+    closed.fit();
+    broken.fit();
+    assert.strictEqual(made, 0, "neither tries to start a renderer");
+    assert.strictEqual(webglPool.size(), full);
+    assert.ok(holders.every((h) => h.gl), "no hidden holder was evicted for them");
+    for (const h of holders) webglPool.release(h);
+    assert.strictEqual(webglPool.size(), before);
+  } finally { delete global.WebglAddon; }
+});
+
+// One resize per size (#126). MEASURED: a size change reached the server three
+// times (ResizeObserver, font load, fitAll), 60 messages for 20 sizes. A new
+// socket must still send its first: the server repaints the TUI on it.
+const { resizeToSend } = require("../static/terminal-tab.js");
+
+test("a socket that has sent nothing sends the size", () => {
+  assert.deepStrictEqual(resizeToSend(null, 24, 80), { type: "resize", rows: 24, cols: 80 });
+});
+
+test("the size this socket already sent is not sent again", () => {
+  assert.strictEqual(resizeToSend({ rows: 24, cols: 80 }, 24, 80), null);
+});
+
+test("a changed row or column count is sent", () => {
+  assert.deepStrictEqual(resizeToSend({ rows: 24, cols: 80 }, 24, 81), { type: "resize", rows: 24, cols: 81 });
+  assert.deepStrictEqual(resizeToSend({ rows: 24, cols: 80 }, 25, 80), { type: "resize", rows: 25, cols: 80 });
+});
+
+test("sendResize sends each size once per socket and again on a new one", () => {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const sockets = [];
+  global.location = { protocol: "http:", host: "127.0.0.1:8899" };
+  global.WebSocket = class {
+    constructor() { this.readyState = 0; this.sent = []; sockets.push(this); }
+    send(m) { this.sent.push(JSON.parse(m)); }
+    close() {}
+  };
+  global.WebSocket.OPEN = 1;
+  try {
+    const tab = Object.create(TerminalTab.prototype);
+    tab.term = { rows: 24, cols: 80, reset() {}, focus() {} };
+    tab.connect();
+    sockets[0].readyState = 1;
+    sockets[0].onopen();
+    tab.sendResize(); tab.sendResize();
+    assert.strictEqual(sockets[0].sent.length, 1, "onopen sent the size; repeats are dropped");
+    tab.term.cols = 100;
+    tab.sendResize(); tab.sendResize();
+    assert.strictEqual(sockets[0].sent.length, 2);
+    tab.connect(); // reconnect: a new socket must hear the size once
+    sockets[1].readyState = 1;
+    sockets[1].onopen();
+    tab.sendResize();
+    assert.deepStrictEqual(sockets[1].sent, [{ type: "resize", rows: 24, cols: 100 }]);
+  } finally { delete global.WebSocket; delete global.location; }
+});

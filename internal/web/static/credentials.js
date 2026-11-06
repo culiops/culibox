@@ -173,25 +173,30 @@ function credDeleteText(kind, e) {
 // tag, seed, title}: `kind` "st" or "pv" is a status / probe verdict coloured by
 // `cls`; `tag` is the PROD badge. The actions column is not here: it is DOM.
 
-// CRED_TABLE_MIN_WIDTH: the narrowest #creds-body (px) a table is drawn in; below
-// it the page draws the cards the modal draws. Measured, not chosen: the AWS table
-// does not wrap its names, so it is the widest at 667px, and #creds-body is 667px
-// when the viewport is 1190px with the default 290px sidebar. Narrower than that
-// the section (overflow: hidden) clips its Edit and Delete; the token tables
-// (table-layout: fixed) break "release-bot" and put Used by under Edit at about
-// 1000px. 700 leaves a little room for a longer account name. It is the body's
-// width, not the viewport's, because the sidebar is dragged between 200 and 560px.
+// CRED_TABLE_MIN_WIDTH: the floor of #creds-body (px) a table is drawn in; below it
+// the page draws the cards the modal draws, whatever the content. It is a floor, not
+// the answer: the width a table needs depends on its content, and a fixed number
+// failed for four content shapes in a row (hyphenated names, hyphen-free names, a
+// long Used by, and a PROD badge beside the "from config.json" chip, which holds the
+// AWS Connection column at 181px and the table at about 725px). Above the floor the
+// painter measures what a drawn table needs (credNeedW). The floor stays because the
+// token tables (table-layout: fixed, shares of the width) break "release-bot" and put
+// Used by under Edit at about 1000px of window, which no section overflow shows. It is
+// the body's width, not the viewport's, because the sidebar is dragged between 200
+// and 560px.
 const CRED_TABLE_MIN_WIDTH = 700;
 
 // credTablesAt: the one rule for tables or cards. Only the desktop page draws
 // tables (a modal resized wide keeps its cards: the dialog must be a page). A body
 // that cannot be measured (0 wide: the tab is hidden) keeps tables, as it always
-// did, so a hidden tab never flips the mode. Pure, so the painter (credTableMode)
-// and the resize observer (credWatchWidth) cannot disagree about it.
-function credTablesAt(width, pageMode) {
+// did, so a hidden tab never flips the mode. Otherwise the body must be at least the
+// floor and at least `needW`, the width a drawn table was measured to need (0: none
+// measured yet), so a table is drawn only where it fits. Pure, so the painter
+// (credTableMode) and the resize observer (credWatchWidth) cannot disagree about it.
+function credTablesAt(width, pageMode, needW) {
   if (!pageMode) return false;
   if (!(width > 0)) return true;
-  return width >= CRED_TABLE_MIN_WIDTH;
+  return width >= Math.max(CRED_TABLE_MIN_WIDTH, needW > 0 ? needW : 0);
 }
 
 const CRED_TABLE_HEADS = {
@@ -828,7 +833,12 @@ let credHeldWired = false;
 // The mode (tables or cards) of the last paint, and whether the resize observer
 // is wired: see credWatchWidth.
 let credPaintedTables = false;
+// credNeedW: the width of #creds-body (px) a table was last measured to need, 0 when
+// nothing was measured. It only grows while the same data is shown, so tables and
+// cards cannot take turns at one width; new data forgets it (renderCredentials).
+let credNeedW = 0;
 let credWidthWatched = false;
+let credFontsWatched = false;
 // The Add / Edit AWS view while it is open, else null. See awsOpenAdd.
 let awsFlow = null;
 
@@ -1028,7 +1038,19 @@ function credPageMode() {
 // never left clipping Edit and Delete in a body that has become too narrow.
 function credTableMode() {
   const body = document.getElementById("creds-body");
-  return credTablesAt(body ? body.clientWidth : 0, credPageMode());
+  return credTablesAt(body ? body.clientWidth : 0, credPageMode(), credNeedW);
+}
+
+// credTableOverflow: how far the widest table section sticks out of its box (px, 0
+// when every one fits). A section clips what does not fit (overflow: hidden), but its
+// scrollWidth still counts it, so this reads what the user would not see.
+function credTableOverflow(host) {
+  let over = 0;
+  for (const sec of host.querySelectorAll(".ctab-sec")) {
+    const d = sec.scrollWidth - sec.clientWidth;
+    if (d > over) over = d;
+  }
+  return over;
 }
 
 // credEntryHost: where an entry's inline confirmation goes. A card is its own
@@ -1271,6 +1293,9 @@ function credBanners(view) {
 function renderCredentials(view) {
   const host = document.getElementById("creds-body");
   if (!host) return;
+  // New data forgets what a table was measured to need: the row that did not fit may be
+  // gone. The cached view repainted for a new width is the same object and keeps it.
+  if (view !== credView) credNeedW = 0;
   credView = view;
   // The Add / Edit view owns the body until it is left; it reads credView when it needs it.
   if (awsFlow || credForm) return;
@@ -1282,8 +1307,18 @@ function renderCredentials(view) {
   credRepaintHeld = false;
   credWireHeld(host);
   credWatchWidth(host);
-  // The mode this paint draws in (credSection and the table builders read the same
-  // credTableMode() a few lines below, in this same call), kept for credWatchWidth.
+  credPaint(host, view);
+  // A table that does not fit is drawn once to find that out, then replaced by cards in
+  // this same call, so nothing is seen. One retry, never a loop: credNeedW only grew, so
+  // the second paint is cards (a body this wide is below the need).
+  if (credPaintedTables && credGrowNeed(host)) credPaint(host, view);
+  credScrollPending();
+}
+
+// credPaint: one paint of the whole body. The mode this paint draws in (credSection
+// and the table builders read the same credTableMode() below, in this same call) is
+// kept for credWatchWidth.
+function credPaint(host, view) {
   credPaintedTables = credTableMode();
   const nodes = [credStrip(view), ...credBanners(view)];
   const groups = credGroups(view);
@@ -1294,7 +1329,19 @@ function renderCredentials(view) {
     nodes.push(credSection(g));
   }
   host.replaceChildren(...nodes);
-  credScrollPending();
+}
+
+// credGrowNeed: after a table paint, measure the tables and, if any section sticks
+// out of its box, make sure credNeedW covers what they need (it only ever grows).
+// True when a section sticks out, i.e. the tables do not fit and the caller repaints,
+// now in cards; false when they fit. The 2px is slack for rounding. A body that reads
+// 0 wide (the tab is hidden) has nothing to measure.
+function credGrowNeed(host) {
+  if (!(host.clientWidth > 0)) return false;
+  const over = credTableOverflow(host);
+  if (!(over > 0)) return false;
+  credNeedW = Math.max(credNeedW, host.clientWidth + over + 2);
+  return true;
 }
 
 // credFocusGroup: the profile form's "none defined" links ask for the
@@ -1319,9 +1366,58 @@ function credScrollPending() {
 function credWireHeld(host) {
   if (credHeldWired) return;
   credHeldWired = true;
-  host.addEventListener("focusout", () => {
-    setTimeout(() => { if (credRepaintHeld && credView) renderCredentials(credView); }, 0);
-  });
+  host.addEventListener("focusout", () => setTimeout(credFocusLeft, 0));
+}
+
+// credFocusLeft: focus left something in the body. A repaint held for the unlock
+// field is made now, unless something is typed there (credWidthHold): focus leaves
+// the field on the mousedown of the Unlock button, and a repaint before the click
+// would wipe the passphrase and the button with it. Otherwise a width repaint that
+// was held back gets another look.
+function credFocusLeft() {
+  const host = document.getElementById("creds-body");
+  if (credRepaintHeld && credView) {
+    if (!host || !credWidthHold(host)) renderCredentials(credView);
+  } else {
+    credRepaintForWidth();
+  }
+}
+
+// credWidthHold: what a repaint for a new width must not replace. A Delete
+// confirmation is a question the user is about to answer; a store passphrase is
+// text they have typed, and focus may have left the field (dragging the window or
+// the sidebar does that), so storeUnlockFocused cannot see it. Read from the DOM,
+// so there is no flag to keep in step. This is not credRepaintHeld: that one is
+// released by the body's focusout, and the click on the confirmation's own Cancel
+// or Delete would fire it first and repaint the button away before it was clicked.
+function credWidthHold(host) {
+  if (host.querySelector(".confirm")) return true;
+  return Array.from(host.querySelectorAll(".storepass")).some((i) => !!i.value);
+}
+
+// credRepaintForWidth: repaint from the cached view when the body is in a different
+// mode (tables or cards) than its last paint, unless something is held. A held
+// repaint is asked for again where the hold ends (credDismissConfirm, the body's
+// focusout), and a later resize asks too. A table that is on screen is measured
+// first: a window dragged narrower than its content needs, but not below the floor,
+// leaves the rule saying "tables" while the section clips (measured: opened at 1440
+// and dragged to 1225, the AWS table stuck out 23px and Delete 6px). Raising the
+// need makes the mode differ from the paint, so the cards are drawn below.
+function credRepaintForWidth() {
+  const host = document.getElementById("creds-body");
+  // A hidden tab reads 0 wide, which credTablesAt takes for "tables": it must not
+  // flip. The observer entry is checked for this; the frame comes later, and the tab
+  // may have been hidden in between.
+  if (!host || !credView || !(host.clientWidth > 0)) return;
+  // Not while a repaint is held (the unlock field has focus): if the hold is for new
+  // data, the table on screen is about to be replaced and credNeedW was forgotten for
+  // the new view, so measuring the old table would hand its width to data it does not
+  // describe. Only the measure waits: the mode check below still runs, and releasing
+  // the hold paints and measures anyway.
+  const grew = credPaintedTables && !credRepaintHeld && credGrowNeed(host);
+  if (!grew && credTableMode() === credPaintedTables) return;
+  if (credWidthHold(host)) return;
+  renderCredentials(credView);
 }
 
 // credWatchWidth: once, repaint from the cached view when the body crosses the
@@ -1329,16 +1425,20 @@ function credWireHeld(host) {
 // (credTableMode), so a page opened wide and then narrowed kept its tables and
 // pushed Edit and Delete past the window. Watching the body, not the window,
 // because the sidebar is dragged too. Nothing happens per pixel: only a change of
-// mode repaints, and never a refetch. renderCredentials already declines while the
-// Add / Edit view is open and while the unlock field has focus, and the next paint
-// (closing the view, leaving the field) draws the right mode. A hidden tab
-// reports 0 wide: skipped, it must not flip anything.
+// mode repaints, and never a refetch; a table on screen is measured on the frame
+// (credRepaintForWidth), which reads sizes and changes nothing unless it overflows.
+// renderCredentials already declines while the Add / Edit view is open and while the
+// unlock field has focus, and the next paint (closing the view, leaving the field)
+// draws the right mode. credRepaintForWidth also waits while a Delete confirmation
+// is open or a passphrase is typed (#123). A hidden tab reports 0 wide: skipped, it
+// must not flip anything.
 //
 // The repaint runs on the next frame, not inside the observer callback: a repaint
 // changes #creds-body's height, which the observer is also watching, and that
 // raises "ResizeObserver loop completed with undelivered notifications" on the
 // window (measured, Chromium). Frames coalesce: a drag asks once per frame at most.
 function credWatchWidth(host) {
+  credWatchFonts();
   if (credWidthWatched || typeof ResizeObserver !== "function") return;
   credWidthWatched = true;
   let queued = false;
@@ -1349,9 +1449,23 @@ function credWatchWidth(host) {
     queued = true;
     later(() => {
       queued = false;
-      if (credView && credTableMode() !== credPaintedTables) renderCredentials(credView);
+      credRepaintForWidth();
     });
   }).observe(host);
+}
+
+// credWatchFonts: once, look at a table again when the web font has loaded. The font
+// is font-display: swap (desktop.css), so a table first drawn in the fallback font can
+// be widened by Inter afterwards, which no resize reports and which does not change
+// the body's height either. credRepaintForWidth measures a table it keeps, and
+// changes nothing if it still fits. A browser without document.fonts has nothing to
+// wait for.
+function credWatchFonts() {
+  if (credFontsWatched) return;
+  const ready = typeof document !== "undefined" && document.fonts ? document.fonts.ready : null;
+  if (!ready || typeof ready.then !== "function") return;
+  credFontsWatched = true;
+  ready.then(() => credRepaintForWidth());
 }
 
 function setCredErr(msg) {
@@ -2930,9 +3044,13 @@ function credValueForm(replaceId) {
 function credDismissConfirm(box) {
   const host = box.parentElement;
   box.remove();
-  if (!host || !host.classList.contains("ctab-ex") || host.firstElementChild) return;
-  const row = host.closest("tr.ctab-x");
-  if (row) row.remove();
+  if (host && host.classList.contains("ctab-ex") && !host.firstElementChild) {
+    const row = host.closest("tr.ctab-x");
+    if (row) row.remove();
+  }
+  // The confirmation may have held back a repaint, for a new width or for new data
+  // (one held while the unlock request was in flight): credFocusLeft makes either.
+  credFocusLeft();
 }
 
 // credConfirmDelete: an inline confirmation in the card or row (no browser

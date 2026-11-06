@@ -17,8 +17,9 @@ import (
 	"github.com/culiops/culibox/internal/proxyline"
 )
 
-// proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// relay key line and PROXY line; the relay writes both before any other byte.
+// proxyHeaderTimeout bounds how long a darwin connection may take to finish the
+// whole relay handshake and send its PROXY line; the relay does both before any
+// other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
@@ -43,9 +44,16 @@ type ServiceOptions struct {
 	// after the network is ensured and before anything else, so a failure keeps
 	// boxes off an egress path whose VM firewall rules no longer hold.
 	AfterNetwork func(ctx context.Context, n Net) error
-	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay presents
-	// before its PROXY line (#114). On darwin a zero key makes Ready refuse to
-	// listen: the PROXY line is never trusted on its own.
+	// SweepRelay (darwin only; nil on Linux) runs on a Ready call that is not
+	// listening yet, before the network is ensured, and removes a relay that is
+	// not current (#118): a Ready that fails before AfterNetwork never reaches the
+	// relay's own checks. Its error is logged and Ready goes on, because
+	// AfterNetwork still decides the normal path.
+	SweepRelay func(ctx context.Context) error
+	// RelayKey (darwin only; zero on Linux) is the key CuliBox's relay and this
+	// listener prove to each other before the relay's PROXY line is read (#114,
+	// #118). On darwin a zero key makes Ready refuse to listen: the PROXY line
+	// is never trusted on its own.
 	RelayKey proxyline.Key
 }
 
@@ -114,9 +122,10 @@ func (s *Service) Exists(ctx context.Context) bool {
 	return err == nil && ok
 }
 
-// Ready is idempotent: it ensures the network (refusing a wrong one), runs
-// AfterNetwork on every call right after that, before anything else (under the
-// service lock, so Close may wait for it), refreshes
+// Ready is idempotent: on darwin, while it is not listening yet, it first runs
+// SweepRelay (a failure there is logged, never returned); it ensures the network
+// (refusing a wrong one), runs AfterNetwork on every call right after that,
+// before anything else (under the service lock, so Close may wait for it), refreshes
 // the host's own addresses (every call, so an address that appears later is
 // refused too), points the proxy at the network, and starts listening once. Any failure leaves nothing listening
 // that was not already, and a later call retries.
@@ -125,6 +134,16 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	defer s.mu.Unlock()
 	if s.closed {
 		return Endpoint{}, errors.New("egress: service is closed")
+	}
+	// Not listening yet: a relay an earlier CuliBox left that is not current goes
+	// before anything can fail (#118). A Ready that fails at the network never
+	// reaches AfterNetwork, and such a relay would keep forwarding the boxes'
+	// egress to a port this daemon does not hold. Once listening this is skipped,
+	// so the steady state costs nothing.
+	if s.ln == nil && s.o.GOOS == "darwin" && s.o.SweepRelay != nil {
+		if err := s.o.SweepRelay(ctx); err != nil {
+			log.Printf("egress: could not remove a relay that is not current (%v); going on, the relay is checked again once the network is ready", err)
+		}
 	}
 	n, err := EnsureNetwork(ctx, s.o.Docker, s.Network(), s.o.Instance, s.o.Want)
 	if err != nil {
@@ -149,18 +168,23 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	// macOS trusts a PROXY line only behind the relay's key, so no key means no
-	// listener (fail closed and loud), never a header-only fallback.
+	// macOS trusts a PROXY line only from a relay that proved the key, so no key
+	// means no listener (fail closed and loud), never a header-only fallback.
 	if s.o.GOOS == "darwin" && s.o.RelayKey.IsZero() {
 		return Endpoint{}, errors.New("egress: no relay key; refusing to listen")
 	}
 	// The source check is on for both OSes. On macOS every box reaches the proxy
 	// through the relay, so the TCP peer is always loopback; the box address is
-	// the relay's PROXY line, which the wrapper below requires (behind the relay
-	// key) and vets.
+	// the relay's PROXY line, which the wrapper below requires (after the relay
+	// proved the key) and vets.
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
+		// Only macOS has a relay in front of the port, so only there does a
+		// bind conflict need saying who may hold it (#118); Linux's text is as it was.
+		if s.o.GOOS == "darwin" {
+			err = proxyline.ExplainBindError(s.o.Port, err)
+		}
 		return Endpoint{}, fmt.Errorf("egress: listen %s: %w", addr, err)
 	}
 	// Whatever Listen did, the socket must be where listenAddr said: never wider.

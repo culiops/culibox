@@ -4812,10 +4812,12 @@ function renderProfileList() {
     const nm = document.createElement("span");
     nm.textContent = p.name;
     b.appendChild(nm);
-    if (!p.editable) {
+    // Where a read-only profile came from (built-in, config.json), by its `source`.
+    const labels = profileListLabels(p);
+    if (labels.badge) {
       const lk = document.createElement("span");
       lk.className = "lk";
-      lk.textContent = "built-in";
+      lk.textContent = labels.badge;
       b.appendChild(lk);
     }
     // Outside .psub on purpose: the mobile list hides .psub, and work that has
@@ -4829,11 +4831,11 @@ function renderProfileList() {
       nh.title = notHomeTitle(p.not_home);
       b.appendChild(nh);
     }
-    // The desktop page's second line (pg-1b): "claude · box", "built-in · host".
+    // The desktop page's second line (pg-1b): "claude · box", "config.json · host".
     // Hidden at <= 700px, where the row stays one line.
     const sub = document.createElement("span");
     sub.className = "psub";
-    sub.textContent = [p.editable ? p.bin : "built-in", p.runtime].filter(Boolean).join(" · ");
+    sub.textContent = labels.sub;
     b.appendChild(sub);
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);

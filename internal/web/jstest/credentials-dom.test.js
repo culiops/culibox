@@ -25,7 +25,10 @@ class Node {
     this.tag = tag; this.children = []; this.parent = null; this.own = "";
     this.className = ""; this.attrs = {}; this.dataset = {}; this.disabled = false; this.colSpan = 1;
     const self = this;
-    this.classList = { contains: (c) => self.className.split(/\s+/).includes(c) };
+    this.classList = {
+      contains: (c) => self.className.split(/\s+/).includes(c),
+      add: (c) => { if (!self.className.split(/\s+/).includes(c)) self.className = (self.className + " " + c).trim(); },
+    };
   }
   get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
@@ -565,4 +568,395 @@ test("no ResizeObserver (an old browser): painting still works and nothing throw
   const p = page({ width: 900 });
   p.box.renderCredentials(liveView);
   assert.ok(p.byId["creds-body"].querySelectorAll("table").length > 0);
+});
+
+// --- #123: a width change never repaints away what the user is in the middle of ------
+
+const deleteBtn = (p) => p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Delete");
+const cancelBtn = (p) => p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Cancel");
+const sameNodes = (a, b) => a.length === b.length && a.every((c, i) => c === b[i]);
+
+test("an open Delete confirmation survives a resize across the threshold; Cancel then paints the right mode", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  const kept = body.children.slice();
+  p.resizeTo(500);
+  assert.ok(sameNodes(body.children, kept), "the body was not replaced");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1, "the confirmation is still there to answer");
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "still the table it was opened in");
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "Cancel lets the held repaint through: cards at 500");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
+});
+
+test("a confirmation opened in a card survives widening to tables the same way", () => {
+  const p = livePage(500);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.resizeTo(900);
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  assert.ok(p.shape().cards > 0 && p.shape().tables === 0);
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "after Cancel: tables at 900");
+});
+
+test("a held repaint that is no longer needed is not made when the confirmation is cancelled", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.resizeTo(500);
+  p.resizeTo(900); // back where it was painted
+  const kept = body.children.slice();
+  cancelBtn(p).onclick();
+  assert.ok(sameNodes(body.children, kept), "same mode as the paint: nothing to redo");
+});
+
+test("a part-typed store passphrase survives a resize; emptied, the next focus change paints the right mode", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials({ ...liveView, store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } });
+  body.querySelectorAll("button").find((b) => b.id === "store-create").onclick();
+  const typed = body.querySelectorAll(".storepass")[0];
+  assert.ok(typed, "the create form's passphrase fields are marked");
+  typed.value = "part-typed";
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "not repainted while a passphrase is typed (the field need not have focus)");
+  assert.strictEqual(body.querySelectorAll(".storepass")[0], typed);
+  assert.strictEqual(typed.value, "part-typed");
+  typed.value = "";
+  p.box.credFocusLeft(); // what the body's focusout does
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "nothing left to lose: the right mode is painted");
+});
+
+test("a focus change with nothing held repaints nothing", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.box.credFocusLeft();
+  assert.ok(sameNodes(body.children, kept));
+});
+
+test("a frame that finds the body unmeasurable (the tab was hidden after the observer fired) repaints nothing", () => {
+  const p = livePage(500); // painted as cards
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.deliver(520); // a measurable entry: a frame is queued
+  body.clientWidth = 0; // the tab is hidden before the frame
+  p.frame();
+  assert.ok(sameNodes(body.children, kept), "0 wide reads as tables, and must not flip a hidden tab");
+  assert.strictEqual(p.shape().tables, 0);
+});
+
+// A repaint held for the unlock field is made when focus leaves it, but not over what was
+// typed there: clicking Unlock moves focus first (mousedown), and the repaint, running
+// before the click, wiped the passphrase and the button along with it.
+test("a repaint held for the unlock field does not wipe a passphrase typed while it was held", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  const field = body.querySelectorAll(".storepass")[0];
+  assert.ok(field, "the unlock form is painted");
+  p.box.storeUnlockFocused = () => true; // the user clicked into the field
+  p.resizeTo(500); // dragged the window across the threshold: the repaint is held
+  assert.ok(p.shape().tables > 0, "held");
+  field.value = "typed-passphrase";
+  p.box.storeUnlockFocused = () => false; // mousedown on Unlock: focus has left the field
+  const kept = body.children.slice();
+  p.box.credFocusLeft(); // the body's focusout, a tick later
+  assert.ok(sameNodes(body.children, kept), "the form and its Unlock button are still the ones on screen");
+  assert.strictEqual(field.value, "typed-passphrase");
+  field.value = ""; // submitted (the field is cleared on every attempt), or the user cleared it
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "nothing left to lose: the held repaint is made");
+});
+
+test("a repaint held for the unlock field is still made when nothing was typed", () => {
+  const p = livePage(900);
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  p.box.storeUnlockFocused = () => true;
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "held");
+  p.box.storeUnlockFocused = () => false;
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "focus left an empty field: repainted");
+});
+
+// A repaint held for a DATA change (the unlock request was in flight) while a Delete
+// confirmation was open: Cancel must let it through even though the width did not change.
+test("Cancel on a Delete confirmation makes a repaint held for new data, not only one for a new width", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.box.storeUnlockFocused = () => true; // an unlock is in flight: the body holds its repaint
+  p.box.renderCredentials({ ...liveView, tokens: [tok("sentry-prod"), tok("sentry-added")] });
+  assert.ok(!/sentry-added/.test(body.textContent), "held: the old body is still on screen");
+  p.box.storeUnlockFocused = () => false;
+  cancelBtn(p).onclick();
+  assert.ok(/sentry-added/.test(body.textContent), "the new data is painted once the confirmation is gone");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
+});
+
+// --- #27: a table is drawn only when it fits, measured from its content ---------------
+//
+// The browser knows what the fake DOM cannot: how wide a table section's content is. A
+// section here reports it the way a browser does: `clientWidth` is its box (the body's
+// width), `scrollWidth` is the larger of that and what `p.need()` says the content needs.
+// `paints` counts how often the body is replaced.
+
+function fitPage(width, need, opts) {
+  const p = livePage(width, opts);
+  const body = p.byId["creds-body"];
+  p.need = typeof need === "function" ? need : () => need;
+  const make = p.doc.createElement;
+  p.doc.createElement = (t) => {
+    const n = make(t);
+    if (t === "section") {
+      Object.defineProperty(n, "clientWidth", { get: () => body.clientWidth });
+      Object.defineProperty(n, "scrollWidth", { get: () => Math.max(body.clientWidth, p.need(body.clientWidth)) });
+    }
+    return n;
+  };
+  p.paints = 0;
+  const replace = body.replaceChildren.bind(body);
+  body.replaceChildren = (...a) => { p.paints++; return replace(...a); };
+  p.needW = () => vm.runInContext("credNeedW", p.box);
+  return p;
+}
+
+test("a table paint that overflows its section ends in cards, and remembers how much room the table needs", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards: the table did not fit");
+  assert.strictEqual(p.needW(), 800 + 23 + 2, "the body's width, plus the overflow, plus 2px to spare");
+  assert.ok(p.paints <= 2, "at most one extra paint, not a loop: " + p.paints);
+  assert.strictEqual(p.paints, 2);
+});
+
+test("a table that fits stays a table and learns nothing", () => {
+  const p = fitPage(800, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0);
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("a width repaint from the cached view uses the need it learned: tables from it up, cards below, no measuring", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(824);
+  assert.strictEqual(p.shape().tables, 0, "824 is below the learned 825: still cards, nothing repainted");
+  assert.strictEqual(p.paints, 0);
+  p.resizeTo(825);
+  assert.ok(p.shape().tables > 0, "825 draws tables again");
+  assert.strictEqual(p.paints, 1, "one paint: it fits, so there is nothing to measure twice");
+  p.resizeTo(1400);
+  assert.ok(p.shape().tables > 0);
+  p.resizeTo(700);
+  assert.strictEqual(p.shape().tables, 0, "and cards below it again, as the floor says");
+  assert.strictEqual(p.needW(), 825, "the need was kept across the width repaints");
+});
+
+test("new data (a new view object) forgets the need, so tables are tried again at the current width", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.needW(), 825);
+  p.need = () => 700; // the long row is gone from the new data
+  p.paints = 0;
+  p.box.renderCredentials({ ...liveView });
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "tables again: the cache of what did not fit is not kept for other data");
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("repainting the same view object keeps the need (a width repaint is not new data)", () => {
+  const p = fitPage(800, 823);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.box.renderCredentials(liveView);
+  assert.strictEqual(p.needW(), 825);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+  assert.strictEqual(p.paints, 1, "cards straight away, no table to measure first");
+});
+
+test("content that overflows at every width costs one extra paint per call, never a loop", () => {
+  const p = fitPage(900, (w) => w + 50);
+  for (const w of [900, 1400, 5000, 701]) {
+    p.byId["creds-body"].clientWidth = w;
+    p.paints = 0;
+    p.box.renderCredentials({ ...liveView }); // new data each time: a fresh try
+    assert.strictEqual(p.paints, 2, "table, then cards, at " + w);
+    assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards at " + w);
+    assert.strictEqual(p.needW(), w + 52);
+  }
+  // The last paint learned 753. Dragging back and forth: one try at 900 (a table, then cards,
+  // which raises the need to 952), and every later flip is decided by what it learned.
+  p.paints = 0;
+  for (const w of [900, 400, 900, 400, 900]) p.resizeTo(w);
+  assert.strictEqual(p.paints, 2, "one table-then-cards try, then no repaint at all");
+  assert.strictEqual(p.needW(), 952);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+});
+
+test("a hidden tab (0 wide) is not measured and keeps tables, as before", () => {
+  const p = fitPage(0, (w) => w + 50);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0);
+  assert.strictEqual(p.needW(), 0, "an overflow read against a 0 wide body means nothing");
+  assert.strictEqual(p.paints, 1);
+});
+
+test("a modal draws cards without measuring anything", () => {
+  const p = fitPage(2000, (w) => w + 50, { asPage: false });
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0);
+  assert.strictEqual(p.needW(), 0);
+  assert.strictEqual(p.paints, 1);
+});
+
+// A window dragged narrower after a table was drawn: the body stays above the 700 floor,
+// so the rule alone still says "tables", yet the content no longer fits. Measured in a
+// browser (2026-11-06): opened at 1440 and dragged to 1225, the AWS section stuck out 23px
+// with Delete 6px past it. The frame that follows a resize measures a table it keeps.
+
+test("a live drag below what a drawn table needs (but above the floor) turns it into cards", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.needW() === 0, "fits at 900: a table, nothing learned");
+  p.paints = 0;
+  p.resizeTo(720);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "720 is above the floor but under the 725 the table needs");
+  assert.strictEqual(p.needW(), 720 + 5 + 2);
+  assert.strictEqual(p.paints, 1, "cards painted straight away, the table is not drawn again to be measured");
+  p.resizeTo(726);
+  assert.strictEqual(p.shape().tables, 0, "726 is under the learned 727");
+  assert.strictEqual(p.paints, 1, "no repaint inside the band");
+  p.resizeTo(727);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "tables again once the body has the room");
+  assert.strictEqual(p.paints, 2);
+});
+
+test("a live drag that still leaves the table room repaints nothing and learns nothing", () => {
+  const p = fitPage(900, 725);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.paints = 0;
+  for (const w of [880, 800, 730, 725, 1000]) p.resizeTo(w);
+  assert.strictEqual(p.paints, 0);
+  assert.ok(sameNodes(body.children, kept), "the same nodes");
+  assert.strictEqual(p.needW(), 0);
+});
+
+test("a table that no longer fits while a Delete confirmation is open is replaced after Cancel, not before", () => {
+  const p = fitPage(900, 725);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  const kept = body.children.slice();
+  p.paints = 0;
+  p.resizeTo(720);
+  assert.ok(sameNodes(body.children, kept), "the question is not wiped");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  assert.strictEqual(p.paints, 0);
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards once the question is answered");
+  assert.strictEqual(p.needW(), 727);
+});
+
+test("a hidden tab is not measured on a resize either", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(0, 500); // the body reads 0 wide when the frame runs
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0, "an overflow against a 0 wide body means nothing");
+  assert.ok(p.shape().tables > 0);
+});
+
+test("a modal that is resized is never measured", () => {
+  const p = fitPage(500, (w) => w + 50, { asPage: false });
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(2000);
+  p.resizeTo(300);
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0);
+});
+
+// A repaint held for the unlock field means the NEW data is waiting; credNeedW was
+// already forgotten for it. A resize meanwhile must not measure the OLD table on screen
+// and hand its need to the new view.
+test("a resize while a repaint is held does not learn the old table's width for the new data", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  p.box.storeUnlockFocused = () => true; // new data arrives while the unlock field has focus: held
+  p.box.renderCredentials({ ...liveView });
+  p.paints = 0;
+  p.resizeTo(720); // the old table needs 725: it would overflow here
+  assert.strictEqual(p.needW(), 0, "nothing learned from the table that is about to be replaced");
+  assert.strictEqual(p.paints, 0, "and nothing painted while the field holds");
+  p.need = () => 700; // the new data's table is narrower
+  p.box.storeUnlockFocused = () => false;
+  p.box.credFocusLeft(); // the hold ends: the new view is painted and measured
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "the new data fits at 720: tables");
+  assert.strictEqual(p.needW(), 0);
+});
+
+// font-display: swap (desktop.css): the first table may be drawn in the fallback font and
+// Inter then widens it, which no resize reports. The fonts promise asks for one more look.
+function fontsPage(width, need) {
+  const p = fitPage(width, need);
+  const thens = [];
+  p.doc.fonts = { ready: { then: (f) => { thens.push(f); } } };
+  p.fontsReady = () => thens.slice();
+  return p;
+}
+
+test("the web font loading re-checks a table that was drawn before it (wired once)", () => {
+  const p = fontsPage(750, 725);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials({ ...liveView });
+  assert.strictEqual(p.fontsReady().length, 1, "asked once, however often it paints");
+  assert.ok(p.shape().tables > 0, "fits in the fallback font");
+  p.need = () => 760; // Inter is wider
+  p.paints = 0;
+  p.fontsReady()[0]();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "the table no longer fits: cards");
+  assert.strictEqual(p.needW(), 750 + 10 + 2);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("the web font loading repaints nothing when the table still fits", () => {
+  const p = fontsPage(750, 725);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.fontsReady()[0]();
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0);
+});
+
+test("no document.fonts (an old browser, the fake DOM): painting still works", () => {
+  const p = fitPage(750, 725);
+  assert.strictEqual(p.doc.fonts, undefined);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0);
+});
+
+test("painted while hidden (0 wide, unmeasured), then shown narrower than the table needs: cards", () => {
+  const p = fitPage(0, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.needW() === 0, "hidden: tables, nothing learned");
+  p.resizeTo(720);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "shown at 720: the table does not fit");
+  assert.strictEqual(p.needW(), 727);
 });

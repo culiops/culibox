@@ -22,8 +22,9 @@ import (
 // names the missing mount).
 const SockBoxDir = box.BrokerMountDest
 
-// proxyHeaderTimeout bounds how long a darwin connection may take to send its
-// relay key line and PROXY line; the relay writes both before any other byte.
+// proxyHeaderTimeout bounds how long a darwin connection may take to finish the
+// whole relay handshake and send its PROXY line; the relay does both before any
+// other byte.
 const proxyHeaderTimeout = 5 * time.Second
 
 // maxDarwinConns caps the raw connections the darwin listener holds at once
@@ -62,14 +63,16 @@ type Endpoint struct {
 // network's gateway forwards the broker port to the Mac's loopback, so boxes
 // are handed the gateway address.
 //
-// The relay opens each connection with its key line (relayKey) and then a PROXY
-// line naming the box. The listener reads the key first and compares it in
-// constant time; only after it matches is the PROXY line believed, and only if
-// it names an address inside the box subnet (not the gateway), so RemoteAddr is
-// the box's address. A connection without the key is closed unanswered, and a
-// zero relayKey refuses to listen at all. The key keeps another process on the
-// Mac from claiming a box's address; it is not a boundary against your own user,
-// since a process running as you can read the key (docs/MACOS.md, Token
+// The relay opens each connection with a handshake in which it and the listener
+// prove they hold the key (relayKey; proxyline's handshake.go), and then sends a
+// PROXY line naming the box. Only after the relay's proof matches is the PROXY
+// line believed, and only if it names an address inside the box subnet (not the
+// gateway), so RemoteAddr is the box's address. The listener writes nothing but
+// its proof line before that, so a connection that cannot prove the key (a
+// process that is not the relay, a relay from before #118) is closed unanswered,
+// and a zero relayKey refuses to listen at all. The key keeps another process on
+// the Mac from claiming a box's address; it is not a boundary against your own
+// user, since a process running as you can read the key (docs/MACOS.md, Token
 // binding). The token guards the rest.
 func Listen(goos, stateRoot string, port int, relayKey proxyline.Key) (Endpoint, error) {
 	if goos == "darwin" {
@@ -79,18 +82,19 @@ func Listen(goos, stateRoot string, port int, relayKey proxyline.Key) (Endpoint,
 }
 
 // listenDarwin is the Mac's broker listener: TCP on the loopback, at most
-// maxConns raw connections open, then the relay-key and PROXY wrapper, then at
-// most maxPerSource open connections for any one source address. The total cap
-// goes UNDER the wrapper so a connection that never sends its key or PROXY line
-// still holds its slot (until the header timeout) instead of being free to pile
-// up. A zero relayKey is refused before anything is bound.
+// maxConns raw connections open, then the relay-handshake and PROXY wrapper,
+// then at most maxPerSource open connections for any one source address. The
+// total cap goes UNDER the wrapper so a connection that never completes the
+// handshake or sends its PROXY line still holds its slot (until the header
+// timeout) instead of being free to pile up. A zero relayKey is refused before
+// anything is bound.
 func listenDarwin(port int, relayKey proxyline.Key, maxConns, maxPerSource int) (Endpoint, error) {
 	if relayKey.IsZero() {
 		return Endpoint{}, fmt.Errorf("broker: no relay key; refusing to listen on 127.0.0.1:%d", port)
 	}
 	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
+		return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, proxyline.ExplainBindError(port, err))
 	}
 	p := l.Addr().(*net.TCPAddr).Port
 	l = netlimit.Listener(l, maxConns)

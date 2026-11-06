@@ -512,6 +512,24 @@ function staleSave(err) {
   };
 }
 
+// profileSourceLabel: where a read-only profile came from, in the words the list
+// shows: a code seed ("built-in") or an agents entry of config.json. A profile
+// saved from the UI ("runtime", the one you can edit) needs no label, and a source
+// this build does not know is not guessed at.
+function profileSourceLabel(source) {
+  if (source === "builtin") return "built-in";
+  if (source === "config") return "config.json";
+  return "";
+}
+
+// profileListLabels: the two things the Profiles list prints for a profile (#121):
+// the badge (read-only profiles only) and the second line, "<what> · <runtime>",
+// where <what> is the binary of a profile you own and the source of one you do not.
+function profileListLabels(p) {
+  const label = p.editable ? "" : profileSourceLabel(p.source);
+  return { badge: label, sub: [p.editable ? p.bin : label, p.runtime].filter(Boolean).join(" · ") };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }

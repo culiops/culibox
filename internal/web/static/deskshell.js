@@ -366,7 +366,14 @@ function paneTabs(hasTerm) {
   ];
 }
 
+// paneTabsClass: the class of the tab group. A group of one tab (a pane of files) is
+// marked `one`: the narrow-pane rule that hides four icons (desktop.css) leaves it
+// alone, since one 24px icon fits where four do not (#123).
+function paneTabsClass(defs) {
+  return defs && defs.length === 1 ? "ph-tabs one" : "ph-tabs";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneTabsClass };
 }
