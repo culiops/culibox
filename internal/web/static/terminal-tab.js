@@ -98,6 +98,16 @@ function dropWebgl(a) {
   } catch (_) {}
 }
 
+// resizeToSend answers the resize message for rows x cols, or null when this
+// socket already sent that size. One size change fires the ResizeObserver, the
+// font load and fitAll: MEASURED (#126), each change went out three times. No
+// trailing debounce: it would widen the window in which xterm's grid and the
+// PTY disagree, and the kernel already drops a same-size resize.
+function resizeToSend(sent, rows, cols) {
+  if (sent && sent.rows === rows && sent.cols === cols) return null;
+  return { type: "resize", rows, cols };
+}
+
 const webglPool = makeWebglPool(webglCapFor(typeof navigator !== "undefined" ? navigator.userAgent : ""));
 
 // TOUCH_SLOP_PX is how far a finger has to travel before the gesture counts as a
@@ -658,6 +668,7 @@ class TerminalTab {
     // closes. The state belongs to this connection: a parse callback that
     // outlives it must not release the next one.
     this.gestureAt = 0;
+    this.sentSize = null; // a new socket sends its size once: the server repaints on it
     const rp = { hold: 1, first: true };
     this.replay = rp;
     this.clearRetry();
@@ -793,9 +804,11 @@ class TerminalTab {
   resetZoom() { this.setFontSize(fontPrefs.get("terminal")); }
 
   sendResize() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "resize", rows: this.term.rows, cols: this.term.cols }));
-    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = resizeToSend(this.sentSize, this.term.rows, this.term.cols);
+    if (!msg) return;
+    this.ws.send(JSON.stringify(msg));
+    this.sentSize = { rows: msg.rows, cols: msg.cols };
   }
 
   // sendText writes text into the session exactly as typing would. It never
@@ -1177,5 +1190,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, resizeToSend, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

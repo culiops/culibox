@@ -708,3 +708,41 @@ test("a closed tab, or one whose WebGL already failed, takes no slot and evicts 
     assert.strictEqual(webglPool.size(), before);
   } finally { delete global.WebglAddon; }
 });
+
+// One resize per size (#126). MEASURED: a size change reached the server three
+// times (ResizeObserver, font load, fitAll), 60 messages for 20 sizes. A new
+// socket must still send its first: the server repaints the TUI on it.
+const { resizeToSend } = require("../static/terminal-tab.js");
+
+test("a socket that has sent nothing sends the size", () => {
+  assert.deepStrictEqual(resizeToSend(null, 24, 80), { type: "resize", rows: 24, cols: 80 });
+});
+
+test("the size this socket already sent is not sent again", () => {
+  assert.strictEqual(resizeToSend({ rows: 24, cols: 80 }, 24, 80), null);
+});
+
+test("a changed row or column count is sent", () => {
+  assert.deepStrictEqual(resizeToSend({ rows: 24, cols: 80 }, 24, 81), { type: "resize", rows: 24, cols: 81 });
+  assert.deepStrictEqual(resizeToSend({ rows: 24, cols: 80 }, 25, 80), { type: "resize", rows: 25, cols: 80 });
+});
+
+test("sendResize sends each size once per socket and again on a new one", () => {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  global.WebSocket = { OPEN: 1 };
+  try {
+    const tab = Object.create(TerminalTab.prototype);
+    const sent = [];
+    tab.term = { rows: 24, cols: 80 };
+    tab.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+    tab.sendResize(); tab.sendResize(); tab.sendResize();
+    assert.strictEqual(sent.length, 1);
+    tab.term.cols = 100;
+    tab.sendResize(); tab.sendResize();
+    assert.strictEqual(sent.length, 2);
+    tab.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) }; // reconnect
+    tab.sentSize = null; // what connect() does for a new socket
+    tab.sendResize();
+    assert.strictEqual(sent.length, 3, "a new socket hears the size once");
+  } finally { delete global.WebSocket; }
+});
