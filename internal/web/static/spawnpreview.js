@@ -145,7 +145,9 @@ function spawnTokenHosts(hosts) {
 // Item = {kind, name, sub, scope, tag, missing}: tag "PROD" | "production" | "";
 // missing: the name is bound but /api/meta does not list it (sub, scope and tag
 // are then blank: nothing is guessed about it). AWS and GitHub items also carry
-// `facts` (write, max, direct, pat), what reachRows needs for its one-line wording.
+// `facts` (AWS: write, max, direct, prod; GitHub: write, pat), what reachRows needs
+// for its one-line wording. facts.prod is meta OR credentials, so a connection that
+// only /api/credentials marks prod still draws the red PROD flag in reachRows.
 // Never an ARN, a token value or a reference: only what /api/meta and the profile
 // view name.
 function reachModel(o) {
@@ -161,7 +163,7 @@ function reachModel(o) {
   const cloud = [];
   for (const ent of spawnAWS(p)) {
     const f = spawnAWSFacts(ent, metaConns, credConns);
-    const facts = { write: f.write, max: f.max, direct: f.direct };
+    const facts = { write: f.write, max: f.max, direct: f.direct, prod: f.prod };
     if (ent.inline) {
       cloud.push(spawnItem("Old-style AWS", ent.name, { scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts }));
     } else if (awsKnown && !f.found) {
@@ -216,7 +218,7 @@ function reachModel(o) {
       line: "Internet only through CuliBox's proxy, HTTPS to hostnames",
       sub: open
         ? "All internet hosts (no allowlist)."
-        : "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains above.",
+        : "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains and token hosts above.",
       open,
     };
   }
@@ -264,7 +266,7 @@ function reachRows(o) {
     else if (f.write) v += " · write only after you elevate" + (f.max ? " (max " + f.max + " min)" : "");
     else v += " only";
     const row = { k: "AWS", v, name: it.name };
-    if (it.tag === "PROD") row.prod = true;
+    if (f.prod) row.prod = true;
     rows.push(row);
   }
 

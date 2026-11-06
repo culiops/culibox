@@ -363,7 +363,7 @@ test("reachModel lists aws-ops as the mockup does", () => {
   assert.deepStrictEqual(pick(m.reachable[3], ["name", "scope"]), { name: "*.example.org", scope: "HTTPS, its subdomains" });
 
   assert.strictEqual(m.network.line, "Internet only through CuliBox's proxy, HTTPS to hostnames");
-  assert.strictEqual(m.network.sub, "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains above.");
+  assert.strictEqual(m.network.sub, "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains and token hosts above.");
   assert.strictEqual(m.files, "~/work/payments-api read/write · nothing else on this machine");
   assert.strictEqual(m.original, "");
   assert.strictEqual(m.account, "default (~/.claude)");
@@ -483,4 +483,23 @@ test("reachModel text never contains arn: or a token value", () => {
   const text = JSON.stringify(reachModel(o)) + JSON.stringify(reachRows(o));
   assert.ok(!/arn:/i.test(text), "no ARN");
   assert.ok(!/SECRETVALUE|SECRETREF|sso-secret-profile/.test(text), "no token value, reference or source profile");
+});
+
+// The red PROD flag is a safety signal: credentials alone may know a connection is
+// prod (meta lists nothing yet, e.g. awscEntries is [] before /api/meta answers).
+test("reachRows keeps PROD from credentials when meta lacks the connection", () => {
+  const p = { claude: true, aws_connections: ["culipulse-prod"] };
+  const c = creds({ aws: [{ name: "culipulse-prod", prod: true, elevate: { max_minutes: 60 } }] });
+  for (const meta of [{ aws_connections: [] }, {}, null]) {
+    const aws = byK(reachRows({ profile: p, tier: "box", cwd: "~/x", meta, creds: c }), "AWS")[0];
+    assert.strictEqual(aws.prod, true, JSON.stringify(meta));
+    assert.strictEqual(aws.v, "culipulse-prod · read · write only after you elevate (max 60 min)");
+  }
+  // The model keeps its blank-for-missing rule for display, yet the fact is not lost.
+  const m = reachModel({ profile: p, tier: "box", meta: { aws_connections: [] }, creds: c });
+  assert.deepStrictEqual(pick(m.cloud[0], ["missing", "tag"]), { missing: true, tag: "" });
+  assert.strictEqual(m.cloud[0].facts.prod, true);
+  // Not prod anywhere: no flag.
+  const plain = byK(reachRows({ profile: p, tier: "box", meta: { aws_connections: [] }, creds: creds({ aws: [{ name: "culipulse-prod" }] }) }), "AWS")[0];
+  assert.ok(!plain.prod);
 });
