@@ -160,3 +160,29 @@ test("Can touch repaints only when its text changes", () => {
   assert.match(r, /if \(key === pfTouchKey[^)]*\) return;/);
   assert.ok(r.indexOf("pfTouchKey = key") < r.indexOf("paintReachRows("), "the key is stored before the paint");
 });
+
+// #151: /api/bundle/imports answers 404 when bundling is off, on every load.
+// /api/meta says so first (bundle_imports), and the profile form then neither
+// requests the route nor shows an error: the row takes today's "absent" path.
+test("refreshPfImports is skipped when meta.bundle_imports is false", () => {
+  const b = body(APP, "refreshPfImports");
+  const skip = b.search(/if \(metaLoaded && !bundleImports\) \{[^}]*pfImportsAbsent = true;[^}]*paintPfImports\(\);[^}]*return;/);
+  assert.ok(skip >= 0, "an early return that marks the route absent and repaints");
+  assert.ok(skip < b.indexOf('api("/api/bundle/imports"'), "the return comes before the request");
+  assert.ok(b.indexOf("++pfImportsSeq") < skip, "a slower earlier answer cannot land after the skip");
+});
+
+// Both globals are set from /api/meta wherever boxRuntime is, after metaLoaded
+// (spawn-refetch.test.js pins that adjacency), and each name is unique across
+// the page scripts (they share one global scope).
+test("the meta reads set bundleImports and boxUnavailableReason beside boxRuntime", () => {
+  assert.match(APP, /let bundleImports = false;/);
+  assert.match(APP, /let boxUnavailableReason = "";/);
+  assert.strictEqual((APP.match(/bundleImports = !!\(meta && meta\.bundle_imports\);/g) || []).length, 2);
+  assert.strictEqual((APP.match(/boxUnavailableReason = \(meta && meta\.box_unavailable_reason\) \|\| "";/g) || []).length, 2);
+  for (const name of ["bundleImports", "boxUnavailableReason"]) {
+    const decl = new RegExp("^(?:let|const|var|function)\\s+" + name + "\\b", "m");
+    const owners = fs.readdirSync(STATIC).filter((f) => f.endsWith(".js") && decl.test(read(f)));
+    assert.deepStrictEqual(owners, ["app.js"], name + " is declared once, in app.js");
+  }
+});

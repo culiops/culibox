@@ -411,6 +411,10 @@ func (c Config) CheckSocketPaths() error {
 	return nil
 }
 
+// ErrColimaNotFound is what LookColima's error wraps when colima is on no PATH
+// or Homebrew prefix, so a caller can tell "not installed" from any other failure.
+var ErrColimaNotFound = errors.New("colima not found")
+
 // LookColima resolves colima like box.LookDocker resolves docker, with the
 // Homebrew prefixes as fallbacks for a daemon started without them on PATH.
 func LookColima(bin string) (string, error) {
@@ -429,5 +433,5 @@ func LookColima(bin string) (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New("colima not found; install it with `brew install colima docker`")
+	return "", fmt.Errorf("%w; install it with `brew install colima docker`", ErrColimaNotFound)
 }

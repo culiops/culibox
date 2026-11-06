@@ -96,6 +96,23 @@ type ProfileView struct {
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
 	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
+	// What the read view lists beyond the touch line (names, repos, paths and
+	// hosts only, like the fields above). GitHubRepos is each owner's repo list;
+	// GitHubPermissions the EFFECTIVE permission set (the defaults when the
+	// profile sets none), present only with a GitHub binding. EgressAllow are
+	// the profile's extra domains and CloneShare the clone's read-only shared
+	// paths, relative to the repo it clones.
+	GitHubRepos       []ProfileGitHubRepos `json:"github_repos,omitempty"`
+	GitHubPermissions map[string]string    `json:"github_permissions,omitempty"`
+	EgressAllow       []string             `json:"egress_allow,omitempty"`
+	CloneShare        []string             `json:"clone_share,omitempty"`
+}
+
+// ProfileGitHubRepos is one owner of a profile's GitHub binding and the repos it
+// reaches there. Never the App or token entry that backs the owner.
+type ProfileGitHubRepos struct {
+	Owner string   `json:"owner"`
+	Repos []string `json:"repos"`
 }
 
 // ProfileAWSInline names a profile's legacy inline AWS binding for the spawn
@@ -483,6 +500,8 @@ func (m *ProfileManager) Views() []ProfileView {
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
+			EgressAllow:    slices.Clone(a.EgressAllow),
+			CloneShare:     slices.Clone(a.CloneShare),
 		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
@@ -503,7 +522,9 @@ func (m *ProfileManager) Views() []ProfileView {
 		if a.GitHub != nil {
 			for _, o := range a.GitHub.Owners {
 				pv.GitHubOwners = append(pv.GitHubOwners, o.Owner)
+				pv.GitHubRepos = append(pv.GitHubRepos, ProfileGitHubRepos{Owner: o.Owner, Repos: append([]string{}, o.Repos...)})
 			}
+			pv.GitHubPermissions = a.GitHub.EffectivePermissions()
 			pv.GitHubWrite = a.GitHub.PushRoute()
 			pv.GitHubPAT = a.GitHub.HasPAT()
 		}

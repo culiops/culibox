@@ -3765,6 +3765,16 @@ let pfImportsAbsent = false;
 let pfImportsSeq = 0;
 async function refreshPfImports() {
   const seq = ++pfImportsSeq;
+  // Bundling is off: the route is not registered, so asking is a guaranteed 404
+  // (#151). That is the "absent" answer already; take it without the request.
+  // Before /api/meta has answered nothing is known, so the request still goes.
+  if (metaLoaded && !bundleImports) {
+    pfImportsSet = null;
+    pfImportsFailed = false;
+    pfImportsAbsent = true;
+    paintPfImports();
+    return;
+  }
   let set = null;
   let failed = false;
   let absent = false;
@@ -5293,6 +5303,14 @@ function updateTierExplain() {
 // or "" when containment is unavailable. Empty means every session is host tier,
 // and the tier chooser is hidden rather than offering a choice that does nothing.
 let boxRuntime = "";
+// boxUnavailableReason: why boxRuntime is "" when the containment layer failed
+// to build (/api/meta box_unavailable_reason, a plain sentence such as "Docker
+// is not installed"), "" otherwise. It only explains; the profile page reads it.
+let boxUnavailableReason = "";
+// bundleImports: /api/bundle/imports exists on this instance (/api/meta
+// bundle_imports). The route is only registered when the CLAUDE.md bundle is on,
+// so with this false the page does not ask (it would answer 404 on every load).
+let bundleImports = false;
 // cloneUnavailable: why this instance cannot run private copies (/api/meta
 // clone_unavailable), "" when it can. It only explains; a profile that is a
 // copy still opens, saves and shows as one (wmCardState).
@@ -6531,6 +6549,8 @@ async function currentShellProfile() {
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
+    boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
@@ -6682,6 +6702,8 @@ initMobileShell();
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
+    boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");

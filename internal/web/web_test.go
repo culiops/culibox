@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/auth"
+	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 )
 
@@ -263,6 +264,36 @@ func TestHandleMetaReplies(t *testing.T) {
 		if !present || v != on {
 			t.Errorf("RepliesEnabled=%v: replies = %v (present=%v), want %v", on, v, present, on)
 		}
+	}
+}
+
+// box_unavailable_reason says why boxes are off: present only when there is no
+// box runtime AND the layer failed to build; absent when boxes work.
+func TestHandleMetaBoxUnavailableReason(t *testing.T) {
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "", BoxUnavailableReason: "Docker is not installed"})
+	if v, ok := got["box_unavailable_reason"]; !ok || v != "Docker is not installed" {
+		t.Errorf("no runtime: box_unavailable_reason = %#v (present %v)", v, ok)
+	}
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, BoxRuntime: "runc", BoxUnavailableReason: "Docker is not installed"})
+	if v, ok := got["box_unavailable_reason"]; ok {
+		t.Errorf("a runtime is present, yet box_unavailable_reason = %#v", v)
+	}
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}})
+	if v, ok := got["box_unavailable_reason"]; ok {
+		t.Errorf("no failed layer, yet box_unavailable_reason = %#v", v)
+	}
+}
+
+// bundle_imports tells the page whether /api/bundle/imports exists at all, so it
+// does not request a route that answers 404 on every load.
+func TestHandleMetaBundleImports(t *testing.T) {
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}})
+	if v, ok := got["bundle_imports"]; !ok || v != false {
+		t.Errorf("nil Imports: bundle_imports = %#v (present %v), want false", v, ok)
+	}
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, Imports: func() bundle.ImportSet { return bundle.ImportSet{} }})
+	if v, ok := got["bundle_imports"]; !ok || v != true {
+		t.Errorf("Imports set: bundle_imports = %#v (present %v), want true", v, ok)
 	}
 }
 
