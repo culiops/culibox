@@ -4720,6 +4720,8 @@ async function reloadStaleProfile() {
 function duplicateProfile() {
   // The desktop profile page asks first when it holds unsaved changes (pfvHold; never on a phone).
   if (profilePageHolds(duplicateProfile)) return;
+  // The desktop page copies the profile it shows, on its own New profile page (pfv-new.js); the form below is the phone's.
+  if (typeof pfvOnPage === "function" && pfvOnPage() && typeof pfvDuplicate === "function") { pfvDuplicate(); return; }
   const name = selectedProfileName();
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
@@ -4874,6 +4876,8 @@ $("pf-save").addEventListener("click", saveProfile);
 // rather than inside newProfile() itself.
 $("pf-new").addEventListener("click", () => {
   if (profilePageHolds(() => $("pf-new").click())) return;
+  // The desktop page has its own New profile page (pfv-new.js); the blank form below is the phone's.
+  if (typeof pfvOnPage === "function" && pfvOnPage() && typeof pfvNew === "function") { pfvNew(); return; }
   pfUserDraft = true;
   newProfile();
   $("settings-modal").classList.add("editing");

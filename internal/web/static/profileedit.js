@@ -339,6 +339,74 @@ function pfvHostRefusal(doc) {
   return doc && typeof doc.clone_of === "string" && doc.clone_of !== "" ? PFE_HOST_REFUSAL : "";
 }
 
+// --- New profile and Duplicate (spec 5.2, 5.8) -------------------------------------------------
+
+// pfvNewDoc: the profile New profile creates from its three inputs: a Claude Code profile on the inherited environment
+// (today's blank form: bin "claude", base "inherit"), where it runs and, when one is given, the folder it works in.
+// The tier is always named (runtimeToSend): a blank would hand it to the instance default, which on a host-default
+// instance is not the box the page lit. v: {name, tier: "box"|"host", cwd, boxAvailable}.
+function pfvNewDoc(v) {
+  const x = v && typeof v === "object" ? v : {};
+  const out = { name: pfeTrim(x.name), bin: "claude", base: "inherit" };
+  const rt = pfeDep("runtimeToSend", "./profileform.js")(x.tier === "host" ? "host" : "box", "", x.boxAvailable !== false);
+  if (rt) out.runtime = rt;
+  Object.assign(out, pfeDep("wmFieldsToSend", "./workmode.js")("folder", { folder: x.cwd }));
+  return out;
+}
+
+// pfvDuplicateDoc: the profile Duplicate creates: every key of `src` (the stored profile) under a new name, so every
+// binding, folder, domain, option and Advanced value comes along, and neither the revision nor the schema (a new profile
+// has none; the caller sends the page's schema). o holds what the page's inputs say: tier and folder (where it runs and
+// the Workspace field) win over the source's; home and taken (the other profiles' copy folders) are for a private copy,
+// whose own folder is never the source's: two profiles on one clone would share a .git (app.js duplicateProfile's rule).
+// The Workspace field of a private copy is the folder it copies. Stripping what host cannot hold is pfvToHost's, after
+// the question. A fresh object.
+function pfvDuplicateDoc(src, name, o) {
+  const x = o && typeof o === "object" ? o : {};
+  const out = pfeClone(src);
+  const wasCopy = typeof out.clone_of === "string" && out.clone_of !== "";
+  delete out.rev;
+  delete out.schema;
+  out.name = pfeTrim(name);
+  if (typeof x.tier === "string") pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(x.tier, out.runtime, x.boxAvailable !== false));
+  if (typeof x.folder === "string") pfeSet(out, wasCopy ? "clone_of" : "default_cwd", x.folder.trim());
+  if (typeof out.clone_of === "string" && out.clone_of !== "") {
+    const fresh = pfeDep("wmCopyDirSuggestion", "./workmode.js")(out.clone_of, x.home, x.taken);
+    pfeSet(out, "default_cwd", fresh);
+  } else if (wasCopy) {
+    // The folder to copy was emptied: nothing of the copy is left to keep (the page refuses this before it gets here).
+    for (const k of ["default_cwd", "clone_share", "clone_no_auto_return"]) delete out[k];
+  }
+  return out;
+}
+
+// What a copy lists, in the read view's order (the mockup's dup state): Runs in and Workspace are the page's own inputs.
+const PFE_COPY_BLOCKS = ["cloud", "reachable", "agent", "network", "advanced"];
+
+// pfvCopyList: the "This copy will also get" list from the read model (pfvReadView) of the profile as it will be created:
+// one item {id, label, lines, rows, note, count} per block that has something to say, in the read view's own words
+// (the rows of reachModel, the agent line, the network sentence). A cloud or folder block with no row is left out: nothing
+// is copied. Advanced is a count ("None set", "3 set") with its rows when there are any. A host copy's model has no cloud
+// blocks, so it lists its agent and Advanced only.
+function pfvCopyList(model) {
+  const blocks = model && Array.isArray(model.blocks) ? model.blocks : [];
+  const out = [];
+  for (const id of PFE_COPY_BLOCKS) {
+    const b = blocks.find((x) => x && x.id === id);
+    if (!b) continue;
+    const lines = Array.isArray(b.lines) ? b.lines.filter((l) => l !== "") : [];
+    const rows = Array.isArray(b.rows) ? b.rows : [];
+    if ((id === "cloud" || id === "reachable") && rows.length === 0) continue;
+    if (id === "network" && lines.length === 0) continue;
+    if (id === "advanced") {
+      out.push({ id, label: b.label, lines: [b.count > 0 ? b.count + " set" : "None set"], rows, note: "", count: b.count || 0 });
+      continue;
+    }
+    out.push({ id, label: b.label, lines, rows, note: b.note || "", count: rows.length });
+  }
+  return out;
+}
+
 // --- the GitHub permission preset ------------------------------------------------------------
 
 // pfvGhPresetLevels: the "Read only" preset as permission levels: the server's
@@ -432,5 +500,5 @@ function pfvSaveError(status, body) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal, pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError };
+  module.exports = { pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal, pfvNewDoc, pfvDuplicateDoc, pfvCopyList, pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError };
 }

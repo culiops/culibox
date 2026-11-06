@@ -10,8 +10,8 @@
 // Desktop only: the old form (.plist, .ped, #foot-manage) is hidden by desktop.css
 // on the page and stays for the phone's modal. Edit opens one block as a small form
 // (Runs in, Agent and Network here, Workspace in pfv-workspace.js, Cloud and tokens and
-// Also reachable in pfv-cloud.js, Advanced in pfv-advanced.js; Duplicate and "+ New profile" are drawn
-// but do nothing until their task wires them). profileedit.js
+// Also reachable in pfv-cloud.js, Advanced in pfv-advanced.js). "+ New profile" and Duplicate open the New
+// profile page of pfv-new.js, which replaces the profile on screen (pfvState.page). profileedit.js
 // decides what a save writes and what a refusal means; this file draws the forms, keeps
 // what the user has typed and runs the save. A block editor in a file of its own registers
 // through pfvRegisterEditor (see PFV_EDITORS) and is loaded after this one.
@@ -30,14 +30,20 @@
 // (rec.ui.picker, which is also what draws the choice), never kept beside them, so it can neither claim a picker
 // that a closed or redrawn block took with it nor miss one that is open. The picker task sets and clears
 // rec.ui.picker. pfvEscTarget reads both, so Esc goes to the innermost open layer.
+// page: "new" or "dup" while the New profile page is on screen instead of a profile (pfv-new.js; then there is no name, doc
+// or view, and the page is the record edits.draft); src what a copy is made from, back the profile Cancel returns to,
+// created the profile whose "Profile created" next steps the overview shows.
 const pfvState = {
   name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, drawer: false,
+  page: "", src: null, back: "", created: "",
   get picker() {
     return Object.keys(this.edits).find((i) => this.edits[i].ui && this.edits[i].ui.picker === true) || "";
   },
 };
 // The newest pfvShow wins: a slower answer for a profile you have left is dropped.
 let pfvSeq = 0;
+// Counts the times the New profile page was opened: a pfvShow that was waiting for the list when it was must not draw over it.
+let pfvPageGen = 0;
 // What the page is drawn from, as a string (pfvKey) and what the nav lists (pfvNavKey):
 // a refetch that would draw the same thing is skipped, so it cannot rebuild the page,
 // drop focus or close the open menu.
@@ -191,6 +197,7 @@ function pfvRenderNav() {
     const add = pfvMk("button", "pfv-ni pfv-ni-add", "+ New profile");
     add.type = "button";
     add.dataset.pfvName = "";
+    add.onclick = () => pfvNew();
     nav.replaceChildren(...kids, add);
     pfvNavKey = key;
     if (had !== undefined) {
@@ -199,7 +206,9 @@ function pfvRenderNav() {
     }
   }
   for (const b of Array.from(nav.children)) {
-    if (b.dataset.pfvName !== "" && b.dataset.pfvName === pfvState.name) b.setAttribute("aria-current", "true");
+    // The New profile page (and a copy's, which is one) is "+ New profile"; no profile is current while it is on screen.
+    const on = b.dataset.pfvName === "" ? pfvState.page !== "" : b.dataset.pfvName === pfvState.name;
+    if (on) b.setAttribute("aria-current", "true");
     else b.removeAttribute("aria-current");
   }
   // The list was refetched: the page reads the fresh row, and redraws only if it differs.
@@ -247,8 +256,10 @@ function pfvMoreMenu(name) {
     i.onclick = fn;
     return i;
   };
-  // Duplicate is the duplicate task's: it only closes the menu until then.
-  pop.append(item("Duplicate", "", () => pfvMenuClose(false)), item("Delete…", " pfv-menu-red", () => { pfvMenuClose(false); return pfvDelete(); }));
+  pop.append(
+    item("Duplicate", "", () => { pfvMenuClose(false); return pfvDuplicate(); }),
+    item("Delete…", " pfv-menu-red", () => { pfvMenuClose(false); return pfvDelete(); }),
+  );
   btn.onclick = () => {
     if (pfvMenu && pfvMenu.wrap === wrap) { pfvMenuClose(false); return; }
     pfvMenuClose(false);
@@ -284,8 +295,8 @@ function pfvDrawHeader(rv, known) {
   pfvRefs.unsaved = unsaved;
   acts.append(unsaved, pfvBtn("Start session", "secondary", () => openSpawnDialog(h.name)));
   // Read-only: Duplicate is the way to a profile you can change, so it leads and
-  // there is no menu (nothing to delete). Both are the duplicate task's to wire.
-  if (h.readOnly) acts.append(pfvBtn("Duplicate", "primary"));
+  // there is no menu (nothing to delete).
+  if (h.readOnly) acts.append(pfvBtn("Duplicate", "primary", () => pfvDuplicate()));
   else acts.append(pfvMoreMenu(h.name));
   head.append(left, acts);
   return head;
@@ -500,6 +511,14 @@ function pfvDrawNote(text) {
 function pfvRender() {
   const root = document.getElementById("pfv-in");
   if (!root) return;
+  // The New profile page (pfv-new.js) is drawn from its record, not from a profile.
+  const draft = pfvState.page ? pfvState.edits.draft : null;
+  if (draft && PFV_EDITORS.draft) {
+    pfvRefs = { unsaved: null, edit: {}, saved: [] };
+    root.replaceChildren(...PFV_EDITORS.draft.draw(draft, pfvEditCtx()));
+    pfvDrawn = "";
+    return;
+  }
   if (!pfvState.name || !pfvState.view || !pfvState.doc) {
     root.replaceChildren(...pfvDrawErrors());
     pfvDrawn = "";
@@ -516,6 +535,8 @@ function pfvRender() {
   const kids = [...pfvDrawErrors(), pfvDrawHeader(rv, known)];
   if (rv.note) kids.push(pfvDrawNote(rv.note));
   for (const w of pfvState.warnings) kids.push(pfvMk("p", "pfv-warn", w));
+  // Right after Create: what the new profile may need next (pfv-new.js).
+  if (pfvState.created !== "" && pfvState.created === pfvState.name) kids.push(pfvNextSteps(rv));
   kids.push(heading, sheet, tail);
   root.replaceChildren(...kids);
   pfvMenu = null;
@@ -569,7 +590,12 @@ function pfvDrawErrors() {
 // refetch from under an edit.
 async function pfvShow(name) {
   if (!pfvOnPage()) return;
+  // The Profiles tab selected again (no profile named) leaves the New profile page as it is, with what was typed.
+  if (!name && pfvState.page) return;
+  const gen = pfvPageGen;
   if (typeof profilesLoaded === "boolean" && !profilesLoaded) await loadProfiles(false);
+  // A New profile page came up while the list loaded: it wins.
+  if (gen !== pfvPageGen) return;
   const has = (n) => profiles.some((p) => p.name === n);
   let pick = name;
   if (!pick || !has(pick)) pick = has(pfvState.name) ? pfvState.name : (profiles.find((p) => p.editable) || profiles[0] || {}).name || "";
@@ -583,6 +609,10 @@ async function pfvShow(name) {
     pfvState.errors = [];
     pfvState.warnings = [];
     pfvClearSaved();
+    // Leaving the New profile page, and the first steps of a profile that is not the one on screen.
+    pfvState.page = "";
+    pfvState.src = null;
+    if (pick !== pfvState.created) pfvState.created = "";
   }
   pfvState.name = pick;
   pfvState.view = pick ? profiles.find((p) => p.name === pick) : null;
@@ -619,7 +649,7 @@ async function pfvMoveOn(name, order) {
   const onIt = pfvState.name === name; // false: the user moved on while it was being removed
   profiles = profiles.filter((p) => p.name !== name);
   if (onIt) {
-    // No profile selected until the next one is shown; the New profile task draws the empty case.
+    // No profile selected until the next one is shown, or the New profile page when there is none.
     pfvState.name = "";
     pfvState.doc = null;
     pfvState.view = null;
@@ -631,7 +661,10 @@ async function pfvMoveOn(name, order) {
   pfvRenderNav();
   await loadProfiles(false);
   if (!onIt || pfvState.name !== "") return;
-  await pfvShow(pfvNextAfter(order, name) || "");
+  const next = pfvNextAfter(order, name);
+  // Nothing left to show: the way on is a new profile (pfv-new.js), not a blank pane.
+  if (!next && profiles.length === 0) await pfvNew();
+  else await pfvShow(next || "");
 }
 
 // pfvDelete: confirm in red, delete, then show the next profile in list order.
@@ -923,7 +956,7 @@ async function pfvLeaveGuard(action) {
   if (verdict === "refuse") { pfvNudge(); return false; }
   const ok = await askConfirm({
     title: "Discard unsaved changes?",
-    body: 'The changes to "' + pfvState.name + '" have not been saved. Leaving drops them.',
+    body: pfvState.page !== "" ? "The new profile has not been created. Leaving drops what you typed." : 'The changes to "' + pfvState.name + '" have not been saved. Leaving drops them.',
     confirmLabel: "Discard",
     cancelLabel: "Keep editing",
     danger: true,
@@ -941,6 +974,9 @@ async function pfvLeaveGuard(action) {
 function pfvEndEdits() {
   if (Object.keys(pfvState.edits).length === 0) return;
   pfvDropEdits();
+  // The New profile page ends with its record: coming back shows a profile (pfvShow), not what was typed.
+  pfvState.page = "";
+  pfvState.src = null;
   pfvRender();
 }
 
@@ -1751,6 +1787,8 @@ async function pfvSaveBlock(id) {
       pfvState.errors = ["Saved, but reloading it failed: " + (reloadErr && reloadErr.message ? reloadErr.message : "no answer")];
     }
     pfvState.warnings = pfvWarnLines(saved);
+    // The first steps of a new profile end with its first change.
+    pfvState.created = "";
     pfvMarkSaved(ids);
     pfvRender();
     const back = pfvRefs.edit[id];
@@ -1840,6 +1878,8 @@ async function pfvLeaveGone() {
 // pfvMetaChanged: /api/meta's credential lists or /api/credentials answered (app.js
 // applyCredLists and refreshPfCreds): a name the page called missing may exist now.
 function pfvMetaChanged() {
+  // The New profile page reads whether there are boxes, and a copy's list the credential lists (pfv-new.js).
+  if (pfvState.page && pfvState.edits.draft && PFV_EDITORS.draft) { PFV_EDITORS.draft.refresh(pfvState.edits.draft, pfvEditCtx()); return; }
   pfvRefresh();
 }
 

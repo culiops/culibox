@@ -9,9 +9,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal,
-  pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError,
+  pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError, pfvNewDoc, pfvDuplicateDoc, pfvCopyList,
 } = require("../static/profileedit.js");
-const { pfvAdvancedCount } = require("../static/profileview.js");
+const { pfvAdvancedCount, pfvReadView } = require("../static/profileview.js");
 const { ghPermLevels, ghBindingFromForm, ghFormError, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -626,6 +626,108 @@ test("mergeBlock workspace in copy mode keeps the share list and the auto-return
   assert.strictEqual(pfvMergeBlock(plainCopy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd, autoReturn: false }).clone_no_auto_return, true);
   // Switching to a plain folder still drops the copy keys: that is what the mode means.
   assert.deepStrictEqual(pfvMergeBlock(copy, "workspace", { mode: "folder", folder: "/home/you/work" }), { name: "p", bin: "claude", runtime: "box", default_cwd: "/home/you/work" });
+});
+
+// --- New profile and Duplicate (spec 5.2, 5.8) -------------------------------------------
+
+test("new doc sends runtime explicitly", () => {
+  assert.deepStrictEqual(
+    pfvNewDoc({ name: " payments-readonly ", tier: "box", cwd: "/home/you/work/payments-api" }),
+    { name: "payments-readonly", bin: "claude", base: "inherit", runtime: "box", default_cwd: "/home/you/work/payments-api" },
+  );
+  assert.strictEqual(pfvNewDoc({ name: "x", tier: "host", cwd: "" }).runtime, "host");
+  // No folder typed: no key (the New session dialog asks for one).
+  assert.ok(!("default_cwd" in pfvNewDoc({ name: "x", tier: "box", cwd: "  " })));
+  // Through runtimeToSend: on an instance with no box layer a box choice is left blank, as the old form does (a blank resolves to box).
+  assert.ok(!("runtime" in pfvNewDoc({ name: "x", tier: "box", cwd: "", boxAvailable: false })));
+});
+
+test("duplicate keeps every binding and resets the copy folder", () => {
+  const src = clone(awsOps);
+  const out = pfvDuplicateDoc(src, "aws-ops-copy");
+  const want = clone(awsOps);
+  delete want.rev;
+  want.name = "aws-ops-copy";
+  assert.deepStrictEqual(out, want, "connections, GitHub, tokens, folders, domains, agent and Advanced all come along; the revision does not");
+  assert.deepStrictEqual(src, awsOps, "the source is not touched");
+  assert.notStrictEqual(out.github, src.github);
+
+  // A private copy never reuses the source's copy folder (two profiles on one clone would share a .git).
+  const copy = { name: "gitops-clone", bin: "claude", runtime: "box", clone_of: "/home/you/work/k8s-gitops", default_cwd: "/home/you/box-clones/k8s-gitops", clone_share: ["README.md"], clone_no_auto_return: true, rev: "r9", schema: "s1" };
+  const c = pfvDuplicateDoc(copy, "gitops-2", { home: "/home/you", taken: ["/home/you/box-clones/k8s-gitops"] });
+  assert.strictEqual(c.clone_of, "/home/you/work/k8s-gitops");
+  assert.strictEqual(c.default_cwd, "/home/you/box-clones/k8s-gitops-2");
+  assert.deepStrictEqual(c.clone_share, ["README.md"]);
+  assert.strictEqual(c.clone_no_auto_return, true);
+  assert.ok(!("rev" in c) && !("schema" in c));
+  // With nothing to suggest (no home known) the folder is dropped, never reused.
+  assert.ok(!("default_cwd" in pfvDuplicateDoc(copy, "gitops-3")));
+
+  // The three inputs win over the source: where it runs, and the workspace.
+  const host = pfvDuplicateDoc(awsOps, "n", { tier: "host", folder: "/home/you/runbooks" });
+  assert.strictEqual(host.runtime, "host");
+  assert.strictEqual(host.default_cwd, "/home/you/runbooks");
+  assert.deepStrictEqual(host.aws_connections, ["prod-read", "staging-read"], "stripping box-only keys is pfvToHost's, after the question");
+  assert.ok(!("default_cwd" in pfvDuplicateDoc(awsOps, "n", { folder: "" })), "an emptied workspace is no folder");
+  // A private copy's workspace is the folder to copy; its own copy folder follows it.
+  const moved = pfvDuplicateDoc(copy, "n", { folder: "/home/you/work/other", home: "/home/you", taken: [] });
+  assert.strictEqual(moved.clone_of, "/home/you/work/other");
+  assert.strictEqual(moved.default_cwd, "/home/you/box-clones/other");
+});
+
+// The read model of aws-ops as the page builds it (profileview.test.js carries the same fixtures).
+const copyView = {
+  name: "aws-ops", editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true, default_cwd: "/home/you/work/payments-api",
+  aws_connections: ["prod-read", "staging-read"], github_owners: ["culiops"], github_repos: [{ owner: "culiops", repos: ["payments-api"] }],
+  github_permissions: { contents: "read", pull_requests: "read", issues: "read", metadata: "read" },
+  tokens: ["grafana-prod", "sentry-staging"], context_paths: ["/home/you/other-repo/docs"], egress_allow: ["api.example.com", "*.example.org"], network: "allowlist",
+};
+const copyMeta = {
+  aws_connections: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }, { name: "staging-read", account_id: "111111111111", region: "eu-west-1" }],
+  static_tokens: [
+    { name: "grafana-prod", prod: true, description: "Grafana service account", env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] },
+    { name: "sentry-staging", description: "", env: ["SENTRY_ACCESS_TOKEN"], hosts: [{ host: "sentry.io", port: 443 }] },
+  ],
+};
+const copyCreds = { store: { initialized: true, locked: false, platform: "linux" }, aws: [{ name: "prod-read", prod: true, elevate: { max_minutes: 30 } }, { name: "staging-read" }] };
+const copyIn = (view, doc) => ({ view, doc, meta: copyMeta, creds: copyCreds, boxRuntime: "runc", bundleImports: true, defs: [] });
+const aws = { name: "aws-ops", bin: "claude", runtime: "box", options: { model: "claude-opus-5-5", effort: "high" }, aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod", "sentry-staging"], context_paths: ["/home/you/other-repo/docs"], egress_allow: ["api.example.com", "*.example.org"] };
+
+test("copy list names every binding in read-view words", () => {
+  const model = pfvReadView(copyIn(copyView, aws));
+  const list = pfvCopyList(model);
+  assert.deepStrictEqual(list.map((i) => i.label), ["Cloud and tokens", "Also reachable", "Agent", "Network", "Advanced"], "the mockup's order, without Runs in and Workspace (the three inputs)");
+  const block = (id) => model.blocks.find((b) => b.id === id);
+  const item = (id) => list.find((i) => i.id === id);
+  // Every binding is a row of the read view's own: same kind, name, sub-line and scope words.
+  const strip = (r) => [r.kind, r.name, r.sub, r.scope, r.tag];
+  assert.deepStrictEqual(item("cloud").rows.map(strip), block("cloud").rows.map(strip));
+  assert.deepStrictEqual(item("cloud").rows.map((r) => r.name), ["prod-read", "staging-read", "culiops", "grafana-prod", "sentry-staging"]);
+  assert.strictEqual(item("cloud").note, "Long-lived; the agent can read it while it runs", "the read view's token line, not a second wording");
+  assert.deepStrictEqual(item("reachable").rows.map(strip), block("reachable").rows.map(strip));
+  assert.deepStrictEqual(item("reachable").rows.map((r) => r.name), ["/home/you/other-repo/docs", "CLAUDE.md imports", "api.example.com", "*.example.org"]);
+  // The agent line and the network sentence are the read view's.
+  assert.deepStrictEqual(item("agent").lines, ["Claude Code with claude-opus-5-5, high effort", "Signs in with the default Claude login (~/.claude)"]);
+  assert.deepStrictEqual(item("network").lines, block("network").lines);
+  // Advanced is a count: "None set", or how many and what.
+  assert.deepStrictEqual(item("advanced").lines, ["None set"]);
+  assert.deepStrictEqual(item("advanced").rows, []);
+  const busy = pfvCopyList(pfvReadView(copyIn(copyView, Object.assign({}, aws, { args: ["--verbose"], env: { LOG: "1" }, replyable: true }))));
+  const adv = busy.find((i) => i.id === "advanced");
+  assert.deepStrictEqual(adv.lines, ["3 set"]);
+  assert.deepStrictEqual(adv.rows.map((r) => r.kind), ["Arguments", "Environment", "Replies"]);
+});
+
+test("copy list leaves out a block that has nothing to copy, and a host copy gets only its agent and Advanced", () => {
+  const bareIn = copyIn({ name: "x", editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, { name: "x", bin: "claude", runtime: "box" });
+  // With bundling on, the CLAUDE.md imports are a row of Also reachable (the read view's, so the copy lists it too).
+  assert.deepStrictEqual(pfvCopyList(pfvReadView(bareIn)).map((i) => i.id), ["reachable", "agent", "network", "advanced"]);
+  const bare = pfvCopyList(pfvReadView(Object.assign(bareIn, { bundleImports: false })));
+  assert.deepStrictEqual(bare.map((i) => i.id), ["agent", "network", "advanced"]);
+  // The tier it will have, not the source's: a host copy cannot hold the cloud blocks.
+  const host = pfvCopyList(pfvReadView(copyIn(Object.assign({}, copyView, { runtime: "host" }), Object.assign({}, aws, { runtime: "host" }))));
+  assert.deepStrictEqual(host.map((i) => i.id), ["agent", "advanced"]);
+  assert.deepStrictEqual(pfvCopyList(null), []);
 });
 
 // --- the page's one scope --------------------------------------------------------------

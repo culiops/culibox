@@ -127,7 +127,7 @@ function page(over) {
     profiles: PROFILES.slice(), profilesLoaded: true, selectedProfile: "", metaLoaded: true,
     boxRuntime: "runc", boxUnavailableReason: "", bundleImports: true, optionDefs: OPTION_DEFS,
     accountsCache: [{ name: "work" }], acctChoices: ACCT.acctChoices, ACCT_DEFAULT: ACCT.ACCT_DEFAULT,
-    withPending: PENDING.withPending, pfSchema: SCHEMA(), docs: {}, puts: [], revN: 1,
+    withPending: PENDING.withPending, pfSchema: SCHEMA(), docs: {}, puts: [], posts: [], asked: [], revN: 1,
     awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }, { name: "staging-read", account_id: "111111111111", region: "eu-west-1" }],
     stEntries: [{ name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] }],
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
@@ -145,6 +145,22 @@ function page(over) {
         if (box.getFail) throw box.getFail;
         return box.docs[name] || DOCS[name];
       }
+      if (!m && p === "/api/profiles" && method === "POST") {
+        const body = JSON.parse(opt.body);
+        box.posts.push(body);
+        if (box.postFail) throw box.postFail;
+        // What the server keeps and lists: the profile with a revision, and a row of the list for it (a runtime profile is editable).
+        const kept = Object.assign({}, body, { rev: "r" + (++box.revN) + "0" });
+        delete kept.schema;
+        box.docs[body.name] = kept;
+        const row = box.rowFor ? box.rowFor(kept) : view(body.name, { runtime: kept.runtime || "box", default_cwd: kept.default_cwd, clone_of: kept.clone_of });
+        if (!box.rowFor) {
+          for (const k of ["aws_connections", "tokens", "context_paths", "egress_allow"]) if (kept[k]) row[k] = kept[k];
+          if (kept.aws_connections || kept.tokens) row.network = "allowlist";
+        }
+        box.profiles = box.profiles.concat([row]);
+        return box.postReply || { name: body.name };
+      }
       if (m && method === "PUT") {
         const body = JSON.parse(opt.body);
         box.puts.push(body);
@@ -159,7 +175,7 @@ function page(over) {
     },
     openSettings: (tab) => { calls.push("openSettings:" + tab); },
     loadProfiles: async () => { calls.push("loadProfiles"); box.profiles = box.profiles.filter((p) => !box.gone || p.name !== box.gone); return true; },
-    askConfirm: async (o) => { calls.push("confirm:" + o.title + ":" + (o.danger ? "danger" : "")); return box.confirmAnswer !== false; },
+    askConfirm: async (o) => { calls.push("confirm:" + o.title + ":" + (o.danger ? "danger" : "")); box.asked.push(o); return box.confirmAnswer !== false; },
     openSpawnDialog: (n) => { calls.push("spawn:" + n); },
     setDialogError: (id, m) => { calls.push("error:" + m); },
   }, over);
@@ -169,7 +185,7 @@ function page(over) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
-  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js", "pfv-new.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
@@ -491,7 +507,8 @@ test("a failed list reload cannot bring the deleted profile back, even when it w
   await lone.box.pfvShow("aws-ops");
   await lone.box.pfvDelete();
   assert.strictEqual(lone.run("pfvState").name, "");
-  assert.strictEqual(byCls(lone.els["pfv-in"], "pfv-title-name").length, 0);
+  // Nothing left to show: the New profile page (R19), not a blank pane and not the profile that was deleted.
+  assert.deepStrictEqual(texts(lone.els["pfv-in"], "pfv-title-name"), ["New profile"]);
   assert.ok(!lone.calls.some((c) => c === "GET /api/profiles/aws-ops" && lone.calls.indexOf(c) !== lone.calls.lastIndexOf(c)), "never fetched again");
 
   const many = page();
@@ -612,7 +629,7 @@ test("clicking a nav row keeps its button and moves aria-current", async () => {
 // --- every class the page draws has a rule ------------------------------------------
 
 test("every pfv- class in the profile page scripts has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
-  const src = ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
+  const src = ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js", "pfv-new.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   const used = new Set();
   for (const m of src.matchAll(/"([^"\n]*)"/g)) {
@@ -3555,4 +3572,571 @@ test("pfvFocusInvalid is a success only when the focus landed, and tries the nex
   assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [gone, plain] }), false);
   assert.strictEqual(Node.focused, null);
   assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [] }), false);
+});
+
+
+// --- New profile, the created state and Duplicate (spec 5.2, 5.8; pfv-new.js) ---------------------------------------------------
+
+const rootOf = (t) => t.els["pfv-in"];
+const newPage = async (over) => { const t = page(over); await t.box.pfvShow("aws-ops"); await t.box.pfvNew(); return t; };
+// What a click on a tier card does: focus moves to it, it becomes checked, its change handler runs.
+const pickTier = (t, which) => { const r = field(t, "tier-" + which); r.focus(); r.checked = true; r.onchange(); };
+const typeName = (t, v) => typeInto(field(t, "name"), v);
+const nameErr = (t) => texts(field(t, "name").parent, "pfv-ferr");
+const wsErr = (t) => texts(field(t, "folder").parent, "pfv-ferr");
+const btn = (t, label) => byText(rootOf(t), "button", label)[0];
+const POSTS = (t) => t.calls.filter((c) => c.startsWith("POST"));
+const dupMenu = (t, label) => byText(rootOf(t), "button", label || "Duplicate")[0];
+const navAdd = (t) => byCls(t.els["pf-navlist"], "pfv-ni-add")[0];
+const NO_DOCKER = { boxRuntime: "", boxUnavailableReason: "Docker is not installed" };
+const nextBtn = (t, label) => byCls(rootOf(t), "pfv-next-btn").find((b) => texts(b, "pfv-next-t")[0] === label);
+// aws-ops as the server has it: its stored profile holds what the list's row says it binds (the shared fixture's stored profile is bare).
+const BOUND = { aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod"] };
+const boundPage = () => {
+  const t = page();
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], BOUND);
+  t.box.rowFor = (d) => Object.assign({}, PROFILES[1], { name: d.name });
+  return t;
+};
+
+test("New profile asks for three things and the page says nothing else", async () => {
+  const t = await newPage();
+  const root = rootOf(t);
+  assert.strictEqual(t.run("pfvState").page, "new");
+  assert.strictEqual(t.run("pfvState").name, "", "no profile is on screen");
+  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["New profile"]);
+  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Three choices to start. Everything else is added on the profile's page."]);
+  assert.deepStrictEqual(texts(root, "pfv-flabel"), ["Name", "Where it runs", "Workspace"]);
+  assert.strictEqual(field(t, "name").getAttribute("placeholder"), "e.g. payments-readonly");
+  assert.strictEqual(field(t, "name").value, "");
+  assert.deepStrictEqual(texts(root, "pfv-hint"), ["You can't rename a profile later.", "The folder it works in. In a box, the only place it can write."]);
+  // Box is lit and recommended, with the Docker line; On this machine is the other choice.
+  assert.strictEqual(field(t, "tier-box").checked, true);
+  assert.strictEqual(field(t, "tier-host").checked, false);
+  assert.deepStrictEqual(texts(root, "pfv-chip-word"), ["Recommended"]);
+  assert.deepStrictEqual(texts(root, "pfv-card-t"), ["In a boxRecommended", "On this machine"]);
+  assert.deepStrictEqual(texts(root, "pfv-card-d"), ["A container. It writes only to its workspace, and CuliBox scopes AWS, GitHub and tokens.", "Docker found", "Runs as you, with your files, your network and your credentials."]);
+  assert.strictEqual(field(t, "folder").getAttribute("placeholder"), "~/work/payments-api");
+  assert.strictEqual(btn(t, "Create profile").className.includes("pfv-btn-primary"), true);
+  assert.strictEqual(btn(t, "Cancel").className.includes("pfv-btn-ghost"), true);
+  assert.deepStrictEqual(texts(root, "pfv-newafter"), ["It starts as Claude Code with its default model. You can change that, and add cloud access, on the next page."]);
+  // The nav: "+ New profile" is the current row, no profile is.
+  const nav = t.els["pf-navlist"].children;
+  assert.deepStrictEqual(nav.filter((n) => n.getAttribute("aria-current") === "true").map((n) => n.textContent), ["+ New profile"]);
+  assert.strictEqual(Node.focused, field(t, "name"), "focus starts in Name");
+  assert.strictEqual(byCls(root, "pfv-block").length, 0, "no read view");
+});
+
+test("New profile: the nav's + New profile opens it, and again changes nothing", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  await navAdd(t).click();
+  assert.strictEqual(t.run("pfvState").page, "new");
+  typeName(t, "half");
+  const before = field(t, "name");
+  await navAdd(t).click();
+  assert.strictEqual(field(t, "name"), before, "the same page, not drawn again");
+  assert.strictEqual(before.value, "half");
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("confirm")), []);
+});
+
+test("New profile on a machine with no Docker preselects On this machine and says why Box is off", async () => {
+  const t = await newPage(NO_DOCKER);
+  const root = rootOf(t);
+  assert.strictEqual(field(t, "tier-host").checked, true);
+  assert.strictEqual(field(t, "tier-box").checked, false);
+  assert.strictEqual(field(t, "tier-box").disabled, true);
+  assert.ok(texts(root, "pfv-card-d").includes("Boxes are unavailable on this machine: Docker is not installed."));
+  assert.ok(!texts(root, "pfv-card-d").includes("Docker found"));
+  assert.ok(texts(root, "pfv-hint").includes("On this machine a profile cannot hold AWS, GitHub or tokens."), "host is chosen: what it cannot hold");
+  // Only the usable choice can be picked: nothing about Box is a button.
+  assert.strictEqual(byText(root, "button", "In a box").length, 0);
+});
+
+test("choosing On this machine says what it cannot hold, choosing Box takes the sentence away", async () => {
+  const t = await newPage();
+  const HOLD = "On this machine a profile cannot hold AWS, GitHub or tokens.";
+  assert.ok(!texts(rootOf(t), "pfv-hint").includes(HOLD));
+  pickTier(t, "host");
+  assert.ok(texts(rootOf(t), "pfv-hint").includes(HOLD));
+  assert.strictEqual(field(t, "tier-host").checked, true);
+  pickTier(t, "box");
+  assert.ok(!texts(rootOf(t), "pfv-hint").includes(HOLD));
+});
+
+test("the box availability arriving after the page opened re-reads it, unless the user already chose", async () => {
+  const t = page({ metaLoaded: false });
+  await t.box.pfvShow("aws-ops");
+  await t.box.pfvNew();
+  assert.strictEqual(field(t, "tier-box").checked, true, "until /api/meta answers, boxes are assumed");
+  Object.assign(t.box, { metaLoaded: true }, NO_DOCKER);
+  t.box.pfvMetaChanged();
+  assert.strictEqual(field(t, "tier-host").checked, true);
+  assert.strictEqual(field(t, "tier-box").disabled, true);
+  // A choice the user made stays.
+  const u = page({ metaLoaded: false });
+  await u.box.pfvShow("aws-ops");
+  await u.box.pfvNew();
+  pickTier(u, "box");
+  Object.assign(u.box, { metaLoaded: true }, { boxRuntime: "runc" });
+  u.box.pfvMetaChanged();
+  assert.strictEqual(field(u, "tier-box").checked, true);
+});
+
+test("an empty name is refused under Name, and typing takes the refusal away", async () => {
+  const t = await newPage();
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(nameErr(t), ["Give the profile a name."]);
+  assert.strictEqual(field(t, "name").getAttribute("aria-invalid"), "true");
+  assert.strictEqual(Node.focused, field(t, "name"));
+  assert.deepStrictEqual(POSTS(t), []);
+  typeName(t, "x");
+  assert.deepStrictEqual(nameErr(t), []);
+  assert.strictEqual(field(t, "name").getAttribute("aria-invalid"), null);
+});
+
+test("create with a taken name shows the refusal under Name", async () => {
+  const t = await newPage();
+  typeName(t, "aws-ops");
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(POSTS(t), [], "refused before anything is sent");
+  assert.deepStrictEqual(nameErr(t), ['A profile named "aws-ops" already exists. Pick another name.']);
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-err"), [], "under the field, not at the top of the page");
+  assert.strictEqual(Node.focused, field(t, "name"));
+  // The server's own refusal, for a list that was behind: the same words, the list refetched.
+  const s = await newPage();
+  s.box.postFail = apiErr(409, { error: "a profile with this name already exists; nothing was saved", code: "profile_exists" });
+  typeName(s, "fresh");
+  s.calls.length = 0;
+  await btn(s, "Create profile").click();
+  assert.deepStrictEqual(nameErr(s), ['A profile named "fresh" already exists. Pick another name.']);
+  assert.ok(s.calls.includes("loadProfiles"));
+  assert.strictEqual(field(s, "name").value, "fresh", "what was typed stays");
+  assert.deepStrictEqual(texts(rootOf(s), "pfv-err"), []);
+});
+
+test("Create sends the three inputs through POST and lands on the new profile's overview with its next steps", async () => {
+  const t = await newPage();
+  typeName(t, "  payments-readonly ");
+  lastPicker(t).pick("/home/you/work/payments-api");
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(t.box.posts, [{ name: "payments-readonly", bin: "claude", base: "inherit", runtime: "box", default_cwd: "/home/you/work/payments-api", schema: "sch-1" }]);
+  const st = t.run("pfvState");
+  assert.strictEqual(st.page, "");
+  assert.strictEqual(st.name, "payments-readonly");
+  const root = rootOf(t);
+  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["payments-readonly"]);
+  assert.deepStrictEqual(texts(root, "pfv-chip"), ["box"]);
+  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Claude Code · agent's default model"]);
+  // The created state: the read view with what to do next.
+  assert.deepStrictEqual(texts(root, "pfv-next-p"), ["Profile created. It can start sessions now."]);
+  assert.deepStrictEqual(texts(root, "pfv-next-h"), ["Next, if this agent needs them"]);
+  assert.deepStrictEqual(texts(root, "pfv-next-t"), ["Add cloud access", "Pick a model", "Add a folder it can read"]);
+  assert.deepStrictEqual(texts(root, "pfv-next-d"), ["AWS, GitHub or a token", "Claude Code's default until you do", "Read only, outside the workspace"]);
+  assert.deepStrictEqual(texts(root, "pfv-label").map((x) => x.replace(/\s*· .*$/, "")), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  // It is in the nav, and the picker of the New page is gone.
+  assert.ok(byCls(t.els["pf-navlist"], "pfv-ni-name").map((n) => n.textContent).includes("payments-readonly"));
+  assert.strictEqual(t.box.pickers[0].destroyed, true);
+  assert.strictEqual(t.run("pfvState").pending, false);
+});
+
+test("the next steps open what they say: cloud access with the choice open, the agent, a folder", async () => {
+  const t = await newPage();
+  typeName(t, "p1");
+  await btn(t, "Create profile").click();
+  nextBtn(t, "Add cloud access").click();
+  assert.strictEqual(t.run("pfvState").openBlock, "cloud");
+  assert.strictEqual(t.run("pfvState").picker, "cloud");
+  assert.strictEqual(byCls(rootOf(t), "pfv-next").length, 1, "the steps stay while the user works through them");
+  clickBtn(blockOf(t, "cloud"), "Cancel");
+  nextBtn(t, "Pick a model").click();
+  assert.strictEqual(t.run("pfvState").openBlock, "agent");
+  clickBtn(blockOf(t, "agent"), "Cancel");
+  nextBtn(t, "Add a folder it can read").click();
+  assert.strictEqual(t.run("pfvState").openBlock, "reachable");
+  assert.strictEqual(t.run("pfvState").picker, "reachable");
+});
+
+test("the next steps go with the first save and with the profile", async () => {
+  const t = await newPage();
+  typeName(t, "p1");
+  await btn(t, "Create profile").click();
+  nextBtn(t, "Pick a model").click();
+  t.box.OPTION_DEFS = OPTION_DEFS;
+  pickModel(t, "claude-sonnet-5");
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.strictEqual(byCls(rootOf(t), "pfv-next").length, 0, "a saved change ends the first-steps list");
+  const u = await newPage();
+  typeName(u, "p2");
+  await btn(u, "Create profile").click();
+  assert.strictEqual(byCls(rootOf(u), "pfv-next").length, 1);
+  await u.box.pfvShow("aws-ops");
+  await u.box.pfvShow("p2");
+  assert.strictEqual(byCls(rootOf(u), "pfv-next").length, 0, "leaving the profile ends it");
+});
+
+test("Create as host asks the C3 question first, and Cancel writes nothing", async () => {
+  const t = await newPage({ confirmAnswer: false });
+  typeName(t, "ops-box");
+  pickTier(t, "host");
+  await btn(t, "Create profile").click();
+  assert.ok(t.calls.includes("confirm:Save as host:danger"));
+  assert.strictEqual(t.box.asked[0].confirmLabel, "Save as host");
+  assert.match(t.box.asked[0].body, /^Sessions from "ops-box" will run with no container/);
+  assert.strictEqual(t.box.asked[0].focusCancel, true, "Enter is not the way into containment loss");
+  assert.deepStrictEqual(POSTS(t), []);
+  assert.strictEqual(t.run("pfvState").page, "new", "still on the page, with what was typed");
+  assert.strictEqual(field(t, "name").value, "ops-box");
+  assert.strictEqual(field(t, "tier-host").checked, true);
+  t.box.confirmAnswer = true;
+  await btn(t, "Create profile").click();
+  assert.strictEqual(t.box.posts.length, 1);
+  assert.strictEqual(t.box.posts[0].runtime, "host");
+  // A host profile has no cloud to add: only the model is a next step.
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-next-t"), ["Pick a model"]);
+  // A box profile asks nothing.
+  const b = await newPage();
+  typeName(b, "boxy");
+  await btn(b, "Create profile").click();
+  assert.deepStrictEqual(b.calls.filter((c) => c.startsWith("confirm")), []);
+});
+
+test("a host profile on a machine with no Docker is created as host, after the question", async () => {
+  const t = await newPage(NO_DOCKER);
+  typeName(t, "local");
+  await btn(t, "Create profile").click();
+  assert.ok(t.calls.includes("confirm:Save as host:danger"), "preselected is not confirmed: the question is the gate (spec 5.8)");
+  assert.strictEqual(t.box.posts[0].runtime, "host");
+});
+
+test("Enter in Name creates", async () => {
+  const t = await newPage();
+  typeName(t, "enter-me");
+  let prevented = false;
+  await field(t, "name").onkeydown({ key: "Enter", preventDefault() { prevented = true; } });
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(t.box.posts.length, 1);
+});
+
+test("a half-typed workspace is not a folder: Create refuses it under Workspace", async () => {
+  const t = await newPage();
+  typeName(t, "x1");
+  lastPicker(t).type("proj");
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(wsErr(t), ["Use a full path that starts with /"]);
+  assert.deepStrictEqual(POSTS(t), []);
+  lastPicker(t).type("");
+  await btn(t, "Create profile").click();
+  assert.strictEqual(t.box.posts.length, 1, "no folder is allowed: the New session dialog asks for one");
+  assert.ok(!("default_cwd" in t.box.posts[0]));
+});
+
+test("a refusal that is not about the name is said at the top and keeps what was typed", async () => {
+  const t = await newPage();
+  typeName(t, "needs-cloud");
+  lastPicker(t).pick("/home/you/work/x");
+  t.box.postFail = apiErr(400, { error: 'profile "needs-cloud": default_cwd must be an absolute path', field: "default_cwd" });
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(wsErr(t), ["Use a full path that starts with /"], "a field of the form lands under it");
+  t.box.postFail = apiErr(400, { error: "something the page has no field for" });
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-err"), ["something the page has no field for"]);
+  assert.strictEqual(field(t, "name").value, "needs-cloud");
+  assert.strictEqual(t.run("pfvState").page, "new");
+  // A name the server refuses lands under Name.
+  t.box.postFail = apiErr(400, { error: "profile requires a name and bin", field: "name" });
+  await btn(t, "Create profile").click();
+  assert.deepStrictEqual(nameErr(t), ["profile requires a name and bin"]);
+});
+
+test("Cancel on New profile goes back to the profile it came from", async () => {
+  const t = await newPage();
+  typeName(t, "typed-and-dropped");
+  await btn(t, "Cancel").click();
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("confirm")), [], "Cancel is the user's own answer");
+  assert.strictEqual(t.run("pfvState").page, "");
+  assert.strictEqual(t.run("pfvState").name, "aws-ops");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["aws-ops"]);
+  assert.strictEqual(t.box.pickers[0].destroyed, true);
+  // With no profile to go back to there is no Cancel to press.
+  const e = page({ profiles: [] });
+  await e.box.pfvNew();
+  assert.strictEqual(byText(rootOf(e), "button", "Cancel").length, 0);
+  assert.strictEqual(byText(rootOf(e), "button", "Create profile").length, 1);
+});
+
+test("leaving a New profile page that has something typed asks first; an untouched one just goes", async () => {
+  const t = await newPage({ confirmAnswer: false });
+  const before = field(t, "name");
+  typeName(t, "half");
+  byCls(t.els["pf-navlist"], "pfv-ni")[2].click();
+  await settle();
+  assert.ok(t.calls.includes("confirm:Discard unsaved changes?:danger"));
+  assert.ok(!/""/.test(t.box.asked[0].body), "the question does not name a profile that has no name: " + t.box.asked[0].body);
+  assert.strictEqual(t.run("pfvState").page, "new");
+  assert.strictEqual(field(t, "name"), before, "Keep editing leaves the page as it was");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  t.box.confirmAnswer = true;
+  byCls(t.els["pf-navlist"], "pfv-ni")[2].click();
+  await settle();
+  assert.strictEqual(t.run("pfvState").page, "");
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform");
+  assert.strictEqual(t.box.pickers[0].destroyed, true, "the folder picker goes with the page");
+  // Nothing typed: no question.
+  const u = await newPage();
+  byCls(u.els["pf-navlist"], "pfv-ni")[2].click();
+  await settle();
+  assert.deepStrictEqual(u.calls.filter((c) => c.startsWith("confirm")), []);
+  assert.strictEqual(u.run("pfvState").name, "infra-terraform");
+});
+
+test("closing the page and Esc go through the same question as any way out of a New profile page", async () => {
+  const t = await newPage({ confirmAnswer: false });
+  typeName(t, "half");
+  const go = t.box.pfvPageLeave("esc");
+  assert.ok(go && typeof go.then === "function", "a question, not an answer");
+  assert.strictEqual(await go, false);
+  assert.ok(t.calls.includes("confirm:Discard unsaved changes?:danger"));
+  t.box.confirmAnswer = true;
+  assert.strictEqual(await t.box.pfvPageLeave("click"), true);
+  assert.strictEqual(t.run("pfvState").page, "", "the page ended with the answer");
+});
+
+test("Esc closes an open folder dropdown before it leaves the page", async () => {
+  const t = await newPage();
+  const picker = lastPicker(t);
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  picker.open();
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  assert.strictEqual(t.box.pfvPageLeave("esc"), false, "the dropdown took the Esc");
+  assert.strictEqual(picker.isOpen(), false);
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  assert.strictEqual(t.box.pfvPageLeave("esc"), true, "nothing typed: the next Esc leaves");
+});
+
+test("the New profile page waits for nothing on a phone's modal", async () => {
+  const t = page();
+  t.els["settings-modal"].classList.remove("as-page");
+  assert.strictEqual(await t.box.pfvNew(), false);
+  assert.strictEqual(await t.box.pfvDuplicate("aws-ops"), false);
+  assert.strictEqual(t.els["pfv-in"].children.length, 0);
+  assert.deepStrictEqual(t.calls, []);
+});
+
+test("deleting the last profile in the list leaves the New profile page, not a blank pane", async () => {
+  const t = page({ profiles: [view("solo", { runtime: "host" })] });
+  t.box.docs.solo = { name: "solo", bin: "claude", runtime: "host", rev: "r1" };
+  await t.box.pfvShow("solo");
+  t.box.gone = "solo";
+  await t.box.pfvDelete();
+  assert.strictEqual(t.run("pfvState").page, "new");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+  assert.strictEqual(byText(rootOf(t), "button", "Cancel").length, 0, "nothing to go back to");
+});
+
+test("a New profile that came up while an older pfvShow was still loading is not replaced by it", async () => {
+  const t = page({ profilesLoaded: false });
+  const first = t.box.pfvShow();
+  await t.box.pfvNew();
+  await first;
+  assert.strictEqual(t.run("pfvState").page, "new", "the older show gave way");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+});
+
+// --- Duplicate -----------------------------------------------------------------------------------------------------------------
+
+const dupFromMenu = async (t, label) => {
+  const more = byCls(rootOf(t), "pfv-btn-icon")[0];
+  if (more) more.click();
+  await dupMenu(t, label).click();
+};
+const cloudNames = (t) => texts(blockOf(t, "cloud"), "pfv-nm");
+
+test("Duplicate opens the New profile page filled in, with what the copy will also get, and writes nothing", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const original = cloudNames(t);
+  assert.strictEqual(original.length, 3);
+  await dupFromMenu(t);
+  const root = rootOf(t);
+  assert.strictEqual(t.run("pfvState").page, "dup");
+  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["Copy of aws-ops"]);
+  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["A new profile with the same settings as aws-ops. Give it a name and check the rest."]);
+  assert.strictEqual(field(t, "name").value, "", "names cannot change later, so the user picks it");
+  assert.strictEqual(field(t, "name").getAttribute("placeholder"), "aws-ops-copy");
+  assert.strictEqual(field(t, "tier-box").checked, true, "where it runs is copied");
+  assert.strictEqual(lastPicker(t).v, "/home/you/work/payments-api", "and the workspace");
+  assert.ok(texts(root, "pfv-hint").includes("Copied from aws-ops. In a box, the only place it can write."));
+  // The list: the read view's words, then the buttons.
+  assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This copy will also get"]);
+  assert.deepStrictEqual(texts(root, "pfv-label"), ["Cloud and tokens", "Also reachable", "Agent", "Network", "Advanced"]);
+  assert.deepStrictEqual(cloudNames(t), original, "the same rows the read view lists");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-tnote"), ["Long-lived; the agent can read it while it runs"]);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-main"), ["Claude Code with claude-opus-5-5, high effort"]);
+  assert.deepStrictEqual(texts(blockOf(t, "advanced"), "pfv-main"), ["None set"]);
+  assert.strictEqual(byText(root, "button", "Remove").length, 0, "a list, not a form: nothing to remove here");
+  assert.strictEqual(btn(t, "Create copy").className.includes("pfv-btn-primary"), true);
+  assert.strictEqual(byText(root, "button", "Create profile").length, 0);
+  assert.deepStrictEqual(texts(root, "pfv-dup-note"), ["Nothing is saved until you click Create copy."]);
+  assert.deepStrictEqual(t.calls.filter((c) => /^(POST|PUT)/.test(c)), []);
+  // aws-ops is no longer the current nav row: "+ New profile" is.
+  assert.deepStrictEqual(t.els["pf-navlist"].children.filter((n) => n.getAttribute("aria-current") === "true").map((n) => n.textContent), ["+ New profile"]);
+});
+
+test("Create copy writes every binding under the typed name and the copy's overview lists the same rows", async () => {
+  const t = boundPage();
+  await t.box.pfvShow("aws-ops");
+  const original = cloudNames(t);
+  await dupFromMenu(t);
+  await btn(t, "Create copy").click();
+  assert.deepStrictEqual(nameErr(t), ["Give the profile a name."]);
+  assert.deepStrictEqual(POSTS(t), []);
+  typeName(t, "aws-ops-copy");
+  await btn(t, "Create copy").click();
+  const want = Object.assign({}, DOCS["aws-ops"], BOUND, { name: "aws-ops-copy", schema: "sch-1" });
+  delete want.rev;
+  assert.deepStrictEqual(t.box.posts, [want], "every binding, the agent and the folder; no revision");
+  assert.strictEqual(t.run("pfvState").name, "aws-ops-copy");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["aws-ops-copy"]);
+  assert.deepStrictEqual(cloudNames(t), original, "the copy lists the same cloud rows");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-next-p"), ["Profile created. It can start sessions now."]);
+});
+
+test("a taken name is refused under Name on a copy as well", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  await dupFromMenu(t);
+  typeName(t, "infra-terraform");
+  await btn(t, "Create copy").click();
+  assert.deepStrictEqual(nameErr(t), ['A profile named "infra-terraform" already exists. Pick another name.']);
+  assert.deepStrictEqual(POSTS(t), []);
+});
+
+test("a copy that runs on this machine lists what a host profile gets, and the question names what it drops", async () => {
+  const t = boundPage();
+  await t.box.pfvShow("aws-ops");
+  await dupFromMenu(t);
+  pickTier(t, "host");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-label"), ["Agent", "Advanced"], "the list is what the copy will have");
+  assert.ok(texts(rootOf(t), "pfv-hint").includes("On this machine a profile cannot hold AWS, GitHub or tokens."));
+  typeName(t, "aws-host");
+  await btn(t, "Create copy").click();
+  const ask = t.box.asked[0];
+  assert.strictEqual(ask.title, "Save as host");
+  assert.match(ask.extra.map((n) => n.textContent).join(" "), /prod-read, staging-read/);
+  assert.strictEqual(t.box.posts.length, 1);
+  assert.strictEqual(t.box.posts[0].runtime, "host");
+  assert.ok(!("aws_connections" in t.box.posts[0]) && !("tokens" in t.box.posts[0]), "box-only bindings are gone");
+  assert.strictEqual(t.box.posts[0].default_cwd, "/home/you/work/payments-api");
+  assert.strictEqual(t.box.posts[0].options.model, "claude-opus-5-5", "the agent comes along");
+});
+
+test("duplicate of a config.json profile creates an editable profile", async () => {
+  const t = page();
+  await t.box.pfvShow("claude");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-note"), ["Defined in config.json. Duplicate it to change it."]);
+  await dupMenu(t).click();
+  assert.strictEqual(t.run("pfvState").page, "dup");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["Copy of claude"]);
+  assert.strictEqual(field(t, "name").getAttribute("placeholder"), "claude-copy");
+  assert.strictEqual(field(t, "tier-host").checked, true, "claude runs on this machine");
+  typeName(t, "claude-copy");
+  await btn(t, "Create copy").click();
+  assert.ok(t.calls.includes("confirm:Save as host:danger"), "a host copy asks the same question");
+  assert.deepStrictEqual(t.box.posts, [{ name: "claude-copy", bin: "claude", runtime: "host", schema: "sch-1" }], "nothing of config.json's source rides along");
+  assert.strictEqual(t.run("pfvState").name, "claude-copy");
+  const root = rootOf(t);
+  assert.deepStrictEqual(texts(root, "pfv-note"), [], "no config.json line");
+  assert.ok(byText(root, "button", "Edit").length > 0, "a profile you can edit");
+  assert.strictEqual(byText(root, "button", "Duplicate").length, 1);
+});
+
+test("duplicating a private copy gives the copy its own folder, and it stays in a box", async () => {
+  const t = clonePage();
+  await t.box.pfvShow("gitops-clone");
+  await dupFromMenu(t);
+  assert.strictEqual(lastPicker(t).v, "/home/you/work/k8s-gitops", "the workspace of a private copy is the folder it copies");
+  assert.strictEqual(byText(rootOf(t), "button", "On this machine").length, 0);
+  assert.strictEqual(field(t, "tier-host"), undefined, "a private copy needs a box: the host card is not drawn");
+  assert.ok(texts(rootOf(t), "pfv-hint").includes("A private copy needs a box."));
+  typeName(t, "gitops-2");
+  await btn(t, "Create copy").click();
+  assert.strictEqual(t.box.posts.length, 1);
+  const post = t.box.posts[0];
+  assert.strictEqual(post.clone_of, "/home/you/work/k8s-gitops");
+  assert.strictEqual(post.default_cwd, "/home/you/box-clones/k8s-gitops-2", "never the source's own copy folder");
+  assert.deepStrictEqual(post.clone_share, ["CLAUDE.md", "docs/a.md"]);
+  assert.strictEqual(post.clone_no_auto_return, true);
+  assert.ok(!("rev" in post));
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("confirm")), []);
+});
+
+test("Cancel on a copy goes back to the profile it was made from", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  await dupFromMenu(t);
+  await btn(t, "Cancel").click();
+  assert.strictEqual(t.run("pfvState").page, "");
+  assert.strictEqual(t.run("pfvState").name, "aws-ops");
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("confirm") || /^(POST|PUT)/.test(c)), []);
+});
+
+test("Duplicate asks first when a block has unsaved changes, and Keep editing stays on the profile", async () => {
+  const t = page({ confirmAnswer: false });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await dupFromMenu(t);
+  assert.ok(t.calls.includes("confirm:Discard unsaved changes?:danger"));
+  assert.strictEqual(t.run("pfvState").page, "");
+  assert.strictEqual(t.run("pfvState").openBlock, "agent");
+  t.box.confirmAnswer = true;
+  await dupFromMenu(t);
+  assert.strictEqual(t.run("pfvState").page, "dup");
+});
+
+test("a copy made while the profile page holds a New profile page starts from the profile on screen only", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(await t.box.pfvDuplicate(), true);
+  assert.strictEqual(await t.box.pfvDuplicate(), false, "there is no profile on screen to copy from the copy page");
+  assert.strictEqual(t.run("pfvState").page, "dup");
+});
+
+test("every top-level name in pfv-new.js is pfn/PFN_ prefixed or a seam, and unique across the page scripts", () => {
+  const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
+  const mine = names(fs.readFileSync(path.join(STATIC, "pfv-new.js"), "utf8"));
+  assert.ok(mine.size > 10);
+  const seams = new Set(["pfvNew", "pfvDuplicate", "pfvNextSteps"]);
+  assert.ok([...mine].every((n) => /^(pfn|PFN_)/.test(n) || seams.has(n)), "every name is pfn/PFN_ prefixed or a seam: " + [...mine].join(", "));
+  for (const n of seams) assert.ok(mine.has(n), n + " is declared here");
+  const clashes = [];
+  for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js") && x !== "pfv-new.js")) {
+    for (const n of names(fs.readFileSync(path.join(STATIC, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
+  }
+  assert.deepStrictEqual(clashes, []);
+});
+
+test("the New profile editor registers through the seam, and index.html loads it after the page script and before app.js", () => {
+  const t = page();
+  assert.ok(t.run("PFV_EDITORS").draft, "the draft registered itself");
+  assert.throws(() => t.box.pfvRegisterEditor("draft", {}), /registered twice: draft/);
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  const tags = [...html.matchAll(/<script src="\/([a-z-]+\.js)"><\/script>/g)].map((m) => m[1]);
+  assert.strictEqual(tags.filter((x) => x === "pfv-new.js").length, 1);
+  assert.ok(tags.indexOf("pfv-new.js") > tags.indexOf("pfv-workspace.js"), "after the scripts whose helpers it calls");
+  assert.ok(tags.indexOf("pfv-new.js") > tags.indexOf("wspicker.js") && tags.indexOf("pfv-new.js") < tags.indexOf("app.js"));
+});
+
+test("app.js gives the desktop page's New profile and Duplicate entry points the page's own pages, and keeps the phone's form after them", () => {
+  const at = APP.indexOf('$("pf-new").addEventListener("click"');
+  assert.ok(at >= 0);
+  const click = APP.slice(at, APP.indexOf("\n});", at));
+  assert.ok(click.indexOf("profilePageHolds(") >= 0 && click.indexOf("profilePageHolds(") < click.indexOf("pfvNew()"), "the hold (unsaved changes) first");
+  assert.match(click, /pfvOnPage\(\)[^\n]*pfvNew\(\); return;/, "the desktop page opens its New profile page and stops");
+  assert.ok(click.indexOf("pfvNew()") < click.indexOf("pfUserDraft = true;") && click.indexOf("pfvNew()") < click.indexOf("newProfile()"), "the phone's blank form is only reached when it is not the page");
+  const dup = appFn("duplicateProfile");
+  assert.ok(dup.indexOf("profilePageHolds(") < dup.indexOf("pfvDuplicate()"));
+  assert.match(dup, /pfvOnPage\(\)[^\n]*pfvDuplicate\(\); return;/);
+  assert.ok(dup.indexOf("pfvDuplicate()") < dup.indexOf("selectedProfileName()") && dup.indexOf("pfvDuplicate()") < dup.indexOf("duplicateDraft("), "the old draft is the phone's");
 });
