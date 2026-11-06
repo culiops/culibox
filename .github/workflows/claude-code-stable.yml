@@ -54,7 +54,7 @@ jobs:
           latest=$(printf '%s' "$tags" | jq -r '.latest // empty')
           for v in "$pin" "$stable"; do
             if ! [[ "$v" =~ $semver ]]; then
-              echo "::error::not an x.y.z version: pin or stable (got '${v:0:40}')"
+              echo "::error::not an x.y.z version: pin or stable (got '$(printf '%s' "${v:0:40}" | tr -c '0-9A-Za-z.+-' '?')')"
               exit 1
             fi
           done
@@ -62,7 +62,10 @@ jobs:
           echo "pin=$pin stable=$stable latest=$latest" | tee -a "$GITHUB_STEP_SUMMARY"
 
           prefix="Box image: Claude Code stable"
-          open=$(gh issue list --state open --limit 100 --json number,title \
+          # Search by title (the repo has more open issues than one page holds) and
+          # only ever touch the bot's own issue, never a human one with the same title.
+          open=$(gh issue list --state open --author app/github-actions --limit 20 \
+            --search 'in:title "Box image: Claude Code stable"' --json number,title \
             --jq "[.[] | select(.title | startswith(\"$prefix\"))][0].number // empty")
 
           newest=$(printf '%s\n%s\n' "$pin" "$stable" | sort -V | tail -n1)

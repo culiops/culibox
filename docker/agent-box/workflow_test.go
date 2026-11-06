@@ -202,6 +202,11 @@ func TestClaudeCodeStableWorkflowOnlyReports(t *testing.T) {
 		"registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags",
 		// Both versions are checked against x.y.z before they reach a command or the issue.
 		`^[0-9]+\.[0-9]+\.[0-9]+$`,
+		// The repo has 100+ open issues: the lookup must search by title, not read
+		// the newest page, or each week opens a duplicate. Only the bot's own issue
+		// is ever edited or closed.
+		`--search 'in:title`,
+		"--author app/github-actions",
 	} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("workflow lacks %q", want)
