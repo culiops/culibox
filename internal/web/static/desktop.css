@@ -1896,14 +1896,32 @@
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: 12px; color: var(--red); }
-  /* The stand-in for the "+ Add" picker: the kinds that are an input row. */
-  #page-host > #settings-modal.as-page #pfv .pfv-pick { box-sizing: border-box; width: 420px; max-width: 100%; margin-top: 6px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; gap: 1px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:hover { background: var(--raise); }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-t { font-weight: 500; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { font-size: 12px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 4px 10px; font-size: 12px; color: var(--muted); }
+  /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
+     than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-addwrap { margin-top: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-addwrap > .pfv-add { margin-top: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; width: 420px; max-width: 100%; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-find { display: block; margin: 2px 0 4px; max-width: none; }
+  /* Tall enough for the mockup's whole list (578px); a longer one scrolls here, under the filter, instead of running down the page. */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-list { max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-g { padding: 8px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:hover:not(:disabled) { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { background: var(--raise); outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's). */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { cursor: default; text-decoration: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled .pfv-opt-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; color: var(--muted); }
   /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
   #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }

@@ -15,12 +15,13 @@
 //              or converted, never edited.
 //   reachable  { folders: [{path}], domains: [{host}] }, the same removed / fresh flags
 //
-// The seams the picker task builds on (spec 5.7): pfvOpenPicker(blockId) opens the "+ Add" choice of an open block
-// (here the smallest stand-in: the kinds that are an input row), and pfvAddRow(blockId, what) puts a pending row in,
-// what being {kind: "folder" | "domain" | "github"} for an input row or {kind: "aws" | "token", name} for a name the
-// instance defines. pfvConvertAws is the old-style AWS row's "Move to a saved connection" (today's convert).
+// The seams (spec 5.7): pfvOpenPicker(blockId) opens the "+ Add" picker of an open block and pfvClosePicker(blockId?) closes
+// it, giving focus back to the link; pfvAddRow(blockId, what) puts a pending row in, what being {kind: "folder" | "domain" |
+// "github"} for an input row or {kind: "aws" | "token", name} for a name the instance defines. The picker's "New ..." items
+// call pfvOpenDrawer(kind), kind "aws" | "github" | "token", when the page has that (the Credentials drawer). pfvConvertAws is
+// the old-style AWS row's "Move to a saved connection" (today's convert).
 //
-// Every top-level name here starts with pfc/PFC_, except the three seams above (the page scripts share one scope).
+// Every top-level name here starts with pfc/PFC_, except the seams above (the page scripts share one scope).
 // Classic script: profilepage.js's helpers (pfvMk, pfvReg, pfvFieldBox, pfvChanged, pfvDrawRow, ...), profileform.js's
 // GitHub rules and the credential lists of app.js are globals read at call time.
 
@@ -98,49 +99,152 @@ function pfcInputRow(rec, o) {
   return row;
 }
 
-// --- the stand-in picker ----------------------------------------------------------------------------------------------
+// --- the "+ Add" picker (spec 5.7; the mockup's `picker` state) -------------------------------------------------------------
 
-function pfcPicker(rec, kinds, none) {
-  const pop = pfvMk("div", "pfv-pick");
-  pop.setAttribute("role", "group");
-  pop.setAttribute("aria-label", "Add");
-  let first = null;
-  for (const k of kinds) {
-    const b = pfvMk("button", "pfv-opt");
-    b.type = "button";
-    b.append(pfvMk("span", "pfv-opt-t", k.title), pfvMk("span", "pfv-opt-s", k.sub));
-    b.onclick = () => pfvAddRow(rec.id, { kind: k.kind });
-    pfvReg(rec, "pick:" + k.kind, b);
-    pop.append(b);
-    first = first || b;
+// A popover under the "+ Add" link. What it offers is data: groups [{title, note, items}], an item being {title, sub, tag,
+// added, add, create}: `add` is what pfvAddRow is given, `create` the kind of thing a "New ..." item makes (pfvOpenDrawer's), `added`
+// that the profile holds it already (drawn, disabled, "Added"). A group with no title is drawn without a heading. The popover is
+// open while rec.ui.picker is true: that is what draws it and what pfvState.picker and the Esc layering read.
+const PFC_PICK_READ = "Read only";
+const PFC_PICK_AWS_WRITE = "Read only; write after a granted window";
+const PFC_PICK_GH_APP = "Through the GitHub App: 1-hour tokens, read only unless you change it";
+const PFC_PICK_TOKENS = "Tokens are long-lived, and the agent can read them while it runs.";
+const PFC_PICK_LEGACY = "Move the old-style AWS setting to a saved connection, or remove it, before adding connections.";
+const PFC_PICK_NONE = "Nothing matches.";
+
+// pfcPickOption: one option: its name (with the PROD / production tag), the line under it and, on one that is added already,
+// the word at its right. Added ones are not buttons that do anything: a disabled button, no handler.
+function pfcPickOption(rec, it) {
+  const b = pfvMk("button", "pfv-opt" + (it.create ? " pfv-create" : ""));
+  b.type = "button";
+  const t = pfvMk("span", "pfv-opt-t");
+  t.append(it.title);
+  if (it.tag) t.append(" ", pfvMk("span", "pfv-tag", it.tag));
+  b.append(t);
+  if (it.sub) b.append(pfvMk("span", "pfv-opt-s", it.sub));
+  if (it.added === true) {
+    b.disabled = true;
+    b.append(pfvMk("span", "pfv-opt-r", "Added"));
+    return b;
   }
-  if (!kinds.length) pop.append(pfvMk("p", "pfv-pick-note", none));
+  b.onclick = it.create ? () => pfcPickCreate(rec, it.create) : () => pfvAddRow(rec.id, it.add);
+  return pfvReg(rec, "pick:" + (it.create ? "new:" + it.create : it.add.kind + (it.add.name ? ":" + it.add.name : "")), b);
+}
+
+// pfcPickCreate: a "New ..." item opens the Credentials drawer for that kind (pfvOpenDrawer), which takes over from the picker.
+// While the page has no drawer the item does nothing. It is read off globalThis, the way the page reads what another script may
+// not have defined (a top-level function there is a property of it), so scripts/lint.sh does not take it for a name nobody defines.
+function pfcPickCreate(rec, kind) {
+  if (typeof globalThis.pfvOpenDrawer !== "function") return;
+  pfcPickClose(rec);
+  globalThis.pfvOpenDrawer(kind);
+}
+
+// pfcPickClose: the picker goes (and the filter text with it) without focus being given to anything: the one that closes it
+// by Esc or a pick says where focus goes.
+function pfcPickClose(rec) {
+  rec.ui.picker = false;
+  rec.ui.pickQuery = "";
+  pfvRedrawForm(rec);
+}
+
+// pfcPicker: the popover. spec: {label, filter, groups}; filter is the filter's name (and placeholder), "" for none. Typing in
+// the filter narrows the options in place (by name and by the line under it), hides a group with nothing left and says when
+// nothing matches; what was typed is kept on rec.ui, so drawing the form again does not lose it.
+function pfcPicker(rec, spec) {
+  const pop = pfvMk("div", "pfv-pick");
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", spec.label);
+  let first = null;
+  let find = null;
+  if (spec.filter) {
+    find = pfvMk("input", "pfv-ctl pfv-pick-find");
+    find.type = "search";
+    find.setAttribute("placeholder", spec.filter);
+    find.setAttribute("aria-label", spec.filter);
+    find.setAttribute("autocomplete", "off");
+    find.setAttribute("spellcheck", "false");
+    pfvReg(rec, "pick:filter", find);
+    pop.append(find);
+    first = find;
+  }
+  // The options scroll inside the popover (the filter stays put above them): an instance can define far more than a screen holds.
+  const list = pfvMk("div", "pfv-pick-list");
+  pop.append(list);
+  const groups = [];
+  for (const g of spec.groups) {
+    const node = pfvMk("div", "pfv-pick-grp");
+    if (g.title) node.append(pfvMk("p", "pfv-pick-g", g.title));
+    if (g.note) node.append(pfvMk("p", "pfv-pick-note", g.note));
+    const mine = [];
+    for (const it of g.items) {
+      const b = pfcPickOption(rec, it);
+      node.append(b);
+      mine.push({ node: b, hay: (it.title + " " + (it.sub || "")).toLowerCase() });
+      first = first || (b.disabled === true ? null : b);
+    }
+    groups.push({ node, opts: mine });
+    list.append(node);
+  }
+  const none = pfvMk("p", "pfv-pick-none", PFC_PICK_NONE);
+  none.hidden = true;
+  list.append(none);
+  const narrow = (q) => {
+    const w = q.trim().toLowerCase();
+    let any = false;
+    for (const g of groups) {
+      let n = 0;
+      for (const o of g.opts) {
+        o.node.hidden = w !== "" && !o.hay.includes(w);
+        if (!o.node.hidden) n++;
+      }
+      g.node.hidden = w !== "" && n === 0;
+      any = any || n > 0;
+    }
+    none.hidden = w === "" || any;
+  };
+  if (find) {
+    find.value = typeof rec.ui.pickQuery === "string" ? rec.ui.pickQuery : "";
+    find.oninput = () => { rec.ui.pickQuery = find.value; narrow(find.value); };
+    narrow(find.value);
+  }
   return { node: pop, first };
 }
 
-// pfvOpenPicker: the "+ Add" choice of an open block. The picker task replaces this with the grouped picker. The choice
-// is open while rec.ui.picker is true: that is what draws it and what pfvState.picker and the Esc layering read, so
-// the picker that replaces this one only has to set and clear that one thing.
+// pfvOpenPicker: the "+ Add" picker of an open block, with focus in it (the filter, else the first option) and the popover in
+// view. false if the block is not open.
 function pfvOpenPicker(blockId) {
   const rec = pfvState.edits[blockId];
   if (!rec) return false;
   rec.ui.picker = true;
+  rec.ui.pickQuery = "";
   pfvRedrawForm(rec);
+  const pop = rec.ui.pickNodes && rec.ui.pickNodes.pop;
+  if (pop && typeof pop.scrollIntoView === "function") pop.scrollIntoView({ block: "nearest" });
   pfvFocusBlock(blockId);
   return true;
 }
 
-// pfvClosePicker: close the open "+ Add" choice (of block `blockId`, else of every open block) and give focus back to
-// the link that opened it. false when none was open.
+// pfvClosePicker: close the open picker (of block `blockId`, else of every open block) and give focus back to the link that
+// opened it. false when none was open.
 function pfvClosePicker(blockId) {
   const open = Object.values(pfvState.edits).filter((r) => r.ui && r.ui.picker === true && (blockId === undefined || r.id === blockId));
-  for (const rec of open) {
-    rec.ui.picker = false;
-    pfvRedrawForm(rec);
-  }
+  for (const rec of open) pfcPickClose(rec);
   const add = open.length ? open[0].fields.add : null;
   if (add && typeof add.focus === "function") add.focus();
   return open.length > 0;
+}
+
+// A click anywhere outside an open picker closes it, and focus stays wherever the click put it (a field, another link). In the
+// capture phase, so it runs before the clicked control's own handler: that handler may draw the form again, and a node the form
+// has dropped is inside nothing. The link has its own toggle, so a click on it is not "outside".
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("click", (ev) => {
+    for (const rec of Object.values(pfvState.edits)) {
+      const wrap = rec.ui && rec.ui.pickNodes ? rec.ui.pickNodes.wrap : null;
+      if (rec.ui && rec.ui.picker === true && !(wrap && wrap.contains(ev.target))) pfcPickClose(rec);
+    }
+  }, true);
 }
 
 // pfvAddRow: a pending row in an open block. true when it added one (or brought a removed row back).
@@ -151,6 +255,7 @@ function pfvAddRow(blockId, what) {
   const key = ed.add(rec, what || {});
   if (!key) return false;
   rec.ui.picker = false;
+  rec.ui.pickQuery = "";
   rec.ferrs = [];
   pfvChanged(rec, "");
   const el = rec.fields[key];
@@ -158,23 +263,29 @@ function pfvAddRow(blockId, what) {
   return true;
 }
 
-// pfcFoot: what ends the form of a block of rows: the empty line, the "+ Add" link and, while it is asked for, the picker.
-function pfcFoot(rec, list, kinds, none) {
+// pfcFoot: what ends the form of a block of rows: the empty line and the "+ Add" link, which carries the picker while it is asked
+// for. pick() is the picker's spec, asked for only while it is open.
+function pfcFoot(rec, list, pick) {
   const out = [list];
   if (list.children.length === 0) out.push(pfvMk("p", "pfv-empty", rec.block.lines[0] || ""));
+  const wrap = pfvMk("div", "pfv-addwrap");
   const add = pfvDrawLink(rec.block.add || "+ Add", "pfv-add");
   add.setAttribute("aria-expanded", rec.ui.picker === true ? "true" : "false");
+  add.setAttribute("aria-haspopup", "dialog");
   add.onclick = () => {
     if (rec.ui.picker !== true) { pfvOpenPicker(rec.id); return; }
     pfvClosePicker(rec.id);
   };
   pfvReg(rec, "add", add);
-  out.push(add);
+  wrap.append(add);
+  rec.ui.pickNodes = null;
   if (rec.ui.picker === true) {
-    const pk = pfcPicker(rec, kinds, none);
-    out.push(pk.node);
+    const pk = pfcPicker(rec, pick());
+    wrap.append(pk.node);
+    rec.ui.pickNodes = { wrap, pop: pk.node };
     if (pk.first) rec.first = pk.first;
   }
+  out.push(wrap);
   return out;
 }
 
@@ -377,15 +488,48 @@ function pfcCloudDraw(rec, c) {
   v.gh.forEach((g, i) => { if (g.removed !== true && g.pick.startsWith("app:")) permsAt = i; });
   v.gh.forEach((g, i) => list.append(pfcGithubRow(rec, c, rows, i, live, permsAt)));
   named("Token", "token", "tokens", v.tokens, stTokensToSend(pfcLive(v.tokens).map((e) => e.name)) || []);
-  const out = pfcFoot(rec, list, pfcCloudKinds(), PFC_NO_LOGINS);
+  const out = pfcFoot(rec, list, () => pfcCloudPick(rec));
   // The note comes once, after the rows, while any token is still bound.
   if (pfcLive(v.tokens).length) out.splice(1, 0, pfvMk("p", "pfv-tnote", SPAWN_TOKEN_NOTE));
   return out;
 }
 
-function pfcCloudKinds() {
-  if (pfcLogins("").length === 0) return [];
-  return [{ kind: "github", title: "Another org or user", sub: "Through a GitHub App or token: 1-hour tokens with an App, read only unless you change it" }];
+// pfcAwsSub: the line under a connection in the picker: where it is, then what it can do.
+function pfcAwsSub(c) {
+  const place = spawnJoin([c.account_id ? "account " + c.account_id : "", c.region]);
+  const words = c.mode === "sso_direct" ? spawnAWSScope({ direct: true }) : c.write_capable === true ? PFC_PICK_AWS_WRITE : PFC_PICK_READ;
+  return place ? place + ". " + words : words;
+}
+
+// pfcCloudPick: what the Cloud and tokens picker offers, in the instance's own order: what the profile holds is drawn as Added
+// (one that is only pending removal is not held: picking it takes the removal back), and what cannot be added now is said in one
+// line instead. The last item of a group makes the thing that is missing.
+function pfcCloudPick(rec) {
+  const v = rec.values;
+  const held = (list) => new Set(pfcLive(list).map((e) => e.name));
+  const heldAws = held(v.aws);
+  const heldTok = held(v.tokens);
+  const conns = typeof awscEntries !== "undefined" && Array.isArray(awscEntries) ? awscEntries : [];
+  const tokens = typeof stEntries !== "undefined" && Array.isArray(stEntries) ? stEntries : [];
+  // The server takes the old-style AWS setting or saved connections, never both (config/awsconn.go): while it stays, neither a
+  // connection nor a new one can be added.
+  const legacy = !!v.legacy && v.legacy.removed !== true;
+  const aws = { title: "AWS connections", note: legacy ? PFC_PICK_LEGACY : "", items: [] };
+  if (!legacy) {
+    for (const c of conns) aws.items.push({ title: c.name, tag: c.prod ? "PROD" : "", sub: pfcAwsSub(c), added: heldAws.has(c.name), add: { kind: "aws", name: c.name } });
+    aws.items.push({ title: "New AWS connection…", sub: "Set it up in Credentials without leaving this page", create: "aws" });
+  }
+  const logins = pfcLogins("");
+  const gh = { title: "GitHub", note: logins.length ? "" : PFC_NO_LOGINS, items: [] };
+  // An owner signs in with a GitHub App, else a personal access token: the App's words are true only when there is an App.
+  if (logins.length) gh.items.push({ title: "Another org or user", sub: logins.some((l) => l.value.startsWith("app:")) ? PFC_PICK_GH_APP : PFC_PAT_NOTE, add: { kind: "github" } });
+  gh.items.push({ title: "New GitHub App…", sub: "Install the App on an org, or paste a personal access token", create: "github" });
+  const tok = { title: "Tokens", note: PFC_PICK_TOKENS, items: [] };
+  for (const t of tokens) {
+    tok.items.push({ title: t.name, tag: t.prod === true ? "production" : "", sub: spawnJoin([t.description].concat(spawnTokenHosts(t.hosts))), added: heldTok.has(t.name), add: { kind: "token", name: t.name } });
+  }
+  tok.items.push({ title: "New token…", sub: "Kept in the encrypted credential store", create: "token" });
+  return { label: "Add cloud access or a token", filter: "Filter connections and tokens", groups: [aws, gh, tok] };
 }
 
 // pfcCloudAdd: pfvAddRow's hook. A name the instance defines goes in as a row (a removed one comes back); a GitHub owner
@@ -497,13 +641,17 @@ function pfcReachDraw(rec, c) {
       toggle: () => pfcToggle(rec, v.domains, e),
     }));
   });
-  return pfcFoot(rec, list, PFC_REACH_KINDS, "");
+  return pfcFoot(rec, list, pfcReachPick);
 }
 
-const PFC_REACH_KINDS = [
-  { kind: "folder", title: "Folder", sub: "Read only. A folder on this machine the agent can read." },
-  { kind: "domain", title: "Domain", sub: "HTTPS only. A host name, or *.host with its subdomains." },
-];
+// pfcReachPick: the Also reachable picker: the two kinds, each an input row (no drawer, nothing to filter).
+const pfcReachPick = () => ({
+  label: "Add a folder or a domain", filter: "",
+  groups: [{ title: "", note: "", items: [
+    { title: "Folder it can read", sub: "Read only, at the same path inside the box. Never list secrets.", add: { kind: "folder" } },
+    { title: "Domain it can reach", sub: "A hostname or *.example.com, over HTTPS", add: { kind: "domain" } },
+  ] }],
+});
 
 function pfcReachAdd(rec, what) {
   const v = rec.values;

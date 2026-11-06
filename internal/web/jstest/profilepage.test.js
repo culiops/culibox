@@ -116,7 +116,9 @@ function page(over) {
   els["settings-modal"].classList.add("as-page");
   const doc = {
     createElement: (t) => new Node(t), createElementNS: (_ns, t) => new Node(t), createTextNode: (t) => new Text(t),
-    getElementById: (id) => els[id] || null, addEventListener() {},
+    getElementById: (id) => els[id] || null,
+    // What the page listens for on the document (a click anywhere else closes the header menu and the "+ Add" picker).
+    listeners: {}, addEventListener(ev, fn) { (doc.listeners[ev] = doc.listeners[ev] || []).push(fn); },
     get activeElement() { return Node.focused || null; },
   };
   Node.focused = null;
@@ -186,7 +188,7 @@ function page(over) {
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
   for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js", "pfv-new.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
-  return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
+  return { box, els, calls, doc, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
 test("pfvRenderNav lists every profile with its tier word and a read-only marker for config.json", () => {
@@ -1706,7 +1708,7 @@ const cloudPage = (over, doc) => {
 const rowsOf = (t, id) => byCls(blockOf(t, id), "pfv-row");
 const rowFor = (t, id, kind, name) => rowsOf(t, id).find((r) => texts(r, "pfv-k")[0] === kind && (texts(r, "pfv-nm")[0] || "").startsWith(name));
 const unsavedNote = (t) => byCls(t.els["pfv-in"], "pfv-unsaved")[0];
-const optBtn = (t, id, title) => byCls(blockOf(t, id), "pfv-opt").find((b) => texts(b, "pfv-opt-t")[0] === title);
+const optBtn = (t, id, title) => byCls(blockOf(t, id), "pfv-opt").find((b) => texts(b, "pfv-opt-t")[0].startsWith(title));
 const setLevel = (t, key, level) => field(t, key).children.find((b) => b.dataset.segvalue === level).click();
 const tick = (t, key, on) => { const cb = field(t, key); cb.checked = on; cb.onchange(); };
 const saveBlock = (t, id) => clickBtn(blockOf(t, id), "Save");
@@ -1792,10 +1794,10 @@ test("undoing the removal a read view link started leaves no change", async () =
   assert.ok(unsavedNote(t).hidden, "undo is what it says");
 });
 
-test("read view + Add access opens cloud in edit mode with the picker open", async () => {
+test("read view + Add access opens cloud in edit mode and asks for the picker", async () => {
   const t = cloudPage();
   const asked = [];
-  // The grouped picker is a later task's: the page only asks for it, by block.
+  // Whatever draws the picker, the page only asks for it, by block.
   t.box.pfvOpenPicker = (id) => { asked.push(id); };
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "cloud"), "+ Add access");
@@ -1806,6 +1808,18 @@ test("read view + Add access opens cloud in edit mode with the picker open", asy
   assert.ok(blockOf(t, "reachable").className.includes("pfv-editing"));
   assert.ok(!blockOf(t, "cloud").className.includes("pfv-editing"), "a form without changes yields to the next");
   assert.deepStrictEqual(asked, ["cloud", "reachable"]);
+});
+
+test("read view + Add access opens the block with the picker open and focus in its filter", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 1);
+  assert.strictEqual(Node.focused, byCls(blockOf(t, "cloud"), "pfv-pick-find")[0]);
+  assert.strictEqual(t.run("pfvState").picker, "cloud");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  assert.strictEqual(t.run("pfvState").picker, "reachable", "the one in the open block; the other block's form is gone with its picker");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-pick").length, 1);
 });
 
 test("+ Add is refused in place while another block holds changes, and asks for no picker", async () => {
@@ -1821,11 +1835,289 @@ test("+ Add is refused in place while another block holds changes, and asks for 
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), ["Save or discard these changes first"]);
 });
 
-test("the stand-in picker offers what is added as an input row, and picking one puts a pending row in", async () => {
+// --- the "+ Add" picker (spec 5.7; the mockup's `picker` state) ----------------------------------------------------------
+
+// What the instance defines: a production connection that can write, a plain one, two more and one that uses the SSO role directly;
+// tokens with and without a description, one with two hosts (one on a port that is not 443), and a GitHub one.
+const PICK_AWS = [
+  { name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" },
+  { name: "staging-read", account_id: "111111111111", region: "eu-west-1" },
+  { name: "sandbox", account_id: "333333333333", region: "us-east-1" },
+  { name: "sso-lab", mode: "sso_direct", account_id: "444444444444", region: "eu-west-1" },
+];
+const PICK_TOKENS = [
+  { name: "grafana-prod", prod: true, description: "Grafana service account", env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] },
+  { name: "sentry-staging", env: ["SENTRY_ACCESS_TOKEN"], hosts: [{ host: "sentry.io", port: 443 }] },
+  { name: "pagerduty", description: "PagerDuty read key", env: ["PAGERDUTY_TOKEN"], hosts: [{ host: "api.pagerduty.com", port: 443 }, { host: "events.pagerduty.com", port: 8443 }] },
+  GH_PAT_ENTRY,
+];
+const pickPage = (over, doc) => cloudPage(Object.assign({ awscEntries: PICK_AWS, stEntries: PICK_TOKENS }, over), doc);
+const openPicker = async (t) => { await t.box.pfvShow("aws-ops"); clickBtn(blockOf(t, "cloud"), "+ Add access"); };
+const popOf = (t, id) => byCls(blockOf(t, id || "cloud"), "pfv-pick")[0];
+const optsOf = (t, id) => byCls(blockOf(t, id || "cloud"), "pfv-opt");
+const optName = (b) => texts(b, "pfv-opt-t")[0];
+const groupsOf = (t) => byCls(popOf(t), "pfv-pick-grp");
+// What the user can see of the options: neither the option nor its group is hidden.
+const shownOpts = (t) => groupsOf(t).filter((g) => !g.hidden).flatMap((g) => byCls(g, "pfv-opt")).filter((o) => !o.hidden).map(optName);
+// A click on the document, as the page's listeners get it.
+const docClick = (t, target) => (t.doc.listeners.click || []).forEach((f) => f({ target }));
+
+test("the + Add picker is a dialog under its link: a filter, then AWS connections, GitHub and Tokens, each ending in what creates the missing thing", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  const pop = popOf(t);
+  assert.strictEqual(pop.getAttribute("role"), "dialog");
+  assert.strictEqual(pop.getAttribute("aria-label"), "Add cloud access or a token");
+  const link = field(t, "add");
+  assert.strictEqual(link.getAttribute("aria-expanded"), "true");
+  assert.strictEqual(link.getAttribute("aria-haspopup"), "dialog");
+  assert.strictEqual(link.parent, pop.parent, "the popover hangs on the link's own wrapper, so it sits under it");
+  const filter = byCls(pop, "pfv-pick-find")[0];
+  assert.strictEqual(filter.getAttribute("placeholder"), "Filter connections and tokens");
+  assert.strictEqual(filter.getAttribute("aria-label"), "Filter connections and tokens");
+  assert.strictEqual(Node.focused, filter, "focus starts in the filter");
+  assert.deepStrictEqual(groupsOf(t).map((g) => texts(g, "pfv-pick-g")[0]), ["AWS connections", "GitHub", "Tokens"]);
+  assert.deepStrictEqual(groupsOf(t).map((g) => byCls(g, "pfv-opt").map(optName)), [
+    ["prod-read PROD", "staging-read", "sandbox", "sso-lab", "New AWS connection…"],
+    ["Another org or user", "New GitHub App…"],
+    ["grafana-prod production", "sentry-staging", "pagerduty", "gh-pat", "New token…"],
+  ]);
+  assert.deepStrictEqual(texts(popOf(t), "pfv-pick-note"), ["Tokens are long-lived, and the agent can read them while it runs."]);
+  assert.strictEqual(t.run("pfvState").picker, "cloud");
+  assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("picker sub-line shows account and region, what the connection can do, a token's description and hosts", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  const sub = (name) => texts(optsOf(t).find((b) => optName(b).startsWith(name)), "pfv-opt-s");
+  assert.deepStrictEqual(sub("prod-read"), ["account 222222222222, eu-west-1. Read only; write after a granted window"]);
+  assert.deepStrictEqual(sub("staging-read"), ["account 111111111111, eu-west-1. Read only"]);
+  assert.deepStrictEqual(sub("sandbox"), ["account 333333333333, us-east-1. Read only"]);
+  assert.deepStrictEqual(sub("sso-lab"), ["account 444444444444, eu-west-1. Read only. Uses the SSO role directly."], "the SSO-direct words of the read view's row");
+  assert.deepStrictEqual(sub("grafana-prod"), ["Grafana service account, grafana.acme.example.com"]);
+  assert.deepStrictEqual(sub("sentry-staging"), ["sentry.io"], "no description: just the hosts");
+  assert.deepStrictEqual(sub("pagerduty"), ["PagerDuty read key, api.pagerduty.com, events.pagerduty.com:8443"], "a port that is not 443 is shown");
+  assert.deepStrictEqual(sub("Another org or user"), ["Through the GitHub App: 1-hour tokens, read only unless you change it"]);
+  assert.deepStrictEqual(sub("New AWS connection…"), ["Set it up in Credentials without leaving this page"]);
+  assert.deepStrictEqual(sub("New GitHub App…"), ["Install the App on an org, or paste a personal access token"]);
+  assert.deepStrictEqual(sub("New token…"), ["Kept in the encrypted credential store"]);
+  assert.deepStrictEqual(texts(optsOf(t).find((b) => optName(b).startsWith("prod-read")), "pfv-tag"), ["PROD"]);
+  assert.deepStrictEqual(texts(optsOf(t).find((b) => optName(b).startsWith("grafana-prod")), "pfv-tag"), ["production"]);
+  // A connection the instance has no account or region for says only what it can do.
+  const bare = pickPage({ awscEntries: [{ name: "bare" }] });
+  await openPicker(bare);
+  assert.deepStrictEqual(texts(optsOf(bare).find((b) => optName(b) === "bare"), "pfv-opt-s"), ["Read only"]);
+});
+
+test("picker marks names already bound as Added and they cannot be picked", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  const added = optsOf(t).filter((b) => texts(b, "pfv-opt-r").length > 0);
+  assert.deepStrictEqual(added.map(optName), ["prod-read PROD", "staging-read", "grafana-prod production", "sentry-staging"], "what the profile holds already, drawn rather than left out");
+  for (const b of added) {
+    assert.deepStrictEqual(texts(b, "pfv-opt-r"), ["Added"]);
+    assert.strictEqual(b.disabled, true);
+    assert.strictEqual(b.onclick, undefined, "a disabled option does nothing");
+  }
+  const free = optsOf(t).filter((b) => !added.includes(b));
+  assert.ok(free.every((b) => b.disabled !== true), "everything else can be picked");
+  // A name that was only just picked counts as added too.
+  optBtn(t, "cloud", "sandbox").click();
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(optBtn(t, "cloud", "sandbox").disabled, true);
+  assert.deepStrictEqual(texts(optBtn(t, "cloud", "sandbox"), "pfv-opt-r"), ["Added"]);
+});
+
+test("picking adds a pending row: the connection or token, with the read view's words, saved only with Save", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  optBtn(t, "cloud", "sandbox").click();
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 0, "picking closes the picker");
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "sandbox"), "pfv-rsub"), ["account 333333333333, us-east-1"]);
+  assert.strictEqual(Node.focused, field(t, "rm:aws:sandbox"), "focus goes to the new row");
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  assert.strictEqual(t.box.puts.length, 0);
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  optBtn(t, "cloud", "pagerduty").click();
+  assert.ok(rowFor(t, "cloud", "Token", "pagerduty"));
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read", "sandbox", "staging-read"]);
+  assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod", "pagerduty", "sentry-staging"]);
+});
+
+test("a row pending removal stays pickable: picking it takes the removal back", async () => {
+  const t = pickPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  const opt = optBtn(t, "cloud", "staging-read");
+  assert.strictEqual(opt.disabled, false, "it is not bound while its removal is pending");
+  assert.deepStrictEqual(texts(opt, "pfv-opt-r"), []);
+  opt.click();
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-removed").length, 0, "the row is back, not struck");
+  assert.strictEqual(rowsOf(t, "cloud").filter((r) => (texts(r, "pfv-nm")[0] || "").startsWith("staging-read")).length, 1, "and not listed twice");
+  assert.ok(unsavedNote(t).hidden, "nothing is left to save");
+});
+
+test("the GitHub option adds an owner row; with only a token to sign in with it says what a token does", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  optBtn(t, "cloud", "Another org or user").click();
+  assert.strictEqual(field(t, "gh:1:pick").value, "app:acme-app", "the first login is preselected");
+  assert.strictEqual(Node.focused, field(t, "gh:1:owner"));
+  const tok = pickPage({ ghApps: [] });
+  await openPicker(tok);
+  const gh = optBtn(tok, "cloud", "Another org or user");
+  assert.deepStrictEqual(texts(gh, "pfv-opt-s"), ["A personal access token is not narrowed by CuliBox: it reaches whatever the token allows."], "the App's words would not be true here");
+  gh.click();
+  assert.strictEqual(field(tok, "gh:1:pick").value, "token:gh-pat");
+});
+
+test("with nothing to sign in to GitHub with, the picker says so and still offers to create it", async () => {
+  const t = pickPage({ ghApps: [], stEntries: PICK_TOKENS.slice(0, 3) });
+  await openPicker(t);
+  const gh = groupsOf(t)[1];
+  assert.deepStrictEqual(byCls(gh, "pfv-opt").map(optName), ["New GitHub App…"], "an option nobody can use is not drawn");
+  assert.deepStrictEqual(texts(gh, "pfv-pick-note"), ["No GitHub App or token is defined yet."]);
+});
+
+test("while the profile has the old-style AWS setting the picker says why AWS cannot be added, and offers it once that is removed", async () => {
+  const t = legacyPage();
+  t.box.awscEntries = PICK_AWS;
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  const aws = () => groupsOf(t)[0];
+  assert.deepStrictEqual(byCls(aws(), "pfv-opt").map(optName), [], "the server takes the old-style setting or saved connections, never both");
+  assert.deepStrictEqual(texts(aws(), "pfv-pick-note"), ["Move the old-style AWS setting to a saved connection, or remove it, before adding connections."]);
+  assert.strictEqual(optBtn(t, "cloud", "New AWS connection…"), undefined, "a connection made now could not be saved with it");
+  assert.deepStrictEqual(groupsOf(t).slice(1).map((g) => texts(g, "pfv-pick-g")[0]), ["GitHub", "Tokens"], "the rest is unaffected");
+  // Taking the setting away (pending, like any removal) frees AWS in the same edit.
+  byText(rowFor(t, "cloud", "AWS", "Old-style AWS setting"), "button", "Remove")[0].click();
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "the picker stays open under the row");
+  assert.deepStrictEqual(byCls(aws(), "pfv-opt").map(optName), ["prod-read PROD", "staging-read", "sandbox", "sso-lab", "New AWS connection…"]);
+  assert.deepStrictEqual(texts(aws(), "pfv-pick-note"), []);
+});
+
+test("the filter narrows the options by name and by sub-line, hides a group with nothing left, and says when nothing matches", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  const filter = byCls(popOf(t), "pfv-pick-find")[0];
+  const none = () => byCls(popOf(t), "pfv-pick-none")[0];
+  const all = shownOpts(t);
+  assert.strictEqual(all.length, 12, "every option and every create item");
+  assert.strictEqual(none().hidden, true);
+  typeInto(filter, "prod");
+  assert.deepStrictEqual(shownOpts(t), ["prod-read PROD", "grafana-prod production"], "by name");
+  assert.strictEqual(groupsOf(t)[1].hidden, true, "GitHub has nothing left");
+  typeInto(filter, "SENTRY.io");
+  assert.deepStrictEqual(shownOpts(t), ["sentry-staging"], "by sub-line, whatever the case");
+  typeInto(filter, "us-east");
+  assert.deepStrictEqual(shownOpts(t), ["sandbox"]);
+  typeInto(filter, "  zzz ");
+  assert.deepStrictEqual(shownOpts(t), []);
+  assert.strictEqual(none().hidden, false);
+  assert.deepStrictEqual(texts(popOf(t), "pfv-pick-none"), ["Nothing matches."]);
+  typeInto(filter, "");
+  assert.deepStrictEqual(shownOpts(t), all);
+  assert.strictEqual(none().hidden, true);
+  assert.ok(groupsOf(t).every((g) => g.hidden !== true));
+  assert.ok(unsavedNote(t).hidden, "typing in the filter is no change");
+  assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("what was typed in the filter survives the form being drawn again, and is gone when the picker is opened anew", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  typeInto(byCls(popOf(t), "pfv-pick-find")[0], "sand");
+  t.run("pfvRedrawForm(pfvState.edits.cloud)");
+  const filter = byCls(popOf(t), "pfv-pick-find")[0];
+  assert.strictEqual(filter.value, "sand");
+  assert.deepStrictEqual(shownOpts(t), ["sandbox"]);
+  assert.strictEqual(Node.focused, filter, "and focus is still in it");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(byCls(popOf(t), "pfv-pick-find")[0].value, "");
+  assert.strictEqual(shownOpts(t).length, 12);
+});
+
+test("the create items call the Credentials drawer for their kind, once there is one, and close the picker", async () => {
+  const t = pickPage();
+  const asked = [];
+  t.box.pfvOpenDrawer = (kind) => { asked.push(kind); };
+  await openPicker(t);
+  optBtn(t, "cloud", "New AWS connection…").click();
+  assert.deepStrictEqual(asked, ["aws"]);
+  assert.strictEqual(t.run("pfvState").picker, "", "the drawer takes over");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  optBtn(t, "cloud", "New GitHub App…").click();
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  optBtn(t, "cloud", "New token…").click();
+  assert.deepStrictEqual(asked, ["aws", "github", "token"]);
+  assert.ok(unsavedNote(t).hidden, "creating is not picking: no row is added here");
+});
+
+test("until the drawer exists a create item does nothing", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  const rows = rowsOf(t, "cloud").length;
+  for (const title of ["New AWS connection…", "New GitHub App…", "New token…"]) optBtn(t, "cloud", title).click();
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "the picker is as it was");
+  assert.strictEqual(rowsOf(t, "cloud").length, rows);
+  assert.ok(unsavedNote(t).hidden);
+  assert.deepStrictEqual(t.calls.filter((c) => /^(POST|PUT)/.test(c)), []);
+});
+
+test("a click outside the open picker closes it and leaves focus where the click put it; a click inside, or on its link, does not", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  docClick(t, byCls(popOf(t), "pfv-pick-find")[0]);
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "inside");
+  docClick(t, optBtn(t, "cloud", "New token…"));
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "on an option");
+  docClick(t, field(t, "add"));
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "on its own link: the link toggles it");
+  const elsewhere = field(t, "rm:aws:prod-read");
+  elsewhere.focus();
+  docClick(t, elsewhere);
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 0);
+  assert.strictEqual(Node.focused, field(t, "rm:aws:prod-read"), "not pulled back to the + Add link");
+  assert.ok(unsavedNote(t).hidden, "closing is no change");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"), "the block stays open");
+});
+
+test("Esc in the filter closes the picker only and gives focus back to the link; typed text goes with it", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  typeInto(byCls(popOf(t), "pfv-pick-find")[0], "pro");
+  assert.strictEqual(t.run("pfvEscTarget()"), "picker");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 0);
+  assert.strictEqual(Node.focused, field(t, "add"));
+  assert.strictEqual(field(t, "add").getAttribute("aria-expanded"), "false");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"));
+  assert.strictEqual(t.box.pageLeaveHook("esc"), true, "the next Esc is the page's");
+});
+
+test("Also reachable's picker is the same popover with its two kinds, no filter and no headings; picking one adds an input row", async () => {
   const t = cloudPage();
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
-  assert.deepStrictEqual(byCls(blockOf(t, "reachable"), "pfv-opt").map((b) => texts(b, "pfv-opt-t")[0]), ["Folder", "Domain"]);
+  const pop = popOf(t, "reachable");
+  assert.strictEqual(pop.getAttribute("role"), "dialog");
+  assert.strictEqual(pop.getAttribute("aria-label"), "Add a folder or a domain");
+  assert.strictEqual(byCls(pop, "pfv-pick-find").length, 0, "two options need no filter");
+  assert.strictEqual(byCls(pop, "pfv-pick-g").length, 0);
+  assert.deepStrictEqual(optsOf(t, "reachable").map(optName), ["Folder it can read", "Domain it can reach"]);
+  assert.deepStrictEqual(optsOf(t, "reachable").map((b) => texts(b, "pfv-opt-s")[0]), [
+    "Read only, at the same path inside the box. Never list secrets.", "A hostname or *.example.com, over HTTPS",
+  ]);
+  assert.strictEqual(Node.focused, optsOf(t, "reachable")[0], "focus starts on the first option");
   assert.strictEqual(t.box.puts.length, 0);
   optBtn(t, "reachable", "Domain").click();
   assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-opt").length, 0, "picking closes it");
@@ -1837,16 +2129,21 @@ test("the stand-in picker offers what is added as an input row, and picking one 
   assert.strictEqual(t.box.puts.length, 0);
 });
 
-test("the stand-in picker for Cloud and tokens adds a GitHub owner, or says why it cannot", async () => {
-  const t = cloudPage();
-  await t.box.pfvShow("aws-ops");
-  clickBtn(blockOf(t, "cloud"), "+ Add access");
-  assert.deepStrictEqual(byCls(blockOf(t, "cloud"), "pfv-opt").map((b) => texts(b, "pfv-opt-t")[0]), ["Another org or user"]);
-  const none = cloudPage({ ghApps: [], stEntries: [] });
-  await none.box.pfvShow("aws-ops");
-  clickBtn(blockOf(none, "cloud"), "+ Add access");
-  assert.strictEqual(byCls(blockOf(none, "cloud"), "pfv-opt").length, 0, "an option nobody can use is not drawn");
-  assert.deepStrictEqual(texts(blockOf(none, "cloud"), "pfv-pick-note"), ["No GitHub App or token is defined yet."]);
+test("the picker stays inside the page column: it hangs on its link's wrapper at no more than the width the form has", () => {
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const rule = (cls) => rules.filter((r) => new RegExp("\\." + cls + "(?![\\w-])").test(r.sel.split(/\s+/).pop()) && !r.sel.includes("@container"));
+  const has = (cls, re) => rule(cls).some((r) => re.test(r.body));
+  assert.ok(has("pfv-addwrap", /position:\s*relative/), "the wrapper is what the popover is placed against");
+  assert.ok(has("pfv-pick", /position:\s*absolute/));
+  assert.ok(has("pfv-pick", /max-width:\s*100%/), "420px at most, never wider than the form");
+  assert.ok(has("pfv-pick", /width:\s*420px/));
+  assert.ok(has("pfv-pick", /z-index:\s*30/), "over the blocks after it");
+  assert.ok(has("pfv-pick-list", /max-height:/) && has("pfv-pick-list", /overflow-y:\s*auto/), "a long list scrolls under the filter instead of running down the page");
+  assert.ok(has("pfv-opt", /text-decoration:\s*none/), "primitives.css strikes every disabled button through; an Added option is not struck");
+  assert.ok(has("pfv-opt-t", /overflow-wrap:\s*anywhere/) && has("pfv-opt-s", /overflow-wrap:\s*anywhere/), "a long name breaks rather than push the popover out");
+  assert.ok(rules.some((r) => /\.pfv-opt\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)), "a grid option is hidden by the filter");
+  assert.ok(rules.some((r) => /\.pfv-pick-grp\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)));
 });
 
 test("a relative folder shows the absolute-path error and blocks save", async () => {
@@ -3258,7 +3555,7 @@ test("Esc with a picker open closes the picker only; the next Esc leaves the pag
   const asked = recordAsks(t, false);
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
-  assert.strictEqual(t.run("pfvState").picker, "reachable", "the stand-in picker sets the flag");
+  assert.strictEqual(t.run("pfvState").picker, "reachable", "the picker sets the flag");
   assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-pick").length, 1);
   assert.strictEqual(t.box.pageLeaveHook("esc"), false, "the page stays");
   assert.strictEqual(t.run("pfvState").picker, "");

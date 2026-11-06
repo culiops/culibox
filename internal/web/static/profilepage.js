@@ -28,7 +28,7 @@
 // moment. warnings: the lines a successful save answered with. drawer: the credentials drawer is open (a later task
 // sets it). picker: the block whose "+ Add" choice is open, "" when none; it is read from the open blocks
 // (rec.ui.picker, which is also what draws the choice), never kept beside them, so it can neither claim a picker
-// that a closed or redrawn block took with it nor miss one that is open. The picker task sets and clears
+// that a closed or redrawn block took with it nor miss one that is open. pfv-cloud.js's picker sets and clears
 // rec.ui.picker. pfvEscTarget reads both, so Esc goes to the innermost open layer.
 // page: "new" or "dup" while the New profile page is on screen instead of a profile (pfv-new.js; then there is no name, doc
 // or view, and the page is the record edits.draft); src what a copy is made from, back the profile Cancel returns to,
