@@ -163,7 +163,8 @@ function drawerDesktop() {
 // that is what is already showing, or switches.
 function toggleDrawer(kind, sessionId) {
   if (!drawerDesktop()) return;
-  closePage(); // a drawer hangs over the panes, which a page hides
+  // A drawer hangs over the panes, which a page hides: close it first, or leave things as they are if it is kept.
+  if (closePageHolds(() => toggleDrawer(kind, sessionId))) return;
   applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
 }
 
@@ -173,7 +174,7 @@ function toggleDrawer(kind, sessionId) {
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
   if (!drawerDesktop()) return;
-  closePage();
+  if (closePageHolds(() => openDrawer(kind, sessionId, opts))) return;
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
@@ -5066,7 +5067,12 @@ function loadLastSpawn() {
 // what "+ New session" does.
 async function spawnSession(req, opts) {
   opts = opts || {};
-  closePage(); // the new session's pane must be on screen, not behind a page
+  // The new session's pane must be on screen, not behind a page. A page that asks about unsaved changes is answered
+  // BEFORE anything starts: Keep editing spawns nothing (null; onCreated does not run, so the spawn dialog stays open
+  // with its form) and the question is never asked a second time when openTerminal closes the page again. With nothing
+  // to ask closePage answers true and the POST goes out in this same tick.
+  const left = closePage();
+  if (left !== true && (left === false || !(await left))) return null;
   const s = await api("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -6158,7 +6164,7 @@ const shellSpawning = new WeakSet();
 // "+", the "+sh" chip) pass "…" so they do not grow into a sentence.
 async function spawnShellIn(cell, placement = "below", trigger, label = "Starting shell…") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
-  closePage();
+  if (closePageHolds(() => spawnShellIn(cell, placement, trigger, label))) return;
   if (trigger) return withPending(trigger, label, () => spawnShellRun(cell, placement, false));
   return spawnShellRun(cell, placement, true);
 }

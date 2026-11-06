@@ -62,15 +62,17 @@ const pageCloseHooks = [
 ];
 for (const [file, name] of pageCloseHooks) {
   test(name + " (" + file + ") closes an open page", () => {
-    assert.match(body(read(file), name), /closePage\(\)/);
+    // Each one closes the page through closePageHolds (or reads closePage's answer itself, as spawnSession does).
+    assert.match(body(read(file), name), /closePage(?:Holds)?\(/);
   });
 }
 
 test("the palette's Activity and Access entries close an open page", () => {
   const src = read("palette.js");
-  for (const k of ["activityView", "accessView"]) {
-    assert.match(src, new RegExp(k + ":\\s*\\(\\)\\s*=>\\s*\\{\\s*closePage\\(\\);"), k);
+  for (const [k, kind] of [["activityView", "activity"], ["accessView", "access"]]) {
+    assert.match(src, new RegExp(k + ':\\s*\\(\\)\\s*=>\\s*paletteOpenView\\("' + kind + '"\\)'), k);
   }
+  assert.match(body(src, "paletteOpenView"), /closePageHolds\(/);
 });
 
 test("dialogsOpen counts modal dialogs only, never a page", () => {
@@ -208,13 +210,56 @@ test("pagehost closePage waits for the leave hook", async () => {
   assert.strictEqual(await t.ctx.closePage(), true);
   assert.strictEqual(t.ctx.currentPage(), "", "Discard: it closes");
 
-  // "force" (the window crossed to a phone) is not asked.
+  // "force" (the window crossed to a phone) closes whatever the hook answers: it is told, so it can end its edit, and
+  // never asked. A hook that throws does not keep the page up either.
   t.ctx.openPage("settings-modal");
   t.ctx.verdict = false;
   seen.length = 0;
   assert.strictEqual(t.ctx.closePage("force"), true);
   assert.strictEqual(t.ctx.currentPage(), "");
-  assert.deepStrictEqual(seen, []);
+  assert.deepStrictEqual(seen, ["force"]);
+  t.ctx.openPage("settings-modal");
+  t.run("pageLeaveHook = () => { throw new Error('boom'); }");
+  assert.strictEqual(t.ctx.closePage("force"), true);
+  assert.strictEqual(t.ctx.currentPage(), "");
+});
+
+test("closePageHolds: false (go on now, synchronously) when nothing is asked; true while asked, and the action runs only on Discard", async () => {
+  const t = pageEnv();
+  let ran = 0;
+  const again = () => { ran++; };
+  // No page open (a phone, or nothing shown): not held, the caller continues in the same tick.
+  assert.strictEqual(t.ctx.closePageHolds(again), false);
+  assert.strictEqual(ran, 0, "the caller runs its own code, not `again`");
+  // A page with no hook, or a hook that says go at once: shut, not held.
+  t.ctx.openPage("settings-modal");
+  assert.strictEqual(t.ctx.closePageHolds(again), false);
+  assert.strictEqual(t.ctx.currentPage(), "");
+  t.ctx.openPage("settings-modal");
+  t.run("pageLeaveHook = () => globalThis.verdict");
+  t.ctx.verdict = true;
+  assert.strictEqual(t.ctx.closePageHolds(again), false);
+  assert.strictEqual(t.ctx.currentPage(), "");
+  // Stay, answered at once: held, nothing runs.
+  t.ctx.openPage("settings-modal");
+  t.ctx.verdict = false;
+  assert.strictEqual(t.ctx.closePageHolds(again), true);
+  await tick();
+  assert.strictEqual(ran, 0);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal");
+  // A question: held; Keep editing runs nothing, Discard closes the page and then runs the action.
+  let answer;
+  t.ctx.verdict = new Promise((r) => { answer = r; });
+  assert.strictEqual(t.ctx.closePageHolds(again), true);
+  answer(false);
+  await tick();
+  assert.strictEqual(ran, 0, "Keep editing");
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal");
+  t.ctx.verdict = Promise.resolve(true);
+  assert.strictEqual(t.ctx.closePageHolds(again), true);
+  await tick();
+  assert.strictEqual(ran, 1, "Discard");
+  assert.strictEqual(t.ctx.currentPage(), "", "the page is shut before the action runs");
 });
 
 test("the Esc key asks the leave hook with why esc, and a hook that says stay keeps the page", async () => {

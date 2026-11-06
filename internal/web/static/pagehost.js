@@ -57,11 +57,7 @@ function openPage(id) {
   if (dlg.open) return false;
   // Another page is open: it may hold something its leave hook wants to ask about. The question is on screen then, and
   // this page opens when it is answered (Discard); true says "handled", so the caller does not open it as a modal.
-  const closing = closePage();
-  if (closing !== true) {
-    if (closing !== false) closing.then((ok) => { if (ok) openPage(id); });
-    return true;
-  }
+  if (closePageHolds(() => openPage(id))) return true;
   const mark = document.createComment("page-home:" + id);
   dlg.before(mark);
   host.appendChild(dlg);
@@ -82,8 +78,9 @@ function openPage(id) {
 }
 
 // pageLeaveHook: set by the page that has something to ask before it goes (profilepage.js: unsaved block
-// changes). closePage asks it with why: "esc" from the Esc key, nothing from its other callers. It answers
-// true (may go), false (stay) or a promise of either, and answers true for a page that is not its own.
+// changes). closePage asks it with why: "esc" from the Esc key, "force" when the window crossed to a phone (told, not
+// asked), nothing from its other callers. It answers true (may go), false (stay) or a promise of either, and answers
+// true for a page that is not its own.
 // Unset, a page closes as it always did.
 let pageLeaveHook = null;
 
@@ -94,13 +91,21 @@ let pageLeaveHook = null;
 // The restore runs right here rather than waiting for the dialog's `close` event (a queued task), so a caller that
 // goes on to open a session lays it out against a visible #grid; the event's own pageClosed then finds nothing to
 // do. That is why the answer is not a promise unless the hook asked something: with nothing to ask the page is
-// shut by the time this returns, as callers that do not wait for it need. why "force" closes without asking: the
-// layout is leaving under the page (the window crossed to a phone), and the hook's state is left alone so what
-// was typed is there when the page comes back.
+// shut by the time this returns. A caller that acts on the panes must read the answer (closePageHolds below does):
+// going on after "stay" would act behind a page the user chose to keep. why "force" closes whatever the hook would
+// say: the layout is leaving under the page (the window crossed to a phone). The hook is told, so it can end what it
+// holds (the profile page drops its edit and releases its pickers), and is never asked.
 function closePage(why) {
   if (!pageNow) return true;
   const dlg = pageNow.dlg;
-  const verdict = why === "force" || typeof pageLeaveHook !== "function" ? true : pageLeaveHook(why);
+  let verdict = true;
+  if (typeof pageLeaveHook === "function") {
+    if (why === "force") {
+      try { pageLeaveHook(why); } catch (_) { /* a hook that fails must not keep a page up on a phone */ }
+    } else {
+      verdict = pageLeaveHook(why);
+    }
+  }
   if (verdict === true) { closePageNow(dlg); return true; }
   if (verdict === false) return false;
   return Promise.resolve(verdict).then((ok) => {
@@ -114,6 +119,18 @@ function closePage(why) {
 function closePageNow(dlg) {
   if (dlg.open) dlg.close();
   pageClosed(dlg);
+}
+
+// closePageHolds: the way for a caller that needs the panes on screen (it shows a session, opens a drawer, changes the
+// layout) to close the page. false means go on now, in this same tick: no page was open (always so on a phone), or it
+// had nothing to ask and is shut. true means the page is asking whether to drop unsaved changes, or has been told to
+// stay: the caller stops, and `again` runs only if the answer is Discard, after the page is shut. Keep editing runs
+// nothing, so nothing happens behind a page the user kept.
+function closePageHolds(again) {
+  const left = closePage();
+  if (left === true) return false;
+  if (left !== false) left.then((ok) => { if (ok) again(); });
+  return true;
 }
 
 // pageClosed: every dialog's `close` handler (shell.js initDialogs), so ✕, Esc

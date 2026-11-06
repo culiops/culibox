@@ -1575,7 +1575,9 @@ function cellTerminal(cell) {
 // sidebar's "SSO expired · Sign in" use it. false on mobile, which has no views.
 function openPaneView(sid, kind) {
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return false;
-  closePage();
+  // Held (the page is asking about unsaved changes): true, "handled", so a caller's own fallback (open the terminal) does
+  // not also run; the view opens once the page is shut, on Discard.
+  if (closePageHolds(() => openPaneView(sid, kind))) return true;
   const model = () => ({ cells: cells.map((c) => ({ term: (cellTerminal(c) || {}).id || null, tabs: c.tabs, dock: c.dock })) });
   let at = paneViewTarget(model(), sid, cells.indexOf(focusedCell));
   if (!at && sid != null) {
@@ -1662,7 +1664,7 @@ function removeCell(cell) {
 }
 
 function toggleMax(cell) {
-  closePage();
+  if (closePageHolds(() => toggleMax(cell))) return;
   maximized = maximized === cell ? null : cell;
   renderGrid();
   scheduleSaveLayout();
@@ -1711,7 +1713,7 @@ function fitAll() {
 // current window count collapses the extra windows: their tabs move into the last
 // kept cell (so "1" instantly stacks everything into one window).
 function applyCap(n) {
-  closePage(); // the layout the user just chose must be on screen
+  if (closePageHolds(() => applyCap(n))) return; // the layout the user just chose must be on screen
   cap = n;
   // Every .layouts group: the header's (mobile) and the sidebar top's (desktop).
   for (const b of document.querySelectorAll(".layouts button")) {
@@ -1765,7 +1767,8 @@ function applyCap(n) {
 // typeof-guarded because tabs.js is a classic script loaded before the mobile
 // globals (mobileActive/setMobileScreen live in mobileshell.js/app.js).
 function openTerminal(id, name, opts) {
-  closePage(); // a page hides the panes: showing a session closes it first
+  // A page hides the panes: showing a session closes it first, or does nothing if the page is kept.
+  if (closePageHolds(() => openTerminal(id, name, opts))) return;
   opts = opts || {};
   // One terminal, one place: a docked shell is already attached, in its dock.
   // placeShell finds where (a dock or a tab: those never share an id).
@@ -1822,7 +1825,9 @@ function openTerminal(id, name, opts) {
 // anywhere is only activated where it is (openTerminal), never attached twice.
 // false, touching nothing, when no pane holds the parent: the caller decides.
 function dockShellBesideParent(s, placement) {
-  closePage(); // the shell docks beside a pane a page would hide
+  // The shell docks beside a pane a page would hide. Held: true ("shown"), so the callers' fallback does not also run; after
+  // Discard it docks, or, with no pane holding the parent, opens the shell as a session of its own (every caller's fallback).
+  if (closePageHolds(() => { if (!dockShellBesideParent(s, placement)) openTerminal(s.id, s.name); })) return true;
   const at = placeShell({ cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) }, s.id, s.parent_id || null);
   if (at.action === "own") return false;
   if (at.action === "activate") { openTerminal(s.id, s.name); return true; }

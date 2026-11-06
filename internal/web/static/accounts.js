@@ -582,8 +582,9 @@ async function acctLogin(name) {
   setAcctNote("");
   const p = acctLoginProfile(profiles);
   if (!p) { setAcctErr("Log in needs a claude profile with no agent account set."); return; }
+  let started;
   try {
-    await spawnSession(spawnPayload({
+    started = await spawnSession(spawnPayload({
       agent: p.name, account: name, runtime: "host", login: true, name: "login: " + name,
       cwd: "", options: {}, profile: p,
     }), { toast: false });
@@ -591,6 +592,8 @@ async function acctLogin(name) {
     setAcctErr("Log in failed: " + e.message);
     return;
   }
+  // null: the open profile page asked about unsaved changes and they were kept, so no session was started.
+  if (!started) return;
   closeDialog("settings-modal");
   showToast("Run /login in the new session");
 }

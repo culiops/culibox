@@ -25,10 +25,17 @@
 // form). edits holds one record per open block (see pfvNewEdit): that is where the
 // pending values live, so the page can rebuild a form from them. pending: some open
 // block differs from what is stored. saved: the blocks whose "Saved" shows for a
-// moment. warnings: the lines a successful save answered with. picker: the block whose "+ Add" choice is open
-// ("" when none; pfv-cloud.js sets and clears it). drawer: the credentials drawer is open (a later task sets it);
-// pfvEscTarget reads both, so Esc goes to the innermost open layer.
-const pfvState = { name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, picker: "", drawer: false };
+// moment. warnings: the lines a successful save answered with. drawer: the credentials drawer is open (a later task
+// sets it). picker: the block whose "+ Add" choice is open, "" when none; it is read from the open blocks
+// (rec.ui.picker, which is also what draws the choice), never kept beside them, so it can neither claim a picker
+// that a closed or redrawn block took with it nor miss one that is open. The picker task sets and clears
+// rec.ui.picker. pfvEscTarget reads both, so Esc goes to the innermost open layer.
+const pfvState = {
+  name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, drawer: false,
+  get picker() {
+    return Object.keys(this.edits).find((i) => this.edits[i].ui && this.edits[i].ui.picker === true) || "";
+  },
+};
 // The newest pfvShow wins: a slower answer for a profile you have left is dropped.
 let pfvSeq = 0;
 // What the page is drawn from, as a string (pfvKey) and what the nav lists (pfvNavKey):
@@ -763,7 +770,6 @@ function pfvDropEdits() {
   pfvState.edits = {};
   pfvState.openBlock = "";
   pfvState.pending = false;
-  pfvState.picker = "";
 }
 
 function pfvClearSaved() {
@@ -890,7 +896,6 @@ function pfvCloseBlock(discard, id) {
     if (pfvState.edits[i]) pfvDisposeRec(pfvState.edits[i]);
     delete pfvState.edits[i];
   }
-  if (ids.includes(pfvState.picker)) pfvState.picker = "";
   for (const rec of Object.values(pfvState.edits)) if (rec.top && rec.top.kind === "repair" && ids.includes(rec.top.target)) rec.top = null;
   pfvSyncOpen();
   pfvRender();
@@ -986,11 +991,18 @@ function pfvEscTarget() {
 }
 
 // pfvPageLeave: pagehost.js's pageLeaveHook while the desktop Settings page is the open page; for any other page,
-// a phone's modal included, it answers true and does nothing. why "esc" is the Esc key: a layer inside the page
+// a phone's modal included, it answers true and does nothing. why "force" is a close that cannot be refused (the
+// window crossed to a phone): the edit ends through pfvDropEdits, so no folder picker keeps a listener on a page that
+// is gone and no edit waits for the next time Settings opens. why "esc" is the Esc key: a layer inside the page
 // takes it (an open picker closes, the drawer closes itself, a question answers itself) and the page stays;
 // only an Esc that no layer wants is a way out. Every other close asks the same question as any way out.
 function pfvPageLeave(why) {
   if (!pfvOnPage()) return true;
+  // The window crossed to a phone: the page goes whatever the user would say, so nothing is asked and nothing is kept.
+  if (why === "force") {
+    pfvEndEdits();
+    return true;
+  }
   if (why === "esc") {
     const at = pfvEscTarget();
     if (at !== "page") {

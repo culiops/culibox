@@ -3205,8 +3205,9 @@ test("pfvEscTarget picks the innermost open layer", async () => {
   const t = cloudPage();
   await t.box.pfvShow("aws-ops");
   assert.strictEqual(t.box.pfvEscTarget(), "page");
-  // The flags are the state: a test, or the code that opens a layer, sets them.
-  t.run("pfvState").picker = "cloud";
+  // The state is the layers: the "+ Add" choice is open while its block's rec.ui.picker is; the drawer is a flag.
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(t.run("pfvState").picker, "cloud");
   assert.strictEqual(t.box.pfvEscTarget(), "picker");
   t.run("pfvState").drawer = true;
   assert.strictEqual(t.box.pfvEscTarget(), "drawer", "the drawer hangs over the page and its pickers");
@@ -3215,7 +3216,9 @@ test("pfvEscTarget picks the innermost open layer", async () => {
   t.els["ask-modal"].open = false;
   assert.strictEqual(t.box.pfvEscTarget(), "drawer");
   t.run("pfvState").drawer = false;
-  t.run("pfvState").picker = "";
+  assert.strictEqual(t.box.pfvEscTarget(), "picker", "the picker is still open under the drawer");
+  t.run("pfvState").edits.cloud.ui.picker = false;
+  assert.strictEqual(t.run("pfvState").picker, "");
   assert.strictEqual(t.box.pfvEscTarget(), "page");
   // An open Workspace folder dropdown is a picker too (it closes itself on Esc; the page must not also act).
   const p = page();
@@ -3277,4 +3280,66 @@ test("Esc with a drawer or a question open never leaves the page", async () => {
   assert.strictEqual(t.box.pageLeaveHook("esc"), false);
   assert.strictEqual(asked.length, 0);
   assert.strictEqual(t.run("pfvState").pending, true);
+});
+
+test("the Esc layer for a picker is read from the open blocks, so it cannot disagree with them", async () => {
+  const t = cloudPage();
+  const asked = recordAsks(t, false);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  // A second block is open (a refused save opens one on top of the first) and its picker is open too.
+  t.box.pfvOpenRepair("cloud");
+  t.box.pfvRender();
+  assert.strictEqual(t.box.pfvOpenPicker("cloud"), true);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-pick").length, 2, "two choices are open");
+  // Closing one by its own link leaves the other open, and the layer says so (a single flag would have said none).
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-pick").length, 1);
+  assert.strictEqual(t.run("pfvState").picker, "reachable");
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  // Esc does not go to the page while any is open, and closes whatever is left.
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-pick").length, 0);
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  // Both open again: one Esc closes both, and the page still stays for it.
+  t.box.pfvOpenPicker("reachable");
+  t.box.pfvOpenPicker("cloud");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  // A block that goes takes its picker with it: nothing is left claiming the layer.
+  t.box.pfvOpenPicker("reachable");
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  clickBtn(blockOf(t, "reachable"), "Cancel");
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  assert.strictEqual(asked.length, 0);
+  // Dropping every edit does the same, and the page's leave answers for the page again.
+  t.box.pfvOpenPicker("cloud");
+  t.box.pfvDropEdits();
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+});
+
+test("a forced close (the window crossed to a phone) ends the edit through pfvDropEdits without asking", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  const picker = await openWs(t);
+  picker.pick("/home/you/other-folder");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.strictEqual(t.box.pageLeaveHook("force"), true);
+  assert.strictEqual(asked.length, 0, "never asked");
+  assert.strictEqual(picker.destroyed, true, "the folder picker's listeners are released");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.deepStrictEqual([t.run("pfvState").pending, t.run("pfvState").openBlock], [false, ""]);
+  // So reopening Settings on another tab and pressing Esc asks nothing about a profile that is not on screen.
+  assert.strictEqual(t.box.pageLeaveHook("esc"), true);
+  assert.strictEqual(t.box.pfvTabLeave("creds"), true);
+  assert.strictEqual(asked.length, 0);
+  // The read view is what comes back.
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  // On a phone's modal the hook is inert for "force" too.
+  const m = page();
+  await dirtyAgent(m);
+  m.els["settings-modal"].classList.remove("as-page");
+  assert.strictEqual(m.box.pageLeaveHook("force"), true);
+  assert.strictEqual(m.run("pfvState").pending, true, "it drops nothing there");
 });
