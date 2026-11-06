@@ -65,8 +65,7 @@ test("aws-ops read view has the seven blocks in order", () => {
 
   const ws = byId(v, "workspace");
   assert.deepStrictEqual(ws.rows.map((r) => [r.kind, r.name, r.scope]), [["Folder", "/home/you/work/payments-api", "Read and write"]]);
-  assert.match(ws.rows[0].sub, /^Work in this folder/);
-  assert.ok(!/Edit the folder directly/.test(JSON.stringify(ws)), "the Work in this folder family, not 'Edit the folder directly'");
+  assert.strictEqual(ws.rows[0].sub, "Edits the folder directly, not a private copy", "the words b-aws-1440-full.png shows");
 
   assert.deepStrictEqual(byId(v, "agent").lines, ["Claude Code with claude-opus-5-5, high effort", "Signs in with the default Claude login (~/.claude)"]);
   assert.deepStrictEqual(byId(v, "advanced").lines.length, 1);
@@ -101,6 +100,11 @@ test("a profile with nothing bound still lists Cloud and Also reachable, empty, 
   assert.strictEqual(byId(v, "cloud").add, "+ Add access");
   assert.deepStrictEqual(byId(v, "cloud").lines, ["Nothing yet. It cannot use AWS, GitHub or any token."]);
   assert.strictEqual(byId(v, "cloud").note, "");
+  // Nothing bound: the words b-created-1440.png shows, not the allowlist sentence.
+  assert.deepStrictEqual(byId(v, "network").lines, [
+    "Any public website over HTTPS, through CuliBox's proxy",
+    "An allowlist starts once it holds cloud access or a token. Private, tailnet and host addresses stay blocked.",
+  ]);
   assert.deepStrictEqual(byId(v, "reachable").rows.map((r) => r.name), ["CLAUDE.md imports"]);
   assert.strictEqual(byId(v, "reachable").add, "+ Add folder or domain");
   assert.strictEqual(v.header.agentLine, "Claude Code · agent's default model");
@@ -117,7 +121,8 @@ test("runbook-host read view has runs, workspace, agent, canreach, advanced and 
   assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "canreach", "advanced"]);
   assert.strictEqual(v.header.tier, "host");
   assert.strictEqual(v.header.agentLine, "Claude Code · agent's default model");
-  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you, with your files, your network and your credentials"]);
+  // The spec's sentence over the two lines b-host / b-ro split it into.
+  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you", "With your files, your network and your credentials"]);
   assert.ok(!byId(v, "runs").tone);
   assert.deepStrictEqual(byId(v, "workspace").rows.map((r) => [r.kind, r.name, r.sub, r.scope]), [
     ["Folder", "/home/you/runbooks", "Sessions start here", "Read and write, like anything else you own"],
@@ -209,7 +214,8 @@ test("boxes unavailable on a host profile is not an error", () => {
   const v = pfvReadView(hostIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" }));
   const runs = byId(v, "runs");
   assert.deepStrictEqual(runs.lines, [
-    "On this machine: runs as you, with your files, your network and your credentials",
+    "On this machine: runs as you",
+    "With your files, your network and your credentials",
     "Boxes are unavailable on this machine: Docker is not installed.",
   ]);
   assert.ok(!runs.tone && runs.toneAt === undefined, "muted, never red");

@@ -164,7 +164,7 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
     rows.push(pfvRow("Folder", cwd ? short(cwd) : "No default folder", { sub: cwd ? "Sessions start here" : "Picked in New session", scope: PFV_HOST_SCOPE }));
   } else {
     rows.push(pfvRow("Folder", cwd ? short(cwd) : "No default folder", {
-      sub: cwd ? "Work in this folder. It changes your files, as you would." : "Picked in New session", scope: "Read and write",
+      sub: cwd ? "Edits the folder directly, not a private copy" : "Picked in New session", scope: "Read and write",
     }));
   }
   return { id: "workspace", label: "Workspace", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
@@ -174,7 +174,9 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
   const u = pfvUnavailable(reason);
   if (host) {
-    b.lines.push("On this machine: runs as you, with your files, your network and your credentials");
+    // The spec's sentence over the two lines the approved shots split it into: the headline
+    // ends at "as you", the muted line carries the rest.
+    b.lines.push("On this machine: runs as you", "With your files, your network and your credentials");
     // Boxes cannot be chosen here; the reason is said once, quietly. Not an error: this profile does not need one.
     if (unavailable) b.lines.push(u.line);
   } else if (unavailable) {

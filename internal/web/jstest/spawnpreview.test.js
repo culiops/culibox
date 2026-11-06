@@ -439,6 +439,42 @@ test("reachModel: the network sentence, an open posture shown plainly, and no ne
   assert.strictEqual(net({}, "host"), null);
 });
 
+// Three postures, told apart by what the profile holds (the approved b-aws, b-created
+// shots and internal/egress: an unbound box is the proxy's open mode, any public host on 443).
+test("reachModel: nothing bound says any public website, not an allowlist (b-created)", () => {
+  const bare = { name: "payments-readonly", runtime: "box", bin: "claude", claude: true, network: "open" };
+  const m = reachModel({ profile: bare, tier: "box", cwd: "~/work/payments-api", meta: awsOpsMeta, creds: null, bundleImports: true });
+  assert.deepStrictEqual(m.cloud, []);
+  assert.deepStrictEqual(m.network, {
+    line: "Any public website over HTTPS, through CuliBox's proxy",
+    sub: "An allowlist starts once it holds cloud access or a token. Private, tailnet and host addresses stay blocked.",
+    open: true,
+  });
+  // The same unbound profile with a domain of its own listed: still nothing is bound.
+  assert.strictEqual(reachModel({ profile: { ...bare, egress_allow: ["api.example.com"] }, tier: "box" }).network.line, "Any public website over HTTPS, through CuliBox's proxy");
+  // The New session row is unchanged: an unbound box is open.
+  assert.deepStrictEqual(byK(reachRows({ profile: bare, tier: "box", cwd: "~/x" }), "Network"), [{ k: "Network", v: "open" }]);
+});
+
+test("reachModel: egress_open on a bound profile says all internet hosts, plainly", () => {
+  // Bound (AWS, GitHub or a token) and open: the profile lifted its allowlist.
+  for (const bound of [{ aws_connections: ["prod-read"] }, { github_owners: ["culiops"] }, { tokens: ["sentry-staging"] }, { aws_inline: { name: "legacy" } }]) {
+    const n = reachModel({ profile: { claude: true, network: "open", ...bound }, tier: "box", meta: awsOpsMeta }).network;
+    assert.deepStrictEqual(n, { line: "Internet only through CuliBox's proxy, HTTPS to hostnames", sub: "All internet hosts (no allowlist).", open: true }, JSON.stringify(bound));
+  }
+  // A bound name that no longer exists in Credentials is still bound.
+  assert.strictEqual(reachModel({ profile: { network: "open", tokens: ["gone"] }, tier: "box", meta: awsOpsMeta }).network.sub, "All internet hosts (no allowlist).");
+});
+
+test("reachModel: any credential bound gives the allowlist sentence, whatever it is bound to", () => {
+  for (const bound of [{ aws_connections: ["prod-read"] }, { github_owners: ["culiops"] }, { tokens: ["sentry-staging"] }]) {
+    const n = reachModel({ profile: { claude: true, network: "allowlist", ...bound }, tier: "box", meta: awsOpsMeta }).network;
+    assert.strictEqual(n.line, "Internet only through CuliBox's proxy, HTTPS to hostnames");
+    assert.match(n.sub, /^Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries/);
+    assert.strictEqual(n.open, false);
+  }
+});
+
 test("reachModel: the store lock and the account", () => {
   const locked = creds({ store: { initialized: true, locked: true, platform: "linux" } });
   const m = reachModel(awsOpsIn({ creds: locked, profile: { ...awsOps, account: "work" } }));

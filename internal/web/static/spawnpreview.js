@@ -139,7 +139,9 @@ function spawnTokenHosts(hosts) {
 //   cloud      Item[]: AWS, Old-style AWS (the legacy inline binding), GitHub, Token
 //   reachable  Item[]: Folder, From the original, Files (the imports), Domain; none on host
 //   tokenNote  once-per-list plain line when any token is bound, else ""
-//   network    {line, sub, open} for a boxed profile with a posture, else null
+//   network    {line, sub, open} for a boxed profile with a posture, else null: an allowlist
+//              (anything bound), open with nothing bound (any public website over HTTPS),
+//              or egress_open on a bound profile (all internet hosts, no allowlist)
 //   account    the agent account as shown ("" for a non-claude profile)
 //   store      {v, tone:"warn"} when the credential store is locked and something is bound, else null
 // Item = {kind, name, sub, scope, tag, missing}: tag "PROD" | "production" | "";
@@ -211,16 +213,29 @@ function reachModel(o) {
     for (const d of spawnNames(p.egress_allow)) reachable.push(spawnItem("Domain", d, { scope: d.startsWith("*.") ? "HTTPS, its subdomains" : "HTTPS" }));
   }
 
+  // Three postures, told apart by what the profile holds. "open" is two different
+  // things: a box with nothing bound (the proxy's open mode: any public host on
+  // 443, the port, private-address, tailnet and host-address checks still apply,
+  // internal/egress/proxy.go) and a bound box whose profile sets egress_open (no
+  // allowlist although it holds credentials). The cloud list says which.
   let network = null;
   if (!host && (p.network === "allowlist" || p.network === "open")) {
     const open = p.network === "open";
-    network = {
-      line: "Internet only through CuliBox's proxy, HTTPS to hostnames",
-      sub: open
-        ? "All internet hosts (no allowlist)."
-        : "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains and token hosts above.",
-      open,
-    };
+    if (open && cloud.length === 0) {
+      network = {
+        line: "Any public website over HTTPS, through CuliBox's proxy",
+        sub: "An allowlist starts once it holds cloud access or a token. Private, tailnet and host addresses stay blocked.",
+        open,
+      };
+    } else {
+      network = {
+        line: "Internet only through CuliBox's proxy, HTTPS to hostnames",
+        sub: open
+          ? "All internet hosts (no allowlist)."
+          : "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains and token hosts above.",
+        open,
+      };
+    }
   }
 
   const acct = String(p.account || "");
