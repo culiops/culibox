@@ -132,6 +132,9 @@ function spawnTokenHosts(hosts) {
 //                   env, hosts}]. A list that is absent means nothing is known of
 //                   it, so no name in it is called missing.
 //   o.creds         GET /api/credentials or null: store, aws [{name, prod, elevate}]
+//   o.githubLogins  {owner: "app:<name>" | "token:<name>"}: how each GitHub owner signs in. ProfileView names no App or
+//                   token, so a caller that holds the stored profile passes it; without it (New session) no owner is
+//                   called missing. meta.github_apps (names) and meta.static_tokens are what the login is checked against.
 //   o.bundleImports /api/meta bundle_imports: the CLAUDE.md imports item may appear
 // Returns {files, original, cloud, reachable, tokenNote, network, account, store}:
 //   files      the workspace line ("" never; the host says its whole account)
@@ -146,7 +149,8 @@ function spawnTokenHosts(hosts) {
 //   store      {v, tone:"warn"} when the credential store is locked and something is bound, else null
 // Item = {kind, name, sub, scope, tag, missing}: tag "PROD" | "production" | "";
 // missing: the name is bound but /api/meta does not list it (sub, scope and tag
-// are then blank: nothing is guessed about it). AWS and GitHub items also carry
+// are then blank: nothing is guessed about it; a GitHub owner whose App or token is gone
+// keeps its sub, the repositories the profile itself names). AWS and GitHub items also carry
 // `facts` (AWS: write, max, direct, prod; GitHub: write, pat), what reachRows needs
 // for its one-line wording. facts.prod is meta OR credentials, so a connection that
 // only /api/credentials marks prod still draws the red PROD flag in reachRows.
@@ -161,6 +165,7 @@ function reachModel(o) {
   const metaTokens = x.meta && Array.isArray(x.meta.static_tokens) ? x.meta.static_tokens : [];
   const awsKnown = !!x.meta && Array.isArray(x.meta.aws_connections);
   const tokensKnown = !!x.meta && Array.isArray(x.meta.static_tokens);
+  const metaApps = x.meta && Array.isArray(x.meta.github_apps) ? x.meta.github_apps : null;
 
   const cloud = [];
   for (const ent of spawnAWS(p)) {
@@ -183,9 +188,21 @@ function reachModel(o) {
     return e ? spawnNames(e.repos) : [];
   };
   const ghFacts = { write: p.github_write === true, pat: p.github_pat === true };
+  const logins = x.githubLogins && typeof x.githubLogins === "object" ? x.githubLogins : {};
+  // The login the owner signs in with is gone from /api/meta (an App by name; a token by entry name, the server asks no more of it).
+  const loginGone = (owner) => {
+    const pick = Object.prototype.hasOwnProperty.call(logins, owner) && typeof logins[owner] === "string" ? logins[owner] : "";
+    const has = (list, n) => list.some((e) => (typeof e === "string" ? e : e && e.name) === n);
+    if (pick.startsWith("app:")) return metaApps !== null && !has(metaApps, pick.slice(4));
+    if (pick.startsWith("token:")) return tokensKnown && !has(metaTokens, pick.slice(6));
+    return false;
+  };
   for (const owner of spawnNames(p.github_owners)) {
     const repos = repoOf(owner);
-    cloud.push(spawnItem("GitHub", owner, { sub: repos.length ? "repo " + repos.join(", ") : "", scope: spawnGitHubScope(p), facts: ghFacts }));
+    const sub = repos.length ? "repo " + repos.join(", ") : "";
+    cloud.push(loginGone(owner)
+      ? spawnItem("GitHub", owner, { sub, missing: true, facts: ghFacts })
+      : spawnItem("GitHub", owner, { sub, scope: spawnGitHubScope(p), facts: ghFacts }));
   }
 
   const tokens = spawnNames(p.tokens);

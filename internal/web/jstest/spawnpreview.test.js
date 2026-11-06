@@ -388,6 +388,36 @@ test("reachModel marks a bound name missing from meta, and never guesses its det
   assert.ok(none.cloud.every((i) => i.missing === false));
 });
 
+// A GitHub owner signs in with an App or a token entry. ProfileView carries neither name, so the caller that holds the
+// stored profile says which login each owner uses (o.githubLogins, owner -> "app:<name>" | "token:<name>"); the model
+// marks the owner when /api/meta no longer lists that login (spec 5.6 rule 2).
+test("reachModel marks a GitHub owner whose App or token is no longer in meta, and keeps its place and repositories", () => {
+  const meta = { ...awsOpsMeta, github_apps: ["acme-app"] };
+  const gh = (o) => reachModel(awsOpsIn(o)).cloud.find((i) => i.kind === "GitHub");
+  const gone = gh({ meta, githubLogins: { culiops: "app:acme-bot" } });
+  assert.deepStrictEqual(pick(gone, ["name", "missing", "scope", "tag", "sub"]), { name: "culiops", missing: true, scope: "", tag: "", sub: "repo payments-api" });
+  assert.deepStrictEqual(reachModel(awsOpsIn({ meta, githubLogins: { culiops: "app:acme-bot" } })).cloud.map((i) => i.name), ["prod-read", "staging-read", "culiops", "grafana-prod", "sentry-staging"], "the row keeps its place");
+  assert.strictEqual(gh({ meta, githubLogins: { culiops: "app:acme-app" } }).missing, false);
+  // A token owner: gone when /api/meta's static_tokens lacks the entry. Any defined entry counts (the server only asks that it is defined).
+  assert.strictEqual(gh({ meta, githubLogins: { culiops: "token:gh-pat" } }).missing, true);
+  assert.strictEqual(gh({ meta, githubLogins: { culiops: "token:grafana-prod" } }).missing, false);
+  // The facts reachRows needs stay on the item.
+  assert.deepStrictEqual(gone.facts, { write: false, pat: false });
+  // Nothing known, nothing called missing: no login named, no github_apps list, no static_tokens list.
+  assert.strictEqual(gh({ meta }).missing, false, "New session names no login");
+  assert.strictEqual(gh({ meta: awsOpsMeta, githubLogins: { culiops: "app:acme-bot" } }).missing, false, "meta without github_apps");
+  assert.strictEqual(gh({ meta: { ...meta, static_tokens: undefined }, githubLogins: { culiops: "token:gh-pat" } }).missing, false, "meta without static_tokens");
+  assert.strictEqual(gh({ meta: null, githubLogins: { culiops: "app:acme-bot" } }).missing, false);
+  assert.strictEqual(gh({ meta, githubLogins: { other: "app:acme-bot" } }).missing, false, "a login for another owner says nothing about this one");
+});
+
+test("reach rows (New session) are the same with or without a login map: the row keeps its words", () => {
+  const meta = { ...awsOpsMeta, github_apps: [] };
+  const plain = reachRows(awsOpsIn({ meta }));
+  assert.deepStrictEqual(reachRows(awsOpsIn({ meta, githubLogins: { culiops: "app:acme-bot" } })), plain);
+  assert.strictEqual(byK(plain, "GitHub")[0].v, "culiops/* · read, 1-hour tokens");
+});
+
 test("reachModel omits the imports item when bundling is off, imports are off, or the tier is host", () => {
   const kinds = (o) => reachModel(awsOpsIn(o)).reachable.map((i) => i.kind);
   assert.deepStrictEqual(kinds({ bundleImports: false }), ["Folder", "Domain", "Domain"]);

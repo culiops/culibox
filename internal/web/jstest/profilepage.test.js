@@ -281,6 +281,102 @@ test("a missing credential row reads Not found in Credentials, in the error colo
   assert.strictEqual(byText(scope, "button", "Remove").length, 1);
 });
 
+// pfvMonoNodes marks machine text. Its pattern once used lookbehind, which Safari before 16.4 cannot parse (no-lookbehind.test.js); it
+// now says the same without it. REF is that former pattern, word for word (node has lookbehind, so it can still be the oracle), and the
+// two are compared on the page's own wording and on a deterministic spread of strings built from the pieces that matter to it.
+const PFV_MACHINE_REF = [
+  "(?<![\\w.])~?(?:\\/[\\w.@+-]+)+\\/?",
+  "(?<![\\w.@/-])(?:[a-z0-9*][a-z0-9-]*\\.)+[a-z]{2,}(?![\\w-])",
+  "(?<!\\d)\\d{12}(?!\\d)",
+  "\\b[a-z]{2}(?:-[a-z]+)+-\\d\\b",
+  "\\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\\b",
+  "\\bbox\\/<branch>",
+  "(?<=^Shares ).+?(?= from the original)",
+  "(?<=^repo ).+$",
+].join("|");
+function monoRef(text, known) {
+  const s = String(text == null ? "" : text);
+  const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const own = (Array.isArray(known) ? known : []).filter((k) => typeof k === "string" && k !== "").map(esc);
+  const re = new RegExp((own.length ? "(?:" + own.join("|") + ")|" : "") + PFV_MACHINE_REF, "g");
+  const out = [];
+  let at = 0;
+  for (const m of s.matchAll(re)) {
+    if (m[0] === "") continue;
+    if (m.index > at) out.push(["text", s.slice(at, m.index)]);
+    out.push(["mono", m[0]]);
+    at = m.index + m[0].length;
+  }
+  if (at < s.length) out.push(["text", s.slice(at)]);
+  return out;
+}
+
+test("pfvMonoNodes marks the same machine text as the lookbehind pattern it replaced", () => {
+  const t = page();
+  const got = (text, known) => Array.from(t.box.pfvMonoNodes(text, known)).map((n) => (typeof n === "string" ? ["text", n] : ["mono", n.textContent]));
+  const wording = [
+    "Claude Code · claude-opus-5-5 · high effort", "~/work/payments-api read/write · nothing else on this machine", "/home/you/other-repo/docs",
+    "account 111111111111, eu-west-1", "api.example.com", "*.example.org", "GRAFANA_SERVICE_ACCOUNT_TOKEN", "box/<branch>", "Shares README.md, docs/a.md from the original",
+    "repo payments-api, runbooks", "repo web", "Not found in Credentials", "Read only: contents, pull requests. 1-hour tokens.", "see /a/b.c, then ~/d and e.f.g.com",
+    "/a//b", "x/a-/b", "foo.bar/baz.qux.com", "https://a.example.com/c", "a@b.example.com", "1234567890123", "x123456789012y", "Shares  from the original", "repo ",
+    "", "plain words only",
+  ];
+  for (const s of wording) for (const known of [undefined, [], ["claude-opus-5-5"], ["x.y", "a(b)"]]) assert.deepStrictEqual(got(s, known), monoRef(s, known), JSON.stringify(s));
+  const pieces = ["/", "~", ".", "-", "@", "+", "a", "b", "z", "1", "0", " ", "_", "A", "Z", "*", "repo ", "Shares ", " from the original", "box/<branch>", "eu-west-1",
+    "123456789012", "example.com", "x.y", "/home", "claude-opus-5-5", "\n"];
+  let seed = 12345;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return Math.floor((seed / 2147483648) * n); };
+  for (let i = 0; i < 20000; i++) {
+    let s = "";
+    for (let k = rnd(9); k >= 0; k--) s += pieces[rnd(pieces.length)];
+    const known = rnd(4) === 0 ? ["claude-opus-5-5", "x.y"] : undefined;
+    assert.deepStrictEqual(got(s, known), monoRef(s, known), JSON.stringify([s, known]));
+  }
+});
+
+test("a GitHub App deleted from Credentials reads Not found in Credentials on the profile that binds it, with Remove in edit mode", async () => {
+  const ghView = view("gh-ops", { default_cwd: "/home/you/work/web", github_owners: ["acme"], github_repos: [{ owner: "acme", repos: ["web"] }], github_permissions: { contents: "read" }, network: "allowlist" });
+  const ghDoc = { name: "gh-ops", bin: "claude", runtime: "box", default_cwd: "/home/you/work/web", github: { owners: [{ owner: "acme", app: "acme-bot", repos: ["web"] }], permissions: { contents: "read" } }, rev: "r9" };
+  const mk = (over) => page(Object.assign({ profiles: PROFILES.concat([ghView]), docs: { "gh-ops": ghDoc } }, over));
+
+  // ghApps (the /api/meta list the page holds) no longer has acme-bot.
+  const t = mk({ ghApps: ["acme-app"] });
+  await t.box.pfvShow("gh-ops");
+  const miss = byCls(t.els["pfv-in"], "pfv-miss");
+  assert.deepStrictEqual(miss.map((n) => n.textContent), ["Not found in Credentials"]);
+  const row = miss[0].parent.parent;
+  assert.match(row.textContent, /GitHub\s*acme/);
+  assert.match(miss[0].parent.textContent, /^Not found in Credentials · Remove$/);
+
+  // Still defined: no mark. Before /api/meta has answered nothing is known, so no mark either.
+  const ok = mk({ ghApps: ["acme-bot"] });
+  await ok.box.pfvShow("gh-ops");
+  assert.strictEqual(byCls(ok.els["pfv-in"], "pfv-miss").length, 0);
+  const early = mk({ ghApps: [], metaLoaded: false });
+  await early.box.pfvShow("gh-ops");
+  assert.strictEqual(byCls(early.els["pfv-in"], "pfv-miss").length, 0);
+
+  // A token owner: a deleted GitHub token reads the same.
+  const tokDoc = { ...ghDoc, github: { owners: [{ owner: "acme", token: "gh-pat", repos: ["web"] }] } };
+  const tk = mk({ docs: { "gh-ops": tokDoc }, ghApps: ["acme-bot"] });
+  await tk.box.pfvShow("gh-ops");
+  assert.deepStrictEqual(byCls(tk.els["pfv-in"], "pfv-miss").map((n) => n.textContent), ["Not found in Credentials"]);
+
+  // Edit mode: the row keeps its place, can be removed, and says so until the owner is signed in with a login that exists.
+  const ed = mk({ ghApps: ["acme-app"] });
+  await ed.box.pfvShow("gh-ops");
+  byText(ed.els["pfv-in"], "button", "Edit").find((b) => b.getAttribute("aria-label") === "Edit cloud and tokens").click();
+  const inEdit = byCls(ed.els["pfv-in"], "pfv-miss");
+  assert.deepStrictEqual(inEdit.map((n) => n.textContent), ["Not found in Credentials"]);
+  assert.strictEqual(byText(inEdit[0].parent.parent, "button", "Remove").length, 1);
+  const sel = ed.els["pfv-in"].all((n) => n.tag === "select" && n.children.some((o) => o.value === "app:acme-bot"))[0];
+  assert.ok(sel, "the login select is drawn, and keeps the stored login selectable");
+  assert.strictEqual(sel.value, "app:acme-bot");
+  sel.value = "app:acme-app";
+  sel.onchange({ target: sel });
+  assert.strictEqual(byCls(ed.els["pfv-in"], "pfv-miss").length, 0, "re-pointed to an App that exists, the row stops saying it is gone");
+});
+
 test("a host profile has Can reach, Switch to box and no cloud blocks", async () => {
   const t = page();
   await t.box.pfvShow("runbook-host");
@@ -2519,6 +2615,88 @@ test("the picker's seam: pfvAddRow puts a named connection or token in as a pend
   await saveBlock(t, "cloud");
   assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read", "sandbox", "staging-read"]);
   assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod", "sentry-staging"]);
+});
+
+// A profile that stores no runtime runs in whatever the instance defaults to (the list view's runtime is that resolved tier), and the
+// page shows it. Credentials, egress and readable folders need an EXPLICIT box on the server (internal/config/awsconn.go: "ValidateProfile
+// sees only an explicit runtime"), so every save, whichever block it is, writes the tier the page shows (spec 9 rule 1; runtimeToSend).
+const noTier = (t, name) => { delete t.box.docs[name].runtime; return t; };
+
+test("a Cloud and tokens save on a profile that stores no runtime sends the tier the page shows, box", async () => {
+  const t = noTier(cloudPage(), "aws-ops");
+  await t.box.pfvShow("aws-ops");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["In a box"], "the page reads the profile as boxed");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "token", name: "gh-pat" }), true);
+  await saveBlock(t, "cloud");
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.strictEqual(t.box.puts[0].runtime, "box", "without it the server refuses the binding: credentials need an explicit box");
+  assert.deepStrictEqual(t.box.puts[0].tokens, ["gh-pat", "grafana-prod", "sentry-staging"]);
+  assert.strictEqual(t.box.asked.length, 0, "no host confirm: the tier did not change");
+  assert.strictEqual(t.box.docs["aws-ops"].runtime, "box", "what the server keeps");
+});
+
+test("every block's save writes the tier the page shows, and keeps the keys no block owns", async () => {
+  const save = {
+    agent: (t) => { clickBtn(blockOf(t, "agent"), "Edit"); pickModel(t, "claude-sonnet-5"); },
+    cloud: (t) => { clickBtn(blockOf(t, "cloud"), "Edit"); t.box.pfvAddRow("cloud", { kind: "token", name: "gh-pat" }); },
+    reachable: (t) => { clickBtn(blockOf(t, "reachable"), "Edit"); t.box.pfvAddRow("reachable", { kind: "domain" }); typeInto(field(t, "domain:2"), "extra.example.net"); },
+  };
+  for (const id of Object.keys(save)) {
+    const t = noTier(cloudPage(), "aws-ops");
+    t.box.docs["aws-ops"].replyable = true;
+    await t.box.pfvShow("aws-ops");
+    save[id](t);
+    await saveBlock(t, id);
+    assert.strictEqual(t.box.puts[0].runtime, "box", id + " save");
+    assert.strictEqual(t.box.puts[0].replyable, true, id + " save keeps a key no block of it owns");
+    assert.deepStrictEqual(t.box.puts[0].github, CLOUD_DOC.github, id + " save keeps the GitHub binding");
+  }
+});
+
+test("a profile that stores no runtime and resolves to host saves host, without the host confirm", async () => {
+  // An instance whose default_runtime is host: the list view's runtime is host and so is the page.
+  const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p)) });
+  t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+  await t.box.pfvShow("infra-terraform");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await saveBlock(t, "agent");
+  assert.strictEqual(t.box.puts[0].runtime, "host", "pinned to what the page showed, not handed back to the instance default");
+  assert.strictEqual(t.box.asked.length, 0, "the tier did not change, so nothing to confirm");
+});
+
+test("with no box layer a runtime-less profile that reads as box stays blank (runtimeToSend); one that reads as host saves host", async () => {
+  const box = noTier(cloudPage({ boxRuntime: "" }), "aws-ops");
+  await box.box.pfvShow("aws-ops");
+  clickBtn(blockOf(box, "agent"), "Edit");
+  pickModel(box, "claude-sonnet-5");
+  await saveBlock(box, "agent");
+  assert.ok(!("runtime" in box.box.puts[0]), "the server refuses an explicit box with no box layer to run it");
+  const host = page({ boxRuntime: "", profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p)) });
+  host.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+  await host.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(host, "agent"), "Edit");
+  pickModel(host, "claude-sonnet-5");
+  await saveBlock(host, "agent");
+  assert.strictEqual(host.box.puts[0].runtime, "host");
+});
+
+test("a stored tier is sent back as it is by every block's save", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await saveBlock(t, "agent");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  const h = page();
+  await h.box.pfvShow("runbook-host");
+  clickBtn(blockOf(h, "agent"), "Edit");
+  pickModel(h, "claude-sonnet-5");
+  await saveBlock(h, "agent");
+  assert.strictEqual(h.box.puts[0].runtime, "host");
+  assert.strictEqual(h.box.asked.length, 0);
 });
 
 // The old-style AWS setting: the server's convert, today's confirm and write acknowledgement.

@@ -68,16 +68,23 @@ const PFV_MONO_KINDS = ["Arguments", "Environment", "Secrets", "Starting environ
 // Machine text inside a sentence: a path, a hostname, an account id, a region, an
 // environment variable name, the box/<branch> pattern, the files a copy shares and
 // the repos of a GitHub row. Mono is for machine text only (BRIEF); words stay Inter.
+// Each rule is [pattern, allowed]: the pattern is tried at one position (sticky), and
+// allowed(text, position), when there is one, says whether the text before that position
+// lets it start there. That is a lookbehind written out by hand: a regex lookbehind is a
+// SyntaxError on Safari before 16.4 (macOS 13 ships such a Safari), and one in this file
+// blanked the whole Profiles page (no-lookbehind.test.js keeps it out). pfvMonoNodes tries
+// the rules in order at every position, which is what one alternation of them would do.
+const pfvBefore = (re) => (s, at) => !re.test(s.charAt(at - 1));
 const PFV_MACHINE = [
-  "(?<![\\w.])~?(?:\\/[\\w.@+-]+)+\\/?",
-  "(?<![\\w.@/-])(?:[a-z0-9*][a-z0-9-]*\\.)+[a-z]{2,}(?![\\w-])",
-  "(?<!\\d)\\d{12}(?!\\d)",
-  "\\b[a-z]{2}(?:-[a-z]+)+-\\d\\b",
-  "\\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\\b",
-  "\\bbox\\/<branch>",
-  "(?<=^Shares ).+?(?= from the original)",
-  "(?<=^repo ).+$",
-].join("|");
+  [/~?(?:\/[\w.@+-]+)+\/?/y, pfvBefore(/[\w.]/)],
+  [/(?:[a-z0-9*][a-z0-9-]*\.)+[a-z]{2,}(?![\w-])/y, pfvBefore(/[\w.@/-]/)],
+  [/\d{12}(?!\d)/y, pfvBefore(/\d/)],
+  [/\b[a-z]{2}(?:-[a-z]+)+-\d\b/y, null],
+  [/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/y, null],
+  [/\bbox\/<branch>/y, null],
+  [/.+?(?= from the original)/y, (s, at) => s.slice(0, at) === "Shares "],
+  [/.+$/y, (s, at) => s.slice(0, at) === "repo "],
+];
 
 function pfvMk(tag, cls, text) {
   const e = document.createElement(tag);
@@ -128,14 +135,22 @@ function pfvMonoNodes(text, known) {
   const s = String(text == null ? "" : text);
   const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const own = (Array.isArray(known) ? known : []).filter((k) => typeof k === "string" && k !== "").map(esc);
-  const re = new RegExp((own.length ? "(?:" + own.join("|") + ")|" : "") + PFV_MACHINE, "g");
+  const rules = (own.length ? [[new RegExp("(?:" + own.join("|") + ")", "y"), null]] : []).concat(PFV_MACHINE);
   const out = [];
-  let at = 0;
-  for (const m of s.matchAll(re)) {
-    if (m[0] === "") continue;
-    if (m.index > at) out.push(s.slice(at, m.index));
-    out.push(pfvMk("span", "pfv-mono", m[0]));
-    at = m.index + m[0].length;
+  let at = 0; // where the text not yet put in a node starts
+  let i = 0;
+  while (i < s.length) {
+    let hit = "";
+    for (const [re, allowed] of rules) {
+      re.lastIndex = i;
+      const m = re.exec(s);
+      if (m && (!allowed || allowed(s, i))) { hit = m[0]; break; }
+    }
+    if (hit === "") { i++; continue; }
+    if (i > at) out.push(s.slice(at, i));
+    out.push(pfvMk("span", "pfv-mono", hit));
+    i += hit.length;
+    at = i;
   }
   if (at < s.length) out.push(s.slice(at));
   return out;
@@ -149,7 +164,7 @@ function pfvInputs() {
   return {
     view: pfvState.view,
     doc: pfvState.doc,
-    meta: meta ? { aws_connections: awscEntries, static_tokens: stEntries } : null,
+    meta: meta ? { aws_connections: awscEntries, static_tokens: stEntries, github_apps: ghApps } : null,
     creds: typeof pfCredsView === "object" ? pfCredsView : null,
     boxRuntime: meta ? boxRuntime : undefined,
     boxUnavailableReason: typeof boxUnavailableReason === "string" ? boxUnavailableReason : "",
@@ -1971,10 +1986,18 @@ async function pfvSaveBlock(id) {
     }
   }
   let doc = pfvState.doc;
+  let tierMerged = false;
   for (const i of ids) {
     const r = pfvState.edits[i];
-    if (r.values) doc = pfvMergeBlock(doc, i, PFV_EDITORS[i].merge ? PFV_EDITORS[i].merge(r, c) : r.values);
+    if (r.values) {
+      doc = pfvMergeBlock(doc, i, PFV_EDITORS[i].merge ? PFV_EDITORS[i].merge(r, c) : r.values);
+      if (i === "runs") tierMerged = true;
+    }
   }
+  // Whichever block it is, a save writes the tier the page shows (spec 9 rule 1): a profile that stores no runtime reads as the
+  // instance's default, and the server wants an explicit box for credentials, egress and readable folders. The tier did not change,
+  // so there is nothing to confirm; runtimeToSend keeps the no-box-layer blank.
+  if (!tierMerged) doc = pfvMergeBlock(doc, "runs", { tier: c.tier, boxAvailable: c.boxAvailable });
   // A box profile becoming host: say what that costs and what it removes, then save it without. Cancel saves nothing and
   // leaves the form as it is.
   if (ids.includes("runs") && pfvToHostPending(pfvState.edits.runs, c)) {

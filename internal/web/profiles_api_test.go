@@ -117,6 +117,66 @@ func TestProfileAWSBindingRoundTripsThroughTheAPI(t *testing.T) {
 	}
 }
 
+// The server half of "every save writes the tier the page shows" (profilepage.js pfvSaveBlock). A stored profile that names no
+// runtime is listed under the instance's default tier, which is what the page shows; but ValidateProfile sees only an explicit
+// runtime, so a binding saved without one is refused even though the list says "box". The page therefore sends the tier it shows,
+// and the server accepts exactly that.
+func TestSaveOnAProfileThatStoresNoRuntime(t *testing.T) {
+	tok := config.StaticToken{Name: "sentry-corp", Value: config.KeyRef{Type: "env", Var: "S"},
+		Env: []string{"SENTRY_ACCESS_TOKEN"}, Egress: []config.TokenEgress{{Host: "sentry.corp.example"}}}
+	newServer := func(def string) *Server {
+		pm := NewProfileManager(nil, nil, def, nil, newFakeStore(), func([]config.AgentConfig) {})
+		pm.SetStaticTokens([]config.StaticToken{tok})
+		return &Server{Profiles: pm}
+	}
+	get := func(s *Server) string {
+		rec := httptest.NewRecorder()
+		s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/p", nil))
+		return rec.Body.String()
+	}
+
+	t.Run("an instance with no default: the list says box, and a Cloud and tokens save must carry it", func(t *testing.T) {
+		s := newServer("")
+		if rec := postProfile(s, `{"name":"p","bin":"claude"}`); rec.Code != 201 {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+		if got := s.Profiles.Views()[0].Runtime; got != config.RuntimeBox {
+			t.Fatalf("the list shows %q for a profile that stores no runtime, want box", got)
+		}
+		// What a Cloud and tokens save sent before the page wrote the tier: refused, whatever the list says.
+		rec := putProfile(t, s, "p", `{"name":"p","bin":"claude","tokens":["sentry-corp"]}`)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "runtime: box") {
+			t.Fatalf("a binding with no explicit runtime: code %d body %s, want 400 naming runtime: box", rec.Code, rec.Body)
+		}
+		rec = putProfile(t, s, "p", `{"name":"p","bin":"claude","runtime":"box","tokens":["sentry-corp"]}`)
+		if rec.Code != 204 {
+			t.Fatalf("the shown tier with a token: code %d body %s, want 204", rec.Code, rec.Body)
+		}
+		for _, want := range []string{`"runtime":"box"`, `"tokens":["sentry-corp"]`} {
+			if !strings.Contains(get(s), want) {
+				t.Errorf("GET lost %s: %s", want, get(s))
+			}
+		}
+	})
+
+	t.Run("an instance that defaults to host: the list says host, and an Agent save pins it", func(t *testing.T) {
+		s := newServer(config.RuntimeHost)
+		if rec := postProfile(s, `{"name":"p","bin":"claude"}`); rec.Code != 201 {
+			t.Fatalf("create: %d %s", rec.Code, rec.Body)
+		}
+		if got := s.Profiles.Views()[0].Runtime; got != config.RuntimeHost {
+			t.Fatalf("the list shows %q for a profile that stores no runtime, want host", got)
+		}
+		rec := putProfile(t, s, "p", `{"name":"p","bin":"claude","runtime":"host"}`)
+		if rec.Code != 204 {
+			t.Fatalf("the shown tier host: code %d body %s, want 204", rec.Code, rec.Body)
+		}
+		if !strings.Contains(get(s), `"runtime":"host"`) {
+			t.Errorf("GET lost the tier: %s", get(s))
+		}
+	})
+}
+
 func TestProfilesAPIShareWarnings(t *testing.T) {
 	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	pm.home = t.TempDir()

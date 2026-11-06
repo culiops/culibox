@@ -47,9 +47,10 @@ function pfcRowOf(rows, kind, name) {
 }
 
 // pfcRows: the rows of block `id` as the read view draws them, over the profile as the form holds it now: `over` names
-// what the form has in place of the stored lists (a row that is pending removal is still listed).
-function pfcRows(id, over) {
-  const rv = pfvReadView(Object.assign({}, pfvInputs(), { view: Object.assign({}, pfvState.view, over) }));
+// what the form has in place of the stored lists (a row that is pending removal is still listed); `logins` the login each
+// stored GitHub owner is signed in with in the form, so a row stops saying its App is gone once it is pointed at one that is not.
+function pfcRows(id, over, logins) {
+  const rv = pfvReadView(Object.assign({}, pfvInputs(), { view: Object.assign({}, pfvState.view, over) }, logins ? { githubLogins: logins } : {}));
   const b = rv.blocks.find((x) => x.id === id);
   return b ? b.rows : [];
 }
@@ -491,7 +492,9 @@ function pfcGithubRow(rec, c, rows, i, live, permsAt) {
 
 function pfcCloudDraw(rec, c) {
   const v = rec.values;
-  const rows = pfcRows("cloud", { aws_connections: v.aws.map((e) => e.name), tokens: v.tokens.map((e) => e.name) });
+  const logins = {};
+  for (const g of v.gh) if (g.was !== "" && g.pick !== "") logins[g.was] = g.pick;
+  const rows = pfcRows("cloud", { aws_connections: v.aws.map((e) => e.name), tokens: v.tokens.map((e) => e.name) }, logins);
   const list = pfvMk("div", "pfv-rows");
   // A named row: the server names it by its place in the list the failing save carried (pfcCounted): sorted when this block
   // sent it, as stored when another block's save did.

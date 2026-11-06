@@ -96,6 +96,19 @@ function pfvPosture(view, doc, tier) {
   return bound && doc.egress_open !== true ? "allowlist" : "open";
 }
 
+// pfvGithubLogins: how each GitHub owner of the stored profile signs in, {owner: "app:<name>" | "token:<name>"}, for
+// reachModel's missing mark. ProfileView carries no App or token name, so it comes from the stored profile (names only).
+function pfvGithubLogins(doc) {
+  const gh = doc && typeof doc.github === "object" && doc.github ? doc.github : null;
+  const out = {};
+  for (const o of gh && Array.isArray(gh.owners) ? gh.owners : []) {
+    if (!o || typeof o !== "object" || pfvText(o.owner) === "") continue;
+    if (pfvText(o.token) !== "") out[o.owner] = "token:" + o.token;
+    else if (pfvText(o.app) !== "") out[o.owner] = "app:" + o.app;
+  }
+  return out;
+}
+
 // pfvUnavailable: the two lines a box tier profile shows when there is no box
 // layer. reason is /api/meta's box_unavailable_reason, already a clause
 // ("Docker is not installed", "run `agent-box doctor` for details").
@@ -192,7 +205,10 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit) {
 // pfvReadView: the whole read view of one profile.
 //   o.view                 the profile's ProfileView (GET /api/profiles)
 //   o.doc                  the stored profile (GET /api/profiles/{name})
-//   o.meta, o.creds        /api/meta and /api/credentials (reachModel's inputs)
+//   o.meta, o.creds        /api/meta and /api/credentials (reachModel's inputs; meta's
+//                          github_apps and static_tokens say whether a GitHub owner's login still exists)
+//   o.githubLogins         optional: {owner: "app:<name>" | "token:<name>"} in place of the stored
+//                          profile's (an open editor says which login the form holds now)
 //   o.boxRuntime           /api/meta box_runtime: "" means no box layer; anything
 //                          else, or not loaded yet, means boxes can run
 //   o.boxUnavailableReason /api/meta box_unavailable_reason, a clause
@@ -253,6 +269,7 @@ function pfvReadView(o) {
     const profile = Object.assign({}, view, { network: pfvPosture(view, doc, tier) });
     const m = pfvDep("reachModel", "./spawnpreview.js")({
       profile, tier, cwd: short(pfvText(pfvField(view, doc, "default_cwd"))), meta: x.meta, creds: x.creds, bundleImports: x.bundleImports,
+      githubLogins: x.githubLogins || pfvGithubLogins(doc),
     });
     const item = (it) => {
       const r = pfvRow(it.kind, it.name, { sub: it.sub, scope: it.scope, tag: it.tag, missing: it.missing === true });

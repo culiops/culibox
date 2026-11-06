@@ -1763,6 +1763,8 @@ function awsField(row, key, label, opts) {
   inp.oninput = () => {
     row[key] = inp.value;
     if (o.invalidates) awsInvalidate(row);
+    // The drawer's check line says "base role only" while the row has an elevate role: it follows what is typed.
+    if (o.repaints && awsFlow && awsFlow.opts && awsFlow.opts.head) awsPaintRes(row);
     awsPaintFoot();
   };
   col.append(lab, inp);
@@ -1860,7 +1862,7 @@ function awsBuildRow(row) {
   adv.appendChild(awsField(row, "egress", "Extra hosts the agent may reach", { area: true, full: true, placeholder: "one per line, e.g. *.example.com" }).col);
   const s3f = awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line" });
   adv.appendChild(s3f.col);
-  const elf = awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, placeholder: "arn:aws:iam::<account>:role/<write role>" });
+  const elf = awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, repaints: true, placeholder: "arn:aws:iam::<account>:role/<write role>" });
   adv.appendChild(elf.col);
   const mcol = awsEl("div", "fcol");
   const mlab = awsEl("label", "flab", "Elevate window");
@@ -2055,8 +2057,11 @@ function awsPaintRes(row) {
     const v = awsCheckView({ assume: row.assume, verdict: row.verdict, actions: row.actions, reason: row.reason, reason_text: row.reasonText });
     if (v.assume === "ok") {
       if (awsFlow && awsFlow.opts && awsFlow.opts.head && !v.needsAck && v.verdict.cls === "ok") {
-        // The drawer's one line, as the mockup draws it: "Assume worked. No broad write access found".
-        nodes.push(awsLine("ok", "✓", v.text + " " + v.verdict.text));
+        // The drawer's one line, as the mockup draws it: "Assume worked. No broad write access found". A row with an elevate role
+        // adds what the tab's verdict line always says: the check read the base role only, not the elevate one.
+        const line = awsLine("ok", "✓", v.text + " " + v.verdict.text);
+        if (row.elevRole) line.lastChild.appendChild(awsEl("span", "when", " base role only"));
+        nodes.push(line);
       } else {
         nodes.push(awsLine("ok", "✓", v.text));
         nodes.push(awsVerdictNode(row, v));

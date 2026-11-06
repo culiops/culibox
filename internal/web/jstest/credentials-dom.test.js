@@ -1818,6 +1818,48 @@ test("framed AWS add: a passed Check is one line, 'Assume worked. No broad write
   assert.ok(body.querySelector("div.verdict"), "and its verdict line");
 });
 
+test("framed AWS add: a row with an elevate role says the check covered the base role only; a row without one stays as it was", async () => {
+  const framed = page({ tab: true });
+  const f = framedOpts();
+  framed.box.reply = checkReply;
+  await awsTick(framed, f.opts, "acme-dev", "acme-ops");
+  const elev = f.opts.host.querySelectorAll("input").filter((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
+  assert.strictEqual(elev.length, 2, "one elevate role field per ticked row");
+  elev[0].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[0].oninput();
+  btnIn(f.opts.foot, "Check all").onclick();
+  await settle();
+  const lines = () => f.opts.host.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent)).map((l) => l.textContent);
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found base role only", "✓Assume worked. No broad write access found"]);
+  const when = f.opts.host.querySelectorAll("span.when");
+  assert.deepStrictEqual(when.map((w) => w.textContent), [" base role only"], "set apart from the verdict the way the tab sets it");
+  assert.strictEqual(f.opts.host.querySelector("div.verdict"), null, "still one line, no second verdict line");
+  // Typing the role after the check, or taking it away, moves the qualifier with it.
+  elev[1].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[1].oninput();
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found base role only", "✓Assume worked. No broad write access found base role only"]);
+  elev[0].value = "";
+  elev[0].oninput();
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found", "✓Assume worked. No broad write access found base role only"]);
+});
+
+test("the Credentials tab's verdict line is the same with or without an elevate role in the row", async () => {
+  const tab = page({ tab: true });
+  tab.box.reply = checkReply;
+  tab.box.awsOpenAdd();
+  await settle();
+  const body = tab.byId["creds-body"];
+  const ticks = body.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  ticks[0].checked = true; ticks[0].onchange();
+  const elev = body.querySelectorAll("input").find((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
+  elev.value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev.oninput();
+  btnIn(body, "Check").onclick();
+  await settle();
+  assert.deepStrictEqual(body.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent)).map((l) => l.textContent), ["✓Assume worked."]);
+  assert.deepStrictEqual(body.querySelectorAll("div.verdict").map((v) => v.textContent), ["✓No broad write access found base role only"]);
+});
+
 test("framed token add: the crumb says Tokens, the intro is in the header, no trailing sentence, and a refused Save is said in the foot", async () => {
   const p = page({ tab: true });
   const { opts } = framedOpts();

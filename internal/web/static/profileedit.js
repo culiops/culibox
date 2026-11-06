@@ -37,6 +37,11 @@
 //                replies: { usable, checked }, imports: { usable, checked } }
 //                replies and imports keep the stored value while the row is not usable
 //
+// runtime belongs to runs alone, but the page (pfvSaveBlock) also merges runs, with the tier it
+// shows, into every save that does not carry the Runs in block: the server wants an explicit box
+// for credentials, egress and readable folders, and a profile with no runtime reads as the
+// instance default (spec 9 rule 1).
+//
 // An option is written only when the values name it, and only by the block that
 // owns it: the Agent block owns model and effort, Advanced owns every other key,
 // so an option the config no longer defines survives an Agent save untouched.

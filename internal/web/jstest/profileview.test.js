@@ -319,6 +319,36 @@ test("missing credential row carries missing:true", () => {
   assert.ok(byId(pfvReadView(awsIn({ meta: null })), "cloud").rows.every((r) => r.missing === false));
 });
 
+test("a GitHub owner whose App or token is gone from Credentials reads Not found in Credentials", () => {
+  // The list view names owners and repositories only; the stored profile says which login each owner uses.
+  const doc = (owners) => ({ ...awsOpsDoc, github: { owners, permissions: { contents: "read" } } });
+  const appDoc = doc([{ owner: "culiops", app: "acme-bot", repos: ["payments-api"] }]);
+  const withApps = (apps) => ({ ...meta, github_apps: apps });
+  const gh = (o) => byId(pfvReadView(awsIn(o)), "cloud").rows.find((r) => r.kind === "GitHub");
+
+  const gone = gh({ doc: appDoc, meta: withApps(["acme-app"]) });
+  assert.deepStrictEqual([gone.name, gone.missing, gone.scope, gone.sub, gone.tag], ["culiops", true, "Not found in Credentials", "repo payments-api", ""]);
+  assert.deepStrictEqual(byId(pfvReadView(awsIn({ doc: appDoc, meta: withApps([]) })), "cloud").rows.map((r) => r.name), ["prod-read", "staging-read", "culiops", "grafana-prod", "sentry-staging"], "the row keeps its place");
+  assert.strictEqual(byId(pfvReadView(awsIn({ doc: appDoc, meta: withApps([]) })), "cloud").count, 5);
+
+  // Still defined: the read view says what it says today.
+  const ok = gh({ doc: appDoc, meta: withApps(["acme-bot"]) });
+  assert.deepStrictEqual([ok.missing, ok.scope], [false, "Read only: contents, pull requests, issues, metadata. 1-hour tokens."]);
+
+  // A token owner is checked against static_tokens.
+  const tokDoc = doc([{ owner: "culiops", token: "gh-pat", repos: ["payments-api"] }]);
+  assert.strictEqual(gh({ doc: tokDoc, meta: withApps([]) }).missing, true);
+  assert.strictEqual(gh({ doc: doc([{ owner: "culiops", token: "grafana-prod", repos: ["payments-api"] }]), meta: withApps([]) }).missing, false);
+
+  // Nothing known, nothing called missing: no github_apps list in meta, meta not loaded, a read-only profile still says so.
+  assert.strictEqual(gh({ doc: appDoc }).missing, false);
+  assert.strictEqual(gh({ doc: appDoc, meta: null }).missing, false);
+  assert.strictEqual(gh({ doc: awsOpsDoc, meta: withApps([]) }).missing, false, "a doc that names no login");
+  const ro = byId(pfvReadView(awsIn({ doc: appDoc, meta: withApps([]), view: { ...awsOpsView, editable: false, source: "config" } })), "cloud");
+  assert.strictEqual(ro.rows.find((r) => r.kind === "GitHub").scope, "Not found in Credentials");
+  assert.strictEqual(ro.add, "");
+});
+
 test("the old-style AWS setting offers the move to a saved connection, unless read-only", () => {
   const view = { ...awsOpsView, aws_connections: undefined, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } };
   const row = (o) => byId(pfvReadView(awsIn(o)), "cloud").rows.find((r) => r.kind === "Old-style AWS");
