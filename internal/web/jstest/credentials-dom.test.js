@@ -1755,3 +1755,199 @@ test("credFlowCancel refuses while a flow in a host saves, so the name being sav
   await settle();
   assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], "the save ended it by itself, and reported");
 });
+
+// --- Task 15 gate fix (R67): a framed host (opts.head) draws the drawer's header band, form, and foot the way the mockup does ----
+
+// A host with a header of its own as well: the crumb and the intro go in `head`, the form in `host`, and a refused Save is said in `foot`.
+function framedOpts() {
+  const events = [];
+  const opts = {
+    head: new Node("div"), host: new Node("div"), foot: new Node("div"),
+    onCreated: (names, kind) => events.push(["created", [...names], kind]),
+    onClose: () => events.push(["close"]),
+    onIdle: () => events.push(["idle"]),
+  };
+  return { opts, events };
+}
+const TOKEN_INTRO = "The agent can read this token. It is long-lived and is not revoked when the session ends.";
+const crumbParts = (head) => head.querySelector("div.crumb").children.map((c) => c.textContent);
+const checkReply = (path, opt) => (path === "/api/credentials/aws/check" ? { assume: "ok", verdict: "none_found", actions: [] } : awsReply()(path, opt));
+
+test("framed AWS add: the crumb and intro are the header, the form stays in the host, and the tick line says the rows join the profile", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = awsReply();
+  p.box.awsOpenAdd(opts);
+  await settle();
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › AWS", "Add AWS accounts"]);
+  assert.strictEqual(opts.head.querySelector("p.intro").textContent, "The agent never gets these profiles. It gets 15-minute credentials for the role you choose below.");
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null, "not in the body that scrolls");
+  assert.strictEqual(opts.host.querySelector("p.intro"), null);
+  const tick = opts.host.querySelectorAll("p.hint").find((h) => h.textContent.startsWith("Tick several"));
+  assert.ok(tick, "the mockup's line");
+  assert.strictEqual(tick.textContent, "Tick several to create several. Each one you save joins this profile as an unsaved row.");
+  assert.strictEqual(tick.hidden, true, "with no row there is the flow's own 'Tick a profile above' line instead");
+  const ticks = opts.host.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  ticks[0].checked = true; ticks[0].onchange();
+  assert.strictEqual(tick.hidden, false);
+  ticks[0].checked = false; ticks[0].onchange();
+  assert.strictEqual(tick.hidden, true, "and it goes again with the last row");
+});
+
+test("framed AWS add: a passed Check is one line, 'Assume worked. No broad write access found'; the tab keeps its two", async () => {
+  const framed = page({ tab: true });
+  const f = framedOpts();
+  framed.box.reply = checkReply;
+  await awsReady(framed, f.opts, "acme-dev");
+  const lines = f.opts.host.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent));
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].textContent, "✓Assume worked. No broad write access found");
+  assert.strictEqual(f.opts.host.querySelector("div.verdict"), null, "no second verdict line");
+  // The Credentials tab, same answers: the flow's own two lines.
+  const tab = page({ tab: true });
+  tab.box.reply = checkReply;
+  tab.box.awsOpenAdd();
+  await settle();
+  const body = tab.byId["creds-body"];
+  const tticks = body.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  tticks[0].checked = true; tticks[0].onchange();
+  btnIn(body, "Check").onclick();
+  await settle();
+  const tl = body.querySelectorAll("div.l").map((l) => l.textContent);
+  assert.ok(tl.includes("✓Assume worked."), "the tab: " + JSON.stringify(tl));
+  assert.ok(body.querySelector("div.verdict"), "and its verdict line");
+});
+
+test("framed token add: the crumb says Tokens, the intro is in the header, no trailing sentence, and a refused Save is said in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › Tokens", "Add token"]);
+  assert.strictEqual(opts.head.querySelector("p.intro").textContent, TOKEN_INTRO);
+  assert.strictEqual(opts.host.querySelector("p.honest"), null, "the sentence moved to the header");
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null);
+  assert.strictEqual(opts.host.querySelector("div.ent-err"), null, "no error line under the form");
+  const msg = opts.foot.querySelector("span.ent-err");
+  assert.ok(msg, "the foot has the line, left of Cancel");
+  assert.strictEqual(msg.attrs.role, "alert");
+  assert.deepStrictEqual(opts.foot.children.map((c) => c.tag), ["span", "button", "button"]);
+  assert.strictEqual(opts.foot.children[0], msg);
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(msg.textContent, "Paste the value to store.", "the refusal is in the foot");
+  assert.strictEqual(opts.host.textContent.includes("Paste the value to store."), false);
+});
+
+test("framed token add with no store: the card opens with the lead, and Save's refusal is the same sentence in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials" ? { ...base(path), store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } } : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const card = opts.host.querySelector("div.storecreate");
+  assert.ok(card);
+  assert.strictEqual(card.children[0].tag, "p");
+  assert.strictEqual(card.children[0].className, "lead");
+  assert.strictEqual(card.children[0].textContent, "Create the encrypted store first. The value is stored in it.");
+  assert.strictEqual(card.children[1].className, "hint", "then the hint");
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(opts.foot.querySelector("span.ent-err").textContent, "Create the encrypted store first. The value is stored in it.");
+});
+
+test("framed GitHub choice and App form: the crumb is the link and the title, the form is in the host, the refusal in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = credReply();
+  p.box.credGitHubChoose(opts);
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", "Add GitHub"], "the mockup draws no GitHub crumb, so there is no tail");
+  assert.strictEqual(opts.head.querySelector("p.intro"), null);
+  opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", "Add GitHub App"]);
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null);
+  fieldIn(opts.host, "cga-name").value = "not a name!";
+  fieldIn(opts.host, "cga-cid").value = "";
+  fieldIn(opts.host, "cga-key").value = "";
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(opts.foot.querySelector("span.ent-err").textContent, "The name may use letters, digits, . _ and -, up to 64 characters.");
+});
+
+test("framed: a start error empties the header, and the error is said in the host", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  opts.head.append(new Node("div"));
+  p.box.reply = (path) => { if (path === "/api/credentials/templates") throw new Error("boom"); return credReply()(path); };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.strictEqual(opts.head.children.length, 0);
+  assert.ok(opts.host.textContent.includes("Could not load the token providers"));
+});
+
+test("onIdle: a save that answered and left the flow open says so; one that ended the flow only closes", async () => {
+  // AWS: 1 of 2 saved, the other refused: the flow stays open and tells the host the save is over.
+  const p = page({ tab: true });
+  const { opts, events } = framedOpts();
+  p.box.reply = awsReply((conn) => { if (conn.name === "acme-ops") throw Object.assign(new Error("A connection with this name already exists."), { status: 409, code: "exists" }); return {}; });
+  await awsReady(p, opts, "acme-dev", "acme-ops");
+  btnIn(opts.foot, "Save all").onclick();
+  assert.deepStrictEqual(events, [], "not while it saves");
+  await settle();
+  assert.deepStrictEqual(events, [["idle"]], "once, when the answer is in");
+  btnIn(opts.foot, "Cancel").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["idle"], ["created", ["acme-dev"], "aws"], ["close"]]);
+  // AWS, everything saved: the flow closes, nothing to say.
+  const q = page({ tab: true });
+  const all = framedOpts();
+  q.box.reply = awsReply();
+  await awsReady(q, all.opts, "acme-dev");
+  btnIn(all.opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(all.events, [["created", ["acme-dev"], "aws"], ["close"]]);
+  // A form: a refused Save is idle, a made one closes.
+  const r = page({ tab: true });
+  const form = framedOpts();
+  r.box.reply = credReply();
+  await r.box.credTokenAdd(null, "sentry", form.opts);
+  btnIn(form.opts.foot, "Save").onclick();
+  await settle();
+  assert.deepStrictEqual(form.events, [["idle"]], "the refusal for a missing value");
+  fieldIn(form.opts.host, "ct-sentry-v0").value = "tok-1";
+  btnIn(form.opts.foot, "Save").onclick();
+  await settle();
+  assert.deepStrictEqual(form.events, [["idle"], ["created", ["sentry-eu-prod"], "token"], ["close"]], "idle after the first refusal only; the made token closes");
+});
+
+test("the Credentials tab still renders the old DOM: ' / ' crumb, the error under the form, the sentence at the foot of the form, no lead, two check lines", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply({ store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } });
+  await p.box.credTokenAdd(null, "sentry");
+  const body = p.byId["creds-body"];
+  assert.deepStrictEqual(body.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"], "the crumb");
+  assert.ok(body.querySelector("p.honest"), "the sentence is the trailing one");
+  assert.strictEqual(body.querySelector("p.honest").textContent, TOKEN_INTRO);
+  assert.strictEqual(body.lastChild.className, "ent-err", "the error line is the last thing in the body");
+  assert.strictEqual(body.querySelector("p.intro"), null);
+  const card = body.querySelector("div.storecreate");
+  assert.ok(card);
+  assert.strictEqual(card.querySelector("p.lead"), null, "no lead in the tab's card");
+  assert.strictEqual(card.children[0].className, "hint");
+  // AWS in the tab: the crumb and the intro are in the body, with the flow's own empty-state line only.
+  const q = page({ tab: true });
+  q.box.reply = awsReply();
+  q.box.awsOpenAdd();
+  await settle();
+  const qb = q.byId["creds-body"];
+  assert.deepStrictEqual(qb.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add AWS accounts"]);
+  assert.strictEqual(qb.querySelectorAll("p.hint").some((h) => h.textContent.startsWith("Tick several")), false, "no tick line in the tab");
+  // A host with no header (Task 14's) keeps its crumb in the host and the error under the form.
+  const h = page({ tab: true });
+  const { opts } = hostOpts();
+  h.box.reply = credReply();
+  await h.box.credTokenAdd(null, "sentry", opts);
+  assert.deepStrictEqual(opts.host.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"]);
+  assert.strictEqual(opts.host.lastChild.className, "ent-err");
+  assert.ok(opts.host.querySelector("p.honest"));
+});

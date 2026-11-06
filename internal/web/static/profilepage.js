@@ -1027,9 +1027,10 @@ function pfvTabLeave(tab) {
 // --- the Credentials drawer (spec 5.7) ---------------------------------------------------------------------------
 
 // The "New AWS connection...", "New GitHub App..." and "New token..." items of the "+ Add" picker open credentials.js's add flows in
-// a drawer over the page (index.html: #cred-scrim and #cred-drawer, whose body is where a flow draws itself, whose foot is where its
-// buttons go, and whose status line says why a close has to wait). The flows are handed `opts` = {host, foot, saveLabel, onCreated,
-// onClose} and know nothing of the page; what they made comes back through onCreated, and each name becomes a pending row of the block
+// a drawer over the page (index.html: #cred-scrim and #cred-drawer, whose head is the header band that stays put (the flow's crumb and
+// intro), whose body is where a flow draws itself, whose foot is where its buttons and a refused Save go, and whose status line says
+// why a close has to wait). The flows are handed `opts` = {head, host, foot, saveLabel, onCreated, onIdle, onClose} and know nothing of
+// the page; what they made comes back through onCreated, and each name becomes a pending row of the block
 // the picker was in, saved only with that block's Save. While the drawer is open it is the page's top layer: the page behind it is
 // inert, Tab stays inside it, and Esc, the scrim and any way out of the page end the flow through its own Cancel (credFlowCancel), so a
 // visit that saved 1 of 2 connections still reports that one.
@@ -1039,11 +1040,11 @@ let pfvDrawer = null;
 // The mockup's primary labels: the drawer also adds what it creates to the open block.
 const PFV_DRAWER_SAVE = { aws: "Save all and add", github: "Save and add", token: "Save and add" };
 const PFV_DRAWER_BUSY = "Wait for the save to finish, then close.";
-const PFV_DRAWER_CONTROLS = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const PFV_DRAWER_CONTROLS = 'a[href], summary, button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function pfvDrawerParts() {
   const parts = {};
-  for (const [k, id] of [["drawer", "cred-drawer"], ["scrim", "cred-scrim"], ["body", "cred-drawer-body"], ["foot", "cred-drawer-foot"], ["status", "cred-drawer-status"]]) {
+  for (const [k, id] of [["drawer", "cred-drawer"], ["scrim", "cred-scrim"], ["head", "cred-drawer-head"], ["body", "cred-drawer-body"], ["foot", "cred-drawer-foot"], ["status", "cred-drawer-status"]]) {
     parts[k] = document.getElementById(id);
     if (!parts[k]) return null;
   }
@@ -1070,8 +1071,10 @@ function pfvOpenDrawer(kind, blockId) {
   if (pfvDrawer || !rec || !rec.fields || !parts || !start || !pfvOnPage()) return false;
   const d = { kind, id, rec, parts, opts: null, inert: [], watch: null };
   d.opts = {
-    host: parts.body, foot: parts.foot, saveLabel: PFV_DRAWER_SAVE[kind],
+    head: parts.head, host: parts.body, foot: parts.foot, saveLabel: PFV_DRAWER_SAVE[kind],
     onCreated: (names, made) => pfvDrawerCreated(d, names, made),
+    // A save has answered and the flow stays open (a row was refused): the line that asked to wait is out of date.
+    onIdle: () => { if (pfvDrawer === d) pfvDrawerSay(""); },
     onClose: () => pfvDrawerEnd(d, true),
   };
   pfvDrawer = d;
@@ -1111,7 +1114,7 @@ async function pfvDrawerCreated(d, names, kind) {
   }
 }
 
-// pfvDrawerEnd: the drawer is gone, however it went (a flow's onClose, pfvCloseDrawer, pfvDropDrawer): its host and foot are emptied so
+// pfvDrawerEnd: the drawer is gone, however it went (a flow's onClose, pfvCloseDrawer, pfvDropDrawer): its head, host and foot are emptied so
 // nothing typed in it (a token's value, a passphrase) lingers in a hidden DOM, the page is live again, and focus goes back to the
 // block's "+ Add" link (`back`). Once only.
 function pfvDrawerEnd(d, back) {
@@ -1120,6 +1123,7 @@ function pfvDrawerEnd(d, back) {
   pfvState.drawer = false;
   if (d.watch) d.watch.disconnect();
   const p = d.parts;
+  p.head.replaceChildren();
   p.body.replaceChildren();
   p.foot.replaceChildren();
   pfvDrawerSay("");
@@ -1177,10 +1181,9 @@ function pfvDrawerControls(root) {
   return Array.from(root.querySelectorAll(PFV_DRAWER_CONTROLS)).filter((n) => (typeof n.getClientRects === "function" ? n.getClientRects().length > 0 : n.hidden !== true));
 }
 
-// pfvDrawerFirst: the first control of what the flow drew, not counting its crumb (the first thing in the host, a link that leaves).
+// pfvDrawerFirst: the first control of what the flow drew in the body, not the crumb link in the header (it leaves).
 function pfvDrawerFirst(parts) {
-  const crumb = parts.body.children[0];
-  return pfvDrawerControls(parts.drawer).find((n) => parts.body.contains(n) && !(crumb && crumb.contains(n))) || null;
+  return pfvDrawerControls(parts.drawer).find((n) => parts.body.contains(n)) || null;
 }
 
 // pfvDrawerFocus: focus goes into the drawer as it opens: the first control of the flow. A flow that has drawn nothing yet (it is

@@ -233,6 +233,36 @@ test("base app.css hides the Credentials drawer and its scrim; desktop.css shows
   for (const sel of own) assert.match(sel, /^#page-host > #settings-modal\.as-page > #cred-/, "scoped: " + sel);
 });
 
+// Task 15 gate fix (R67/R68): the drawer's skin is the mockup's, scoped to #cred-drawer (the Credentials tab keeps its own rules).
+test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap, a two-column store card, a neutral region bar, the page's own primary text", () => {
+  const css = stripComments(DESK_CSS);
+  const D = "#page-host > #settings-modal.as-page > #cred-drawer";
+  const rule = (sel) => { const at = css.indexOf("\n  " + sel + " {"); assert.ok(at >= 0, "rule: " + sel); return css.slice(at, css.indexOf("}", at)); };
+  assert.match(rule(D + " > #cred-drawer-head"), /padding: 18px 22px 16px; border-bottom: 1px solid var\(--line\)/);
+  assert.match(rule(D + " > #cred-drawer-head:empty"), /display: none/);
+  assert.match(rule(D + " > #cred-drawer-head .crumb b"), /font-size: 15px; font-weight: 600; line-height: 22\.5px/);
+  const body = rule(D + " > #cred-drawer-body");
+  assert.match(body, /flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; padding: 20px 22px/);
+  // The body's last section used to keep a 22px margin on top of the body's padding (a :last-child rule that lost to the one above it).
+  assert.doesNotMatch(css, /#cred-drawer-body > :last-child/);
+  assert.match(rule(D + " > #cred-drawer-body .storecreate"), /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(rule(D + " > #cred-drawer-body .storecreate .lead"), /font-weight: 500/);
+  // The Service region bar: full width, neutral; accent stays with the primary button, the focus ring and links.
+  const seg = rule(D + " > #cred-drawer-body .seg") + rule(D + " > #cred-drawer-body .seg button") + rule(D + " > #cred-drawer-body .seg button.on");
+  assert.doesNotMatch(seg, /--accent/);
+  assert.match(rule(D + " > #cred-drawer-body .seg button.on"), /background: var\(--raise\); font-weight: 500; color: var\(--fg\)/);
+  assert.match(rule(D + " > #cred-drawer-body .seg"), /display: flex;/);
+  // The primary button reads #0b1220 as the page's own block Save does.
+  assert.match(css, /#pfv \.pfv-btn-primary \{ background: var\(--accent\); color: #0b1220; \}/);
+  assert.match(rule(D + " > #cred-drawer-foot > .btn.pri"), /color: #0b1220/);
+  // Buttons and labels are 13px; the native boxes 14px.
+  assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: 13px/);
+  assert.match(rule(D + " > #cred-drawer-body .pf-check"), /font-size: 13px/);
+  assert.match(css, /#cred-drawer-body input\[type="checkbox"\], [^{]*input\[type="radio"\] \{ width: 14px; height: 14px;/);
+  // A refused Save is the foot's own line, 12px.
+  assert.match(rule(D + " > #cred-drawer-foot > .grow"), /font-size: 12px; line-height: 18px/);
+});
+
 test("the page script is loaded after the read model and before app.js", () => {
   const order = [...HTML.matchAll(/<script src="\/([a-z-]+\.js)"/g)].map((m) => m[1]);
   assert.ok(order.indexOf("profilepage.js") > order.indexOf("profileview.js"), "after profileview.js");

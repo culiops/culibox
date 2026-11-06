@@ -16,6 +16,8 @@
 // the honest statement of what a stored token is.
 const CRED_D4 = "The agent will be able to change this AWS account: create, modify and delete resources.";
 const CRED_N3 = "The agent can read this token. It is long-lived and is not revoked when the session ends.";
+// What Save says when the encrypted store does not exist yet, and what a framed host's store card opens with.
+const CRED_STORE_FIRST = "Create the encrypted store first. The value is stored in it.";
 
 // The two ways to give a box GitHub, side by side under "Add GitHub".
 const GH_ROUTE_CHOICES = [
@@ -1619,7 +1621,9 @@ function awsPaintFlow() {
   const leave = f.opts ? () => (awsFlow === f ? awsExit() : undefined) : () => awsExit();
   back.onclick = leave;
   back.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); leave(); } };
-  crumb.append(back, document.createTextNode(" / "), awsEl("b", null, edit ? "Edit " + f.rows[0].name : "Add AWS accounts"));
+  // A framed host (opts.head, the drawer) has a header of its own: the crumb reads "Credentials › AWS" over the title.
+  const framed = !!(f.opts && f.opts.head);
+  crumb.append(back, document.createTextNode(framed ? " › AWS" : " / "), awsEl("b", null, edit ? "Edit " + f.rows[0].name : "Add AWS accounts"));
   const nodes = [crumb, awsEl("p", "intro", "The agent never gets these profiles. It gets 15-minute credentials for the role you choose below.")];
   if (!edit) {
     const sec = awsEl("section", "sec");
@@ -1638,14 +1642,25 @@ function awsPaintFlow() {
   rh.appendChild(f.rowsHead);
   f.rowsHost = awsEl("div", "stack");
   f.rowsEmpty = awsEl("p", "hint", "Tick a profile above to set up a connection for it.");
-  rsec.append(rh, f.rowsHost, f.rowsEmpty);
+  if (framed) {
+    // The mockup's line under the head: what ticking several does, and where each connection goes.
+    f.rowsTick = awsEl("p", "hint", "Tick several to create several. Each one you save joins this profile as an unsaved row.");
+    rsec.append(rh, f.rowsTick, f.rowsHost, f.rowsEmpty);
+  } else {
+    rsec.append(rh, f.rowsHost, f.rowsEmpty);
+  }
   nodes.push(rsec);
   f.msgBox = awsEl("div", "hint");
   f.msgBox.setAttribute("role", "status");
   // The footer's own note is hidden on a phone (the footer is one row of buttons), so the same words sit here.
   f.noteBox = awsEl("div", "hint awsnote");
   nodes.push(f.msgBox, f.noteBox);
-  host.replaceChildren(...nodes);
+  if (framed) {
+    f.opts.head.replaceChildren(nodes[0], nodes[1]);
+    host.replaceChildren(...nodes.slice(2));
+  } else {
+    host.replaceChildren(...nodes);
+  }
   for (const r of f.rows) f.rowsHost.appendChild(awsBuildRow(r));
   awsPaintProfiles();
   if (f.opts) awsBuildFoot(f);
@@ -1709,6 +1724,7 @@ function awsPaintRowsHead() {
   f.rowsHead.replaceChildren(document.createTextNode((f.mode === "edit" ? "Connection " : "Connections to create ")),
     awsEl("span", "count", String(f.rows.length)));
   f.rowsEmpty.hidden = f.rows.length > 0 || f.mode === "edit";
+  if (f.rowsTick) f.rowsTick.hidden = f.rows.length === 0;
 }
 
 function awsToggleProfile(p, on) {
@@ -2038,8 +2054,13 @@ function awsPaintRes(row) {
   } else if (row.assume) {
     const v = awsCheckView({ assume: row.assume, verdict: row.verdict, actions: row.actions, reason: row.reason, reason_text: row.reasonText });
     if (v.assume === "ok") {
-      nodes.push(awsLine("ok", "✓", v.text));
-      nodes.push(awsVerdictNode(row, v));
+      if (awsFlow && awsFlow.opts && awsFlow.opts.head && !v.needsAck && v.verdict.cls === "ok") {
+        // The drawer's one line, as the mockup draws it: "Assume worked. No broad write access found".
+        nodes.push(awsLine("ok", "✓", v.text + " " + v.verdict.text));
+      } else {
+        nodes.push(awsLine("ok", "✓", v.text));
+        nodes.push(awsVerdictNode(row, v));
+      }
     } else if (v.signIn) {
       needSignIn = true; // awsSignInNode carries the badge, beside its Sign in button
     } else {
@@ -2436,6 +2457,7 @@ async function awsSaveAll() {
   if (saved) f.msg = "Saved " + saved + (saved === 1 ? " connection." : " connections.") + " The rest need attention.";
   awsPaintProfiles();
   awsPaintFoot();
+  if (f.opts && typeof f.opts.onIdle === "function") f.opts.onIdle();
 }
 
 // awsDelete: an inline confirmation in the card (no browser dialog), then DELETE.
@@ -2580,6 +2602,7 @@ function credHostErr(opts, msg) {
   if (!opts) { setCredErr(msg); return; }
   const err = credEl("p", "ent-err", msg);
   err.setAttribute("role", "alert");
+  if (opts.head) opts.head.replaceChildren();
   opts.host.replaceChildren(err);
   const seq = credHostSeq;
   const cancel = credEl("button", "btn", "Cancel");
@@ -2617,8 +2640,11 @@ function credFormBuildFoot(opts, saveLabel, submit) {
   const save = credEl("button", "btn pri", saveLabel || "Save");
   save.type = "button";
   save.onclick = () => (credFormSubmit === submit ? credFormRun() : undefined);
-  credFormBtns = { save, cancel };
-  opts.foot.replaceChildren(credEl("span", "grow"), cancel, save);
+  // The spacer left of Cancel. In a framed host it is also where a refused Save is said (credFormErrEl).
+  const msg = credEl("span", opts.head ? "grow ent-err" : "grow");
+  if (opts.head) msg.setAttribute("role", "alert");
+  credFormBtns = { save, cancel, msg };
+  opts.foot.replaceChildren(msg, cancel, save);
 }
 
 function credFormFoot(on) {
@@ -2712,12 +2738,13 @@ async function credRefreshView() {
 // (at least 12 characters); macOS: one button (the key goes in the Keychain). A
 // seccomp refusal shows the server's own sentence, word for word. The passphrase
 // fields are emptied after every attempt. `hold` marks the fields so a repaint of
-// the tab waits while one is being typed in.
-function credStoreCreateNode(onDone, hold) {
+// the tab waits while one is being typed in. `lead`, when given, is a sentence the card opens with.
+function credStoreCreateNode(onDone, hold, lead) {
   const st = (credView && credView.store) || {};
   // The server's own answer (the keyring in use), which is what store init checks.
   const passMode = !!st.passphrase_mode;
   const box = credEl("div", "storecreate");
+  if (lead) box.appendChild(credEl("p", "lead", lead));
   box.appendChild(credEl("p", "hint", passMode
     ? "Values are stored encrypted. Choose a passphrase of at least 12 characters. You type it to unlock the store, and it cannot be recovered if you lose it."
     : "Values are stored encrypted, with a key kept in the macOS Keychain. There is no passphrase to type."));
@@ -2776,15 +2803,25 @@ function credOpenForm(meta, crumbText, nodes, submit, opts) {
   credFormSubmit = submit;
   credFormBusy = false;
   credFormOpts = opts || null;
+  // A framed host (opts.head, the drawer) has a header of its own and says a refused Save in its foot.
+  const framed = !!(opts && opts.head);
   const crumb = credEl("div", "crumb");
   const leave = opts ? () => (credFormSubmit === submit ? credFormExit() : undefined) : () => credFormExit();
-  crumb.append(credLink("Credentials", leave), document.createTextNode(" / "), credEl("b", null, crumbText));
-  const err = credEl("div", "ent-err");
-  err.setAttribute("role", "alert");
-  credFormErrEl = err;
-  host.replaceChildren(crumb, ...nodes, err);
+  // The mockup's crumb: "Credentials › Tokens" for a token (it draws no other form), the bare link otherwise.
+  const tail = framed ? (meta.kind === "token-add" ? " › Tokens" : "") : " / ";
+  crumb.append(credLink("Credentials", leave), ...(tail ? [document.createTextNode(tail)] : []), credEl("b", null, crumbText));
+  if (framed) {
+    opts.head.replaceChildren(crumb, ...(meta.kind === "token-add" ? [credEl("p", "intro", CRED_N3)] : []));
+    host.replaceChildren(...nodes);
+  } else {
+    const err = credEl("div", "ent-err");
+    err.setAttribute("role", "alert");
+    credFormErrEl = err;
+    host.replaceChildren(crumb, ...nodes, err);
+  }
   if (opts) {
     credFormBuildFoot(opts, opts.saveLabel || meta.saveLabel, submit);
+    if (framed) credFormErrEl = credFormBtns.msg;
   } else {
     const save = document.getElementById("cred-form-save");
     if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }
@@ -2832,6 +2869,7 @@ async function credFormRun() {
   // tab never drops, so it goes on to leave, as it always did, even after its Cancel was pressed.
   if (credHostSeq !== seq) return;
   if (done) await credFormExit(done);
+  else if (credFormOpts && typeof credFormOpts.onIdle === "function") credFormOpts.onIdle();
 }
 
 async function credSend(method, path, body) {
@@ -2879,7 +2917,7 @@ function credSeg(fd, labelId, onChange) {
   return { node: seg, get: () => cur };
 }
 
-function credTokenDetails(t, taken) {
+function credTokenDetails(t, taken, opts) {
   const tf = templateForm(t);
   const uid = "ct-" + t.id;
   const sec = credEl("section", "sec");
@@ -2939,7 +2977,8 @@ function credTokenDetails(t, taken) {
     valueEls = [];
     hints = [];
     if (!credStoreReady()) {
-      valuesHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintValues(); }, false));
+      // In a framed host the card opens with the sentence Save would refuse with (the mockup's lead).
+      valuesHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintValues(); }, false, opts && opts.head ? CRED_STORE_FIRST : ""));
       return;
     }
     const nodes = [];
@@ -2962,7 +3001,9 @@ function credTokenDetails(t, taken) {
   nm.inp.addEventListener("input", () => { hints.forEach((hn, i) => { hn.textContent = hintText(i); }); });
   paintValues();
 
-  sec.append(h, grid, credEl("p", "honest", CRED_N3));
+  // The sentence about what a stored token is goes at the foot of the form in the tab, and in the header (credOpenForm) in a framed host.
+  if (opts && opts.head) sec.append(h, grid);
+  else sec.append(h, grid, credEl("p", "honest", CRED_N3));
   return {
     node: sec,
     ready: () => credStoreReady(),
@@ -3009,7 +3050,7 @@ async function credTokenAdd(group, startID, opts) {
   const select = (t) => {
     cur = t;
     for (const [id, b] of tileBtns) { b.classList.toggle("on", id === t.id); b.setAttribute("aria-pressed", id === t.id ? "true" : "false"); }
-    det = credTokenDetails(t, taken);
+    det = credTokenDetails(t, taken, opts);
     detHost.replaceChildren(det.node);
     credKeep({ kind: "token-add", template: t.id, saveLabel: "Save" });
     credFormErr("");
@@ -3027,7 +3068,7 @@ async function credTokenAdd(group, startID, opts) {
   credOpenForm({ kind: "token-add", template: start.id, saveLabel: "Save" }, "Add token", [tilesSec, detHost], async () => {
     const body = fromTemplateBody(cur, det.collect());
     if (!body.name) { credFormErr("Give the token a name."); return false; }
-    if (!det.ready()) { credFormErr("Create the encrypted store first. The value is stored in it."); return false; }
+    if (!det.ready()) { credFormErr(CRED_STORE_FIRST); return false; }
     if (body.values.some((v) => v === "")) { credFormErr("Paste the value to store."); return false; }
     let res = null;
     try {

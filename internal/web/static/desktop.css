@@ -2033,7 +2033,7 @@
   /* --- the Credentials drawer over the profile page (spec 5.7; the mockup's `drawer` and `drawer-tok` states) ----------- */
   /* A scrim and a drawer, both fixed and so out of the page's grid; neither is a .dbd or a .dft (selectSettingsTab hides those). They
      show only while profilepage.js has opened them (the [hidden] they are born with); app.css hides them for good on a phone. The
-     Credentials add flows draw into the body and put their buttons in the foot; their own rules are the `#creds` ones (the
+     Credentials add flows draw their crumb and intro into the head, themselves into the body and their buttons into the foot; their own rules are the `#creds` ones (the
      `:is(#creds, #cred-drawer)` twins above). */
   #page-host > #settings-modal.as-page > #cred-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .55); }
   #page-host > #settings-modal.as-page > #cred-drawer:not([hidden]) {
@@ -2042,32 +2042,39 @@
     border-left: 1px solid var(--line); border-radius: var(--r-dlg) 0 0 var(--r-dlg); box-shadow: -24px 0 72px rgba(0, 0, 0, .55);
   }
   #page-host > #settings-modal.as-page > #cred-drawer:focus { outline: none; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 22px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-status { margin: 0; padding: 8px 22px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .grow { flex: 1; min-width: 0; }
-  /* The flows' own rules are the Credentials tab's (the twins above). In the drawer they wear the mockup's skin instead: a header band (the
-     crumb's link above the title, the intro under it), section heads in sentence case, the host's profiles as one panel, and a connection as a
-     raised card. The body is plain block flow so the header band can run edge to edge; everything else keeps the body's 22px margins. */
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body { display: block; padding: 0 0 22px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .crumb { display: block; margin: 0 0 20px; padding: 18px 22px 16px; border-bottom: 1px solid var(--line); font-size: 0; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .crumb:has(+ .intro) { margin: 0; padding-bottom: 0; border-bottom: 0; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .crumb a.lnk { font-size: 12px; color: var(--muted); text-decoration: none; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .crumb a.lnk:hover { color: var(--fg); text-decoration: underline; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .crumb b { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > .intro { margin: 0 0 20px; padding: 6px 22px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > :not(.crumb):not(.intro) { margin: 0 22px 22px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body > :last-child { margin-bottom: 0; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .grow { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 18px; }
+  /* The three parts, as the mockup's .drawer is made: a header band that stays put (the flow's crumb and intro), a body that scrolls, a
+     foot. The Credentials flows draw into them (opts.head, opts.host, opts.foot) and their own rules are the Credentials tab's (the
+     `:is(#creds, #cred-drawer)` twins above); everything below is the drawer's skin over them: the mockup's header, section heads in
+     sentence case, the host's profiles as one panel, a connection as a raised card, 13px buttons and labels, the store step as a card
+     of two columns. Scoped to #cred-drawer, so the Credentials tab is the same as it was. */
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head { padding: 18px 22px 16px; border-bottom: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head:empty { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb { display: block; font-size: 12px; line-height: 18px; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk { color: var(--muted); text-decoration: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk:hover { color: var(--fg); text-decoration: underline; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb b { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; line-height: 22.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .intro { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; padding: 20px 22px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h { min-height: 0; padding: 0; border-bottom: 0; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h .count { margin-left: 4px; font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp { padding: 0; border: 0; background: transparent; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint { margin: 0; font-size: 12px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint:empty { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body section[aria-label="Host profiles"] > .stack { gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp { gap: 10px; padding: 0; border: 0; background: transparent; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .tx { gap: 0; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .nm { font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .d { font-size: 12px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .d { font-size: 12px; line-height: 18px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="checkbox"], #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="radio"] { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .pf-check { align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .bdg.kind { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 0; border-radius: var(--r-chip); background: var(--line); font: 500 11px/1 var(--font-mono); letter-spacing: 0; color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .bdg.kind { background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow { gap: 10px; border: 0; border-radius: var(--r-card); background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
@@ -2075,9 +2082,12 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: 12.5px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border-color: transparent; background: var(--line); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary { font-size: 13px; list-style: none; color: var(--accent); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; background: var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok { align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok > span:first-child { flex: none; font-size: 12px; color: var(--ok); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary { display: inline-flex; font-size: 13px; font-weight: 500; list-style: none; color: var(--accent); border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary::-webkit-details-marker { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tiles { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile { gap: 2px; padding: 9px 11px; border-color: var(--line); border-radius: var(--r-ctl); }
@@ -2085,9 +2095,16 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .s { font-size: 12px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on { border-color: var(--muted); background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on .n { color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate { padding: 14px; border: 0; border-radius: var(--r-card); background: var(--raise); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { height: 32px; padding: 0 12px; border-color: transparent; background: var(--line); color: var(--fg); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border-color: transparent; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg { display: flex; gap: 2px; height: 32px; max-width: none; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); box-sizing: border-box; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button { display: flex; align-items: center; padding: 0 12px; border: 0; border-radius: var(--r-chip); background: transparent; font: 400 12.5px var(--font-ui); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button.on { background: var(--raise); font-weight: 500; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate { margin-top: -2px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 14px; border: 0; border-radius: var(--r-card); background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate > :is(.lead, .hint, .ent-err, .btn) { grid-column: 1 / -1; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .lead { margin: 0; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .ent-err:empty { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; background: var(--line); color: var(--fg); font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn.pri { color: #0b1220; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):hover { background: var(--line); }
 }

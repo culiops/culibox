@@ -4690,13 +4690,13 @@ function drawerPage(over, doc) {
   const t = pickPage(over, doc);
   const scrim = new Node("div");
   const drawer = new Node("aside");
-  const body = new Node("div"), foot = new Node("div"), status = new Node("p");
+  const head = new Node("div"), body = new Node("div"), foot = new Node("div"), status = new Node("p");
   scrim.hidden = drawer.hidden = status.hidden = true;
   drawer.setAttribute("tabindex", "-1");
-  drawer.append(body, foot, status);
+  drawer.append(head, body, status, foot);
   const behind = [new Node("div"), new Node("nav"), new Node("div")];
   t.els["settings-modal"].append(...behind, scrim, drawer);
-  Object.assign(t.els, { "cred-scrim": scrim, "cred-drawer": drawer, "cred-drawer-body": body, "cred-drawer-foot": foot, "cred-drawer-status": status });
+  Object.assign(t.els, { "cred-scrim": scrim, "cred-drawer": drawer, "cred-drawer-head": head, "cred-drawer-body": body, "cred-drawer-foot": foot, "cred-drawer-status": status });
   // What the browser's querySelectorAll finds for the focus selector: the enabled controls and the links made tabbable.
   drawer.selectors = [];
   drawer.querySelectorAll = (sel) => {
@@ -4711,7 +4711,8 @@ function drawerPage(over, doc) {
     const crumb = control("a", "Credentials");
     crumb.className = "crumb";
     crumb.setAttribute("tabindex", "0");
-    opts.host.replaceChildren(crumb, control("input"), control("button", "Tile"));
+    opts.head.replaceChildren(crumb);
+    opts.host.replaceChildren(control("input"), control("button", "Tile"));
     opts.foot.replaceChildren(control("button", "Cancel"), control("button", opts.saveLabel || "Save"));
   };
   t.box.awsOpenAdd = (opts) => draw("aws", opts);
@@ -4727,7 +4728,7 @@ function drawerPage(over, doc) {
     opts.onClose();
     return true;
   };
-  return { t, st, drawer, scrim, body, foot, status, behind };
+  return { t, st, drawer, scrim, head, body, foot, status, behind };
 }
 // The picker's "New ..." item of Cloud and tokens, from the read view.
 const openDrawerFrom = async (d, title) => {
@@ -4807,6 +4808,8 @@ test("the drawer opens from a create item of the picker with a host, a foot, a l
   const flow = await openDrawerFrom(d, "New AWS connection…");
   assert.strictEqual(flow.opts.host, body);
   assert.strictEqual(flow.opts.foot, foot);
+  assert.strictEqual(flow.opts.head, d.head, "the header band, which stays put while the body scrolls");
+  assert.strictEqual(typeof flow.opts.onIdle, "function");
   assert.strictEqual(flow.opts.saveLabel, "Save all and add", "the mockup's label for AWS");
   assert.strictEqual(typeof flow.opts.onCreated, "function");
   assert.strictEqual(typeof flow.opts.onClose, "function");
@@ -4970,10 +4973,10 @@ test("every close empties the drawer's host and foot, hides it and its scrim, fr
     const d = drawerPage({ awscEntries: PICK_AWS });
     await openDrawerFrom(d, "New token…");
     d.body.append(new Node("input"));
-    assert.ok(d.body.children.length > 0 && d.foot.children.length > 0, how + ": drawn");
+    assert.ok(d.head.children.length > 0 && d.body.children.length > 0 && d.foot.children.length > 0, how + ": drawn");
     close(d);
     await settle();
-    assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0], how + ": what was typed does not linger in a hidden DOM");
+    assert.deepStrictEqual([d.head.children.length, d.body.children.length, d.foot.children.length], [0, 0, 0], how + ": what was typed does not linger in a hidden DOM");
     assert.strictEqual(d.drawer.hidden, true, how);
     assert.strictEqual(d.scrim.hidden, true, how);
     assert.strictEqual(d.t.run("pfvState").drawer, false, how);
@@ -5162,4 +5165,53 @@ test("the drawer's markup: an aside after #manage inside the settings modal, not
   assert.match(aside, /id="cred-drawer-body"/);
   assert.match(aside, /id="cred-drawer-foot"/);
   assert.match(aside, /id="cred-drawer-status"[^>]*role="status"[^>]*hidden/);
+});
+
+// --- Task 15 gate fix (R67, R68) -----------------------------------------------------------------------------------------
+
+test("the busy line goes as soon as the save has answered, whether or not the flow went on", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st, status } = d;
+  const flow = await openDrawerFrom(d, "New AWS connection…");
+  st.busy = true;
+  assert.strictEqual(t.box.pfvCloseDrawer(), false);
+  assert.strictEqual(status.hidden, false);
+  assert.ok(status.textContent.length > 0);
+  // The save is over and the flow stays open (a row was refused): the host is told, and the line goes.
+  st.busy = false;
+  flow.opts.onIdle();
+  assert.strictEqual(status.hidden, true);
+  assert.strictEqual(status.textContent, "");
+  assert.strictEqual(d.drawer.hidden, false, "the drawer is open still");
+  // Idle with nothing said is harmless.
+  flow.opts.onIdle();
+  assert.strictEqual(status.hidden, true);
+  // A late answer for a drawer that has gone does not touch a new one's line.
+  t.box.pfvCloseDrawer();
+  const again = await openDrawerFrom(d, "New token…");
+  again.opts.onIdle();
+  flow.opts.onIdle();
+  assert.strictEqual(status.hidden, true);
+});
+
+test("the focus trap reaches a summary (the AWS Advanced fold, the App's help)", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  await openDrawerFrom(d, "New AWS connection…");
+  assert.ok(d.drawer.selectors.length > 0);
+  assert.ok(d.drawer.selectors.every((sel) => /(^|,)\s*summary\b/.test(sel)), "the selector lists summary: " + d.drawer.selectors[0]);
+});
+
+test("the header band is part of the drawer's markup, above the body", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  const aside = html.slice(html.indexOf('<aside id="cred-drawer"'), html.indexOf("</aside>", html.indexOf('<aside id="cred-drawer"')));
+  const at = (id) => aside.indexOf('id="' + id + '"');
+  assert.ok(at("cred-drawer-head") > 0, "the header");
+  assert.ok(at("cred-drawer-head") < at("cred-drawer-body") && at("cred-drawer-body") < at("cred-drawer-status") && at("cred-drawer-status") < at("cred-drawer-foot"), "head, body, status, foot");
+});
+
+test("the first control the drawer focuses is in the body, never the header's crumb link", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  await openDrawerFrom(d, "New token…");
+  assert.ok(d.body.contains(Node.focused), "in the body");
+  assert.ok(!d.head.contains(Node.focused));
 });
