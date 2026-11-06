@@ -11,6 +11,14 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const STATIC = path.join(__dirname, "..", "static");
+const APP = fs.readFileSync(path.join(STATIC, "app.js"), "utf8");
+// A top-level function of app.js (not exported: app.js is the page itself), as source,
+// so the page script runs against the real buildSeg / optApplies and not a copy of them.
+function appFn(name) {
+  const at = APP.indexOf("function " + name + "(");
+  assert.ok(at >= 0, name + " is in app.js");
+  return APP.slice(at, APP.indexOf("\n}\n", at) + 2);
+}
 
 class Text { constructor(t) { this.text = String(t); this.parent = null; } get textContent() { return this.text; } }
 class Node {
@@ -58,6 +66,18 @@ const DOCS = {
   "infra-terraform": { name: "infra-terraform", bin: "claude", runtime: "box", rev: "r2" },
   "runbook-host": { name: "runbook-host", bin: "claude", runtime: "host", default_cwd: "/home/you/runbooks", rev: "r3" },
 };
+const OPTION_DEFS = [
+  { key: "model", label: "Model", type: "enum", choices: ["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5"], bins: ["claude"] },
+  { key: "effort", label: "Effort", type: "enum", choices: ["low", "medium", "high", "xhigh", "max"], bins: ["claude"] },
+  { key: "skip_permissions", label: "Bypass permissions", type: "bool", bins: ["claude"] },
+];
+
+const ACCT = require("../static/accounts.js");
+const PENDING = require("../static/pending.js");
+// The page's pinned profile schema (app.js pfSchema), pinned like /api/meta does.
+const SCHEMA = () => { const p = require("../static/profileform.js").schemaPin(); p.pin("sch-1"); return p; };
+// An api() failure as app.js throws it: the sentence, the status and code, the parsed body.
+const apiErr = (status, body) => Object.assign(new Error(body.error || "failed"), { status, code: body.code || "", body });
 
 // One page: the real model scripts, profilepage.js, and stand-ins for what app.js owns.
 function page(over) {
@@ -76,7 +96,9 @@ function page(over) {
     document: doc, console, Promise, JSON, Date, Math, Array, Object, Set, String, Number, setTimeout, clearTimeout,
     window: { HOME_DIR: "/home/you" },
     profiles: PROFILES.slice(), profilesLoaded: true, selectedProfile: "", metaLoaded: true,
-    boxRuntime: "runc", boxUnavailableReason: "", bundleImports: true, optionDefs: [],
+    boxRuntime: "runc", boxUnavailableReason: "", bundleImports: true, optionDefs: OPTION_DEFS,
+    accountsCache: [{ name: "work" }], acctChoices: ACCT.acctChoices, ACCT_DEFAULT: ACCT.ACCT_DEFAULT,
+    withPending: PENDING.withPending, pfSchema: SCHEMA(), docs: {}, puts: [], revN: 1,
     awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }, { name: "staging-read", account_id: "111111111111", region: "eu-west-1" }],
     stEntries: [{ name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] }],
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
@@ -85,9 +107,24 @@ function page(over) {
       calls.push(method + " " + p);
       if (box.apiFail) throw box.apiFail;
       const m = /^\/api\/profiles\/([^/]+)$/.exec(p);
-      if (m && method === "GET") return DOCS[decodeURIComponent(m[1])];
+      const name = m ? decodeURIComponent(m[1]) : "";
+      if (m && method === "GET") {
+        if (box.getFail) throw box.getFail;
+        return box.docs[name] || DOCS[name];
+      }
+      if (m && method === "PUT") {
+        const body = JSON.parse(opt.body);
+        box.puts.push(body);
+        if (box.putFail) throw box.putFail;
+        // What the server keeps: the profile with a new revision, and no schema key.
+        const kept = Object.assign({}, body, { rev: "r" + (++box.revN) + "0" });
+        delete kept.schema;
+        box.docs[name] = kept;
+        return box.putReply || null;
+      }
       return null;
     },
+    openSettings: (tab) => { calls.push("openSettings:" + tab); },
     loadProfiles: async () => { calls.push("loadProfiles"); box.profiles = box.profiles.filter((p) => !box.gone || p.name !== box.gone); return true; },
     askConfirm: async (o) => { calls.push("confirm:" + o.title + ":" + (o.danger ? "danger" : "")); return box.confirmAnswer !== false; },
     openSpawnDialog: (n) => { calls.push("spawn:" + n); },
@@ -95,9 +132,11 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["fsops.js", "workhome.js", "spawnpreview.js", "profileview.js", "profilepage.js"]) {
+  for (const f of ["fsops.js", "workhome.js", "spawnpreview.js", "spawnform.js", "profileform.js", "profileview.js", "profileedit.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
+  for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
+  new vm.Script(fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8"), { filename: "profilepage.js" }).runInContext(ctx);
   return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
@@ -153,7 +192,8 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   ]);
   assert.strictEqual(byText(root, "button", "+ Add access").length, 1);
   assert.strictEqual(byText(root, "button", "+ Add folder or domain").length, 1);
-  assert.ok(byText(root, "button", "Edit").every((b) => !b.onclick), "Edit does nothing until the edit task");
+  // Runs in, Agent and Network edit now; the blocks whose editor is a later task are drawn but inert.
+  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, false, true, false, false, true, false]);
   // Rows come from reachModel: a PROD tag on the prod connection, the production tag on the token.
   const rows = byCls(root, "pfv-row");
   assert.ok(rows.some((r) => texts(r, "pfv-tag").join() === "PROD" && /prod-read/.test(r.textContent)));
@@ -562,4 +602,599 @@ test("the file shared from a private copy's original is drawn mono, the CLAUDE.m
   assert.deepStrictEqual(texts(rows[0], "pfv-mono"), ["CLAUDE.md"]);
   assert.deepStrictEqual(texts(rows[0], "pfv-scope"), ["From the original, read only"]);
   assert.deepStrictEqual(texts(rows[1], "pfv-mono"), [], "CLAUDE.md imports is words");
+});
+
+
+// --- editing one block at a time (spec 5.5, 5.6) ----------------------------------------
+
+const field = (t, key) => t.els["pfv-in"].all((n) => n.dataset && n.dataset.pfvField === key)[0];
+const blockOf = (t, id) => byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === id);
+const clickBtn = (root, text) => byText(root, "button", text)[0].click();
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const pickModel = (t, v) => { const m = field(t, "options.model"); m.value = v; m.onchange(); };
+// aws-ops with a readable folder, so Also reachable has a Folder row to put an error under.
+const withFolder = () => PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { context_paths: ["/home/you/other-repo/docs"] }) : p));
+const gone400 = () => apiErr(400, { error: 'profile "aws-ops": context_paths[0] "/home/you/other-repo/docs": does not exist', field: "context_paths[0]" });
+
+test("Edit opens the Agent block as a form: agent, model, effort, login; the rest stays read-only", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const agent = blockOf(t, "agent");
+  assert.ok(agent.className.includes("pfv-editing"));
+  assert.strictEqual(t.run("pfvState").openBlock, "agent");
+  assert.strictEqual(byText(agent, "button", "Edit").length, 0, "the Edit link goes while the block is open");
+  assert.strictEqual(field(t, "bin").value, "claude");
+  assert.strictEqual(field(t, "options.model").value, "claude-opus-5-5");
+  assert.strictEqual(field(t, "options.effort").dataset.value, "high");
+  assert.strictEqual(field(t, "account").value, "");
+  assert.deepStrictEqual(byCls(agent, "pfv-flabel").map((n) => n.textContent), ["Agent", "Model", "Effort", "Claude login"]);
+  assert.strictEqual(byCls(blockOf(t, "network"), "pfv-editing").length, 0);
+  assert.strictEqual(byText(blockOf(t, "network"), "button", "Edit").length, 1);
+  assert.strictEqual(Node.focused, field(t, "bin"), "focus moves into the form");
+});
+
+test("no unsaved changes until something changes; then the header says so with Show, and the footer Discard", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const head = byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+  assert.ok(head.hidden, "a form that was opened and not touched holds no changes");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Cancel").length, 1);
+  pickModel(t, "claude-sonnet-5");
+  assert.strictEqual(head.hidden, false);
+  assert.strictEqual(head.textContent, "Unsaved changes" + "Show");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-dirty"), ["Unsaved changes"]);
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Discard").length, 1);
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Cancel").length, 0);
+  pickModel(t, "claude-opus-5-5");
+  assert.ok(head.hidden, "back to what was stored is no change");
+});
+
+test("save sends the merged profile with rev and schema, then shows it read-only with Saved", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  const ok = await clickBtn(blockOf(t, "agent"), "Save");
+  assert.strictEqual(ok, true);
+  assert.strictEqual(t.box.puts.length, 1);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.rev, "r1");
+  assert.strictEqual(body.schema, "sch-1");
+  assert.strictEqual(body.options.model, "claude-sonnet-5");
+  assert.strictEqual(body.options.effort, "high", "the other agent option is carried as stored");
+  assert.strictEqual(body.default_cwd, "/home/you/work/payments-api", "keys of other blocks are untouched");
+  assert.deepStrictEqual(t.calls.filter((c) => c === "GET /api/profiles/aws-ops").length, 2, "one GET to show it, one after the save");
+  assert.ok(t.calls.includes("loadProfiles"));
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-sonnet-5 · high effort"], "the read view shows the new model");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-saved"), ["Saved"]);
+  t.run("pfvExpireSaved()");
+  assert.ok(byCls(blockOf(t, "agent"), "pfv-saved").every((n) => n.hidden), "Saved goes after a moment");
+});
+
+test("second block save uses the rev from the refetch", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.strictEqual(t.box.puts[0].rev, "r1");
+  clickBtn(blockOf(t, "network"), "Edit");
+  const open = field(t, "egress_open");
+  open.checked = true;
+  open.onchange();
+  await clickBtn(blockOf(t, "network"), "Save");
+  assert.strictEqual(t.box.puts.length, 2);
+  assert.strictEqual(t.box.puts[1].rev, "r20", "the revision the server gave after the first save, not the one the page opened at");
+  assert.strictEqual(t.box.puts[1].egress_open, true);
+  assert.strictEqual(t.box.puts[1].options.model, "claude-sonnet-5", "and it carries the first save");
+});
+
+test("a 409 shows changed-elsewhere inside the block and keeps nothing pending after Reload", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(409, { error: "the profile changed", code: "profile_changed" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  const agent = blockOf(t, "agent");
+  assert.deepStrictEqual(texts(agent, "pfv-top-err"), ["This profile changed elsewhere Reload"]);
+  assert.strictEqual(byText(agent, "button", "Reload").length, 1);
+  assert.strictEqual(t.run("pfvState").pending, true, "the change is still there until Reload");
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5");
+  // The profile as it is now: somebody changed the model.
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { rev: "r7", options: { model: "claude-opus-5", effort: "high" } });
+  await clickBtn(agent, "Reload");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(t.run("pfvState").doc.rev, "r7");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-opus-5 · high effort"]);
+  assert.strictEqual(t.box.puts.length, 1, "Reload writes nothing");
+});
+
+test("a 409 for a profile deleted meanwhile says so, offers no Reload, and moves to the next profile", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(409, { error: "the profile changed", code: "profile_changed", gone: true });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  const agent = blockOf(t, "agent");
+  assert.match(texts(agent, "pfv-top-err")[0], /^This profile was deleted elsewhere/);
+  assert.strictEqual(byText(agent, "button", "Reload").length, 0);
+  t.box.gone = "aws-ops"; // the list no longer has it
+  await clickBtn(agent, "Show another profile");
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform", "the profile that followed it, like Delete");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.ok(!byCls(t.els["pf-navlist"], "pfv-ni-name").some((n) => n.textContent === "aws-ops"));
+});
+
+test("a Reload that finds the profile gone says so too", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(409, { error: "the profile changed", code: "profile_changed" });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  t.box.getFail = apiErr(404, { error: "no such profile" });
+  await clickBtn(blockOf(t, "agent"), "Reload");
+  assert.match(texts(blockOf(t, "agent"), "pfv-top-err")[0], /^This profile was deleted elsewhere/);
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Reload").length, 0);
+});
+
+test("a 400 with field context_paths[0] while editing agent opens reachable too and keeps the agent change", async () => {
+  const t = page({ profiles: withFolder() });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = gone400();
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), ["agent", "reachable"], "the one-open-block rule yields to repair");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5", "the agent change is kept");
+  const reach = blockOf(t, "reachable");
+  assert.ok(reach.className.includes("pfv-editing"));
+  // The error sits under the folder row, in words, not the server's sentence with its keys.
+  const row = byCls(reach, "pfv-row")[0];
+  assert.deepStrictEqual(texts(row, "pfv-ferr"), ["This folder no longer exists. Remove it or pick another."]);
+  assert.ok(!/context_paths/.test(t.els["pfv-in"].textContent));
+  // The Agent block says what is wrong and where, with a way there (approved state err2).
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), ["Not saved: a folder in Also reachable needs a fix first. Show"]);
+  // Both footers: the repair one is clean (Cancel) and says what Save also saves; the agent one is dirty (Discard).
+  assert.deepStrictEqual(texts(reach, "pfv-st-invalid"), ["One field needs a fix before this can save."]);
+  assert.ok(texts(reach, "pfv-fnote").includes("Saving also saves your Agent change."));
+  assert.strictEqual(byText(reach, "button", "Cancel").length, 1);
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Discard").length, 1);
+  // Saving from the repair block saves the same merged profile, agent change included.
+  t.box.putFail = null;
+  assert.strictEqual(await clickBtn(reach, "Save"), true);
+  assert.strictEqual(t.box.puts.length, 2);
+  assert.strictEqual(t.box.puts[1].options.model, "claude-sonnet-5");
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(Object.keys(t.run("pfvState").edits).length, 0);
+});
+
+test("cancelling the repair block keeps the other block's change; its note about the repair goes", async () => {
+  const t = page({ profiles: withFolder() });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = gone400();
+  await clickBtn(blockOf(t, "agent"), "Save");
+  clickBtn(blockOf(t, "reachable"), "Cancel");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), ["agent"]);
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), [], "the block it pointed at is closed");
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5");
+});
+
+test("a 400 naming a field in the open block puts the words under that input and keeps the value", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": options.model: "claude-sonnet-5" is not one of the allowed values', field: "options.model" });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), ["agent"]);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-ferr"), ['options.model: "claude-sonnet-5" is not one of the allowed values']);
+  assert.ok(field(t, "options.model").className.includes("pfv-bad"));
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-invalid"), ["One field needs a fix before this can save."]);
+  // Changing that field clears its error.
+  pickModel(t, "claude-opus-5");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-ferr"), []);
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-invalid"), []);
+});
+
+test("an error no block owns shows at the top of the open block, and a network failure says it could not save", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": something the server invented' });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), ["something the server invented"]);
+  t.box.putFail = new TypeError("Failed to fetch");
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), ["Could not save this profile."]);
+  assert.strictEqual(t.run("pfvState").pending, true, "nothing was lost");
+});
+
+test("save sends runtime explicitly", async () => {
+  const t = page();
+  t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" }; // names no tier
+  await t.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  await clickBtn(blockOf(t, "runs"), "Save");
+  assert.strictEqual(t.box.puts[0].runtime, "box", "the tier the form showed, not a blank that hands it back to the instance default");
+  // With no box layer a blank tier stays blank (runtimeToSend): the server refuses an explicit box there.
+  const n = page({ boxRuntime: "" });
+  n.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+  await n.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(n, "runs"), "Edit");
+  await clickBtn(blockOf(n, "runs"), "Save");
+  assert.ok(!("runtime" in n.box.puts[0]));
+});
+
+test("discard restores the read view with no PUT", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  clickBtn(blockOf(t, "agent"), "Discard");
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-opus-5-5 · high effort"]);
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.strictEqual(field(t, "options.model").value, "claude-opus-5-5", "the form opens on what is stored, not the discarded pick");
+});
+
+test("Edit on another block while one has changes is refused in place; a block with no changes just yields", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  clickBtn(blockOf(t, "network"), "Edit"); // nothing changed in Agent yet
+  assert.strictEqual(t.run("pfvState").openBlock, "network");
+  assert.ok(!blockOf(t, "agent").className.includes("pfv-editing"), "the unchanged Agent form closed in favour of the new one");
+  clickBtn(blockOf(t, "network"), "Cancel");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  clickBtn(blockOf(t, "network"), "Edit");
+  assert.strictEqual(t.run("pfvState").openBlock, "agent", "refused");
+  assert.ok(!blockOf(t, "network").className.includes("pfv-editing"));
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), ["Save or discard these changes first"]);
+  assert.ok(blockOf(t, "agent").className.includes("pfv-nudge"));
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5", "and nothing is lost");
+  // The next edit takes the nudge away.
+  pickModel(t, "claude-opus-5");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), []);
+});
+
+test("a failed GET that lands after a block was opened does not redraw over it", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  let fail;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (p === "/api/profiles/aws-ops" && !(o && o.method)) { await new Promise((r) => { fail = r; }); throw new Error("offline"); } return real(p, o); };
+  const slow = t.box.pfvShow("aws-ops"); // the tab was selected again
+  await settle();
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  const form = field(t, "options.model");
+  fail();
+  await slow;
+  assert.strictEqual(field(t, "options.model"), form, "the same control, not a redraw");
+  assert.strictEqual(form.value, "claude-sonnet-5");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-err"), []);
+});
+
+test("an /api/credentials answer that differs only in a field the page does not read does not redraw", async () => {
+  const t = page();
+  t.box.pfCredsView = { store: { initialized: true, locked: false }, aws: [{ name: "prod-read", prod: true, checked_at: "2026-11-06T10:00:00Z" }] };
+  await t.box.pfvShow("aws-ops");
+  const kids = t.els["pfv-in"].children.slice();
+  t.box.pfCredsView = { store: { initialized: true, locked: false }, aws: [{ name: "prod-read", prod: true, checked_at: "2026-11-06T10:00:20Z" }] };
+  t.box.pfvMetaChanged();
+  assert.ok(t.els["pfv-in"].children.every((c, i) => c === kids[i]), "checked_at moves every few seconds and says nothing the page draws");
+  t.box.pfCredsView = { store: { initialized: true, locked: false }, aws: [{ name: "prod-read", prod: true, elevate: { max_minutes: 45 } }] };
+  t.box.pfvMetaChanged();
+  assert.match(t.els["pfv-in"].textContent, /max 45 min/);
+});
+
+test("Manage goes to Agent accounts through the leave guard", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  // Nothing changed: no question.
+  await clickBtn(blockOf(t, "agent"), "Manage");
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("openSettings") || c.startsWith("confirm")), ["openSettings:accounts"]);
+  // Changed: the question, with its own words on both buttons. Keep editing stays.
+  t.calls.length = 0;
+  let asked = null;
+  t.box.askConfirm = async (o) => { asked = o; return false; };
+  pickModel(t, "claude-sonnet-5");
+  await clickBtn(blockOf(t, "agent"), "Manage");
+  assert.strictEqual(asked.confirmLabel, "Discard");
+  assert.strictEqual(asked.cancelLabel, "Keep editing");
+  assert.ok(!t.calls.includes("openSettings:accounts"));
+  assert.strictEqual(t.run("pfvState").pending, true);
+  // Discard: the changes go and the page is left.
+  t.box.askConfirm = async () => true;
+  await clickBtn(blockOf(t, "agent"), "Manage");
+  assert.ok(t.calls.includes("openSettings:accounts"));
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+});
+
+test("pfvLeaveGuard asks only when something changed and Discard drops it", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true, "nothing open");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true, "open but unchanged");
+  assert.ok(!t.calls.some((c) => c.startsWith("confirm")));
+  pickModel(t, "claude-sonnet-5");
+  t.box.confirmAnswer = false;
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), false);
+  assert.strictEqual(t.run("pfvState").pending, true);
+  t.box.confirmAnswer = true;
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true);
+  assert.strictEqual(t.run("pfvState").pending, false);
+});
+
+test("Runs in: Box and On this machine; Box is disabled with the reason when no box layer exists", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  assert.strictEqual(field(t, "tier-box").checked, true);
+  assert.strictEqual(field(t, "tier-box").disabled, false);
+  assert.strictEqual(field(t, "tier-host").checked, false);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-card-t").map((s) => s.replace(/\s*Recommended$/, "")), ["In a box", "On this machine"]);
+  assert.match(blockOf(t, "runs").textContent, /Docker found/);
+  assert.match(blockOf(t, "runs").textContent, /Runs as you, with your files, your network and your credentials\./);
+
+  const n = page({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" });
+  await n.box.pfvShow("aws-ops");
+  clickBtn(blockOf(n, "runs"), "Edit");
+  assert.strictEqual(field(n, "tier-box").disabled, true);
+  assert.match(blockOf(n, "runs").textContent, /Boxes are unavailable on this machine: Docker is not installed\./);
+  assert.ok(!/Docker found/.test(blockOf(n, "runs").textContent));
+});
+
+test("Runs in: a private copy cannot choose host; the refusal shows in place and Save is hidden", async () => {
+  const prof = view("gitops-clone", { default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", auto_return: true });
+  const t = page({ profiles: [prof] });
+  t.box.docs["gitops-clone"] = { name: "gitops-clone", bin: "claude", runtime: "box", clone_of: "/home/you/work/k8s-gitops", rev: "r5" };
+  await t.box.pfvShow("gitops-clone");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  const runs = blockOf(t, "runs");
+  assert.strictEqual(byCls(runs, "pfv-refuse").length, 0);
+  assert.strictEqual(byText(runs, "button", "Save").length, 1);
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-refuse").map((s) => s.replace(/\s*Open Workspace$/, "")), ["A private copy needs a box. Set Workspace to 'Work in this folder' first."]);
+  assert.strictEqual(byText(blockOf(t, "runs"), "button", "Open Workspace").length, 1);
+  assert.ok(byText(blockOf(t, "runs"), "button", "Save").every((b) => b.hidden), "Save is hidden while the refusal stands");
+  assert.strictEqual(byText(blockOf(t, "runs"), "button", "Discard").length, 1);
+  assert.strictEqual(t.box.puts.length, 0);
+  // Back to the box: the refusal and the Save return.
+  const box = field(t, "tier-box");
+  box.checked = true;
+  box.onchange();
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-refuse").length, 0);
+  assert.ok(byText(blockOf(t, "runs"), "button", "Save").every((b) => !b.hidden));
+});
+
+test("Runs in to On this machine saves through the same pipeline; a refusal from the server shows in words in the block it names", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": tokens[0]: requires runtime: box', field: "tokens[0]" });
+  await clickBtn(blockOf(t, "runs"), "Save");
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+  const cloud = blockOf(t, "cloud");
+  assert.ok(cloud.className.includes("pfv-editing"), "the block the server named opens");
+  assert.ok(texts(cloud, "pfv-ferr").concat(texts(cloud, "pfv-top-err")).some((s) => /Set Runs in to Box/.test(s)));
+  assert.ok(!/tokens\[0\]|requires runtime/.test(t.els["pfv-in"].textContent));
+});
+
+test("the box consequence line shows on Runs in (box) and Network, not on Agent, nor on a host profile's Runs in", async () => {
+  const line = "Saving gives the next session a new box. Running sessions keep theirs.";
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-fnote"), [line]);
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-fnote"), [], "choosing host: the next session is not a box");
+  clickBtn(blockOf(t, "runs"), "Discard");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-fnote"), []);
+  clickBtn(blockOf(t, "agent"), "Cancel");
+  clickBtn(blockOf(t, "network"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-fnote"), [line]);
+
+  const h = page();
+  await h.box.pfvShow("runbook-host");
+  clickBtn(blockOf(h, "runs"), "Edit");
+  assert.deepStrictEqual(texts(blockOf(h, "runs"), "pfv-fnote"), []);
+});
+
+test("Network edit is one switch with its consequence; it saves egress_open", async () => {
+  const t = page();
+  // The list refetch after a save reports the posture of what was saved, as the daemon does.
+  t.box.loadProfiles = async () => {
+    t.box.profiles = t.box.profiles.map((p) => (p.name === "aws-ops" && t.box.docs["aws-ops"] ? Object.assign({}, p, { network: t.box.docs["aws-ops"].egress_open ? "open" : "allowlist" }) : p));
+    return true;
+  };
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "network"), "Edit");
+  const net = blockOf(t, "network");
+  assert.deepStrictEqual(texts(net, "pfv-flabel"), []);
+  assert.match(net.textContent, /Allow all internet hosts \(no allowlist\)/);
+  assert.match(net.textContent, /Private, tailnet and host addresses stay blocked either way\./);
+  assert.strictEqual(byCls(net, "pfv-consq").length, 0, "no consequence until it is on");
+  const sw = field(t, "egress_open");
+  assert.strictEqual(sw.checked, false);
+  sw.checked = true;
+  sw.onchange();
+  assert.deepStrictEqual(texts(blockOf(t, "network"), "pfv-consq"), ["The agent could then send this profile's credentials to any website. Every host it contacts is logged in Activity."]);
+  await clickBtn(blockOf(t, "network"), "Save");
+  assert.strictEqual(t.box.puts[0].egress_open, true);
+  assert.match(texts(blockOf(t, "network"), "pfv-sub").join(" "), /All internet hosts/);
+  // Turning it off removes the key.
+  clickBtn(blockOf(t, "network"), "Edit");
+  const off = field(t, "egress_open");
+  assert.strictEqual(off.checked, true);
+  off.checked = false;
+  off.onchange();
+  await clickBtn(blockOf(t, "network"), "Save");
+  assert.ok(!("egress_open" in t.box.puts[1]));
+});
+
+test("changing the agent to another command drops the options it does not take, and hides their fields", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const bin = field(t, "bin");
+  bin.value = "bash";
+  bin.onchange();
+  assert.strictEqual(field(t, "options.model"), undefined);
+  assert.strictEqual(field(t, "options.effort"), undefined);
+  assert.strictEqual(field(t, "account"), undefined, "a login is Claude's");
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.strictEqual(t.box.puts[0].bin, "bash");
+  assert.ok(!("options" in t.box.puts[0]), "the server refuses a Claude-only option on bash");
+});
+
+test("an agent command that is neither claude nor bash opens as Other command, with its text kept", async () => {
+  const t = page();
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { bin: "/opt/agents/claude" });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  assert.strictEqual(field(t, "bin").value, "__other__");
+  assert.strictEqual(field(t, "bin-text").value, "/opt/agents/claude");
+  assert.ok(field(t, "options.model"), "its basename is claude: the Claude options still apply");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  const txt = field(t, "bin-text");
+  txt.value = "";
+  txt.oninput();
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.strictEqual(t.box.puts.length, 0, "an empty command is not sent");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-ferr"), ["A command is required."]);
+});
+
+test("the login choice: default and the saved accounts; the default is stored as no account", async () => {
+  const t = page();
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { account: "work" });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const acct = field(t, "account");
+  assert.deepStrictEqual(acct.children.map((o) => o.value), ["", "work"]);
+  assert.strictEqual(acct.value, "work");
+  acct.value = "";
+  acct.onchange();
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.ok(!("account" in t.box.puts[0]));
+});
+
+test("a GitHub binding with no permission ticked is refused before the PUT, with the sentence", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  // The Cloud editor is a later task; the pipeline already checks what it will hand over.
+  t.run('pfvState.edits.cloud = { id: "cloud", values: { github: { owners: [{ owner: "culiops", app: "x" }], permissions: {} } }, init: "{}", ferrs: [], nodes: null }; pfvState.openBlock = "cloud"');
+  assert.strictEqual(await t.box.pfvSaveBlock("cloud"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(t.run("pfvState.edits.cloud.ferrs").map((e) => e.text))), ["GitHub: tick at least one permission, or the agent gets none."]);
+});
+
+test("a save that succeeds but returns warnings shows them in words", async () => {
+  const t = page();
+  t.box.putReply = { warnings: ["egress_allow and egress_open apply only to a profile with a credential binding; without one the box already reaches any public host"] };
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "network"), "Edit");
+  const sw = field(t, "egress_open");
+  sw.checked = true;
+  sw.onchange();
+  await clickBtn(blockOf(t, "network"), "Save");
+  const w = texts(t.els["pfv-in"], "pfv-warn");
+  assert.strictEqual(w.length, 1);
+  assert.ok(!/egress_/.test(w[0]));
+  assert.match(w[0], /^Network settings apply only to a profile that holds cloud access or a token/);
+});
+
+test("a save whose reload fails still says it saved, and the next save is refused as stale instead of overwriting", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.getFail = apiErr(500, { error: "boom" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-err"), ["Saved, but reloading it failed: boom"]);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(t.run("pfvState").pending, false);
+});
+
+test("a save for a profile you have left does not draw over the one on screen", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (o && o.method === "PUT") await new Promise((r) => { release = r; }); return real(p, o); };
+  const saving = clickBtn(blockOf(t, "agent"), "Save");
+  await settle();
+  await t.box.pfvShow("runbook-host");
+  release();
+  await saving;
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-saved").length, 0);
+});
+
+test("a read-only profile has no Edit to open, and pfvOpenBlock refuses it", async () => {
+  const t = page();
+  await t.box.pfvShow("claude");
+  assert.strictEqual(t.box.pfvOpenBlock("agent"), false);
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+});
+
+test("Show scrolls to the open block that has changes", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  let scrolled = null;
+  blockOf(t, "agent").scrollIntoView = (o) => { scrolled = o; };
+  clickBtn(byCls(t.els["pfv-in"], "pfv-unsaved")[0], "Show");
+  assert.strictEqual(JSON.stringify(scrolled), '{"block":"nearest"}');
+});
+
+test("picking an effort keeps focus on the lit button after the form redraws", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const xhigh = byText(field(t, "options.effort"), "button", "xhigh")[0];
+  xhigh.focus();
+  xhigh.click();
+  assert.strictEqual(field(t, "options.effort").dataset.value, "xhigh");
+  assert.strictEqual(Node.focused.textContent, "xhigh");
+  assert.ok(blockOf(t, "agent").contains(Node.focused), "a button of the new form, not of the one that was replaced");
+  assert.strictEqual(t.run("pfvState").pending, true);
 });

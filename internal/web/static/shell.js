@@ -473,6 +473,9 @@ function askDialog(opts) {
   document.getElementById("ask-title").textContent = opts.title || "";
   document.getElementById("ask-body").textContent = opts.body || "";
   ok.textContent = opts.confirmLabel || "OK";
+  // Cancel is reset on every ask, so a label one question gave (the profile page's
+  // "Keep editing") never leaks into the next.
+  document.getElementById("ask-cancel").textContent = opts.cancelLabel || "Cancel";
   const alt = document.getElementById("ask-alt");
   alt.hidden = !askAltVisible(opts.altLabel);
   alt.textContent = opts.altLabel || "";

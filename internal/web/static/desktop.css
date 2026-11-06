@@ -1792,6 +1792,76 @@
   #page-host > #settings-modal.as-page #pfv .pfv-dl dt { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
 
+  /* --- Editing one block (spec 5.5, 5.6) ------------------------------------------ */
+  /* The open block is raised (--raise), its Edit link is gone, and its body spans to the right edge. Look source:
+     profile-mockups/option-b/index.html (.block.editing, .fields, .opt-card, .b-foot) and the b-err / b-err2 shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-editing { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:only-child { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nudge { box-shadow: inset 0 0 0 1px var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-top:empty { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: 12.5px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-form { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: 12.5px; font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: 12px; color: var(--red); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 13px var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--faint); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
+  #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: 12px; }
+  /* Where it runs: two cards, the lit one outlined. */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-choice .pfv-flabel { margin-bottom: 3px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-on { border-color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
+  #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 11.5px/1 var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-okdot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: 12.5px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: 12.5px; }
+  /* Network: one switch, its consequence under it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: 12.5px; }
+  /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
+  #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-dirty { display: inline-flex; align-items: center; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-nudge { color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-fbtns { display: flex; flex: none; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
+  /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved .pfv-link { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved-ic { flex: none; color: var(--ok); }
+  #page-host > #settings-modal.as-page #pfv .pfv-warn { margin-bottom: 16px; font-size: 12.5px; color: var(--muted); }
+
   /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
   @container (max-width: 863px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
