@@ -103,13 +103,20 @@ function pfwText(area, id) {
   return e;
 }
 
-// pfwFolderField: the folder and its picker. The error key is the folder's own: clone_of when the
-// folder is the one to copy, default_cwd when the agent works in it.
-function pfwFolderField(rec, c, copy) {
+// pfwFolderBox: a folder control, the one every place that asks for a folder on the profile page builds (the Workspace block
+// here, the New profile and Duplicate page in pfv-new.js): the input and its dropdown, the shared picker (wspicker.js) on them,
+// and the field around them. rec.values.folder is the folder it starts with; o: {errKey, label, hint, placeholder, onPick}:
+// the key a refusal for it is drawn under, its label, the lines under it, a placeholder for an empty field, and what a pick, a
+// resolved or typed path or an emptied field does. The picker belongs to the form's nodes: it is on the record while the form
+// stands (rec.ui.folderPicker: the page's Esc layering asks whether its dropdown is open, pfvEscTarget) and released with the
+// record's disposers, so the wiring is in this one place. rec.ui.typed is text a refused Save left in the field;
+// rec.ui.clearFolder() takes the refusal away.
+function pfwFolderBox(rec, o) {
   const v = rec.values;
   const ui = rec.ui;
   const input = pfwText(false, "pfv-f" + ++pfvUid);
   input.type = "text";
+  if (o.placeholder) input.setAttribute("placeholder", o.placeholder);
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-expanded", "false");
   input.setAttribute("aria-autocomplete", "list");
@@ -129,23 +136,31 @@ function pfwFolderField(rec, c, copy) {
     reanchor: true,
     // Opening the block puts focus here; the dropdown is for the user to ask for.
     openOnFocus: () => !ui.quiet,
-    onPick: (path) => pfwFolderChanged(rec, path),
+    onPick: o.onPick,
     // The steady-state caption ("N project roots...") is for a dialog with room to spare; a problem is not.
     onNote: (text, idle) => { note.textContent = idle ? "" : text; note.hidden = idle || !text; },
   });
-  // The page's Esc layering asks whether the dropdown is open (pfvEscTarget): the picker is on the record while this form stands.
   ui.folderPicker = picker;
   rec.disposers.push(() => { if (ui.folderPicker === picker) ui.folderPicker = null; picker.destroy(); });
   picker.set(v.folder);
   // Text left over from a Save that refused it is still there to fix.
   if (ui.typed !== undefined) input.value = ui.typed;
   pfvReg(rec, "folder", input);
-  const box = pfvFieldBox(rec, copy ? "clone_of" : "default_cwd", copy ? "Folder to copy" : "Folder", input, [c.tier === "host" ? PFW_HINT_HOST : PFW_HINT_BOX]);
+  const box = pfvFieldBox(rec, o.errKey, o.label, input, o.hint);
   input.addEventListener("input", () => { ui.typed = undefined; box.clear(); pfvPaint(); });
   box.append(note, list);
   ui.folderInput = input;
   ui.clearFolder = () => box.clear();
   return box;
+}
+
+// pfwFolderField: the Workspace block's folder. The error key is the folder's own: clone_of when the folder is the one to copy,
+// default_cwd when the agent works in it.
+function pfwFolderField(rec, c, copy) {
+  return pfwFolderBox(rec, {
+    errKey: copy ? "clone_of" : "default_cwd", label: copy ? "Folder to copy" : "Folder", hint: [c.tier === "host" ? PFW_HINT_HOST : PFW_HINT_BOX],
+    onPick: (path) => pfwFolderChanged(rec, path),
+  });
 }
 
 // pfwModeField: the two ways of working on the folder, as cards.

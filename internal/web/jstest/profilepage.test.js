@@ -3999,7 +3999,10 @@ test("Create copy writes every binding under the typed name and the copy's overv
   assert.strictEqual(t.run("pfvState").name, "aws-ops-copy");
   assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["aws-ops-copy"]);
   assert.deepStrictEqual(cloudNames(t), original, "the copy lists the same cloud rows");
+  // The status line, and no next steps: a copy already has what it needs (R59; the steps are New profile's, b-created).
   assert.deepStrictEqual(texts(rootOf(t), "pfv-next-p"), ["Profile created. It can start sessions now."]);
+  assert.strictEqual(byCls(rootOf(t), "pfv-next-btn").length, 0);
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-next-h"), []);
 });
 
 test("a taken name is refused under Name on a copy as well", async () => {
@@ -4139,4 +4142,132 @@ test("app.js gives the desktop page's New profile and Duplicate entry points the
   assert.ok(dup.indexOf("profilePageHolds(") < dup.indexOf("pfvDuplicate()"));
   assert.match(dup, /pfvOnPage\(\)[^\n]*pfvDuplicate\(\); return;/);
   assert.ok(dup.indexOf("pfvDuplicate()") < dup.indexOf("selectedProfileName()") && dup.indexOf("pfvDuplicate()") < dup.indexOf("duplicateDraft("), "the old draft is the phone's");
+});
+
+
+// --- fix round 1 ---------------------------------------------------------------------------------------------------------
+
+// Every refusal Create can get lands where the user can see it: under the control it names, else at the top of the page.
+test("every refusal of Create or Create copy is visible: under its field, else at the top", async () => {
+  const draw = (t) => ({ top: texts(rootOf(t), "pfv-err"), name: nameErr(t), ws: field(t, "folder") ? wsErr(t) : [] });
+  const cases = [
+    // [how the server answers, where it must land, the words]
+    [apiErr(400, { error: 'profile "x": default_cwd must be an absolute path', field: "default_cwd" }), "ws", "Use a full path that starts with /"],
+    [apiErr(400, { error: "profile requires a name and bin", field: "name" }), "name", "profile requires a name and bin"],
+    [apiErr(400, { error: 'profile "x": aws_connections[0] "gone" is not defined in aws_connections', field: "aws_connections[0]" }), "top", "Not found in Credentials. Remove it or create it."],
+    [apiErr(400, { error: "something with no field" }), "top", "something with no field"],
+    [apiErr(409, { error: "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved", code: "page_outdated" }), "top", "CuliBox was updated since this page was loaded; reload the page, then save again; nothing was saved"],
+    [new Error("boom"), "top", "Could not save this profile."],
+  ];
+  for (const [fail, where, words] of cases) {
+    const t = await newPage();
+    typeName(t, "refused");
+    t.box.postFail = fail;
+    await btn(t, "Create profile").click();
+    const at = draw(t);
+    const seen = where === "top" ? at.top : where === "name" ? at.name : at.ws;
+    assert.deepStrictEqual(seen, [words], words);
+    assert.strictEqual(t.run("pfvState").page, "new", "the page and what was typed stay");
+    assert.strictEqual(field(t, "name").value, "refused");
+  }
+});
+
+test("a refusal of the copy's own folder on Create copy of a private copy is said at the top, not swallowed", async () => {
+  // The Workspace control of a private copy is the folder to copy (clone_of); the copy's folder (default_cwd) has no control here.
+  for (const [fail, where, words] of [
+    [apiErr(400, { error: 'profile "gitops-2": clone_of requires default_cwd', field: "default_cwd" }), "top", 'clone_of requires default_cwd'],
+    [apiErr(400, { error: 'profile "gitops-2": default_cwd must be an absolute path', field: "default_cwd" }), "top", "Use a full path that starts with /"],
+    [apiErr(400, { error: 'profile "gitops-2": clone_of must be an absolute path', field: "clone_of" }), "ws", "Use a full path that starts with /"],
+  ]) {
+    const t = clonePage();
+    await t.box.pfvShow("gitops-clone");
+    await dupFromMenu(t);
+    typeName(t, "gitops-2");
+    t.box.postFail = fail;
+    await btn(t, "Create copy").click();
+    assert.strictEqual(t.box.posts.length, 1, "it was sent: the refusal is the server's");
+    assert.deepStrictEqual(where === "top" ? texts(rootOf(t), "pfv-err") : wsErr(t), [words]);
+    assert.strictEqual(t.run("pfvState").page, "dup");
+  }
+});
+
+test("Create copy of a private copy with its folder emptied is refused under Workspace, before anything is sent", async () => {
+  const t = clonePage();
+  await t.box.pfvShow("gitops-clone");
+  await dupFromMenu(t);
+  typeName(t, "gitops-2");
+  lastPicker(t).type("");
+  await btn(t, "Create copy").click();
+  assert.deepStrictEqual(wsErr(t), ["Private copy: pick the folder to copy."]);
+  assert.deepStrictEqual(POSTS(t), []);
+});
+
+test("the folder picker and the tier cards are built in one place each, for Workspace, Runs in, New profile and Duplicate", () => {
+  const files = fs.readdirSync(STATIC).filter((f) => /^(profilepage|pfv-[a-z]+)\.js$/.test(f));
+  // The code, not the comments that name it.
+  const code = (f) => fs.readFileSync(path.join(STATIC, f), "utf8").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  const count = (re) => files.map((f) => [f, (code(f).match(re) || []).length]).filter(([, n]) => n > 0);
+  assert.deepStrictEqual(count(/createWsPicker\(/g), [["pfv-workspace.js", 1]], "one picker construction (its Esc and release wiring included)");
+  assert.deepStrictEqual(count(/A container\. It writes only to its workspace/g), [["profilepage.js", 1]]);
+  assert.deepStrictEqual(count(/Runs as you, with your files, your network and your credentials/g), [["profilepage.js", 1]]);
+  assert.deepStrictEqual(count(/Docker found/g), [["profilepage.js", 1]]);
+});
+
+test("opening the page with no profile to show is the New profile page, not a blank pane", async () => {
+  const t = page({ profiles: [] });
+  await t.box.pfvShow();
+  assert.strictEqual(t.run("pfvState").page, "new");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+  assert.strictEqual(byText(rootOf(t), "button", "Cancel").length, 0, "nothing to go back to");
+  // The Profiles tab selected again leaves it as it is.
+  typeName(t, "half");
+  await t.box.pfvShow();
+  assert.strictEqual(field(t, "name").value, "half");
+  // Not while a profile can be shown.
+  const u = page();
+  await u.box.pfvShow();
+  assert.strictEqual(u.run("pfvState").page, "");
+  assert.strictEqual(u.run("pfvState").name, "aws-ops", "the first one you own");
+});
+
+test("no Docker: a copy of a box profile keeps Box selectable with the reason under it, and host stays a choice", async () => {
+  const t = page(NO_DOCKER);
+  await t.box.pfvShow("aws-ops");
+  await dupFromMenu(t);
+  const box = field(t, "tier-box");
+  assert.strictEqual(box.checked, true, "the copy's tier is the source's");
+  assert.strictEqual(box.disabled, false, "a copy of a box profile may stay one");
+  assert.ok(texts(rootOf(t), "pfv-card-d").includes("Boxes are unavailable on this machine: Docker is not installed."));
+  assert.ok(!texts(rootOf(t), "pfv-card-d").includes("Docker found"));
+  assert.strictEqual(field(t, "tier-host").disabled, false);
+  // It can be created as the box profile it copies, and the page does not promise sessions.
+  typeName(t, "aws-box-copy");
+  await btn(t, "Create copy").click();
+  assert.strictEqual(t.box.posts[0].runtime, "box");
+  assert.deepStrictEqual(texts(rootOf(t), "pfv-next-p"), ["Profile created."]);
+  // And the user can choose On this machine, then Box again.
+  const u = page(NO_DOCKER);
+  await u.box.pfvShow("aws-ops");
+  await dupFromMenu(u);
+  pickTier(u, "host");
+  assert.strictEqual(field(u, "tier-host").checked, true);
+  assert.strictEqual(field(u, "tier-box").disabled, false);
+  pickTier(u, "box");
+  assert.strictEqual(field(u, "tier-box").checked, true);
+  // A host profile's copy on this machine has no Box to choose: as for New profile.
+  const h = page(NO_DOCKER);
+  await h.box.pfvShow("runbook-host");
+  await dupFromMenu(h);
+  assert.strictEqual(field(h, "tier-host").checked, true);
+  assert.strictEqual(field(h, "tier-box").disabled, true);
+});
+
+test("after Duplicate -> + New profile, Cancel goes back to the profile the copy was made from", async () => {
+  const t = page();
+  await t.box.pfvShow("infra-terraform");
+  await dupFromMenu(t);
+  await navAdd(t).click();
+  assert.strictEqual(t.run("pfvState").page, "new");
+  await btn(t, "Cancel").click();
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform", "not the first profile you own");
 });

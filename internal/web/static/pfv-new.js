@@ -36,6 +36,8 @@ const PFN_DUP_NOTE = "Nothing is saved until you click Create copy.";
 const pfnHome = () => (typeof window !== "undefined" && window.HOME_DIR) || "";
 const pfnTaken = () => (typeof profiles !== "undefined" && Array.isArray(profiles) ? profiles : []).map((p) => p.default_cwd).filter(Boolean);
 const pfnIsCopy = (doc) => !!doc && typeof doc.clone_of === "string" && doc.clone_of !== "";
+// The profile field the Workspace control is: the folder to copy for a private copy, else the folder it works in.
+const pfnFolderKey = (copy) => (copy ? "clone_of" : "default_cwd");
 
 // --- the record ----------------------------------------------------------------------------------------------------
 
@@ -124,31 +126,20 @@ function pfnNameField(rec, src) {
   return box;
 }
 
-// pfnTierField: where it runs, the two cards of the Runs in block. With no box layer the Box card is off and says why (the
-// reason is /api/meta's, in the read view's words); a private copy has no host card, and its absence is said in a sentence.
+// pfnTierField: where it runs, the two cards of the Runs in block (pfvTierCards). With no box layer the Box card is off and says why
+// (the reason is /api/meta's, in the read view's words), as it is for a profile that starts as host. A copy of a box profile
+// keeps its Box: the card stays selectable, with that line under it as the read view shows it for a box profile. A private copy
+// has no host card, and its absence is said in a sentence.
 function pfnTierField(rec, c, copy) {
   const v = rec.values;
-  const pick = (tier) => () => { v.tier = tier; pfnChanged(rec, "runtime"); };
-  const boxLine = pfvMk("span", "pfv-card-d");
-  if (c.boxAvailable) boxLine.append(pfvMk("span", "pfv-okdot"), "Docker found");
-  else boxLine.append(pfvUnavailable(c.reason).line);
+  const cards = pfvTierCards(rec, c, {
+    tier: v.tier, group: "pfn_tier", host: !copy, boxOff: !c.boxAvailable && v.dflt !== "box",
+    pick: (tier) => { v.tier = tier; pfnChanged(rec, "runtime"); },
+  });
   const fs = pfvMk("fieldset", "pfv-field pfv-choice");
-  fs.append(
-    pfvMk("legend", "pfv-flabel", "Where it runs"),
-    pfvCard(rec, "tier-box", {
-      group: "pfn_tier", checked: v.tier === "box", disabled: !c.boxAvailable, title: "In a box", chip: "Recommended", pick: pick("box"),
-      lines: [pfvMk("span", "pfv-card-d", "A container. It writes only to its workspace, and CuliBox scopes AWS, GitHub and tokens."), boxLine],
-    }),
-  );
-  if (copy) {
-    fs.append(pfvMk("p", "pfv-hint", PFN_COPY_NEEDS_BOX));
-  } else {
-    fs.append(pfvCard(rec, "tier-host", {
-      group: "pfn_tier", checked: v.tier === "host", disabled: false, title: "On this machine", chip: "", pick: pick("host"),
-      lines: [pfvMk("span", "pfv-card-d", "Runs as you, with your files, your network and your credentials.")],
-    }));
-    if (v.tier === "host") fs.append(pfvMk("p", "pfv-hint", PFN_HOST_HOLDS));
-  }
+  fs.append(pfvMk("legend", "pfv-flabel", "Where it runs"), ...cards);
+  if (copy) fs.append(pfvMk("p", "pfv-hint", PFN_COPY_NEEDS_BOX));
+  else if (v.tier === "host") fs.append(pfvMk("p", "pfv-hint", PFN_HOST_HOLDS));
   return fs;
 }
 
@@ -159,50 +150,14 @@ function pfnFolderHint(src, copy) {
   return src.doc.default_cwd ? "Copied from " + src.name + ". In a box, the only place it can write." : PFN_FOLDER_HINT;
 }
 
-// pfnFolderField: the folder and its picker, the same factory as the Workspace block's. The picker belongs to the page's nodes:
-// the record releases it when the page is drawn again or goes (rec.disposers), and pfvEscTarget finds it on rec.ui.
+// pfnFolderField: Workspace, the Workspace block's folder control (pfwFolderBox: the same picker, Esc wiring and release). The error key
+// is the control's own: clone_of for a private copy, whose Workspace is the folder it copies.
 function pfnFolderField(rec, src, copy) {
   const v = rec.values;
-  const ui = rec.ui;
-  const input = pfvMk("input", "pfv-ctl pfv-ctl-mono");
-  input.type = "text";
-  input.id = "pfv-f" + ++pfvUid;
-  input.setAttribute("autocomplete", "off");
-  input.setAttribute("spellcheck", "false");
-  input.setAttribute("placeholder", PFN_FOLDER_PLACEHOLDER);
-  input.setAttribute("role", "combobox");
-  input.setAttribute("aria-expanded", "false");
-  input.setAttribute("aria-autocomplete", "list");
-  const list = pfvMk("div", "pfv-wslist");
-  list.id = input.id + "-list";
-  list.setAttribute("role", "listbox");
-  list.setAttribute("aria-label", "Directories");
-  list.hidden = true;
-  input.setAttribute("aria-controls", list.id);
-  const note = pfvMk("p", "pfv-wsnote");
-  note.hidden = true;
-  const picker = createWsPicker({
-    input, list,
-    // An Esc that closes the list is not the page's to act on.
-    keepEsc: true,
-    // The list is position: fixed and this page scrolls under it.
-    reanchor: true,
-    // Opening the page puts focus in Name; the dropdown is for the user to ask for.
-    openOnFocus: () => !ui.quiet,
-    onPick: (path) => { v.folder = path; ui.typed = undefined; box.clear(); pfvPaint(); },
-    onNote: (text, idle) => { note.textContent = idle ? "" : text; note.hidden = idle || !text; },
+  return pfwFolderBox(rec, {
+    errKey: pfnFolderKey(copy), label: "Workspace", hint: [pfnFolderHint(src, copy)], placeholder: PFN_FOLDER_PLACEHOLDER,
+    onPick: (path) => { v.folder = path; rec.ui.typed = undefined; rec.ui.clearFolder(); pfvPaint(); },
   });
-  ui.folderPicker = picker;
-  rec.disposers.push(() => { if (ui.folderPicker === picker) ui.folderPicker = null; picker.destroy(); });
-  picker.set(v.folder);
-  // Text left over from a Create that refused it is still there to fix.
-  if (ui.typed !== undefined) input.value = ui.typed;
-  pfvReg(rec, "folder", input);
-  const box = pfvFieldBox(rec, copy ? "clone_of" : "default_cwd", "Workspace", input, [pfnFolderHint(src, copy)]);
-  input.addEventListener("input", () => { ui.typed = undefined; box.clear(); pfvPaint(); });
-  box.append(note, list);
-  ui.folderInput = input;
-  return box;
 }
 
 // pfnHasBack: Cancel has somewhere to go: the profile this was started from, or any profile at all.
@@ -272,7 +227,9 @@ function pfnDraw(rec, c) {
   const src = dup ? pfvState.src : null;
   const copy = dup && pfnIsCopy(src.doc);
 
-  const kids = [...pfvDrawErrors()];
+  const errors = pfvDrawErrors();
+  rec.ui.errNode = errors[0] || null;
+  const kids = [...errors];
   const head = pfvMk("div", "pfv-head");
   const main = pfvMk("div", "pfv-head-main");
   const title = pfvMk("div", "pfv-title");
@@ -317,7 +274,7 @@ function pfnCheck(rec, name, copy) {
   if (name === "") return { field: "name", text: PFN_NO_NAME };
   const taken = saveTarget("", name, (typeof profiles !== "undefined" && Array.isArray(profiles) ? profiles : []).map((p) => p.name));
   if (taken.error) return { field: "name", text: taken.error };
-  const field = copy ? "clone_of" : "default_cwd";
+  const field = pfnFolderKey(copy);
   const ui = rec.ui;
   if (ui.folderInput && ui.folderInput.value.trim() !== v.folder) {
     ui.typed = ui.folderInput.value;
@@ -328,16 +285,21 @@ function pfnCheck(rec, name, copy) {
   return null;
 }
 
-// pfnRefuse: show a refusal on the page, with everything typed kept: under Name or Workspace when it is about one of them,
-// else at the top. The control it is under takes focus.
-function pfnRefuse(rec, bad) {
-  rec.ferrs = bad ? [bad] : [];
-  if (bad && bad.field !== "name" && bad.field !== "default_cwd" && bad.field !== "clone_of") {
-    pfvState.errors = [bad.text];
-    rec.ferrs = [];
-  }
+// pfnRefuse: show a refusal on the page, with everything typed kept. One about Name or about the Workspace control (its own key: the
+// folder to copy for a private copy) goes under that control and takes its focus; every other, the copy's own folder (a private
+// copy has no control for it) and any the server words without a field included, is said at the top of the page and brought into
+// view, so the click is never left looking dead.
+function pfnRefuse(rec, bad, copy) {
+  const mine = pfvFieldIs(bad.field, "name") || pfvFieldIs(bad.field, pfnFolderKey(copy));
+  rec.ferrs = mine ? [bad] : [];
+  pfvState.errors = mine ? [] : [bad.text];
   pfnRedraw(rec);
-  pfvFocusInvalid(rec);
+  if (mine) {
+    pfvFocusInvalid(rec);
+    return;
+  }
+  const at = rec.ui.errNode;
+  if (at && typeof at.scrollIntoView === "function") at.scrollIntoView({ block: "nearest" });
 }
 
 // pfnCreate: Create profile / Create copy. Resolves true when the profile was written.
@@ -351,7 +313,7 @@ async function pfnCreate(rec) {
   pfvState.errors = [];
   const bad = pfnCheck(rec, name, copy);
   if (bad) {
-    pfnRefuse(rec, bad);
+    pfnRefuse(rec, bad, copy);
     return false;
   }
   rec.ferrs = [];
@@ -376,11 +338,11 @@ async function pfnCreate(rec) {
     if (taken) await loadProfiles(false);
     if (pfvState.edits.draft !== rec) return false;
     if (taken) {
-      pfnRefuse(rec, { field: "name", text: saveTarget("", name, [name]).error });
+      pfnRefuse(rec, { field: "name", text: saveTarget("", name, [name]).error }, copy);
       return false;
     }
     const r = pfvSaveError(e && typeof e.status === "number" ? e.status : 0, e && e.body && typeof e.body === "object" ? e.body : null);
-    pfnRefuse(rec, { field: r.kind === "field" ? r.field : "", text: r.text });
+    pfnRefuse(rec, { field: r.kind === "field" ? r.field : "", text: r.text }, copy);
     return false;
   } finally {
     rec.ui.creating = false;
@@ -392,6 +354,7 @@ async function pfnCreate(rec) {
   pfvState.page = "";
   pfvState.src = null;
   pfvState.created = name;
+  pfvState.createdBy = src ? "dup" : "new";
   await pfvShow(name);
   if (warnings.length && pfvState.name === name) {
     pfvState.warnings = warnings;
@@ -403,11 +366,11 @@ async function pfnCreate(rec) {
 // --- the entry points ------------------------------------------------------------------------------------------------
 
 // pfnOpen: show the page. The way out of whatever was on screen has been asked about (pfvLeaving) by now; an older
-// pfvShow that is still loading must not draw over this (pfvPageGen), nor an older fetch (pfvSeq).
-function pfnOpen(kind, src) {
+// pfvShow that is still loading must not draw over this (pfvPageGen), nor an older fetch (pfvSeq). back is where Cancel goes,
+// read before that way out ended what was on screen.
+function pfnOpen(kind, src, back) {
   pfvPageGen++;
   pfvSeq++;
-  const back = kind === "dup" ? src.name : pfvState.name || (pfvState.page ? pfvState.back : "");
   pfvDropEdits();
   pfvClearSaved();
   Object.assign(pfvState, { page: kind, src, back, name: "", doc: null, view: null, errors: [], warnings: [], created: "", advOpen: null });
@@ -427,9 +390,11 @@ async function pfvNew() {
     pfvFocusBlock("draft");
     return true;
   }
+  // The profile this was started from: the one on screen, or the one the copy page was made from.
+  const back = pfvState.name || (pfvState.page ? pfvState.back : "");
   const go = pfvLeaving();
   if (go !== true && !(await go)) return false;
-  return pfnOpen("new", null);
+  return pfnOpen("new", null, back);
 }
 
 // pfvDuplicate: Duplicate: the New profile page filled in from the profile on screen. A config.json profile copies the same way:
@@ -452,25 +417,27 @@ async function pfvDuplicate() {
   const view = (typeof profiles !== "undefined" && Array.isArray(profiles) ? profiles : []).find((p) => p.name === from);
   // The user went somewhere else meanwhile, or the profile is gone: nothing to copy.
   if (!view || pfvState.name !== from) return false;
-  return pfnOpen("dup", { name: from, doc: JSON.parse(JSON.stringify(doc)), view: Object.assign({}, view) });
+  return pfnOpen("dup", { name: from, doc: JSON.parse(JSON.stringify(doc)), view: Object.assign({}, view) }, from);
 }
 
 pfvRegisterEditor("draft", { values: pfnValues, settled: pfnSettled, draw: pfnDraw, refresh: pfnRefresh });
 
 // --- the created state ------------------------------------------------------------------------------------------------
 
-// pfvNextSteps: under the header of a profile that was just created: it can start sessions, and what it may need next, each a
-// button that opens what it says (cloud access and a folder with the "+ Add" choice open). A host profile has no cloud and no
-// folder to add, so only its model is offered. rv is the read model of the page.
+// pfvNextSteps: under the header of a profile that was just created: it can start sessions (not on a machine with no Docker, for a
+// profile in a box). After New profile, and what it may need next, each a button that opens what it says (cloud access and a
+// folder with the "+ Add" choice open); a host profile has no cloud and no folder to add, so only its model is offered. After
+// Create copy, only the status line: the copy already has what its source had (spec 5.8, the b-created state is New profile's).
+// rv is the read model of the page.
 function pfvNextSteps(rv) {
   const host = rv.header.tier === "host";
   const wrap = pfvMk("div", "pfv-next");
   wrap.setAttribute("role", "status");
   const head = pfvMk("div", "pfv-next-head");
-  head.append(
-    pfvMk("p", "pfv-next-p", pfvEditCtx().boxAvailable || host ? "Profile created. It can start sessions now." : "Profile created."),
-    pfvMk("span", "pfv-next-h", "Next, if this agent needs them"),
-  );
+  head.append(pfvMk("p", "pfv-next-p", pfvEditCtx().boxAvailable || host ? "Profile created. It can start sessions now." : "Profile created."));
+  wrap.append(head);
+  if (pfvState.createdBy === "dup") return wrap;
+  head.append(pfvMk("span", "pfv-next-h", "Next, if this agent needs them"));
   const list = pfvMk("div", "pfv-next-list");
   const step = (title, text, go) => {
     const b = pfvMk("button", "pfv-next-btn");
@@ -482,6 +449,6 @@ function pfvNextSteps(rv) {
   if (!host) step("Add cloud access", "AWS, GitHub or a token", () => pfvOpenAdd("cloud"));
   step("Pick a model", "Claude Code's default until you do", () => pfvOpenBlock("agent"));
   if (!host) step("Add a folder it can read", "Read only, outside the workspace", () => pfvOpenAdd("reachable"));
-  wrap.append(head, list);
+  wrap.append(list);
   return wrap;
 }

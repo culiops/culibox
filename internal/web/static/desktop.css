@@ -1934,6 +1934,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-dup-note { font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-next { margin-bottom: 26px; padding: 16px 20px; background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-next-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; margin-bottom: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-head:last-child { margin-bottom: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-p { font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-h { font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-next-list { display: flex; flex-wrap: wrap; gap: 8px; }

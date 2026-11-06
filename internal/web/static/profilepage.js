@@ -32,10 +32,10 @@
 // rec.ui.picker. pfvEscTarget reads both, so Esc goes to the innermost open layer.
 // page: "new" or "dup" while the New profile page is on screen instead of a profile (pfv-new.js; then there is no name, doc
 // or view, and the page is the record edits.draft); src what a copy is made from, back the profile Cancel returns to,
-// created the profile whose "Profile created" next steps the overview shows.
+// created the profile whose "Profile created" line the overview shows (createdBy "new": with its next steps, "dup": the line only).
 const pfvState = {
   name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, drawer: false,
-  page: "", src: null, back: "", created: "",
+  page: "", src: null, back: "", created: "", createdBy: "",
   get picker() {
     return Object.keys(this.edits).find((i) => this.edits[i].ui && this.edits[i].ui.picker === true) || "";
   },
@@ -617,7 +617,15 @@ async function pfvShow(name) {
   pfvState.name = pick;
   pfvState.view = pick ? profiles.find((p) => p.name === pick) : null;
   pfvRenderNav();
-  if (!pick) { pfvState.doc = null; pfvRender(); return; }
+  if (!pick) {
+    // Nothing to show (no profile at all): the way on is a new profile, not a blank pane. Whatever page was up goes with its record.
+    pfvState.doc = null;
+    pfvDropEdits();
+    pfvState.page = "";
+    pfvState.src = null;
+    await pfvNew();
+    return;
+  }
   if (!pfvState.doc) pfvRender();
   let doc;
   try { doc = await api("/api/profiles/" + encodeURIComponent(pick)); }
@@ -661,10 +669,8 @@ async function pfvMoveOn(name, order) {
   pfvRenderNav();
   await loadProfiles(false);
   if (!onIt || pfvState.name !== "") return;
-  const next = pfvNextAfter(order, name);
-  // Nothing left to show: the way on is a new profile (pfv-new.js), not a blank pane.
-  if (!next && profiles.length === 0) await pfvNew();
-  else await pfvShow(next || "");
+  // pfvShow opens the New profile page (pfv-new.js) when there is nothing left to show.
+  await pfvShow(pfvNextAfter(order, name) || "");
 }
 
 // pfvDelete: confirm in red, delete, then show the next profile in list order.
@@ -1517,24 +1523,35 @@ function pfvCard(rec, key, o) {
   return lab;
 }
 
-function pfvRunsForm(rec, c) {
-  const v = rec.values;
-  const pick = (tier) => () => { v.tier = tier; pfvChanged(rec, "runtime"); };
+// pfvTierCards: the two cards of "Where it runs", the one place their words are: In a box (Recommended, with "Docker found" or why
+// there are no boxes) and On this machine. Runs in (above) and the New profile and Duplicate page (pfv-new.js) draw them. o:
+// {tier, pick(tier), group, host, boxOff}: the lit tier, what choosing a card does, the radio group (a name apart from other
+// forms'), false for no host card, and whether the Box card is off (default: when there are no boxes). The cards are registered
+// on rec as tier-box and tier-host.
+function pfvTierCards(rec, c, o) {
   const boxLine = pfvMk("span", "pfv-card-d");
   if (c.boxAvailable) boxLine.append(pfvMk("span", "pfv-okdot"), "Docker found");
   else boxLine.append(pfvUnavailable(c.reason).line);
-  const box = pfvCard(rec, "tier-box", {
-    checked: v.tier === "box", disabled: !c.boxAvailable, title: "In a box", chip: "Recommended", pick: pick("box"),
+  const cards = [pfvCard(rec, "tier-box", {
+    group: o.group, checked: o.tier === "box", disabled: o.boxOff === undefined ? !c.boxAvailable : o.boxOff, title: "In a box", chip: "Recommended", pick: () => o.pick("box"),
     lines: [pfvMk("span", "pfv-card-d", "A container. It writes only to its workspace, and CuliBox scopes AWS, GitHub and tokens."), boxLine],
-  });
-  const host = pfvCard(rec, "tier-host", {
-    checked: v.tier === "host", disabled: false, title: "On this machine", chip: "", pick: pick("host"),
-    lines: [pfvMk("span", "pfv-card-d", "Runs as you, with your files, your network and your credentials.")],
-  });
+  })];
+  if (o.host !== false) {
+    cards.push(pfvCard(rec, "tier-host", {
+      group: o.group, checked: o.tier === "host", disabled: false, title: "On this machine", chip: "", pick: () => o.pick("host"),
+      lines: [pfvMk("span", "pfv-card-d", "Runs as you, with your files, your network and your credentials.")],
+    }));
+  }
+  return cards;
+}
+
+function pfvRunsForm(rec, c) {
+  const v = rec.values;
+  const cards = pfvTierCards(rec, c, { tier: v.tier, pick: (tier) => { v.tier = tier; pfvChanged(rec, "runtime"); } });
   // The control to focus on open: the one that is lit and can be used.
   rec.first = [rec.fields["tier-box"], rec.fields["tier-host"]].find((r) => r.checked && !r.disabled) || rec.fields["tier-host"];
   const fs = pfvMk("fieldset", "pfv-field pfv-choice");
-  fs.append(pfvMk("legend", "pfv-flabel", "Where it runs"), box, host);
+  fs.append(pfvMk("legend", "pfv-flabel", "Where it runs"), ...cards);
   const out = [fs];
   const err = pfvFerr(rec, "runtime");
   if (err) {
