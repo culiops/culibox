@@ -158,11 +158,11 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "profileview.js", "profileedit.js"]) {
+  for (const f of ["fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
-  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
@@ -218,8 +218,8 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   ]);
   assert.strictEqual(byText(root, "button", "+ Add access").length, 1);
   assert.strictEqual(byText(root, "button", "+ Add folder or domain").length, 1);
-  // Every block but Advanced edits now; the block whose editor is a later task is drawn but inert.
-  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, true, true, true, true, true, false]);
+  // Every block edits.
+  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, true, true, true, true, true, true]);
   assert.ok(byText(root, "button", "+ Add access")[0].onclick && byText(root, "button", "+ Add folder or domain")[0].onclick, "+ Add opens its block");
   // Rows come from reachModel: a PROD tag on the prod connection, the production tag on the token.
   const rows = byCls(root, "pfv-row");
@@ -605,7 +605,7 @@ test("clicking a nav row keeps its button and moves aria-current", async () => {
 // --- every class the page draws has a rule ------------------------------------------
 
 test("every pfv- class in the profile page scripts has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
-  const src = ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
+  const src = ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js", "pfv-advanced.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   const used = new Set();
   for (const m of src.matchAll(/"([^"\n]*)"/g)) {
@@ -2296,4 +2296,347 @@ test("Cloud and tokens and Also reachable register their editors through the sea
     assert.ok(t.run("PFV_EDITORS")[id], id + " registered itself");
     assert.throws(() => t.box.pfvRegisterEditor(id, {}), new RegExp("registered twice: " + id));
   }
+});
+
+// --- Advanced (spec 5.3, 5.5; pfv-advanced.js) -----------------------------------------------------------------------------
+
+const ENVROWS = require("../static/envrows.js");
+const advOf = (t) => blockOf(t, "advanced");
+const advLabels = (t) => texts(advOf(t), "pfv-flabel");
+// The refusals the user can see: a field's line is hidden, not removed, once its words are stale.
+const advErrs = (t) => byCls(advOf(t), "pfv-ferr").filter((n) => !n.hidden).map((n) => n.textContent);
+const openAdv = async (t, name, doc) => {
+  if (doc) t.box.docs[name] = Object.assign({}, DOCS[name], doc);
+  await t.box.pfvShow(name);
+  clickBtn(advOf(t), "Edit");
+  return advOf(t);
+};
+const typeArgs = (t, text) => { const a = field(t, "args"); a.value = text; a.oninput(); };
+const advTick = (t, key, on) => { const c = field(t, key); c.checked = on; c.onchange(); };
+const envRowsOf = (t) => byCls(advOf(t), "kvrow");
+const typeRow = (row, name, value) => {
+  const k = byCls(row, "k")[0];
+  k.value = name; k.oninput();
+  if (value !== undefined) { const v = byCls(row, "v")[0]; v.value = value; v.oninput(); }
+};
+
+test("advanced opens by itself when something is set", async () => {
+  // Nothing set: folded, with nothing to unfold; the Edit link opens the form all the same.
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(texts(advOf(t), "pfv-label")[0], "Advanced · none set");
+  assert.ok(!advOf(t).className.includes("pfv-open"));
+  assert.strictEqual(byCls(advOf(t), "pfv-fold").length, 0);
+  // Something set: open, listing it, and the form opened from the Edit link holds it.
+  const set = page();
+  set.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { args: ["--verbose"], env: { LOG_LEVEL: "debug" } });
+  await set.box.pfvShow("aws-ops");
+  assert.strictEqual(texts(advOf(set), "pfv-label")[0], "Advanced · 2 set");
+  assert.ok(advOf(set).className.includes("pfv-open"), "open without a click");
+  assert.strictEqual(byCls(advOf(set), "pfv-fold")[0].getAttribute("aria-expanded"), "true");
+  assert.deepStrictEqual(texts(advOf(set), "pfv-dl"), ["Arguments--verboseEnvironmentLOG_LEVEL"]);
+  clickBtn(advOf(set), "Edit");
+  assert.ok(advOf(set).className.includes("pfv-editing"));
+  assert.strictEqual(field(set, "args").value, "--verbose");
+  assert.deepStrictEqual(envRowsOf(set).map((r) => [byCls(r, "k")[0].value, byCls(r, "v")[0].value]), [["LOG_LEVEL", "debug"]]);
+  // The first setting saved from "none set" opens the fold by itself, with no click.
+  await openAdv(t, "aws-ops");
+  typeArgs(t, "--verbose");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(texts(advOf(t), "pfv-label")[0], "Advanced · 1 set");
+  assert.ok(advOf(t).className.includes("pfv-open"));
+  assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
+});
+
+test("base is not offered on a box profile and its stored value is kept", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { base: "clean" });
+  assert.strictEqual(field(t, "base"), undefined, "no select, no disabled wall");
+  assert.strictEqual(byCls(advOf(t), "pfv-select").length, 0);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-hint").filter((x) => /starts with/.test(x)), ["Environment it starts with only applies on this machine; a box always starts minimal."]);
+  assert.ok(!advLabels(t).includes("Environment it starts with"));
+  typeArgs(t, "--verbose");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].base, "clean", "a save from a box profile keeps the base the profile has");
+  assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
+  // A host profile does offer it, in the mockup's words; the default is stored as no base.
+  const h = page();
+  await openAdv(h, "runbook-host", { base: "clean" });
+  assert.deepStrictEqual(Array.from(field(h, "base").children).map((o) => o.textContent), ["Everything you have (inherit)", "Minimal, no secrets (clean)", "Your login shell (login)"]);
+  assert.strictEqual(field(h, "base").value, "clean");
+  assert.strictEqual(byCls(advOf(h), "pfv-hint").filter((n) => /starts with only applies/.test(n.textContent)).length, 0, "the sentence is for a box");
+  field(h, "base").value = "inherit"; field(h, "base").onchange();
+  assert.strictEqual(await clickBtn(advOf(h), "Save"), true);
+  assert.ok(!("base" in h.box.puts[0]), "inherit is the default: no base is stored");
+  const login = page();
+  await openAdv(login, "runbook-host");
+  field(login, "base").value = "login"; field(login, "base").onchange();
+  await clickBtn(advOf(login), "Save");
+  assert.strictEqual(login.box.puts[0].base, "login");
+});
+
+test("env row errors block save", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  clickBtn(advOf(t), "+ Add variable");
+  assert.strictEqual(envRowsOf(t).length, 1);
+  assert.strictEqual(Node.focused, byCls(envRowsOf(t)[0], "k")[0], "focus goes to the new row's name");
+  typeRow(envRowsOf(t)[0], "1BAD", "x");
+  const want = ENVROWS.rowError([{ key: "1BAD", value: "x", kind: "literal" }]);
+  assert.ok(want.length > 0);
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), false);
+  assert.strictEqual(t.box.puts.length, 0, "nothing is sent");
+  assert.deepStrictEqual(advErrs(t), [want], "the sentence is under the variables, inside the block");
+  assert.deepStrictEqual(texts(advOf(t), "pfv-st-invalid"), ["One field needs a fix before this can save."]);
+  assert.strictEqual(envRowsOf(t).length, 1, "what was typed is still there");
+  assert.strictEqual(byCls(envRowsOf(t)[0], "k")[0].value, "1BAD");
+  // Fixing the name takes the sentence away, and the same Save goes through.
+  typeRow(envRowsOf(t)[0], "LEVEL");
+  assert.deepStrictEqual(advErrs(t), [], "the refusal goes when the rows change");
+  // A name listed twice is refused too, literal against secret as the server does.
+  clickBtn(advOf(t), "+ Add secret");
+  typeRow(envRowsOf(t)[1], "LEVEL");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), false);
+  assert.deepStrictEqual(advErrs(t), ['Listed twice: "LEVEL".']);
+  assert.strictEqual(t.box.puts.length, 0);
+  typeRow(envRowsOf(t)[1], "LEVEL_FROM_STORE");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].env, { LEVEL: "x" });
+  assert.deepStrictEqual(t.box.puts[0].secrets, ["LEVEL_FROM_STORE"]);
+});
+
+test("imports row hidden when bundling is off keeps imports_off", async () => {
+  const t = page({ bundleImports: false });
+  await openAdv(t, "aws-ops", { imports_off: true });
+  assert.strictEqual(field(t, "imports_off"), undefined, "the row is not drawn");
+  assert.ok(!/CLAUDE\.md/.test(advOf(t).textContent), "and not explained in words nobody asked for");
+  typeArgs(t, "--verbose");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.strictEqual(t.box.puts[0].imports_off, true, "the stored value goes back as it was");
+  // Before /api/meta has answered nothing is known: the row stays. Once it has, a bundling instance shows it too.
+  const early = page({ metaLoaded: false, bundleImports: false });
+  await openAdv(early, "aws-ops");
+  assert.ok(field(early, "imports_off"), "the row is there until /api/meta says bundling is off");
+  const on = page();
+  await openAdv(on, "aws-ops", { imports_off: true });
+  assert.strictEqual(field(on, "imports_off").checked, false, "off is unchecked");
+  advTick(on, "imports_off", true);
+  assert.strictEqual(await clickBtn(advOf(on), "Save"), true);
+  assert.ok(!("imports_off" in on.box.puts[0]), "checked is the default: nothing stored");
+  // A row that stops being usable while the form is open has no say any more: what was ticked in it is not sent.
+  const late = page();
+  await openAdv(late, "aws-ops");
+  advTick(late, "imports_off", false);
+  late.box.bundleImports = false;
+  assert.strictEqual(await clickBtn(advOf(late), "Save"), true);
+  assert.ok(!("imports_off" in late.box.puts[0]), "the stored value, which was none");
+  // A host profile has no box to give the files to; an account with no personal config says so in the row's own words.
+  const host = page();
+  await openAdv(host, "runbook-host", { imports_off: true });
+  assert.strictEqual(field(host, "imports_off"), undefined);
+  const acct = page({ accountsCache: [{ name: "work" }] });
+  await openAdv(acct, "aws-ops", { account: "work", imports_off: true });
+  assert.strictEqual(field(acct, "imports_off"), undefined);
+  assert.deepStrictEqual(texts(advOf(acct), "pfv-hint").filter((x) => /personal config/.test(x)), ["This account does not use your personal config, so its boxes get no CLAUDE.md imports."]);
+  typeArgs(acct, "--x");
+  await clickBtn(advOf(acct), "Save");
+  assert.strictEqual(acct.box.puts[0].imports_off, true);
+});
+
+test("Advanced edit form: the mockup's fields in order, for a box profile and for a host profile", async () => {
+  const t = page({ repliesEnabled: true });
+  await openAdv(t, "aws-ops");
+  assert.deepStrictEqual(advLabels(t), ["Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(t), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session.", "Include files my CLAUDE.md pulls in with @Read-only copies in the box."]);
+  assert.strictEqual(field(t, "args").getAttribute("placeholder"), "--some-flag");
+  assert.deepStrictEqual(texts(advOf(t), "pfv-hint"), ["One per line.", "None. The agent gets the box's minimal environment.", "Environment it starts with only applies on this machine; a box always starts minimal."]);
+  assert.strictEqual(byText(advOf(t), "button", "+ Add variable").length + byText(advOf(t), "button", "+ Add secret").length, 2);
+  assert.strictEqual(Node.focused, field(t, "options.skip_permissions"), "focus goes to the first control");
+  const h = page({ repliesEnabled: true });
+  await openAdv(h, "runbook-host");
+  assert.deepStrictEqual(advLabels(h), ["Environment it starts with", "Extra command-line arguments", "Environment variables"]);
+  assert.deepStrictEqual(texts(advOf(h), "pfv-check-t"), ["Bypass permissions", "Answer prompts from the sidebarSets the default in New session."]);
+  assert.deepStrictEqual(texts(advOf(h), "pfv-hint"), ["One per line.", "None added on top of the starting environment."]);
+  assert.strictEqual(Node.focused, field(h, "base"));
+  assert.ok(advOf(h).className.includes("pfv-editing"));
+  // Opened and not touched holds no change, and the model and effort stay in the Agent block.
+  assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden);
+  assert.strictEqual(field(t, "options.model"), undefined);
+  assert.strictEqual(field(t, "options.effort"), undefined);
+});
+
+test("Advanced: the other options are drawn the old form's way and only what the user set is written", async () => {
+  const defs = OPTION_DEFS.concat([
+    { key: "verbosity", label: "Verbosity", type: "enum", choices: ["quiet", "normal", "loud"], bins: ["claude"] },
+    { key: "profile_pack", label: "Pack", type: "enum", choices: ["a", "b", "c", "d", "e"], bins: ["claude"] },
+    { key: "shell_only", label: "Shell only", type: "bool", bins: ["bash"] },
+  ]);
+  const t = page({ optionDefs: defs });
+  await openAdv(t, "aws-ops", { options: { model: "claude-opus-5-5", effort: "high", legacy_key: "keep me" } });
+  assert.deepStrictEqual(advLabels(t).slice(0, 2), ["Verbosity", "Pack"]);
+  assert.ok(hasCls("seg")(field(t, "options.verbosity")), "three choices: a segmented control");
+  assert.strictEqual(field(t, "options.profile_pack").tag, "select", "five: a select");
+  assert.deepStrictEqual(Array.from(field(t, "options.profile_pack").children).map((o) => o.textContent), ["(not set)", "a", "b", "c", "d", "e"]);
+  assert.strictEqual(field(t, "options.shell_only"), undefined, "an option of another command is not drawn");
+  assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden, "nothing changed yet");
+  advTick(t, "options.skip_permissions", true);
+  field(t, "options.profile_pack").value = "c"; field(t, "options.profile_pack").onchange();
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  assert.deepStrictEqual(t.box.puts[0].options, { model: "claude-opus-5-5", effort: "high", legacy_key: "keep me", skip_permissions: true, profile_pack: "c" });
+  // Untouched, an option that was never stored is not written as false; one stored as false stays false; unchecking a stored true says false.
+  const u = page();
+  await openAdv(u, "aws-ops", { options: { model: "claude-opus-5-5", skip_permissions: false } });
+  typeArgs(u, "--x");
+  await clickBtn(advOf(u), "Save");
+  assert.deepStrictEqual(u.box.puts[0].options, { model: "claude-opus-5-5", skip_permissions: false });
+  const n = page();
+  await openAdv(n, "aws-ops");
+  typeArgs(n, "--x");
+  await clickBtn(advOf(n), "Save");
+  assert.deepStrictEqual(n.box.puts[0].options, { model: "claude-opus-5-5", effort: "high" });
+  const off = page();
+  await openAdv(off, "aws-ops", { options: { model: "claude-opus-5-5", skip_permissions: true } });
+  assert.strictEqual(field(off, "options.skip_permissions").checked, true);
+  advTick(off, "options.skip_permissions", false);
+  await clickBtn(advOf(off), "Save");
+  assert.deepStrictEqual(off.box.puts[0].options, { model: "claude-opus-5-5", skip_permissions: false });
+});
+
+test("Advanced: arguments are one per line, blanks dropped; emptying them removes the key", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { args: ["--a", "--b value"] });
+  assert.strictEqual(field(t, "args").value, "--a\n--b value");
+  typeArgs(t, "  --a \n\n--c\n  \n");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden, false);
+  await clickBtn(advOf(t), "Save");
+  assert.deepStrictEqual(t.box.puts[0].args, ["--a", "--c"]);
+  const e = page();
+  await openAdv(e, "aws-ops", { args: ["--a"] });
+  typeArgs(e, "");
+  await clickBtn(advOf(e), "Save");
+  assert.ok(!("args" in e.box.puts[0]));
+});
+
+test("Advanced: variables and secrets are rows; a secret has no value; removing the last one says the empty line", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { env: { KEEP: "1", DROP: "2" }, secrets: ["TOKEN_NAME"] });
+  assert.deepStrictEqual(envRowsOf(t).map((r) => byCls(r, "k")[0].value), ["KEEP", "DROP", "TOKEN_NAME"]);
+  assert.deepStrictEqual(texts(envRowsOf(t)[2], "v"), ["→ by reference"], "a secret is a name only");
+  byCls(envRowsOf(t)[1], "rm")[0].click();
+  clickBtn(advOf(t), "+ Add variable");
+  typeRow(envRowsOf(t)[2], "ADDED", " v ");
+  await clickBtn(advOf(t), "Save");
+  assert.deepStrictEqual(t.box.puts[0].env, { KEEP: "1", ADDED: "v" });
+  assert.deepStrictEqual(t.box.puts[0].secrets, ["TOKEN_NAME"]);
+  // Remove everything: the keys go, and the empty line is the mockup's.
+  const e = page();
+  await openAdv(e, "aws-ops", { env: { ONE: "1" } });
+  byCls(envRowsOf(e)[0], "rm")[0].click();
+  assert.strictEqual(envRowsOf(e).length, 0);
+  assert.deepStrictEqual(texts(advOf(e), "pfv-hint").filter((x) => /^None\./.test(x)), ["None. The agent gets the box's minimal environment."]);
+  assert.strictEqual(byCls(advOf(e), "kvempty").length, 0, "not envrows.js's own line");
+  await clickBtn(advOf(e), "Save");
+  assert.ok(!("env" in e.box.puts[0]) && !("secrets" in e.box.puts[0]));
+  // A row added and left blank is not a variable.
+  const b = page();
+  await openAdv(b, "aws-ops");
+  clickBtn(advOf(b), "+ Add variable");
+  assert.strictEqual(await clickBtn(advOf(b), "Save"), true);
+  assert.ok(!("env" in b.box.puts[0]));
+});
+
+test("Advanced: replies are offered for a claude command on an instance that has them, and the stored value is kept when they are not", async () => {
+  const on = page({ repliesEnabled: true });
+  await openAdv(on, "aws-ops");
+  assert.strictEqual(field(on, "replyable").checked, false);
+  advTick(on, "replyable", true);
+  await clickBtn(advOf(on), "Save");
+  assert.strictEqual(on.box.puts[0].replyable, true);
+  const clear = page({ repliesEnabled: true });
+  await openAdv(clear, "aws-ops", { replyable: true });
+  assert.strictEqual(field(clear, "replyable").checked, true);
+  advTick(clear, "replyable", false);
+  await clickBtn(advOf(clear), "Save");
+  assert.ok(!("replyable" in clear.box.puts[0]));
+  // The same when the instance's answer lands after the box was ticked.
+  const late = page({ repliesEnabled: true });
+  await openAdv(late, "aws-ops");
+  advTick(late, "replyable", true);
+  late.box.repliesEnabled = false;
+  await clickBtn(advOf(late), "Save");
+  assert.ok(!("replyable" in late.box.puts[0]));
+  // The instance has replies off: no row, the profile's default stays.
+  const off = page({ repliesEnabled: false });
+  await openAdv(off, "aws-ops", { replyable: true });
+  assert.strictEqual(field(off, "replyable"), undefined);
+  typeArgs(off, "--x");
+  await clickBtn(advOf(off), "Save");
+  assert.strictEqual(off.box.puts[0].replyable, true);
+  // Not a claude command: replies are claude-only.
+  const shell = page({ repliesEnabled: true });
+  await openAdv(shell, "aws-ops", { bin: "bash", replyable: true });
+  assert.strictEqual(field(shell, "replyable"), undefined);
+  typeArgs(shell, "--x");
+  await clickBtn(advOf(shell), "Save");
+  assert.strictEqual(shell.box.puts[0].replyable, true);
+});
+
+test("Advanced: a refusal that names args, an option, the variables or the base goes under that field", async () => {
+  // under: the node the refusal's line must share a field with.
+  const refuse = async (open, fieldPath, under) => {
+    const t = page({ repliesEnabled: true });
+    await open(t);
+    typeArgs(t, "--x");
+    t.box.putFail = apiErr(400, { error: 'profile "aws-ops": refused', field: fieldPath });
+    assert.strictEqual(await clickBtn(advOf(t), "Save"), false);
+    assert.deepStrictEqual(texts(advOf(t), "pfv-top-err"), [], "not at the top: " + fieldPath);
+    const shown = byCls(advOf(t), "pfv-ferr").filter((n) => !n.hidden);
+    assert.strictEqual(shown.length, 1, "one refusal for " + fieldPath);
+    assert.ok(under(shown[0].parent), "and it is in the field of " + fieldPath);
+    return t;
+  };
+  const hasField = (key) => (n) => n.all((x) => x.dataset && x.dataset.pfvField === key).length > 0;
+  const hasRows = (n) => byCls(n, "pfv-env").length > 0;
+  const t = await refuse((x) => openAdv(x, "aws-ops"), "args", hasField("args"));
+  await refuse((x) => openAdv(x, "aws-ops"), "options.skip_permissions", hasField("options.skip_permissions"));
+  await refuse((x) => openAdv(x, "aws-ops"), "env", hasRows);
+  await refuse((x) => openAdv(x, "aws-ops"), "secrets[0]", hasRows);
+  await refuse((x) => openAdv(x, "runbook-host"), "base", hasField("base"));
+  // The refusal goes when its field changes.
+  typeArgs(t, "--y");
+  assert.deepStrictEqual(advErrs(t), []);
+});
+
+test("Advanced: a refused save in another block opens Advanced as a repair form with the refusal under its field", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": args refused', field: "args" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.ok(advOf(t).className.includes("pfv-editing"), "Advanced opened to show it");
+  assert.strictEqual(advErrs(t).length, 1);
+  assert.ok(field(t, "args"));
+});
+
+test("every top-level name in pfv-advanced.js is unique across the page scripts", () => {
+  const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
+  const mine = names(fs.readFileSync(path.join(STATIC, "pfv-advanced.js"), "utf8"));
+  assert.ok(mine.size > 8);
+  assert.ok([...mine].every((n) => /^(pfa|PFA_)/.test(n)), "every name is pfa/PFA_ prefixed: " + [...mine].join(", "));
+  const clashes = [];
+  for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js") && x !== "pfv-advanced.js")) {
+    for (const n of names(fs.readFileSync(path.join(STATIC, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
+  }
+  assert.deepStrictEqual(clashes, []);
+});
+
+test("Advanced registers its editor through the seam, and index.html loads it after profilepage.js", () => {
+  const t = page();
+  assert.ok(t.run("PFV_EDITORS").advanced, "advanced registered itself");
+  assert.throws(() => t.box.pfvRegisterEditor("advanced", {}), /registered twice: advanced/);
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
+  assert.ok(at("profilepage.js") > 0 && at("pfv-advanced.js") > at("profilepage.js"));
+  assert.ok(at("envrows.js") > 0 && at("envrows.js") < at("pfv-advanced.js") && at("importsmodel.js") < at("pfv-advanced.js"));
 });

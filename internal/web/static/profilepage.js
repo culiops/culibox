@@ -10,7 +10,7 @@
 // Desktop only: the old form (.plist, .ped, #foot-manage) is hidden by desktop.css
 // on the page and stays for the phone's modal. Edit opens one block as a small form
 // (Runs in, Agent and Network here, Workspace in pfv-workspace.js, Cloud and tokens and
-// Also reachable in pfv-cloud.js; the other blocks' Edit, Duplicate, Switch to box and
+// Also reachable in pfv-cloud.js, Advanced in pfv-advanced.js; Duplicate, Switch to box and
 // "+ New profile" are drawn but do nothing until their tasks wire them). profileedit.js
 // decides what a save writes and what a refusal means; this file draws the forms, keeps
 // what the user has typed and runs the save. A block editor in a file of its own registers
@@ -648,7 +648,7 @@ async function pfvDelete() {
 // as it likes. A block of rows has two more: add(rec, what) puts a pending row in (what is
 // pfvAddRow's) and answers the key of the control to focus, "" when it added nothing;
 // remove(rec, row) marks the read view's row removed. A block with no entry here is drawn
-// but its Edit link does nothing until its task (Advanced); one that a refused save opens
+// but its Edit link does nothing; one that a refused save opens
 // is drawn read-only with the refusal under the row it names, so the user can see what is wrong.
 const PFV_EDITORS = {
   runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave },
