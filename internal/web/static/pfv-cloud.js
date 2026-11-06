@@ -140,12 +140,36 @@ function pfcPickCreate(rec, kind) {
   globalThis.pfvOpenDrawer(kind);
 }
 
-// pfcPickClose: the picker goes (and the filter text with it) without focus being given to anything: the one that closes it
-// by Esc or a pick says where focus goes.
-function pfcPickClose(rec) {
+// pfcPickEnd: the picker is not asked for any more: what was typed in its filter and the height it was pinned at go with it.
+function pfcPickEnd(rec) {
   rec.ui.picker = false;
   rec.ui.pickQuery = "";
+  rec.ui.pickMin = 0;
+}
+
+// pfcPickClose: the picker goes without focus being given to anything: the one that closes it by Esc or a pick says where focus goes.
+function pfcPickClose(rec) {
+  pfcPickEnd(rec);
   pfvRedrawForm(rec);
+}
+
+// pfcPickPin: the list may not get shorter than `px`. The popover hangs off the link and, when its block is the last on the page,
+// it is what holds the page's scroll height: options that the filter hides would shorten it, the page would scroll back under the
+// user's hands and the filter and the link would move down while it is typed in. The height is a custom property (desktop.css
+// takes the smaller of it and the room there is), so it also survives the form being drawn again.
+function pfcPickPin(rec, list) {
+  if (rec.ui.pickMin > 0) list.style.setProperty("--pfv-pick-min", rec.ui.pickMin + "px");
+}
+
+// pfcPickTabbed: a Tab (or Shift+Tab) in the popover has been given to the browser; once focus has moved, a popover that focus is
+// not in any more closes, so it does not stay open over the block's footer and Save. Focus is where the user tabbed: the form is
+// drawn again with focus kept on that control (pfvRedrawForm), and nothing is given back to the link.
+function pfcPickTabbed(rec) {
+  setTimeout(() => {
+    const pk = rec.ui.pickNodes;
+    if (rec.ui.picker !== true || !pk || pk.pop.contains(document.activeElement)) return;
+    pfcPickClose(rec);
+  }, 0);
 }
 
 // pfcPicker: the popover. spec: {label, filter, groups}; filter is the filter's name (and placeholder), "" for none. Typing in
@@ -170,6 +194,7 @@ function pfcPicker(rec, spec) {
   }
   // The options scroll inside the popover (the filter stays put above them): an instance can define far more than a screen holds.
   const list = pfvMk("div", "pfv-pick-list");
+  pfcPickPin(rec, list);
   pop.append(list);
   const groups = [];
   for (const g of spec.groups) {
@@ -208,7 +233,8 @@ function pfcPicker(rec, spec) {
     find.oninput = () => { rec.ui.pickQuery = find.value; narrow(find.value); };
     narrow(find.value);
   }
-  return { node: pop, first };
+  pop.addEventListener("keydown", (ev) => { if (ev.key === "Tab") pfcPickTabbed(rec); });
+  return { node: pop, first, list };
 }
 
 // pfvOpenPicker: the "+ Add" picker of an open block, with focus in it (the filter, else the first option) and the popover in
@@ -216,11 +242,15 @@ function pfcPicker(rec, spec) {
 function pfvOpenPicker(blockId) {
   const rec = pfvState.edits[blockId];
   if (!rec) return false;
+  pfcPickEnd(rec);
   rec.ui.picker = true;
-  rec.ui.pickQuery = "";
   pfvRedrawForm(rec);
-  const pop = rec.ui.pickNodes && rec.ui.pickNodes.pop;
-  if (pop && typeof pop.scrollIntoView === "function") pop.scrollIntoView({ block: "nearest" });
+  const pk = rec.ui.pickNodes;
+  if (pk && pk.list.offsetHeight > 0) {
+    rec.ui.pickMin = pk.list.offsetHeight;
+    pfcPickPin(rec, pk.list);
+  }
+  if (pk && typeof pk.pop.scrollIntoView === "function") pk.pop.scrollIntoView({ block: "nearest" });
   pfvFocusBlock(blockId);
   return true;
 }
@@ -254,8 +284,7 @@ function pfvAddRow(blockId, what) {
   if (!rec || !rec.values || !ed || typeof ed.add !== "function") return false;
   const key = ed.add(rec, what || {});
   if (!key) return false;
-  rec.ui.picker = false;
-  rec.ui.pickQuery = "";
+  pfcPickEnd(rec);
   rec.ferrs = [];
   pfvChanged(rec, "");
   const el = rec.fields[key];
@@ -282,7 +311,7 @@ function pfcFoot(rec, list, pick) {
   if (rec.ui.picker === true) {
     const pk = pfcPicker(rec, pick());
     wrap.append(pk.node);
-    rec.ui.pickNodes = { wrap, pop: pk.node };
+    rec.ui.pickNodes = { wrap, pop: pk.node, list: pk.list };
     if (pk.first) rec.first = pk.first;
   }
   out.push(wrap);

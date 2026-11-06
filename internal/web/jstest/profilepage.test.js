@@ -26,6 +26,8 @@ class Node {
     this.tag = tag; this.children = []; this.parent = null; this.own = "";
     this.className = ""; this.attrs = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this.handlers = {};
     const self = this;
+    // Only what a test reads back: the custom properties a script sets on an element's style.
+    this.style = { props: {}, setProperty: (k, v) => { self.style.props[k] = v; } };
     const set = () => new Set(self.className.split(/\s+/).filter(Boolean));
     this.classList = {
       contains: (c) => set().has(c),
@@ -35,6 +37,11 @@ class Node {
     };
   }
   get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
+  // A layout model for one thing: the "+ Add" picker's list is 50px tall per option that is shown (neither it nor its group hidden).
+  get offsetHeight() {
+    if (!this.className.split(/\s+/).includes("pfv-pick-list")) return 0;
+    return 50 * this.all((n) => n.tag === "button" && !n.hidden && !(n.parent && n.parent.hidden)).length;
+  }
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
   setAttribute(k, v) { this.attrs[k] = String(v); if (k === "class") this.className = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
@@ -2045,6 +2052,109 @@ test("what was typed in the filter survives the form being drawn again, and is g
   assert.strictEqual(shownOpts(t).length, 12);
 });
 
+// The popover is what holds the page's scroll height when the block is the last on the page. Options that the filter hides would
+// shorten it, the page would scroll back under the user's hands, and the filter and the link would move down while it is typed in.
+const PICK_MIN = "--pfv-pick-min";
+const pickMin = (t) => byCls(popOf(t), "pfv-pick-list")[0].style.props[PICK_MIN];
+
+test("the filter does not move while it is typed in: the list keeps the height it had when the picker opened", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  assert.strictEqual(pickMin(t), "600px", "12 options at 50px each, measured once the picker is drawn");
+  const filter = byCls(popOf(t), "pfv-pick-find")[0];
+  typeInto(filter, "prod");
+  assert.strictEqual(byCls(popOf(t), "pfv-pick-list")[0].offsetHeight, 100, "the options that are shown take less room");
+  assert.strictEqual(pickMin(t), "600px", "but the list may not get shorter");
+  typeInto(filter, "zzz");
+  assert.strictEqual(pickMin(t), "600px");
+  typeInto(filter, "");
+  assert.strictEqual(pickMin(t), "600px");
+  // The form drawn again while the picker is open keeps it.
+  typeInto(byCls(popOf(t), "pfv-pick-find")[0], "sand");
+  t.run("pfvRedrawForm(pfvState.edits.cloud)");
+  assert.strictEqual(pickMin(t), "600px");
+});
+
+test("the height is measured when the picker is opened, not remembered from the last time", async () => {
+  const t = legacyPage();
+  t.box.awscEntries = PICK_AWS;
+  t.box.stEntries = PICK_TOKENS;
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(pickMin(t), "350px", "7 options while the old-style setting hides AWS");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  byText(rowFor(t, "cloud", "AWS", "Old-style AWS setting"), "button", "Remove")[0].click();
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(pickMin(t), "600px", "12 now");
+});
+
+// A Tab that moves focus out of the popover closes it (it would stay open over the block's footer and Save); focus is where the user tabbed.
+const pressTab = (t, shift) => {
+  const pop = popOf(t);
+  const ev = { key: "Tab", shiftKey: shift === true, target: Node.focused, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  for (const f of pop.handlers.keydown || []) f(ev);
+  return ev;
+};
+
+test("Tab out of the popover closes it and focus stays where the user tabbed; Tab inside it does not", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  // Tab from the filter to the first option, then on: inside the popover.
+  pressTab(t);
+  optsOf(t).find((b) => !b.disabled).focus();
+  await settle();
+  assert.strictEqual(t.run("pfvState").picker, "cloud", "focus is still in the popover");
+  // From the last option to Cancel: out.
+  const last = optsOf(t).filter((b) => !b.disabled).pop();
+  last.focus();
+  const ev = pressTab(t);
+  assert.strictEqual(ev.defaultPrevented, false, "the browser does the move, the popover only follows it");
+  const cancel = byText(blockOf(t, "cloud"), "button", "Cancel")[0];
+  cancel.focus();
+  await settle();
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 0, "it no longer covers the footer");
+  assert.strictEqual(Node.focused, cancel, "focus is not pulled back to the + Add link");
+  assert.strictEqual(field(t, "add").getAttribute("aria-expanded"), "false");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"), "the block stays open");
+  assert.ok(unsavedNote(t).hidden, "closing is no change");
+});
+
+test("Shift+Tab from the filter to the + Add link closes the popover with focus on the link", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  pressTab(t, true);
+  field(t, "add").focus();
+  await settle();
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(Node.focused, field(t, "add"), "where the user tabbed");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-pick").length, 0);
+});
+
+test("Tab out of a field the form draws again keeps focus on that field", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  pressTab(t);
+  // Focus lands on a control the redraw replaces (a row's Remove): the form is drawn again with focus kept on it by its key.
+  const rm = field(t, "rm:token:grafana-prod");
+  rm.focus();
+  await settle();
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(Node.focused, field(t, "rm:token:grafana-prod"), "the new node for the same control");
+});
+
+test("a Tab that leaves nothing to do after the popover is gone changes nothing", async () => {
+  const t = pickPage();
+  await openPicker(t);
+  pressTab(t);
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false, "Esc closed it before the timer ran");
+  const at = Node.focused;
+  await settle();
+  assert.strictEqual(Node.focused, at);
+  assert.strictEqual(t.run("pfvState").picker, "");
+});
+
 test("the create items call the Credentials drawer for their kind, once there is one, and close the picker", async () => {
   const t = pickPage();
   const asked = [];
@@ -2140,6 +2250,7 @@ test("the picker stays inside the page column: it hangs on its link's wrapper at
   assert.ok(has("pfv-pick", /width:\s*420px/));
   assert.ok(has("pfv-pick", /z-index:\s*30/), "over the blocks after it");
   assert.ok(has("pfv-pick-list", /max-height:/) && has("pfv-pick-list", /overflow-y:\s*auto/), "a long list scrolls under the filter instead of running down the page");
+  assert.ok(has("pfv-pick-list", /min-height:\s*min\(var\(--pfv-pick-min/), "the list may not get shorter than it opened at, and never taller than the room");
   assert.ok(has("pfv-opt", /text-decoration:\s*none/), "primitives.css strikes every disabled button through; an Added option is not struck");
   assert.ok(has("pfv-opt-t", /overflow-wrap:\s*anywhere/) && has("pfv-opt-s", /overflow-wrap:\s*anywhere/), "a long name breaks rather than push the popover out");
   assert.ok(rules.some((r) => /\.pfv-opt\[hidden\]/.test(r.sel) && /display:\s*none/.test(r.body)), "a grid option is hidden by the filter");
