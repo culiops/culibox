@@ -509,6 +509,10 @@ const refusals = {
     { field: "clone_of", error: 'clone_of "src/repo" must be an absolute path' },
     { field: "default_cwd", error: 'default_cwd "work" must be an absolute path' },
   ],
+  badDomain: [
+    { field: "egress_allow[2]", error: 'profile "p": egress_allow[2] "10.0.0.1": must be a normalised lowercase hostname (no trailing dot, no IP literal) or *.host' },
+    { field: "egress_allow[0]", error: 'egress_allow[0] "*.x": wildcard must be *. followed by a normalised host of at least two labels' },
+  ],
   needsBox: [
     { field: "aws", error: "aws binding requires runtime: box (set it explicitly); the host tier cannot contain credentials", kind: "Old-style AWS" },
     { field: "aws_connections", error: 'profile "p": aws_connections require runtime: box (set it explicitly); the host tier cannot contain credentials', kind: "AWS connections" },
@@ -529,6 +533,15 @@ test("save error words an undefined credential, a vanished folder and a relative
   for (const r of refusals.folderGone) assert.strictEqual(textOf(r), "This folder no longer exists. Remove it or pick another.", r.error);
   for (const r of refusals.credentialMissing) assert.strictEqual(textOf(r), "Not found in Credentials. Remove it or create it.", r.error);
   for (const r of refusals.relativePath) assert.strictEqual(textOf(r), "Use a full path that starts with /", r.error);
+});
+
+test("save error words a domain the host check refuses, and leaves any other egress sentence as the server wrote it", () => {
+  for (const r of refusals.badDomain) {
+    assert.strictEqual(textOf(r), "Not a valid domain. Use a lowercase name like api.example.com or *.example.com; IP addresses are not accepted.", r.error);
+  }
+  assert.strictEqual(textOf({ field: "egress_allow", error: "egress_allow has more than 64 entries" }), "egress_allow has more than 64 entries");
+  // The same words under another field are not the class.
+  assert.strictEqual(textOf({ field: "args[0]", error: 'args[0] "x" must be a normalised thing' }), 'args[0] "x" must be a normalised thing');
 });
 
 test("save error words a box-only setting refused on host with the read view's name for it", () => {

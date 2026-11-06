@@ -104,6 +104,11 @@ const PFE_RELATIVE = /\bmust be an absolute path\b/;
 // box.CheckContextPathID: some component of the path is not there.
 const PFE_FOLDER_FIELD = /^context_paths\[\d+\]$/;
 const PFE_NOT_THERE = /\bdoes not exist\s*$/;
+// A domain the host check refuses (hostmatch.ValidPattern, run by validateEgressPolicy): an IP literal, an upper-case
+// or dotted-off name, a wildcard that is not *.host.
+const PFE_BAD_DOMAIN = "Not a valid domain. Use a lowercase name like api.example.com or *.example.com; IP addresses are not accepted.";
+const PFE_DOMAIN_FIELD = /^egress_allow\[\d+\]$/;
+const PFE_NOT_A_HOST = /\bnormalised\b/;
 // A box-only setting on the host tier: "requires/require/needs/need runtime: box",
 // ErrContextNeedsBox's `needs runtime "box"`, and the clone refusal.
 const PFE_NEEDS_BOX = /\b(?:requires?|needs?) runtime[:\s]+"?box\b|\bruns only in a box\b/;
@@ -384,6 +389,7 @@ function pfeFieldText(field, sentence) {
   if (PFE_PATH_FIELDS.has(head) && PFE_RELATIVE.test(sentence)) return PFE_RELATIVE_PATH;
   if (PFE_FOLDER_FIELD.test(field) && PFE_NOT_THERE.test(sentence)) return PFE_FOLDER_GONE;
   if (PFE_CREDENTIAL_FIELD.test(field) && PFE_UNDEFINED.test(sentence)) return PFE_CREDENTIAL_MISSING;
+  if (PFE_DOMAIN_FIELD.test(field) && PFE_NOT_A_HOST.test(sentence)) return PFE_BAD_DOMAIN;
   if (PFE_NEEDS_BOX.test(sentence)) {
     if (head === "clone_of") return PFE_HOST_REFUSAL;
     const kind = PFE_HOST_KIND.get(head);

@@ -124,6 +124,10 @@ function page(over) {
     awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }, { name: "staging-read", account_id: "111111111111", region: "eu-west-1" }],
     stEntries: [{ name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] }],
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
+    ghApps: ["acme-app"], refreshCredLists: async () => { calls.push("refreshCredLists"); },
+    awsErrText: (e) => "aws: " + e.message,
+    CRED_D4: "The agent will be able to change this AWS account: create, modify and delete resources.",
+    CRED_D4_REMEDY: "Use a role without write access as the base and put this one under Elevate.",
     api: async (p, opt) => {
       const method = (opt && opt.method) || "GET";
       calls.push(method + " " + p);
@@ -158,7 +162,7 @@ function page(over) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
-  for (const f of ["profilepage.js", "pfv-workspace.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
@@ -207,15 +211,16 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Claude Code · claude-opus-5-5 · high effort"]);
   assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This agent will be able to"]);
   assert.deepStrictEqual(texts(root, "pfv-label").map((s) => s.replace(/\s*· .*$/, "")), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
-  // Edit on every block of an editable profile, "+ Add" on the two row blocks; none of them acts yet.
+  // Edit on every block of an editable profile, "+ Add" on the two row blocks.
   assert.strictEqual(byText(root, "button", "Edit").length, 7);
   assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => b.getAttribute("aria-label")), [
     "Edit where it runs", "Edit workspace", "Edit agent", "Edit cloud and tokens", "Edit also reachable", "Edit network", "Edit advanced settings",
   ]);
   assert.strictEqual(byText(root, "button", "+ Add access").length, 1);
   assert.strictEqual(byText(root, "button", "+ Add folder or domain").length, 1);
-  // Runs in, Workspace, Agent and Network edit now; the blocks whose editor is a later task are drawn but inert.
-  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, true, true, false, false, true, false]);
+  // Every block but Advanced edits now; the block whose editor is a later task is drawn but inert.
+  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, true, true, true, true, true, false]);
+  assert.ok(byText(root, "button", "+ Add access")[0].onclick && byText(root, "button", "+ Add folder or domain")[0].onclick, "+ Add opens its block");
   // Rows come from reachModel: a PROD tag on the prod connection, the production tag on the token.
   const rows = byCls(root, "pfv-row");
   assert.ok(rows.some((r) => texts(r, "pfv-tag").join() === "PROD" && /prod-read/.test(r.textContent)));
@@ -600,7 +605,7 @@ test("clicking a nav row keeps its button and moves aria-current", async () => {
 // --- every class the page draws has a rule ------------------------------------------
 
 test("every pfv- class in the profile page scripts has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
-  const src = ["profilepage.js", "pfv-workspace.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
+  const src = ["profilepage.js", "pfv-workspace.js", "pfv-cloud.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   const used = new Set();
   for (const m of src.matchAll(/"([^"\n]*)"/g)) {
@@ -636,6 +641,8 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 const pickModel = (t, v) => { const m = field(t, "options.model"); m.value = v; m.onchange(); };
 // aws-ops with a readable folder, so Also reachable has a Folder row to put an error under.
 const withFolder = () => PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { context_paths: ["/home/you/other-repo/docs"] }) : p));
+// The block's form reads the stored profile, which holds the folder too.
+const withFolderDoc = (t) => { t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { context_paths: ["/home/you/other-repo/docs"] }); return t; };
 const gone400 = () => apiErr(400, { error: 'profile "aws-ops": context_paths[0] "/home/you/other-repo/docs": does not exist', field: "context_paths[0]" });
 
 test("Edit opens the Agent block as a form: agent, model, effort, login; the rest stays read-only", async () => {
@@ -773,7 +780,7 @@ test("a Reload that finds the profile gone says so too", async () => {
 });
 
 test("a 400 with field context_paths[0] while editing agent opens reachable too and keeps the agent change", async () => {
-  const t = page({ profiles: withFolder() });
+  const t = withFolderDoc(page({ profiles: withFolder() }));
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
@@ -805,7 +812,7 @@ test("a 400 with field context_paths[0] while editing agent opens reachable too 
 });
 
 test("cancelling the repair block keeps the other block's change; its note about the repair goes", async () => {
-  const t = page({ profiles: withFolder() });
+  const t = withFolderDoc(page({ profiles: withFolder() }));
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
@@ -1132,16 +1139,6 @@ test("the login choice: default and the saved accounts; the default is stored as
   acct.onchange();
   await clickBtn(blockOf(t, "agent"), "Save");
   assert.ok(!("account" in t.box.puts[0]));
-});
-
-test("a GitHub binding with no permission ticked is refused before the PUT, with the sentence", async () => {
-  const t = page();
-  await t.box.pfvShow("aws-ops");
-  // The Cloud editor is a later task; the pipeline already checks what it will hand over.
-  t.run('pfvState.edits.cloud = { id: "cloud", values: { github: { owners: [{ owner: "culiops", app: "x" }], permissions: {} } }, init: "{}", ferrs: [], nodes: null }; pfvState.openBlock = "cloud"');
-  assert.strictEqual(await t.box.pfvSaveBlock("cloud"), false);
-  assert.strictEqual(t.box.puts.length, 0);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(t.run("pfvState.edits.cloud.ferrs").map((e) => e.text))), ["GitHub: tick at least one permission, or the agent gets none."]);
 });
 
 test("a save that succeeds but returns warnings shows them in words", async () => {
@@ -1653,4 +1650,542 @@ test("every top-level name in pfv-workspace.js is unique across the page scripts
     for (const n of names(fs.readFileSync(path.join(STATIC, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
   }
   assert.deepStrictEqual(clashes, []);
+});
+
+// --- Cloud and tokens, Also reachable (spec 5.3, 5.5; pfv-cloud.js) --------------------------------------------------------
+
+const GH_READ = { actions: "read", checks: "read", contents: "read", pull_requests: "read", issues: "read", metadata: "read" };
+const CLOUD_DOC = {
+  name: "aws-ops", bin: "claude", runtime: "box", default_cwd: "/home/you/work/payments-api", options: { model: "claude-opus-5-5", effort: "high" },
+  aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod", "sentry-staging"],
+  github: { owners: [{ owner: "culiops", app: "acme-app", repos: ["payments-api"] }], egress_allow: ["extra.example.com"] },
+  context_paths: ["/home/you/other-repo/docs"], egress_allow: ["api.example.com", "*.example.org"], rev: "r1",
+};
+const cloudView = (over) => view("aws-ops", Object.assign({
+  default_cwd: "/home/you/work/payments-api", aws_connections: ["prod-read", "staging-read"], tokens: ["grafana-prod", "sentry-staging"],
+  github_owners: ["culiops"], github_repos: [{ owner: "culiops", repos: ["payments-api"] }], github_permissions: GH_READ,
+  context_paths: ["/home/you/other-repo/docs"], egress_allow: ["api.example.com", "*.example.org"], network: "allowlist",
+}, over));
+const GH_PAT_ENTRY = { name: "gh-pat", provider: "github", hosts: [{ host: "api.github.com", port: 443 }] };
+const cloudPage = (over, doc) => {
+  const t = page(Object.assign({
+    profiles: [PROFILES[0], cloudView(), PROFILES[2], PROFILES[3]],
+    stEntries: [
+      { name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] },
+      { name: "sentry-staging", env: ["SENTRY_ACCESS_TOKEN"], hosts: [{ host: "sentry.io", port: 443 }] },
+      GH_PAT_ENTRY,
+    ],
+  }, over));
+  t.box.docs["aws-ops"] = Object.assign({}, CLOUD_DOC, doc);
+  return t;
+};
+const rowsOf = (t, id) => byCls(blockOf(t, id), "pfv-row");
+const rowFor = (t, id, kind, name) => rowsOf(t, id).find((r) => texts(r, "pfv-k")[0] === kind && (texts(r, "pfv-nm")[0] || "").startsWith(name));
+const unsavedNote = (t) => byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+const optBtn = (t, id, title) => byCls(blockOf(t, id), "pfv-opt").find((b) => texts(b, "pfv-opt-t")[0] === title);
+const setLevel = (t, key, level) => field(t, key).children.find((b) => b.dataset.segvalue === level).click();
+const tick = (t, key, on) => { const cb = field(t, key); cb.checked = on; cb.onchange(); };
+const saveBlock = (t, id) => clickBtn(blockOf(t, id), "Save");
+
+test("Cloud and tokens edit: every grant is a row with Remove, the read view's words, and one note for the tokens", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  const cloud = blockOf(t, "cloud");
+  assert.ok(cloud.className.includes("pfv-editing"));
+  assert.deepStrictEqual(rowsOf(t, "cloud").map((r) => texts(r, "pfv-k")[0]), ["AWS", "AWS", "GitHub", "Token", "Token"]);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "prod-read"), "pfv-scope"), ["Read only. Write only after you grant a window."]);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "prod-read"), "pfv-tag"), ["PROD"]);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "Token", "grafana-prod"), "pfv-tag"), ["production"]);
+  for (const r of rowsOf(t, "cloud")) assert.strictEqual(byText(r, "button", "Remove").length, 1, "one Remove per row");
+  assert.deepStrictEqual(texts(cloud, "pfv-tnote"), ["Long-lived; the agent can read it while it runs"], "the note comes once");
+  assert.strictEqual(byText(cloud, "button", "+ Add access").length, 1);
+  assert.ok(unsavedNote(t).hidden, "opening a form is no change");
+  assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("removing a row is pending until save and undo restores it", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  const row = () => rowFor(t, "cloud", "AWS", "staging-read");
+  byText(row(), "button", "Remove")[0].click();
+  assert.ok(row().className.includes("pfv-removed"), "the row stays, struck through");
+  assert.strictEqual(byText(row(), "button", "Undo").length, 1);
+  assert.strictEqual(t.box.puts.length, 0, "nothing is sent until Save");
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  byText(row(), "button", "Undo")[0].click();
+  assert.ok(!row().className.includes("pfv-removed"));
+  assert.ok(unsavedNote(t).hidden, "undone is no change");
+  byText(row(), "button", "Remove")[0].click();
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  const body = t.box.puts[0];
+  assert.deepStrictEqual(body.aws_connections, ["prod-read"]);
+  assert.deepStrictEqual(body.tokens, ["grafana-prod", "sentry-staging"]);
+  assert.deepStrictEqual(body.github, CLOUD_DOC.github, "the binding goes back as it was, its extra hosts too");
+  assert.deepStrictEqual(body.context_paths, ["/home/you/other-repo/docs"], "the other block's keys are untouched");
+  assert.deepStrictEqual([body.rev, body.schema], ["r1", "sch-1"]);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+});
+
+test("removing every token takes the token note with it; removing the GitHub row takes the binding", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  for (const name of ["grafana-prod", "sentry-staging"]) byText(rowFor(t, "cloud", "Token", name), "button", "Remove")[0].click();
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-tnote"), []);
+  byText(rowFor(t, "cloud", "GitHub", "culiops"), "button", "Remove")[0].click();
+  await saveBlock(t, "cloud");
+  const body = t.box.puts[0];
+  assert.ok(!("tokens" in body) && !("github" in body), "no tokens, no binding");
+  assert.deepStrictEqual(body.aws_connections, ["prod-read", "staging-read"]);
+});
+
+test("a missing credential row can be removed and saves without it", async () => {
+  const t = cloudPage({ awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }] });
+  await t.box.pfvShow("aws-ops");
+  const read = rowFor(t, "cloud", "AWS", "staging-read");
+  assert.match(texts(read, "pfv-scope")[0], /^Not found in Credentials · Remove$/);
+  byText(read, "button", "Remove")[0].click();
+  // The link opens the block with the row removed, pending: never a silent save.
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"));
+  assert.strictEqual(t.box.puts.length, 0);
+  const row = rowFor(t, "cloud", "AWS", "staging-read");
+  assert.ok(row.className.includes("pfv-removed"));
+  assert.deepStrictEqual(texts(row, "pfv-miss"), ["Not found in Credentials"], "still the error colour's text");
+  assert.strictEqual(byText(row, "button", "Remove").length, 0, "the open block has its Remove column, not the inline link");
+  assert.strictEqual(byText(row, "button", "Undo").length, 1);
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read"]);
+});
+
+test("undoing the removal a read view link started leaves no change", async () => {
+  const t = cloudPage({ awscEntries: [{ name: "prod-read", prod: true, write_capable: true, account_id: "222222222222", region: "eu-west-1" }] });
+  await t.box.pfvShow("aws-ops");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Undo")[0].click();
+  assert.ok(unsavedNote(t).hidden, "undo is what it says");
+});
+
+test("read view + Add access opens cloud in edit mode with the picker open", async () => {
+  const t = cloudPage();
+  const asked = [];
+  // The grouped picker is a later task's: the page only asks for it, by block.
+  t.box.pfvOpenPicker = (id) => { asked.push(id); };
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.ok(blockOf(t, "cloud").className.includes("pfv-editing"));
+  assert.strictEqual(t.run("pfvState").openBlock, "cloud");
+  assert.deepStrictEqual(asked, ["cloud"]);
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  assert.ok(blockOf(t, "reachable").className.includes("pfv-editing"));
+  assert.ok(!blockOf(t, "cloud").className.includes("pfv-editing"), "a form without changes yields to the next");
+  assert.deepStrictEqual(asked, ["cloud", "reachable"]);
+});
+
+test("+ Add is refused in place while another block holds changes, and asks for no picker", async () => {
+  const t = cloudPage();
+  const asked = [];
+  t.box.pfvOpenPicker = (id) => { asked.push(id); };
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.deepStrictEqual(asked, []);
+  assert.ok(!blockOf(t, "cloud").className.includes("pfv-editing"));
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), ["Save or discard these changes first"]);
+});
+
+test("the stand-in picker offers what is added as an input row, and picking one puts a pending row in", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  assert.deepStrictEqual(byCls(blockOf(t, "reachable"), "pfv-opt").map((b) => texts(b, "pfv-opt-t")[0]), ["Folder", "Domain"]);
+  assert.strictEqual(t.box.puts.length, 0);
+  optBtn(t, "reachable", "Domain").click();
+  assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-opt").length, 0, "picking closes it");
+  assert.strictEqual(Node.focused, field(t, "domain:2"), "focus goes to the new row's input");
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("the stand-in picker for Cloud and tokens adds a GitHub owner, or says why it cannot", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.deepStrictEqual(byCls(blockOf(t, "cloud"), "pfv-opt").map((b) => texts(b, "pfv-opt-t")[0]), ["Another org or user"]);
+  const none = cloudPage({ ghApps: [], stEntries: [] });
+  await none.box.pfvShow("aws-ops");
+  clickBtn(blockOf(none, "cloud"), "+ Add access");
+  assert.strictEqual(byCls(blockOf(none, "cloud"), "pfv-opt").length, 0, "an option nobody can use is not drawn");
+  assert.deepStrictEqual(texts(blockOf(none, "cloud"), "pfv-pick-note"), ["No GitHub App or token is defined yet."]);
+});
+
+test("a relative folder shows the absolute-path error and blocks save", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Folder").click();
+  const input = () => field(t, "folder:1");
+  assert.deepStrictEqual(texts(input().parent, "pfv-hint"), ["Read only. List a folder rather than a single file."]);
+  typeInto(input(), "home/you/runbooks");
+  assert.strictEqual(await saveBlock(t, "reachable"), false);
+  assert.strictEqual(t.box.puts.length, 0, "nothing was sent");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-ferr"), ["Use a full path that starts with /"]);
+  assert.ok(input().className.includes("pfv-bad"));
+  assert.strictEqual(input().value, "home/you/runbooks", "what was typed stays");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-st-invalid"), ["One field needs a fix before this can save."]);
+  typeInto(input(), "/home/you/runbooks");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-ferr"), [], "the words go as soon as the field changes");
+  assert.strictEqual(await saveBlock(t, "reachable"), true);
+  assert.deepStrictEqual(t.box.puts[0].context_paths, ["/home/you/other-repo/docs", "/home/you/runbooks"]);
+});
+
+test("a row that was added and not filled in is not sent, and removing it takes it outright", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  const folders = () => rowsOf(t, "reachable").filter((r) => texts(r, "pfv-k")[0] === "Folder");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Folder").click();
+  assert.strictEqual(folders().length, 2);
+  byText(folders()[1], "button", "Remove")[0].click();
+  assert.strictEqual(folders().length, 1, "a row never saved has nothing to undo");
+  assert.ok(unsavedNote(t).hidden, "and nothing is pending");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Folder").click();
+  await saveBlock(t, "reachable");
+  assert.deepStrictEqual(t.box.puts[0].context_paths, ["/home/you/other-repo/docs"], "an empty folder row is dropped");
+});
+
+test("a domain is added as a row with the HTTPS-only hint and saves with the others", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Domain").click();
+  const input = field(t, "domain:2");
+  assert.deepStrictEqual(texts(input.parent, "pfv-hint"), ["HTTPS only. IP addresses are not accepted."]);
+  typeInto(input, "*.example.net");
+  assert.strictEqual(await saveBlock(t, "reachable"), true);
+  assert.deepStrictEqual(t.box.puts[0].egress_allow, ["api.example.com", "*.example.org", "*.example.net"]);
+  assert.deepStrictEqual(t.box.puts[0].context_paths, ["/home/you/other-repo/docs"]);
+  assert.deepStrictEqual(t.box.puts[0].github, CLOUD_DOC.github, "the cloud keys are untouched");
+});
+
+test("a refused domain says so in words under its row; a folder that is gone is under its own row", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Domain").click();
+  typeInto(field(t, "domain:2"), "10.0.0.1");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": egress_allow[2] "10.0.0.1": must be a normalised lowercase hostname (no trailing dot, no IP literal) or *.host', field: "egress_allow[2]" });
+  await saveBlock(t, "reachable");
+  const ferr = texts(blockOf(t, "reachable"), "pfv-ferr");
+  assert.strictEqual(ferr.length, 1);
+  assert.match(ferr[0], /^Not a valid domain/);
+  assert.ok(!/egress_allow|normalised/.test(ferr[0]), "no config keys");
+  assert.ok(field(t, "domain:2").className.includes("pfv-bad"));
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": context_paths[0] "/home/you/other-repo/docs": does not exist', field: "context_paths[0]" });
+  typeInto(field(t, "domain:2"), "ok.example.com");
+  await saveBlock(t, "reachable");
+  assert.deepStrictEqual(texts(rowFor(t, "reachable", "Folder", "/home/you/other-repo/docs"), "pfv-ferr"), ["This folder no longer exists. Remove it or pick another."]);
+  byText(rowFor(t, "reachable", "Folder", "/home/you/other-repo/docs"), "button", "Remove")[0].click();
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-ferr"), [], "removing the folder takes the refusal with it");
+  t.box.putFail = null;
+  assert.strictEqual(await saveBlock(t, "reachable"), true);
+  const sent = t.box.puts[t.box.puts.length - 1];
+  assert.ok(!("context_paths" in sent), "no readable folder is left");
+  assert.deepStrictEqual(sent.egress_allow, ["api.example.com", "*.example.org", "ok.example.com"]);
+});
+
+test("Also reachable: the files the original and Advanced control are rows with where to change them, not Remove", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ clone_share: ["CLAUDE.md"] }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "Edit");
+  const files = rowsOf(t, "reachable").filter((r) => texts(r, "pfv-k")[0] === "Files");
+  assert.strictEqual(files.length, 2);
+  assert.deepStrictEqual(files.map((r) => texts(r, "pfv-inote")[0]), ["Set in Workspace", "Set in Advanced"]);
+  for (const r of files) assert.strictEqual(byText(r, "button", "Remove").length, 0);
+  assert.deepStrictEqual(rowsOf(t, "reachable").map((r) => texts(r, "pfv-k")[0]), ["Folder", "Files", "Files", "Domain", "Domain"]);
+});
+
+test("GitHub: the owner row shows its fields and a Read only preset; untouched, no permissions are written", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(field(t, "gh:0:pick").value, "app:acme-app");
+  assert.strictEqual(field(t, "gh:0:owner").value, "culiops");
+  assert.strictEqual(field(t, "gh:0:repos").value, "payments-api");
+  assert.deepStrictEqual(byCls(blockOf(t, "cloud"), "pfv-permsum").map((n) => n.textContent), ["Read only (6 of 7: actions, checks, contents, pull requests, issues, metadata)"]);
+  assert.strictEqual(byText(blockOf(t, "cloud"), "button", "Customise").length, 1);
+  assert.strictEqual(field(t, "gh:perm:contents"), undefined, "the seven are behind Customise");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  await saveBlock(t, "cloud");
+  assert.ok(!("permissions" in t.box.puts[0].github), "the preset is the server's default: nothing is written");
+});
+
+test("GitHub customise sends only writable keys as write", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  for (const k of ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"]) assert.ok(field(t, "gh:perm:" + k), k + " has a checkbox");
+  assert.deepStrictEqual(["contents", "pull_requests", "issues"].map((k) => !!field(t, "gh:level:" + k)), [true, true, true], "read/write toggles on the three writable keys");
+  for (const k of ["actions", "checks", "metadata", "statuses"]) assert.strictEqual(field(t, "gh:level:" + k), undefined, k + " can only be read");
+  assert.strictEqual(field(t, "gh:perm:statuses").checked, false);
+  tick(t, "gh:perm:statuses", true);
+  setLevel(t, "gh:level:contents", "write");
+  setLevel(t, "gh:level:issues", "write");
+  assert.match(texts(blockOf(t, "cloud"), "pfv-warnw")[0], /^Write: this profile works in your folder/);
+  assert.match(byCls(blockOf(t, "cloud"), "pfv-permsum")[0].textContent, /^Can write: contents, issues\. Read only: /);
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].github.permissions, {
+    actions: "read", checks: "read", contents: "write", pull_requests: "read", issues: "write", metadata: "read", statuses: "read",
+  });
+});
+
+test("GitHub customise: unticking a write key and ticking it again gives read, and a custom set can be saved as ticked", async () => {
+  const t = cloudPage({}, { github: { owners: [{ owner: "culiops", app: "acme-app", repos: ["payments-api"] }], permissions: { contents: "write", metadata: "read" } } });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  assert.strictEqual(field(t, "gh:perm:contents").checked, true);
+  assert.strictEqual(field(t, "gh:level:contents").dataset.value, "write");
+  assert.strictEqual(field(t, "gh:perm:actions").checked, false);
+  tick(t, "gh:perm:contents", false);
+  assert.strictEqual(field(t, "gh:level:contents"), undefined, "no level for a key that is off");
+  tick(t, "gh:perm:contents", true);
+  assert.strictEqual(field(t, "gh:level:contents").dataset.value, "read");
+  setLevel(t, "gh:level:contents", "write");
+  assert.ok(unsavedNote(t).hidden, "back to what was stored is no change");
+  tick(t, "gh:perm:issues", true);
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].github.permissions, { contents: "write", issues: "read", metadata: "read" });
+});
+
+test("GitHub with no permission ticked is refused before the PUT, with the sentence under Permissions", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  for (const k of ["actions", "checks", "contents", "pull_requests", "issues", "metadata"]) tick(t, "gh:perm:" + k, false);
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-ferr"), ["GitHub: tick at least one permission, or the agent gets none."]);
+  tick(t, "gh:perm:contents", true);
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-ferr"), [], "the sentence goes when a box is ticked");
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].github.permissions, { contents: "read" });
+});
+
+test("GitHub owner signing in with a token: not narrowed, no permissions to customise, stored permissions kept", async () => {
+  const doc = { github: { owners: [{ owner: "culiops", token: "gh-pat", repos: ["payments-api"] }], permissions: { contents: "read" } } };
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ github_pat: true, github_permissions: { contents: "read" } }), PROFILES[2], PROFILES[3]] }, doc);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(field(t, "gh:0:pick").value, "token:gh-pat");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-hint").filter((x) => /personal access token/.test(x)),
+    ["A personal access token is not narrowed by CuliBox: it reaches whatever the token allows."]);
+  assert.strictEqual(byText(blockOf(t, "cloud"), "button", "Customise").length, 0, "the server never applies the set to a token");
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-permsum").length, 0);
+  typeInto(field(t, "gh:0:repos"), "payments-api, runbooks");
+  await saveBlock(t, "cloud");
+  const g = t.box.puts[0].github;
+  assert.deepStrictEqual(g.owners, [{ owner: "culiops", token: "gh-pat", repos: ["payments-api", "runbooks"] }], "a token owner carries no app key");
+  assert.deepStrictEqual(g.permissions, { contents: "read" }, "what was stored is kept");
+});
+
+test("GitHub: switching the login between an App and a token shows or hides the permissions", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  const sel = field(t, "gh:0:pick");
+  assert.deepStrictEqual(sel.children.map((o) => o.value), ["app:acme-app", "token:gh-pat"]);
+  assert.deepStrictEqual(sel.children.map((o) => o.textContent), ["acme-app · GitHub App, 1-hour tokens", "gh-pat · personal access token"]);
+  sel.value = "token:gh-pat";
+  sel.onchange();
+  assert.strictEqual(byCls(blockOf(t, "cloud"), "pfv-permsum").length, 0);
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].github.owners, [{ owner: "culiops", token: "gh-pat", repos: ["payments-api"] }]);
+});
+
+test("GitHub: a login the lists no longer have stays selectable, and the server's refusal goes under it in words", async () => {
+  const t = cloudPage({ ghApps: [] }, { github: { owners: [{ owner: "culiops", app: "gone-app", repos: ["payments-api"] }] } });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(field(t, "gh:0:pick").value, "app:gone-app");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": github.owners[0].app "gone-app" is not defined in github_apps', field: "github.owners[0].app" });
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-ferr"), ["Not found in Credentials. Remove it or create it."]);
+  assert.ok(field(t, "gh:0:pick").className.includes("pfv-bad"));
+});
+
+test("a new GitHub owner needs a name, a repository and a login before anything is sent", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  optBtn(t, "cloud", "Another org or user").click();
+  assert.strictEqual(field(t, "gh:1:pick").value, "app:acme-app", "the first login is preselected");
+  assert.strictEqual(Node.focused, field(t, "gh:1:owner"));
+  typeInto(field(t, "gh:1:repos"), "svc-a");
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-ferr"), ["Name the GitHub org or user."]);
+  typeInto(field(t, "gh:1:owner"), "acme-platform");
+  typeInto(field(t, "gh:1:repos"), "");
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-ferr"), ["List at least one repository."]);
+  assert.strictEqual(t.box.puts.length, 0);
+  typeInto(field(t, "gh:1:repos"), "svc-a, svc-b");
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].github.owners, [
+    { owner: "culiops", app: "acme-app", repos: ["payments-api"] },
+    { owner: "acme-platform", app: "acme-app", repos: ["svc-a", "svc-b"] },
+  ]);
+  assert.deepStrictEqual(t.box.puts[0].github.egress_allow, ["extra.example.com"]);
+});
+
+test("a GitHub owner row left empty is dropped, as the old form did", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  optBtn(t, "cloud", "Another org or user").click();
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.strictEqual(t.box.puts[0].github.owners.length, 1);
+});
+
+test("a refusal that names a row (a token that is not defined any more) goes under that row in words", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": tokens[1] "sentry-staging" is not defined in static_tokens', field: "tokens[1]" });
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "Token", "sentry-staging"), "pfv-ferr"), ["Not found in Credentials. Remove it or create it."]);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "Token", "grafana-prod"), "pfv-ferr"), []);
+  assert.ok(!/static_tokens|tokens\[/.test(t.els["pfv-in"].textContent));
+});
+
+test("the picker's seam: pfvAddRow puts a named connection or token in as a pending row, once", async () => {
+  const sandbox = { name: "sandbox", account_id: "333333333333", region: "eu-west-1" };
+  const t = cloudPage({ awscEntries: [...page().box.awscEntries, sandbox] });
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "aws", name: "sandbox" }), false, "the block is not open yet");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "aws", name: "sandbox" }), true);
+  assert.deepStrictEqual(texts(rowFor(t, "cloud", "AWS", "sandbox"), "pfv-rsub"), ["account 333333333333, eu-west-1"], "the row has the read view's words");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "aws", name: "sandbox" }), false, "it is there already");
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  // A row that was removed comes back instead of being added twice.
+  byText(rowFor(t, "cloud", "Token", "sentry-staging"), "button", "Remove")[0].click();
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "token", name: "sentry-staging" }), true);
+  assert.ok(!rowFor(t, "cloud", "Token", "sentry-staging").className.includes("pfv-removed"));
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read", "sandbox", "staging-read"]);
+  assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod", "sentry-staging"]);
+});
+
+// The old-style AWS setting: the server's convert, today's confirm and write acknowledgement.
+const legacyPage = () => cloudPage(
+  { profiles: [PROFILES[0], cloudView({ aws_connections: undefined, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } }), PROFILES[2], PROFILES[3]] },
+  { aws_connections: undefined, aws: { source_profile: "old", role_arn: "arn:aws:iam::123456789012:role/ops", region: "eu-west-1", label: "legacy-prod" } },
+);
+const convertCalls = (t) => t.calls.filter((c) => /convert-aws/.test(c));
+
+test("the old-style AWS row offers Move to a saved connection, which asks and converts on the server", async () => {
+  const t = legacyPage();
+  const posts = [];
+  const real = t.box.api;
+  t.box.api = async (p, o) => {
+    if (/convert-aws$/.test(p)) { posts.push(JSON.parse(o.body)); t.calls.push("POST " + p); return { connection: "aws-ops" }; }
+    return real(p, o);
+  };
+  await t.box.pfvShow("aws-ops");
+  const row = rowFor(t, "cloud", "AWS", "Old-style AWS setting");
+  assert.deepStrictEqual(texts(row, "pfv-tag"), ["PROD"]);
+  assert.deepStrictEqual(texts(row, "pfv-rsub"), ["legacy-prod"], "the binding's own label is the sub-line");
+  await byText(row, "button", "Move to a saved connection")[0].click();
+  assert.ok(t.calls.includes("confirm:Move to a saved connection:"));
+  assert.deepStrictEqual(posts, [{}]);
+  assert.ok(t.calls.includes("refreshCredLists"), "the new connection is listed before the profile is drawn");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-warn"), ["Converted to the connection aws-ops. The profile now uses it; the next session gets a new box."]);
+});
+
+test("a convert that needs the write acknowledgement asks again, then sends it", async () => {
+  const t = legacyPage();
+  const posts = [];
+  const real = t.box.api;
+  t.box.api = async (p, o) => {
+    if (!/convert-aws$/.test(p)) return real(p, o);
+    const body = JSON.parse(o.body);
+    posts.push(body);
+    if (!body.ack_write) throw apiErr(409, { error: "the role can write", code: "needs_ack", verdict: { actions: ["s3:PutObject"] } });
+    return { connection: "aws-ops" };
+  };
+  await t.box.pfvShow("aws-ops");
+  await byText(rowFor(t, "cloud", "AWS", "Old-style AWS setting"), "button", "Move to a saved connection")[0].click();
+  assert.deepStrictEqual(posts, [{}, { ack_write: true }]);
+  assert.strictEqual(t.calls.filter((c) => c.startsWith("confirm:")).length, 2);
+});
+
+test("a declined convert, a refusal and unsaved changes each leave the profile as it was", async () => {
+  const t = legacyPage();
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (/convert-aws$/.test(p)) { t.calls.push("POST " + p); throw apiErr(400, { error: "no role to convert" }); } return real(p, o); };
+  await t.box.pfvShow("aws-ops");
+  const link = () => byText(rowFor(t, "cloud", "AWS", "Old-style AWS setting"), "button", "Move to a saved connection")[0];
+  t.box.confirmAnswer = false;
+  await link().click();
+  assert.deepStrictEqual(convertCalls(t), [], "declined: nothing is sent");
+  t.box.confirmAnswer = true;
+  await link().click();
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-err"), ["aws: no role to convert"], "a refusal reads as the Credentials screen words it");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  const before = convertCalls(t).length;
+  await link().click();
+  assert.strictEqual(convertCalls(t).length, before, "unsaved changes would be lost by the convert: it is refused");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), ["Save or discard these changes first"]);
+});
+
+test("the old-style AWS row can be removed in the form, and the save drops the setting", async () => {
+  const t = legacyPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  const row = () => rowFor(t, "cloud", "AWS", "Old-style AWS setting");
+  assert.strictEqual(byText(row(), "button", "Move to a saved connection").length, 1, "the form offers the move too");
+  byText(row(), "button", "Remove")[0].click();
+  assert.ok(row().className.includes("pfv-removed"));
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  await saveBlock(t, "cloud");
+  assert.ok(!("aws" in t.box.puts[0]));
+  const again = legacyPage();
+  await again.box.pfvShow("aws-ops");
+  clickBtn(blockOf(again, "cloud"), "Edit");
+  await saveBlock(again, "cloud");
+  assert.ok("aws" in again.box.puts[0], "an old-style setting that is not removed goes back as stored");
+});
+
+test("every top-level name in pfv-cloud.js is unique across the page scripts", () => {
+  const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
+  const mine = names(fs.readFileSync(path.join(STATIC, "pfv-cloud.js"), "utf8"));
+  assert.ok(mine.size > 10);
+  // pfc/PFC_ for its own; the three pfv names are the page's seams for the pages that call into it.
+  const seams = new Set(["pfvOpenPicker", "pfvAddRow", "pfvConvertAws"]);
+  assert.ok([...mine].every((n) => /^(pfc|PFC_)/.test(n) || seams.has(n)), "every name is pfc/PFC_ prefixed or a seam: " + [...mine].join(", "));
+  const clashes = [];
+  for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js") && x !== "pfv-cloud.js")) {
+    for (const n of names(fs.readFileSync(path.join(STATIC, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
+  }
+  assert.deepStrictEqual(clashes, []);
+});
+
+test("Cloud and tokens and Also reachable register their editors through the seam", () => {
+  const t = page();
+  for (const id of ["cloud", "reachable"]) {
+    assert.ok(t.run("PFV_EDITORS")[id], id + " registered itself");
+    assert.throws(() => t.box.pfvRegisterEditor(id, {}), new RegExp("registered twice: " + id));
+  }
 });

@@ -1849,6 +1849,33 @@
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
+  /* Cloud and tokens, Also reachable (editing): the read view's rows with Remove at the right (Undo while the removal is pending,
+     the row struck through), an input row for a folder, a domain or a GitHub owner being added, and the owner's fields under its
+     row. Look source: option-b/index.html (.rm, .row.removed, .row-edit, .perm) and the b-aws, b-err, b-err2 and b-picker shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn { min-width: 54px; height: 20px; padding: 0 4px; text-align: right; border: 0; border-radius: var(--r-chip); background: none; color: var(--muted); font: 400 12px var(--font-ui); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed :is(.pfv-nm, .pfv-rsub, .pfv-scope, .pfv-miss, .pfv-mono) { text-decoration: line-through; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-act-link { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-tag { color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: 12px; line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2 / 4; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rowedit { grid-column: 2 / -1; margin-top: 12px; padding: 14px 0 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-perms { display: grid; gap: 4px; justify-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-permsum { line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-cust { padding: 0 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; justify-self: stretch; min-height: 30px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 4px; font-size: 12px; color: var(--red); }
+  /* The stand-in for the "+ Add" picker: the kinds that are an input row. */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick { box-sizing: border-box; width: 420px; max-width: 100%; margin-top: 6px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; gap: 1px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:hover { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t { font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 4px 10px; font-size: 12px; color: var(--muted); }
   /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
   #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }
@@ -1874,5 +1901,7 @@
   @container (max-width: 863px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2; }
   }
 }

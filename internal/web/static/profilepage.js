@@ -9,12 +9,12 @@
 //
 // Desktop only: the old form (.plist, .ped, #foot-manage) is hidden by desktop.css
 // on the page and stays for the phone's modal. Edit opens one block as a small form
-// (Runs in, Agent and Network here, Workspace in pfv-workspace.js; the other blocks'
-// Edit, "+ Add", Remove, Duplicate, Switch to box and "+ New profile" are drawn but do
-// nothing until their tasks wire them). profileedit.js decides what a save writes and
-// what a refusal means; this file draws the forms, keeps what the user has typed and
-// runs the save. A block editor in a file of its own registers through
-// pfvRegisterEditor (see PFV_EDITORS) and is loaded after this one.
+// (Runs in, Agent and Network here, Workspace in pfv-workspace.js, Cloud and tokens and
+// Also reachable in pfv-cloud.js; the other blocks' Edit, Duplicate, Switch to box and
+// "+ New profile" are drawn but do nothing until their tasks wire them). profileedit.js
+// decides what a save writes and what a refusal means; this file draws the forms, keeps
+// what the user has typed and runs the save. A block editor in a file of its own registers
+// through pfvRegisterEditor (see PFV_EDITORS) and is loaded after this one.
 // Classic script: api, askConfirm, openSpawnDialog, openSettings, loadProfiles,
 // withPending, buildSeg and the profile globals are app.js's and the helpers',
 // read at call time; every top-level name here starts with pfv/PFV_ (the page
@@ -291,37 +291,54 @@ function pfvDrawLink(label, cls, aria) {
   return b;
 }
 
-function pfvDrawScope(r, known) {
+// o: {block, edit}. block: the block the row belongs to (the read view's Remove link opens it with the row
+// removed); edit: the row is drawn in the open block, whose Remove column is the way out, so the link is not drawn.
+function pfvDrawScope(r, known, o) {
   const p = pfvMk("p", "pfv-scope");
+  const at = o || {};
   if (r.missing) {
     // A bound name /api/meta no longer lists: the server refuses every save until
     // it is removed, so it is an error and says so in the error colour.
-    p.append(pfvMk("span", "pfv-miss", r.scope), " · ", pfvDrawLink("Remove", "pfv-rm"));
+    p.append(pfvMk("span", "pfv-miss", r.scope));
+    if (!at.edit) {
+      const rm = pfvDrawLink("Remove", "pfv-rm");
+      rm.onclick = () => pfvOpenRemove(at.block, r);
+      p.append(" · ", rm);
+    }
     return p;
   }
   p.append(...pfvMonoNodes(r.scope, known));
-  if (r.action) p.append(" ", pfvDrawLink(r.action, "pfv-act-link"));
+  if (r.action) {
+    const act = pfvDrawLink(r.action, "pfv-act-link");
+    act.onclick = () => pfvConvertAws();
+    p.append(" ", act);
+  }
   return p;
 }
 
-// err: a refusal that names this row (a folder that is gone, say), drawn under it in words.
-function pfvDrawRow(r, known, err) {
+// err: a refusal that names this row (a folder that is gone, say), drawn under it in words. o: pfvDrawScope's.
+function pfvDrawRow(r, known, err, o) {
   const row = pfvMk("div", "pfv-row");
-  row.append(pfvMk("span", "pfv-k", r.kind));
+  // The old-style AWS setting is an AWS row named for what it is (the kind column is 52px: "Old-style AWS" would wrap
+  // in three lines); the binding's own label is its sub-line.
+  const old = r.kind === "Old-style AWS";
+  row.append(pfvMk("span", "pfv-k", old ? "AWS" : r.kind));
   const id = pfvMk("div", "pfv-id");
   const nm = pfvMk("p", "pfv-nm");
   // The file shared from a private copy's original is a path; the CLAUDE.md imports row, also Files, is words.
-  if (r.original === true || PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
+  if (old) nm.append("Old-style AWS setting");
+  else if (r.original === true || PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
   else nm.append(...pfvMonoNodes(r.name, known));
   if (r.tag) nm.append(pfvMk("span", "pfv-tag", r.tag));
   id.append(nm);
-  if (r.sub) {
+  const sub = old ? r.name : r.sub;
+  if (sub) {
     const s = pfvMk("p", "pfv-rsub");
-    s.append(...pfvMonoNodes(r.sub, known));
+    s.append(...pfvMonoNodes(sub, known));
     id.append(s);
   }
   if (err) id.append(pfvMk("p", "pfv-ferr", err));
-  row.append(id, pfvDrawScope(r, known));
+  row.append(id, pfvDrawScope(r, known, o));
   return row;
 }
 
@@ -364,13 +381,17 @@ function pfvDrawBody(b, known, rec) {
       if (r.kind === "Not home") continue;
       const e = rec ? rec.ferrs.find((x) => pfvRowForField(b.rows, x.field) === r) : null;
       if (e) rec.consumed.add(e.field);
-      rows.append(pfvDrawRow(r, known, e ? e.text : ""));
+      rows.append(pfvDrawRow(r, known, e ? e.text : "", { block: b.id }));
     }
     if (b.notHome) rows.append(pfvDrawBranches(b.notHome, nh));
     body.append(rows);
   }
   if (b.note) body.append(pfvMk("p", "pfv-tnote", b.note));
-  if (b.add) body.append(pfvDrawLink(b.add, "pfv-add"));
+  if (b.add) {
+    const add = pfvDrawLink(b.add, "pfv-add");
+    add.onclick = () => pfvOpenAdd(b.id);
+    body.append(add);
+  }
   // Offered by the read model only where it can be used. Wired by the Runs in task.
   if (b.switchToBox) {
     const act = pfvMk("div", "pfv-stmt-act");
@@ -624,9 +645,11 @@ async function pfvDelete() {
 // check(rec, c): what the client refuses before any PUT, {field, text} or null. note(rec, c):
 // the footer carries the box consequence. hideSave(rec, c): Save is not offered. fields: the
 // form is a stack of labelled fields (a 16px rhythm, 440px wide); without it the form flows
-// as it likes. A block with no entry here is drawn but its Edit link does nothing until its
-// task (Cloud and tokens, Also reachable, Advanced); one that a refused save opens is drawn
-// read-only with the refusal under the row it names, so the user can see what is wrong.
+// as it likes. A block of rows has two more: add(rec, what) puts a pending row in (what is
+// pfvAddRow's) and answers the key of the control to focus, "" when it added nothing;
+// remove(rec, row) marks the read view's row removed. A block with no entry here is drawn
+// but its Edit link does nothing until its task (Advanced); one that a refused save opens
+// is drawn read-only with the refusal under the row it names, so the user can see what is wrong.
 const PFV_EDITORS = {
   runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave },
   agent: { values: pfvAgentValues, draw: pfvAgentForm, merge: pfvAgentMerge, fields: true },
@@ -805,6 +828,24 @@ function pfvOpenBlock(id) {
   pfvSyncOpen();
   pfvRender();
   pfvFocusBlock(id);
+  return true;
+}
+
+// pfvOpenAdd: a "+ Add ..." link of the read view: the block opens as a form with the picker open (the picker
+// is pfvOpenPicker's, pfv-cloud.js). Nothing opens when the block refuses to (another block holds changes).
+function pfvOpenAdd(id) {
+  if (!pfvOpenBlock(id)) return false;
+  pfvOpenPicker(id);
+  return true;
+}
+
+// pfvOpenRemove: the Remove link of a read view row: the block opens as a form with that row removed. The
+// removal is pending like any other, so nothing is saved until Save.
+function pfvOpenRemove(id, row) {
+  if (!pfvOpenBlock(id)) return false;
+  const ed = PFV_EDITORS[id];
+  const rec = pfvState.edits[id];
+  if (ed && typeof ed.remove === "function" && rec) ed.remove(rec, row);
   return true;
 }
 
@@ -1308,12 +1349,15 @@ function pfvPreCheck(rec, c) {
   if (!v) return null;
   if (rec.id === "agent" && typeof v.bin === "string" && v.bin.trim() === "") return { field: "bin", text: PFV_NO_COMMAND };
   if (rec.id === "runs" && v.tier === "host" && pfvHostRefusal(c.doc)) return { field: "runtime", text: pfvHostRefusal(c.doc) };
-  const own = PFV_EDITORS[rec.id] && PFV_EDITORS[rec.id].check ? PFV_EDITORS[rec.id].check(rec, c) : null;
+  const ed = PFV_EDITORS[rec.id];
+  const own = ed && ed.check ? ed.check(rec, c) : null;
   if (own) return own;
-  // The permission set is checked here, not repaired in the merge: "none ticked" must not become the six read defaults.
-  if (v.github) {
-    const text = pfvGithubError(v.github);
-    if (text) return { field: "github", text };
+  // The permission set is checked here, on what the merge is given, not repaired in it: "none ticked" must not become
+  // the six read defaults.
+  const sent = ed && ed.merge ? ed.merge(rec, c) : v;
+  if (sent && sent.github) {
+    const text = pfvGithubError(sent.github);
+    if (text) return { field: "github.permissions", text };
   }
   return null;
 }
