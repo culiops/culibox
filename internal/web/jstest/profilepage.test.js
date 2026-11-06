@@ -44,7 +44,7 @@ class Node {
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
   addEventListener(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); }
   contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
-  focus() { Node.focused = this; }
+  focus() { Node.focused = this; for (const f of (this.handlers.focus || []).slice()) f({ target: this }); }
   click() { if (this.onclick) return this.onclick({ target: this }); }
   all(pred, out = []) { for (const c of this.children) { if (!(c instanceof Node)) continue; if (pred(c)) out.push(c); c.all(pred, out); } return out; }
 }
@@ -79,6 +79,27 @@ const SCHEMA = () => { const p = require("../static/profileform.js").schemaPin()
 // An api() failure as app.js throws it: the sentence, the status and code, the parsed body.
 const apiErr = (status, body) => Object.assign(new Error(body.error || "failed"), { status, code: body.code || "", body });
 
+// The workspace picker (wspicker.js) has its own tests; here the Workspace editor is driven through a stand-in
+// that records how it was built and lets a test do what the user does (pick, type, focus).
+function stubPickers() {
+  const made = [];
+  const factory = (opts) => {
+    const p = { opts, v: "", destroyed: false, opened: 0 };
+    p.value = () => p.v;
+    p.set = (x) => { p.v = x || ""; opts.input.value = p.v; };
+    p.open = () => { p.opened++; };
+    p.close = () => {};
+    p.destroy = () => { p.destroyed = true; };
+    p.pick = (x) => { p.v = x; opts.input.value = x; opts.onPick(x); };
+    p.type = (x) => { opts.input.value = x; if (x.startsWith("/")) { p.v = x; opts.onPick(x); } else if (x === "") { p.v = ""; opts.onPick(""); } };
+    // The real picker opens its list on focus unless asked not to (openOnFocus).
+    opts.input.addEventListener("focus", () => { if (!opts.openOnFocus || opts.openOnFocus()) p.opened++; });
+    made.push(p);
+    return p;
+  };
+  return { made, factory };
+}
+
 // One page: the real model scripts, profilepage.js, and stand-ins for what app.js owns.
 function page(over) {
   const calls = [];
@@ -92,9 +113,10 @@ function page(over) {
     get activeElement() { return Node.focused || null; },
   };
   Node.focused = null;
+  const pk = stubPickers();
   const box = Object.assign({
     document: doc, console, Promise, JSON, Date, Math, Array, Object, Set, String, Number, setTimeout, clearTimeout,
-    window: { HOME_DIR: "/home/you" },
+    window: { HOME_DIR: "/home/you" }, cloneUnavailable: "", createWsPicker: pk.factory, pickers: pk.made,
     profiles: PROFILES.slice(), profilesLoaded: true, selectedProfile: "", metaLoaded: true,
     boxRuntime: "runc", boxUnavailableReason: "", bundleImports: true, optionDefs: OPTION_DEFS,
     accountsCache: [{ name: "work" }], acctChoices: ACCT.acctChoices, ACCT_DEFAULT: ACCT.ACCT_DEFAULT,
@@ -132,11 +154,11 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["fsops.js", "workhome.js", "spawnpreview.js", "spawnform.js", "profileform.js", "profileview.js", "profileedit.js"]) {
+  for (const f of ["fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "profileview.js", "profileedit.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
-  new vm.Script(fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8"), { filename: "profilepage.js" }).runInContext(ctx);
+  for (const f of ["profilepage.js", "pfv-workspace.js"]) new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   return { box, els, calls, run: (code) => new vm.Script(code).runInContext(ctx) };
 }
 
@@ -192,8 +214,8 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   ]);
   assert.strictEqual(byText(root, "button", "+ Add access").length, 1);
   assert.strictEqual(byText(root, "button", "+ Add folder or domain").length, 1);
-  // Runs in, Agent and Network edit now; the blocks whose editor is a later task are drawn but inert.
-  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, false, true, false, false, true, false]);
+  // Runs in, Workspace, Agent and Network edit now; the blocks whose editor is a later task are drawn but inert.
+  assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => !!b.onclick), [true, true, true, false, false, true, false]);
   // Rows come from reachModel: a PROD tag on the prod connection, the production tag on the token.
   const rows = byCls(root, "pfv-row");
   assert.ok(rows.some((r) => texts(r, "pfv-tag").join() === "PROD" && /prod-read/.test(r.textContent)));
@@ -577,8 +599,8 @@ test("clicking a nav row keeps its button and moves aria-current", async () => {
 
 // --- every class the page draws has a rule ------------------------------------------
 
-test("every pfv- class in profilepage.js has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
-  const src = fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8");
+test("every pfv- class in the profile page scripts has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
+  const src = ["profilepage.js", "pfv-workspace.js"].map((f) => fs.readFileSync(path.join(STATIC, f), "utf8")).join("\n");
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   const used = new Set();
   for (const m of src.matchAll(/"([^"\n]*)"/g)) {
@@ -1197,4 +1219,412 @@ test("picking an effort keeps focus on the lit button after the form redraws", a
   assert.strictEqual(Node.focused.textContent, "xhigh");
   assert.ok(blockOf(t, "agent").contains(Node.focused), "a button of the new form, not of the one that was replaced");
   assert.strictEqual(t.run("pfvState").pending, true);
+});
+
+// --- Task 7 review minors: a stale answer after a save, and a stuck Save ---------------------------------------
+
+test("an answer to a pfvShow that was already out before the edit cannot bring back the profile as it was before the save", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const old = JSON.parse(JSON.stringify(DOCS["aws-ops"]));
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => {
+    if (p === "/api/profiles/aws-ops" && !(o && o.method) && !release) { await new Promise((r) => { release = r; }); return old; }
+    return real(p, o);
+  };
+  const slow = t.box.pfvShow("aws-ops"); // the tab was selected again: a GET is out
+  await settle();
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  const saved = t.run("pfvState").doc;
+  assert.notStrictEqual(saved.rev, "r1", "the page holds the revision the save made");
+  release();
+  await slow;
+  assert.strictEqual(t.run("pfvState").doc, saved, "the late answer is dropped");
+  assert.strictEqual(t.run("pfvState").doc.options.model, "claude-sonnet-5");
+});
+
+test("an answer to an older pfvShow cannot replace what Reload fetched", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const old = JSON.parse(JSON.stringify(DOCS["aws-ops"]));
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => {
+    if (p === "/api/profiles/aws-ops" && !(o && o.method) && !release) { await new Promise((r) => { release = r; }); return old; }
+    return real(p, o);
+  };
+  const slow = t.box.pfvShow("aws-ops");
+  await settle();
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(409, { error: "changed", code: "profile_changed" });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  t.box.putFail = null;
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { rev: "r9" });
+  await clickBtn(blockOf(t, "agent"), "Reload");
+  assert.strictEqual(t.run("pfvState").doc.rev, "r9");
+  release();
+  await slow;
+  assert.strictEqual(t.run("pfvState").doc.rev, "r9", "the late answer is dropped");
+});
+
+test("a throw while a save runs its course cannot leave Save and Edit refused for good", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.loadProfiles = async () => { throw new Error("boom"); };
+  await assert.rejects(() => clickBtn(blockOf(t, "agent"), "Save"), /boom/);
+  assert.strictEqual(t.run("pfvState").saving, false);
+  t.box.loadProfiles = async () => true;
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true, "Save works again");
+  assert.strictEqual(t.box.puts.length, 2);
+});
+
+// --- the Workspace block (spec 5.5; pfv-workspace.js) -----------------------------------------------------------------
+
+const CLONE_DOC = { name: "gitops-clone", bin: "claude", runtime: "box", default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", clone_share: ["CLAUDE.md", "docs/a.md"], clone_no_auto_return: true, rev: "r5" };
+const cloneView = () => view("gitops-clone", { default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", auto_return: false });
+const clonePage = (over) => {
+  const t = page(Object.assign({ profiles: [cloneView(), PROFILES[1], PROFILES[3]] }, over));
+  t.box.docs["gitops-clone"] = CLONE_DOC;
+  return t;
+};
+const lastPicker = (t) => t.box.pickers[t.box.pickers.length - 1];
+async function openWs(t, name) {
+  await t.box.pfvShow(name || "aws-ops");
+  clickBtn(blockOf(t, "workspace"), "Edit");
+  return lastPicker(t);
+}
+// What a click on a radio does: focus moves to it, it becomes checked, and its change handler runs.
+function pickMode(t, which) {
+  const r = field(t, "mode-" + which);
+  r.focus();
+  r.checked = true;
+  r.onchange();
+}
+const typeInto = (n, text) => { n.value = text; n.oninput(); };
+const ferrs = (t) => texts(blockOf(t, "workspace"), "pfv-ferr");
+
+test("Workspace edit: the folder picker and the two ways of working on it; the copy fields wait for the private copy", async () => {
+  const t = page();
+  const pk = await openWs(t);
+  const ws = blockOf(t, "workspace");
+  assert.ok(ws.className.includes("pfv-editing"));
+  assert.strictEqual(t.run("pfvState").openBlock, "workspace");
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder", "How it works on the folder"]);
+  const input = field(t, "folder");
+  assert.strictEqual(input.value, "/home/you/work/payments-api");
+  assert.strictEqual(t.box.pickers.length, 1, "one picker for the block");
+  assert.strictEqual(pk.opts.input, input);
+  assert.strictEqual(pk.opts.keepEsc, true, "Esc closes the list, not the page");
+  assert.strictEqual(pk.opts.list.className, "pfv-wslist");
+  assert.strictEqual(pk.value(), "/home/you/work/payments-api");
+  assert.deepStrictEqual(texts(ws, "pfv-hint"), ["A box cannot use your whole home or system folders."]);
+  assert.deepStrictEqual(texts(ws, "pfv-card-t"), ["Work in this folder", "Work on a private copy"]);
+  assert.strictEqual(field(t, "mode-folder").checked, true);
+  assert.strictEqual(field(t, "mode-copy").checked, false);
+  assert.strictEqual(field(t, "copy-dir"), undefined, "no copy fields yet");
+  assert.strictEqual(field(t, "share"), undefined);
+  assert.strictEqual(byText(ws, "button", "Edit").length, 0);
+  assert.deepStrictEqual(texts(ws, "pfv-fnote"), [], "the 'new box' line is for the private copy, as the mockup draws it");
+  assert.strictEqual(Node.focused, input, "focus goes to the folder");
+  assert.strictEqual(pk.opened, 0, "but opening the block does not open the dropdown");
+  input.focus();
+  assert.strictEqual(pk.opened, 1, "tabbing in later does");
+});
+
+test("Workspace: picking a folder is a change; Save writes default_cwd and keeps the rest of the profile", async () => {
+  const t = page();
+  const pk = await openWs(t);
+  const head = byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+  assert.ok(head.hidden);
+  pk.pick("/home/you/work/billing");
+  assert.strictEqual(head.hidden, false);
+  assert.deepStrictEqual(texts(blockOf(t, "workspace"), "pfv-st-dirty"), ["Unsaved changes"]);
+  assert.strictEqual(t.box.pickers.length, 1, "a pick does not draw the form again: the picker and its list stay");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 1);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.default_cwd, "/home/you/work/billing");
+  assert.strictEqual(body.clone_of, undefined);
+  assert.strictEqual(body.runtime, "box");
+  assert.deepStrictEqual(body.options, { model: "claude-opus-5-5", effort: "high" }, "the other blocks' values are kept");
+  assert.strictEqual(body.rev, "r1");
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+  assert.strictEqual(pk.destroyed, true, "the picker goes with the form");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-saved"), ["Saved"]);
+});
+
+test("Workspace: Work on a private copy shows the copy fields, the copy kept under ~/box-clones; Save sends clone_of and where the copy lives", async () => {
+  const t = page();
+  const first = await openWs(t);
+  pickMode(t, "copy");
+  const ws = blockOf(t, "workspace");
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder to copy", "How it works on the folder", "Where the copy is kept", "Files to share from your repo, read-only"]);
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/payments-api");
+  assert.strictEqual(field(t, "share").value, "");
+  assert.strictEqual(field(t, "auto-return").checked, true);
+  assert.deepStrictEqual(texts(ws, "pfv-check-t"), ["Bring work home automatically"]);
+  assert.deepStrictEqual(texts(ws, "pfv-hint"), [
+    "A box cannot use your whole home or system folders.", "CuliBox creates it on the first session.", "Relative to the folder, one per line, at most 8.",
+  ]);
+  assert.deepStrictEqual(texts(ws, "pfv-fnote"), ["Saving gives the next session a new box. Running sessions keep theirs."]);
+  assert.strictEqual(first.destroyed, true, "the form was drawn again: the old picker is released");
+  assert.strictEqual(t.box.pickers.length, 2);
+  assert.strictEqual(lastPicker(t).value(), "/home/you/work/payments-api", "the folder carries over");
+  assert.strictEqual(Node.focused, field(t, "mode-copy"), "focus stays on the radio");
+  assert.strictEqual(lastPicker(t).opened, 0, "and the dropdown stays closed");
+  typeInto(field(t, "share"), "CLAUDE.md\ndocs/guide.md");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.clone_of, "/home/you/work/payments-api");
+  assert.strictEqual(body.default_cwd, "/home/you/box-clones/payments-api");
+  assert.deepStrictEqual(body.clone_share, ["CLAUDE.md", "docs/guide.md"]);
+  assert.strictEqual(body.clone_no_auto_return, undefined, "unset means on");
+});
+
+test("Workspace: the copy's folder follows the picked folder until the user writes their own, and is never one another profile keeps its copy in", async () => {
+  const t = page({ profiles: PROFILES.concat([view("other", { default_cwd: "/home/you/box-clones/payments-api" })]) });
+  await openWs(t);
+  pickMode(t, "copy");
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/payments-api-2", "the other profile's copy is taken");
+  lastPicker(t).pick("/home/you/work/billing");
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/billing");
+  assert.strictEqual(t.box.pickers.length, 2, "no redraw for it");
+  typeInto(field(t, "copy-dir"), "/home/you/clones/mine");
+  lastPicker(t).pick("/home/you/work/other");
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/clones/mine", "what the user wrote stays");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].default_cwd, "/home/you/clones/mine");
+  assert.strictEqual(t.box.puts[0].clone_of, "/home/you/work/other");
+});
+
+test("Workspace: a private copy and back is no change, and the copy fields return as they were left", async () => {
+  const t = page();
+  await openWs(t);
+  const head = byCls(t.els["pfv-in"], "pfv-unsaved")[0];
+  pickMode(t, "copy");
+  assert.strictEqual(head.hidden, false);
+  typeInto(field(t, "share"), "CLAUDE.md");
+  pickMode(t, "folder");
+  assert.ok(head.hidden, "back to what was stored is no change");
+  assert.strictEqual(field(t, "copy-dir"), undefined);
+  assert.strictEqual(byText(blockOf(t, "workspace"), "button", "Cancel").length, 1);
+  pickMode(t, "copy");
+  assert.strictEqual(field(t, "share").value, "CLAUDE.md");
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/payments-api");
+  assert.strictEqual(head.hidden, false);
+});
+
+test("Workspace: a private copy with no folder or no place for the copy, or a relative one, is refused before any PUT, and the words go when the field changes", async () => {
+  const t = page();
+  await openWs(t);
+  pickMode(t, "copy");
+  lastPicker(t).type("");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.deepStrictEqual(ferrs(t), ["Private copy: pick the folder to copy."]);
+  assert.ok(field(t, "folder").className.includes("pfv-bad"));
+  assert.deepStrictEqual(texts(blockOf(t, "workspace"), "pfv-st-invalid"), ["One field needs a fix before this can save."]);
+  const redraws = t.box.pickers.length;
+  lastPicker(t).pick("/home/you/work/payments-api");
+  assert.deepStrictEqual(ferrs(t), [], "picking clears it in place");
+  assert.strictEqual(t.box.pickers.length, redraws, "without drawing the form again");
+  typeInto(field(t, "copy-dir"), "");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), false);
+  assert.deepStrictEqual(ferrs(t), ["Private copy: choose where the copy lives."]);
+  typeInto(field(t, "copy-dir"), "~/box-clones/x");
+  assert.deepStrictEqual(ferrs(t), []);
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), false);
+  assert.deepStrictEqual(ferrs(t), ["Use a full path that starts with /"]);
+  assert.strictEqual(t.box.puts.length, 0);
+});
+
+test("Workspace: text left in the folder field that was never picked or resolved is refused, not saved as the old folder", async () => {
+  const t = page();
+  const pk = await openWs(t);
+  pk.type("culi"); // a search query, not a folder
+  assert.strictEqual(pk.value(), "/home/you/work/payments-api");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.deepStrictEqual(ferrs(t), ["Use a full path that starts with /"]);
+  assert.strictEqual(field(t, "folder").value, "culi", "what the user typed is still there to fix");
+  lastPicker(t).pick("/home/you/work/billing");
+  assert.deepStrictEqual(ferrs(t), []);
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  assert.strictEqual(t.box.puts[0].default_cwd, "/home/you/work/billing");
+});
+
+test("Workspace: a refusal that names the folder, the copy's folder or a shared file goes under that control", async () => {
+  const t = page();
+  await openWs(t);
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": default working dir cannot be contained: it is your home', field: "default_cwd" });
+  lastPicker(t).pick("/home/you");
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), false);
+  assert.deepStrictEqual(ferrs(t), ["default working dir cannot be contained: it is your home"]);
+  assert.ok(field(t, "folder").className.includes("pfv-bad"));
+  assert.strictEqual(field(t, "folder").value, "/home/you", "the value stays");
+  // Copy mode: three controls, three fields.
+  pickMode(t, "copy");
+  for (const [fieldPath, control] of [["clone_of", "folder"], ["default_cwd", "copy-dir"], ["clone_share[1]", "share"]]) {
+    t.box.putFail = apiErr(400, { error: "profile \"aws-ops\": " + fieldPath + " is wrong", field: fieldPath });
+    await clickBtn(blockOf(t, "workspace"), "Save");
+    const bad = byCls(blockOf(t, "workspace"), "pfv-bad");
+    assert.deepStrictEqual(bad.map((n) => n.dataset.pfvField), [control], fieldPath);
+    assert.deepStrictEqual(ferrs(t), [fieldPath + " is wrong"], fieldPath);
+  }
+});
+
+test("Workspace on a host profile: one folder field and one sentence saying why there is no private copy", async () => {
+  const t = page();
+  const pk = await openWs(t, "runbook-host");
+  const ws = blockOf(t, "workspace");
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent), ["Folder"]);
+  assert.deepStrictEqual(texts(ws, "pfv-hint"), ["Where sessions start. A private copy needs a box."]);
+  assert.strictEqual(byCls(ws, "pfv-card").length, 0);
+  assert.strictEqual(field(t, "folder").value, "/home/you/runbooks");
+  assert.deepStrictEqual(texts(ws, "pfv-fnote"), [], "a host has no box to give the next session");
+  pk.pick("/home/you/notes");
+  await clickBtn(blockOf(t, "workspace"), "Save");
+  assert.strictEqual(t.box.puts[0].default_cwd, "/home/you/notes");
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+});
+
+test("Workspace where private copies are not available: the choice is hidden with the reason; a profile that already is a copy keeps both and the warning", async () => {
+  const t = page({ cloneUnavailable: "Docker is not installed" });
+  await openWs(t);
+  let ws = blockOf(t, "workspace");
+  assert.strictEqual(byCls(ws, "pfv-card").length, 0);
+  assert.deepStrictEqual(texts(ws, "pfv-hint"), ["A box cannot use your whole home or system folders.", "Private copies are not available on this instance: Docker is not installed."]);
+  const c = clonePage({ cloneUnavailable: "Docker is not installed" });
+  await openWs(c, "gitops-clone");
+  ws = blockOf(c, "workspace");
+  assert.deepStrictEqual(texts(ws, "pfv-card-t"), ["Work in this folder", "Work on a private copy"]);
+  assert.ok(texts(ws, "pfv-hint").includes("Private copies are not available on this instance (Docker is not installed). Sessions of this profile will not start."));
+  assert.strictEqual(field(c, "mode-copy").checked, true);
+});
+
+test("Workspace on a private copy: it opens as one, and Work in this folder says the copy stays on disk and saves just the folder", async () => {
+  const t = clonePage();
+  await openWs(t, "gitops-clone");
+  const ws = blockOf(t, "workspace");
+  assert.strictEqual(field(t, "mode-copy").checked, true);
+  assert.strictEqual(field(t, "folder").value, "/home/you/work/k8s-gitops");
+  assert.strictEqual(field(t, "copy-dir").value, "/home/you/box-clones/k8s-gitops");
+  assert.strictEqual(field(t, "share").value, "CLAUDE.md\ndocs/a.md");
+  assert.strictEqual(field(t, "auto-return").checked, false, "clone_no_auto_return is the stored opt-out");
+  assert.deepStrictEqual(byCls(ws, "pfv-flabel").map((n) => n.textContent)[0], "Folder to copy");
+  assert.ok(texts(ws, "pfv-hint").includes("CuliBox created it on the first session."));
+  assert.deepStrictEqual(texts(ws, "pfv-fnote"), ["Saving gives the next session a new box. Running sessions keep theirs."]);
+  assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden, "opened and not touched is no change");
+  pickMode(t, "folder");
+  assert.deepStrictEqual(texts(blockOf(t, "workspace"), "pfv-hint").slice(-1), ["The private copy at ~/box-clones/k8s-gitops stays on disk with its work; this switch never deletes it."]);
+  assert.strictEqual(await clickBtn(blockOf(t, "workspace"), "Save"), true);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.default_cwd, "/home/you/work/k8s-gitops");
+  for (const k of ["clone_of", "clone_share", "clone_no_auto_return"]) assert.strictEqual(body[k], undefined, k);
+});
+
+test("Workspace on a private copy: share and the auto-return opt-out that were not touched are saved as stored", async () => {
+  const t = clonePage();
+  await openWs(t, "gitops-clone");
+  lastPicker(t).pick("/home/you/work/other");
+  await clickBtn(blockOf(t, "workspace"), "Save");
+  const body = t.box.puts[0];
+  assert.strictEqual(body.clone_of, "/home/you/work/other");
+  assert.strictEqual(body.default_cwd, "/home/you/box-clones/k8s-gitops", "the stored copy folder is not replaced by a suggestion");
+  assert.deepStrictEqual(body.clone_share, ["CLAUDE.md", "docs/a.md"]);
+  assert.strictEqual(body.clone_no_auto_return, true);
+});
+
+test("Workspace: the picker is built for each draw of the form and released when the form goes", async () => {
+  const t = page();
+  const a = await openWs(t);
+  pickMode(t, "copy");
+  const b = lastPicker(t);
+  assert.deepStrictEqual([a.destroyed, b.destroyed], [true, false]);
+  clickBtn(blockOf(t, "workspace"), "Discard");
+  assert.strictEqual(b.destroyed, true, "Discard");
+  const c = await openWs(t);
+  assert.strictEqual(c.destroyed, false);
+  await t.box.pfvShow("runbook-host");
+  assert.strictEqual(c.destroyed, true, "switching profile");
+  await t.box.pfvShow("aws-ops");
+  const d = await openWs(t);
+  t.box.putFail = apiErr(400, { error: "nope", field: "default_cwd" });
+  d.pick("/home/you/x");
+  await clickBtn(blockOf(t, "workspace"), "Save");
+  assert.strictEqual(d.destroyed, true, "a refused save draws the form again, with a new picker");
+  assert.strictEqual(lastPicker(t).destroyed, false);
+  assert.strictEqual(t.box.pickers.filter((p) => !p.destroyed).length, 1, "exactly one is alive");
+});
+
+test("Workspace: a refused save in another block opens Workspace as a repair form with the error under its folder", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": default working dir cannot be contained: it is your home', field: "default_cwd" });
+  await clickBtn(blockOf(t, "agent"), "Save");
+  assert.ok(blockOf(t, "workspace").className.includes("pfv-editing"));
+  assert.deepStrictEqual(ferrs(t), ["default working dir cannot be contained: it is your home"]);
+  assert.strictEqual(field(t, "folder").value, "/home/you/work/payments-api");
+  assert.ok(byCls(blockOf(t, "agent"), "pfv-top-err")[0].textContent.startsWith("Not saved: a folder in Workspace needs a fix first."));
+});
+
+test("Runs in: Open Workspace drops the host choice and opens the Workspace block, with no PUT", async () => {
+  const t = clonePage();
+  await t.box.pfvShow("gitops-clone");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  assert.strictEqual(byText(blockOf(t, "runs"), "button", "Open Workspace").length, 1);
+  byText(blockOf(t, "runs"), "button", "Open Workspace")[0].click();
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-editing").length, 0, "the Runs in change is gone");
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-refuse").length, 0);
+  assert.ok(blockOf(t, "workspace").className.includes("pfv-editing"));
+  assert.strictEqual(t.run("pfvState").openBlock, "workspace");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), ["workspace"]);
+  assert.ok(byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden, "nothing is pending");
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.strictEqual(field(t, "mode-copy").checked, true, "the profile is still a copy until the user picks the folder");
+});
+
+test("Runs in: Open Workspace does not drop another block's unsaved change", async () => {
+  const t = clonePage();
+  await t.box.pfvShow("gitops-clone");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  // A repair block can sit beside the dirty one: Runs in, with host chosen.
+  const rec = t.box.pfvOpenRepair("runs");
+  rec.values.tier = "host";
+  t.box.pfvRender();
+  assert.strictEqual(t.box.pfvOpenWorkspace(), false);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits).sort(), ["agent", "runs"], "nothing was dropped");
+  assert.strictEqual(t.run("pfvState").edits.runs.values.tier, "host");
+  assert.strictEqual(t.run("pfvState").edits.agent.nudge, true);
+});
+
+test("an editor in its own script registers through pfvRegisterEditor, once", () => {
+  const t = page();
+  assert.ok(t.run("PFV_EDITORS").workspace, "Workspace registered itself");
+  assert.throws(() => t.box.pfvRegisterEditor("runs", {}), /registered twice: runs/);
+  assert.throws(() => t.box.pfvRegisterEditor("workspace", {}), /registered twice: workspace/);
+});
+
+test("every top-level name in pfv-workspace.js is unique across the page scripts", () => {
+  const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
+  const mine = names(fs.readFileSync(path.join(STATIC, "pfv-workspace.js"), "utf8"));
+  assert.ok(mine.size > 5);
+  assert.ok([...mine].every((n) => /^(pfw|PFW_)/.test(n)), "every name is pfw/PFW_ prefixed: " + [...mine].join(", "));
+  const clashes = [];
+  for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js") && x !== "pfv-workspace.js")) {
+    for (const n of names(fs.readFileSync(path.join(STATIC, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
+  }
+  assert.deepStrictEqual(clashes, []);
 });

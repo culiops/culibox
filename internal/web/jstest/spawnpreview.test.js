@@ -197,7 +197,7 @@ test("hotkey from the workspace field spawns only when it shows the directory in
 });
 
 test("hotkey from the workspace field picks/resolves instead of spawning in the wrong directory", () => {
-  // a fuzzy query typed over a resolved directory: swsCwd still holds the old one
+  // a fuzzy query typed over a resolved directory: the picker's value still holds the old one
   assert.strictEqual(spawnHotkeyAction({ text: "culi", cwd: "/home/u/old", listOpen: false }), "pick");
   assert.strictEqual(spawnHotkeyAction({ text: "~/proj", cwd: "/home/u/proj", listOpen: false }), "pick");
   // an open list with a highlighted row takes that row, even when the text matches
@@ -205,11 +205,12 @@ test("hotkey from the workspace field picks/resolves instead of spawning in the 
   assert.strictEqual(spawnHotkeyAction({}), "submit");
 });
 
-test("swsKeydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, and it asks the guard", () => {
+test("the picker's keydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, and it asks the guard", () => {
   const app = read("app.js");
-  const body = app.slice(app.indexOf("function swsKeydown"), app.indexOf("function swsEnter"));
+  const src = read("wspicker.js");
+  const body = src.slice(src.indexOf("function onKeydown"), src.indexOf("function enter"));
   assert.match(body, /if \(e\.ctrlKey \|\| e\.metaKey\) return;/);
-  assert.ok(body.indexOf("e.ctrlKey || e.metaKey") < body.indexOf("e.preventDefault();\n  swsEnter"));
+  assert.ok(body.indexOf("e.ctrlKey || e.metaKey") < body.indexOf("e.preventDefault();\n    enter();"));
   assert.match(app, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\)/);
 });
 
@@ -228,10 +229,11 @@ test("every submit of the spawn form asks the guard before spawning", () => {
   const at = app.indexOf('$("spawn").addEventListener("submit"');
   assert.ok(at > 0);
   const body = app.slice(at, app.indexOf("spawnBusy = true;", at));
-  assert.match(body, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\), listOpen: !\$\("spawn-ws-list"\)\.hidden, highlighted: swsActive >= 0 \}\) === "pick"/);
-  assert.match(body, /swsSettle\(\);\s*return;/);
-  const settle = app.slice(app.indexOf("function swsSettle"), app.indexOf("function swsResolvePath"));
-  assert.match(settle, /swsEnter\(\);/);
+  assert.match(body, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\), listOpen: spawnWsPicker\.isOpen\(\), highlighted: spawnWsPicker\.highlighted\(\) \}\) === "pick"/);
+  assert.match(body, /spawnWsPicker\.settle\(\);\s*return;/);
+  const src = read("wspicker.js");
+  const settle = src.slice(src.indexOf("function settle"), src.indexOf("function destroy"));
+  assert.match(settle, /enter\(\);/);
 });
 
 // A legacy inline AWS binding (profile.aws_inline: name, prod, elevate_max_minutes)

@@ -9,10 +9,12 @@
 //
 // Desktop only: the old form (.plist, .ped, #foot-manage) is hidden by desktop.css
 // on the page and stays for the phone's modal. Edit opens one block as a small form
-// (Runs in, Agent and Network so far; the other blocks' Edit, "+ Add", Remove,
-// Duplicate, Switch to box and "+ New profile" are drawn but do nothing until their
-// tasks wire them). profileedit.js decides what a save writes and what a refusal
-// means; this file draws the forms, keeps what the user has typed and runs the save.
+// (Runs in, Agent and Network here, Workspace in pfv-workspace.js; the other blocks'
+// Edit, "+ Add", Remove, Duplicate, Switch to box and "+ New profile" are drawn but do
+// nothing until their tasks wire them). profileedit.js decides what a save writes and
+// what a refusal means; this file draws the forms, keeps what the user has typed and
+// runs the save. A block editor in a file of its own registers through
+// pfvRegisterEditor (see PFV_EDITORS) and is loaded after this one.
 // Classic script: api, askConfirm, openSpawnDialog, openSettings, loadProfiles,
 // withPending, buildSeg and the profile globals are app.js's and the helpers',
 // read at call time; every top-level name here starts with pfv/PFV_ (the page
@@ -616,18 +618,28 @@ async function pfvDelete() {
 // --- editing: the records ----------------------------------------------------------------
 
 // What each editable block is. values(c): the controls' starting values from the stored
-// profile (c is pfvEditCtx). draw(rec, c): the form's nodes. merge(rec, c): the values
-// pfvMergeBlock is given (default: rec.values). note(rec, c): the footer carries the box
-// consequence. hideSave(rec, c): Save is not offered. fields: the form is a stack of
-// labelled fields (a 16px rhythm, 440px wide); without it the form flows as it likes. A block with no entry here is drawn
-// but its Edit link does nothing until its task (Workspace, Cloud and tokens, Also
-// reachable, Advanced); one that a refused save opens is drawn read-only with the
-// refusal under the row it names, so the user can see what is wrong.
+// profile (c is pfvEditCtx). draw(rec, c): the form's nodes; what it builds that outlives
+// the nodes (a picker's listeners) goes on rec.disposers, run before the next draw and when
+// the record goes. merge(rec, c): the values pfvMergeBlock is given (default: rec.values).
+// check(rec, c): what the client refuses before any PUT, {field, text} or null. note(rec, c):
+// the footer carries the box consequence. hideSave(rec, c): Save is not offered. fields: the
+// form is a stack of labelled fields (a 16px rhythm, 440px wide); without it the form flows
+// as it likes. A block with no entry here is drawn but its Edit link does nothing until its
+// task (Cloud and tokens, Also reachable, Advanced); one that a refused save opens is drawn
+// read-only with the refusal under the row it names, so the user can see what is wrong.
 const PFV_EDITORS = {
   runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave },
   agent: { values: pfvAgentValues, draw: pfvAgentForm, merge: pfvAgentMerge, fields: true },
   network: { values: pfvNetworkValues, draw: pfvNetworkForm, note: pfvNetworkNote },
 };
+
+// pfvRegisterEditor: the seam for an editor that lives in its own script (pfv-workspace.js, and the
+// Cloud and tokens, Also reachable and Advanced scripts after it). It runs while the page loads, before
+// the first draw, which is when the Edit links are wired.
+function pfvRegisterEditor(id, spec) {
+  if (PFV_EDITORS[id]) throw new Error("profile block editor registered twice: " + id);
+  PFV_EDITORS[id] = spec;
+}
 
 const PFV_NEW_BOX = "Saving gives the next session a new box. Running sessions keep theirs.";
 const PFV_NUDGE = "Save or discard these changes first";
@@ -687,7 +699,15 @@ function pfvEditCtx() {
 function pfvNewEdit(id, repair) {
   const ed = PFV_EDITORS[id];
   const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(values), repair: repair === true, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {} };
+  return { id, values, init: pfvStable(values), repair: repair === true, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
+}
+
+// pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
+// outlives its nodes, a picker's listeners and timers, is released.
+function pfvDisposeRec(rec) {
+  const fns = rec.disposers;
+  rec.disposers = [];
+  for (const f of fns) f();
 }
 
 const pfvEditDirty = (rec) => !!rec && rec.values !== null && pfvStable(rec.values) !== rec.init;
@@ -707,6 +727,7 @@ function pfvSyncOpen() {
 
 // pfvDropEdits: every open block goes, and what was typed in it.
 function pfvDropEdits() {
+  for (const rec of Object.values(pfvState.edits)) pfvDisposeRec(rec);
   pfvState.edits = {};
   pfvState.openBlock = "";
   pfvState.pending = false;
@@ -777,7 +798,7 @@ function pfvOpenBlock(id) {
     pfvNudge();
     return false;
   }
-  pfvState.edits = {};
+  pfvDropEdits();
   pfvState.edits[id] = pfvNewEdit(id, false);
   pfvState.openBlock = id;
   pfvClearSaved();
@@ -814,7 +835,10 @@ function pfvShowBlockQuietly(id) {
 function pfvCloseBlock(discard, id) {
   const ids = id ? [id] : Object.keys(pfvState.edits);
   if (!discard && ids.some((i) => pfvEditDirty(pfvState.edits[i]))) return false;
-  for (const i of ids) delete pfvState.edits[i];
+  for (const i of ids) {
+    if (pfvState.edits[i]) pfvDisposeRec(pfvState.edits[i]);
+    delete pfvState.edits[i];
+  }
   for (const rec of Object.values(pfvState.edits)) if (rec.top && rec.top.kind === "repair" && ids.includes(rec.top.target)) rec.top = null;
   pfvSyncOpen();
   pfvRender();
@@ -880,6 +904,7 @@ function pfvDrawEditBlock(b, rec, known) {
 function pfvFillForm(rec) {
   if (!rec.nodes) return;
   const ed = PFV_EDITORS[rec.id];
+  pfvDisposeRec(rec);
   rec.fields = {};
   rec.first = null;
   rec.consumed = new Set();
@@ -904,7 +929,7 @@ function pfvRedrawForm(rec) {
 // pfvChanged: a control changed a value. Its refusal is stale now, a nudge was about this very
 // change, and the form (and every footer, and the header note) re-reads the values.
 function pfvChanged(rec, key) {
-  if (key) rec.ferrs = rec.ferrs.filter((e) => e.field !== key);
+  if (key) rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, key));
   rec.nudge = false;
   pfvRedrawForm(rec);
   pfvPaint();
@@ -996,9 +1021,13 @@ function pfvReg(rec, key, el) {
   return el;
 }
 
+// pfvFieldIs: a refused field path is the control `key`'s: the same path, or an entry of it ("clone_share[1]" is
+// "clone_share"'s).
+const pfvFieldIs = (field, key) => field === key || field.startsWith(key + "[");
+
 // pfvFerr: the refusal for a field, in words, and note that the form drew it.
 function pfvFerr(rec, key) {
-  const e = rec.ferrs.find((x) => x.field === key);
+  const e = rec.ferrs.find((x) => pfvFieldIs(x.field, key));
   if (!e) return "";
   rec.consumed.add(e.field);
   return e.text;
@@ -1080,11 +1109,23 @@ function pfvRunsHideSave(rec, c) {
   return rec.values.tier === "host" && pfvHostRefusal(c.doc) !== "";
 }
 
+// pfvOpenWorkspace: the link under the private-copy refusal. The host choice cannot be saved, so it goes (the
+// Runs in block closes with its change) and Workspace opens, where the user picks the folder explicitly.
+// Another block's changes are not this link's to drop: they refuse the open, in place, as an Edit would.
+function pfvOpenWorkspace() {
+  if (Object.values(pfvState.edits).some((r) => r.id !== "runs" && pfvEditDirty(r))) {
+    pfvNudge();
+    return false;
+  }
+  pfvCloseBlock(true, "runs");
+  return pfvOpenBlock("workspace");
+}
+
 function pfvCard(rec, key, o) {
   const lab = pfvMk("label", "pfv-card" + (o.checked ? " pfv-on" : "") + (o.disabled ? " pfv-off" : ""));
   const r = pfvMk("input");
   r.type = "radio";
-  r.name = "pfv_tier"; // the radio group (an underscore: the class scan reads pfv- words as classes)
+  r.name = o.group || "pfv_tier"; // the radio group (an underscore: the class scan reads pfv- words as classes)
   r.checked = o.checked;
   r.disabled = o.disabled;
   r.onchange = () => { if (r.checked) o.pick(); };
@@ -1120,8 +1161,9 @@ function pfvRunsForm(rec, c) {
   if (refusal) {
     const p = pfvMk("p", "pfv-refuse");
     p.setAttribute("role", "alert");
-    // The link opens Workspace (a later task wires it).
-    p.append(refusal, " ", pfvDrawLink("Open Workspace", ""));
+    const link = pfvDrawLink("Open Workspace", "");
+    link.onclick = pfvOpenWorkspace;
+    p.append(refusal, " ", link);
     out.push(p);
   }
   return out;
@@ -1251,6 +1293,8 @@ function pfvPreCheck(rec, c) {
   if (!v) return null;
   if (rec.id === "agent" && typeof v.bin === "string" && v.bin.trim() === "") return { field: "bin", text: PFV_NO_COMMAND };
   if (rec.id === "runs" && v.tier === "host" && pfvHostRefusal(c.doc)) return { field: "runtime", text: pfvHostRefusal(c.doc) };
+  const own = PFV_EDITORS[rec.id] && PFV_EDITORS[rec.id].check ? PFV_EDITORS[rec.id].check(rec, c) : null;
+  if (own) return own;
   // The permission set is checked here, not repaired in the merge: "none ticked" must not become the six read defaults.
   if (v.github) {
     const text = pfvGithubError(v.github);
@@ -1300,37 +1344,43 @@ async function pfvSaveBlock(id) {
   const put = () => api("/api/profiles/" + encodeURIComponent(name), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   pfvState.saving = true;
   pfvState.warnings = [];
-  let saved;
+  // saving stays set until the save has run its course, whatever happens in it: a throw must not leave Save and Edit refused for good.
   try {
-    saved = rec.nodes ? await withPending(rec.nodes.save, "Saving…", put) : await put();
-  } catch (e) {
+    let saved;
+    try {
+      saved = rec.nodes ? await withPending(rec.nodes.save, "Saving…", put) : await put();
+    } catch (e) {
+      if (pfvState.name === name) pfvShowError(e, id);
+      return false;
+    }
+    // It is written: a pfvShow GET that was already out when the block was opened would answer with the profile as it was before this
+    // save, so every older answer is dropped from here on.
+    pfvSeq++;
+    // Show what the server holds now: a failed refetch must not read as a failed save.
+    let fresh = null;
+    let reloadErr = null;
+    try { fresh = await api("/api/profiles/" + encodeURIComponent(name)); } catch (e) { reloadErr = e; }
+    await loadProfiles(false);
+    if (pfvState.name !== name) return true; // the user moved on: nothing here to draw
+    pfvTakeRow(name);
+    pfvDropEdits();
+    if (fresh) {
+      pfvState.doc = fresh;
+      pfvState.errors = [];
+    } else {
+      // What was sent, still at the old revision: the next save is refused as stale (and offers Reload) rather than overwriting.
+      pfvState.doc = doc;
+      pfvState.errors = ["Saved, but reloading it failed: " + (reloadErr && reloadErr.message ? reloadErr.message : "no answer")];
+    }
+    pfvState.warnings = pfvWarnLines(saved);
+    pfvMarkSaved(ids);
+    pfvRender();
+    const back = pfvRefs.edit[id];
+    if (back && typeof back.focus === "function") back.focus();
+    return true;
+  } finally {
     pfvState.saving = false;
-    if (pfvState.name === name) pfvShowError(e, id);
-    return false;
   }
-  // It is written. Show what the server holds now: a failed refetch must not read as a failed save.
-  let fresh = null;
-  let reloadErr = null;
-  try { fresh = await api("/api/profiles/" + encodeURIComponent(name)); } catch (e) { reloadErr = e; }
-  await loadProfiles(false);
-  pfvState.saving = false;
-  if (pfvState.name !== name) return true; // the user moved on: nothing here to draw
-  pfvTakeRow(name);
-  pfvDropEdits();
-  if (fresh) {
-    pfvState.doc = fresh;
-    pfvState.errors = [];
-  } else {
-    // What was sent, still at the old revision: the next save is refused as stale (and offers Reload) rather than overwriting.
-    pfvState.doc = doc;
-    pfvState.errors = ["Saved, but reloading it failed: " + (reloadErr && reloadErr.message ? reloadErr.message : "no answer")];
-  }
-  pfvState.warnings = pfvWarnLines(saved);
-  pfvMarkSaved(ids);
-  pfvRender();
-  const back = pfvRefs.edit[id];
-  if (back && typeof back.focus === "function") back.focus();
-  return true;
 }
 
 // pfvShowError: a refused save, on the page. err is api()'s error; fromId the block whose Save it was.
@@ -1378,6 +1428,7 @@ function pfvTakeRow(name) {
 async function pfvReload() {
   const name = pfvState.name;
   if (!name || pfvState.saving) return;
+  pfvSeq++; // an older pfvShow answer must not land over what this fetches
   let doc;
   try { doc = await api("/api/profiles/" + encodeURIComponent(name)); }
   catch (e) {

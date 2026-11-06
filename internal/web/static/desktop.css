@@ -1841,6 +1841,14 @@
   #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
   #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: 12.5px; }
+  /* Workspace: the folder picker's dropdown (fixed under the field by wspicker.js, so the page's own scroll never clips it), the
+     note under the field for a search that found nothing, and the textarea for the shared files. The rows are the shared
+     .ft-opt/.ft-note ones. */
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
   /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
   #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }
