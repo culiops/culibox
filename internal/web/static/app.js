@@ -3734,6 +3734,8 @@ function applyCredLists(meta) {
   renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
   syncEditorActions();
   renderPfTouch();
+  // The profile page reads the same lists: a row it called missing may exist now.
+  if (typeof pfvMetaChanged === "function") pfvMetaChanged();
 }
 let credListsPainted = false;
 // refreshCredLists re-reads /api/meta and repaints the pickers: when the
@@ -3846,6 +3848,7 @@ async function refreshPfCreds(known) {
   if (seq !== pfCredsSeq) return;
   pfCredsView = got;
   renderPfTouch();
+  if (typeof pfvMetaChanged === "function") pfvMetaChanged();
 }
 // renderPfTouch paints #pf-touch from what the form holds right now, with the
 // New session box's own rules (reachRows) and renderer (paintReachRows). Run
@@ -4851,6 +4854,8 @@ function renderProfileList() {
     li.appendChild(b);
     return li;
   }));
+  // The desktop page lists the profiles in its nav instead (profilepage.js).
+  if (typeof pfvRenderNav === "function") pfvRenderNav();
 }
 $("pf-save").addEventListener("click", saveProfile);
 // newProfile() also runs once at boot (below) to seed the editor pane with a

@@ -186,3 +186,43 @@ test("the meta reads set bundleImports and boxUnavailableReason beside boxRuntim
     assert.deepStrictEqual(owners, ["app.js"], name + " is declared once, in app.js");
   }
 });
+
+// The profile overview (Task 5): the read view replaces the form and the profile
+// list on the desktop page, so its two nodes sit where the page needs them, and
+// the base sheet hides them for a phone (the modal keeps today's form).
+test("#pf-navlist follows the Profiles tab", () => {
+  const tabs = /<div class="tabs" id="settings-tabs"[\s\S]*?<button type="button" class="t" data-tab="creds"/.exec(HTML)[0];
+  assert.match(tabs, /data-tab="manage"[^>]*>Profiles<\/button>\s*<div id="pf-navlist"[^>]*><\/div>\s*<button type="button" class="t" data-tab="creds"/);
+});
+
+test("#pfv is inside #manage", () => {
+  const start = HTML.indexOf('<div class="dbd split" id="manage"');
+  const end = HTML.indexOf('<div class="dbd pad" id="settings"');
+  assert.ok(start > 0 && end > start);
+  assert.match(HTML.slice(start, end), /<div id="pfv">\s*<div class="pfv-in" id="pfv-in"><\/div>\s*<\/div>/);
+});
+
+test("base app.css hides #pfv and #pf-navlist", () => {
+  assert.match(stripComments(BASE_CSS), /#pfv, #pf-navlist \{ display: none; \}/);
+});
+
+test("desktop.css shows them on the page and takes the old list, form and footer away", () => {
+  const css = stripComments(DESK_CSS);
+  assert.match(css, /#page-host > #settings-modal\.as-page #pfv \{[^}]*display: block/);
+  assert.match(css, /#page-host > #settings-modal\.as-page > #settings-tabs > \.t\[data-tab="manage"\]\.on \+ #pf-navlist \{[^}]*display: block/);
+  assert.match(css, /#page-host > #settings-modal\.as-page #manage > \.plist, #page-host > #settings-modal\.as-page #manage > \.ped \{ display: none; \}/);
+  assert.match(css, /#page-host > #settings-modal\.as-page > #foot-manage \{ display: none; \}/);
+});
+
+test("the page script is loaded after the read model and before app.js", () => {
+  const order = [...HTML.matchAll(/<script src="\/([a-z-]+\.js)"/g)].map((m) => m[1]);
+  assert.ok(order.indexOf("profilepage.js") > order.indexOf("profileview.js"), "after profileview.js");
+  assert.ok(order.indexOf("profilepage.js") < order.indexOf("app.js"), "before app.js");
+});
+
+test("Settings shows the overview when Profiles is selected on the page", () => {
+  const SHELL = read("shell.js");
+  assert.match(body(SHELL, "selectSettingsTab"), /name === "manage" && typeof pfvShow === "function"\) pfvShow\(\)/);
+  assert.match(body(SHELL, "openSettings"), /typeof pfvShow === "function"\) pfvShow\(\)/);
+  assert.match(body(APP, "renderProfileList"), /typeof pfvRenderNav === "function"\) pfvRenderNav\(\)/);
+});

@@ -1429,6 +1429,9 @@
        page above 700px): the nav's group labels, the profile form's Can touch
        box, section heads and Advanced fold, Discard, and About's runtime line. */
     .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime { display: none; }
+    /* The desktop page's profile overview and its nav list (desktop.css shows them
+       on the page above 700px); a phone keeps the form. */
+    #pfv, #pf-navlist { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;

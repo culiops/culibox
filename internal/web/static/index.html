@@ -287,6 +287,7 @@
       <span class="pg-group" role="presentation">Access</span>
       <span class="pg-group" role="presentation">App</span>
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
+      <div id="pf-navlist" role="group" aria-label="Profiles"></div>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
@@ -478,6 +479,9 @@
           the New-session form can override containment and options for a single run.</p>
         <div class="warnbox" id="pf-stale" role="alert" hidden><span id="pf-stale-msg"></span> <button type="button" class="btn" id="pf-stale-reload">Load latest</button></div>
         <div class="dlg-err" id="settings-err"></div>
+      </div>
+      <div id="pfv">
+        <div class="pfv-in" id="pfv-in"></div>
       </div>
     </div>
     <div class="dbd pad" id="settings" role="tabpanel" hidden>
@@ -824,6 +828,7 @@
   <script src="/spawnpreview.js"></script>
   <script src="/workhome.js"></script>
   <script src="/profileview.js"></script>
+  <script src="/profilepage.js"></script>
   <script src="/spawnpanel.js"></script>
   <script src="/app.js"></script>
 </body>
