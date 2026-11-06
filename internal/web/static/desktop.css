@@ -1859,6 +1859,12 @@
      control need 213px; the permissions have the page less 170px (less 104px from 300px down), so 213px is gone at 383px; 390px keeps a margin. */
   @container (max-width: 390px) {
     #page-host > #settings-modal.as-page #pfv .pfv-perm { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; justify-content: center; }
+    /* An option's segmented control (Agent's Effort, and Advanced's choices) wraps onto a second line when its choices no longer fit in one:
+       "low medium high xhigh max" needs 284px and the body has the page less 104px (less 52px from 240px down), so it is 388px that runs out;
+       390px keeps a margin. Without it the control's own width held its grid track open past the block. A choice stays one button, and one
+       that is long (a stored value the list no longer has) wraps its text; every line is 26px tall, as the single line is. */
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; height: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; }
   }
   /* The kind word above its content, which then has the whole width. */
   @container (max-width: 300px) {
@@ -1867,9 +1873,10 @@
     #page-host > #settings-modal.as-page #pfv .pfv-block { column-gap: 12px; }
     #page-host > #settings-modal.as-page #pfv :is(.pfv-adv-label, .pfv-fold) { flex-wrap: wrap; }
     #page-host > #settings-modal.as-page #pfv .pfv-link { text-align: left; }
-    /* The New profile card gives its text the room its padding took, and the chip after "In a box" wraps instead of leaving the card. */
+    /* The New profile card gives its text the room its padding took. The chip after "In a box" wraps instead of leaving its card, on this
+       page's cards (New profile, Duplicate) and on Runs in's alike: they are the same two cards. */
     #page-host > #settings-modal.as-page #pfv .pfv-newcard { padding: 16px 14px; }
-    #page-host > #settings-modal.as-page #pfv .pfv-newcard .pfv-card-t { flex-wrap: wrap; gap: 2px 8px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-card .pfv-card-t { flex-wrap: wrap; gap: 2px 8px; }
   }
   /* A window under 743px leaves the page under 241px (199px at 701px): less margin, so Discard and Save still fit beside each other inside the block. */
   @container (max-width: 240px) {

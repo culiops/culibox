@@ -214,8 +214,10 @@ test("in a narrow pane only the tabs hide; + Shell stays down to the width where
 // The profile page in a narrow window (Task 11 slice gate, gap 1). The shell takes 502 px (sidebar 290, Settings nav 212), so #pfv is 398 px in a
 // 900 px window and 199 px in a 701 px one. The steps are container rules on #pfv, each inside the desktop block (so mobile cannot see them):
 // 863 puts the scope under the name, 624 puts a block's label above its body (the Edit link stays on the label's line), 440 puts Remove or Undo
-// on its own line under a row's content, 390 stacks every GitHub permission with its control under it (together, never one row alone), 300 puts
-// the kind word above the content, 240 trims the margins so Discard and Save fit at 701.
+// on its own line under a row's content, 390 stacks every GitHub permission with its control under it (together, never one row alone) and wraps an
+// option's segmented control (Agent's Effort: 284 px of choices, which held its grid track open past the block in a 701 to 800 px window), 300 puts
+// the kind word above the content and lets the chip after "In a box" wrap (the cards of Runs in and of New profile), 240 trims the margins so Discard
+// and Save fit at 701.
 test("the profile page stacks its blocks in narrow windows: container steps on #pfv, widest first, each inside the desktop block", () => {
   const steps = containerRules().filter((r) => /#pfv /.test(r.body));
   assert.deepStrictEqual(steps.map((r) => r.px), [863, 624, 440, 390, 300, 240]);
@@ -233,7 +235,15 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   // A permission and its control share a line while they fit (and wrap on their own if one ever does not); at 390 all of them stack.
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
   assert.match(at(390), /\.pfv-perm \{ flex-direction: column; flex-wrap: nowrap; align-items: flex-start;/);
-  assert.ok(at(390).length < 300, "the 390 step is the permissions' alone");
+  // An option's segmented control (the fieldset's own, not a permission's 26px one) wraps its choices once they no longer fit in a row, every line
+  // 26px as the one line is; a long stored value wraps its text instead of widening the control. Without it the control's min-content (284 px for
+  // Effort) held its grid track open and #pfv scrolled sideways at 701 to 800 px (gap N4).
+  assert.match(at(390), /\.pfv-field > \.pfv-seg \{ flex-wrap: wrap; align-content: flex-start; height: auto; \}/);
+  assert.match(at(390), /\.pfv-field > \.pfv-seg button \{ min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; \}/);
+  assert.ok(!/\.pfv-perm \.pfv-seg/.test(at(390)), "a permission's Read/Write control keeps its one 26px line");
+  assert.ok(at(390).length < 1100, "the 390 step is the permissions' and the option controls' alone");
+  // The chip after "In a box" wraps under the title on every tier card, so Runs in's (a 4px overflow at 701) leaves no card either.
+  assert.match(at(300), /\.pfv-card \.pfv-card-t \{ flex-wrap: wrap; gap: 2px 8px; \}/);
 });
 
 test("below the icon threshold every tab shows its icon and hides its label", () => {
