@@ -287,7 +287,15 @@ function pfcPermsField(rec, c) {
   if (rec.ui.customise === true) for (const k of pfcPermOrder()) body.append(pfcPermRow(rec, k));
   const warn = ghWriteWarning(v.perms, wmModeOf(c.doc) !== "copy");
   if (warn) body.append(pfvMk("p", "pfv-warnw", warn));
-  return pfvFieldBox(rec, "github.permissions", "Permissions", body, [], "fieldset");
+  const box = pfvFieldBox(rec, "github.permissions", "Permissions", body, [], "fieldset");
+  // A refusal about the set is about its checkboxes (none ticked, say): the first one is what is marked and takes focus, or the
+  // Customise link while they are folded away.
+  const words = box.words();
+  if (words) {
+    const first = rec.fields["gh:perm:" + pfcPermOrder()[0]];
+    pfvStandIn(rec, body, first || cust, words, !first);
+  }
+  return box;
 }
 
 // pfcGithubFields: one owner's fields: how it signs in, the login, its repositories and (on the row that holds them,

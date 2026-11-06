@@ -197,10 +197,11 @@ test("in a narrow pane only the tabs hide; + Shell stays down to the width where
 // The profile page in a narrow window (Task 11 slice gate, gap 1). The shell takes 502 px (sidebar 290, Settings nav 212), so #pfv is 398 px in a
 // 900 px window and 199 px in a 701 px one. The steps are container rules on #pfv, each inside the desktop block (so mobile cannot see them):
 // 863 puts the scope under the name, 624 puts a block's label above its body (the Edit link stays on the label's line), 440 puts Remove or Undo
-// on its own line under a row's content, 300 puts the kind word above the content, 240 trims the margins so Discard and Save fit at 701.
+// on its own line under a row's content, 390 stacks every GitHub permission with its control under it (together, never one row alone), 300 puts
+// the kind word above the content, 240 trims the margins so Discard and Save fit at 701.
 test("the profile page stacks its blocks in narrow windows: container steps on #pfv, widest first, each inside the desktop block", () => {
   const steps = containerRules().filter((r) => /#pfv /.test(r.body));
-  assert.deepStrictEqual(steps.map((r) => r.px), [863, 624, 440, 300, 240]);
+  assert.deepStrictEqual(steps.map((r) => r.px), [863, 624, 440, 390, 300, 240]);
   const at = (px) => steps.find((r) => r.px === px).body;
   // The label on its own line above the body; Edit on the label's line, right-aligned; the body the full width, Advanced's too.
   assert.match(at(624), /\.pfv-block \{ grid-template-columns: minmax\(0, 1fr\) auto;/);
@@ -212,8 +213,10 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);
   assert.match(at(300), /\.pfv-row \{ display: flex; flex-direction: column;/);
   assert.match(at(240), /\.pfv-in \{ padding: 20px 12px 120px;/);
-  // The read/write control of a permission wraps under its label by itself, so it has no step of its own.
+  // A permission and its control share a line while they fit (and wrap on their own if one ever does not); at 390 all of them stack.
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
+  assert.match(at(390), /\.pfv-perm \{ flex-direction: column; flex-wrap: nowrap; align-items: flex-start;/);
+  assert.ok(at(390).length < 300, "the 390 step is the permissions' alone");
 });
 
 test("below the icon threshold every tab shows its icon and hides its label", () => {

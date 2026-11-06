@@ -44,7 +44,13 @@ class Node {
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
   addEventListener(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); }
   contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
-  focus() { Node.focused = this; for (const f of (this.handlers.focus || []).slice()) f({ target: this }); }
+  // As a browser: only a control takes focus (a div, a fieldset or a paragraph does not), so a test cannot pass on a focus that never landed.
+  focus() {
+    if (!["input", "select", "textarea", "button"].includes(this.tag) && !("tabindex" in this.attrs)) return;
+    if (this.disabled) return;
+    Node.focused = this;
+    for (const f of (this.handlers.focus || []).slice()) f({ target: this });
+  }
   click() { if (this.onclick) return this.onclick({ target: this }); }
   all(pred, out = []) { for (const c of this.children) { if (!(c instanceof Node)) continue; if (pred(c)) out.push(c); c.all(pred, out); } return out; }
 }
@@ -3477,4 +3483,76 @@ test("a variable's refusal focuses the row that is wrong, not the first row, and
   typeRow(envRowsOf(t)[1], "GOOD", "x");
   assert.strictEqual(bad().getAttribute("aria-invalid"), null);
   assert.strictEqual(bad().getAttribute("aria-describedby"), null);
+});
+
+// --- Task 11 gate fix, round 1: a refusal about the permission set puts focus on a control, never on a div ---------------
+
+const untickAll = (t) => { for (const k of ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"]) if (field(t, "gh:perm:" + k)) tick(t, "gh:perm:" + k, false); };
+const SET_WORDS = "GitHub: tick at least one permission, or the agent gets none.";
+
+test("an empty GitHub permission set focuses the first permission checkbox", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  untickAll(t);
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  assert.strictEqual(t.box.puts.length, 0);
+  const words = byCls(blockOf(t, "cloud"), "pfv-ferr")[0];
+  assert.strictEqual(words.textContent, SET_WORDS);
+  const first = field(t, "gh:perm:contents");
+  assert.strictEqual(Node.focused, first, "focus is on the first permission, in the order the list shows");
+  assert.strictEqual(first.getAttribute("aria-invalid"), "true");
+  assert.strictEqual(first.getAttribute("aria-describedby"), words.id);
+  const group = byCls(blockOf(t, "cloud"), "pfv-perms")[0];
+  assert.strictEqual(group.getAttribute("aria-invalid"), null, "the div is not the field: the checkbox that holds the focus is");
+  tick(t, "gh:perm:contents", true);
+  assert.strictEqual(field(t, "gh:perm:contents").getAttribute("aria-invalid"), null);
+  assert.strictEqual(field(t, "gh:perm:contents").getAttribute("aria-describedby"), null);
+  // Folded away, the Customise link stands in for the checkboxes: described, and it takes the focus.
+  untickAll(t);
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  assert.strictEqual(field(t, "gh:perm:contents"), undefined, "folded");
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  const cust = byText(blockOf(t, "cloud"), "button", "Customise")[0];
+  assert.strictEqual(Node.focused, cust);
+  assert.strictEqual(cust.getAttribute("aria-describedby"), byCls(blockOf(t, "cloud"), "pfv-ferr")[0].id);
+  assert.strictEqual(cust.getAttribute("aria-invalid"), null, "a link is not an invalid field");
+});
+
+test("a server refusal about the permission set focuses the first permission checkbox too, not the body", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": github.permissions: nothing is ticked', field: "github.permissions" });
+  assert.strictEqual(await saveBlock(t, "cloud"), false);
+  assert.strictEqual(t.box.puts.length, 1, "this one reached the server");
+  const words = byCls(blockOf(t, "cloud"), "pfv-ferr")[0];
+  assert.ok(words, "the refusal is under Permissions");
+  const first = field(t, "gh:perm:contents");
+  assert.strictEqual(Node.focused, first, "the page was drawn again: focus is on the new checkbox, not lost with the old Save");
+  assert.strictEqual(first.getAttribute("aria-invalid"), "true");
+  assert.strictEqual(first.getAttribute("aria-describedby"), words.id);
+});
+
+test("pfvFocusInvalid is a success only when the focus landed, and tries the next marked control otherwise", () => {
+  const t = page();
+  const mk = (tag, over) => Object.assign(t.box.document.createElement(tag), over);
+  const gone = mk("button", { disabled: true });
+  const plain = mk("div");
+  const input = mk("input");
+  const inner = mk("div");
+  const innerBtn = mk("button");
+  inner.append(innerBtn);
+  Node.focused = null;
+  assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [gone, plain, input] }), true);
+  assert.strictEqual(Node.focused, input, "a disabled control and a div took nothing: the input did");
+  assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [inner] }), true);
+  assert.strictEqual(Node.focused, innerBtn, "a group gives its first control");
+  Node.focused = null;
+  assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [gone, plain] }), false);
+  assert.strictEqual(Node.focused, null);
+  assert.strictEqual(t.box.pfvFocusInvalid({ ui: {}, invalid: [] }), false);
 });

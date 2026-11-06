@@ -1936,7 +1936,8 @@
      no narrow design: these steps only stack what it already draws, in its own grammar, and change nothing above them. The thresholds
      are the page's width (#pfv), measured: at 624px (a 1126px window) the label column starts to cost the body more than it is worth;
      at 440px (942px) a row's content, with a kind word and Remove beside it, falls under what a name and a value need; at 300px (802px)
-     it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. */
+     it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. The permissions have
+     a step of their own, at 390px (see it). */
   /* The label above its body, the Edit link on the label's line, the body the full width. */
   @container (max-width: 624px) {
     #page-host > #settings-modal.as-page #pfv .pfv-block { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
@@ -1962,6 +1963,12 @@
     #page-host > #settings-modal.as-page #pfv .pfv-foot { flex-wrap: wrap; }
     #page-host > #settings-modal.as-page #pfv .pfv-fbtns { margin-left: auto; }
   }
+  /* Every permission stacks the same way (the permission, then its Read/Write control under it) once the longest one no longer fits beside
+     its control, so the list reads as one column instead of one row dropping its control and its neighbours not. "pull requests" and its
+     control need 213px; the permissions have the page less 170px (less 104px from 300px down), so 213px is gone at 383px; 390px keeps a margin. */
+  @container (max-width: 390px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-perm { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; justify-content: center; }
+  }
   /* The kind word above its content, which then has the whole width. */
   @container (max-width: 300px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { display: flex; flex-direction: column; gap: 2px; }
@@ -1970,7 +1977,7 @@
     #page-host > #settings-modal.as-page #pfv :is(.pfv-adv-label, .pfv-fold) { flex-wrap: wrap; }
     #page-host > #settings-modal.as-page #pfv .pfv-link { text-align: left; }
   }
-  /* A 701px window leaves the page 199px: less margin, so Discard and Save still fit beside each other inside the block. */
+  /* A window under 743px leaves the page under 241px (199px at 701px): less margin, so Discard and Save still fit beside each other inside the block. */
   @container (max-width: 240px) {
     #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 20px 12px 120px; }
     #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 16px 14px; }

@@ -263,10 +263,7 @@ function pfaEnvField(rec, host) {
     const live = pfaLive(v.envRows);
     const bad = live.findIndex((_, i) => rowError(live.slice(0, i + 1)) !== "");
     const input = names[bad >= 0 ? v.envRows.indexOf(live[bad]) : v.envRows.findIndex((r) => r.removed !== true)];
-    if (input) {
-      pfvBad(rec, input, words);
-      if (rec.invalid === ctl) rec.invalid = input;
-    }
+    if (input) pfvStandIn(rec, ctl, input, words);
   }
   for (const [label, kind] of [["+ Add variable", "literal"], ["+ Add secret", "secret"]]) {
     const b = pfvDrawLink(label, "");

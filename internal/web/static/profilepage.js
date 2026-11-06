@@ -742,7 +742,7 @@ function pfvEditCtx() {
 function pfvNewEdit(id, repair) {
   const ed = PFV_EDITORS[id];
   const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [], invalid: null };
+  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [], invalid: [] };
 }
 
 // pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
@@ -1069,7 +1069,7 @@ function pfvFillForm(rec) {
   pfvDisposeRec(rec);
   rec.fields = {};
   rec.first = null;
-  rec.invalid = null;
+  rec.invalid = [];
   rec.consumed = new Set();
   const kids = ed ? ed.draw(rec, pfvEditCtx()) : [pfvDrawBody(rec.block, rec.known, rec)];
   rec.nodes.form.replaceChildren(...kids);
@@ -1190,13 +1190,24 @@ function pfvReg(rec, key, el) {
 }
 
 // pfvBad: `control` is in error and `words` (the node that says it) is what a screen reader reads for it: aria-invalid and
-// aria-describedby, and the first control of a form to be marked is where focus goes after a refused Save (pfvFocusInvalid).
-// plain: describe only (a Remove button is no input, so it is not "invalid").
+// aria-describedby, and the controls of a form that are marked, in the order they were drawn, are where focus goes after a
+// refused Save (pfvFocusInvalid). plain: describe only (a Remove button is no input, so it is not "invalid").
 function pfvBad(rec, control, words, plain) {
   if (!words.id) words.id = "pfv-e" + ++pfvUid;
   control.setAttribute("aria-describedby", words.id);
   if (!plain) control.setAttribute("aria-invalid", "true");
-  if (!rec.invalid) rec.invalid = control;
+  if (!rec.invalid.includes(control)) rec.invalid.push(control);
+}
+
+// pfvStandIn: the field is a group of controls (the permissions, the variables), and `control`, one of them, stands for it: it is
+// marked and focused in the group's place (a div takes no focus, and a screen reader is told where the focus is, not about the div).
+function pfvStandIn(rec, group, control, words, plain) {
+  pfvOk(group);
+  pfvBad(rec, control, words, plain);
+  const at = rec.invalid.indexOf(group);
+  if (at < 0) return;
+  rec.invalid.splice(rec.invalid.indexOf(control), 1);
+  rec.invalid[at] = control;
 }
 
 // pfvOk: the error of `control` is gone: it is not invalid any more.
@@ -1205,21 +1216,37 @@ function pfvOk(control) {
   control.removeAttribute("aria-describedby");
 }
 
-// pfvFocusTarget: the node of a control that takes focus. A segmented control is not focusable itself: its lit button is.
-function pfvFocusTarget(el) {
-  return el.dataset && el.dataset.value !== undefined ? Array.from(el.children).find((b) => b.dataset.segvalue === el.dataset.value) || el.children[0] : el;
+// pfvFirstFocusable: `el` if it takes focus, else the first control inside it that does (null when none).
+const PFV_FOCUSABLE = ["input", "select", "textarea", "button"];
+function pfvFirstFocusable(el) {
+  if (PFV_FOCUSABLE.includes(String(el.tagName || el.tag || "").toLowerCase()) && !el.disabled) return el;
+  for (const c of Array.from(el.children || [])) {
+    const f = pfvFirstFocusable(c);
+    if (f) return f;
+  }
+  return null;
 }
 
-// pfvFocusInvalid: after a refused Save, focus goes to the first control the refusal is under. True when it did. The folder's
-// dropdown (the Workspace editor's quiet) is not asked for by a focus that is the page's, not the user's.
+// pfvFocusTarget: the node of a control that takes focus. A segmented control is not focusable itself: its lit button is.
+function pfvFocusTarget(el) {
+  if (el.dataset && el.dataset.value !== undefined) return Array.from(el.children).find((b) => b.dataset.segvalue === el.dataset.value) || el.children[0];
+  return pfvFirstFocusable(el);
+}
+
+// pfvFocusInvalid: after a refused Save, focus goes to the first marked control of the form that takes it. True only when focus is
+// there afterwards: a control that did not take it (hidden, gone) is not a success, and the next one is tried. The folder's dropdown
+// (the Workspace editor's quiet) is not asked for by a focus that is the page's, not the user's.
 function pfvFocusInvalid(rec) {
-  const el = rec && rec.invalid ? pfvFocusTarget(rec.invalid) : null;
-  if (!el || typeof el.focus !== "function") return false;
-  const ui = rec.ui || {};
-  const was = ui.quiet;
-  ui.quiet = true;
-  try { el.focus(); } finally { ui.quiet = was; }
-  return true;
+  const ui = rec && rec.ui ? rec.ui : {};
+  for (const c of rec && rec.invalid ? rec.invalid : []) {
+    const el = pfvFocusTarget(c);
+    if (!el || typeof el.focus !== "function") continue;
+    const was = ui.quiet;
+    ui.quiet = true;
+    try { el.focus(); } finally { ui.quiet = was; }
+    if (document.activeElement === el) return true;
+  }
+  return false;
 }
 
 // pfvFieldIs: a refused field path is the control `key`'s: the same path, or an entry of it ("clone_share[1]" is
@@ -1765,8 +1792,8 @@ function pfvShowError(err, fromId) {
   pfvRender();
   // Focus goes to the first field the refusal is under (this block's, else the block it sent the user to); a refusal no field
   // holds (a stale profile, say) leaves it on Save.
-  const bad = from.invalid ? from : Object.values(pfvState.edits).find((x) => x.invalid);
-  if (!(bad && pfvFocusInvalid(bad)) && from.nodes && from.nodes.save && typeof from.nodes.save.focus === "function") from.nodes.save.focus();
+  const focused = [from].concat(Object.values(pfvState.edits).filter((x) => x !== from)).some((x) => pfvFocusInvalid(x));
+  if (!focused && from.nodes && from.nodes.save && typeof from.nodes.save.focus === "function") from.nodes.save.focus();
   return r;
 }
 
