@@ -1613,8 +1613,11 @@ function awsPaintFlow() {
   const back = awsEl("a", "lnk", "Credentials");
   back.tabIndex = 0;
   back.setAttribute("role", "button");
-  back.onclick = () => awsExit();
-  back.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); awsExit(); } };
+  // In a host the crumb ends this flow only: once it was dropped or replaced it does nothing, and never
+  // takes the tab's way out (a reload of the list).
+  const leave = f.opts ? () => (awsFlow === f ? awsExit() : undefined) : () => awsExit();
+  back.onclick = leave;
+  back.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); leave(); } };
   crumb.append(back, document.createTextNode(" / "), awsEl("b", null, edit ? "Edit " + f.rows[0].name : "Add AWS accounts"));
   const nodes = [crumb, awsEl("p", "intro", "The agent never gets these profiles. It gets 15-minute credentials for the role you choose below.")];
   if (!edit) {
@@ -2331,13 +2334,14 @@ async function awsCheckAll() {
   }
 }
 
-// awsBuildFoot: the add view's buttons in a host's own footer, the same four as #foot-creds-add.
+// awsBuildFoot: the add view's buttons in a host's own footer, the same four as #foot-creds-add. Each
+// acts on this flow only: a click left over after the flow was dropped or replaced does nothing.
 function awsBuildFoot(f) {
-  const checkAll = awsBtn("Check all", "", () => awsCheckAll());
+  const checkAll = awsBtn("Check all", "", () => (awsFlow === f ? awsCheckAll() : undefined));
   const note = awsEl("span", "grow hint");
   note.setAttribute("role", "status");
-  const cancel = awsBtn("Cancel", "", () => awsExit());
-  const save = awsBtn("Save all", "pri off", () => awsSaveAll());
+  const cancel = awsBtn("Cancel", "", () => (awsFlow === f ? awsExit() : undefined));
+  const save = awsBtn("Save all", "pri off", () => (awsFlow === f ? awsSaveAll() : undefined));
   save.disabled = true;
   f.foot = { checkAll, note, cancel, save };
   f.opts.foot.replaceChildren(checkAll, note, cancel, save);
@@ -2509,7 +2513,7 @@ function credTabFlowOpen() {
 
 // credFlowDrop: forgets whichever Add / Edit view is open, reporting nothing: its timers stop and the
 // singletons clear. The caller of a flow in a host uses it when the host closes by itself (the drawer's
-// own close, Esc). A view left open in the tab loses its Add / Edit footers too (the tab's list footer
+// own close, Esc), once credFlowBusy() is false: a flow dropped mid-save never hears the answer. A view left open in the tab loses its Add / Edit footers too (the tab's list footer
 // is not put back: when this runs another tab is the one showing; selecting Credentials again
 // reloads the list).
 function credFlowDrop() {
@@ -2538,10 +2542,21 @@ function credFlowStart(opts) {
   if (opts && credFormOpts !== opts) credFlowDrop();
 }
 
-// credFlowDone: the way out of a flow in a host.
+// credFlowDone: the way out of a flow in a host. onClose runs even when onCreated throws (the error
+// still surfaces), so the host is never left open on a flow that has already been reset.
 function credFlowDone(opts, names, kind) {
-  if (names && names.length && typeof opts.onCreated === "function") opts.onCreated([...names], kind);
-  if (typeof opts.onClose === "function") opts.onClose();
+  try {
+    if (names && names.length && typeof opts.onCreated === "function") opts.onCreated([...names], kind);
+  } finally {
+    if (typeof opts.onClose === "function") opts.onClose();
+  }
+}
+
+// credFlowBusy: a flow in a host is saving right now. The host should not close until this is false:
+// credFlowDrop reports nothing, and a save whose host is gone has no one left to tell (the connection or
+// token is created all the same), so closing mid-save would lose the name.
+function credFlowBusy() {
+  return !!((awsFlow && awsFlow.opts && awsFlow.saving) || (credFormOpts && credFormBusy));
 }
 
 // credHostErr: why a flow could not start, in the tab's error line or, in a host, in the host with a
@@ -2551,10 +2566,25 @@ function credHostErr(opts, msg) {
   const err = credEl("p", "ent-err", msg);
   err.setAttribute("role", "alert");
   opts.host.replaceChildren(err);
+  const seq = credHostSeq;
   const cancel = credEl("button", "btn", "Cancel");
   cancel.type = "button";
-  cancel.onclick = () => { credFlowDrop(); credFlowDone(opts); };
+  cancel.onclick = () => { if (credHostSeq === seq) { credFlowDrop(); credFlowDone(opts); } };
   opts.foot.replaceChildren(credEl("span", "grow"), cancel);
+}
+
+// credHostPrime: a flow in a host reads the store and the tokens already there before it draws (the tab's
+// own load has done that by then). False means stop: the host went away meanwhile, or the read failed,
+// which is said in the host (credRefreshView keeps the last view, and with none the form would offer to
+// create a store that may exist).
+async function credHostPrime(opts, seq) {
+  const ok = await credRefreshView();
+  if (credHostSeq !== seq) return false;
+  if (!ok) {
+    credHostErr(opts, "Could not read the credentials, so it is not known whether the encrypted store exists. Cancel and try again.");
+    return false;
+  }
+  return true;
 }
 
 // credSaveBtn: the Save button of the open form view, wherever it is.
@@ -2563,13 +2593,15 @@ function credSaveBtn() {
 }
 
 // credFormBuildFoot: a form view's Cancel and Save in a host's own footer, as #foot-creds-form has them.
-function credFormBuildFoot(opts, saveLabel) {
+// Both act on this view only (`submit` is its own): a click left over after it was dropped or replaced
+// does nothing, and never takes the tab's way out.
+function credFormBuildFoot(opts, saveLabel, submit) {
   const cancel = credEl("button", "btn", "Cancel");
   cancel.type = "button";
-  cancel.onclick = () => credFormExit();
+  cancel.onclick = () => (credFormSubmit === submit ? credFormExit() : undefined);
   const save = credEl("button", "btn pri", saveLabel || "Save");
   save.type = "button";
-  save.onclick = () => credFormRun();
+  save.onclick = () => (credFormSubmit === submit ? credFormRun() : undefined);
   credFormBtns = { save, cancel };
   opts.foot.replaceChildren(credEl("span", "grow"), cancel, save);
 }
@@ -2654,9 +2686,11 @@ function credStoreReady() {
 
 // credRefreshView: re-read the store and the read model without repainting the
 // body (a form is open). Used after the store was created from inside a form.
+// It answers whether the read worked; a failed one keeps the last view (the tab's forms go on with it).
 async function credRefreshView() {
   if (typeof refreshStore === "function") await refreshStore();
-  try { credView = await api("/api/credentials"); } catch (_) { /* the form keeps its last view */ }
+  try { credView = await api("/api/credentials"); } catch (_) { return false; /* the form keeps its last view */ }
+  return true;
 }
 
 // credStoreCreateNode: "Create the encrypted store" (D6). Linux: a passphrase twice
@@ -2728,13 +2762,14 @@ function credOpenForm(meta, crumbText, nodes, submit, opts) {
   credFormBusy = false;
   credFormOpts = opts || null;
   const crumb = credEl("div", "crumb");
-  crumb.append(credLink("Credentials", () => credFormExit()), document.createTextNode(" / "), credEl("b", null, crumbText));
+  const leave = opts ? () => (credFormSubmit === submit ? credFormExit() : undefined) : () => credFormExit();
+  crumb.append(credLink("Credentials", leave), document.createTextNode(" / "), credEl("b", null, crumbText));
   const err = credEl("div", "ent-err");
   err.setAttribute("role", "alert");
   credFormErrEl = err;
   host.replaceChildren(crumb, ...nodes, err);
   if (opts) {
-    credFormBuildFoot(opts, meta.saveLabel);
+    credFormBuildFoot(opts, meta.saveLabel, submit);
   } else {
     const save = document.getElementById("cred-form-save");
     if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }
@@ -2763,23 +2798,24 @@ async function credFormExit(made) {
 
 async function credFormRun() {
   if (!credFormSubmit || credFormBusy) return;
-  const submit = credFormSubmit;
+  const seq = credHostSeq;
   const save = credSaveBtn();
-  const cancel = credFormBtns && credFormBtns.cancel;
+  const cancel = credFormOpts && credFormBtns ? credFormBtns.cancel : null;
   credFormBusy = true;
   if (save) save.disabled = true;
   if (cancel) cancel.disabled = true;
   credFormErr("");
   let done = false;
   try {
-    done = await submit();
+    done = await credFormSubmit();
   } finally {
     credFormBusy = false;
     if (save) save.disabled = false;
     if (cancel) cancel.disabled = false;
   }
-  // The host went away while it saved (credFlowDrop): nothing is left to leave or to tell.
-  if (credFormSubmit !== submit) return;
+  // The host dropped this flow while it saved (credFlowDrop): nothing is left to leave or to tell. The
+  // tab never drops, so it goes on to leave, as it always did, even after its Cancel was pressed.
+  if (credHostSeq !== seq) return;
   if (done) await credFormExit(done);
 }
 
@@ -2931,10 +2967,7 @@ function credTokenDetails(t, taken) {
 async function credTokenAdd(group, startID, opts) {
   credFlowStart(opts);
   const seq = credHostSeq;
-  if (opts) {
-    await credRefreshView();
-    if (credHostSeq !== seq) return;
-  }
+  if (opts && !(await credHostPrime(opts, seq))) return;
   let tpls;
   try {
     tpls = await credLoadTemplates();
@@ -3067,10 +3100,7 @@ const CRED_APP_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 async function credAppForm(entry, opts) {
   credFlowStart(opts);
   const seq = credHostSeq;
-  if (opts) {
-    await credRefreshView();
-    if (credHostSeq !== seq) return;
-  }
+  if (opts && !(await credHostPrime(opts, seq))) return;
   const edit = !!entry;
   const uid = "cga";
   const sec = credEl("section", "sec");

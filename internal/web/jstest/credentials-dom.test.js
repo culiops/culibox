@@ -1196,12 +1196,16 @@ function awsReply(post) {
     return {};
   };
 }
-// Opens the add view in `opts`, ticks the named host profiles and checks them all.
-async function awsReady(p, opts, ...names) {
+// Opens the add view in `opts` and ticks the named host profiles.
+async function awsTick(p, opts, ...names) {
   p.box.awsOpenAdd(opts);
   await settle();
   const ticks = opts.host.querySelectorAll("input").filter((i) => i.type === "checkbox");
   awsHostProfiles.forEach((hp, i) => { if (names.includes(hp.name)) { ticks[i].checked = true; ticks[i].onchange(); } });
+}
+// ... and checks them all.
+async function awsReady(p, opts, ...names) {
+  await awsTick(p, opts, ...names);
   btnIn(opts.foot, "Check all").onclick();
   await settle();
 }
@@ -1470,4 +1474,194 @@ test("without opts the Cancel button and the crumb leave a token form for the li
   await settle();
   assert.strictEqual(p.box.reloaded, 1);
   assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+});
+
+// --- fix round 1: the tab stays as it was, host controls end their own flow only ----------------
+
+// A token save that waits for the test to answer it: { p, opts, events, release, openForm() }.
+async function pendingTokenSave(p, opts) {
+  let release;
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials/tokens/from-template" ? new Promise((r) => { release = () => r({ names: ["sentry-prod"] }); }) : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts ? opts.host : p.byId["creds-body"], "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts ? opts.host : p.byId["creds-body"], "ct-sentry-v0").value = "tok-123";
+  return () => release();
+}
+
+test("tab: Cancel pressed while a token saves reloads, and the save finishing reloads again (the new item shows)", async () => {
+  const p = page({ tab: true });
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] }));
+  const release = await pendingTokenSave(p, null);
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  p.byId["cred-form-cancel"].onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 1, "Cancel left for the list");
+  release();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 2, "and the save finishing reloads the list once more, so it holds the new token");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+});
+
+test("a host's Cancel, Save and crumb left over after its flow was dropped do nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts.host, "ct-sentry-v0").value = "tok-123";
+  const cancel = btnIn(opts.foot, "Cancel"), save = btnIn(opts.foot, "Save"), crumb = opts.host.querySelector("a.lnk");
+  p.box.credFlowDrop();
+  cancel.onclick(); save.onclick(); crumb.onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 0, "no tab exit, no loadCredentials");
+  assert.deepStrictEqual(events, []);
+  assert.deepStrictEqual(p.calls.filter((c) => c.method === "POST"), [], "and nothing is saved");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+  // ... nor do they end a newer flow that is open by now
+  const second = hostOpts();
+  await p.box.credAppForm(null, second.opts);
+  cancel.onclick(); save.onclick(); crumb.onclick();
+  await settle();
+  assert.deepStrictEqual(second.events, []);
+  assert.notStrictEqual(p.box.credState().form, null, "the newer flow is still open");
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("a host's Cancel left over after a normal exit does nothing more", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const cancel = btnIn(opts.foot, "Cancel");
+  cancel.onclick();
+  await settle();
+  cancel.onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["close"]], "closed once");
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("an AWS host's Cancel, Check all, Save all and crumb left over after a drop do nothing, to it or to a newer flow", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply();
+  await awsReady(p, opts, "acme-dev");
+  const old = ["Cancel", "Check all", "Save all"].map((l) => btnIn(opts.foot, l)).concat(opts.host.querySelector("a.lnk"));
+  p.box.credFlowDrop();
+  const before = p.calls.length;
+  old.forEach((b) => b.onclick());
+  await settle();
+  assert.strictEqual(p.calls.length, before, "no request");
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.deepStrictEqual(events, []);
+  const second = hostOpts();
+  await awsTick(p, second.opts, "acme-ops"); // ticked, not yet checked: a stray Check all would show
+  const calls = p.calls.length;
+  old.forEach((b) => b.onclick());
+  await settle();
+  assert.strictEqual(p.calls.length, calls, "the newer flow was not checked, saved or closed by them");
+  assert.deepStrictEqual(second.events, []);
+  assert.notStrictEqual(vmEval(p, "awsFlow"), null);
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("the Cancel of a host's start error closes once, and a second click does nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = (path) => { if (path === "/api/credentials/templates") throw new Error("boom"); return credReply()(path); };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const cancel = btnIn(opts.foot, "Cancel");
+  cancel.onclick();
+  cancel.onclick();
+  assert.deepStrictEqual(events, [["close"]]);
+});
+
+test("onClose runs even when onCreated throws, and the error still surfaces (token and AWS)", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  opts.onCreated = () => { throw new Error("consumer broke"); };
+  const release = await pendingTokenSave(p, opts);
+  const run = btnIn(opts.foot, "Save").onclick();
+  await settle();
+  release();
+  await assert.rejects(run, /consumer broke/);
+  assert.deepStrictEqual(events, [["close"]], "closed all the same");
+  assert.strictEqual(p.box.credState().form, null, "and the flow was reset");
+  assert.strictEqual(p.box.reloaded, 0);
+
+  const q = page({ tab: true });
+  const a = hostOpts();
+  a.opts.onCreated = () => { throw new Error("consumer broke"); };
+  q.box.reply = awsReply();
+  await awsReady(q, a.opts, "acme-dev");
+  const saved = btnIn(a.opts.foot, "Save all").onclick();
+  await assert.rejects(saved, /consumer broke/);
+  assert.deepStrictEqual(a.events, [["close"]]);
+  assert.strictEqual(vmEval(q, "awsFlow"), null);
+});
+
+test("a host flow whose credentials read failed says so, instead of offering to create a store that may exist", async () => {
+  for (const start of ["token", "app"]) {
+    const p = page({ tab: true });
+    const { opts, events } = hostOpts();
+    p.box.reply = (path) => { if (path === "/api/credentials") throw new Error("down"); return credReply()(path); };
+    if (start === "token") await p.box.credTokenAdd(null, "sentry", opts); else await p.box.credAppForm(null, opts);
+    assert.ok(opts.host.textContent.includes("Could not read the credentials"), start + ": the sentence is in the host");
+    assert.strictEqual(opts.host.querySelector(".storecreate"), null, start + ": no create-the-store step");
+    assert.strictEqual(p.box.credState().form, null, start + ": no form opened");
+    assert.deepStrictEqual(btnLabels(opts.foot), ["Cancel"]);
+    btnIn(opts.foot, "Cancel").onclick();
+    assert.deepStrictEqual(events, [["close"]], start);
+  }
+});
+
+const btnLabels = (root) => root.querySelectorAll("button").map((b) => b.textContent);
+
+test("credRefreshView answers whether the read worked, and keeps the last view when it did not", async () => {
+  const p = page();
+  p.box.reply = credReply();
+  assert.strictEqual(await p.box.credRefreshView(), true);
+  const view = p.box.credState().view;
+  assert.ok(view);
+  p.box.apiFail = new Error("down");
+  assert.strictEqual(await p.box.credRefreshView(), false);
+  assert.strictEqual(p.box.credState().view, view);
+});
+
+test("credFlowBusy is true while a flow in a host saves, and only then", async () => {
+  const p = page({ tab: true });
+  assert.strictEqual(p.box.credFlowBusy(), false, "nothing open");
+  // an AWS visit
+  const { opts } = hostOpts();
+  let release;
+  p.box.reply = awsReply(() => new Promise((r) => { release = () => r({}); }));
+  await awsReady(p, opts, "acme-dev");
+  assert.strictEqual(p.box.credFlowBusy(), false, "open, not saving");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), true, "saving");
+  release();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false, "closed");
+  // a form in a host
+  const second = hostOpts();
+  const answer = await pendingTokenSave(p, second.opts);
+  assert.strictEqual(p.box.credFlowBusy(), false);
+  btnIn(second.opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), true);
+  answer();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false);
+  // a form in the tab is not the host's business
+  p.box.credFlowDrop();
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] }));
+  const tabAnswer = await pendingTokenSave(p, null);
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false, "a save in the tab does not count");
+  tabAnswer();
+  await settle();
 });
