@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/awsprobe"
@@ -923,6 +924,12 @@ type Session struct {
 	// which has no abduco in front of it. Only pump touches it.
 	trim *preambleTrimmer
 
+	// sizeMu orders every PTY size change (Resize, ForceRedraw and its restore)
+	// with the size it records; taken before mu, never inside it. redrawSeq
+	// (guarded by sizeMu) names the latest ForceRedraw, the only one that restores.
+	sizeMu    sync.Mutex
+	redrawSeq uint64
+
 	mu   sync.Mutex
 	cond *sync.Cond
 	rb   *ring
@@ -1239,28 +1246,36 @@ func (s *Session) markSubmitted() {
 	}
 }
 
-// Resize resizes the PTY and records the size for ForceRedraw.
+// Resize resizes the PTY and records the size for ForceRedraw. sizeMu holds
+// the record and the ioctl together, so a delayed restore cannot set an older
+// size between them.
 func (s *Session) Resize(rows, cols uint16) error {
+	s.sizeMu.Lock()
+	defer s.sizeMu.Unlock()
 	s.mu.Lock()
 	s.rows, s.cols = rows, cols
 	s.muteActivity(time.Now())
 	s.mu.Unlock()
-	return pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols})
+	return setPTYSize(s.ptmx, rows, cols)
 }
 
 // redrawGap is how long ForceRedraw holds its nudged size. MEASURED (#126):
 // Claude Code reads its size when its event loop reaches the SIGWINCH, so a
 // nudge undone at once was read as "unchanged" and nothing repainted; a 10 ms
-// hold gave a full repaint. 50 ms leaves room for abduco's extra hop and a busy
-// agent.
-const redrawGap = 50 * time.Millisecond
+// hold gave a full repaint. 100 ms leaves room for abduco's or docker exec's
+// extra hop and an agent whose event loop is busy. A var only for tests.
+var redrawGap = 100 * time.Millisecond
 
 // ForceRedraw makes a TUI repaint over the best-effort replay on attach: the
 // PTY goes one column narrower for redrawGap, then back. Narrower, so the frame
 // painted in between fits the viewer's grid instead of wrapping. The restore
-// runs on a timer (the caller's read loop must not sleep) and takes the size
-// recorded when it fires, so a resize that lands during the hold wins.
+// runs on a timer (the caller's read loop must not sleep) and sets the size
+// recorded when it fires, so a resize during the hold wins. Only the latest
+// redraw restores: an earlier timer must not cut a later hold short. The one
+// activity mute covers both repaints (attachRepaintGrace > redrawGap).
 func (s *Session) ForceRedraw() {
+	s.sizeMu.Lock()
+	defer s.sizeMu.Unlock()
 	s.mu.Lock()
 	r, c := s.rows, s.cols
 	s.muteActivity(time.Now())
@@ -1268,14 +1283,38 @@ func (s *Session) ForceRedraw() {
 	if c < 2 {
 		return
 	}
-	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c - 1})
+	s.redrawSeq++
+	seq := s.redrawSeq
+	_ = setPTYSize(s.ptmx, r, c-1)
 	time.AfterFunc(redrawGap, func() {
+		s.sizeMu.Lock()
+		defer s.sizeMu.Unlock()
+		if s.redrawSeq != seq {
+			return
+		}
 		s.mu.Lock()
 		r, c := s.rows, s.cols
-		s.muteActivity(time.Now()) // the second repaint is the viewer's doing too
 		s.mu.Unlock()
-		_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c})
+		_ = setPTYSize(s.ptmx, r, c)
 	})
+}
+
+// setPTYSize sets the PTY size through the file's own reference. pty.Setsize
+// reads the raw fd number (f.Fd()) with no hold on it; a restore that fires
+// while the session closes could race the close or reach a PTY that reused the
+// number. Control holds the fd for the ioctl and fails on a closed file.
+func setPTYSize(f *os.File, rows, cols uint16) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ierr error
+	if err := rc.Control(func(fd uintptr) {
+		ierr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols})
+	}); err != nil {
+		return err
+	}
+	return ierr
 }
 
 // Done is closed when the child exits.

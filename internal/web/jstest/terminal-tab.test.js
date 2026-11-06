@@ -729,20 +729,29 @@ test("a changed row or column count is sent", () => {
 
 test("sendResize sends each size once per socket and again on a new one", () => {
   const { TerminalTab } = require("../static/terminal-tab.js");
-  global.WebSocket = { OPEN: 1 };
+  const sockets = [];
+  global.location = { protocol: "http:", host: "127.0.0.1:8899" };
+  global.WebSocket = class {
+    constructor() { this.readyState = 0; this.sent = []; sockets.push(this); }
+    send(m) { this.sent.push(JSON.parse(m)); }
+    close() {}
+  };
+  global.WebSocket.OPEN = 1;
   try {
     const tab = Object.create(TerminalTab.prototype);
-    const sent = [];
-    tab.term = { rows: 24, cols: 80 };
-    tab.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
-    tab.sendResize(); tab.sendResize(); tab.sendResize();
-    assert.strictEqual(sent.length, 1);
+    tab.term = { rows: 24, cols: 80, reset() {}, focus() {} };
+    tab.connect();
+    sockets[0].readyState = 1;
+    sockets[0].onopen();
+    tab.sendResize(); tab.sendResize();
+    assert.strictEqual(sockets[0].sent.length, 1, "onopen sent the size; repeats are dropped");
     tab.term.cols = 100;
     tab.sendResize(); tab.sendResize();
-    assert.strictEqual(sent.length, 2);
-    tab.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) }; // reconnect
-    tab.sentSize = null; // what connect() does for a new socket
+    assert.strictEqual(sockets[0].sent.length, 2);
+    tab.connect(); // reconnect: a new socket must hear the size once
+    sockets[1].readyState = 1;
+    sockets[1].onopen();
     tab.sendResize();
-    assert.strictEqual(sent.length, 3, "a new socket hears the size once");
-  } finally { delete global.WebSocket; }
+    assert.deepStrictEqual(sockets[1].sent, [{ type: "resize", rows: 24, cols: 100 }]);
+  } finally { delete global.WebSocket; delete global.location; }
 });

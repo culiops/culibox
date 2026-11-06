@@ -332,7 +332,15 @@ func TestAttachedStaysTrueWhenOneViewerEvictsAnother(t *testing.T) {
 // was undone at once (it read the size after the restore); with a 10 ms hold
 // it repainted. The nudge is one column narrower, so the in-between frame never
 // wraps in the viewer's wider grid.
+// holdFor sets redrawGap for one test; tests that touch it do not run in parallel.
+func holdFor(t *testing.T, d time.Duration) {
+	old := redrawGap
+	redrawGap = d
+	t.Cleanup(func() { redrawGap = old })
+}
+
 func TestForceRedrawHoldsANarrowerSizeThenRestores(t *testing.T) {
+	holdFor(t, 300*time.Millisecond) // "right after" must not race the restore on a loaded runner
 	s := startProc(t, 1<<12, "sleep", "5")
 	if err := s.Resize(30, 100); err != nil {
 		t.Fatal(err)
@@ -375,4 +383,46 @@ func waitSize(s *Session, rows, cols uint16, d time.Duration) bool {
 		}
 	}
 	return false
+}
+
+// Two redraws in a row (a daemon-restart reattach, then the viewer's first
+// resize): the first one's restore must not cut the second one's hold short,
+// or the agent may read the size after it and skip the repaint again.
+func TestForceRedrawALaterRedrawOwnsTheRestore(t *testing.T) {
+	holdFor(t, 400*time.Millisecond)
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(30, 100)
+	s.ForceRedraw()
+	time.Sleep(200 * time.Millisecond)
+	s.ForceRedraw()
+	time.Sleep(300 * time.Millisecond) // past the first restore, inside the second hold
+	if ws, _ := pty.GetsizeFull(s.ptmx); ws.Cols != 99 {
+		t.Fatalf("inside the second hold: %d cols, want 99", ws.Cols)
+	}
+	if !waitSize(s, 30, 100, 2*time.Second) {
+		t.Fatal("the second redraw did not restore")
+	}
+}
+
+// The restore fires on a timer, so it can run after the session closed its
+// PTY. It must neither panic nor reach a PTY that reuses the fd number.
+func TestForceRedrawRestoreAfterCloseTouchesNothing(t *testing.T) {
+	holdFor(t, 100*time.Millisecond)
+	s := startProc(t, 1<<12, "sleep", "5")
+	_ = s.Resize(30, 100)
+	s.ForceRedraw()
+	_ = s.ptmx.Close()
+	other, tty, err := pty.Open() // likely takes the number just freed
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	defer tty.Close()
+	if err := pty.Setsize(other, &pty.Winsize{Rows: 7, Cols: 33}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(3 * redrawGap)
+	if ws, _ := pty.GetsizeFull(other); ws.Rows != 7 || ws.Cols != 33 {
+		t.Fatalf("another PTY was resized to %dx%d", ws.Rows, ws.Cols)
+	}
 }
