@@ -2,7 +2,8 @@
 
 // The profile page's read view as data (spec 5.2-5.4, 5.6): the header, the note
 // and one block per question "what will this agent be able to do?". Pure: no
-// DOM, no fetch, no page globals read, so the page script only has to draw it.
+// DOM, no fetch, and no page state read (only the helpers it depends on read their
+// own: shortPath reads window.HOME_DIR), so the page script only has to draw it.
 // Everything about Cloud and tokens, Also reachable and Network is reachModel's
 // (spawnpreview.js), the one builder New session shares, so no wording of those
 // blocks is invented here; the rest is the approved mockup's
@@ -174,11 +175,10 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
   const u = pfvUnavailable(reason);
   if (host) {
-    // The spec's sentence over the two lines the approved shots split it into: the headline
-    // ends at "as you", the muted line carries the rest.
-    b.lines.push("On this machine: runs as you", "With your files, your network and your credentials");
-    // Boxes cannot be chosen here; the reason is said once, quietly. Not an error: this profile does not need one.
-    if (unavailable) b.lines.push(u.line);
+    // The spec's sentence, verbatim, on one line (spec 5.4). The muted line under it
+    // carries only the boxes-unavailable reason when there is one, quietly: not an
+    // error, this profile does not need a box.
+    b.lines.push("On this machine: runs as you, with your files, your network and your credentials", unavailable ? u.line : "");
   } else if (unavailable) {
     b.lines.push("In a box", u.line, u.consequence);
     b.tone = "error";
@@ -204,8 +204,10 @@ function pfvRunsBlock(host, copy, unavailable, reason, edit) {
 //   blocks  [{id, label, lines, rows, edit, add, count, note}] in page order
 //     runs, workspace, agent, cloud, reachable, network, advanced (box)
 //     runs, workspace, agent, canreach, advanced (host)
-//   lines   the statements, the first is the headline, the rest are muted. In
-//           a block with tone "error", the line at toneAt is the red one.
+//   lines   the statements, the first is the headline, the rest are muted; an
+//           empty string is a line not drawn (host Runs in has a second, "" unless
+//           boxes are unavailable). In a block with tone "error", the line at
+//           toneAt is the red one.
 //   rows    {kind, name, sub, scope, tag, missing} (reachModel's Item) plus, only
 //           where it applies, fix (a Not home row) or action (Old-style AWS).
 //           A row with missing:true carries scope "Not found in Credentials",

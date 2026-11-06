@@ -121,8 +121,8 @@ test("runbook-host read view has runs, workspace, agent, canreach, advanced and 
   assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "canreach", "advanced"]);
   assert.strictEqual(v.header.tier, "host");
   assert.strictEqual(v.header.agentLine, "Claude Code · agent's default model");
-  // The spec's sentence over the two lines b-host / b-ro split it into.
-  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you", "With your files, your network and your credentials"]);
+  // The spec's sentence verbatim, on one line; the muted line is empty when boxes are available.
+  assert.deepStrictEqual(byId(v, "runs").lines, ["On this machine: runs as you, with your files, your network and your credentials", ""]);
   assert.ok(!byId(v, "runs").tone);
   assert.deepStrictEqual(byId(v, "workspace").rows.map((r) => [r.kind, r.name, r.sub, r.scope]), [
     ["Folder", "/home/you/runbooks", "Sessions start here", "Read and write, like anything else you own"],
@@ -202,6 +202,28 @@ test("boxes unavailable on a box profile is an error line with the reason", () =
   assert.strictEqual(none.lines[1], "Boxes are unavailable on this machine.");
 });
 
+// With no box layer the list view reports no network posture for a boxed profile; the
+// read view still shows the posture it will have once boxes exist (pfvPosture).
+test("no box layer: the network block reads the posture the profile will have", () => {
+  const noLayer = (over, doc) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, network: "", ...over }, doc: { ...awsOpsDoc, ...doc } })), "network").lines;
+  const unbound = { aws_connections: undefined, github_owners: undefined, github_repos: undefined, github_permissions: undefined, tokens: undefined };
+  // Nothing bound: any public website over HTTPS (the b-created words), not an allowlist.
+  assert.deepStrictEqual(noLayer(unbound), [
+    "Any public website over HTTPS, through CuliBox's proxy",
+    "An allowlist starts once it holds cloud access or a token. Private, tailnet and host addresses stay blocked.",
+  ]);
+  // Bound with egress_open: all internet hosts, plainly.
+  assert.deepStrictEqual(noLayer({}, { egress_open: true }), ["Internet only through CuliBox's proxy, HTTPS to hostnames", "All internet hosts (no allowlist)."]);
+  // Bound: the allowlist sentence (each of AWS, GitHub, a token, the old-style AWS setting binds).
+  for (const only of [{ aws_connections: ["prod-read"] }, { github_owners: ["culiops"] }, { tokens: ["sentry-staging"] }, { aws_inline: { name: "legacy" } }]) {
+    const lines = noLayer({ ...unbound, ...only });
+    assert.strictEqual(lines[0], "Internet only through CuliBox's proxy, HTTPS to hostnames");
+    assert.match(lines[1], /^Because this profile holds cloud access and tokens/, JSON.stringify(only));
+  }
+  // A host profile has no network block at all, layer or not.
+  assert.strictEqual(byId(pfvReadView(hostIn({ boxRuntime: "" })), "network"), undefined);
+});
+
 test("boxes available (or not yet known) is not an unavailable state", () => {
   for (const boxRuntime of ["runc", "sysbox-runc", undefined, null]) {
     const runs = byId(pfvReadView(awsIn({ boxRuntime })), "runs");
@@ -214,8 +236,7 @@ test("boxes unavailable on a host profile is not an error", () => {
   const v = pfvReadView(hostIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" }));
   const runs = byId(v, "runs");
   assert.deepStrictEqual(runs.lines, [
-    "On this machine: runs as you",
-    "With your files, your network and your credentials",
+    "On this machine: runs as you, with your files, your network and your credentials",
     "Boxes are unavailable on this machine: Docker is not installed.",
   ]);
   assert.ok(!runs.tone && runs.toneAt === undefined, "muted, never red");
