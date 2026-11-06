@@ -494,7 +494,7 @@ test("a boxed session's workspace-relative token also carries alt", () => {
 // OLDEST, which were the panes on screen while hidden tabs kept theirs. A lost
 // pane painted nothing until reload. dispose() alone does not free a slot (the
 // context lives until GC); loseContext() does.
-const { makeWebglPool, WEBGL_CAP, loadWebgl, dropWebgl } = require("../static/terminal-tab.js");
+const { makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl } = require("../static/terminal-tab.js");
 
 function member(name, shown = true, on = true) {
   return {
@@ -505,9 +505,27 @@ function member(name, shown = true, on = true) {
   };
 }
 
+const DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+const ANDROID_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+
 test("the WebGL cap leaves room for every on-screen pane under the browser's 16", () => {
-  assert.ok(WEBGL_CAP >= 8, "4 panes, each with a docked shell, are on screen at once");
-  assert.ok(WEBGL_CAP < 16, "Chromium kills the oldest context past 16");
+  assert.ok(webglCapFor(DESKTOP_UA) >= 8, "4 panes, each with a docked shell, are on screen at once");
+  assert.ok(webglCapFor(DESKTOP_UA) < 16, "Chromium kills the oldest context past 16");
+});
+
+test("on Android the WebGL cap stays under Chromium's 8 there", () => {
+  assert.ok(webglCapFor(ANDROID_UA) < 8);
+  assert.ok(webglCapFor(ANDROID_UA) >= 1);
+  assert.strictEqual(webglCapFor(""), webglCapFor(DESKTOP_UA), "no user agent: the desktop cap");
+});
+
+// dropWebgl reaches the context through the vendored addon's private fields.
+// If a re-vendor renames them it silently falls back to a plain dispose, the
+// slot waits for GC, and #127 comes back under churn: pin them here.
+test("the vendored WebGL addon still keeps its context where dropWebgl looks", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/xterm/addon-webgl.js"), "utf8");
+  assert.ok(src.includes("this._renderer=this._register(new"), "addon._renderer");
+  assert.ok(src.includes('this._gl=this._canvas.getContext("webgl2"'), "renderer._gl");
 });
 
 test("a shown tab gets WebGL while the pool has room", () => {
@@ -609,4 +627,84 @@ test("dropWebgl tolerates no addon, no renderer and a lost context", () => {
   dropWebgl({ dispose() {} });
   dropWebgl({ dispose() {}, _renderer: { _gl: { getExtension: () => null } } });
   dropWebgl({ dispose() { throw new Error("already disposed"); }, _renderer: null });
+});
+
+// TerminalTab as a pool member: shown when sized, a lost renderer gives its
+// slot back, a late loss from a renderer already dropped changes nothing.
+function webglTab() {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const tab = Object.create(TerminalTab.prototype);
+  tab.termEl = { clientWidth: 800, clientHeight: 400 };
+  tab.term = { rows: 24, cols: 80, loadAddon() {} };
+  tab.fitAddon = { fit() {} };
+  tab.ws = null;
+  tab.closed = false;
+  tab.webgl = null;
+  tab.webglBroken = false;
+  return tab;
+}
+
+test("a shown terminal draws with WebGL and falls back when its context is lost", () => {
+  global.WebglAddon = { WebglAddon: fakeAddonClass([]) };
+  try {
+    const tab = webglTab();
+    const before = webglPool.size();
+    tab.fit();
+    assert.ok(tab.webgl, "a sized fit takes a renderer");
+    assert.strictEqual(webglPool.size(), before + 1);
+    tab.webgl.lossFn();
+    assert.strictEqual(tab.webgl, null, "lost: back to the DOM renderer");
+    assert.strictEqual(webglPool.size(), before, "and the slot is free");
+    tab.fit();
+    assert.ok(tab.webgl, "retried the next time it shows");
+    webglPool.release(tab);
+  } finally { delete global.WebglAddon; }
+});
+
+test("a loss reported by a renderer the tab already dropped is ignored", () => {
+  global.WebglAddon = { WebglAddon: fakeAddonClass([]) };
+  try {
+    const tab = webglTab();
+    tab.fit();
+    const old = tab.webgl;
+    webglPool.release(tab);
+    tab.fit();
+    const now = tab.webgl;
+    old.lossFn();
+    assert.strictEqual(tab.webgl, now);
+    webglPool.release(tab);
+  } finally { delete global.WebglAddon; }
+});
+
+test("a closed tab, or one whose WebGL already failed, takes no slot and evicts nobody", () => {
+  const log = [];
+  let made = 0;
+  global.WebglAddon = { WebglAddon: class extends fakeAddonClass(log) { constructor() { super(); made++; } } };
+  try {
+    const before = webglPool.size();
+    const broken = webglTab();
+    broken.term.loadAddon = () => { throw new Error("WebGL2 not supported"); };
+    broken.fit(); // the first try is the only one
+    assert.strictEqual(broken.webglBroken, true);
+    assert.strictEqual(webglPool.size(), before);
+    // A full pool of hidden holders: any acquire would evict one of them.
+    const cap = webglCapFor(typeof navigator !== "undefined" ? navigator.userAgent : "");
+    const holders = [];
+    while (webglPool.size() < cap) {
+      const h = member("h" + holders.length, false);
+      webglPool.acquire(h);
+      holders.push(h);
+    }
+    const full = webglPool.size();
+    const closed = webglTab();
+    closed.closed = true;
+    made = 0;
+    closed.fit();
+    broken.fit();
+    assert.strictEqual(made, 0, "neither tries to start a renderer");
+    assert.strictEqual(webglPool.size(), full);
+    assert.ok(holders.every((h) => h.gl), "no hidden holder was evicted for them");
+    for (const h of holders) webglPool.release(h);
+    assert.strictEqual(webglPool.size(), before);
+  } finally { delete global.WebglAddon; }
 });

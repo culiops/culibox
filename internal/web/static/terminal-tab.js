@@ -29,12 +29,15 @@ function hasSize(w, h) {
   return w > 0 && h > 0;
 }
 
-// WEBGL_CAP: Chromium keeps 16 live WebGL contexts per page and, past that,
-// kills the OLDEST one. MEASURED (#127): with 19 tabs open, the three panes on
-// screen went blank while 15 hidden tabs kept theirs. At most 8 terminals are on
-// screen (4 panes, each with a docked shell), so 12 covers them plus the last
-// few hidden tabs, and stays under the browser's limit.
-const WEBGL_CAP = 12;
+// webglCapFor: Chromium keeps 16 live WebGL contexts per page (8 on Android,
+// GetWebglPreferences) and, past that, kills the OLDEST one. MEASURED (#127):
+// with 19 tabs open, the three panes on screen went blank while 15 hidden tabs
+// kept theirs. At most 8 terminals are on screen (4 panes, each with a docked
+// shell), so 12 covers them plus the last few hidden tabs. On Android, 6 stays
+// under its 8; a tablet showing more than 6 draws the rest with the DOM renderer.
+function webglCapFor(ua) {
+  return /Android/i.test(ua || "") ? 6 : 12;
+}
 
 // makeWebglPool hands WebGL renderers to the tabs most recently shown. A member
 // is { shown(), webglOn() -> bool, webglOff() }. acquire runs whenever a tab is
@@ -95,7 +98,7 @@ function dropWebgl(a) {
   } catch (_) {}
 }
 
-const webglPool = makeWebglPool(WEBGL_CAP);
+const webglPool = makeWebglPool(webglCapFor(typeof navigator !== "undefined" ? navigator.userAgent : ""));
 
 // TOUCH_SLOP_PX is how far a finger has to travel before the gesture counts as a
 // scroll rather than a tap. Under it the touch belongs to the browser: a tap is
@@ -757,7 +760,9 @@ class TerminalTab {
     if (!hasSize(this.termEl.clientWidth, this.termEl.clientHeight)) return;
     // A sized fit is the one signal every show path gives (pane tab, dock,
     // restore, phone): the ResizeObserver fires when the pane gains a size.
-    webglPool.acquire(this);
+    // Asked only when a renderer could start: a full pool evicts a hidden tab
+    // before it learns the newcomer would refuse.
+    if (this.webglPossible()) webglPool.acquire(this);
     try { this.fitAddon.fit(); this.sendResize(); } catch (_) {}
   }
 
@@ -765,9 +770,11 @@ class TerminalTab {
   // (no WebGL2) is not retried; a lost one is retried the next time it shows.
   shown() { return hasSize(this.termEl.clientWidth, this.termEl.clientHeight); }
 
+  webglPossible() { return !this.closed && !this.webglBroken && typeof WebglAddon !== "undefined"; }
+
   webglOn() {
     if (this.webgl) return true;
-    if (this.closed || this.webglBroken || typeof WebglAddon === "undefined") return false;
+    if (!this.webglPossible()) return false;
     this.webgl = loadWebgl(this.term, WebglAddon.WebglAddon, (a) => { if (this.webgl === a) webglPool.release(this); });
     if (!this.webgl) this.webglBroken = true;
     return !!this.webgl;
@@ -1170,5 +1177,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, makeWebglPool, WEBGL_CAP, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }
