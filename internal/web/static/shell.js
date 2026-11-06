@@ -113,6 +113,13 @@ function closeDialog(id) {
   if (d && d.open) d.close();
 }
 
+// closeDialogFromUI: a ✕ or Done button. The open page goes through closePage so its leave hook can ask first
+// (unsaved profile changes); every other dialog, and every dialog on a phone, closes as closeDialog does.
+function closeDialogFromUI(id) {
+  if (typeof currentPage === "function" && currentPage() === id && typeof closePage === "function") closePage();
+  else closeDialog(id);
+}
+
 // openSheet/closeSheet: the mobile bottom-sheet primitive. One #sheet-modal,
 // body rebuilt per open (like #ask-modal). `build(bodyEl)` fills the sheet;
 // `opts.height` sets the --sheet-h CSS var (default from app.css); `opts.onClose`
@@ -141,6 +148,13 @@ function closeSheet() {
 // profiles, "settings" = font sizes: the ids are the pre-existing panel ids,
 // kept so every handler that already targets them keeps working).
 function openSettings(tab, group) {
+  // The profile page asks before another tab replaces it, when it holds unsaved changes (settingsLeave). It is
+  // opened again once the question is answered with Discard.
+  const leave = settingsLeave(tab);
+  if (leave !== true) {
+    leave.then((ok) => { if (ok) openSettings(tab, group); });
+    return;
+  }
   // "creds" can be opened on one group ("aws", "github", "tokens"): it scrolls
   // there once the Credentials view has painted (credFocusGroup).
   if (tab === "creds" && group && typeof credFocusGroup === "function") credFocusGroup(group);
@@ -154,6 +168,13 @@ function openSettings(tab, group) {
   // very first paint — guard it. Reopening Settings must reflect a permission
   // revoked in the browser meanwhile, so this re-reads on every open.
   if (typeof initNotifyToggle === "function") initNotifyToggle();
+}
+
+// settingsLeave: may Settings go to tab `tab`? true, itself and not a promise, when it may at once. The profile page
+// (profilepage.js pfvTabLeave) answers a promise when it holds unsaved changes and the user is asked; on a phone, or
+// with nothing changed, it is true, so the modal never sees a question.
+function settingsLeave(tab) {
+  return typeof pfvTabLeave === "function" ? pfvTabLeave(tab || "manage") : true;
 }
 
 function selectSettingsTab(name) {
@@ -200,10 +221,14 @@ function selectSettingsTab(name) {
 
 function initDialogs() {
   for (const btn of document.querySelectorAll("[data-close]")) {
-    btn.onclick = () => closeDialog(btn.dataset.close);
+    btn.onclick = () => closeDialogFromUI(btn.dataset.close);
   }
   for (const b of document.querySelectorAll("#settings-tabs button")) {
-    b.onclick = () => selectSettingsTab(b.dataset.tab);
+    b.onclick = () => {
+      const leave = settingsLeave(b.dataset.tab);
+      if (leave === true) selectSettingsTab(b.dataset.tab);
+      else leave.then((ok) => { if (ok) selectSettingsTab(b.dataset.tab); });
+    };
   }
   for (const d of document.querySelectorAll("dialog")) {
     // A click landing on the dialog element itself is a backdrop click: the
@@ -472,6 +497,13 @@ function askDialog(opts) {
   const ok = document.getElementById("ask-ok");
   document.getElementById("ask-title").textContent = opts.title || "";
   document.getElementById("ask-body").textContent = opts.body || "";
+  // Optional nodes under the body (the host switch lists what it removes). Reset on every ask, like the cancel label.
+  const extra = document.getElementById("ask-extra");
+  if (extra) {
+    extra.replaceChildren(...(Array.isArray(opts.extra) ? opts.extra : opts.extra ? [opts.extra] : []));
+    extra.hidden = !extra.children.length;
+    d.classList.toggle("wide", !extra.hidden);
+  }
   ok.textContent = opts.confirmLabel || "OK";
   // Cancel is reset on every ask, so a label one question gave (the profile page's
   // "Keep editing") never leaks into the next.
@@ -522,8 +554,12 @@ function askDialog(opts) {
     d.returnValue = "";               // clear the previous answer before showing
     d.showModal();
     // Focus explicitly: showModal() otherwise lands on the first focusable
-    // descendant, which is the ×, making Enter and Space a cancel.
-    if (opts.input) input.focus(); else ok.focus();
+    // descendant, which is the ×, making Enter and Space a cancel. focusCancel
+    // puts it on Cancel instead, for a question whose "yes" must never be one
+    // keypress away (the host switch, discarding unsaved profile changes).
+    if (opts.input) input.focus();
+    else if (opts.focusCancel) document.getElementById("ask-cancel").focus();
+    else ok.focus();
   });
 }
 

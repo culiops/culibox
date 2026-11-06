@@ -115,13 +115,28 @@ function pfcPicker(rec, kinds, none) {
   return { node: pop, first };
 }
 
-// pfvOpenPicker: the "+ Add" choice of an open block. The picker task replaces this with the grouped picker.
+// pfvOpenPicker: the "+ Add" choice of an open block. The picker task replaces this with the grouped picker. It
+// sets pfvState.picker (the block whose picker is open, "" when none) for pfvEscTarget, and pfvClosePicker clears
+// it: the pair is the seam the Esc layering reads.
 function pfvOpenPicker(blockId) {
   const rec = pfvState.edits[blockId];
   if (!rec) return false;
   rec.ui.picker = true;
+  pfvState.picker = blockId;
   pfvRedrawForm(rec);
   pfvFocusBlock(blockId);
+  return true;
+}
+
+// pfvClosePicker: close the open "+ Add" choice and give focus back to the link that opened it. false when none is open.
+function pfvClosePicker() {
+  const rec = pfvState.edits[pfvState.picker];
+  pfvState.picker = "";
+  if (!rec || rec.ui.picker !== true) return false;
+  rec.ui.picker = false;
+  pfvRedrawForm(rec);
+  const add = rec.fields.add;
+  if (add && typeof add.focus === "function") add.focus();
   return true;
 }
 
@@ -133,6 +148,7 @@ function pfvAddRow(blockId, what) {
   const key = ed.add(rec, what || {});
   if (!key) return false;
   rec.ui.picker = false;
+  pfvState.picker = "";
   rec.ferrs = [];
   pfvChanged(rec, "");
   const el = rec.fields[key];
@@ -148,8 +164,7 @@ function pfcFoot(rec, list, kinds, none) {
   add.setAttribute("aria-expanded", rec.ui.picker === true ? "true" : "false");
   add.onclick = () => {
     if (rec.ui.picker !== true) { pfvOpenPicker(rec.id); return; }
-    rec.ui.picker = false;
-    pfvRedrawForm(rec);
+    pfvClosePicker();
   };
   pfvReg(rec, "add", add);
   out.push(add);

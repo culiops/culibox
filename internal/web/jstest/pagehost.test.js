@@ -91,7 +91,8 @@ test("crossing to mobile closes the page", () => {
   const src = read("app.js");
   const at = src.indexOf('window.matchMedia(mobileMediaQuery()).addEventListener("change"');
   assert.ok(at >= 0);
-  assert.match(src.slice(at, at + 300), /closePage\(\)/);
+  // "force": the layout is leaving under the page, so the profile page's leave hook is not asked.
+  assert.match(src.slice(at, at + 400), /closePage\("force"\)/);
 });
 
 test("the Audit link shows only when the server has an audit store", () => {
@@ -135,4 +136,140 @@ test("with a page open, zoom and Ctrl+P stand down to the browser", () => {
 test("classnames HOOKS lists the page-<id> body classes for every PAGE_ID", () => {
   const src = fs.readFileSync(path.join(__dirname, "classnames.test.js"), "utf8");
   for (const id of PAGE_IDS) assert.ok(src.includes('"page-' + id + '"'), "page-" + id);
+});
+
+// --- the leave hook: a page with something to ask (the profile page's unsaved changes) is asked before it goes ---
+
+// pagehost.js on a fake DOM: two page dialogs and the host, enough for openPage / closePage / the Esc handler.
+function pageEnv() {
+  const vm = require("node:vm");
+  const mk = (id) => {
+    const cls = new Set();
+    return {
+      id, open: false, hidden: false, cls,
+      classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) },
+      before() {}, show() { this.open = true; }, close() { this.open = false; }, querySelector: () => null,
+    };
+  };
+  const els = { "settings-modal": mk("settings-modal"), "analytics-modal": mk("analytics-modal"), "page-host": Object.assign(mk("page-host"), { appendChild() {} }) };
+  const listeners = [];
+  const body = { classList: { add() {}, remove() {} } };
+  const ctx = vm.createContext({
+    document: {
+      getElementById: (id) => els[id] || null, createComment: () => ({ parentNode: {}, replaceWith() {} }),
+      addEventListener: (ev, fn) => listeners.push([ev, fn]), body,
+    },
+    window: { innerWidth: 1280 }, mobileActive: global.mobileActive, requestAnimationFrame() {},
+  });
+  new vm.Script(read("pagehost.js"), { filename: "pagehost.js" }).runInContext(ctx);
+  const esc = (taken) => {
+    const ev = { key: "Escape", defaultPrevented: taken === true, prevented: false, preventDefault() { this.prevented = true; } };
+    for (const [name, fn] of listeners) if (name === "keydown") fn(ev);
+    return ev;
+  };
+  return { ctx, els, esc, run: (code) => new vm.Script(code).runInContext(ctx) };
+}
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test("pagehost closePage waits for the leave hook", async () => {
+  const t = pageEnv();
+  // No hook: shut at once, and the answer says so.
+  t.ctx.openPage("settings-modal");
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal");
+  assert.strictEqual(t.ctx.closePage(), true);
+  assert.strictEqual(t.ctx.currentPage(), "");
+  assert.strictEqual(t.ctx.closePage(), true, "nothing open is closed");
+
+  // A hook that says stay.
+  t.ctx.openPage("settings-modal");
+  const seen = [];
+  t.run("pageLeaveHook = (why) => { globalThis.seen.push(why); return globalThis.verdict; }");
+  t.ctx.seen = seen;
+  t.ctx.verdict = false;
+  assert.strictEqual(t.ctx.closePage(), false);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal", "it stays");
+  assert.deepStrictEqual(seen, [undefined]);
+  // A hook that answers true at once: shut by the time closePage returns (callers that do not wait rely on it).
+  t.ctx.verdict = true;
+  assert.strictEqual(t.ctx.closePage(), true);
+  assert.strictEqual(t.ctx.currentPage(), "");
+
+  // A hook that asks: closePage hands back the promise and the page stays until it is answered.
+  t.ctx.openPage("settings-modal");
+  let answer;
+  t.ctx.verdict = new Promise((r) => { answer = r; });
+  const pending = t.ctx.closePage();
+  assert.ok(pending && typeof pending.then === "function");
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal", "open while the question is on screen");
+  answer(false);
+  assert.strictEqual(await pending, false);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal", "Keep editing: it stays");
+  t.ctx.verdict = Promise.resolve(true);
+  assert.strictEqual(await t.ctx.closePage(), true);
+  assert.strictEqual(t.ctx.currentPage(), "", "Discard: it closes");
+
+  // "force" (the window crossed to a phone) is not asked.
+  t.ctx.openPage("settings-modal");
+  t.ctx.verdict = false;
+  seen.length = 0;
+  assert.strictEqual(t.ctx.closePage("force"), true);
+  assert.strictEqual(t.ctx.currentPage(), "");
+  assert.deepStrictEqual(seen, []);
+});
+
+test("the Esc key asks the leave hook with why esc, and a hook that says stay keeps the page", async () => {
+  const t = pageEnv();
+  t.ctx.openPage("settings-modal");
+  const seen = [];
+  t.ctx.seen = seen;
+  t.ctx.verdict = false;
+  t.run("pageLeaveHook = (why) => { globalThis.seen.push(why); return globalThis.verdict; }");
+  const ev = t.esc();
+  assert.strictEqual(ev.prevented, true);
+  assert.deepStrictEqual(seen, ["esc"]);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal");
+  t.ctx.verdict = true;
+  t.esc();
+  assert.strictEqual(t.ctx.currentPage(), "", "nothing wants it: the page closes");
+  // A key something above already took (a field, an open list) is not the page's: the hook is not even asked.
+  t.ctx.openPage("settings-modal");
+  seen.length = 0;
+  const taken = t.esc(true);
+  assert.strictEqual(taken.prevented, false);
+  assert.deepStrictEqual(seen, []);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal");
+});
+
+test("another page opening asks the open page's hook, and opens after Discard", async () => {
+  const t = pageEnv();
+  t.ctx.openPage("settings-modal");
+  t.ctx.verdict = false;
+  t.run("pageLeaveHook = () => globalThis.verdict");
+  assert.strictEqual(t.ctx.openPage("analytics-modal"), true, "handled: the caller must not open it as a modal");
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal", "Keep editing: Settings stays");
+  let answer;
+  t.ctx.verdict = new Promise((r) => { answer = r; });
+  assert.strictEqual(t.ctx.openPage("analytics-modal"), true);
+  assert.strictEqual(t.ctx.currentPage(), "settings-modal", "still Settings while it is asked");
+  answer(true);
+  await tick();
+  assert.strictEqual(t.ctx.currentPage(), "analytics-modal", "Discard: the other page opens");
+});
+
+test("the profile page and the shell wire the guard through one function each", () => {
+  const shell = read("shell.js");
+  // The close buttons go through closePage for the open page; every other dialog closes as before.
+  assert.match(body(shell, "initDialogs"), /btn\.onclick = \(\) => closeDialogFromUI\(btn\.dataset\.close\)/);
+  assert.match(body(shell, "closeDialogFromUI"), /currentPage\(\) === id[^\n]*closePage\(\);\s*else closeDialog\(id\)/);
+  // The Settings nav click and openSettings ask settingsLeave first, which is a no-op answer (true) off the desktop page.
+  assert.match(body(shell, "initDialogs"), /const leave = settingsLeave\(b\.dataset\.tab\);\s*if \(leave === true\) selectSettingsTab\(b\.dataset\.tab\);/);
+  assert.match(body(shell, "openSettings"), /const leave = settingsLeave\(tab\);\s*if \(leave !== true\) \{\s*leave\.then\(\(ok\) => \{ if \(ok\) openSettings\(tab, group\); \}\);\s*return;/);
+  assert.match(body(shell, "settingsLeave"), /typeof pfvTabLeave === "function" \? pfvTabLeave\(tab \|\| "manage"\) : true/);
+  // The profile page installs its hook; the old editor's entry points ask through it on the desktop page only.
+  assert.match(read("profilepage.js"), /if \(typeof pageLeaveHook !== "undefined"\) pageLeaveHook = pfvPageLeave;/);
+  const app = read("app.js");
+  assert.match(body(app, "profilePageHolds"), /typeof pfvHold === "function" && pfvHold\(again\)/);
+  assert.match(body(app, "editProfile"), /^\{\s*if \(profilePageHolds\(\(\) => editProfile\(name\)\)\) return;/);
+  assert.match(body(app, "duplicateProfile"), /^\{\s*\/\/[^\n]*\n\s*if \(profilePageHolds\(duplicateProfile\)\) return;/);
+  assert.match(app, /\$\("pf-new"\)\.addEventListener\("click", \(\) => \{\s*if \(profilePageHolds\(\(\) => \$\("pf-new"\)\.click\(\)\)\) return;/);
 });

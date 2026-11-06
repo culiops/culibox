@@ -133,7 +133,9 @@ function pfwFolderField(rec, c, copy) {
     // The steady-state caption ("N project roots...") is for a dialog with room to spare; a problem is not.
     onNote: (text, idle) => { note.textContent = idle ? "" : text; note.hidden = idle || !text; },
   });
-  rec.disposers.push(() => picker.destroy());
+  // The page's Esc layering asks whether the dropdown is open (pfvEscTarget): the picker is on the record while this form stands.
+  ui.folderPicker = picker;
+  rec.disposers.push(() => { if (ui.folderPicker === picker) ui.folderPicker = null; picker.destroy(); });
   picker.set(v.folder);
   // Text left over from a Save that refused it is still there to fix.
   if (ui.typed !== undefined) input.value = ui.typed;

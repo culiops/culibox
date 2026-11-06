@@ -10,8 +10,8 @@
 // Desktop only: the old form (.plist, .ped, #foot-manage) is hidden by desktop.css
 // on the page and stays for the phone's modal. Edit opens one block as a small form
 // (Runs in, Agent and Network here, Workspace in pfv-workspace.js, Cloud and tokens and
-// Also reachable in pfv-cloud.js, Advanced in pfv-advanced.js; Duplicate, Switch to box and
-// "+ New profile" are drawn but do nothing until their tasks wire them). profileedit.js
+// Also reachable in pfv-cloud.js, Advanced in pfv-advanced.js; Duplicate and "+ New profile" are drawn
+// but do nothing until their task wires them). profileedit.js
 // decides what a save writes and what a refusal means; this file draws the forms, keeps
 // what the user has typed and runs the save. A block editor in a file of its own registers
 // through pfvRegisterEditor (see PFV_EDITORS) and is loaded after this one.
@@ -25,8 +25,10 @@
 // form). edits holds one record per open block (see pfvNewEdit): that is where the
 // pending values live, so the page can rebuild a form from them. pending: some open
 // block differs from what is stored. saved: the blocks whose "Saved" shows for a
-// moment. warnings: the lines a successful save answered with.
-const pfvState = { name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false };
+// moment. warnings: the lines a successful save answered with. picker: the block whose "+ Add" choice is open
+// ("" when none; pfv-cloud.js sets and clears it). drawer: the credentials drawer is open (a later task sets it);
+// pfvEscTarget reads both, so Esc goes to the innermost open layer.
+const pfvState = { name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, picker: "", drawer: false };
 // The newest pfvShow wins: a slower answer for a profile you have left is dropped.
 let pfvSeq = 0;
 // What the page is drawn from, as a string (pfvKey) and what the nav lists (pfvNavKey):
@@ -176,7 +178,7 @@ function pfvRenderNav() {
       }
       tier.append(p.runtime === "host" ? "host" : "box");
       b.append(pfvMk("span", "pfv-ni-name", p.name), tier);
-      b.onclick = () => pfvShow(p.name);
+      b.onclick = () => pfvSwitch(p.name);
       return b;
     });
     const add = pfvMk("button", "pfv-ni pfv-ni-add", "+ New profile");
@@ -392,10 +394,10 @@ function pfvDrawBody(b, known, rec) {
     add.onclick = () => pfvOpenAdd(b.id);
     body.append(add);
   }
-  // Offered by the read model only where it can be used. Wired by the Runs in task.
+  // Offered by the read model only where it can be used.
   if (b.switchToBox) {
     const act = pfvMk("div", "pfv-stmt-act");
-    act.append(pfvBtn("Switch to box", "secondary"));
+    act.append(pfvBtn("Switch to box", "secondary", pfvSwitchToBox));
     body.append(act);
   }
   return body;
@@ -643,7 +645,8 @@ async function pfvDelete() {
 // the nodes (a picker's listeners) goes on rec.disposers, run before the next draw and when
 // the record goes. merge(rec, c): the values pfvMergeBlock is given (default: rec.values).
 // check(rec, c): what the client refuses before any PUT, {field, text} or null. note(rec, c):
-// the footer carries the box consequence. hideSave(rec, c): Save is not offered. settled(values): the values as they
+// the footer carries the box consequence. hideSave(rec, c): Save is not offered. saveLabel(rec, c): what Save reads
+// when it is not "Save" (and it is then drawn as a way into containment loss: red). settled(values): the values as they
 // count when a change is looked for (a row added and left blank is no change). fields: the
 // form is a stack of labelled fields (a 16px rhythm, 440px wide); without it the form flows
 // as it likes. A block of rows has two more: add(rec, what) puts a pending row in (what is
@@ -652,7 +655,7 @@ async function pfvDelete() {
 // but its Edit link does nothing; one that a refused save opens
 // is drawn read-only with the refusal under the row it names, so the user can see what is wrong.
 const PFV_EDITORS = {
-  runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave },
+  runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave, saveLabel: pfvRunsSaveLabel },
   agent: { values: pfvAgentValues, draw: pfvAgentForm, merge: pfvAgentMerge, fields: true },
   network: { values: pfvNetworkValues, draw: pfvNetworkForm, note: pfvNetworkNote },
 };
@@ -760,6 +763,7 @@ function pfvDropEdits() {
   pfvState.edits = {};
   pfvState.openBlock = "";
   pfvState.pending = false;
+  pfvState.picker = "";
 }
 
 function pfvClearSaved() {
@@ -886,6 +890,7 @@ function pfvCloseBlock(discard, id) {
     if (pfvState.edits[i]) pfvDisposeRec(pfvState.edits[i]);
     delete pfvState.edits[i];
   }
+  if (ids.includes(pfvState.picker)) pfvState.picker = "";
   for (const rec of Object.values(pfvState.edits)) if (rec.top && rec.top.kind === "repair" && ids.includes(rec.top.target)) rec.top = null;
   pfvSyncOpen();
   pfvRender();
@@ -897,8 +902,9 @@ function pfvCloseBlock(discard, id) {
 // pfvLeaveGuard: may the page go away from what it is showing (another tab, here the Agent
 // block's Manage link)? Nothing changed: yes. Changes: the question, Discard drops them and
 // goes, Keep editing stays. action is pfvGuard's ("leave" for anything that is not opening
-// another block); Esc, the nav, switching profile and closing the page go through the same
-// function as their tasks wire them.
+// another block). It is the one question every way out asks: switching profile, a Settings tab,
+// Esc, the page's close buttons, New profile and Duplicate reach it through pfvLeaving below.
+// Discard ends the edit through pfvEndEdits (pfvDropEdits), which releases the folder pickers.
 async function pfvLeaveGuard(action) {
   const verdict = pfvGuard({ openBlock: pfvState.openBlock, dirty: pfvAnyDirty(), action: action || "leave", target: "" });
   if (verdict === "go") return true;
@@ -909,10 +915,93 @@ async function pfvLeaveGuard(action) {
     confirmLabel: "Discard",
     cancelLabel: "Keep editing",
     danger: true,
+    // Esc raises this question, so a second keypress on reflex must not be the one that drops the changes.
+    focusCancel: true,
   });
   if (!ok) return false;
-  pfvCloseBlock(true);
+  pfvEndEdits();
   return true;
+}
+
+// pfvEndEdits: the page is being left: every open block goes with what was typed in it (pfvDropEdits releases a
+// folder picker's listeners), and the page is drawn as the read view again so coming back shows it. A no-op
+// with nothing open.
+function pfvEndEdits() {
+  if (Object.keys(pfvState.edits).length === 0) return;
+  pfvDropEdits();
+  pfvRender();
+}
+
+// pfvLeaving: the question before the desktop profile page goes away from the profile it shows. true, itself and
+// not a promise, when nothing is asked: not the desktop page (a phone's modal and its old form never see a
+// question) or nothing changed (open blocks without changes simply end). Otherwise pfvLeaveGuard's promise.
+function pfvLeaving() {
+  if (!pfvOnPage()) return true;
+  if (pfvAnyDirty()) return pfvLeaveGuard("leave");
+  pfvEndEdits();
+  return true;
+}
+
+// pfvHold: a way out that is not the page's own (New profile, Duplicate, the old editor's entry points in app.js):
+// true when the page is asking whether to drop unsaved changes, and `again` runs if the answer is Discard. false
+// means nothing is asked and the caller goes on.
+function pfvHold(again) {
+  const go = pfvLeaving();
+  if (go === true) return false;
+  go.then((ok) => { if (ok) again(); });
+  return true;
+}
+
+// pfvSwitch: a profile in the nav. The same profile again changes nothing and asks nothing.
+async function pfvSwitch(name) {
+  if (name !== pfvState.name) {
+    const go = pfvLeaving();
+    if (go !== true && !(await go)) return false;
+  }
+  await pfvShow(name);
+  return true;
+}
+
+// pfvTabLeave: another Settings tab (shell.js settingsLeave). Profiles itself is not leaving.
+function pfvTabLeave(tab) {
+  return tab === "manage" ? true : pfvLeaving();
+}
+
+// --- Esc ----------------------------------------------------------------------------------------------
+
+// pfvFolderListOpen: a Workspace folder dropdown is open (the picker is on the record while its form stands).
+function pfvFolderListOpen() {
+  return Object.values(pfvState.edits).some((r) => r.ui && r.ui.folderPicker && typeof r.ui.folderPicker.isOpen === "function" && r.ui.folderPicker.isOpen());
+}
+
+// pfvEscTarget: the layer the next Esc belongs to, innermost first: a question on screen (askConfirm and askDialog
+// are one modal), the credentials drawer, an open picker (the "+ Add" choice or a Workspace folder dropdown),
+// else the page itself. Read from state, so it is the same answer whichever control has focus.
+function pfvEscTarget() {
+  const ask = document.getElementById("ask-modal");
+  if (ask && ask.open) return "confirm";
+  if (pfvState.drawer) return "drawer";
+  if (pfvState.picker || pfvFolderListOpen()) return "picker";
+  return "page";
+}
+
+// pfvPageLeave: pagehost.js's pageLeaveHook while the desktop Settings page is the open page; for any other page,
+// a phone's modal included, it answers true and does nothing. why "esc" is the Esc key: a layer inside the page
+// takes it (an open picker closes, the drawer closes itself, a question answers itself) and the page stays;
+// only an Esc that no layer wants is a way out. Every other close asks the same question as any way out.
+function pfvPageLeave(why) {
+  if (!pfvOnPage()) return true;
+  if (why === "esc") {
+    const at = pfvEscTarget();
+    if (at !== "page") {
+      if (at === "picker") {
+        pfvClosePicker();
+        for (const r of Object.values(pfvState.edits)) if (r.ui && r.ui.folderPicker && typeof r.ui.folderPicker.close === "function") r.ui.folderPicker.close();
+      }
+      return false;
+    }
+  }
+  return pfvLeaving();
 }
 
 // --- editing: the block and its footer --------------------------------------------------------------
@@ -1008,6 +1097,12 @@ function pfvPaintEdit(rec) {
   pfvSetKids(rec, "status", pfvStatusKids(rec, dirty, c));
   n.discard.textContent = dirty ? "Discard" : "Cancel";
   n.save.hidden = !!(ed && ed.hideSave && ed.hideSave(rec, c));
+  // Not while a save is running: withPending owns the label then.
+  if (n.save.getAttribute("aria-busy") !== "true") {
+    const label = (ed && ed.saveLabel && ed.saveLabel(rec, c)) || "Save";
+    n.save.textContent = label;
+    n.save.classList.toggle("pfv-btn-host", label !== "Save");
+  }
 }
 
 function pfvSetKids(rec, part, kids) {
@@ -1171,6 +1266,90 @@ function pfvRunsHideSave(rec, c) {
   return rec.values.tier === "host" && pfvHostRefusal(c.doc) !== "";
 }
 
+// Choosing host on a profile that is not host: Save is the way into it, and it asks (pfvConfirmHost).
+const pfvToHostPending = (rec, c) => rec.values.tier === "host" && c.tier !== "host";
+function pfvRunsSaveLabel(rec, c) {
+  return pfvToHostPending(rec, c) ? "Save as host…" : "";
+}
+
+// pfvRemovalCount: one kind of what host removes, as the Runs in consequence line counts it: "2 AWS connections".
+const PFV_REMOVAL_COUNT = new Map([
+  ["AWS connections", ["AWS connection", "AWS connections"]], ["Tokens", ["token", "tokens"]],
+  ["Readable folders", ["readable folder", "readable folders"]], ["Domains", ["domain", "domains"]],
+]);
+function pfvRemovalCount(r) {
+  const n = r.names.length;
+  const word = PFV_REMOVAL_COUNT.get(r.kind);
+  if (word) return n + " " + word[n === 1 ? 0 : 1];
+  if (r.kind === "Old-style AWS") return "the old-style AWS setting";
+  return r.kind === "Network settings" ? "network settings" : r.kind;
+}
+
+// The consequence under the cards (the mockup's when-host and when-box lines).
+const PFV_HOST_RISK = "its sessions run with your whole home, your SSH keys and the Docker socket";
+function pfvHostConsequence(doc) {
+  const rm = pfvHostRemovals(doc);
+  const name = typeof doc.name === "string" && doc.name !== "" ? doc.name : pfvState.name;
+  if (rm.length === 0) return "Its sessions run with your whole home, your SSH keys and the Docker socket.";
+  return "A host profile cannot hold box-only access. Saving removes " + pfvJoin(rm.map(pfvRemovalCount)) + " from " + name + ", and " + PFV_HOST_RISK + ".";
+}
+function pfvBoxConsequence(doc) {
+  const p = pfvMk("p", "pfv-consq");
+  const cwd = typeof doc.default_cwd === "string" && doc.default_cwd !== "" ? doc.default_cwd : "";
+  p.append("In a box, sessions can write only to ");
+  if (cwd) p.append(pfvMk("span", "pfv-mono", shortPath(cwd)));
+  else p.append("their workspace");
+  p.append(". After saving you can add cloud access, GitHub, tokens, folders and domains here.");
+  return p;
+}
+
+// --- the host confirm ---
+
+// What the confirm calls each kind it lists (profileedit.js pfvHostRemovals gives the plural kind words): the singular
+// when the profile has one, as the mockup's dialog does ("Readable folder"). Folders and domains are machine text.
+const PFV_REMOVAL_ONE = new Map([["AWS connections", "AWS connection"], ["Tokens", "Token"], ["Readable folders", "Readable folder"], ["Domains", "Domain"]]);
+const PFV_REMOVAL_MONO = ["Readable folders", "Domains"];
+// A setting that has no name to list.
+const PFV_REMOVAL_NONAME = new Map([["Network settings", "CuliBox's proxy and its allowlist"]]);
+
+// pfvHostConfirmNodes: what sits under the body of the "Save as host" question: why the list, the list (one row per
+// kind: a name and where it is, never a value), and the question itself last. Drawn in #ask-modal, so the classes
+// are the dialog's (ask-note, ask-list, ask-q), not the page's.
+function pfvHostConfirmNodes(name, removals, question) {
+  const out = [pfvMk("p", "ask-note", "A host profile cannot hold these, so saving also removes them from " + name + ":")];
+  const dl = pfvMk("dl", "ask-list");
+  for (const r of removals) {
+    const dd = pfvMk("dd");
+    if (r.names.length === 0) dd.append(PFV_REMOVAL_NONAME.get(r.kind) || "Set");
+    r.names.forEach((n, i) => {
+      if (i > 0) dd.append(", ");
+      if (PFV_REMOVAL_MONO.includes(r.kind)) dd.append(pfvMk("span", "ask-mono", n));
+      else dd.append(n);
+    });
+    dl.append(pfvMk("dt", "", r.names.length === 1 && PFV_REMOVAL_ONE.has(r.kind) ? PFV_REMOVAL_ONE.get(r.kind) : r.kind), dd);
+  }
+  out.push(dl);
+  if (question) out.push(pfvMk("p", "ask-q", question));
+  return out;
+}
+
+// pfvConfirmHost: the C3 question before a profile is saved as host: today's title, body and "Save as host" button
+// (containmentConfirm), and under the body what the switch removes (pfvHostRemovals of `doc`, the profile as it
+// would be saved). The body's closing question is moved below the list, where the mockup has it. Resolves true only
+// on the explicit "Save as host". Cancel is focused: Enter must not be the way into containment loss.
+async function pfvConfirmHost(doc) {
+  const name = doc && typeof doc.name === "string" && doc.name !== "" ? doc.name : pfvState.name;
+  const ask = containmentConfirm("host", name);
+  const removals = pfvHostRemovals(doc);
+  if (removals.length === 0) return askConfirm(Object.assign({}, ask, { focusCancel: true }));
+  const q = /\s*(Save it that way\?)$/.exec(ask.body);
+  return askConfirm(Object.assign({}, ask, {
+    body: q ? ask.body.slice(0, q.index) : ask.body,
+    extra: pfvHostConfirmNodes(name, removals, q ? q[1] : ""),
+    focusCancel: true,
+  }));
+}
+
 // pfvOpenWorkspace: the link under the private-copy refusal. The host choice cannot be saved, so it goes (the
 // Runs in block closes with its change) and Workspace opens, where the user picks the folder explicitly.
 // Another block's changes are not this link's to drop: they refuse the open, in place, as an Edit would.
@@ -1181,6 +1360,19 @@ function pfvOpenWorkspace() {
   }
   pfvCloseBlock(true, "runs");
   return pfvOpenBlock("workspace");
+}
+
+// pfvSwitchToBox: the host read view's "Switch to box": Runs in opens with Box chosen. Nothing is restored and
+// nothing is saved until Save; refused in place while another block holds changes, as an Edit would be.
+function pfvSwitchToBox() {
+  if (!pfvOpenBlock("runs")) return false;
+  const rec = pfvState.edits.runs;
+  if (!rec || !rec.values) return false;
+  rec.values.tier = "box";
+  pfvChanged(rec, "runtime");
+  const r = rec.fields["tier-box"];
+  if (r && !r.disabled && typeof r.focus === "function") r.focus();
+  return true;
 }
 
 function pfvCard(rec, key, o) {
@@ -1220,6 +1412,10 @@ function pfvRunsForm(rec, c) {
   const err = pfvFerr(rec, "runtime");
   if (err) out.push(pfvMk("p", "pfv-ferr", err));
   const refusal = v.tier === "host" ? pfvHostRefusal(c.doc) : "";
+  // A box profile choosing host: what that costs. A private copy gets the refusal below instead.
+  if (pfvToHostPending(rec, c) && !refusal) out.push(pfvMk("p", "pfv-consq", pfvHostConsequence(c.doc)));
+  // A host profile choosing box: where it will write, and that the cloud blocks come back empty.
+  if (v.tier === "box" && c.tier === "host") out.push(pfvBoxConsequence(c.doc));
   if (refusal) {
     const p = pfvMk("p", "pfv-refuse");
     p.setAttribute("role", "alert");
@@ -1407,6 +1603,13 @@ async function pfvSaveBlock(id) {
     const r = pfvState.edits[i];
     if (r.values) doc = pfvMergeBlock(doc, i, PFV_EDITORS[i].merge ? PFV_EDITORS[i].merge(r, c) : r.values);
   }
+  // A box profile becoming host: say what that costs and what it removes, then save it without. Cancel saves nothing and
+  // leaves the form as it is.
+  if (ids.includes("runs") && pfvToHostPending(pfvState.edits.runs, c)) {
+    if (!(await pfvConfirmHost(doc))) return false;
+    if (pfvState.name !== name) return false; // the page moved on while it was asked
+    doc = pfvToHost(doc);
+  }
   // The revision and schema in the body are the page's (withRev, withSchema), not copies the loaded profile carries.
   const send = Object.assign({}, doc);
   delete send.rev;
@@ -1533,6 +1736,10 @@ async function pfvLeaveGone() {
 function pfvMetaChanged() {
   pfvRefresh();
 }
+
+// pagehost.js asks this before the Settings page goes (the close buttons, Esc, another page, a session opening). It
+// answers true for everything but the desktop Settings page, so it is installed once and is inert on a phone.
+if (typeof pageLeaveHook !== "undefined") pageLeaveHook = pfvPageLeave;
 
 if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   // A click anywhere else closes the header menu.

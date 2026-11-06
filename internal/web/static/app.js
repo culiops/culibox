@@ -4717,6 +4717,8 @@ async function reloadStaleProfile() {
 // creates exactly one profile under whatever name is typed. Writing the copy up
 // front left it behind when the user renamed it and saved.
 function duplicateProfile() {
+  // The desktop profile page asks first when it holds unsaved changes (pfvHold; never on a phone).
+  if (profilePageHolds(duplicateProfile)) return;
   const name = selectedProfileName();
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
@@ -4745,7 +4747,14 @@ function duplicateProfile() {
   $("pf-name").focus();
   $("pf-name").select();
 }
+// profilePageHolds: the desktop profile page holds unsaved block changes and is asking whether to leave them
+// (profilepage.js pfvHold). true = the caller stops; `again` runs when the answer is Discard. Always false on a
+// phone, where the page does not exist.
+function profilePageHolds(again) {
+  return typeof pfvHold === "function" && pfvHold(again);
+}
 async function editProfile(name) {
+  if (profilePageHolds(() => editProfile(name))) return;
   setDialogError("settings-modal", "");
   selectedProfile = name;
   pfUserDraft = false;
@@ -4863,6 +4872,7 @@ $("pf-save").addEventListener("click", saveProfile);
 // mobile editor view, so the class is added here, at the actual button press,
 // rather than inside newProfile() itself.
 $("pf-new").addEventListener("click", () => {
+  if (profilePageHolds(() => $("pf-new").click())) return;
   pfUserDraft = true;
   newProfile();
   $("settings-modal").classList.add("editing");
@@ -6473,8 +6483,9 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
-    // A phone has no pages: the dialog goes home closed, the panes come back.
-    closePage();
+    // A phone has no pages: the dialog goes home closed, the panes come back. "force": the layout is leaving under
+    // the page, so its leave hook (unsaved profile changes) is not asked and keeps what was typed.
+    closePage("force");
     // Mobile's Files screen expects #files-pane back in #sidebar.
     // The pane-collapse html classes follow the layout: the stored state on
     // mobile (as at a fresh load), none on desktop, where app.css's

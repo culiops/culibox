@@ -87,8 +87,9 @@ function stubPickers() {
     const p = { opts, v: "", destroyed: false, opened: 0 };
     p.value = () => p.v;
     p.set = (x) => { p.v = x || ""; opts.input.value = p.v; };
-    p.open = () => { p.opened++; };
-    p.close = () => {};
+    p.open = () => { p.opened++; p.shown = true; };
+    p.close = () => { p.shown = false; };
+    p.isOpen = () => p.shown === true;
     p.destroy = () => { p.destroyed = true; };
     p.pick = (x) => { p.v = x; opts.input.value = x; opts.onPick(x); };
     p.type = (x) => { opts.input.value = x; if (x.startsWith("/")) { p.v = x; opts.onPick(x); } else if (x === "") { p.v = ""; opts.onPick(""); } };
@@ -116,7 +117,7 @@ function page(over) {
   const pk = stubPickers();
   const box = Object.assign({
     document: doc, console, Promise, JSON, Date, Math, Array, Object, Set, String, Number, setTimeout, clearTimeout,
-    window: { HOME_DIR: "/home/you" }, cloneUnavailable: "", createWsPicker: pk.factory, pickers: pk.made,
+    window: { HOME_DIR: "/home/you" }, cloneUnavailable: "", createWsPicker: pk.factory, pickers: pk.made, pageLeaveHook: null,
     profiles: PROFILES.slice(), profilesLoaded: true, selectedProfile: "", metaLoaded: true,
     boxRuntime: "runc", boxUnavailableReason: "", bundleImports: true, optionDefs: OPTION_DEFS,
     accountsCache: [{ name: "work" }], acctChoices: ACCT.acctChoices, ACCT_DEFAULT: ACCT.ACCT_DEFAULT,
@@ -1032,7 +1033,7 @@ test("Runs in to On this machine saves through the same pipeline; a refusal from
   host.checked = true;
   host.onchange();
   t.box.putFail = apiErr(400, { error: 'profile "aws-ops": tokens[0]: requires runtime: box', field: "tokens[0]" });
-  await clickBtn(blockOf(t, "runs"), "Save");
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
   assert.strictEqual(t.box.puts[0].runtime, "host");
   const cloud = blockOf(t, "cloud");
   assert.ok(cloud.className.includes("pfv-editing"), "the block the server named opens");
@@ -2282,8 +2283,8 @@ test("every top-level name in pfv-cloud.js is unique across the page scripts", (
   const names = (src) => new Set([...src.matchAll(/^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+)([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]));
   const mine = names(fs.readFileSync(path.join(STATIC, "pfv-cloud.js"), "utf8"));
   assert.ok(mine.size > 10);
-  // pfc/PFC_ for its own; the three pfv names are the page's seams for the pages that call into it.
-  const seams = new Set(["pfvOpenPicker", "pfvAddRow", "pfvConvertAws"]);
+  // pfc/PFC_ for its own; the pfv names are the page's seams for the pages that call into it.
+  const seams = new Set(["pfvOpenPicker", "pfvClosePicker", "pfvAddRow", "pfvConvertAws"]);
   assert.ok([...mine].every((n) => /^(pfc|PFC_)/.test(n) || seams.has(n)), "every name is pfc/PFC_ prefixed or a seam: " + [...mine].join(", "));
   const clashes = [];
   for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js") && x !== "pfv-cloud.js")) {
@@ -2880,4 +2881,400 @@ test("a blank added folder or domain row does not make the block dirty", async (
   const owner = field(g, "gh:1:owner");
   owner.value = "culiops"; owner.oninput();
   assert.strictEqual(unsavedNote(g).hidden, false);
+});
+
+// --- the host switch, the unsaved guard and the Esc layers (spec 5.5) -----------------------------------------------------
+
+// A confirm that records what it was asked and answers `ans` (a value, or a function of what was asked).
+function recordAsks(t, ans) {
+  t.box.asked = [];
+  t.box.askConfirm = async (o) => { t.box.asked.push(o); return typeof ans === "function" ? ans(o) : ans; };
+  return t.box.asked;
+}
+const toHost = (t) => { const h = field(t, "tier-host"); h.checked = true; h.onchange(); };
+const extraRows = (o) => {
+  const dl = o.extra.find((n) => n.className === "ask-list");
+  const kids = dl.children;
+  return kids.filter((_, i) => i % 2 === 0).map((dt, i) => [dt.textContent, kids[i * 2 + 1].textContent]);
+};
+const nav = (t, name) => byCls(t.els["pf-navlist"], "pfv-ni").find((n) => n.dataset.pfvName === name);
+const dirtyAgent = async (t, name) => {
+  await t.box.pfvShow(name || "aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+};
+
+test("switching to host lists what will be removed and saves without it", async () => {
+  const t = cloudPage();
+  const asked = recordAsks(t, true);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  toHost(t);
+  // Before Save: the cost is on the form and on the button, which is a way into losing the container.
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), [
+    "A host profile cannot hold box-only access. Saving removes 2 AWS connections, GitHub, 2 tokens, 1 readable folder and 2 domains from aws-ops, and its sessions run with your whole home, your SSH keys and the Docker socket.",
+  ]);
+  assert.strictEqual(byText(blockOf(t, "runs"), "button", "Save as host…").length, 1);
+  assert.ok(byText(blockOf(t, "runs"), "button", "Save as host…")[0].className.includes("pfv-btn-host"));
+  assert.strictEqual(t.box.puts.length, 0, "nothing is sent by choosing it");
+
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
+  assert.strictEqual(asked.length, 1);
+  const o = asked[0];
+  // Today's C3 words and button, in red, with Cancel focused; the closing question moved under the list.
+  assert.strictEqual(o.title, "Save as host");
+  assert.strictEqual(o.confirmLabel, "Save as host");
+  assert.strictEqual(o.danger, true);
+  assert.strictEqual(o.focusCancel, true);
+  assert.strictEqual(o.body, 'Sessions from "aws-ops" will run with no container, as your user, with everything you can reach: your whole home directory, your SSH keys, your Docker socket.');
+  assert.deepStrictEqual(Array.from(o.extra, (n) => n.className), ["ask-note", "ask-list", "ask-q"]);
+  assert.strictEqual(o.extra[0].textContent, "A host profile cannot hold these, so saving also removes them from aws-ops:");
+  assert.strictEqual(o.extra[2].textContent, "Save it that way?");
+  assert.deepStrictEqual(extraRows(o), [
+    ["AWS connections", "prod-read, staging-read"], ["GitHub", "culiops"], ["Tokens", "grafana-prod, sentry-staging"],
+    ["Readable folder", "/home/you/other-repo/docs"], ["Domains", "api.example.com, *.example.org"],
+  ]);
+  // Folders and domains are machine text; the other names are words.
+  const dds = o.extra[1].children.filter((n) => n.tag === "dd");
+  assert.deepStrictEqual(dds.map((d) => byCls(d, "ask-mono").length), [0, 0, 0, 1, 2]);
+
+  // Saved without them: host, explicit, and every box-only key gone; the rest of the profile is as it was.
+  assert.strictEqual(t.box.puts.length, 1);
+  const put = t.box.puts[0];
+  assert.strictEqual(put.runtime, "host");
+  for (const k of ["aws_connections", "aws", "github", "tokens", "context_paths", "egress_allow", "egress_open"]) assert.ok(!(k in put), k + " is not sent");
+  assert.strictEqual(put.default_cwd, "/home/you/work/payments-api");
+  assert.strictEqual(put.rev, "r1");
+  assert.strictEqual(t.run("pfvState").openBlock, "", "back to the read view");
+});
+
+test("the host confirm names the network setting and the old-style AWS setting, and asks no list when there is nothing to remove", async () => {
+  const t = cloudPage({}, { egress_open: true, aws: { source_profile: "s", region: "eu-west-1", label: "old-aws" } });
+  const asked = recordAsks(t, false);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  toHost(t);
+  assert.match(texts(blockOf(t, "runs"), "pfv-consq")[0], /Saving removes 2 AWS connections, the old-style AWS setting, GitHub, 2 tokens, 1 readable folder, 2 domains and network settings from aws-ops, and its sessions run/);
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
+  assert.deepStrictEqual(extraRows(asked[0]).slice(1, 2).concat(extraRows(asked[0]).slice(-1)), [["Old-style AWS", "old-aws"], ["Network settings", "CuliBox's proxy and its allowlist"]]);
+
+  // Infra-terraform holds nothing box-only: the question has no list, and the body keeps its own closing question.
+  const p = page();
+  const a2 = recordAsks(p, false);
+  await p.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(p, "runs"), "Edit");
+  toHost(p);
+  assert.deepStrictEqual(texts(blockOf(p, "runs"), "pfv-consq"), ["Its sessions run with your whole home, your SSH keys and the Docker socket."]);
+  await clickBtn(blockOf(p, "runs"), "Save as host…");
+  assert.strictEqual(a2[0].extra, undefined);
+  assert.match(a2[0].body, /Save it that way\?$/);
+});
+
+test("cancelling the host confirm saves nothing", async () => {
+  const t = cloudPage();
+  const asked = recordAsks(t, false);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  toHost(t);
+  const saved = await clickBtn(blockOf(t, "runs"), "Save as host…");
+  assert.strictEqual(saved, false);
+  assert.strictEqual(asked.length, 1);
+  assert.strictEqual(t.box.puts.length, 0, "no PUT");
+  assert.strictEqual(t.run("pfvState").openBlock, "runs", "the form stays");
+  assert.strictEqual(field(t, "tier-host").checked, true, "with host still chosen");
+  assert.strictEqual(t.run("pfvState").saving, false);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-top-err"), []);
+  // A save that stays a box asks nothing.
+  clickBtn(blockOf(t, "runs"), "Discard");
+  clickBtn(blockOf(t, "network"), "Edit");
+  tick(t, "egress_open", true);
+  asked.length = 0;
+  await saveBlock(t, "network");
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.box.puts.length, 1);
+});
+
+test("a host profile saved from another block asks nothing, and a box profile saved from another block while Runs in has host chosen does", async () => {
+  const h = page();
+  const hAsked = recordAsks(h, true);
+  await h.box.pfvShow("runbook-host");
+  clickBtn(blockOf(h, "agent"), "Edit");
+  pickModel(h, "claude-sonnet-5");
+  await saveBlock(h, "agent");
+  assert.strictEqual(hAsked.length, 0, "it already is host");
+  assert.strictEqual(h.box.puts.length, 1);
+
+  const t = cloudPage();
+  const asked = recordAsks(t, true);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  toHost(t);
+  // A repair-style second block holds a change too: both footers save the same merged profile.
+  const rec = t.box.pfvOpenRepair("agent");
+  rec.values.options.model = "claude-sonnet-5";
+  t.box.pfvRender();
+  await saveBlock(t, "agent");
+  assert.strictEqual(asked.length, 1, "the host switch rides along, so it is asked");
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+  assert.strictEqual(t.box.puts[0].options.model, "claude-sonnet-5");
+});
+
+test("a private copy cannot choose host: refused in place, Save hidden, nothing asked or sent", async () => {
+  const t = clonePage();
+  const asked = recordAsks(t, true);
+  await t.box.pfvShow("gitops-clone");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  toHost(t);
+  const sentence = "A private copy needs a box. Set Workspace to 'Work in this folder' first.";
+  assert.strictEqual(texts(blockOf(t, "runs"), "pfv-refuse")[0], sentence + " Open Workspace");
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-consq").length, 0, "no host consequence line under a refusal");
+  const save = byCls(blockOf(t, "runs"), "pfv-btn-primary")[0];
+  assert.strictEqual(save.hidden, true, "Save is not offered");
+  assert.strictEqual(await t.box.pfvSaveBlock("runs"), false);
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [sentence]);
+  // Choosing the box again brings Save back, with its own name.
+  const box = field(t, "tier-box"); box.checked = true; box.onchange();
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-btn-primary")[0].hidden, false);
+  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-refuse").length, 0);
+});
+
+test("Switch to box opens Runs in with Box chosen and the line for it; nothing is restored or saved until Save, then + Add is offered", async () => {
+  const t = page();
+  const asked = recordAsks(t, true);
+  t.box.loadProfiles = async () => { t.box.profiles = t.box.profiles.map((p) => (p.name === "runbook-host" ? Object.assign({}, p, { runtime: "box" }) : p)); return true; };
+  await t.box.pfvShow("runbook-host");
+  assert.strictEqual(byText(t.els["pfv-in"], "button", "+ Add access").length + byText(t.els["pfv-in"], "button", "+ Add folder or domain").length, 0, "a host profile has no + Add");
+  byText(t.els["pfv-in"], "button", "Switch to box")[0].click();
+  assert.ok(blockOf(t, "runs").className.includes("pfv-editing"));
+  assert.strictEqual(field(t, "tier-box").checked, true);
+  assert.strictEqual(Node.focused, field(t, "tier-box"), "focus is on the choice that was made");
+  assert.strictEqual(t.box.puts.length, 0, "nothing is saved by opening it");
+  assert.strictEqual(unsavedNote(t).hidden, false, "it is a pending change");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), ["In a box, sessions can write only to ~/runbooks. After saving you can add cloud access, GitHub, tokens, folders and domains here."]);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-mono"), ["~/runbooks"]);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-fnote"), [], "the new-box line is for a box that stays a box");
+  assert.strictEqual(byText(blockOf(t, "runs"), "button", "Save").length, 1, "plain Save: a box needs no question");
+  // Choosing host again is no change.
+  const h = field(t, "tier-host"); h.checked = true; h.onchange();
+  assert.strictEqual(unsavedNote(t).hidden, true);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-consq"), []);
+  const b = field(t, "tier-box"); b.checked = true; b.onchange();
+  await saveBlock(t, "runs");
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  assert.ok(!("aws_connections" in t.box.puts[0]) && !("tokens" in t.box.puts[0]), "nothing was restored");
+  // Now a box profile with nothing bound: the read view offers what to add.
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
+  assert.strictEqual(byText(blockOf(t, "cloud"), "button", "+ Add access").length, 1);
+  assert.strictEqual(byText(blockOf(t, "reachable"), "button", "+ Add folder or domain").length, 1);
+});
+
+test("Switch to box is refused in place while another block holds changes", async () => {
+  const t = page();
+  await dirtyAgent(t, "runbook-host");
+  byText(t.els["pfv-in"], "button", "Switch to box")[0].click();
+  assert.ok(!blockOf(t, "runs").className.includes("pfv-editing"));
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-nudge"), ["Save or discard these changes first"]);
+});
+
+test("leaving with unsaved changes asks; Discard leaves, Keep editing stays: switching profile", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  t.box.pfvRenderNav();
+  await dirtyAgent(t);
+  nav(t, "infra-terraform").click();
+  await settle();
+  assert.strictEqual(asked.length, 1);
+  assert.deepStrictEqual([asked[0].title, asked[0].confirmLabel, asked[0].cancelLabel, asked[0].danger], ["Discard unsaved changes?", "Discard", "Keep editing", true]);
+  assert.strictEqual(asked[0].focusCancel, true, "Keep editing is focused: Enter must not drop the changes");
+  assert.strictEqual(t.run("pfvState").name, "aws-ops", "Keep editing stays");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5", "what was typed is still there");
+  recordAsks(t, true);
+  nav(t, "infra-terraform").click();
+  await settle();
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["infra-terraform"]);
+});
+
+test("switching profile with nothing changed asks nothing, ends an open block and does not ask for the profile already shown", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  t.box.pfvRenderNav();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  nav(t, "aws-ops").click();
+  await settle();
+  assert.strictEqual(t.run("pfvState").openBlock, "agent", "the profile on screen: nothing happens");
+  nav(t, "runbook-host").click();
+  await settle();
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+});
+
+test("leaving with unsaved changes asks; Discard leaves, Keep editing stays: another Settings tab", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  await dirtyAgent(t);
+  assert.strictEqual(t.box.pfvTabLeave("manage"), true, "Profiles itself is not leaving");
+  const keep = t.box.pfvTabLeave("creds");
+  assert.ok(keep && typeof keep.then === "function", "a question is a promise");
+  assert.strictEqual(await keep, false);
+  assert.strictEqual(asked.length, 1);
+  assert.strictEqual(t.run("pfvState").pending, true);
+  recordAsks(t, true);
+  assert.strictEqual(await t.box.pfvTabLeave("creds"), true);
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(t.box.pfvTabLeave("creds"), true, "nothing left to ask");
+});
+
+test("leaving with unsaved changes asks; Discard leaves, Keep editing stays: Esc and closing the page, through pagehost's hook", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  assert.strictEqual(t.box.pageLeaveHook, t.box.pfvPageLeave, "the page registers its hook");
+  await dirtyAgent(t);
+  for (const why of ["esc", undefined]) {
+    assert.strictEqual(await t.box.pageLeaveHook(why), false, "Keep editing: the page stays (" + why + ")");
+  }
+  assert.strictEqual(asked.length, 2);
+  assert.strictEqual(t.run("pfvState").pending, true);
+  recordAsks(t, true);
+  assert.strictEqual(await t.box.pageLeaveHook("esc"), true);
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  // Clean: no question, true at once (not a promise), so a caller that does not wait still sees the page shut.
+  const c = page();
+  const cAsked = recordAsks(c, false);
+  await c.box.pfvShow("aws-ops");
+  clickBtn(blockOf(c, "agent"), "Edit");
+  assert.strictEqual(c.box.pageLeaveHook(), true);
+  assert.strictEqual(cAsked.length, 0);
+  assert.deepStrictEqual(Object.keys(c.run("pfvState").edits), [], "an open block with no change ends with the page");
+});
+
+test("the profile page's hook and tab question stand down on a phone's modal and for any other page", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  await dirtyAgent(t);
+  t.els["settings-modal"].classList.remove("as-page");
+  assert.strictEqual(t.box.pageLeaveHook("esc"), true);
+  assert.strictEqual(t.box.pfvTabLeave("creds"), true);
+  assert.strictEqual(t.box.pfvHold(() => { throw new Error("not held"); }), false);
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.run("pfvState").pending, true, "and it drops nothing");
+});
+
+test("Discard ends the edit through pfvDropEdits: the folder picker is released", async () => {
+  const t = page();
+  recordAsks(t, true);
+  const picker = await openWs(t);
+  picker.pick("/home/you/other-folder");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.strictEqual(await t.box.pageLeaveHook("esc"), true);
+  assert.strictEqual(picker.destroyed, true);
+  // A clean leave releases it too.
+  const c = page();
+  const cp = await openWs(c);
+  assert.strictEqual(c.box.pageLeaveHook(), true);
+  assert.strictEqual(cp.destroyed, true);
+});
+
+test("New profile, Duplicate and the old editor's entry points ask first through pfvHold", async () => {
+  const t = page();
+  recordAsks(t, false);
+  let again = 0;
+  assert.strictEqual(t.box.pfvHold(() => again++), false, "nothing changed: not held");
+  await dirtyAgent(t);
+  assert.strictEqual(t.box.pfvHold(() => again++), true, "held");
+  await settle();
+  assert.strictEqual(again, 0, "Keep editing: it does not run");
+  recordAsks(t, true);
+  assert.strictEqual(t.box.pfvHold(() => again++), true);
+  await settle();
+  assert.strictEqual(again, 1, "Discard: it runs after the edit is gone");
+  assert.strictEqual(t.run("pfvState").pending, false);
+});
+
+test("pfvEscTarget picks the innermost open layer", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  // The flags are the state: a test, or the code that opens a layer, sets them.
+  t.run("pfvState").picker = "cloud";
+  assert.strictEqual(t.box.pfvEscTarget(), "picker");
+  t.run("pfvState").drawer = true;
+  assert.strictEqual(t.box.pfvEscTarget(), "drawer", "the drawer hangs over the page and its pickers");
+  t.els["ask-modal"] = { open: true };
+  assert.strictEqual(t.box.pfvEscTarget(), "confirm", "a question over everything");
+  t.els["ask-modal"].open = false;
+  assert.strictEqual(t.box.pfvEscTarget(), "drawer");
+  t.run("pfvState").drawer = false;
+  t.run("pfvState").picker = "";
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  // An open Workspace folder dropdown is a picker too (it closes itself on Esc; the page must not also act).
+  const p = page();
+  const picker = await openWs(p);
+  assert.strictEqual(p.box.pfvEscTarget(), "page");
+  picker.open();
+  assert.strictEqual(p.box.pfvEscTarget(), "picker");
+  picker.close();
+  assert.strictEqual(p.box.pfvEscTarget(), "page");
+});
+
+test("Esc with a picker open closes the picker only; the next Esc leaves the page", async () => {
+  const t = cloudPage();
+  const asked = recordAsks(t, false);
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  assert.strictEqual(t.run("pfvState").picker, "reachable", "the stand-in picker sets the flag");
+  assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-pick").length, 1);
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false, "the page stays");
+  assert.strictEqual(t.run("pfvState").picker, "");
+  assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-pick").length, 0, "the picker is gone");
+  assert.ok(blockOf(t, "reachable").className.includes("pfv-editing"), "the block it opened from is still open");
+  assert.strictEqual(Node.focused, field(t, "add"), "focus is back on the link that opened it");
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.box.pageLeaveHook("esc"), true, "nothing left above the page");
+  // Picking closes it and clears the flag too, and so does Cancel.
+  const u = cloudPage();
+  await u.box.pfvShow("aws-ops");
+  clickBtn(blockOf(u, "reachable"), "+ Add folder or domain");
+  optBtn(u, "reachable", "Domain").click();
+  assert.strictEqual(u.run("pfvState").picker, "");
+  field(u, "domain:2").value = "api.example.net"; field(u, "domain:2").oninput();
+  clickBtn(blockOf(u, "cloud"), "+ Add access");
+  assert.strictEqual(u.run("pfvState").picker, "", "refused while the block holds a change");
+  const w = cloudPage();
+  await w.box.pfvShow("aws-ops");
+  clickBtn(blockOf(w, "reachable"), "+ Add folder or domain");
+  clickBtn(blockOf(w, "reachable"), "Cancel");
+  assert.strictEqual(w.run("pfvState").picker, "");
+});
+
+test("Esc with the Workspace dropdown open lets the dropdown close and the page stays", async () => {
+  const t = page();
+  const picker = await openWs(t);
+  picker.open();
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(picker.isOpen(), false, "its list is closed");
+  assert.strictEqual(t.run("pfvState").openBlock, "workspace");
+});
+
+test("Esc with a drawer or a question open never leaves the page", async () => {
+  const t = page();
+  const asked = recordAsks(t, true);
+  await dirtyAgent(t);
+  t.run("pfvState").drawer = true;
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  t.run("pfvState").drawer = false;
+  t.els["ask-modal"] = { open: true };
+  assert.strictEqual(t.box.pageLeaveHook("esc"), false);
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(t.run("pfvState").pending, true);
 });

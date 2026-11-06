@@ -1611,6 +1611,16 @@
   /* Destructive confirm: red text on a clear button, never a red fill. */
   #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
+  /* A question that lists what it affects (the profile page's "Save as host", shell.js askDialog opts.extra): a card wide
+     enough for the list, and under the body a lead line, the list (a kind and its names) and the question. */
+  #ask-modal.wide { width: 500px; max-width: calc(100vw - 40px); }
+  #ask-modal #ask-extra[hidden] { display: none; }
+  #ask-modal .ask-note { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
+  #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: 12.5px; }
+  #ask-modal .ask-list dt { color: var(--muted); }
+  #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
+  #ask-modal .ask-mono { font-family: var(--font-mono); font-size: 12px; }
+  #ask-modal .ask-q { margin: 14px 0 0; }
 
   /* Command palette. */
   #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px var(--font-ui); overflow: hidden; }
@@ -1896,6 +1906,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost:hover { background: var(--line); }
+  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). */
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .6); }
   #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
   /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
   #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: 12.5px; }
