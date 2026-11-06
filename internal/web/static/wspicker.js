@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus })
+//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, reanchor })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -39,6 +39,9 @@
 // on the same Esc, as New session's does, leaves it unset. openOnFocus(): asked when the field
 // gains focus; false keeps the list closed (a form that focuses the field by itself when it
 // opens does not want a dropdown over it). A click always opens the list; unset means yes.
+// reanchor: also keep an open list under its field when something behind it scrolls. The list is
+// position: fixed, so a page that scrolls under it (the profile page) needs this; New session never
+// listened for scrolls and does not pass it.
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
@@ -361,10 +364,10 @@ function createWsPicker(opts) {
   on(document, "click", (e) => {
     if (e.target !== input && !list.contains(e.target)) close();
   });
-  // An open list stays under its field when the window resizes or something behind it scrolls (the page
-  // scrolls; a dialog body can). The list's own scrolling moves nothing.
+  // An open list stays under its field when the window resizes, and, when asked (reanchor), when something
+  // behind it scrolls. The list's own scrolling moves nothing.
   on(window, "resize", () => { if (!list.hidden) setOpen(true); });
-  on(document, "scroll", (e) => { if (!list.hidden && !list.contains(e.target)) setOpen(true); }, true);
+  if (o.reanchor === true) on(document, "scroll", (e) => { if (!list.hidden && !list.contains(e.target)) setOpen(true); }, true);
 
   return { value, set, open, close, destroy, isOpen: () => !list.hidden, highlighted: () => active >= 0, settle, refresh, showIdleNote };
 }

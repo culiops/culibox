@@ -94,29 +94,6 @@ function pfwFolderChanged(rec, path) {
   pfvPaint();
 }
 
-// pfwBox: a label, the control and one line under it: the hint, or in its place the refusal for errKey.
-// clear() takes the refusal away at once, without drawing the form again.
-function pfwBox(rec, errKey, label, control, hint) {
-  const w = pfvMk("div", "pfv-field");
-  const lab = pfvMk("label", "pfv-flabel", label);
-  lab.setAttribute("for", control.id);
-  const below = pfvMk("p", "pfv-hint");
-  w.append(lab, control, below);
-  const paint = () => {
-    const err = pfvFerr(rec, errKey);
-    below.className = err ? "pfv-ferr" : "pfv-hint";
-    below.textContent = err || hint;
-    control.classList.toggle("pfv-bad", err !== "");
-  };
-  paint();
-  const clear = () => {
-    rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, errKey));
-    rec.nudge = false;
-    paint();
-  };
-  return { w, clear };
-}
-
 // pfwText: a mono text control (a textarea when `area`), with the browser's helpers off.
 function pfwText(area, id) {
   const e = pfvMk(area ? "textarea" : "input", "pfv-ctl pfv-ctl-mono" + (area ? " pfv-area" : ""));
@@ -148,6 +125,8 @@ function pfwFolderField(rec, c, copy) {
     input, list,
     // An Esc that closes the list is not the page's to act on.
     keepEsc: true,
+    // The list is position: fixed and this page scrolls under it; New session's dialog never needed this.
+    reanchor: true,
     // Opening the block puts focus here; the dropdown is for the user to ask for.
     openOnFocus: () => !ui.quiet,
     onPick: (path) => pfwFolderChanged(rec, path),
@@ -159,12 +138,12 @@ function pfwFolderField(rec, c, copy) {
   // Text left over from a Save that refused it is still there to fix.
   if (ui.typed !== undefined) input.value = ui.typed;
   pfvReg(rec, "folder", input);
-  const box = pfwBox(rec, copy ? "clone_of" : "default_cwd", copy ? "Folder to copy" : "Folder", input, c.tier === "host" ? PFW_HINT_HOST : PFW_HINT_BOX);
+  const box = pfvFieldBox(rec, copy ? "clone_of" : "default_cwd", copy ? "Folder to copy" : "Folder", input, [c.tier === "host" ? PFW_HINT_HOST : PFW_HINT_BOX]);
   input.addEventListener("input", () => { ui.typed = undefined; box.clear(); pfvPaint(); });
-  box.w.append(note, list);
+  box.append(note, list);
   ui.folderInput = input;
   ui.clearFolder = () => box.clear();
-  return box.w;
+  return box;
 }
 
 // pfwModeField: the two ways of working on the folder, as cards.
@@ -190,14 +169,14 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   dir.type = "text";
   dir.value = v.copyDir;
   pfvReg(rec, "copy-dir", dir);
-  const dirBox = pfwBox(rec, "default_cwd", "Where the copy is kept", dir, storedCopy ? "CuliBox created it on the first session." : "CuliBox creates it on the first session.");
+  const dirBox = pfvFieldBox(rec, "default_cwd", "Where the copy is kept", dir, [storedCopy ? "CuliBox created it on the first session." : "CuliBox creates it on the first session."]);
   dir.oninput = () => { v.copyDir = dir.value; dirBox.clear(); pfvPaint(); };
   ui.copyInput = dir;
   const share = pfwText(true, "pfv-f" + ++pfvUid);
   share.value = v.shareText;
   share.setAttribute("placeholder", "CLAUDE.md");
   pfvReg(rec, "share", share);
-  const shareBox = pfwBox(rec, "clone_share", "Files to share from your repo, read-only", share, PFW_HINT_SHARE);
+  const shareBox = pfvFieldBox(rec, "clone_share", "Files to share from your repo, read-only", share, [PFW_HINT_SHARE]);
   share.oninput = () => { v.shareText = share.value; shareBox.clear(); pfvPaint(); };
   const lab = pfvMk("label", "pfv-check");
   const cb = pfvMk("input");
@@ -206,7 +185,7 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   cb.onchange = () => { v.autoReturn = cb.checked; rec.nudge = false; pfvPaint(); };
   pfvReg(rec, "auto-return", cb);
   lab.append(cb, pfvMk("span", "pfv-check-t", "Bring work home automatically"));
-  const out = [dirBox.w, shareBox.w, lab];
+  const out = [dirBox, shareBox, lab];
   const err = pfvFerr(rec, "clone_no_auto_return");
   if (err) out.push(pfvMk("p", "pfv-ferr", err));
   return out;

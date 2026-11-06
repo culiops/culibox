@@ -1034,21 +1034,36 @@ function pfvFerr(rec, key) {
 }
 
 // pfvFieldBox: a label, the control, and under it the hint, or in its place the refusal for errKey
-// (the control then wears the error border). tag "fieldset" for a group of controls.
+// (the control then wears the error border). tag "fieldset" for a group of controls. w.clear() takes the
+// refusal away in place (the hint comes back) for a control that changes without the form being drawn
+// again, as a folder picker's must not be: its input and its dropdown are the nodes that stay.
 function pfvFieldBox(rec, errKey, label, control, hint, tag) {
   const w = pfvMk(tag || "div", "pfv-field");
   const lab = pfvMk(tag === "fieldset" ? "legend" : "label", "pfv-flabel", label);
   if (tag !== "fieldset" && control.id) lab.setAttribute("for", control.id);
   w.append(lab, control);
-  const err = pfvFerr(rec, errKey);
-  if (err) {
-    control.classList.add("pfv-bad");
-    w.append(pfvMk("p", "pfv-ferr", err));
-  } else if (hint && hint.length) {
-    const h = pfvMk("p", "pfv-hint");
-    h.append(...hint);
-    w.append(h);
-  }
+  const hints = hint && hint.length ? hint : [];
+  let below = null;
+  const paint = (err) => {
+    control.classList.toggle("pfv-bad", err !== "");
+    if (err === "" && hints.length === 0) {
+      if (below) below.hidden = true;
+      return;
+    }
+    if (!below) {
+      below = pfvMk("p", "");
+      w.append(below);
+    }
+    below.hidden = false;
+    below.className = err ? "pfv-ferr" : "pfv-hint";
+    below.replaceChildren(...(err ? [err] : hints));
+  };
+  paint(pfvFerr(rec, errKey));
+  w.clear = () => {
+    rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, errKey));
+    rec.nudge = false;
+    paint("");
+  };
   return w;
 }
 
@@ -1354,8 +1369,9 @@ async function pfvSaveBlock(id) {
       return false;
     }
     // It is written: a pfvShow GET that was already out when the block was opened would answer with the profile as it was before this
-    // save, so every older answer is dropped from here on.
-    pfvSeq++;
+    // save, so every older answer is dropped from here on. Not when the user has moved to another profile since: the GET that move
+    // sent is that profile's own, and dropping it would leave the pane blank.
+    if (pfvState.name === name) pfvSeq++;
     // Show what the server holds now: a failed refetch must not read as a failed save.
     let fresh = null;
     let reloadErr = null;

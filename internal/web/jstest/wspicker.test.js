@@ -421,18 +421,38 @@ test("tabbing away closes the list; a pointer press that moves focus to a contai
   assert.strictEqual(p.list.hidden, true);
 });
 
-test("a scroll or resize while the list is open keeps it under the field", () => {
+test("a resize while the list is open keeps it under the field; a scroll does only when the page asks (reanchor)", () => {
+  const t = env();
+  const plain = t.make();
+  fire(plain.input, "focus");
+  plain.list.style.top = "";
+  fire(t.doc, "scroll", { target: new El("div") });
+  assert.strictEqual(plain.list.style.top, "", "New session never listened for scrolls: the factory does not unless asked");
+  fire(t.win, "resize");
+  assert.strictEqual(plain.list.style.top, "130px");
+  plain.picker.destroy();
+  const page = t.make({ reanchor: true });
+  fire(page.input, "focus");
+  page.list.style.top = "";
+  fire(t.doc, "scroll", { target: new El("div") });
+  assert.strictEqual(page.list.style.top, "130px", "the profile page scrolls, and its list is position: fixed");
+  page.list.style.top = "";
+  fire(t.doc, "scroll", { target: page.list.children[0] });
+  assert.strictEqual(page.list.style.top, "", "the list's own scroll moves nothing");
+  const before = count(t.doc);
+  page.picker.destroy();
+  assert.ok(count(t.doc) < before, "the scroll listener goes with the picker");
+});
+
+test("a picker that is not asked to re-anchor puts no scroll listener on the document", () => {
   const t = env();
   const p = t.make();
-  fire(p.input, "focus");
-  p.list.style.top = "";
-  fire(t.doc, "scroll", { target: new El("div") });
-  assert.strictEqual(p.list.style.top, "130px");
-  p.list.style.top = "";
-  fire(t.doc, "scroll", { target: p.list.children[0] });
-  assert.strictEqual(p.list.style.top, "", "the list's own scroll moves nothing");
-  fire(t.win, "resize");
-  assert.strictEqual(p.list.style.top, "130px");
+  assert.strictEqual((t.doc.handlers.scroll || []).length, 0);
+  p.picker.destroy();
+  const q = t.make({ reanchor: true });
+  assert.strictEqual(t.doc.handlers.scroll.length, 1);
+  q.picker.destroy();
+  assert.strictEqual(t.doc.handlers.scroll.length, 0);
 });
 
 test("every top-level name in wspicker.js is unique across the page scripts", () => {

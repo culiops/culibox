@@ -1246,6 +1246,31 @@ test("an answer to a pfvShow that was already out before the edit cannot bring b
   assert.strictEqual(t.run("pfvState").doc.options.model, "claude-sonnet-5");
 });
 
+test("a profile opened while a save is in flight still lands when the save returns first", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  let releasePut, releaseGet;
+  const real = t.box.api;
+  t.box.api = async (p, o) => {
+    if (o && o.method === "PUT") await new Promise((r) => { releasePut = r; });
+    if (p === "/api/profiles/runbook-host" && !(o && o.method)) await new Promise((r) => { releaseGet = r; });
+    return real(p, o);
+  };
+  const saving = clickBtn(blockOf(t, "agent"), "Save");
+  await settle();
+  const showing = t.box.pfvShow("runbook-host"); // the user clicked another profile; its GET is out
+  await settle();
+  releasePut(); // the save finishes before that GET lands
+  await saving;
+  releaseGet();
+  await showing;
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+  assert.strictEqual(t.run("pfvState").doc && t.run("pfvState").doc.name, "runbook-host", "the pane is not left blank");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+});
+
 test("an answer to an older pfvShow cannot replace what Reload fetched", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
@@ -1321,6 +1346,7 @@ test("Workspace edit: the folder picker and the two ways of working on it; the c
   assert.strictEqual(t.box.pickers.length, 1, "one picker for the block");
   assert.strictEqual(pk.opts.input, input);
   assert.strictEqual(pk.opts.keepEsc, true, "Esc closes the list, not the page");
+  assert.strictEqual(pk.opts.reanchor, true, "the page scrolls under the fixed list");
   assert.strictEqual(pk.opts.list.className, "pfv-wslist");
   assert.strictEqual(pk.value(), "/home/you/work/payments-api");
   assert.deepStrictEqual(texts(ws, "pfv-hint"), ["A box cannot use your whole home or system folders."]);
