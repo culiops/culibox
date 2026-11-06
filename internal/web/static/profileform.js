@@ -386,50 +386,6 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
   return (ticked || []).filter((n) => !(was.has(n) && !now.has(n)));
 }
 
-// pfTouchProfile: what the editor holds now (readForm's request body) in the
-// ProfileView shape reachRows reads (spawnpreview.js), so the Settings page's
-// "Can touch" line and the New session box follow one set of rules.
-//   o.view       the saved ProfileView of this profile, or null for a draft
-//   o.claude     the form's binary is claude (spawnform.js isClaudeBinName)
-//   o.egressAll  every boxed spawn goes through the egress proxy
-// Network mirrors session.EgressMode: bound = allowlist (open when the form
-// sets egress_open), unbound = open only when egress is mandatory. The inline AWS binding is not edited here, so its
-// name and flags come from the saved view while the form still carries it. The
-// GitHub repos and effective permissions, the extra domains and the readable
-// paths (context_paths, clone_share) ride along for reachModel's lists.
-function pfTouchProfile(form, o) {
-  const f = form || {};
-  const x = o || {};
-  const list = (l) => (Array.isArray(l) ? l.filter((n) => typeof n === "string" && n !== "") : []);
-  const out = { bin: String(f.bin || ""), account: String(f.account || ""), claude: x.claude === true };
-  const conns = list(f.aws_connections);
-  if (conns.length) out.aws_connections = conns;
-  if (f.aws && typeof f.aws === "object") {
-    const saved = x.view && x.view.aws_inline;
-    out.aws_inline = saved ? saved : { name: String(f.aws.label || "") || "aws", prod: f.aws.prod === true };
-  }
-  const rows = ((f.github && f.github.owners) || []).filter((w) => w && typeof w.owner === "string" && w.owner !== "");
-  const owners = rows.map((w) => w.owner);
-  if (owners.length) {
-    out.github_owners = owners;
-    out.github_repos = rows.map((w) => ({ owner: w.owner, repos: list(w.repos) }));
-    // The effective set, as the server reports it: the stored one, else the defaults.
-    const levels = ghPermLevels(f.github);
-    out.github_permissions = Object.fromEntries(GH_PERMS.filter((k) => levels[k] !== "off").map((k) => [k, levels[k]]));
-  }
-  const route = ghRouteOf(f.github);
-  if (route.write) out.github_write = true;
-  if (route.pat) out.github_pat = true;
-  const tokens = list(f.tokens);
-  if (tokens.length) out.tokens = tokens;
-  if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
-  // What the box may also read or reach (the Reads and Domains rows).
-  for (const k of ["context_paths", "clone_share", "egress_allow"]) if (list(f[k]).length) out[k] = list(f[k]);
-  const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
-  out.network = bound ? (f.egress_open === true ? "open" : "allowlist") : x.egressAll === true ? "open" : "";
-  return out;
-}
-
 // autoReturnToSend: the auto-return switch's part of a save. The field is the
 // off switch (omitted means on), so a ticked box sends nothing. Only a private
 // copy may carry it (the server refuses it without clone_of): wmFieldsToSend
@@ -533,14 +489,12 @@ function profileSourceLabel(source) {
   return "";
 }
 
-// profileListLabels: the two things the Profiles list prints for a profile (#121):
-// the badge (read-only profiles only) and the second line, "<what> · <runtime>",
-// where <what> is the binary of a profile you own and the source of one you do not.
+// profileListLabels: what the Profiles list prints for a profile (#121): the
+// badge, for read-only profiles only.
 function profileListLabels(p) {
-  const label = p.editable ? "" : profileSourceLabel(p.source);
-  return { badge: label, sub: [p.editable ? p.bin : label, p.runtime].filter(Boolean).join(" · ") };
+  return { badge: p.editable ? "" : profileSourceLabel(p.source) };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }

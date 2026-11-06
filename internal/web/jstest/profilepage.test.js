@@ -3616,7 +3616,7 @@ test("Discard ends the edit through pfvDropEdits: the folder picker is released"
   assert.strictEqual(cp.destroyed, true);
 });
 
-test("New profile, Duplicate and the old editor's entry points ask first through pfvHold", async () => {
+test("a way out that is not the page's own (the old New profile button) asks first through pfvHold", async () => {
   const t = page();
   recordAsks(t, false);
   let again = 0;
@@ -4539,17 +4539,15 @@ test("the New profile editor registers through the seam, and index.html loads it
   assert.ok(tags.indexOf("pfv-new.js") > tags.indexOf("wspicker.js") && tags.indexOf("pfv-new.js") < tags.indexOf("app.js"));
 });
 
-test("app.js gives the desktop page's New profile and Duplicate entry points the page's own pages, and keeps the phone's form after them", () => {
+test("app.js gives the old New profile button the page's own New profile page on the desktop page, and keeps the phone's form after it", () => {
   const at = APP.indexOf('$("pf-new").addEventListener("click"');
   assert.ok(at >= 0);
   const click = APP.slice(at, APP.indexOf("\n});", at));
   assert.ok(click.indexOf("profilePageHolds(") >= 0 && click.indexOf("profilePageHolds(") < click.indexOf("pfvNew()"), "the hold (unsaved changes) first");
   assert.match(click, /pfvOnPage\(\)[^\n]*pfvNew\(\); return;/, "the desktop page opens its New profile page and stops");
-  assert.ok(click.indexOf("pfvNew()") < click.indexOf("pfUserDraft = true;") && click.indexOf("pfvNew()") < click.indexOf("newProfile()"), "the phone's blank form is only reached when it is not the page");
-  const dup = appFn("duplicateProfile");
-  assert.ok(dup.indexOf("profilePageHolds(") < dup.indexOf("pfvDuplicate()"));
-  assert.match(dup, /pfvOnPage\(\)[^\n]*pfvDuplicate\(\); return;/);
-  assert.ok(dup.indexOf("pfvDuplicate()") < dup.indexOf("selectedProfileName()") && dup.indexOf("pfvDuplicate()") < dup.indexOf("duplicateDraft("), "the old draft is the phone's");
+  assert.ok(click.indexOf("pfvNew()") < click.indexOf("newProfile()"), "the phone's blank form is only reached when it is not the page");
+  // The old Duplicate button is in the footer the page does not draw, and the page's own Duplicate (pfvDuplicate) does not go through it.
+  assert.doesNotMatch(appFn("duplicateProfile"), /pfv/);
 });
 
 

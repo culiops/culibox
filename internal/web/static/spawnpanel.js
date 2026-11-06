@@ -208,12 +208,10 @@ function renderSpawnReach() {
   paintReachRows(box, rows, { title: "This agent will be able to" });
 }
 
-// paintReachRows draws reachRows' rows into `box`, replacing what it held. The
-// one renderer for both places that show reach: the New session box (a row per
-// key) and the Settings page's "Can touch" line (opts.inline: the label, then
-// every row's v in one flowing line joined by " · "). An AWS row on a prod
-// connection carries the red PROD tag after its name either way. Every string
-// is server or operator text, so it goes in through textContent only.
+// paintReachRows draws reachRows' rows into `box`, replacing what it held: a
+// row per key. An AWS row on a prod connection carries the red PROD tag after
+// its name. Every string is server or operator text, so it goes in through
+// textContent only.
 function paintReachRows(box, rows, opts) {
   const o = opts || {};
   const value = (r, cls) => {
@@ -226,24 +224,12 @@ function paintReachRows(box, rows, opts) {
     return v;
   };
   const kids = [];
-  if (o.inline) {
-    if (o.title) kids.push(spawnPanelEl("span", "sr-ik", o.title));
-    const line = spawnPanelEl("span", "sr-iv");
-    (rows || []).forEach((r, i) => {
-      if (i) line.append(" · ");
-      const part = value(r, "sr-part");
-      if (r.tone) part.classList.add("tone-" + r.tone);
-      line.append(part);
-    });
-    kids.push(line);
-  } else {
-    if (o.title) kids.push(spawnPanelEl("div", "sr-title", o.title));
-    for (const r of rows || []) {
-      const row = spawnPanelEl("div", "sr-row");
-      if (r.tone) row.classList.add("tone-" + r.tone);
-      row.append(spawnPanelEl("span", "sr-k", r.k), value(r, "sr-v"));
-      kids.push(row);
-    }
+  if (o.title) kids.push(spawnPanelEl("div", "sr-title", o.title));
+  for (const r of rows || []) {
+    const row = spawnPanelEl("div", "sr-row");
+    if (r.tone) row.classList.add("tone-" + r.tone);
+    row.append(spawnPanelEl("span", "sr-k", r.k), value(r, "sr-v"));
+    kids.push(row);
   }
   box.replaceChildren(...kids);
 }

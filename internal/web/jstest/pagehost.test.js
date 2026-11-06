@@ -310,11 +310,10 @@ test("the profile page and the shell wire the guard through one function each", 
   assert.match(body(shell, "initDialogs"), /const leave = settingsLeave\(b\.dataset\.tab\);\s*if \(leave === true\) selectSettingsTab\(b\.dataset\.tab\);/);
   assert.match(body(shell, "openSettings"), /const leave = settingsLeave\(tab\);\s*if \(leave !== true\) \{\s*leave\.then\(\(ok\) => \{ if \(ok\) openSettings\(tab, group\); \}\);\s*return;/);
   assert.match(body(shell, "settingsLeave"), /typeof pfvTabLeave === "function" \? pfvTabLeave\(tab \|\| "manage"\) : true/);
-  // The profile page installs its hook; the old editor's entry points ask through it on the desktop page only.
+  // The profile page installs its hook; the old "+ new profile" button (which the empty state's "Create box profile" presses
+  // on the desktop page) asks through it on the desktop page only. The old form's other buttons are hidden there.
   assert.match(read("profilepage.js"), /if \(typeof pageLeaveHook !== "undefined"\) pageLeaveHook = pfvPageLeave;/);
   const app = read("app.js");
   assert.match(body(app, "profilePageHolds"), /typeof pfvHold === "function" && pfvHold\(again\)/);
-  assert.match(body(app, "editProfile"), /^\{\s*if \(profilePageHolds\(\(\) => editProfile\(name\)\)\) return;/);
-  assert.match(body(app, "duplicateProfile"), /^\{\s*\/\/[^\n]*\n\s*if \(profilePageHolds\(duplicateProfile\)\) return;/);
   assert.match(app, /\$\("pf-new"\)\.addEventListener\("click", \(\) => \{\s*if \(profilePageHolds\(\(\) => \$\("pf-new"\)\.click\(\)\)\) return;/);
 });

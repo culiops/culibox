@@ -999,7 +999,8 @@ function pfvLeaving() {
   return true;
 }
 
-// pfvHold: a way out that is not the page's own (New profile, Duplicate, the old editor's entry points in app.js):
+// pfvHold: a way out that is not the page's own (the old "+ new profile" button's entry point in app.js, which the empty state's
+// "Create box profile" presses):
 // true when the page is asking whether to drop unsaved changes, and `again` runs if the answer is Discard. false
 // means nothing is asked and the caller goes on.
 function pfvHold(again) {

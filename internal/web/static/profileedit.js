@@ -50,10 +50,8 @@ function pfeDep(name, file) {
 // has it and required under node.
 const pfeGhWritable = () => (typeof GH_WRITABLE !== "undefined" ? GH_WRITABLE : require("./profileform.js").GH_WRITABLE);
 
-// The options the Agent block owns, by key: renderPfOptions renders every option
-// in one list, and the desktop page puts these three in the Agent block with CSS
-// alone (desktop.css data-opt); the read view leaves them out of Advanced
-// (PFV_AGENT_OPTIONS) and the server offers them unset (config.unsetOfferKeys).
+// The options the Agent block owns, by key: the read view leaves them out of
+// Advanced (PFV_AGENT_OPTIONS) and the server offers them unset (config.unsetOfferKeys).
 const PFE_AGENT_OPTIONS = ["model", "effort", "effortLevel"];
 
 // The keys the Workspace block replaces as a unit.

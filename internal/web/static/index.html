@@ -304,10 +304,6 @@
         </div>
       </div>
       <div class="ped">
-        <div id="pf-touch" class="pf-touch" aria-live="polite"></div>
-        <h3 class="pf-sec" data-sec="agent">Agent</h3>
-        <h3 class="pf-sec" data-sec="where">Where it runs</h3>
-        <h3 class="pf-sec" data-sec="touch">What it can touch</h3>
         <div class="lockbar" id="pf-lock" hidden>Built-in profile — read only. Duplicate it to make one you own.</div>
         <div class="frow">
           <div class="fcol" id="pf-name-col"><label class="flab" for="pf-name">Profile name</label>
@@ -459,7 +455,6 @@
           <p class="warnbox tiny" id="pf-egress-open-warn" hidden>The agent can send this profile's credentials to any internet host. Private, tailnet and host addresses stay blocked, and every host is logged. To build an allowlist, turn this on briefly, read Activity › Egress, add those hosts above, then turn it off.</p>
           <p class="tiny mut">Applies only when the profile has a credential binding; without one the box already reaches any public host.</p>
         </div>
-        <button id="pf-adv" class="pf-adv" type="button" aria-expanded="false" aria-controls="pf-base-col pf-options pf-replyable-row pf-args-row pf-env-block">Advanced · base environment, options, args, environment variables, replies</button>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
           <label class="pf-check"><input type="checkbox" id="pf-replyable"> Allow replies by default</label>
@@ -575,7 +570,6 @@
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
       <button id="pf-duplicate" type="button" class="btn" disabled>Duplicate</button>
-      <button id="pf-discard" class="btn gh" type="button">Discard</button>
       <button id="pf-save" type="button" class="btn pri">Save</button>
       <button type="button" class="btn" data-close="settings-modal">Done</button>
     </div>

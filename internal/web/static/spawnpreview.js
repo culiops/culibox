@@ -124,7 +124,7 @@ function spawnTokenHosts(hosts) {
 // reachModel: everything the "This agent will be able to" views say, as data, in
 // the words of the profile page (spec 5.3). New session's box (reachRows, below)
 // and the profile read view both draw from it, so neither invents wording.
-//   o.profile       the ProfileView (or what pfTouchProfile builds in its shape)
+//   o.profile       the ProfileView
 //   o.tier          "box" | "host" as the form currently has it
 //   o.cwd           the workspace as it is to be shown
 //   o.meta          /api/meta: aws_connections [{name, prod, write_capable, mode,

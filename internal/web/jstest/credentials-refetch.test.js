@@ -1,6 +1,6 @@
 "use strict";
 // loadCredentials reads GET /api/credentials, paints it, then asks the profile
-// form's "Can touch" line to refresh, which used to read /api/credentials again
+// page's reach view to refresh, which used to read /api/credentials again
 // straight after. The refresh now takes the view just read. app.js needs a DOM, so
 // refreshPfCreds is cut out of the source and run with stand-ins, and the hand-over
 // is pinned at the source level, as settings-profiles-refetch.test.js does.
@@ -32,7 +32,7 @@ function refreshPfCredsIn({ desktop = true, answers = [] } = {}) {
     desktop, pfCredsView: "unset", pfCredsSeq: 0, painted: 0,
     drawerDesktop: () => box.desktop,
     deadlineSignal: () => undefined,
-    renderPfTouch: () => { box.painted++; },
+    pfvMetaChanged: () => { box.painted++; }, // the desktop profile page redraws from the new view
     api: async (p) => { calls.push(p); const a = answers.shift(); if (a instanceof Error) throw a; return a; },
   };
   const ctx = vm.createContext(box);
@@ -46,7 +46,7 @@ test("refreshPfCreds with the view loadCredentials just read does not fetch it a
   await t.run(view);
   assert.deepStrictEqual(t.calls, [], "no second GET /api/credentials");
   assert.strictEqual(t.box.pfCredsView, view);
-  assert.strictEqual(t.box.painted, 1);
+  assert.strictEqual(t.box.painted, 1, "the profile page is told");
 });
 
 test("refreshPfCreds with nothing (the Profiles tab was shown) still fetches", async () => {
@@ -57,7 +57,7 @@ test("refreshPfCreds with nothing (the Profiles tab was shown) still fetches", a
   assert.strictEqual(t.box.pfCredsView, view);
 });
 
-test("a failed fetch leaves the line without a Store part, as before", async () => {
+test("a failed fetch leaves the reach words without a Store part, as before", async () => {
   const t = refreshPfCredsIn({ answers: [new Error("down")] });
   await t.run();
   assert.strictEqual(t.box.pfCredsView, null);

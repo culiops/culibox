@@ -4,10 +4,11 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-// The Settings page on desktop (S4 Task 5): grouped nav, the regrouped profile
-// form, Discard, the "Can touch" summary. app.js, spawnpanel.js and the
+// The Settings page on desktop (S4 Task 5): the grouped nav and the profile
+// overview that replaced the profile form there. app.js, spawnpanel.js and the
 // stylesheets need a DOM to run, so the wiring is pinned at the source level,
-// the way settings-profiles-refetch.test.js does it.
+// the way settings-profiles-refetch.test.js does it. The old form (.plist, .ped,
+// #foot-manage) is the phone's alone since Task 16.
 const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 const HTML = read("index.html");
@@ -45,58 +46,29 @@ test("the nav carries the three group labels, as presentation-only spans", () =>
   }
 });
 
-test("the profile form gains the Can touch box first, three section heads and the Advanced fold", () => {
+test("the old profile form keeps the phone's fields and has no desktop-only node", () => {
   const ped = HTML.slice(HTML.indexOf('<div class="ped">'), HTML.indexOf('<div class="dbd pad" id="settings"'));
-  assert.match(ped, /^<div class="ped">\s*<div id="pf-touch" class="pf-touch" aria-live="polite"><\/div>/);
-  for (const sec of ["agent", "where", "touch"]) assert.match(ped, new RegExp('<h3 class="pf-sec" data-sec="' + sec + '">'));
-  assert.match(ped, /<button id="pf-adv" class="pf-adv" type="button" aria-expanded="false" aria-controls="pf-base-col pf-options pf-replyable-row pf-args-row pf-env-block">Advanced · base environment, options, args, environment variables, replies<\/button>/);
-  // Every id aria-controls names exists.
-  for (const id of ["pf-base-col", "pf-options", "pf-replyable-row", "pf-args-row", "pf-env-block"]) assert.match(ped, new RegExp('id="' + id + '"'), id);
-  for (const id of ["pf-name-col", "pf-bin-col", "pf-base-col", "pf-cwd-col", "pf-args-row"]) {
+  assert.match(ped, /^<div class="ped">\s*<div class="lockbar" id="pf-lock" hidden>/);
+  for (const id of ["pf-name-col", "pf-bin-col", "pf-base-col", "pf-cwd-col", "pf-args-row", "pf-options", "pf-replyable-row", "pf-env-block"]) {
     assert.match(ped, new RegExp('id="' + id + '"'), id);
   }
+  // The Can touch box, the section heads and the Advanced fold were drawn on the desktop page only (base CSS hid them on a phone).
+  assert.doesNotMatch(ped, /id="pf-touch"|class="pf-touch"|class="pf-sec"|id="pf-adv"|class="pf-adv"/);
 });
 
-test("Discard sits in the Profiles footer before Save; About has a runtime line", () => {
+test("the Profiles footer is the phone's (Delete, Duplicate, Save, Done); About has a runtime line", () => {
   const foot = /<div class="dft" id="foot-manage">[\s\S]*?<\/div>/.exec(HTML)[0];
-  assert.match(foot, /<button id="pf-discard" class="btn gh" type="button">Discard<\/button>\s*<button id="pf-save"/);
+  assert.match(foot, /id="pf-delete"[\s\S]*id="pf-duplicate"[\s\S]*id="pf-save"[\s\S]*data-close="settings-modal"/);
+  assert.doesNotMatch(foot, /pf-discard/);
   assert.match(HTML, /<div class="dbd pad" id="about"[\s\S]*?<p id="about-runtime"><\/p>/);
 });
 
-test("the New session box and Can touch share one row painter", () => {
+test("the New session box paints its reach rows by textContent only", () => {
   assert.match(body(PANEL, "renderSpawnReach"), /paintReachRows\(/);
   const paint = body(PANEL, "paintReachRows");
-  assert.match(paint, /inline/);
   assert.match(paint, /sr-prod/);
+  assert.doesNotMatch(paint, /inline/, "the Settings page's inline Can touch line went with the old form");
   assert.ok(!/innerHTML/.test(paint), "reach text goes in through textContent only");
-});
-
-test("renderPfOptions tags each option row with its key", () => {
-  assert.match(body(APP, "renderPfOptions"), /row\.dataset\.opt = o\.key/);
-});
-
-test("Discard reloads the profile, or starts a new one when it is unsaved", () => {
-  const d = body(APP, "discardProfileEdits");
-  assert.match(d, /editProfile\(/);
-  assert.match(d, /newProfile\(/);
-  assert.match(APP, /\$\("pf-discard"\)\.addEventListener\("click", discardProfileEdits\)/);
-});
-
-test("Advanced toggles .adv-open on .ped and aria-expanded", () => {
-  const i = APP.indexOf('$("pf-adv")');
-  assert.ok(i > 0, "#pf-adv is wired");
-  const near = APP.slice(i, i + 600);
-  assert.match(near, /adv-open/);
-  assert.match(near, /aria-expanded/);
-});
-
-test("Can touch is built by reachRows and repainted from the form", () => {
-  const r = body(APP, "renderPfTouch");
-  assert.match(r, /reachRows\(/);
-  assert.match(r, /readForm\(\)/);
-  assert.match(r, /pfCredsView/);
-  assert.match(r, /paintReachRows\(/);
-  assert.match(body(APP, "fillForm"), /renderPfTouch\(\)/);
 });
 
 test("About names the box runtime", () => {
@@ -119,46 +91,23 @@ test("the page rules live in desktop.css and target #settings-modal.as-page", ()
   assert.match(css, /#page-host > #settings-modal\.as-page \[data-close\]:not\(#settings-esc\)\s*\{[^}]*display: none/);
 });
 
-// Fix round 1: a failed Save can be about a field folded under Advanced (the
-// allowlist's rows, or a server refusal naming args or an option), so every
-// failed Save opens the fold; a reload failure after a good Save does not.
-test("a failed Save opens the Advanced fold", () => {
+// A failed Save reports through the dialog's own line (a toast would paint beneath the modal backdrop), and the per-block
+// lines (#pf-copy-err, #pf-st-err, #pf-awsc-err) sit above it, so each is un-hidden before the scroll, not after.
+test("every failed Save reports through pfSaveError, per-block lines first", () => {
   const e = body(APP, "pfSaveError");
   assert.match(e, /setDialogError\("settings-modal", msg\)/);
-  assert.match(e, /setPfAdvOpen\(true\)/);
-  const o = body(APP, "setPfAdvOpen");
-  assert.match(o, /classList\.toggle\("adv-open", open\)/);
-  assert.match(o, /aria-expanded/);
+  assert.doesNotMatch(e, /Adv/, "the Advanced fold was the desktop page's");
   const save = body(APP, "saveProfile");
   for (const err of ['"Name and Command are required."', "rowsErr", "ghErr", "target.error", '"Save failed: " + e.message']) {
     assert.ok(save.includes("pfSaveError(" + err + ")"), "saveProfile reports " + err + " through pfSaveError");
   }
-  assert.ok(!/setDialogError\("settings-modal", "Name and Command|setDialogError\("settings-modal", rowsErr|setDialogError\("settings-modal", "Save failed/.test(save), "no failed-Save path bypasses the fold");
-});
-
-// The error scrolls itself into view, so the fold must already be open when it
-// does: opening it afterwards adds ~580px above the line and pushes it off screen.
-// Likewise the per-block lines (#pf-copy-err, #pf-st-err, #pf-awsc-err) sit above
-// the dialog's line, so each is un-hidden before the scroll, not after.
-test("a failed Save opens the fold first and scrolls to the error last", () => {
-  const e = body(APP, "pfSaveError");
-  assert.ok(e.indexOf("setPfAdvOpen(") >= 0 && e.indexOf("setDialogError(") >= 0);
-  assert.ok(e.indexOf("setPfAdvOpen(") < e.indexOf("setDialogError("), "fold open before the scrolling error");
-  const save = body(APP, "saveProfile");
+  assert.ok(!/setDialogError\("settings-modal", "Name and Command|setDialogError\("settings-modal", rowsErr|setDialogError\("settings-modal", "Save failed/.test(save), "no failed-Save path bypasses pfSaveError");
   const at = save.indexOf('pfSaveError("Save failed: " + e.message)');
   assert.ok(at > 0, "the server refusal goes through pfSaveError");
   for (const shown of ['$("pf-st-err").hidden = false', '$("pf-awsc-err").hidden = false', '$("pf-copy-err").hidden = false']) {
     const i = save.indexOf(shown);
     assert.ok(i > 0 && i < at, shown + " must run before the final pfSaveError scroll");
   }
-});
-
-// Fix round 1: #pf-touch is aria-live, so an unchanged line is not repainted.
-test("Can touch repaints only when its text changes", () => {
-  const r = body(APP, "renderPfTouch");
-  assert.match(r, /const key = JSON\.stringify\(rows\)/);
-  assert.match(r, /if \(key === pfTouchKey[^)]*\) return;/);
-  assert.ok(r.indexOf("pfTouchKey = key") < r.indexOf("paintReachRows("), "the key is stored before the paint");
 });
 
 // #151: /api/bundle/imports answers 404 when bundling is off, on every load.
@@ -293,4 +242,31 @@ test("the Settings nav is the mockup's: sentence-case muted 12px labels, 30px ro
   assert.ok(!/text-transform|letter-spacing/.test(label), "no uppercase, no tracking");
   assert.match(rule("#page-host > #settings-modal.as-page > #settings-tabs .t"), /height: 30px/);
   assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /font-size: 15px/);
+});
+
+// Task 16: the old profile form is the phone's alone. Nothing in desktop.css may style it any more: the only rules that name
+// it are the two that keep it out of the page (an unstyled form would be drawn by the base sheet, which is the phone's).
+test("no desktop.css rule targets .ped, .plist, .pitem, #foot-manage or any #pf-/.pf- node except the two that hide the old form", () => {
+  const css = stripComments(DESK_CSS);
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim().replace(/\s+/g, " "), body: m[2].trim() }));
+  // #pf-navlist and .pfv-* are the page's own; .pf-check is the Credentials flows' checkbox, which the drawer also draws.
+  const OLD = /\.ped\b|\.plist\b|\.plist-foot\b|\.pitem\b|\.psub\b|#foot-manage\b|#pf-(?!navlist\b)|\.pf-(?!check\b)/;
+  const hits = rules.filter((r) => OLD.test(r.sel));
+  assert.deepStrictEqual(hits.map((r) => r.body), ["display: none;", "display: none;"], "only the two hide rules remain: " + hits.map((r) => r.sel).join(" | "));
+  assert.match(hits[0].sel, /^#page-host > #settings-modal\.as-page #manage > \.plist, #page-host > #settings-modal\.as-page #manage > \.ped$/);
+  assert.match(hits[1].sel, /^#page-host > #settings-modal\.as-page > #foot-manage$/);
+});
+
+test("the old form's desktop-only drivers are gone, and the wiring the phone and the desktop entry points use is not", () => {
+  // Drivers of the nodes the page no longer draws: the preselect and its draft flag, the Can touch line, Discard, the Advanced fold.
+  for (const name of ["preselectPageProfile", "pfUserDraft", "pfPreselecting", "pfMarkDraft", "renderPfTouch", "schedulePfTouch", "pfTouchKey", "discardProfileEdits", "setPfAdvOpen"]) {
+    assert.ok(!new RegExp("\\b" + name + "\\b").test(APP + read("shell.js") + read("profileform.js")), name + " has no caller left");
+  }
+  // The phone: syncPfMode re-derives the work-mode display on every edit in the form (it used to hang off #pf-adv's parent).
+  assert.match(APP, /for \(const ev of \["input", "change", "click"\]\) \$\("manage"\)\.querySelector\("\.ped"\)\.addEventListener\(ev, syncPfMode\)/);
+  // The desktop entry into New profile that is not the page's own: the empty state's "Create box profile" presses the old button.
+  assert.match(APP, /openSettings\("manage"\); \$\("pf-new"\)\.click\(\)/);
+  assert.match(APP, /\$\("pf-new"\)\.addEventListener\("click", \(\) => \{[^}]*pfvNew\(\); return;/);
+  // The page reads the credentials view (the reach words' elevate minutes) and is told when it changes.
+  assert.match(body(APP, "refreshPfCreds"), /pfCredsView = got;\s*if \(typeof pfvMetaChanged === "function"\) pfvMetaChanged\(\);/);
 });

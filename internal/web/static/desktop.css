@@ -1060,7 +1060,7 @@
   /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
   #page-host > dialog.as-page[box-]::before { display: none; }
 
-  /* --- Settings page (S4): grouped nav, the regrouped profile form ---------- */
+  /* --- Settings page (S4): grouped nav ----------------------------------------- */
   /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
      #settings-modal rules in app.css carry an id, and this outranks them. A
      grid: the header across, the nav down the left, the open panel and its
@@ -1120,171 +1120,17 @@
   #page-host > #settings-modal.as-page > .dft .btn.dgr:hover { background: var(--danger-tint); }
   #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: 13px; }
 
-  /* Profiles: the list (200px) runs the full height, and the sticky footer
-     starts at the form column. #manage spans the footer's row too, so the form
-     scrolls under the footer and keeps room for it at the bottom. */
+  /* Profiles: #manage spans the footer's row too (the old form's footer, #foot-manage, is not drawn here). */
   #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
-  #page-host > #settings-modal.as-page > #foot-manage { position: relative; z-index: 1; margin-left: 200px; }
-  /* The 200px starts the footer at the form column. When the dialog itself (the
-     container: measured, 747px is the narrowest that holds the one-line footer past
-     that margin) is narrower, the footer takes the whole panel. */
-  #page-host > #settings-modal.as-page { container-type: inline-size; }
-  @container (max-width: 750px) {
-    #page-host > #settings-modal.as-page > #foot-manage { margin-left: 0; }
-  }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-delete { order: 1; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate { order: 2; }
-  #page-host > #settings-modal.as-page > #foot-manage .grow { order: 3; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-discard { order: 4; display: inline-block; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-save { order: 5; }
-  /* Duplicate reads as a quiet action beside Delete…; a built-in profile
-     makes it the primary (syncEditorActions adds .pri) and the rule above fills it. */
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri) { background: transparent; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri):hover { background: var(--raise); }
 
-  #page-host > #settings-modal.as-page #manage .plist { width: 200px; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
-  #page-host > #settings-modal.as-page #manage .plist > .grow { display: none; }
-  #page-host > #settings-modal.as-page #manage .plist ul { display: flex; flex-direction: column; gap: 2px; overflow: visible; }
-  #page-host > #settings-modal.as-page #manage .pitem {
-    padding: 8px 10px; border: 0; border-left: 2px solid transparent; border-radius: var(--r-chip);
-    box-shadow: none; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
-  }
-  #page-host > #settings-modal.as-page #manage .pitem:hover { background: var(--raise); }
-  #page-host > #settings-modal.as-page #manage .pitem.on { background: var(--raise); border-left-color: var(--accent); box-shadow: none; }
-  /* Two lines (pg-1b): the name, then "claude · box" / "built-in · host", which
-     carries the built-in marker, so the right-hand "built-in" goes. */
-  #page-host > #settings-modal.as-page #manage .pitem { flex-wrap: wrap; row-gap: 1px; }
-  #page-host > #settings-modal.as-page #manage .pitem .lk { display: none; }
-  #page-host > #settings-modal.as-page #manage .pitem .psub { display: block; flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); }
-  #page-host > #settings-modal.as-page #manage .plist-foot { padding: 8px 10px; border: 0; }
-  #page-host > #settings-modal.as-page #manage .plist-foot .btn { width: auto; padding: 0; border: 0; background: none; font-family: var(--font-ui); font-size: 13px; color: var(--accent); }
-  #page-host > #settings-modal.as-page #manage .plist-foot .btn:hover { text-decoration: underline; }
-
-  /* The form: a 4-track grid, so a field takes half (two tracks) and model ·
-     effort share one half. The three unnamed .frow wrappers and #pf-options
-     are display: contents, so their columns are grid items placed by `order`
-     (visual only: readForm scans #pf-options, and mobile keeps DOM order).
-     Rows with an id keep their own display, so their [hidden] still hides them.
-       Can touch
-       AGENT          name | account; binary | model · effort
-       WHERE IT RUNS  containment | default workspace; readable host paths
-       WHAT IT CAN TOUCH  AWS connections | GitHub; legacy AWS; tokens
-       Advanced ▸     base environment, the other options, replies, args, allowlist */
-  #page-host > #settings-modal.as-page #manage .ped {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
-    padding: 18px 22px 84px; background: var(--bg);
-    /* The footer (#foot-manage) is 56px and overlays the bottom of this
-       scroller, so scroll-into-view "nearest" (setDialogError) would count a
-       line under it as visible. 72px = footer 56px + 16px clearance. */
-    scroll-padding-bottom: 72px;
-  }
-  /* Full-width, the footer also sits over the list's foot; and while the dialog is
-     narrower than 559px (measured, Discard showing: the buttons are 316px, with 30px
-     of gaps, 40px of padding and the 170px nav) the one line no longer fits and the
-     footer takes two, 89px, so the form leaves room under it too. 580px is that width
-     plus room for a font that renders the buttons a little wider. */
-  @container (max-width: 750px) {
-    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 66px; }
-  }
-  @container (max-width: 580px) {
-    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 106px; }
-    #page-host > #settings-modal.as-page #manage .ped { padding-bottom: 116px; scroll-padding-bottom: 104px; }
-  }
-  #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
-  #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
-  #page-host > #settings-modal.as-page #manage #pf-lock { order: 1; }
-  #page-host > #settings-modal.as-page #manage #pf-touch { order: 2; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="agent"] { order: 10; }
-  #page-host > #settings-modal.as-page #manage #pf-name-col { order: 11; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-account-col { order: 12; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-bin-col { order: 13; grid-column: 1 / span 2; }
-  /* Model and effort stack in the right half, beside Binary: their segmented
-     controls carry real model ids, which never fit side by side in a quarter. */
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
-  #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-mode-block { order: 23; }
-  #page-host > #settings-modal.as-page #manage #pf-mode-block .pf-mode-cards { display: grid; grid-template-columns: 1fr 1fr; }
-  #page-host > #settings-modal.as-page #manage #pf-copy-block { order: 24; }
-  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 25; }
-  #page-host > #settings-modal.as-page #manage #pf-imports-row { order: 26; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
-  #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }
-  /* The GitHub block is only half the editor wide, so an owner row cannot hold
-     App or token, Owner and remove side by side (the fields shrink under
-     120px). Same stack as the phone: App or token with remove at the end of
-     the first line, then Owner and Repositories each on a full line, then the
-     PAT note. */
-  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 10px; align-items: start; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { grid-column: 2; grid-row: 1; align-self: end; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.own, #page-host > #settings-modal.as-page .pf-gh-owner .fcol.repos, #page-host > #settings-modal.as-page .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
-  /* The remove cell is a .fcol with the class "rm", which collides with the
-     3px progress-bar .rm rule above (grey fill, fixed height): it painted an
-     empty dark box over the x. Reset the bar's paint so only the button shows. */
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { height: auto; padding: 0; background: none; border-radius: 0; position: static; }
-  #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
-  #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
-  #page-host > #settings-modal.as-page #manage #pf-net-block { order: 35; }
-  #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
-  #page-host > #settings-modal.as-page #manage #pf-base-col { order: 41; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #pf-options > .frow { order: 42; grid-column: span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-replyable-row { order: 43; }
-  #page-host > #settings-modal.as-page #manage #pf-args-row { order: 44; }
-  #page-host > #settings-modal.as-page #manage #pf-env-block { order: 45; }
-  #page-host > #settings-modal.as-page #manage .ped > .hint { order: 46; }
-  #page-host > #settings-modal.as-page #manage #settings-err { order: 50; }
-  /* Advanced, folded: the fields are still in the form (readForm reads them),
-     just not drawn. */
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-base-col,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-options > .frow:not([data-opt="model"]):not([data-opt="effort"]):not([data-opt="effortLevel"]),
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-replyable-row,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-args-row,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-env-block,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) > .hint { display: none; }
-
-  #page-host > #settings-modal.as-page #manage .pf-touch {
-    display: flex; gap: 22px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line);
-    border-radius: var(--r-card); font-size: 13px; line-height: 1.5;
-  }
-  .sr-ik { flex: none; color: var(--muted); }
-  .sr-iv { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
-  .sr-part.tone-warn { color: var(--amber); }
-  #page-host > #settings-modal.as-page #manage .pf-sec { display: block; margin: 6px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-  #page-host > #settings-modal.as-page #manage .pf-adv {
-    display: block; width: 100%; margin: 4px 0 14px; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line);
-    background: none; text-align: left; font-family: var(--font-ui); font-size: 13px; color: var(--muted); cursor: pointer;
-  }
-  #page-host > #settings-modal.as-page #manage .pf-adv::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page #manage .ped.adv-open .pf-adv::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page #manage .pf-adv:hover { color: var(--fg); }
-
-  /* Labels and fields per pg-1b: sentence-case 12.5px labels, 34px fields with
-     6px corners; mono only for machine text (paths, binaries, model names). */
-  #page-host > #settings-modal.as-page #manage .flab { margin-bottom: 6px; font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--muted); }
-  #page-host > #settings-modal.as-page #manage .fld {
-    min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl);
-    background: var(--bg); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
-  }
-  #page-host > #settings-modal.as-page #manage textarea.fld { min-height: 0; line-height: 1.5; }
-  #page-host > #settings-modal.as-page #manage #pf-bin, #page-host > #settings-modal.as-page #manage #pf-cwd, #page-host > #settings-modal.as-page #manage #pf-cwd-custom, #page-host > #settings-modal.as-page #manage #pf-context, #page-host > #settings-modal.as-page #manage #pf-args,
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] .fld, #page-host > #settings-modal.as-page #manage #pf-env-rows .fld { font-family: var(--font-mono); font-size: 12.5px; }
+  /* The profile page's own controls, as the form drew them: sentence-case labels
+     and fields are the page's (.pfv-*), but its segmented controls (buildSeg), its
+     checkboxes and its picker hints are the shared ones, and take the page's tokens here. */
   #page-host > #settings-modal.as-page #manage .seg { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
   #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
   #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
-  /* An option's segmented control wraps inside its column rather than run past it. */
-  #page-host > #settings-modal.as-page #pf-options .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; }
-  #page-host > #settings-modal.as-page #pf-options .seg button { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #manage .lockbar, #page-host > #settings-modal.as-page #manage .pf-sumbox, #page-host > #settings-modal.as-page #manage .pf-confirm { border-radius: var(--r-card); }
-  #page-host > #settings-modal.as-page #manage .warnbox { border-radius: var(--r-ctl); }
-  #page-host > #settings-modal.as-page #manage .ped .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #manage .ped .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  #page-host > #settings-modal.as-page #manage .ped .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page #manage .hint { font-size: 12px; line-height: 1.6; }
 
   /* Agent accounts, API tokens, Appearance, About: the same content, on the
@@ -1689,7 +1535,7 @@
   /* Settings > Profiles on the page: the profiles nested under Profiles in the nav,
      and the read view of one profile (profilepage.js) in place of the list column,
      the form and its footer. Look source: profile-mockups/option-b/index.html. The
-     old form stays in the DOM (the phone's modal and the edit tasks use it); it is
+     old form stays in the DOM (the phone's modal uses it); it is
      only not drawn here. */
   #page-host > #settings-modal.as-page #manage > .plist, #page-host > #settings-modal.as-page #manage > .ped { display: none; }
   /* The nav is 212px on Profiles, where it carries the profile names (the mockup's width);

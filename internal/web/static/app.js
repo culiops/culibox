@@ -3605,10 +3605,6 @@ function renderPfOptions(current) {
   $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
     row.className = "frow";
-    // The desktop Settings page places a row by its key (model and effort sit
-    // in the Agent block, the rest under Advanced) with CSS alone: the row has
-    // to stay inside #pf-options, which is what readForm scans.
-    row.dataset.opt = o.key;
     const col = document.createElement("div");
     col.className = "fcol";
     const lbl = document.createElement("label");
@@ -3734,7 +3730,6 @@ function applyCredLists(meta) {
   renderAwscPicker(ticksAfterRefresh(readAwscTicked(), oldAwsc, names(awscs)));
   renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
   syncEditorActions();
-  renderPfTouch();
   // The profile page reads the same lists: a row it called missing may exist now.
   if (typeof pfvMetaChanged === "function") pfvMetaChanged();
 }
@@ -3825,11 +3820,11 @@ function paintPfImports() {
   $("pf-imports-refused").hidden = !st.refused;
 }
 
-// --- the profile form's "Can touch" line (desktop Settings page) ------------
+// --- the desktop profile page's reach view (profilepage.js) -----------------
 // pfCredsView: what GET /api/credentials said when the Profiles tab was last
 // shown (the store lock and the elevate windows), or null: never fetched, or
-// it failed, and the line then has no Store part and no window. Desktop only,
-// like the New session box that reads the same view (spawnpanel.js).
+// it failed, and the reach words then have no Store part and no window. Desktop
+// only, like the New session box that reads the same view (spawnpanel.js).
 let pfCredsView = null;
 let pfCredsSeq = 0;
 // `known` is a view the caller has just read: it is used as it is, with no second
@@ -3848,41 +3843,7 @@ async function refreshPfCreds(known) {
   }
   if (seq !== pfCredsSeq) return;
   pfCredsView = got;
-  renderPfTouch();
   if (typeof pfvMetaChanged === "function") pfvMetaChanged();
-}
-// renderPfTouch paints #pf-touch from what the form holds right now, with the
-// New session box's own rules (reachRows) and renderer (paintReachRows). Run
-// from fillForm, after the credential lists repaint, and (debounced) on every
-// edit inside the form. Base CSS hides the box on a phone, where it is skipped.
-// pfTouchKey: what #pf-touch shows now. The box is aria-live, so it is only
-// repainted when the text changes; a keystroke that changes nothing it says
-// must not make a screen reader read the whole line again.
-let pfTouchKey = "";
-function renderPfTouch() {
-  const box = $("pf-touch");
-  if (!box || !drawerDesktop()) return;
-  const form = readForm();
-  const view = profiles.find((x) => x.name === selectedProfileName()) || null;
-  // Without a box layer every session is host, whatever the seg shows.
-  const tier = (metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host" ? "host" : "box";
-  const rows = reachRows({
-    // "open" is only ever reported when egress is mandatory for every boxed spawn.
-    profile: pfTouchProfile(form, { view, claude: isClaudeBinName(form.bin), egressAll: profiles.some((x) => x.network === "open") }),
-    tier,
-    cwd: shortPath(pfMode() === "copy" ? $("pf-copy-dir").value.trim() : pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
-    meta: { aws_connections: awscEntries },
-    creds: pfCredsView,
-  });
-  const key = JSON.stringify(rows);
-  if (key === pfTouchKey && box.childNodes.length) return;
-  pfTouchKey = key;
-  paintReachRows(box, rows, { inline: true, title: "Can touch" });
-}
-let pfTouchTimer = 0;
-function schedulePfTouch() {
-  clearTimeout(pfTouchTimer);
-  pfTouchTimer = setTimeout(renderPfTouch, 150);
 }
 
 // The stored binding as loaded: the editor has no field for its extra egress
@@ -4322,7 +4283,6 @@ function fillForm(p) {
   $("pf-awsc-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
-  renderPfTouch();
   refreshPfImports();
 }
 // syncEditorActions is the single place that decides what the editor may do,
@@ -4447,7 +4407,7 @@ function syncPfMode() {
   $("pf-mode-copy-card").classList.toggle("off", st.copyDisabled);
   folderRadio.closest(".pf-mode-card").classList.toggle("off", folderRadio.disabled);
   $("pf-mode-copy-why").textContent = st.copyReason;
-  // Same tier test as renderPfTouch: no box layer means every session is host.
+  // No box layer means every session is host, whatever the seg shows.
   const folderCopy = wmFolderCopy((metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host");
   $("pf-mode-folder-body").textContent = folderCopy.body;
   $("pf-mode-diff-commit").textContent = folderCopy.commitCell;
@@ -4575,14 +4535,8 @@ function readForm() {
 // These three run while #settings-modal is open, so their errors go to the
 // dialog's own inline line. A toast is fixed-position and paints beneath a modal
 // backdrop, which would leave the failure invisible.
-// pfSaveError: a Save that did not happen. On the desktop page the line can be
-// about a field folded under Advanced (the allowlist's rows, or a server refusal
-// naming args, an option or the base environment), so any failed Save opens the
-// fold: a message pointing at a field nobody can see is a dead end.
-// The fold opens FIRST: the line scrolls itself into view, and opening the fold
-// afterwards adds the Advanced block above it and pushes it off screen.
+// pfSaveError: a Save that did not happen.
 function pfSaveError(msg) {
-  setPfAdvOpen(true);
   setDialogError("settings-modal", msg);
 }
 async function saveProfile() {
@@ -4667,7 +4621,6 @@ async function saveProfile() {
       // The profile now exists, so the editor is no longer a draft even if the
       // reload below fails (a second Save must PUT, not POST again).
       selectedProfile = p.name;
-      pfUserDraft = false;
       try {
         // No background retry: one that succeeds later would leave the "Saved, but
         // reloading it failed" line on screen next to a good list.
@@ -4692,11 +4645,8 @@ async function saveProfile() {
     syncEditorActions();
   }
 }
-// The banner for a save the server refused as stale. The fold opens FIRST, as in
-// pfSaveError: opening it after the scroll adds the Advanced block above the
-// banner and pushes it off screen.
+// The banner for a save the server refused as stale.
 function showPfStale(model) {
-  setPfAdvOpen(true);
   $("pf-stale-msg").textContent = model.message;
   $("pf-stale").hidden = false;
   $("pf-stale").scrollIntoView({ block: "nearest" });
@@ -4718,10 +4668,6 @@ async function reloadStaleProfile() {
 // creates exactly one profile under whatever name is typed. Writing the copy up
 // front left it behind when the user renamed it and saved.
 function duplicateProfile() {
-  // The desktop profile page asks first when it holds unsaved changes (pfvHold; never on a phone).
-  if (profilePageHolds(duplicateProfile)) return;
-  // The desktop page copies the profile it shows, on its own New profile page (pfv-new.js); the form below is the phone's.
-  if (typeof pfvOnPage === "function" && pfvOnPage() && typeof pfvDuplicate === "function") { pfvDuplicate(); return; }
   const name = selectedProfileName();
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
@@ -4735,7 +4681,6 @@ function duplicateProfile() {
     else delete draft.default_cwd;
   }
   selectedProfile = "";
-  pfUserDraft = true;
   fillForm(draft);
   // fillForm took the saved mode and copy dir from an unsaved draft; nothing is
   // saved yet, so no "your private copy stays on disk" note may name a directory
@@ -4757,10 +4702,8 @@ function profilePageHolds(again) {
   return typeof pfvHold === "function" && pfvHold(again);
 }
 async function editProfile(name) {
-  if (profilePageHolds(() => editProfile(name))) return;
   setDialogError("settings-modal", "");
   selectedProfile = name;
-  pfUserDraft = false;
   // Same drill-down as newProfile(); inert above 700px, where both columns
   // are already on screen.
   $("settings-modal").classList.add("editing");
@@ -4790,44 +4733,6 @@ async function deleteProfile(name) {
 // marker is not inferred from the name.
 let selectedProfile = "";
 function selectedProfileName() { return selectedProfile; }
-// pfUserDraft: the editor holds a draft the user started (+ new profile,
-// Duplicate), which the page's preselect below must never replace.
-let pfUserDraft = false;
-let pfPreselecting = false;
-// pfMarkDraft: any edit to the editor while no profile is selected makes the
-// form a draft, so a preselect still in flight leaves it alone. A selected
-// profile needs no flag (the preselect bails on selectedProfile), and fillForm
-// is programmatic, so it fires none of these events. A click counts only on a
-// segmented control (tier, runtime), the one input that is a button.
-function pfMarkDraft(e) {
-  if (selectedProfile) return;
-  if (e.type === "click" && !(e.target.closest && e.target.closest(".seg button"))) return;
-  pfUserDraft = true;
-}
-// preselectPageProfile: the desktop Settings page opens Profiles on a profile
-// (pg-1b), the first one you own, else the first one, rather than on a blank
-// draft. Page only: a phone keeps its list-first view.
-async function preselectPageProfile() {
-  const page = () => $("settings-modal").classList.contains("as-page");
-  if (!page() || selectedProfile || pfUserDraft || pfPreselecting) return;
-  pfPreselecting = true;
-  try {
-    if (!profilesLoaded) await loadProfiles(false);
-    const p = profiles.find((x) => x.editable) || profiles[0];
-    if (!p || !page() || selectedProfile || pfUserDraft) return;
-    const full = await api("/api/profiles/" + encodeURIComponent(p.name));
-    if (!page() || selectedProfile || pfUserDraft) return;
-    selectedProfile = p.name;
-    fillForm(full);
-    setDialogError("settings-modal", "");
-    renderProfileList();
-    syncEditorActions();
-  } catch (_) {
-    // Nothing chosen: the blank form stays, as before.
-  } finally {
-    pfPreselecting = false;
-  }
-}
 function renderProfileList() {
   $("pf-list").replaceChildren(...profiles.map((p) => {
     const li = document.createElement("li");
@@ -4845,9 +4750,7 @@ function renderProfileList() {
       lk.textContent = labels.badge;
       b.appendChild(lk);
     }
-    // Outside .psub on purpose: the mobile list hides .psub, and work that has
-    // not come home must stay visible there. Before .psub so it sits on the
-    // name's line, not under the full-width second line.
+    // Work that has not come home sits on the name's line, at every width.
     const nhLabel = notHomeLabel(p.not_home);
     if (nhLabel) {
       const nh = document.createElement("span");
@@ -4856,12 +4759,6 @@ function renderProfileList() {
       nh.title = notHomeTitle(p.not_home);
       b.appendChild(nh);
     }
-    // The desktop page's second line (pg-1b): "claude · box", "config.json · host".
-    // Hidden at <= 700px, where the row stays one line.
-    const sub = document.createElement("span");
-    sub.className = "psub";
-    sub.textContent = labels.sub;
-    b.appendChild(sub);
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);
     return li;
@@ -4878,7 +4775,6 @@ $("pf-new").addEventListener("click", () => {
   if (profilePageHolds(() => $("pf-new").click())) return;
   // The desktop page has its own New profile page (pfv-new.js); the blank form below is the phone's.
   if (typeof pfvOnPage === "function" && pfvOnPage() && typeof pfvNew === "function") { pfvNew(); return; }
-  pfUserDraft = true;
   newProfile();
   $("settings-modal").classList.add("editing");
 });
@@ -4890,29 +4786,10 @@ $("pf-back").addEventListener("click", () => {
 });
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
-// Discard (desktop page footer): back to what the server holds for this
-// profile, or a blank form when the editor holds an unsaved draft.
-function discardProfileEdits() {
-  const name = selectedProfileName();
-  if (name) editProfile(name);
-  else newProfile();
-}
-$("pf-discard").addEventListener("click", discardProfileEdits);
 $("pf-stale-reload").addEventListener("click", reloadStaleProfile);
-// Advanced (desktop page): folds base environment, the other options, replies,
-// args and the allowlist. CSS only hides them; every field stays in the form.
-function setPfAdvOpen(open) {
-  $("pf-adv").closest(".ped").classList.toggle("adv-open", open);
-  $("pf-adv").setAttribute("aria-expanded", open ? "true" : "false");
-}
-$("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".ped").classList.contains("adv-open")));
-// Any edit in the form re-derives the Can touch line; a seg or a picker change
-// is a click, so clicks count too.
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
 // The GitHub hint follows the GitHub and Tokens blocks, so every edit re-derives
 // the work-mode display (syncPfMode is display only and cheap).
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, syncPfMode);
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, pfMarkDraft);
+for (const ev of ["input", "change", "click"]) $("manage").querySelector(".ped").addEventListener(ev, syncPfMode);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
 // that happens.
@@ -4948,7 +4825,6 @@ for (const r of document.querySelectorAll('input[name="pf-mode"]')) {
   r.addEventListener("change", () => {
     pfFillCopyDir();
     syncEditorActions();
-    renderPfTouch();
   });
 }
 $("pf-copy-gh-link").addEventListener("click", (e) => {
