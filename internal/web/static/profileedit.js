@@ -22,7 +22,9 @@
 //                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
 //                In copy mode a shareText or autoReturn that is omitted (or undefined) keeps the
 //                stored share list and auto-return opt-out; folder mode drops all four
-//   agent      { bin, account, options: { model, effort, effortLevel } }
+//   agent      { bin, account, options: { model, effort, effortLevel }, dropOptions: [key] }
+//                dropOptions: options removed whatever their value, the ones the new command does not take
+//                (the caller knows the option definitions; the server refuses such an option)
 //   cloud      { aws_connections: [name], tokens: [name], github: binding|null, aws: null }
 //                github is ghBindingFromForm's answer; its egress_allow is carried when
 //                not stated; the legacy aws is never edited, only removed (aws: null).
@@ -195,6 +197,10 @@ const PFE_MERGE = {
       pfeSet(out, "account", a === "default" ? "" : a);
     }
     pfeOptions(out, v.options, (k) => PFE_AGENT_OPTIONS.includes(k));
+    if (Array.isArray(v.dropOptions) && out.options && typeof out.options === "object" && !Array.isArray(out.options)) {
+      for (const k of v.dropOptions) delete out.options[k];
+      if (!Object.keys(out.options).length) delete out.options;
+    }
   },
 
   cloud(out, v, doc) {

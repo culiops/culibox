@@ -75,6 +75,18 @@ test("mergeBlock agent changes only model and effort", () => {
   assert.deepStrictEqual(again, doc);
 });
 
+test("mergeBlock agent drops the options it is told the new command does not take, whatever their value, and no others", () => {
+  const doc = { name: "p", bin: "claude", options: { model: "m", skip_permissions: true, other: false, legacy_key: "keep" } };
+  const out = pfvMergeBlock(doc, "agent", { bin: "bash", options: { model: "" }, dropOptions: ["skip_permissions", "other", "never_stored"] });
+  assert.deepStrictEqual(out.options, { legacy_key: "keep" });
+  assert.strictEqual(out.bin, "bash");
+  assert.deepStrictEqual(doc.options, { model: "m", skip_permissions: true, other: false, legacy_key: "keep" }, "the loaded profile is not touched");
+  // Nothing left: no options key at all. Nothing named: nothing dropped.
+  assert.ok(!("options" in pfvMergeBlock({ name: "p", bin: "claude", options: { skip_permissions: true } }, "agent", { bin: "bash", dropOptions: ["skip_permissions"] })));
+  assert.deepStrictEqual(pfvMergeBlock(doc, "agent", { bin: "claude", dropOptions: [] }).options, doc.options);
+  assert.deepStrictEqual(pfvMergeBlock({ name: "p", bin: "claude" }, "agent", { dropOptions: ["x"] }), { name: "p", bin: "claude" });
+});
+
 test("mergeBlock agent clears an option the user emptied, keeps the one it was not given, and the default login leaves no account", () => {
   const doc = clone(awsOps);
   const cleared = pfvMergeBlock(doc, "agent", { account: "default", options: { effort: "" } });

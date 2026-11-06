@@ -566,13 +566,19 @@ async function pfcAfterConvert(name, line) {
   return true;
 }
 
+// pfcBlankNew: a row that was added in this edit and is still empty is no change (a save drops it: the old form did). The props
+// are the entry's fields that must all be empty.
+const pfcBlankNew = (e, ...props) => e.fresh === true && props.every((p) => String(e[p] || "").trim() === "");
+
 pfvRegisterEditor("cloud", {
   values: pfcCloudValues, draw: pfcCloudDraw, merge: pfcCloudMerge, check: pfcCloudCheck, add: pfcCloudAdd, remove: pfcCloudRemove,
+  settled: (v) => Object.assign({}, v, { gh: v.gh.filter((g) => !pfcBlankNew(g, "owner", "repos")) }),
   // Only a box has this block, so a save always gives the next session a new box.
   note: (rec, c) => c.tier === "box",
 });
 
 pfvRegisterEditor("reachable", {
   values: pfcReachValues, draw: pfcReachDraw, merge: pfcReachMerge, check: pfcReachCheck, add: pfcReachAdd,
+  settled: (v) => ({ folders: v.folders.filter((e) => !pfcBlankNew(e, "path")), domains: v.domains.filter((e) => !pfcBlankNew(e, "host")) }),
   note: (rec, c) => c.tier === "box",
 });

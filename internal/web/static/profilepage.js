@@ -643,7 +643,8 @@ async function pfvDelete() {
 // the nodes (a picker's listeners) goes on rec.disposers, run before the next draw and when
 // the record goes. merge(rec, c): the values pfvMergeBlock is given (default: rec.values).
 // check(rec, c): what the client refuses before any PUT, {field, text} or null. note(rec, c):
-// the footer carries the box consequence. hideSave(rec, c): Save is not offered. fields: the
+// the footer carries the box consequence. hideSave(rec, c): Save is not offered. settled(values): the values as they
+// count when a change is looked for (a row added and left blank is no change). fields: the
 // form is a stack of labelled fields (a 16px rhythm, 440px wide); without it the form flows
 // as it likes. A block of rows has two more: add(rec, what) puts a pending row in (what is
 // pfvAddRow's) and answers the key of the control to focus, "" when it added nothing;
@@ -724,7 +725,7 @@ function pfvEditCtx() {
 function pfvNewEdit(id, repair) {
   const ed = PFV_EDITORS[id];
   const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(values), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
+  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
 }
 
 // pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
@@ -735,7 +736,10 @@ function pfvDisposeRec(rec) {
   for (const f of fns) f();
 }
 
-const pfvEditDirty = (rec) => !!rec && rec.values !== null && pfvStable(rec.values) !== rec.init;
+// pfvSettled: the values as they count when two sets are compared. An editor may say what is no change even though the values
+// differ (its settled(values)): a row that was added and is still blank.
+const pfvSettled = (id, values) => (values !== null && PFV_EDITORS[id] && PFV_EDITORS[id].settled ? PFV_EDITORS[id].settled(values) : values);
+const pfvEditDirty = (rec) => !!rec && rec.values !== null && pfvStable(pfvSettled(rec.id, rec.values)) !== rec.init;
 const pfvAnyDirty = () => Object.values(pfvState.edits).some(pfvEditDirty);
 // The block "Show" goes to: the first one with changes, else the first one open.
 function pfvFirstDirty() {
@@ -1253,13 +1257,19 @@ function pfvAgentValues(c) {
   return { bin: typeof c.doc.bin === "string" ? c.doc.bin : "", account: typeof c.doc.account === "string" ? c.doc.account : "", options };
 }
 
-// An option the command does not take is removed: the server refuses a Claude-only option on another command.
+// An option the command does not take is removed: the server refuses a Claude-only option on another command. Model and
+// effort are decided here by pfvAgentDefs; when the command changes, every other stored option whose definition does not
+// apply to the new one goes too (the Advanced block's, which this block does not show), by the rule the old form draws its
+// options by (optApplies). An option no definition names is not ours to judge and is sent back as it was.
 function pfvAgentMerge(rec, c) {
   const v = rec.values;
   const takes = new Set(pfvAgentDefs(c, v.bin).map((d) => d.key));
   const options = {};
   for (const k of Object.keys(v.options)) options[k] = takes.has(k) ? v.options[k] : "";
-  return { bin: v.bin, account: v.account, options };
+  const bin = v.bin.trim();
+  const changed = bin !== "" && bin !== (typeof c.doc.bin === "string" ? c.doc.bin.trim() : "");
+  const dropOptions = changed ? c.defs.filter((d) => d && typeof d.key === "string" && !optApplies(d, bin)).map((d) => d.key) : [];
+  return { bin: v.bin, account: v.account, options, dropOptions };
 }
 
 function pfvAccountChoices(account) {

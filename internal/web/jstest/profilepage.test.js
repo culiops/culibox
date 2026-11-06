@@ -1806,7 +1806,9 @@ test("the stand-in picker offers what is added as an input row, and picking one 
   optBtn(t, "reachable", "Domain").click();
   assert.strictEqual(byCls(blockOf(t, "reachable"), "pfv-opt").length, 0, "picking closes it");
   assert.strictEqual(Node.focused, field(t, "domain:2"), "focus goes to the new row's input");
-  assert.strictEqual(unsavedNote(t).hidden, false);
+  assert.strictEqual(unsavedNote(t).hidden, true, "a row that is still empty is no change");
+  field(t, "domain:2").value = "api.example.net"; field(t, "domain:2").oninput();
+  assert.strictEqual(unsavedNote(t).hidden, false, "typing in it is");
   clickBtn(blockOf(t, "cloud"), "+ Add access");
   assert.strictEqual(t.box.puts.length, 0);
 });
@@ -2737,4 +2739,145 @@ test("Advanced registers its editor through the seam, and index.html loads it af
   const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
   assert.ok(at("profilepage.js") > 0 && at("pfv-advanced.js") > at("profilepage.js"));
   assert.ok(at("envrows.js") > 0 && at("envrows.js") < at("pfv-advanced.js") && at("importsmodel.js") < at("pfv-advanced.js"));
+});
+
+// --- the agent command and the options it takes (R33) ---------------------------------------------------------------------
+
+// A claude profile with a Claude-only option (the example config has exactly this), one every command takes, and one no definition names.
+const CLAUDE_OPTS = { model: "claude-opus-5-5", effort: "high", skip_permissions: true, all_bins: true, legacy_key: "keep me" };
+const ALL_BINS_DEFS = OPTION_DEFS.concat([{ key: "all_bins", label: "Everywhere", type: "bool" }]);
+const pickBin = (t, bin) => { const s = field(t, "bin"); s.value = bin; s.onchange(); };
+
+test("changing the agent command drops options that do not apply to the new command and keeps undefined keys", async () => {
+  const t = page({ optionDefs: ALL_BINS_DEFS, repliesEnabled: true });
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: Object.assign({}, CLAUDE_OPTS), replyable: true });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickBin(t, "bash");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 1);
+  const body = t.box.puts[0];
+  assert.strictEqual(body.bin, "bash");
+  assert.ok(!("skip_permissions" in (body.options || {})), "the Claude-only option is not sent: the server would refuse the save");
+  assert.deepStrictEqual(body.options, { all_bins: true, legacy_key: "keep me" }, "an option every command takes stays, and so does a key no definition names");
+  assert.strictEqual(body.replyable, true, "replies are Advanced's and not this block's to drop");
+  // What Advanced offers now is what bash takes: no Skip permissions, no replies row, and it still saves.
+  clickBtn(advOf(t), "Edit");
+  assert.strictEqual(field(t, "options.skip_permissions"), undefined);
+  assert.ok(field(t, "options.all_bins"));
+  assert.strictEqual(field(t, "replyable"), undefined);
+});
+
+test("the same command, or another name for the same program, keeps every option; a command that takes it keeps it", async () => {
+  const same = page({ optionDefs: ALL_BINS_DEFS });
+  same.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: Object.assign({}, CLAUDE_OPTS) });
+  await same.box.pfvShow("aws-ops");
+  clickBtn(blockOf(same, "agent"), "Edit");
+  pickModel(same, "claude-sonnet-5");
+  await clickBtn(blockOf(same, "agent"), "Save");
+  assert.deepStrictEqual(same.box.puts[0].options, Object.assign({}, CLAUDE_OPTS, { model: "claude-sonnet-5" }), "no command change, nothing dropped");
+  // A path to claude is still claude (optApplies matches the program's name).
+  const path = page({ optionDefs: ALL_BINS_DEFS });
+  path.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: Object.assign({}, CLAUDE_OPTS) });
+  await path.box.pfvShow("aws-ops");
+  clickBtn(blockOf(path, "agent"), "Edit");
+  pickBin(path, "__other__");
+  const txt = field(path, "bin-text");
+  txt.value = "/usr/local/bin/claude"; txt.oninput(); txt.onchange();
+  await clickBtn(blockOf(path, "agent"), "Save");
+  assert.strictEqual(path.box.puts[0].bin, "/usr/local/bin/claude");
+  assert.strictEqual(path.box.puts[0].options.skip_permissions, true);
+});
+
+test("Advanced follows the command the open Agent block will save: its options go from the form, and the one save drops them", async () => {
+  const t = page({ optionDefs: ALL_BINS_DEFS, repliesEnabled: true });
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { options: Object.assign({}, CLAUDE_OPTS), replyable: true });
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickBin(t, "bash");
+  // The save is refused for something Advanced owns, so Advanced opens beside the Agent block with the command still pending.
+  t.box.putFail = apiErr(400, { error: 'profile "aws-ops": args refused', field: "args" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.ok(advOf(t).className.includes("pfv-editing"));
+  assert.strictEqual(field(t, "options.skip_permissions"), undefined, "bash does not take it, so it is not offered");
+  assert.ok(field(t, "options.all_bins"));
+  assert.strictEqual(field(t, "replyable"), undefined, "nor replies");
+  t.box.putFail = null;
+  typeArgs(t, "--x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
+  const body = t.box.puts[t.box.puts.length - 1];
+  assert.strictEqual(body.bin, "bash");
+  assert.deepStrictEqual(body.options, { all_bins: true, legacy_key: "keep me" });
+  assert.deepStrictEqual(body.args, ["--x"]);
+  assert.strictEqual(body.replyable, true, "the stored default stays");
+});
+
+// --- a row that was added and left blank is no change (R34) ----------------------------------------------------------------------
+
+const leaveAsk = (t) => t.calls.filter((c) => c.startsWith("confirm:")).length;
+
+test("a blank added env row does not make the block dirty", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops", { env: { KEEP: "1" } });
+  clickBtn(advOf(t), "+ Add variable");
+  clickBtn(advOf(t), "+ Add secret");
+  assert.strictEqual(envRowsOf(t).length, 3, "the rows are there to type in");
+  assert.ok(!unsaved(t), "no Unsaved changes in the header");
+  assert.deepStrictEqual(texts(advOf(t), "pfv-st-dirty"), [], "nor in the footer");
+  assert.strictEqual(byText(advOf(t), "button", "Cancel").length, 1);
+  assert.strictEqual(t.run("pfvState").pending, false);
+  // Leaving asks nothing and sends nothing.
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true);
+  assert.strictEqual(leaveAsk(t), 0);
+  assert.strictEqual(t.box.puts.length, 0);
+  // Typing in one is a change; emptying it again is not; a value with no name is a change (it is a mistake the check will say).
+  typeRow(envRowsOf(t)[1], "NEW");
+  assert.ok(unsaved(t));
+  typeRow(envRowsOf(t)[1], "");
+  assert.ok(!unsaved(t));
+  typeRow(envRowsOf(t)[1], "", "v");
+  assert.ok(unsaved(t));
+  typeRow(envRowsOf(t)[1], "", "");
+  assert.ok(!unsaved(t));
+  // A blank row that was removed again is nothing either.
+  rowRm(envRowsOf(t)[2]).click();
+  assert.ok(!unsaved(t));
+  assert.strictEqual(envRowsOf(t).length, 2);
+});
+
+test("a blank added folder or domain row does not make the block dirty", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Folder").click();
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Domain").click();
+  assert.ok(field(t, "folder:1") && field(t, "domain:2"), "both rows are there to type in (after the one folder and two domains it holds)");
+  assert.ok(unsavedNote(t).hidden, "no Unsaved changes");
+  assert.deepStrictEqual(texts(blockOf(t, "reachable"), "pfv-st-dirty"), []);
+  assert.strictEqual(t.run("pfvState").pending, false);
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true);
+  assert.strictEqual(leaveAsk(t), 0);
+  assert.strictEqual(t.box.puts.length, 0);
+  // Typing is a change, emptying it is not.
+  const f = field(t, "folder:1");
+  f.value = "/home/you/x"; f.oninput();
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  f.value = ""; f.oninput();
+  assert.ok(unsavedNote(t).hidden);
+  const d = field(t, "domain:2");
+  d.value = "api.example.net"; d.oninput();
+  assert.strictEqual(unsavedNote(t).hidden, false);
+  d.value = "  "; d.oninput();
+  assert.ok(unsavedNote(t).hidden, "blank is blank");
+  // A GitHub owner row with no owner and no repos is just as empty (a save drops it), even though it already signs in with something.
+  const g = cloudPage();
+  await g.box.pfvShow("aws-ops");
+  clickBtn(blockOf(g, "cloud"), "+ Add access");
+  optBtn(g, "cloud", "Another org or user").click();
+  assert.ok(field(g, "gh:1:owner"), "the owner row is there");
+  assert.ok(unsavedNote(g).hidden);
+  const owner = field(g, "gh:1:owner");
+  owner.value = "culiops"; owner.oninput();
+  assert.strictEqual(unsavedNote(g).hidden, false);
 });

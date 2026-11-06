@@ -39,10 +39,19 @@ const pfaLines = (text) => String(text || "").split("\n").map((s) => s.trim()).f
 // pfaLive: the variable rows that count: not pending removal.
 const pfaLive = (rows) => rows.filter((r) => r.removed !== true);
 
+// pfaBin: the command the profile will have once what is open is saved: the Agent block's pending command when that
+// block is open (a refused save can open Advanced beside it), else the stored one. What Advanced draws and offers
+// follows it, so an option the new command does not take is not offered (the Agent save drops the stored one).
+function pfaBin(c) {
+  const agent = typeof pfvState !== "undefined" ? pfvState.edits.agent : null;
+  const pending = agent && agent.values && typeof agent.values.bin === "string" ? agent.values.bin.trim() : "";
+  return pending !== "" ? pending : typeof c.doc.bin === "string" ? c.doc.bin : "";
+}
+
 // pfaDefs: the options this block draws: every option the daemon defines except the Agent block's (model and
 // effort), for the commands they apply to.
 function pfaDefs(c) {
-  const bin = typeof c.doc.bin === "string" ? c.doc.bin : "";
+  const bin = pfaBin(c);
   return c.defs.filter((d) => d && typeof d.key === "string" && !PFE_AGENT_OPTIONS.includes(d.key) && optApplies(d, bin));
 }
 
@@ -62,7 +71,7 @@ function pfaValues(c) {
 }
 
 // pfaRepliesUsable: replies are claude-only, and the instance can switch them off (/api/meta); the old form's gate.
-const pfaRepliesUsable = (c) => globalThis.repliesEnabled === true && isClaudeBinName(c.doc.bin);
+const pfaRepliesUsable = (c) => globalThis.repliesEnabled === true && isClaudeBinName(pfaBin(c));
 
 // pfaImportsRow: importsmodel.js's rule for the imports row, from the page's own state. Before /api/meta has answered
 // nothing is known and the row stays; once it has, "bundling off" (Ruling R8) and "no box layer" hide it like a host
@@ -84,6 +93,8 @@ function pfaMerge(rec, c) {
   const options = {};
   for (const def of pfaDefs(c)) {
     const val = v.options[def.key];
+    // An option the form was opened without (the Agent block's command changed after) is not this save's to write.
+    if (val === undefined) continue;
     if (def.type === "bool") options[def.key] = val === true ? true : stored[def.key] === undefined ? "" : false;
     else options[def.key] = typeof val === "string" ? val : "";
   }
@@ -282,4 +293,10 @@ function pfaDraw(rec, c) {
   return out;
 }
 
-pfvRegisterEditor("advanced", { values: pfaValues, draw: pfaDraw, merge: pfaMerge, check: pfaCheck, fields: true });
+// A row that was added and is still blank is no change: nothing is saved for it.
+const pfaBlankNew = (r) => r.fresh === true && r.key.trim() === "" && r.value.trim() === "";
+
+pfvRegisterEditor("advanced", {
+  values: pfaValues, draw: pfaDraw, merge: pfaMerge, check: pfaCheck, fields: true,
+  settled: (v) => Object.assign({}, v, { envRows: v.envRows.filter((r) => !pfaBlankNew(r)) }),
+});
