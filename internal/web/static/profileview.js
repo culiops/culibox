@@ -28,12 +28,18 @@ const pfvBinName = (p) => String(p || "").split("/").filter(Boolean).pop() || ""
 const pfvSet = (v) => v === true || (typeof v === "string" && v.trim() !== "");
 const pfvRow = (kind, name, over) => Object.assign({ kind, name, sub: "", scope: "", tag: "", missing: false }, over);
 
-// pfvTierOf: the tier the profile says it runs under. The list view's runtime is
-// the resolved one; the stored profile's own is the fallback. Not the effective
-// tier: without a box layer a boxed profile is still a boxed profile, it just
-// cannot start (that is what the Runs in block says).
+// pfvTierOf: the tier the profile runs under, as the page shows it and as every save writes it. The stored
+// profile's own runtime when it names "box" or "host" (the document the PUT is checked against by revision);
+// only a profile that stores none takes the resolved tier, the list view's runtime (the instance default, else
+// box). The list row can be stale (a failed list refetch after a save, a refetch that lands before the profile
+// does), and a stale row must neither misdraw the page nor change where the profile runs on a save with no host
+// confirm. Not the effective tier: without a box layer a boxed profile is still a boxed profile, it just cannot
+// start (that is what the Runs in block says).
 function pfvTierOf(view, doc) {
-  return (view.runtime || doc.runtime) === "host" ? "host" : "box";
+  const v = view && typeof view === "object" ? view : {};
+  const d = doc && typeof doc === "object" ? doc : {};
+  if (d.runtime === "box" || d.runtime === "host") return d.runtime;
+  return v.runtime === "host" ? "host" : "box";
 }
 
 // pfvField: a value the list view and the stored profile both carry. The view

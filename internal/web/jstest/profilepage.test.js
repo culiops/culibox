@@ -578,7 +578,11 @@ test("a credential that /api/meta lists later stops being missing (pfvMetaChange
 });
 
 test("a refetched profile list redraws the page from the fresh row", async () => {
+  // A profile that stores no runtime takes the resolved tier, the row's: when the list says the instance default changed, the page follows.
+  // (One that stores a runtime keeps it, whatever the row says: pfvTierOf.)
   const t = page();
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"]);
+  delete t.box.docs["aws-ops"].runtime;
   await t.box.pfvShow("aws-ops");
   assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
   // The list is fetched again (app.js loadProfiles -> renderProfileList -> pfvRenderNav) and the row changed.
@@ -2697,6 +2701,92 @@ test("a stored tier is sent back as it is by every block's save", async () => {
   await saveBlock(h, "agent");
   assert.strictEqual(h.box.puts[0].runtime, "host");
   assert.strictEqual(h.box.asked.length, 0);
+});
+
+// The tier the page shows, and so the tier every save writes, is the STORED profile's when it names one; only a profile that
+// stores none takes the resolved tier (the list row: the instance's default). The list row can be stale (a failed list refetch
+// after a save, a refetch that lands before the profile does), and a stale row must never write a tier: that would change
+// where the profile runs with no host confirm (spec 9, C3; R40).
+const rowTier = (name, runtime) => PROFILES.map((p) => (p.name === name ? Object.assign({}, p, { runtime }) : p));
+
+test("a list row that says host over a stored box: the page reads box, and a Cloud or Agent save writes box with no confirm", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ runtime: "host" }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["In a box"]);
+  assert.ok(blockOf(t, "cloud"), "a box profile has its Cloud block");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "token", name: "gh-pat" }), true);
+  await saveBlock(t, "cloud");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  assert.strictEqual(t.box.asked.length, 0);
+  assert.strictEqual(t.box.docs["aws-ops"].runtime, "box", "the profile stays where it ran");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await saveBlock(t, "agent");
+  assert.strictEqual(t.box.puts[1].runtime, "box");
+  assert.strictEqual(t.box.asked.length, 0);
+  assert.strictEqual(t.box.docs["aws-ops"].runtime, "box");
+});
+
+test("a list row that says box over a stored host: the page reads On this machine, and a save writes host", async () => {
+  const t = page({ profiles: rowTier("runbook-host", "box") });
+  await t.box.pfvShow("runbook-host");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
+  assert.ok(!blockOf(t, "cloud"), "a host profile has no Cloud block");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await saveBlock(t, "agent");
+  assert.strictEqual(t.box.puts[0].runtime, "host", "not turned into a box profile by a stale row");
+  assert.strictEqual(t.box.asked.length, 0);
+  assert.strictEqual(t.box.docs["runbook-host"].runtime, "host");
+});
+
+test("a profile that stores no runtime takes the resolved tier, from the list row", async () => {
+  for (const [row, want] of [["host", "host"], ["box", "box"]]) {
+    const t = page({ profiles: rowTier("infra-terraform", row) });
+    t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+    await t.box.pfvShow("infra-terraform");
+    assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), [want]);
+    clickBtn(blockOf(t, "agent"), "Edit");
+    pickModel(t, "claude-sonnet-5");
+    await saveBlock(t, "agent");
+    assert.strictEqual(t.box.puts[0].runtime, want, "row " + row);
+    assert.strictEqual(t.box.asked.length, 0);
+  }
+});
+
+test("after a host switch whose list refetch gave back the old row, the page reads host and the next save keeps host", async () => {
+  // The harness's loadProfiles leaves the list as it was: the row still says box after the switch (review B M11).
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  await clickBtn(blockOf(t, "runs"), "Save as host…");
+  await settle();
+  assert.strictEqual(t.box.puts[0].runtime, "host");
+  assert.strictEqual(t.box.asked.length, 1, "the switch asked once");
+  assert.strictEqual(t.box.profiles.find((p) => p.name === "aws-ops").runtime, "box", "the list row is stale");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"], "the page reads the stored tier");
+  assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
+  assert.ok(!blockOf(t, "cloud"), "no Cloud block on a host profile");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-sonnet-5");
+  await saveBlock(t, "agent");
+  assert.strictEqual(t.box.puts[1].runtime, "host");
+  assert.strictEqual(t.box.asked.length, 1, "no second question, and no quiet change back to box");
+  assert.strictEqual(t.box.docs["aws-ops"].runtime, "host");
+});
+
+test("Duplicate offers the stored tier of the source, not a stale row's", async () => {
+  const t = cloudPage({ profiles: [PROFILES[0], cloudView({ runtime: "host" }), PROFILES[2], PROFILES[3]] });
+  await t.box.pfvShow("aws-ops");
+  await dupFromMenu(t);
+  assert.strictEqual(field(t, "tier-box").checked, true);
+  assert.strictEqual(field(t, "tier-host").checked, false);
 });
 
 // The old-style AWS setting: the server's convert, today's confirm and write acknowledgement.

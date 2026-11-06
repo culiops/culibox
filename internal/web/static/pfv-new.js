@@ -53,7 +53,7 @@ function pfnValues(c) {
   }
   const d = src.doc;
   const copy = pfnIsCopy(d);
-  const tier = !copy && (src.view.runtime || d.runtime) === "host" ? "host" : "box";
+  const tier = !copy && pfvTierOf(src.view, d) === "host" ? "host" : "box";
   const folder = copy ? d.clone_of : typeof d.default_cwd === "string" ? d.default_cwd : "";
   return { name: "", tier, folder, dflt: tier };
 }

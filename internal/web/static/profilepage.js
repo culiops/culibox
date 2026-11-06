@@ -777,7 +777,7 @@ function pfvEditCtx() {
   return {
     doc,
     view,
-    tier: (view.runtime || doc.runtime) === "host" ? "host" : "box",
+    tier: pfvTierOf(view, doc),
     // /api/meta says "" when there is no box layer; before it has answered boxes are assumed (as the read view does).
     boxAvailable: inp.boxRuntime !== "",
     reason: inp.boxUnavailableReason,

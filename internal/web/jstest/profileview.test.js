@@ -319,6 +319,23 @@ test("missing credential row carries missing:true", () => {
   assert.ok(byId(pfvReadView(awsIn({ meta: null })), "cloud").rows.every((r) => r.missing === false));
 });
 
+test("the tier is the stored profile's when it names one; the list row only when it names none", () => {
+  const tier = (view, doc, over) => pfvReadView(awsIn(Object.assign({ view, doc }, over))).header.tier;
+  const boxDoc = { ...awsOpsDoc, runtime: "box" }, hostDoc2 = { ...awsOpsDoc, runtime: "host" };
+  const noTier = { ...awsOpsDoc }; delete noTier.runtime;
+  // A stale row never beats the stored tier, either way round.
+  assert.strictEqual(tier({ ...awsOpsView, runtime: "host" }, boxDoc), "box");
+  assert.strictEqual(tier({ ...awsOpsView, runtime: "box" }, hostDoc2), "host");
+  assert.deepStrictEqual(byId(pfvReadView(awsIn({ view: { ...awsOpsView, runtime: "host" }, doc: boxDoc })), "runs").lines[0], "In a box");
+  assert.deepStrictEqual(ids(pfvReadView(awsIn({ view: { ...awsOpsView, runtime: "host" }, doc: boxDoc }))), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
+  // A profile that stores none takes the resolved tier.
+  assert.strictEqual(tier({ ...awsOpsView, runtime: "host" }, noTier), "host");
+  assert.strictEqual(tier({ ...awsOpsView, runtime: "box" }, noTier), "box");
+  assert.strictEqual(tier({ ...awsOpsView, runtime: undefined }, noTier), "box", "nothing says host: box");
+  // Anything but box or host stored is not a tier.
+  assert.strictEqual(tier({ ...awsOpsView, runtime: "host" }, { ...awsOpsDoc, runtime: "" }), "host");
+});
+
 test("a GitHub owner whose App or token is gone from Credentials reads Not found in Credentials", () => {
   // The list view names owners and repositories only; the stored profile says which login each owner uses.
   const doc = (owners) => ({ ...awsOpsDoc, github: { owners, permissions: { contents: "read" } } });
