@@ -891,3 +891,72 @@ test("a modal that is resized is never measured", () => {
   assert.strictEqual(p.paints, 0);
   assert.strictEqual(p.needW(), 0);
 });
+
+// A repaint held for the unlock field means the NEW data is waiting; credNeedW was
+// already forgotten for it. A resize meanwhile must not measure the OLD table on screen
+// and hand its need to the new view.
+test("a resize while a repaint is held does not learn the old table's width for the new data", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  p.box.storeUnlockFocused = () => true; // new data arrives while the unlock field has focus: held
+  p.box.renderCredentials({ ...liveView });
+  p.paints = 0;
+  p.resizeTo(720); // the old table needs 725: it would overflow here
+  assert.strictEqual(p.needW(), 0, "nothing learned from the table that is about to be replaced");
+  assert.strictEqual(p.paints, 0, "and nothing painted while the field holds");
+  p.need = () => 700; // the new data's table is narrower
+  p.box.storeUnlockFocused = () => false;
+  p.box.credFocusLeft(); // the hold ends: the new view is painted and measured
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "the new data fits at 720: tables");
+  assert.strictEqual(p.needW(), 0);
+});
+
+// font-display: swap (desktop.css): the first table may be drawn in the fallback font and
+// Inter then widens it, which no resize reports. The fonts promise asks for one more look.
+function fontsPage(width, need) {
+  const p = fitPage(width, need);
+  const thens = [];
+  p.doc.fonts = { ready: { then: (f) => { thens.push(f); } } };
+  p.fontsReady = () => thens.slice();
+  return p;
+}
+
+test("the web font loading re-checks a table that was drawn before it (wired once)", () => {
+  const p = fontsPage(750, 725);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials(liveView);
+  p.box.renderCredentials({ ...liveView });
+  assert.strictEqual(p.fontsReady().length, 1, "asked once, however often it paints");
+  assert.ok(p.shape().tables > 0, "fits in the fallback font");
+  p.need = () => 760; // Inter is wider
+  p.paints = 0;
+  p.fontsReady()[0]();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "the table no longer fits: cards");
+  assert.strictEqual(p.needW(), 750 + 10 + 2);
+  assert.strictEqual(p.paints, 1);
+});
+
+test("the web font loading repaints nothing when the table still fits", () => {
+  const p = fontsPage(750, 725);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.fontsReady()[0]();
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0);
+});
+
+test("no document.fonts (an old browser, the fake DOM): painting still works", () => {
+  const p = fitPage(750, 725);
+  assert.strictEqual(p.doc.fonts, undefined);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0);
+});
+
+test("painted while hidden (0 wide, unmeasured), then shown narrower than the table needs: cards", () => {
+  const p = fitPage(0, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.needW() === 0, "hidden: tables, nothing learned");
+  p.resizeTo(720);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "shown at 720: the table does not fit");
+  assert.strictEqual(p.needW(), 727);
+});

@@ -838,6 +838,7 @@ let credPaintedTables = false;
 // cards cannot take turns at one width; new data forgets it (renderCredentials).
 let credNeedW = 0;
 let credWidthWatched = false;
+let credFontsWatched = false;
 // The Add / Edit AWS view while it is open, else null. See awsOpenAdd.
 let awsFlow = null;
 
@@ -1330,10 +1331,11 @@ function credPaint(host, view) {
   host.replaceChildren(...nodes);
 }
 
-// credGrowNeed: after a table paint, raise credNeedW to what the tables were measured
-// to need, if any section sticks out of its box. True when it was raised (the caller
-// repaints, now in cards). The 2px is slack for rounding. A body that reads 0 wide
-// (the tab is hidden) has nothing to measure.
+// credGrowNeed: after a table paint, measure the tables and, if any section sticks
+// out of its box, make sure credNeedW covers what they need (it only ever grows).
+// True when a section sticks out, i.e. the tables do not fit and the caller repaints,
+// now in cards; false when they fit. The 2px is slack for rounding. A body that reads
+// 0 wide (the tab is hidden) has nothing to measure.
 function credGrowNeed(host) {
   if (!(host.clientWidth > 0)) return false;
   const over = credTableOverflow(host);
@@ -1407,7 +1409,12 @@ function credRepaintForWidth() {
   // flip. The observer entry is checked for this; the frame comes later, and the tab
   // may have been hidden in between.
   if (!host || !credView || !(host.clientWidth > 0)) return;
-  const grew = credPaintedTables && credGrowNeed(host);
+  // Not while a repaint is held (the unlock field has focus): if the hold is for new
+  // data, the table on screen is about to be replaced and credNeedW was forgotten for
+  // the new view, so measuring the old table would hand its width to data it does not
+  // describe. Only the measure waits: the mode check below still runs, and releasing
+  // the hold paints and measures anyway.
+  const grew = credPaintedTables && !credRepaintHeld && credGrowNeed(host);
   if (!grew && credTableMode() === credPaintedTables) return;
   if (credWidthHold(host)) return;
   renderCredentials(credView);
@@ -1431,6 +1438,7 @@ function credRepaintForWidth() {
 // raises "ResizeObserver loop completed with undelivered notifications" on the
 // window (measured, Chromium). Frames coalesce: a drag asks once per frame at most.
 function credWatchWidth(host) {
+  credWatchFonts();
   if (credWidthWatched || typeof ResizeObserver !== "function") return;
   credWidthWatched = true;
   let queued = false;
@@ -1444,6 +1452,20 @@ function credWatchWidth(host) {
       credRepaintForWidth();
     });
   }).observe(host);
+}
+
+// credWatchFonts: once, look at a table again when the web font has loaded. The font
+// is font-display: swap (desktop.css), so a table first drawn in the fallback font can
+// be widened by Inter afterwards, which no resize reports and which does not change
+// the body's height either. credRepaintForWidth measures a table it keeps, and
+// changes nothing if it still fits. A browser without document.fonts has nothing to
+// wait for.
+function credWatchFonts() {
+  if (credFontsWatched) return;
+  const ready = typeof document !== "undefined" && document.fonts ? document.fonts.ready : null;
+  if (!ready || typeof ready.then !== "function") return;
+  credFontsWatched = true;
+  ready.then(() => credRepaintForWidth());
 }
 
 function setCredErr(msg) {
