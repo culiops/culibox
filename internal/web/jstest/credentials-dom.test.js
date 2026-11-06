@@ -821,3 +821,73 @@ test("a modal draws cards without measuring anything", () => {
   assert.strictEqual(p.needW(), 0);
   assert.strictEqual(p.paints, 1);
 });
+
+// A window dragged narrower after a table was drawn: the body stays above the 700 floor,
+// so the rule alone still says "tables", yet the content no longer fits. Measured in a
+// browser (2026-11-06): opened at 1440 and dragged to 1225, the AWS section stuck out 23px
+// with Delete 6px past it. The frame that follows a resize measures a table it keeps.
+
+test("a live drag below what a drawn table needs (but above the floor) turns it into cards", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0 && p.needW() === 0, "fits at 900: a table, nothing learned");
+  p.paints = 0;
+  p.resizeTo(720);
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "720 is above the floor but under the 725 the table needs");
+  assert.strictEqual(p.needW(), 720 + 5 + 2);
+  assert.strictEqual(p.paints, 1, "cards painted straight away, the table is not drawn again to be measured");
+  p.resizeTo(726);
+  assert.strictEqual(p.shape().tables, 0, "726 is under the learned 727");
+  assert.strictEqual(p.paints, 1, "no repaint inside the band");
+  p.resizeTo(727);
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "tables again once the body has the room");
+  assert.strictEqual(p.paints, 2);
+});
+
+test("a live drag that still leaves the table room repaints nothing and learns nothing", () => {
+  const p = fitPage(900, 725);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.paints = 0;
+  for (const w of [880, 800, 730, 725, 1000]) p.resizeTo(w);
+  assert.strictEqual(p.paints, 0);
+  assert.ok(sameNodes(body.children, kept), "the same nodes");
+  assert.strictEqual(p.needW(), 0);
+});
+
+test("a table that no longer fits while a Delete confirmation is open is replaced after Cancel, not before", () => {
+  const p = fitPage(900, 725);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  const kept = body.children.slice();
+  p.paints = 0;
+  p.resizeTo(720);
+  assert.ok(sameNodes(body.children, kept), "the question is not wiped");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  assert.strictEqual(p.paints, 0);
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "cards once the question is answered");
+  assert.strictEqual(p.needW(), 727);
+});
+
+test("a hidden tab is not measured on a resize either", () => {
+  const p = fitPage(900, 725);
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(0, 500); // the body reads 0 wide when the frame runs
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0, "an overflow against a 0 wide body means nothing");
+  assert.ok(p.shape().tables > 0);
+});
+
+test("a modal that is resized is never measured", () => {
+  const p = fitPage(500, (w) => w + 50, { asPage: false });
+  p.box.renderCredentials(liveView);
+  p.paints = 0;
+  p.resizeTo(2000);
+  p.resizeTo(300);
+  assert.strictEqual(p.paints, 0);
+  assert.strictEqual(p.needW(), 0);
+});

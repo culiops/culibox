@@ -1396,14 +1396,19 @@ function credWidthHold(host) {
 // credRepaintForWidth: repaint from the cached view when the body is in a different
 // mode (tables or cards) than its last paint, unless something is held. A held
 // repaint is asked for again where the hold ends (credDismissConfirm, the body's
-// focusout), and a later resize asks too.
+// focusout), and a later resize asks too. A table that is on screen is measured
+// first: a window dragged narrower than its content needs, but not below the floor,
+// leaves the rule saying "tables" while the section clips (measured: opened at 1440
+// and dragged to 1225, the AWS table stuck out 23px and Delete 6px). Raising the
+// need makes the mode differ from the paint, so the cards are drawn below.
 function credRepaintForWidth() {
   const host = document.getElementById("creds-body");
   // A hidden tab reads 0 wide, which credTablesAt takes for "tables": it must not
   // flip. The observer entry is checked for this; the frame comes later, and the tab
   // may have been hidden in between.
   if (!host || !credView || !(host.clientWidth > 0)) return;
-  if (credTableMode() === credPaintedTables) return;
+  const grew = credPaintedTables && credGrowNeed(host);
+  if (!grew && credTableMode() === credPaintedTables) return;
   if (credWidthHold(host)) return;
   renderCredentials(credView);
 }
@@ -1413,11 +1418,13 @@ function credRepaintForWidth() {
 // (credTableMode), so a page opened wide and then narrowed kept its tables and
 // pushed Edit and Delete past the window. Watching the body, not the window,
 // because the sidebar is dragged too. Nothing happens per pixel: only a change of
-// mode repaints, and never a refetch. renderCredentials already declines while the
-// Add / Edit view is open and while the unlock field has focus, and the next paint
-// (closing the view, leaving the field) draws the right mode. credRepaintForWidth
-// also waits while a Delete confirmation is open or a passphrase is typed (#123). A
-// hidden tab reports 0 wide: skipped, it must not flip anything.
+// mode repaints, and never a refetch; a table on screen is measured on the frame
+// (credRepaintForWidth), which reads sizes and changes nothing unless it overflows.
+// renderCredentials already declines while the Add / Edit view is open and while the
+// unlock field has focus, and the next paint (closing the view, leaving the field)
+// draws the right mode. credRepaintForWidth also waits while a Delete confirmation
+// is open or a passphrase is typed (#123). A hidden tab reports 0 wide: skipped, it
+// must not flip anything.
 //
 // The repaint runs on the next frame, not inside the observer callback: a repaint
 // changes #creds-body's height, which the observer is also watching, and that
