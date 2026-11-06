@@ -277,7 +277,7 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 
 # --- Claude Code ---
 # @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
-# at (measured 2026-10-19: stable 2.1.292, latest 2.1.303). The `stable` tag is the
+# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
 # deliberate exception to the two-week rule: Anthropic's own soak period stands in
 # for ours, and it is a deliberate downgrade from `latest`. Self-update is off
 # (DISABLE_UPDATES above), so the image is the only way this version moves.
@@ -286,7 +286,7 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # never lands in a layer.
 # To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
 # CLAUDE_CODE_VERSION to `stable`, rebuild.
-ARG CLAUDE_CODE_VERSION=2.1.292
+ARG CLAUDE_CODE_VERSION=2.1.311
 RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
