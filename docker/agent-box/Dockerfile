@@ -189,33 +189,6 @@ ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH
 COPY --from=abduco-build /out/abduco /usr/local/bin/abduco
 RUN abduco -v 2>&1 | grep -q 'abduco-0.6'
 
-# --- codebase-memory-mcp ---
-# v0.10.8, pinned by version AND per-arch SHA256 of the release's *-portable build:
-#   https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-amd64-portable.tar.gz
-#   https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-arm64-portable.tar.gz
-# Why portable: the release's plain linux build is dynamically linked and needs
-# GLIBC_2.38, but bookworm ships 2.36. The portable build is statically linked,
-# so it runs here; the build asserts that. The host's `codebase-memory-mcp
-# --version` is the source of truth for which version to pin.
-# To bump: take the sums from the release's checksums.txt, cross-checked against
-# the GitHub asset digests, then change CBM_VERSION.
-ARG CBM_VERSION=0.10.8
-ARG CBM_SHA256_AMD64=6eef49652bc0c7820f43114125044d40bf7f4d97c11b2592f6b0f6a307702325
-ARG CBM_SHA256_ARM64=5697d986d9716c913163b4bff7b3a294287f3b843e993bc1ff71e78dcdc21781
-RUN set -eu; \
-    case "$(dpkg --print-architecture)" in \
-      amd64) a=amd64; sum="$CBM_SHA256_AMD64" ;; \
-      arm64) a=arm64; sum="$CBM_SHA256_ARM64" ;; \
-      *) echo "unsupported arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/DeusData/codebase-memory-mcp/releases/download/v${CBM_VERSION}/codebase-memory-mcp-linux-${a}-portable.tar.gz" -o /tmp/cbm.tar.gz; \
-    echo "${sum}  /tmp/cbm.tar.gz" | sha256sum -c -; \
-    mkdir /tmp/cbm; tar -C /tmp/cbm -xzf /tmp/cbm.tar.gz; \
-    install -m 0755 /tmp/cbm/codebase-memory-mcp /usr/local/bin/codebase-memory-mcp; \
-    rm -rf /tmp/cbm /tmp/cbm.tar.gz; \
-    ldd /usr/local/bin/codebase-memory-mcp 2>&1 | grep -q 'not a dynamic executable'; \
-    codebase-memory-mcp --version | grep -q "${CBM_VERSION}"
-
 # --- Playwright MCP + Chromium ---
 # Debian's chromium (apt-signed; security fixes arrive with every rebuild, and
 # there is no unhashed CDN download; the version moves with the base image's apt
@@ -248,13 +221,15 @@ RUN groupadd -g "$GID" agent \
     && chown -R "$UID:$GID" /home/agent
 
 # MCP servers the image itself provides. agent-box merges this file into the
-# session's MCP bundle (it is read by a probe run with --entrypoint sh). No
-# "env": the default cache $HOME/.cache/codebase-memory-mcp is already in the
-# box home.
+# session's MCP bundle (it is read by a probe run with --entrypoint sh).
+# codebase-memory-mcp is not shipped (removed 2026-11-06: 4 of 209 box sessions
+# since 2026-10-23 called it). A box runs only the MCP servers whose command is in
+# this image (the bundle probe drops the rest), so a user's own entry for it works
+# in host-tier sessions, not in a box.
 # playwright writes its output to /tmp/playwright-mcp (dies with the box, never
 # in a clone's working tree) and starts every browser with an in-memory profile
 # (--isolated), so no login persists in the box home.
-RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]},"playwright":{"type":"stdio","command":"/usr/local/bin/playwright-mcp","args":["--headless","--isolated","--output-dir","/tmp/playwright-mcp","--browser","chromium","--executable-path","/usr/bin/chromium"]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json && jq -e '.mcpServers["playwright"].command' /etc/agent-box/mcp.json
+RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"playwright":{"type":"stdio","command":"/usr/local/bin/playwright-mcp","args":["--headless","--isolated","--output-dir","/tmp/playwright-mcp","--browser","chromium","--executable-path","/usr/bin/chromium"]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["playwright"].command' /etc/agent-box/mcp.json
 
 # Entrypoint: at container start, create $GOTMPDIR, link the tflint default config
 # and plugin into the home, and seed and re-arm the tfenv state in the home (see
@@ -274,20 +249,6 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # downloaded artefacts AND compared with the upstream checksums file and/or the
 # GitHub asset digest. To bump: change <TOOL>_VERSION, download both arch
 # artefacts, recompute both sums, compare them with the same sources.
-
-# --- Claude Code ---
-# @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
-# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
-# deliberate exception to the two-week rule: Anthropic's own soak period stands in
-# for ours, and it is a deliberate downgrade from `latest`. Self-update is off
-# (DISABLE_UPDATES above), so the image is the only way this version moves.
-# RESIDUAL, accepted (same class as @playwright/mcp): the package's dependency
-# tree resolves at build time. The npm cache is removed in the same RUN so it
-# never lands in a layer.
-# To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
-# CLAUDE_CODE_VERSION to `stable`, rebuild.
-ARG CLAUDE_CODE_VERSION=2.1.311
-RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
 # make, dnsutils (dig) and netcat-openbsd (nc) are absent from the slim base;
@@ -1024,6 +985,23 @@ RUN printf '%s\n' '#!/bin/sh' \
       'exit 127' > /usr/local/bin/agent-box-no-network \
     && chmod 0755 /usr/local/bin/agent-box-no-network \
     && for n in ping mtr traceroute tracepath httping; do ln -s agent-box-no-network "/usr/local/bin/$n"; done
+
+# --- Claude Code ---
+# @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
+# at (measured 2026-11-06: stable 2.1.311, latest 2.1.318). The `stable` tag is the
+# deliberate exception to the two-week rule: Anthropic's own soak period stands in
+# for ours, and it is a deliberate downgrade from `latest`. Self-update is off
+# (DISABLE_UPDATES above), so the image is the only way this version moves.
+# RESIDUAL, accepted (same class as @playwright/mcp): the package's dependency
+# tree resolves at build time. The npm cache is removed in the same RUN so it
+# never lands in a layer.
+# To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
+# CLAUDE_CODE_VERSION to `stable`, rebuild.
+# Last of the pins on purpose: it is bumped most often (npm stable moves about
+# weekly), and every layer after a changed one is rebuilt and re-pulled. Here a
+# bump costs its own layer only; first in the tail it rebuilt ~1.2 GB.
+ARG CLAUDE_CODE_VERSION=2.1.311
+RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # Nothing but the base image's two dotfiles may be left in /root: every RUN above
 # cleans after itself in its own layer (a later layer cannot remove an earlier

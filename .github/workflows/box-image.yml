@@ -50,6 +50,9 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/culiops/agent-box
+  # The layer cache, a package of its own so cache manifests never show up as
+  # versions of the public image (see the build step).
+  CACHE: ghcr.io/culiops/agent-box-cache
 
 jobs:
   build:
@@ -98,9 +101,18 @@ jobs:
         run: |
           : > docker/agent-box/extra-ca.pem
 
-      # The image is about 4 GB uncompressed. mode=max for two arches can pass
-      # GitHub's 10 GB per-repo cache, which then evicts the oldest entries:
-      # accepted, a cold build is only slower (about 10 minutes).
+      # Layer cache in the registry, one tag per arch in its own package
+      # ($CACHE:amd64/arm64, never pinned or run). Not GitHub's Actions cache: it drops an entry unused
+      # for 7 days, and a cold build is not only slower, it produces new bytes for
+      # every layer, so every host re-pulls the whole ~4 GB image. Measured: the
+      # 2026-11-02 run came 8 days after the previous one and hit 0 cached steps.
+      # The cache holds only what the image's own layers and builder stages hold
+      # (public sources; no secret ever reaches a build step, see above).
+      # ignore-error: a cache that cannot be written never blocks publishing.
+      # RESIDUAL, accepted: unlike the Actions cache, a registry cache has no
+      # branch isolation, so anyone with write access to $CACHE could plant an
+      # entry that skips a RUN (and its sha256sum -c) in the next main build. The
+      # same access already lets them push a bad image, so nothing new is exposed.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -113,8 +125,8 @@ jobs:
           provenance: false
           sbom: false
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+          cache-from: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.CACHE }}:${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Record the digest
         env:
