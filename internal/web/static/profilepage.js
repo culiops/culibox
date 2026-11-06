@@ -20,6 +20,11 @@
 const pfvState = { name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null };
 // The newest pfvShow wins: a slower answer for a profile you have left is dropped.
 let pfvSeq = 0;
+// What the page is drawn from, as a string (pfvKey) and what the nav lists (pfvNavKey):
+// a refetch that would draw the same thing is skipped, so it cannot rebuild the page,
+// drop focus or close the open menu.
+let pfvDrawn = "";
+let pfvNavKey = "";
 // The open header menu: {wrap, btn, pop}, or null.
 let pfvMenu = null;
 
@@ -29,7 +34,7 @@ const PFV_EDIT_LABEL = {
   reachable: "Edit also reachable", network: "Edit network", advanced: "Edit advanced settings",
 };
 // The Advanced rows whose value is machine text (the rest are words).
-const PFV_MONO_KINDS = ["From the original", "Arguments", "Environment", "Secrets", "Starting environment"];
+const PFV_MONO_KINDS = ["Arguments", "Environment", "Secrets", "Starting environment"];
 // Machine text inside a sentence: a path, a hostname, an account id, a region, an
 // environment variable name, the box/<branch> pattern, the files a copy shares and
 // the repos of a GitHub row. Mono is for machine text only (BRIEF); words stay Inter.
@@ -133,32 +138,51 @@ function pfvOnPage() {
 // --- the nav list -------------------------------------------------------------
 
 // pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, the
-// muted tier word, a lock for one you cannot edit, then "+ New profile".
+// muted tier word, a lock for one you cannot edit, then "+ New profile". The list is
+// rebuilt only when what it shows changed (every loadProfiles hands back new objects);
+// otherwise only the current row's aria-current moves, so a refetch or a click never
+// replaces the button that has focus.
 function pfvRenderNav() {
   const nav = document.getElementById("pf-navlist");
   if (!nav || !pfvOnPage()) return; // a phone's modal keeps its own list
-  const kids = (typeof profiles === "object" && Array.isArray(profiles) ? profiles : []).map((p) => {
-    const b = pfvMk("button", "pfv-ni");
-    b.type = "button";
-    if (p.name === pfvState.name) b.setAttribute("aria-current", "true");
-    const tier = pfvMk("span", "pfv-ni-tier");
-    if (!p.editable) {
-      b.setAttribute("title", "Defined in config.json (read-only)");
-      tier.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
+  const list = typeof profiles === "object" && Array.isArray(profiles) ? profiles : [];
+  const key = JSON.stringify(list.map((p) => [p.name, p.runtime === "host" ? "host" : "box", !p.editable]));
+  if (key !== pfvNavKey || nav.children.length === 0) {
+    const at = document.activeElement;
+    const had = at && nav.contains(at) ? at.dataset.pfvName : undefined; // a profile's name, "" for the add row
+    const kids = list.map((p) => {
+      const b = pfvMk("button", "pfv-ni");
+      b.type = "button";
+      b.dataset.pfvName = p.name;
+      const tier = pfvMk("span", "pfv-ni-tier");
+      if (!p.editable) {
+        b.setAttribute("title", "Defined in config.json (read-only)");
+        tier.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
+      }
+      tier.append(p.runtime === "host" ? "host" : "box");
+      b.append(pfvMk("span", "pfv-ni-name", p.name), tier);
+      b.onclick = () => pfvShow(p.name);
+      return b;
+    });
+    const add = pfvMk("button", "pfv-ni pfv-ni-add", "+ New profile");
+    add.type = "button";
+    add.dataset.pfvName = "";
+    nav.replaceChildren(...kids, add);
+    pfvNavKey = key;
+    if (had !== undefined) {
+      const again = Array.from(nav.children).find((b) => b.dataset.pfvName === had);
+      if (again) again.focus();
     }
-    tier.append(p.runtime === "host" ? "host" : "box");
-    b.append(pfvMk("span", "pfv-ni-name", p.name), tier);
-    b.onclick = () => pfvShow(p.name);
-    return b;
-  });
-  const add = pfvMk("button", "pfv-ni pfv-ni-add", "+ New profile");
-  add.type = "button";
-  nav.replaceChildren(...kids, add);
-  // The list was refetched: the page reads the fresh row.
-  const v = pfvState.name && pfvState.doc ? profiles.find((x) => x.name === pfvState.name) : null;
-  if (v && v !== pfvState.view && !pfvState.openBlock) {
+  }
+  for (const b of Array.from(nav.children)) {
+    if (b.dataset.pfvName !== "" && b.dataset.pfvName === pfvState.name) b.setAttribute("aria-current", "true");
+    else b.removeAttribute("aria-current");
+  }
+  // The list was refetched: the page reads the fresh row, and redraws only if it differs.
+  const v = pfvState.name && pfvState.doc ? list.find((x) => x.name === pfvState.name) : null;
+  if (v) {
     pfvState.view = v;
-    pfvRender();
+    pfvRefresh();
   }
 }
 
@@ -263,7 +287,8 @@ function pfvDrawRow(r, known) {
   row.append(pfvMk("span", "pfv-k", r.kind));
   const id = pfvMk("div", "pfv-id");
   const nm = pfvMk("p", "pfv-nm");
-  if (PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
+  // The file shared from a private copy's original is a path; the CLAUDE.md imports row, also Files, is words.
+  if (r.original === true || PFV_MONO_KINDS.includes(r.kind)) nm.append(pfvMk("span", "pfv-mono", r.name));
   else nm.append(...pfvMonoNodes(r.name, known));
   if (r.tag) nm.append(pfvMk("span", "pfv-tag", r.tag));
   id.append(nm);
@@ -335,7 +360,7 @@ function pfvDrawAct(b) {
 // is nothing to unfold, so the label is not a button.
 function pfvDrawAdvanced(b, known) {
   const open = b.count > 0 && (pfvState.advOpen === null ? b.open === true : pfvState.advOpen);
-  const sec = pfvMk("section", "pfv-block pfv-adv" + (open ? " pfv-open" : ""));
+  const sec = pfvMk("section", "pfv-block" + (open ? " pfv-open" : ""));
   sec.dataset.block = b.id;
   const label = pfvMk("h4", "pfv-label pfv-adv-label");
   const status = pfvMk("span", "pfv-muted", "· " + b.status);
@@ -391,6 +416,7 @@ function pfvRender() {
   if (!root) return;
   if (!pfvState.name || !pfvState.view || !pfvState.doc) {
     root.replaceChildren(...pfvDrawErrors());
+    pfvDrawn = "";
     return;
   }
   const rv = pfvReadView(pfvInputs());
@@ -405,6 +431,20 @@ function pfvRender() {
   kids.push(heading, sheet, tail);
   root.replaceChildren(...kids);
   pfvMenu = null;
+  pfvDrawn = pfvKey();
+}
+
+// pfvKey: everything the page is drawn from (the model's inputs and the messages).
+function pfvKey() {
+  return JSON.stringify([pfvInputs(), pfvState.errors]);
+}
+
+// pfvRefresh: redraw only when what the page is drawn from changed, and never while a
+// block is being edited. The list, /api/meta and /api/credentials all refetch often
+// and mostly answer the same thing.
+function pfvRefresh() {
+  if (!pfvState.doc || pfvState.openBlock) return;
+  if (pfvKey() !== pfvDrawn) pfvRender();
 }
 
 function pfvDrawErrors() {
@@ -418,15 +458,21 @@ function pfvDrawErrors() {
 // --- showing and deleting ---------------------------------------------------------
 
 // pfvShow: the page for one profile (the one on screen, else the first you own,
-// else the first), from the list's row and the stored profile. The previous
-// profile stays drawn until the new one's answer lands.
+// else the first), from the list's row and the stored profile. Switching profile
+// blanks the pane until the new one's answer lands (it never shows the wrong
+// profile under a highlighted nav row); showing the one on screen again keeps it
+// drawn and redraws only if the answer differs. While a block of that profile is
+// open it does nothing at all: the tab being selected again must not redraw or
+// refetch from under an edit.
 async function pfvShow(name) {
   if (!pfvOnPage()) return;
   if (typeof profilesLoaded === "boolean" && !profilesLoaded) await loadProfiles(false);
   const has = (n) => profiles.some((p) => p.name === n);
   let pick = name;
   if (!pick || !has(pick)) pick = has(pfvState.name) ? pfvState.name : (profiles.find((p) => p.editable) || profiles[0] || {}).name || "";
+  if (pick !== "" && pick === pfvState.name && pfvState.openBlock) return;
   const seq = ++pfvSeq;
+  const same = pick !== "" && pick === pfvState.name && pfvState.doc !== null;
   if (pick !== pfvState.name) {
     pfvState.doc = null;
     pfvState.openBlock = "";
@@ -436,7 +482,6 @@ async function pfvShow(name) {
   }
   pfvState.name = pick;
   pfvState.view = pick ? profiles.find((p) => p.name === pick) : null;
-  pfvMenu = null;
   pfvRenderNav();
   if (!pick) { pfvState.doc = null; pfvRender(); return; }
   if (!pfvState.doc) pfvRender();
@@ -447,13 +492,17 @@ async function pfvShow(name) {
     return;
   }
   if (seq !== pfvSeq) return;
+  if (same && pfvState.openBlock) return; // a block was opened while this was out
   pfvState.doc = doc;
   pfvState.errors = [];
-  pfvRender();
+  if (same) pfvRefresh();
+  else pfvRender();
 }
 
 // pfvDelete: confirm in red, delete, then show the next profile in list order (the
-// one before it when it was last). The deleted profile never stays on screen.
+// one before it when it was last). The deleted profile leaves the screen and the
+// nav the moment the DELETE succeeds, not when the list reloads, and it is dropped
+// from the page's list first, so a reload that fails or is slow cannot bring it back.
 async function pfvDelete() {
   const name = pfvState.name;
   if (!name) return;
@@ -468,20 +517,29 @@ async function pfvDelete() {
   pfvState.errors = [];
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
   catch (e) { pfvState.errors = ["Delete failed: " + e.message]; pfvRender(); return; }
+  const onIt = pfvState.name === name; // false: the user moved on while it was deleting
+  profiles = profiles.filter((p) => p.name !== name);
+  if (onIt) {
+    // No profile selected until the next one is shown; the New profile task draws the empty case.
+    pfvState.name = "";
+    pfvState.doc = null;
+    pfvState.view = null;
+    pfvState.openBlock = "";
+    pfvState.pending = false;
+    pfvRender();
+  }
+  pfvRenderNav();
   await loadProfiles(false);
-  if (pfvState.name !== name) return; // the user moved on while it was deleting
+  if (!onIt || pfvState.name !== "") return;
   const at = order.indexOf(name);
   const next = order.slice(at + 1).concat(order.slice(0, at).reverse()).find((n) => n !== name && profiles.some((p) => p.name === n));
-  // No profile left: the page is blank until the New profile task draws its page.
-  pfvState.name = "";
-  pfvState.doc = null;
   await pfvShow(next || "");
 }
 
 // pfvMetaChanged: /api/meta's credential lists or /api/credentials answered (app.js
 // applyCredLists and refreshPfCreds): a name the page called missing may exist now.
 function pfvMetaChanged() {
-  if (pfvState.doc && !pfvState.openBlock) pfvRender();
+  pfvRefresh();
 }
 
 if (typeof document !== "undefined" && typeof document.addEventListener === "function") {

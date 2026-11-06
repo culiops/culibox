@@ -396,8 +396,11 @@ test("reachModel omits the imports item when bundling is off, imports are off, o
 
 test("reachModel: a private copy lists the paths shared from the original after the folders", () => {
   const m = reachModel(awsOpsIn({ profile: { ...awsOps, clone_of: "/h/k8s-gitops", clone_share: ["CLAUDE.md"] } }));
-  assert.deepStrictEqual(m.reachable.map((i) => i.kind), ["Folder", "From the original", "Files", "Domain", "Domain"]);
-  assert.deepStrictEqual(pick(m.reachable[1], ["name", "scope"]), { name: "CLAUDE.md", scope: "Read only" });
+  // The b-clone shot's row: kind Files, the path, "From the original, read only". The CLAUDE.md imports item is
+  // also a Files item, so the two are told apart by `original`, not by the kind string.
+  assert.deepStrictEqual(m.reachable.map((i) => i.kind), ["Folder", "Files", "Files", "Domain", "Domain"]);
+  assert.deepStrictEqual(pick(m.reachable[1], ["name", "scope", "original"]), { name: "CLAUDE.md", scope: "From the original, read only", original: true });
+  assert.deepStrictEqual(pick(m.reachable[2], ["name", "original"]), { name: "CLAUDE.md imports", original: undefined });
   assert.strictEqual(m.original, "/h/k8s-gitops/.git read-only · the box cannot change your history");
 });
 
@@ -500,6 +503,11 @@ test("reachRows keeps today's rows and appends Reads, Imports, Domains", () => {
   // Reads is folders and the original's shared paths, in one list.
   const copy = reachRows(awsOpsIn({ profile: { ...awsOps, clone_of: "/h/r", clone_share: ["CLAUDE.md", "docs"] } }));
   assert.strictEqual(byK(copy, "Reads")[0].v, "/home/you/other-repo/docs, CLAUDE.md, docs");
+  // The original's files are not the CLAUDE.md imports item: no Imports row unless that item is there.
+  const noImports = reachRows(awsOpsIn({ bundleImports: false, profile: { ...awsOps, clone_of: "/h/r", clone_share: ["CLAUDE.md"] } }));
+  assert.strictEqual(byK(noImports, "Reads")[0].v, "/home/you/other-repo/docs, CLAUDE.md");
+  assert.strictEqual(byK(noImports, "Imports").length, 0);
+  assert.strictEqual(byK(copy, "Imports").length, 1);
   // Without bundleImports the Imports row never appears; on host none of the three do.
   assert.strictEqual(byK(reachRows(awsOpsIn({ bundleImports: false })), "Imports").length, 0);
   const host = reachRows(awsOpsIn({ tier: "host" }));

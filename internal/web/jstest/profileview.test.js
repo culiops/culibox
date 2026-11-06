@@ -278,7 +278,10 @@ test("private copy workspace lists not-home branches with today's reason text", 
   assert.deepStrictEqual(ws.notHome, { label: notHomeLabel(notHome), title: notHomeTitle(notHome) });
   assert.strictEqual(ws.notHome.label, "2 branches not home");
   assert.strictEqual(byId(v, "runs").lines[1], "A container on this machine. It can write only to its private copy and reach only what this page lists.");
-  assert.deepStrictEqual(byId(v, "reachable").rows.filter((r) => r.kind === "From the original").map((r) => r.name), ["CLAUDE.md"]);
+  // b-clone: kind Files, the path, "From the original, read only"; the imports row is the other Files row.
+  const reach = byId(v, "reachable").rows;
+  assert.deepStrictEqual(reach.filter((r) => r.original).map((r) => [r.kind, r.name, r.scope]), [["Files", "CLAUDE.md", "From the original, read only"]]);
+  assert.deepStrictEqual(reach.filter((r) => r.kind === "Files" && !r.original).map((r) => r.name), ["CLAUDE.md imports"]);
 
   // Auto-return off says so; a copy with nothing behind says nothing about branches.
   const off = pfvReadView({ view: { ...view, auto_return: undefined, not_home: undefined }, doc: {}, meta, creds, boxRuntime: "runc" });

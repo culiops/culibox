@@ -69,7 +69,9 @@ function page(over) {
   const doc = {
     createElement: (t) => new Node(t), createElementNS: (_ns, t) => new Node(t), createTextNode: (t) => new Text(t),
     getElementById: (id) => els[id] || null, addEventListener() {},
+    get activeElement() { return Node.focused || null; },
   };
+  Node.focused = null;
   const box = Object.assign({
     document: doc, console, Promise, JSON, Date, Math, Array, Object, Set, String, Number, setTimeout, clearTimeout,
     window: { HOME_DIR: "/home/you" },
@@ -388,4 +390,176 @@ test("a refetched profile list redraws the page from the fresh row", async () =>
   t.box.profiles = PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { runtime: "host" }) : p));
   t.box.pfvRenderNav();
   assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+});
+
+// --- delete keeps the page steady -------------------------------------------------
+
+test("a deleted profile leaves the screen as soon as the DELETE succeeds, before the list reloads", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  let release;
+  t.box.loadProfiles = () => new Promise((r) => { release = () => r(true); });
+  const done = t.box.pfvDelete();
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
+  assert.strictEqual(t.run("pfvState").name, "", "nothing selected while the reload is out");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-title-name").length, 0, "the deleted profile's header, Start session and menu are gone");
+  assert.ok(!byCls(t.els["pf-navlist"], "pfv-ni-name").some((n) => n.textContent === "aws-ops"), "and its nav row");
+  release();
+  await done;
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform");
+});
+
+test("a failed list reload cannot bring the deleted profile back, even when it was the only one", async () => {
+  const lone = page({ profiles: [PROFILES[1]] });
+  lone.box.loadProfiles = async () => false; // the reload failed and left the list as it was
+  await lone.box.pfvShow("aws-ops");
+  await lone.box.pfvDelete();
+  assert.strictEqual(lone.run("pfvState").name, "");
+  assert.strictEqual(byCls(lone.els["pfv-in"], "pfv-title-name").length, 0);
+  assert.ok(!lone.calls.some((c) => c === "GET /api/profiles/aws-ops" && lone.calls.indexOf(c) !== lone.calls.lastIndexOf(c)), "never fetched again");
+
+  const many = page();
+  many.box.loadProfiles = async () => false;
+  await many.box.pfvShow("aws-ops");
+  await many.box.pfvDelete();
+  assert.strictEqual(many.run("pfvState").name, "infra-terraform");
+  assert.ok(!byCls(many.els["pf-navlist"], "pfv-ni-name").some((n) => n.textContent === "aws-ops"));
+});
+
+test("if you moved to another profile while the DELETE was out, that profile stays", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (o && o.method === "DELETE") { await new Promise((r) => { release = r; }); } return real(p, o); };
+  const done = t.box.pfvDelete();
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  await t.box.pfvShow("runbook-host");
+  release();
+  await done;
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+});
+
+// --- an open block is never redrawn from under the user -----------------------------
+
+test("showing the same profile again (tab select) while a block is open fetches nothing and redraws nothing", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  t.run('pfvState.openBlock = "agent"');
+  const before = t.els["pfv-in"].children.slice();
+  const calls = t.calls.length;
+  await t.box.pfvShow();
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(t.calls.length, calls, "no GET");
+  assert.ok(t.els["pfv-in"].children.every((c, i) => c === before[i]), "the same nodes");
+  // The edit tasks decide leaving: an explicit move to another profile still goes.
+  await t.box.pfvShow("infra-terraform");
+  assert.strictEqual(t.run("pfvState").name, "infra-terraform");
+  assert.strictEqual(t.run("pfvState").openBlock, "");
+});
+
+test("an answer that lands after a block was opened does not replace the stored profile", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (p === "/api/profiles/aws-ops") { await new Promise((r) => { release = r; }); return Object.assign({}, DOCS["aws-ops"], { rev: "r9" }); } return real(p, o); };
+  const slow = t.box.pfvShow("aws-ops"); // the tab was selected again
+  await new Promise((r) => setTimeout(r, 0));
+  t.run('pfvState.openBlock = "agent"'); // and the user started editing meanwhile
+  release();
+  await slow;
+  assert.strictEqual(t.run("pfvState").doc.rev, "r1");
+});
+
+// --- a refetch that changes nothing changes nothing on screen ----------------------
+
+test("a list refetch with the same data keeps the nav, the page, the focus and the open menu", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const navKids = t.els["pf-navlist"].children.slice();
+  const pageKids = t.els["pfv-in"].children.slice();
+  byCls(t.els["pfv-in"], "pfv-btn-icon")[0].click();
+  const menu = byCls(t.els["pfv-in"], "pfv-menu")[0];
+  assert.strictEqual(menu.hidden, false);
+  const focused = navKids[2];
+  focused.focus();
+  t.box.profiles = PROFILES.map((p) => Object.assign({}, p)); // loadProfiles returns new objects every time
+  t.box.pfvRenderNav();
+  assert.ok(t.els["pf-navlist"].children.every((c, i) => c === navKids[i]), "the nav buttons are the same nodes");
+  assert.ok(t.els["pfv-in"].children.every((c, i) => c === pageKids[i]), "the page is not rebuilt");
+  assert.strictEqual(menu.hidden, false, "the menu stays open");
+  assert.strictEqual(Node.focused, focused, "focus stays");
+});
+
+test("an /api/credentials answer that changes nothing does not redraw; one that changes a row does", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const kids = t.els["pfv-in"].children.slice();
+  t.box.pfCredsView = JSON.parse(JSON.stringify(t.box.pfCredsView));
+  t.box.pfvMetaChanged();
+  assert.ok(t.els["pfv-in"].children.every((c, i) => c === kids[i]), "same nodes");
+  t.box.pfCredsView = { store: { initialized: true, locked: false }, aws: [{ name: "prod-read", prod: true, elevate: { max_minutes: 45 } }] };
+  t.box.pfvMetaChanged();
+  assert.ok(t.els["pfv-in"].children.some((c, i) => c !== kids[i]), "a changed elevate window redraws");
+  assert.match(t.els["pfv-in"].textContent, /max 45 min/);
+});
+
+test("when the list itself changes the nav is rebuilt and the focused row keeps focus by name", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const old = t.els["pf-navlist"].children.slice();
+  old[3].focus(); // gitops... the fourth row
+  const name = byCls(old[3], "pfv-ni-name")[0].textContent;
+  t.box.profiles = PROFILES.concat([view("zzz-new")]);
+  t.box.pfvRenderNav();
+  const now = t.els["pf-navlist"].children;
+  assert.strictEqual(now.length, old.length + 1);
+  assert.notStrictEqual(now[3], old[3]);
+  assert.ok(t.els["pf-navlist"].contains(Node.focused), "focus is on a button that is still in the nav, not on the one that was replaced");
+  assert.strictEqual(byCls(Node.focused, "pfv-ni-name")[0].textContent, name);
+});
+
+test("clicking a nav row keeps its button and moves aria-current", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const items = t.els["pf-navlist"].children.slice();
+  items[3].focus();
+  await items[3].click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(t.els["pf-navlist"].children.every((c, i) => c === items[i]), "no rebuild");
+  assert.strictEqual(Node.focused, items[3]);
+  assert.deepStrictEqual(t.els["pf-navlist"].children.filter((n) => n.getAttribute("aria-current") === "true").map((n) => byCls(n, "pfv-ni-name")[0].textContent), ["runbook-host"]);
+});
+
+// --- every class the page draws has a rule ------------------------------------------
+
+test("every pfv- class in profilepage.js has a rule in desktop.css (classnames.test.js cannot see helper-built classes)", () => {
+  const src = fs.readFileSync(path.join(STATIC, "profilepage.js"), "utf8");
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const used = new Set();
+  for (const m of src.matchAll(/"([^"\n]*)"/g)) {
+    for (const tok of m[1].split(/\s+/)) if (/^pfv-[a-z][a-z-]*[a-z]$/.test(tok)) used.add(tok);
+  }
+  assert.ok(used.size > 40, "the scan found the page's classes");
+  const missing = [...used].filter((c) => !new RegExp("\\." + c + "(?![\\w-])").test(css));
+  assert.deepStrictEqual(missing, []);
+});
+
+test("the file shared from a private copy's original is drawn mono, the CLAUDE.md imports row is not", async () => {
+  const prof = view("gitops-clone", { default_cwd: "/home/you/box-clones/k8s-gitops", clone_of: "/home/you/work/k8s-gitops", clone_share: ["CLAUDE.md"], auto_return: true });
+  const t = page({ profiles: [prof] });
+  const real = t.box.api;
+  t.box.api = async (p, o) => (p === "/api/profiles/gitops-clone" ? { name: "gitops-clone", bin: "claude", runtime: "box" } : real(p, o));
+  await t.box.pfvShow("gitops-clone");
+  const reach = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "reachable");
+  const rows = byCls(reach, "pfv-row");
+  assert.deepStrictEqual(rows.map((r) => texts(r, "pfv-k")[0]), ["Files", "Files"]);
+  assert.deepStrictEqual(texts(rows[0], "pfv-nm"), ["CLAUDE.md"]);
+  assert.deepStrictEqual(texts(rows[0], "pfv-mono"), ["CLAUDE.md"]);
+  assert.deepStrictEqual(texts(rows[0], "pfv-scope"), ["From the original, read only"]);
+  assert.deepStrictEqual(texts(rows[1], "pfv-mono"), [], "CLAUDE.md imports is words");
 });

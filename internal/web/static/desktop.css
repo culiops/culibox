@@ -1066,7 +1066,7 @@
      grid: the header across, the nav down the left, the open panel and its
      footer to the right. */
   #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 15px; font-weight: 600; color: var(--fg); }
   #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
   #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: 12px; }
   #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
@@ -1075,11 +1075,11 @@
      tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
      `order` regroups it here. */
   #page-host > #settings-modal.as-page > #settings-tabs {
-    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 2px;
-    padding: 10px 8px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 0;
+    padding: 14px 10px 80px; border: 0; border-right: 1px solid var(--line); background: var(--bg); overflow-y: auto;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 6px; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 2px; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
@@ -1089,10 +1089,10 @@
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
   #page-host > #settings-modal.as-page > #settings-tabs .t {
-    padding: 7px 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
-    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--muted);
+    display: flex; align-items: center; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--panel); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
 
   /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
@@ -1686,6 +1686,13 @@
   #page-host > #settings-modal.as-page.tall { grid-template-columns: 212px minmax(0, 1fr); }
   #page-host > #settings-modal.as-page > #foot-manage { display: none; }
   #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 13px/1.5 var(--font-ui); }
+  /* The sidebar's width handle is a 7px band between it and the page. On Settings it takes no room (the
+     mockup has none, and the page starts at the sidebar's edge) but stays a draggable edge, with its grip
+     showing on hover. Other pages keep the band. */
+  body.page-settings-modal #split-v { width: 0; border: 0; background: none; z-index: 2; }
+  body.page-settings-modal #split-v::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; }
+  body.page-settings-modal #split-v::after { background: transparent; }
+  body.page-settings-modal #split-v:hover::after, body.page-settings-modal #split-v.dragging::after { background: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 940px; padding: 28px 32px 140px; }
   #page-host > #settings-modal.as-page #pfv :is(h2, h3, h4, p, dl, dd) { margin: 0; padding: 0; }
   #page-host > #settings-modal.as-page .pfv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -1695,7 +1702,8 @@
   #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; margin: 2px 0 6px 12px; padding-left: 6px; border-left: 1px solid var(--line); }
   #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: block; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 12.5px var(--font-ui); text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover, #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--panel); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; color: var(--muted); }
@@ -1716,6 +1724,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
   #page-host > #settings-modal.as-page #pfv .pfv-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 190px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
   #page-host > #settings-modal.as-page #pfv .pfv-menu[hidden] { display: none; }
@@ -1724,6 +1733,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-menu-red { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-menu-item:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: 12.5px; color: var(--red); }
 
   /* The sheet: a card of blocks, a label column, the plain-words values, Edit at the right. */
@@ -1737,6 +1747,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-act { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 13px/20px var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-link:hover { text-decoration: underline; }
+  /* Remove and "Move to a saved connection" sit inside a scope line, so they take its size. */
+  #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: 12.5px; }
   #page-host > #settings-modal.as-page #pfv .pfv-main { line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-sub { margin-top: 8px; }

@@ -226,3 +226,22 @@ test("Settings shows the overview when Profiles is selected on the page", () => 
   assert.match(body(SHELL, "openSettings"), /typeof pfvShow === "function"\) pfvShow\(\)/);
   assert.match(body(APP, "renderProfileList"), /typeof pfvRenderNav === "function"\) pfvRenderNav\(\)/);
 });
+
+// The nav is the approved mockup's on every Settings tab (profile-mockups/option-b/index.html .nav):
+// sentence-case 12px muted group labels, 30px rows, the page's own background.
+test("the Settings nav is the mockup's: sentence-case muted 12px labels, 30px rows, --bg", () => {
+  const css = stripComments(DESK_CSS);
+  const rule = (sel) => {
+    const i = css.indexOf(sel + " {");
+    assert.ok(i >= 0, sel + " rule missing");
+    return css.slice(i, css.indexOf("}", i));
+  };
+  const nav = rule("#page-host > #settings-modal.as-page > #settings-tabs");
+  assert.match(nav, /background: var\(--bg\)/);
+  assert.match(nav, /gap: 0/);
+  const label = rule("#page-host > #settings-modal.as-page > #settings-tabs .pg-group");
+  assert.match(label, /font-size: 12px; font-weight: 600; color: var\(--muted\)/);
+  assert.ok(!/text-transform|letter-spacing/.test(label), "no uppercase, no tracking");
+  assert.match(rule("#page-host > #settings-modal.as-page > #settings-tabs .t"), /height: 30px/);
+  assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /font-size: 15px/);
+});

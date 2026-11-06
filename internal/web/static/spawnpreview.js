@@ -137,7 +137,7 @@ function spawnTokenHosts(hosts) {
 //   files      the workspace line ("" never; the host says its whole account)
 //   original   the read-only note about a private copy's original, "" when none
 //   cloud      Item[]: AWS, Old-style AWS (the legacy inline binding), GitHub, Token
-//   reachable  Item[]: Folder, From the original, Files (the imports), Domain; none on host
+//   reachable  Item[]: Folder, Files (the original's shared files, original: true, and the imports item), Domain; none on host
 //   tokenNote  once-per-list plain line when any token is bound, else ""
 //   network    {line, sub, open} for a boxed profile with a posture, else null: an allowlist
 //              (anything bound), open with nothing bound (any public website over HTTPS),
@@ -206,7 +206,8 @@ function reachModel(o) {
   const reachable = [];
   if (!host) {
     for (const path of spawnNames(p.context_paths)) reachable.push(spawnItem("Folder", path, { scope: "Read only" }));
-    for (const path of spawnNames(p.clone_share)) reachable.push(spawnItem("From the original", path, { scope: "Read only" }));
+    // The original's shared files: a Files row like the imports item (the b-clone shot), told apart from it by `original`.
+    for (const path of spawnNames(p.clone_share)) reachable.push(spawnItem("Files", path, { scope: "From the original, read only", original: true }));
     if (x.bundleImports === true && !p.imports_off) {
       reachable.push(spawnItem("Files", "CLAUDE.md imports", { sub: "The files your CLAUDE.md pulls in with @", scope: "Read-only copies" }));
     }
@@ -292,9 +293,9 @@ function reachRows(o) {
   if (tokens.length) rows.push({ k: "Tokens", v: tokens.map((i) => i.name).join(", ") });
 
   const names = (kinds) => m.reachable.filter((i) => kinds.includes(i.kind)).map((i) => i.name);
-  const reads = names(["Folder", "From the original"]);
+  const reads = m.reachable.filter((i) => i.kind === "Folder" || i.original === true).map((i) => i.name);
   if (reads.length) rows.push({ k: "Reads", v: reads.join(", ") });
-  if (m.reachable.some((i) => i.kind === "Files")) rows.push({ k: "Imports", v: "CLAUDE.md imports, read-only copies" });
+  if (m.reachable.some((i) => i.kind === "Files" && i.original !== true)) rows.push({ k: "Imports", v: "CLAUDE.md imports, read-only copies" });
   const domains = names(["Domain"]);
   if (domains.length) rows.push({ k: "Domains", v: domains.join(", ") });
 
