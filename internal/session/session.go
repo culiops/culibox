@@ -1248,18 +1248,34 @@ func (s *Session) Resize(rows, cols uint16) error {
 	return pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
-// ForceRedraw nudges the size (±1 col then back) to make a full-screen TUI
-// repaint over a best-effort replay on attach.
+// redrawGap is how long ForceRedraw holds its nudged size. MEASURED (#126):
+// Claude Code reads its size when its event loop reaches the SIGWINCH, so a
+// nudge undone at once was read as "unchanged" and nothing repainted; a 10 ms
+// hold gave a full repaint. 50 ms leaves room for abduco's extra hop and a busy
+// agent.
+const redrawGap = 50 * time.Millisecond
+
+// ForceRedraw makes a TUI repaint over the best-effort replay on attach: the
+// PTY goes one column narrower for redrawGap, then back. Narrower, so the frame
+// painted in between fits the viewer's grid instead of wrapping. The restore
+// runs on a timer (the caller's read loop must not sleep) and takes the size
+// recorded when it fires, so a resize that lands during the hold wins.
 func (s *Session) ForceRedraw() {
 	s.mu.Lock()
 	r, c := s.rows, s.cols
 	s.muteActivity(time.Now())
 	s.mu.Unlock()
-	if c == 0 {
+	if c < 2 {
 		return
 	}
-	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c + 1})
-	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c})
+	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c - 1})
+	time.AfterFunc(redrawGap, func() {
+		s.mu.Lock()
+		r, c := s.rows, s.cols
+		s.muteActivity(time.Now()) // the second repaint is the viewer's doing too
+		s.mu.Unlock()
+		_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: r, Cols: c})
+	})
 }
 
 // Done is closed when the child exits.
