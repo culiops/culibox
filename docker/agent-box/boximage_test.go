@@ -376,8 +376,8 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 20 {
-		t.Errorf("found %d downloads, want at least 20 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana, duckdb, s5cmd)", downloads)
+	if downloads < 19 {
+		t.Errorf("found %d downloads, want at least 19 (aws, terraform, gh, go, abduco, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana, duckdb, s5cmd)", downloads)
 	}
 	// The Sentry and Atlassian servers come from npm and PyPI, not curl: their
 	// pins are checked in TestDockerfilePinsMCPServers. No uv is downloaded in
@@ -408,28 +408,18 @@ func TestDockerfileGoMatchesGoMod(t *testing.T) {
 	}
 }
 
-func TestDockerfileDeclaresCodebaseMemory(t *testing.T) {
-	var line string
+// codebase-memory-mcp left the image (founder 2026-11-06: unused, ~293 MB;
+// 4 of 209 box sessions since 2026-10-23 called it). Nothing may install,
+// declare or pin it again by accident.
+func TestDockerfileShipsNoCodebaseMemory(t *testing.T) {
 	for _, in := range dockerfileInstructions() {
-		if strings.Contains(in, "printf") && strings.Contains(in, "/etc/agent-box/mcp.json") {
-			line = in
+		if strings.Contains(in, "codebase-memory") || strings.Contains(in, "CBM_") {
+			t.Errorf("instruction still names codebase-memory: %.120s", in)
 		}
 	}
-	if line == "" {
-		t.Fatal("no printf writing /etc/agent-box/mcp.json")
-	}
-	i, j := strings.Index(line, "'{"), strings.LastIndex(line, "}'")
-	if i < 0 || j < i {
-		t.Fatalf("no quoted JSON in %q", line)
-	}
-	var doc struct {
-		MCPServers map[string]map[string]any `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(line[i+1:j+1]), &doc); err != nil {
-		t.Fatalf("mcp.json payload is not JSON: %v", err)
-	}
-	if got := doc.MCPServers["codebase-memory"]["command"]; got != "/usr/local/bin/codebase-memory-mcp" {
-		t.Errorf("codebase-memory command = %v", got)
+	_, servers := mcpServersFromDockerfile(t)
+	if _, ok := servers["codebase-memory"]; ok {
+		t.Error("mcp.json still declares codebase-memory")
 	}
 }
 
@@ -456,12 +446,6 @@ func TestDockerfileSetsGoEnvUnderHome(t *testing.T) {
 		if !env[want] {
 			t.Errorf("Dockerfile has no instruction ENV %s", want)
 		}
-	}
-}
-
-func TestDockerfilePinsCodebaseMemoryVersion(t *testing.T) {
-	if !strings.Contains(string(dockerfile), "\nARG CBM_VERSION=0.10.8\n") {
-		t.Error("Dockerfile does not pin ARG CBM_VERSION=0.10.8")
 	}
 }
 
@@ -545,9 +529,6 @@ func TestDockerfilePinsPlaywrightMCPVersion(t *testing.T) {
 
 func TestDockerfileDeclaresPlaywright(t *testing.T) {
 	line, servers := mcpServersFromDockerfile(t)
-	if got := servers["codebase-memory"]["command"]; got != "/usr/local/bin/codebase-memory-mcp" {
-		t.Errorf("codebase-memory command = %v", got)
-	}
 	pw, ok := servers["playwright"]
 	if !ok {
 		t.Fatal("mcp.json has no playwright server")
@@ -581,11 +562,9 @@ func TestDockerfileDeclaresPlaywright(t *testing.T) {
 			t.Errorf("playwright args %v lack %s %s", args, w[0], w[1])
 		}
 	}
-	// Both servers are checked at build time, not just written.
-	for _, name := range []string{"codebase-memory", "playwright"} {
-		if !strings.Contains(line, `jq -e '.mcpServers["`+name+`"].command'`) {
-			t.Errorf("mcp.json RUN has no jq -e check for %s", name)
-		}
+	// The server is checked at build time, not just written.
+	if !strings.Contains(line, `jq -e '.mcpServers["playwright"].command'`) {
+		t.Error("mcp.json RUN has no jq -e check for playwright")
 	}
 }
 
@@ -925,6 +904,25 @@ func TestDockerfileSourceLabel(t *testing.T) {
 	}
 	if last := strings.LastIndex(df, "\nFROM "); i < last {
 		t.Error("the source label must be in the final stage")
+	}
+}
+
+// Claude Code is the most often bumped pin (npm stable moves weekly). As the
+// last download, a bump rebuilds only its own ~294 MB layer and the tiny checks
+// after it; first in the tail it rebuilt ~1.2 GB (measured 2026-11-06: 29 of 51
+// CI steps). No version-pinned tool may come after it.
+func TestDockerfileClaudeCodeIsTheLastPin(t *testing.T) {
+	df := string(dockerfile)
+	cc := strings.Index(df, "\nARG CLAUDE_CODE_VERSION=")
+	if cc < 0 {
+		t.Fatal("no ARG CLAUDE_CODE_VERSION")
+	}
+	if m := regexp.MustCompile(`\nARG [A-Z0-9_]+_(VERSION|SHA256[A-Z0-9_]*)=`).FindAllStringIndex(df[cc+1:], -1); len(m) > 0 {
+		t.Errorf("a version or sum ARG comes after CLAUDE_CODE_VERSION: %q", df[cc+1+m[0][0]:cc+1+m[0][1]])
+	}
+	install, user := strings.Index(df, "npm install -g @anthropic-ai/claude-code@"), strings.Index(df, "\nUSER agent")
+	if install < cc || user < 0 || install > user {
+		t.Error("claude-code must install after its ARG and before USER agent (npm -g runs as root)")
 	}
 }
 
