@@ -1829,6 +1829,10 @@
   #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: 12.5px; }
   #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
   #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
+  /* The mockup's .in::placeholder (muted, not the browser's grey) and its invalid-and-focused field: the red border stays under the focus ring
+     (.field.has-err .in outranks .in:focus-visible's transparent border), so a refused field still reads as one. */
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl::placeholder { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl.pfv-bad:focus-visible { border-color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: 12.5px; }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
