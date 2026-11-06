@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -567,4 +567,52 @@ test("staleSave starts its message with a capital letter", () => {
   assert.ok(e("Already a sentence").message.startsWith("Already a sentence. "));
   assert.ok(e("3 edits lost").message.startsWith("3 edits lost. "));
   assert.ok(e("a b C").message.startsWith("A b C. "));
+});
+
+// #121: the profile list says where a read-only profile came from, not "built-in" for all of them.
+test("profileSourceLabel: built-in for a code seed, config.json for an agents entry, nothing otherwise", () => {
+  assert.strictEqual(profileSourceLabel("builtin"), "built-in");
+  assert.strictEqual(profileSourceLabel("config"), "config.json");
+  assert.strictEqual(profileSourceLabel("runtime"), "");
+  assert.strictEqual(profileSourceLabel(""), "");
+  assert.strictEqual(profileSourceLabel(undefined), "");
+  assert.strictEqual(profileSourceLabel("something-new"), "", "an unknown source is not claimed to be built-in");
+});
+
+test("profileListLabels: the badge and the second line follow the source", () => {
+  assert.deepStrictEqual(profileListLabels({ name: "claude", editable: false, source: "builtin", bin: "claude", runtime: "host" }),
+    { badge: "built-in", sub: "built-in · host" });
+  assert.deepStrictEqual(profileListLabels({ name: "bash", editable: false, source: "config", bin: "bash", runtime: "host" }),
+    { badge: "config.json", sub: "config.json · host" });
+  assert.deepStrictEqual(profileListLabels({ name: "mine", editable: true, source: "runtime", bin: "claude", runtime: "box" }),
+    { badge: "", sub: "claude · box" }, "a profile you own has no badge, and shows its binary");
+});
+
+test("profileListLabels: a missing runtime or binary leaves no stray separator", () => {
+  assert.deepStrictEqual(profileListLabels({ editable: false, source: "config" }), { badge: "config.json", sub: "config.json" });
+  assert.deepStrictEqual(profileListLabels({ editable: true, source: "runtime", runtime: "box" }), { badge: "", sub: "box" });
+  assert.deepStrictEqual(profileListLabels({ editable: true, source: "runtime" }), { badge: "", sub: "" });
+});
+
+test("profileListLabels: an unknown source on a read-only profile has no badge (not a guess)", () => {
+  assert.deepStrictEqual(profileListLabels({ editable: false, source: "future", runtime: "host" }), { badge: "", sub: "host" });
+  assert.deepStrictEqual(profileListLabels({ editable: false, runtime: "host" }), { badge: "", sub: "host" });
+});
+
+// app.js needs a DOM and cannot be require()d: pin the list's wiring at the source level.
+test("renderProfileList takes both labels from profileListLabels, not a literal", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  const m = /function renderProfileList\s*\(/.exec(app);
+  assert.ok(m, "renderProfileList not found in app.js");
+  const open = app.indexOf("{", app.indexOf(")", m.index));
+  let depth = 0, end = -1;
+  for (let i = open; i < app.length && end < 0; i++) {
+    if (app[i] === "{") depth++;
+    else if (app[i] === "}" && --depth === 0) end = i;
+  }
+  const b = app.slice(open, end + 1);
+  assert.match(b, /profileListLabels\(p\)/);
+  assert.doesNotMatch(b, /"built-in"/);
 });

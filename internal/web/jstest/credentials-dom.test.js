@@ -25,7 +25,10 @@ class Node {
     this.tag = tag; this.children = []; this.parent = null; this.own = "";
     this.className = ""; this.attrs = {}; this.dataset = {}; this.disabled = false; this.colSpan = 1;
     const self = this;
-    this.classList = { contains: (c) => self.className.split(/\s+/).includes(c) };
+    this.classList = {
+      contains: (c) => self.className.split(/\s+/).includes(c),
+      add: (c) => { if (!self.className.split(/\s+/).includes(c)) self.className = (self.className + " " + c).trim(); },
+    };
   }
   get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
@@ -565,4 +568,138 @@ test("no ResizeObserver (an old browser): painting still works and nothing throw
   const p = page({ width: 900 });
   p.box.renderCredentials(liveView);
   assert.ok(p.byId["creds-body"].querySelectorAll("table").length > 0);
+});
+
+// --- #123: a width change never repaints away what the user is in the middle of ------
+
+const deleteBtn = (p) => p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Delete");
+const cancelBtn = (p) => p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Cancel");
+const sameNodes = (a, b) => a.length === b.length && a.every((c, i) => c === b[i]);
+
+test("an open Delete confirmation survives a resize across the threshold; Cancel then paints the right mode", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  const kept = body.children.slice();
+  p.resizeTo(500);
+  assert.ok(sameNodes(body.children, kept), "the body was not replaced");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1, "the confirmation is still there to answer");
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "still the table it was opened in");
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "Cancel lets the held repaint through: cards at 500");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
+});
+
+test("a confirmation opened in a card survives widening to tables the same way", () => {
+  const p = livePage(500);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.resizeTo(900);
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 1);
+  assert.ok(p.shape().cards > 0 && p.shape().tables === 0);
+  cancelBtn(p).onclick();
+  assert.ok(p.shape().tables > 0 && p.shape().cards === 0, "after Cancel: tables at 900");
+});
+
+test("a held repaint that is no longer needed is not made when the confirmation is cancelled", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.resizeTo(500);
+  p.resizeTo(900); // back where it was painted
+  const kept = body.children.slice();
+  cancelBtn(p).onclick();
+  assert.ok(sameNodes(body.children, kept), "same mode as the paint: nothing to redo");
+});
+
+test("a part-typed store passphrase survives a resize; emptied, the next focus change paints the right mode", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials({ ...liveView, store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } });
+  body.querySelectorAll("button").find((b) => b.id === "store-create").onclick();
+  const typed = body.querySelectorAll(".storepass")[0];
+  assert.ok(typed, "the create form's passphrase fields are marked");
+  typed.value = "part-typed";
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "not repainted while a passphrase is typed (the field need not have focus)");
+  assert.strictEqual(body.querySelectorAll(".storepass")[0], typed);
+  assert.strictEqual(typed.value, "part-typed");
+  typed.value = "";
+  p.box.credFocusLeft(); // what the body's focusout does
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "nothing left to lose: the right mode is painted");
+});
+
+test("a focus change with nothing held repaints nothing", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.box.credFocusLeft();
+  assert.ok(sameNodes(body.children, kept));
+});
+
+test("a frame that finds the body unmeasurable (the tab was hidden after the observer fired) repaints nothing", () => {
+  const p = livePage(500); // painted as cards
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  const kept = body.children.slice();
+  p.deliver(520); // a measurable entry: a frame is queued
+  body.clientWidth = 0; // the tab is hidden before the frame
+  p.frame();
+  assert.ok(sameNodes(body.children, kept), "0 wide reads as tables, and must not flip a hidden tab");
+  assert.strictEqual(p.shape().tables, 0);
+});
+
+// A repaint held for the unlock field is made when focus leaves it, but not over what was
+// typed there: clicking Unlock moves focus first (mousedown), and the repaint, running
+// before the click, wiped the passphrase and the button along with it.
+test("a repaint held for the unlock field does not wipe a passphrase typed while it was held", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  const field = body.querySelectorAll(".storepass")[0];
+  assert.ok(field, "the unlock form is painted");
+  p.box.storeUnlockFocused = () => true; // the user clicked into the field
+  p.resizeTo(500); // dragged the window across the threshold: the repaint is held
+  assert.ok(p.shape().tables > 0, "held");
+  field.value = "typed-passphrase";
+  p.box.storeUnlockFocused = () => false; // mousedown on Unlock: focus has left the field
+  const kept = body.children.slice();
+  p.box.credFocusLeft(); // the body's focusout, a tick later
+  assert.ok(sameNodes(body.children, kept), "the form and its Unlock button are still the ones on screen");
+  assert.strictEqual(field.value, "typed-passphrase");
+  field.value = ""; // submitted (the field is cleared on every attempt), or the user cleared it
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "nothing left to lose: the held repaint is made");
+});
+
+test("a repaint held for the unlock field is still made when nothing was typed", () => {
+  const p = livePage(900);
+  p.box.renderCredentials({ ...liveView, store: { initialized: true, locked: true, platform: "linux", passphrase_mode: true } });
+  p.box.storeUnlockFocused = () => true;
+  p.resizeTo(500);
+  assert.ok(p.shape().tables > 0, "held");
+  p.box.storeUnlockFocused = () => false;
+  p.box.credFocusLeft();
+  assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "focus left an empty field: repainted");
+});
+
+// A repaint held for a DATA change (the unlock request was in flight) while a Delete
+// confirmation was open: Cancel must let it through even though the width did not change.
+test("Cancel on a Delete confirmation makes a repaint held for new data, not only one for a new width", () => {
+  const p = livePage(900);
+  const body = p.byId["creds-body"];
+  p.box.renderCredentials(liveView);
+  deleteBtn(p).onclick();
+  p.box.storeUnlockFocused = () => true; // an unlock is in flight: the body holds its repaint
+  p.box.renderCredentials({ ...liveView, tokens: [tok("sentry-prod"), tok("sentry-added")] });
+  assert.ok(!/sentry-added/.test(body.textContent), "held: the old body is still on screen");
+  p.box.storeUnlockFocused = () => false;
+  cancelBtn(p).onclick();
+  assert.ok(/sentry-added/.test(body.textContent), "the new data is painted once the confirmation is gone");
+  assert.strictEqual(body.querySelectorAll(".confirm").length, 0);
 });
