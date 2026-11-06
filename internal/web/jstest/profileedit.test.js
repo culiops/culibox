@@ -9,10 +9,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal,
-  pfvGhPreset, pfvGhPresetLevels, pfvSaveError,
+  pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError,
 } = require("../static/profileedit.js");
 const { pfvAdvancedCount } = require("../static/profileview.js");
-const { ghPermLevels, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
+const { ghPermLevels, ghBindingFromForm, ghFormError, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
@@ -382,13 +382,23 @@ test("the client's GitHub permission lists are the server's", () => {
 test("save error 409 profile_changed is stale", () => {
   const body = { error: "this profile was changed after you opened it (another tab, another device or a restart); nothing was saved", code: "profile_changed" };
   assert.deepStrictEqual(pfvSaveError(409, body), { kind: "stale", block: "", field: "", text: "This profile changed elsewhere" });
-  // A profile deleted meanwhile has the same code, and the same answer.
-  assert.strictEqual(pfvSaveError(409, Object.assign({ gone: true }, body)).kind, "stale");
+  // gone is only ever the boolean true (profilerev.go writeSaveErr); anything else is a changed profile.
+  for (const gone of [false, "true", 1, undefined, null]) assert.strictEqual(pfvSaveError(409, Object.assign({ gone }, body)).kind, "stale", String(gone));
+});
+
+test("save error 409 profile_changed with gone is its own kind, not stale", () => {
+  // What the server sends for a profile deleted after the page opened it.
+  const body = { error: "this profile no longer exists (it was deleted after you opened it); nothing was saved", code: "profile_changed", gone: true };
+  const e = pfvSaveError(409, body);
+  assert.deepStrictEqual(e, { kind: "gone", block: "", field: "", text: "This profile was deleted elsewhere" });
+  // Only a 409 profile_changed can be gone.
+  assert.strictEqual(pfvSaveError(400, { error: "x", gone: true }).kind, "block");
+  assert.strictEqual(pfvSaveError(409, { error: "x", code: "profile_exists", gone: true }).kind, "block");
 });
 
 test("save error 400 with field maps to its block", () => {
-  const body = { error: 'profile "p": context_paths "/gone" does not exist', field: "context_paths[1]" };
-  assert.deepStrictEqual(pfvSaveError(400, body), { kind: "field", block: "reachable", field: "context_paths[1]", text: body.error });
+  const body = { error: "context_paths /home/you/old-docs: does not exist", field: "context_paths[1]" };
+  assert.deepStrictEqual(pfvSaveError(400, body), { kind: "field", block: "reachable", field: "context_paths[1]", text: "This folder no longer exists. Remove it or pick another." });
   assert.strictEqual(pfvSaveError(400, { error: "x", field: "aws_connections[0]" }).block, "cloud");
   assert.strictEqual(pfvSaveError(400, { error: "x", field: "options.model" }).block, "agent");
   assert.strictEqual(pfvSaveError(400, { error: "x", field: "options.foo" }).block, "advanced");
@@ -399,7 +409,7 @@ test("save error 400 with field maps to its block", () => {
 
 test("save error without a field, or of any other kind, is block-level text", () => {
   const plain = { error: 'profile "p": box.image is not per-profile' };
-  assert.deepStrictEqual(pfvSaveError(400, plain), { kind: "block", block: "", field: "", text: plain.error });
+  assert.deepStrictEqual(pfvSaveError(400, plain), { kind: "block", block: "", field: "", text: "box.image is not per-profile" });
   // The other 409s are not cured by a reload of the profile: they keep the server's sentence.
   for (const code of ["profile_exists", "page_outdated", "profiles_file_changed"]) {
     assert.deepStrictEqual(pfvSaveError(409, { error: "the sentence", code }), { kind: "block", block: "", field: "", text: "the sentence" }, code);
@@ -413,6 +423,184 @@ test("save error without a field, or of any other kind, is block-level text", ()
   }
   // A field with no sentence still says something.
   assert.ok(pfvSaveError(400, { field: "tokens[0]" }).text.length > 0);
+});
+
+// --- I1: the GitHub binding is checked before it is merged ------------------------------------
+
+test("githubError passes a binding with no permissions, which the server reads as the six read defaults", () => {
+  const owners = [{ owner: "culiops", app: "bot", repos: ["api"] }];
+  assert.strictEqual(pfvGithubError({ owners }), "");
+  assert.strictEqual(pfvGithubError({ owners, permissions: null }), "");
+  assert.strictEqual(pfvGithubError(null), "", "no binding at all is nothing to check");
+  assert.strictEqual(pfvGithubError(undefined), "");
+});
+
+test("githubError refuses an empty permission set with ghFormError's sentence", () => {
+  const owners = [{ owner: "culiops", app: "bot", repos: ["api"] }];
+  const sentence = ghFormError({ owners: [{ owner: "culiops", app: "bot", repos: "api" }], permissions: {} });
+  assert.ok(sentence.length > 0, "the old form's sentence");
+  assert.strictEqual(pfvGithubError({ owners, permissions: {} }), sentence);
+  // The builder really does produce that binding when nothing is ticked.
+  const built = ghBindingFromForm({ owners: [{ owner: "culiops", app: "bot", repos: "api" }], permissions: { actions: "off", contents: "off" } });
+  assert.deepStrictEqual(built.permissions, {});
+  assert.strictEqual(pfvGithubError(built), sentence);
+  // A permission map that is not a map is not a set either.
+  assert.strictEqual(pfvGithubError({ owners, permissions: [] }), sentence);
+});
+
+test("githubError lets only contents, pull_requests and issues be write", () => {
+  const owners = [{ owner: "culiops", app: "bot", repos: ["api"] }];
+  const ok = { contents: "write", pull_requests: "write", issues: "write", actions: "read", checks: "read", metadata: "read", statuses: "read" };
+  assert.strictEqual(pfvGithubError({ owners, permissions: ok }), "");
+  for (const k of GH_PERMS.filter((x) => !GH_WRITABLE.includes(x))) {
+    const msg = pfvGithubError({ owners, permissions: { contents: "read", [k]: "write" } });
+    assert.ok(msg.length > 0, k + " can not be write");
+    assert.ok(msg.includes(k.replace(/_/g, " ")), "names " + k + ": " + msg);
+  }
+  // The sentence names every writable key in words, and none as a config key.
+  const msg = pfvGithubError({ owners, permissions: { statuses: "write", checks: "write" } });
+  assert.ok(msg.includes("statuses") && msg.includes("checks"), msg);
+  assert.ok(msg.includes("contents") && msg.includes("pull requests") && msg.includes("issues"), msg);
+  assert.ok(!/[_"\[]/.test(msg), "plain words: " + msg);
+  // The builder never sends that, so a binding it built passes.
+  const built = ghBindingFromForm({ owners: [{ owner: "culiops", app: "bot", repos: "api" }], permissions: { contents: "write", statuses: "write" } });
+  assert.strictEqual(built.permissions.statuses, "read");
+  assert.strictEqual(pfvGithubError(built), "");
+});
+
+// A personal access token is not narrowed by the permission set (the page says so
+// on its row), and today's check does not look at it: the set must still be valid.
+test("githubError applies to a token owner the same way", () => {
+  const pat = [{ owner: "culiops", token: "gh-pat", repos: ["api"] }];
+  assert.strictEqual(pfvGithubError({ owners: pat }), "");
+  assert.strictEqual(pfvGithubError({ owners: pat, permissions: { contents: "write" } }), "");
+  assert.ok(pfvGithubError({ owners: pat, permissions: {} }).length > 0);
+  assert.ok(pfvGithubError({ owners: pat, permissions: { actions: "write" } }).length > 0);
+});
+
+// The refusal is the caller's: an empty set must reach the server's own check as
+// it is, because deleting it here would turn "none ticked" into the six read defaults.
+test("mergeBlock cloud does not repair a permission set, it sends what it is given", () => {
+  const doc = { name: "p", bin: "claude", runtime: "box" };
+  const empty = pfvMergeBlock(doc, "cloud", { github: { owners: [{ owner: "o", app: "a", repos: ["r"] }], permissions: {} } });
+  assert.deepStrictEqual(empty.github.permissions, {});
+  const bad = pfvMergeBlock(doc, "cloud", { github: { owners: [{ owner: "o", app: "a", repos: ["r"] }], permissions: { actions: "write" } } });
+  assert.deepStrictEqual(bad.github.permissions, { actions: "write" });
+});
+
+// --- I2: a refusal reads in plain words -----------------------------------------------------------
+
+// Real sentences, as the server words them (internal/config, internal/box, internal/web),
+// with the field path each is tagged with.
+const refusals = {
+  folderGone: [
+    { field: "context_paths[1]", error: "context_paths /home/you/old-docs: does not exist" },
+    { field: "context_paths[0]", error: 'context_paths "/srv/bad": does not exist' },
+  ],
+  credentialMissing: [
+    { field: "aws_connections[1]", error: 'profile "p": aws_connections[1] "staging-read" is not defined in aws_connections' },
+    { field: "tokens[0]", error: 'profile "p": tokens[0] "nope" is not defined in static_tokens' },
+    { field: "github.owners[0].app", error: 'profile "p": github.owners[0].app "missing" is not defined in github_apps' },
+    { field: "github.owners[2].token", error: 'profile "p": github.owners[2].token "pat" is not defined in static_tokens' },
+  ],
+  relativePath: [
+    { field: "context_paths[1]", error: 'profile "p": context_paths "relative/dir" must be an absolute path' },
+    { field: "context_paths[0]", error: "context_paths rel/dir: must be an absolute path" },
+    { field: "clone_of", error: 'clone_of "src/repo" must be an absolute path' },
+    { field: "default_cwd", error: 'default_cwd "work" must be an absolute path' },
+  ],
+  needsBox: [
+    { field: "aws", error: "aws binding requires runtime: box (set it explicitly); the host tier cannot contain credentials", kind: "Old-style AWS" },
+    { field: "aws_connections", error: 'profile "p": aws_connections require runtime: box (set it explicitly); the host tier cannot contain credentials', kind: "AWS connections" },
+    { field: "tokens", error: "tokens require runtime: box (set it explicitly); the host tier cannot contain credentials", kind: "Tokens" },
+    { field: "github", error: "github binding requires runtime: box (set it explicitly); the host tier cannot contain credentials", kind: "GitHub" },
+    { field: "context_paths", error: 'context_paths needs runtime "box"; host sessions can already read any path', kind: "Readable folders" },
+    { field: "egress_allow", error: "egress_allow and egress_open need runtime: box (set it explicitly)", kind: "Domains" },
+    { field: "egress_open", error: "egress_allow and egress_open need runtime: box (set it explicitly)", kind: "Network settings" },
+  ],
+  privateCopyOnHost: [
+    { field: "clone_of", error: 'clone mode runs only in a box; remove runtime "host" or clone_of' },
+    { field: "clone_of", error: 'clone mode needs runtime "box" (this instance defaults to host)' },
+  ],
+};
+const textOf = (r) => pfvSaveError(400, { error: r.error, field: r.field }).text;
+
+test("save error words an undefined credential, a vanished folder and a relative path plainly", () => {
+  for (const r of refusals.folderGone) assert.strictEqual(textOf(r), "This folder no longer exists. Remove it or pick another.", r.error);
+  for (const r of refusals.credentialMissing) assert.strictEqual(textOf(r), "Not found in Credentials. Remove it or create it.", r.error);
+  for (const r of refusals.relativePath) assert.strictEqual(textOf(r), "Use a full path that starts with /", r.error);
+});
+
+test("save error words a box-only setting refused on host with the read view's name for it", () => {
+  const all = {
+    aws: { source_profile: "s" }, aws_connections: ["c"], github: { owners: [] }, tokens: ["t"],
+    context_paths: ["/srv/a"], egress_allow: ["x.example.com"], egress_open: true,
+  };
+  const kinds = pfvHostRemovals(all).map((x) => x.kind);
+  for (const r of refusals.needsBox) {
+    const text = textOf(r);
+    assert.ok(kinds.includes(r.kind), r.kind + " is a read-view word for what the host switch removes");
+    assert.strictEqual(text, r.kind + " can't be used when Runs in is On this machine. Set Runs in to Box, or remove the setting.", r.error);
+  }
+  // A private copy has its own approved sentence.
+  for (const r of refusals.privateCopyOnHost) assert.strictEqual(textOf(r), pfvHostRefusal({ clone_of: "/x" }), r.error);
+});
+
+test("no known refusal class shows a key, an underscore, an index or a quote", () => {
+  let n = 0;
+  for (const rows of Object.values(refusals)) {
+    for (const r of rows) {
+      const text = textOf(r);
+      n++;
+      assert.ok(text.length > 0, r.error);
+      assert.ok(!/[\[\]_"]/.test(text), "plain words: " + text);
+    }
+  }
+  assert.ok(n >= 15);
+  for (const text of ["This profile changed elsewhere", "This profile was deleted elsewhere"]) assert.ok(!/[\[\]_"]/.test(text));
+});
+
+test("save error recognises a class by the field as well as the sentence", () => {
+  // The same words under another field are not that class: the server's own sentence stays.
+  const s = 'tokens[0] "nope" is not defined in static_tokens';
+  assert.strictEqual(pfvSaveError(400, { error: s, field: "env" }).text, s);
+  assert.strictEqual(pfvSaveError(400, { error: "context_paths /a: cannot be read (denied)", field: "context_paths[0]" }).text, "context_paths /a: cannot be read (denied)");
+  assert.strictEqual(pfvSaveError(400, { error: "tokens[1] \"t\" is listed twice", field: "tokens[1]" }).text, 'tokens[1] "t" is listed twice');
+  // A relative-path sentence is a path class only under the path fields.
+  assert.strictEqual(pfvSaveError(400, { error: "env must be an absolute path", field: "env" }).text, "env must be an absolute path");
+});
+
+test("save error strips the leading profile name from any other sentence and leaves the rest as the server wrote it", () => {
+  const e = (error, field) => pfvSaveError(400, field ? { error, field } : { error }).text;
+  assert.strictEqual(e('profile "p": agent accounts are not configured', "account"), "agent accounts are not configured");
+  assert.strictEqual(e('profile "p": box.image is not per-profile; every box runs the instance-wide box_image'), "box.image is not per-profile; every box runs the instance-wide box_image");
+  // A quote in the name is escaped by the server (%q), and the whole prefix still goes.
+  assert.strictEqual(e('profile "a\\"b": env CLAUDE_CONFIG_DIR is set by the agent account, not the profile', "env"), "env CLAUDE_CONFIG_DIR is set by the agent account, not the profile");
+  // Only a leading prefix, and only the one: a name in the middle of a sentence stays.
+  assert.strictEqual(e('the profile "p": is mentioned here'), 'the profile "p": is mentioned here');
+  assert.strictEqual(e('profile "p" has invalid base "x" (want clean|login|inherit)', "base"), 'profile "p" has invalid base "x" (want clean|login|inherit)');
+  // Nothing but the prefix leaves the fallback, not a blank line.
+  assert.ok(e('profile "p": ').length > 0);
+  // Other 400s and the other 409s lose it as well.
+  assert.strictEqual(pfvSaveError(409, { error: 'profile "p": the sentence', code: "profile_exists" }).text, "the sentence");
+});
+
+// --- M1: omitted means keep, in the workspace too ------------------------------------------------------
+
+test("mergeBlock workspace in copy mode keeps the share list and the auto-return opt-out it was not given", () => {
+  const copy = { name: "p", bin: "claude", runtime: "box", clone_of: "/src/repo", default_cwd: "/home/you/box-clones/repo", clone_share: [".env.example", "docs"], clone_no_auto_return: true };
+  const out = pfvMergeBlock(copy, "workspace", { mode: "copy", folder: "/src/other", copyDir: "/home/you/box-clones/other" });
+  assert.deepStrictEqual(out, Object.assign({}, copy, { clone_of: "/src/other", default_cwd: "/home/you/box-clones/other" }));
+  // An undefined is no more a word than an omission is.
+  assert.deepStrictEqual(pfvMergeBlock(copy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd, shareText: undefined, autoReturn: undefined }), copy);
+  // What it is given, it writes: false opts out, true opts back in, "" clears the list.
+  assert.strictEqual(pfvMergeBlock(copy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd, autoReturn: true }).clone_no_auto_return, undefined);
+  assert.strictEqual("clone_share" in pfvMergeBlock(copy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd, shareText: "" }), false);
+  const plainCopy = Object.fromEntries(Object.entries(copy).filter(([k]) => k !== "clone_no_auto_return" && k !== "clone_share"));
+  assert.deepStrictEqual(pfvMergeBlock(plainCopy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd }), plainCopy, "nothing stored, nothing invented");
+  assert.strictEqual(pfvMergeBlock(plainCopy, "workspace", { mode: "copy", folder: "/src/repo", copyDir: copy.default_cwd, autoReturn: false }).clone_no_auto_return, true);
+  // Switching to a plain folder still drops the copy keys: that is what the mode means.
+  assert.deepStrictEqual(pfvMergeBlock(copy, "workspace", { mode: "folder", folder: "/home/you/work" }), { name: "p", bin: "claude", runtime: "box", default_cwd: "/home/you/work" });
 });
 
 // --- the page's one scope --------------------------------------------------------------

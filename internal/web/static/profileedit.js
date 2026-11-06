@@ -19,11 +19,16 @@
 //                runtime, through runtimeToSend (always explicit)
 //   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn }
 //                default_cwd, clone_of, clone_share, clone_no_auto_return, through
-//                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing
+//                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
+//                In copy mode a shareText or autoReturn that is omitted (or undefined) keeps the
+//                stored share list and auto-return opt-out; folder mode drops all four
 //   agent      { bin, account, options: { model, effort, effortLevel } }
 //   cloud      { aws_connections: [name], tokens: [name], github: binding|null, aws: null }
 //                github is ghBindingFromForm's answer; its egress_allow is carried when
-//                not stated; the legacy aws is never edited, only removed (aws: null)
+//                not stated; the legacy aws is never edited, only removed (aws: null).
+//                The merge sends the binding as given: the caller refuses a bad permission
+//                set first (pfvGithubError), because repairing it here would turn "none
+//                ticked" into the six read defaults
 //   reachable  { context_paths: [path], egress_allow: [domain] }
 //   network    { egress_open: bool }
 //   advanced   { base, args: [string], envRows: [row], options: { <other keys> },
@@ -37,6 +42,11 @@
 function pfeDep(name, file) {
   return typeof globalThis[name] === "function" ? globalThis[name] : require(file)[name];
 }
+
+// GH_WRITABLE is a top-level const of profileform.js: a classic script's const is in
+// the page's shared scope but not on globalThis, so it is read by name when the page
+// has it and required under node.
+const pfeGhWritable = () => (typeof GH_WRITABLE !== "undefined" ? GH_WRITABLE : require("./profileform.js").GH_WRITABLE);
 
 // The options the Agent block owns, by key: renderPfOptions renders every option
 // in one list, and the desktop page puts these three in the Agent block with CSS
@@ -63,9 +73,42 @@ const PFE_FIELD_BLOCK = new Map([
   ["base", "advanced"], ["args", "advanced"], ["env", "advanced"], ["secrets", "advanced"], ["replyable", "advanced"], ["imports_off", "advanced"],
 ]);
 
+// What the host switch and its refusal call each box-only setting: the read view's
+// words, keyed by the profile field the server names.
+const PFE_HOST_KIND = new Map([
+  ["aws", "Old-style AWS"], ["aws_connections", "AWS connections"], ["github", "GitHub"], ["tokens", "Tokens"],
+  ["context_paths", "Readable folders"], ["egress_allow", "Domains"], ["egress_open", "Network settings"],
+]);
+
 const PFE_STALE_TEXT = "This profile changed elsewhere";
+const PFE_GONE_TEXT = "This profile was deleted elsewhere";
 const PFE_SAVE_FAILED = "Could not save this profile.";
 const PFE_HOST_REFUSAL = "A private copy needs a box. Set Workspace to 'Work in this folder' first.";
+// ghFormError's sentence for a binding with no permission ticked (profileform.js; a test pins them equal).
+const PFE_NO_PERMISSION = "GitHub: tick at least one permission, or the agent gets none.";
+
+// The refusals the server words in config keys, and what the page says instead.
+// A class is recognised by the field the server names and by its sentence, both:
+// the same words under another field are not the class. The server's sentences
+// are in internal/config (aws.go, awsconn.go, github.go, statictoken.go, clone.go,
+// contextpaths.go), internal/box/contextpaths.go and internal/web/profiles.go.
+const PFE_FOLDER_GONE = "This folder no longer exists. Remove it or pick another."; // the approved mockup's (err2)
+const PFE_CREDENTIAL_MISSING = "Not found in Credentials. Remove it or create it.";
+const PFE_RELATIVE_PATH = "Use a full path that starts with /";
+// A name the connection, token or GitHub App lists do not define (config.UndefinedRefError).
+const PFE_CREDENTIAL_FIELD = /^(?:aws_connections\[\d+\]|tokens\[\d+\]|github\.owners\[\d+\]\.(?:app|token))$/;
+const PFE_UNDEFINED = /\bis not defined in (?:aws_connections|static_tokens|github_apps)\s*$/;
+// absClean (clone_of, default_cwd, context_paths) and the box's own check say it alike.
+const PFE_PATH_FIELDS = new Set(["context_paths", "clone_of", "default_cwd"]);
+const PFE_RELATIVE = /\bmust be an absolute path\b/;
+// box.CheckContextPathID: some component of the path is not there.
+const PFE_FOLDER_FIELD = /^context_paths\[\d+\]$/;
+const PFE_NOT_THERE = /\bdoes not exist\s*$/;
+// A box-only setting on the host tier: "requires/require/needs/need runtime: box",
+// ErrContextNeedsBox's `needs runtime "box"`, and the clone refusal.
+const PFE_NEEDS_BOX = /\b(?:requires?|needs?) runtime[:\s]+"?box\b|\bruns only in a box\b/;
+// The `profile "<name>": ` some wrappers put in front (the name is %q-quoted, so a quote in it is escaped).
+const PFE_PROFILE_PREFIX = /^profile "(?:[^"\\]|\\.)*": /;
 
 // --- small helpers -------------------------------------------------------------------
 
@@ -76,6 +119,12 @@ const pfeClone = (doc) => JSON.parse(JSON.stringify(doc && typeof doc === "objec
 const pfeNames = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x !== "") : []);
 // One entry per item, trimmed, blanks dropped, order kept.
 const pfeLines = (v) => (Array.isArray(v) ? v.map(pfeTrim).filter(Boolean) : []);
+
+// pfeWords: permission keys as words, "contents, pull requests and issues".
+function pfeWords(keys) {
+  const w = keys.map((k) => k.replace(/_/g, " "));
+  return w.length < 2 ? w.join("") : w.slice(0, -1).join(", ") + " and " + w[w.length - 1];
+}
 
 // pfeEmpty: a value that means "this key is not set". false counts, because every
 // boolean profile key (replyable, imports_off, egress_open) is stored only when true.
@@ -119,11 +168,18 @@ const PFE_MERGE = {
     pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(v.tier, doc.runtime, v.boxAvailable !== false));
   },
 
-  workspace(out, v) {
+  workspace(out, v, doc) {
     // Never guess between a folder and a copy: a wrong guess drops clone_of or invents it.
     if (v.mode !== "copy" && v.mode !== "folder") return;
+    // wmFieldsToSend reads a missing autoReturn as "on" and a missing shareText as "none",
+    // which would drop a stored opt-out or share list the values never mentioned.
+    const given = Object.assign({}, v);
+    if (v.mode === "copy") {
+      if (given.shareText === undefined) given.shareText = pfeLines(doc.clone_share).join("\n");
+      if (given.autoReturn === undefined) given.autoReturn = doc.clone_no_auto_return !== true;
+    }
     for (const k of PFE_WORKSPACE_KEYS) delete out[k];
-    Object.assign(out, pfeDep("wmFieldsToSend", "./workmode.js")(v.mode, v));
+    Object.assign(out, pfeDep("wmFieldsToSend", "./workmode.js")(v.mode, given));
   },
 
   agent(out, v) {
@@ -240,19 +296,19 @@ function pfvHostRemovals(doc) {
   const d = doc && typeof doc === "object" ? doc : {};
   const out = [];
   const conns = pfeNames(d.aws_connections);
-  if (conns.length) out.push({ kind: "AWS connections", names: conns });
-  if (d.aws && typeof d.aws === "object") out.push({ kind: "Old-style AWS", names: pfeNames([d.aws.label]) });
+  if (conns.length) out.push({ kind: PFE_HOST_KIND.get("aws_connections"), names: conns });
+  if (d.aws && typeof d.aws === "object") out.push({ kind: PFE_HOST_KIND.get("aws"), names: pfeNames([d.aws.label]) });
   if (d.github && typeof d.github === "object") {
     const owners = Array.isArray(d.github.owners) ? d.github.owners : [];
-    out.push({ kind: "GitHub", names: pfeNames(owners.map((o) => o && o.owner)) });
+    out.push({ kind: PFE_HOST_KIND.get("github"), names: pfeNames(owners.map((o) => o && o.owner)) });
   }
   const tokens = pfeNames(d.tokens);
-  if (tokens.length) out.push({ kind: "Tokens", names: tokens });
+  if (tokens.length) out.push({ kind: PFE_HOST_KIND.get("tokens"), names: tokens });
   const folders = pfeNames(d.context_paths);
-  if (folders.length) out.push({ kind: "Readable folders", names: folders });
+  if (folders.length) out.push({ kind: PFE_HOST_KIND.get("context_paths"), names: folders });
   const domains = pfeNames(d.egress_allow);
-  if (domains.length) out.push({ kind: "Domains", names: domains });
-  if (d.egress_open === true) out.push({ kind: "Network settings", names: [] });
+  if (domains.length) out.push({ kind: PFE_HOST_KIND.get("egress_allow"), names: domains });
+  if (d.egress_open === true) out.push({ kind: PFE_HOST_KIND.get("egress_open"), names: [] });
   return out;
 }
 
@@ -293,28 +349,76 @@ function pfvGhPreset(levels) {
   return "read-only";
 }
 
+// pfvGithubError: the sentence that stops a GitHub binding from being saved, or "".
+// The caller runs it on the binding it is about to merge (pfvMergeBlock sends a
+// binding as given, so a bad set reaches the server only if this was skipped). The
+// rules are today's (ghFormError, config GitHubBinding.Validate): a permission set
+// that is stated must not be empty, because an empty one is "none ticked" and the
+// server would read an absent one as the six read defaults; and only the keys in
+// GH_WRITABLE may be write. A binding that states no permissions is the defaults and
+// passes. A personal access token owner is not narrowed by the set (its row says
+// so) but the set is checked all the same, as the old form did.
+function pfvGithubError(binding) {
+  if (!binding || typeof binding !== "object") return "";
+  const perms = binding.permissions;
+  if (perms === undefined || perms === null) return "";
+  if (typeof perms !== "object" || Array.isArray(perms) || Object.keys(perms).length === 0) return PFE_NO_PERMISSION;
+  const writable = pfeGhWritable();
+  const bad = Object.keys(perms).filter((k) => perms[k] === "write" && !writable.includes(k));
+  if (bad.length === 0) return "";
+  return "GitHub: " + pfeWords(bad) + " can't be write; only " + pfeWords(writable) + " can.";
+}
+
 // --- a failed save --------------------------------------------------------------------------------
 
+// pfeSentence: the server's sentence for the user: without the leading
+// `profile "<name>": ` some wrappers add, trimmed, or the fallback when nothing is left.
+function pfeSentence(raw) {
+  return pfeTrim(pfeTrim(raw).replace(PFE_PROFILE_PREFIX, "")) || PFE_SAVE_FAILED;
+}
+
+// pfeFieldText: what a refusal that names a field says. The classes the server words in
+// config keys (see the constants) get plain sentences; any other keeps the server's own.
+function pfeFieldText(field, sentence) {
+  const head = (/^[^.[\]]+/.exec(field) || [""])[0];
+  if (PFE_PATH_FIELDS.has(head) && PFE_RELATIVE.test(sentence)) return PFE_RELATIVE_PATH;
+  if (PFE_FOLDER_FIELD.test(field) && PFE_NOT_THERE.test(sentence)) return PFE_FOLDER_GONE;
+  if (PFE_CREDENTIAL_FIELD.test(field) && PFE_UNDEFINED.test(sentence)) return PFE_CREDENTIAL_MISSING;
+  if (PFE_NEEDS_BOX.test(sentence)) {
+    if (head === "clone_of") return PFE_HOST_REFUSAL;
+    const kind = PFE_HOST_KIND.get(head);
+    if (kind) return kind + " can't be used when Runs in is On this machine. Set Runs in to Box, or remove the setting.";
+  }
+  return sentence;
+}
+
 // pfvSaveError: what a refused save means for the page. status and body are the
-// response's (body the parsed JSON, {error, code?, field?}).
-//   kind "stale"  409 profile_changed (a deleted profile has the same code): the
-//                 block says "This profile changed elsewhere" with Reload
-//   kind "field"  a refusal that names a field: `field` is its path and `block`
-//                 the block that owns it ("" when none does, e.g. the name)
-//   kind "block"  anything else: the server's sentence, shown at the top of the
-//                 open block (block and field are "")
-// text is the server's sentence unchanged, so an older client's matching and the
-// words the server already chose keep working.
+// response's (body the parsed JSON, {error, code?, field?, gone?}).
+//   kind "stale"  409 profile_changed: the block says "This profile changed elsewhere"
+//                 with Reload
+//   kind "gone"   409 profile_changed with gone (the profile was deleted meanwhile):
+//                 there is nothing to reload, so the page offers something else
+//   kind "field"  a 400 that names a field: `field` is its path and `block` the block
+//                 that owns it ("" when none does, e.g. the name)
+//   kind "block"  anything else: shown at the top of the open block (block and field "")
+// text is in words. The server's refusals about a vanished folder, an undefined
+// credential, a relative path and a box-only setting on host are worded here (spec 5.6:
+// plain words, never config keys); every other sentence is the server's own with the
+// leading `profile "<name>": ` taken off.
 function pfvSaveError(status, body) {
   const b = body && typeof body === "object" ? body : {};
-  const sentence = pfeTrim(b.error) || PFE_SAVE_FAILED;
-  if (status === 409 && b.code === "profile_changed") return { kind: "stale", block: "", field: "", text: PFE_STALE_TEXT };
+  if (status === 409 && b.code === "profile_changed") {
+    return b.gone === true
+      ? { kind: "gone", block: "", field: "", text: PFE_GONE_TEXT }
+      : { kind: "stale", block: "", field: "", text: PFE_STALE_TEXT };
+  }
+  const sentence = pfeSentence(b.error);
   if (status === 400 && typeof b.field === "string" && b.field !== "") {
-    return { kind: "field", block: pfvBlockForField(b.field), field: b.field, text: sentence };
+    return { kind: "field", block: pfvBlockForField(b.field), field: b.field, text: pfeFieldText(b.field, sentence) };
   }
   return { kind: "block", block: "", field: "", text: sentence };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal, pfvGhPreset, pfvGhPresetLevels, pfvSaveError };
+  module.exports = { pfvMergeBlock, pfvBlockForField, pfvGuard, pfvHostRemovals, pfvToHost, pfvHostRefusal, pfvGhPreset, pfvGhPresetLevels, pfvGithubError, pfvSaveError };
 }
