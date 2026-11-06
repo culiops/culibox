@@ -194,6 +194,28 @@ test("in a narrow pane only the tabs hide; + Shell stays down to the width where
   assert.ok(floor.px < 230, "a 250 px pane (230 content) still shows + Shell");
 });
 
+// The profile page in a narrow window (Task 11 slice gate, gap 1). The shell takes 502 px (sidebar 290, Settings nav 212), so #pfv is 398 px in a
+// 900 px window and 199 px in a 701 px one. The steps are container rules on #pfv, each inside the desktop block (so mobile cannot see them):
+// 863 puts the scope under the name, 624 puts a block's label above its body (the Edit link stays on the label's line), 440 puts Remove or Undo
+// on its own line under a row's content, 300 puts the kind word above the content, 240 trims the margins so Discard and Save fit at 701.
+test("the profile page stacks its blocks in narrow windows: container steps on #pfv, widest first, each inside the desktop block", () => {
+  const steps = containerRules().filter((r) => /#pfv /.test(r.body));
+  assert.deepStrictEqual(steps.map((r) => r.px), [863, 624, 440, 300, 240]);
+  const at = (px) => steps.find((r) => r.px === px).body;
+  // The label on its own line above the body; Edit on the label's line, right-aligned; the body the full width, Advanced's too.
+  assert.match(at(624), /\.pfv-block \{ grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(at(624), /\.pfv-act \{ grid-column: 2; grid-row: 1;/);
+  assert.match(at(624), /\.pfv-body, [^{]*\.pfv-adv-body \{ grid-column: 1 \/ -1; grid-row: 2;/);
+  assert.match(at(624), /\.pfv-rows \{ grid-template-columns: minmax\(0, 1fr\);/, "a row's track may be narrower than its longest word");
+  // Remove never sits beside an input: it has its own line under the content, at the right.
+  assert.match(at(440), /\.pfv-row \{ grid-template-columns: 52px minmax\(0, 1fr\);/);
+  assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);
+  assert.match(at(300), /\.pfv-row \{ display: flex; flex-direction: column;/);
+  assert.match(at(240), /\.pfv-in \{ padding: 20px 12px 120px;/);
+  // The read/write control of a permission wraps under its label by itself, so it has no step of its own.
+  assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
+});
+
 test("below the icon threshold every tab shows its icon and hides its label", () => {
   const icons = headerRule(/\.ph-lbl\s*\{/);
   assert.ok(/\.ph-lbl\s*\{[^}]*display:\s*none/.test(icons.body), "label hidden");

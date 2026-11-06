@@ -143,7 +143,9 @@ function pfaCheckbox(rec, key, label, detail, checked, onChange) {
   const err = pfvFerr(rec, key);
   if (!err) return lab;
   const w = pfvMk("div", "pfv-field");
-  w.append(lab, pfvMk("p", "pfv-ferr", err));
+  const words = pfvMk("p", "pfv-ferr", err);
+  pfvBad(rec, cb, words);
+  w.append(lab, words);
   return w;
 }
 
@@ -222,6 +224,7 @@ function pfaEnvField(rec, host) {
   // A row was typed in or taken, put or brought back: a refusal about the list is stale.
   const changed = () => {
     box.clear();
+    names.forEach((n) => { if (n) pfvOk(n); });
     if (secretsNode) {
       secretsNode.hidden = true;
       rec.ferrs = rec.ferrs.filter((e) => !pfvFieldIs(e.field, "secrets"));
@@ -253,6 +256,18 @@ function pfaEnvField(rec, host) {
     }));
   };
   paint();
+  // A refusal about the list is about one row of it, the first that makes the list wrong (a name that is not one, or the second
+  // of a pair): that row's name is what is invalid, and where focus goes after a refused Save.
+  const words = box.words() || secretsNode;
+  if (words) {
+    const live = pfaLive(v.envRows);
+    const bad = live.findIndex((_, i) => rowError(live.slice(0, i + 1)) !== "");
+    const input = names[bad >= 0 ? v.envRows.indexOf(live[bad]) : v.envRows.findIndex((r) => r.removed !== true)];
+    if (input) {
+      pfvBad(rec, input, words);
+      if (rec.invalid === ctl) rec.invalid = input;
+    }
+  }
   for (const [label, kind] of [["+ Add variable", "literal"], ["+ Add secret", "secret"]]) {
     const b = pfvDrawLink(label, "");
     b.onclick = () => {

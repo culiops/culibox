@@ -3343,3 +3343,138 @@ test("a forced close (the window crossed to a phone) ends the edit through pfvDr
   assert.strictEqual(m.box.pageLeaveHook("force"), true);
   assert.strictEqual(m.run("pfvState").pending, true, "it drops nothing there");
 });
+
+// --- Task 11 slice gate: the edit blocks as the mockup draws them -------------------------------------------------------
+
+test("GitHub permissions are listed writable first, in the mockup's order; Repos is a one-line input", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(field(t, "gh:0:repos").tag, "input", "one line, not a textarea");
+  assert.strictEqual(field(t, "gh:0:repos").getAttribute("placeholder"), "payments-api, runbooks");
+  clickBtn(blockOf(t, "cloud"), "Customise");
+  const rows = byCls(blockOf(t, "cloud"), "pfv-perm");
+  assert.deepStrictEqual(rows.map((r) => texts(r, "pfv-check-t")[0]), ["contents", "pull requests", "issues", "metadata", "actions", "checks", "statuses"]);
+  assert.deepStrictEqual(rows.map((r) => byCls(r, "pfv-seg").length), [1, 1, 1, 0, 0, 0, 0], "the three that can be written come first, each with its Read/Write control");
+  // A comma list is still what is sent.
+  typeInto(field(t, "gh:0:repos"), "payments-api, runbooks");
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].github.owners[0].repos, ["payments-api", "runbooks"]);
+});
+
+test("Effort not set says who decides, until one is lit", async () => {
+  const t = page();
+  await t.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const hints = () => texts(blockOf(t, "agent"), "pfv-hint");
+  assert.ok(hints().includes("Not set: Claude Code decides."), "no effort stored: the line is under the control");
+  const lit = field(t, "options.effort");
+  assert.strictEqual(lit.parent.children[lit.parent.children.indexOf(lit) + 1].textContent, "Not set: Claude Code decides.", "right under it");
+  lit.children.find((b) => b.dataset.segvalue === "high").click();
+  assert.ok(!hints().includes("Not set: Claude Code decides."), "gone once an effort is picked");
+  // A profile that has one never shows it.
+  const set = page();
+  await set.box.pfvShow("aws-ops");
+  clickBtn(blockOf(set, "agent"), "Edit");
+  assert.ok(!texts(blockOf(set, "agent"), "pfv-hint").includes("Not set: Claude Code decides."));
+  // The Manage link stays beside the login hint.
+  assert.deepStrictEqual(byText(blockOf(set, "agent"), "button", "Manage").length, 1);
+});
+
+test("Advanced keeps its fold label while editing: the chevron turned down and what is set, the form under it", async () => {
+  for (const [doc, word] of [[{}, "Advanced · none set"], [{ args: ["--verbose"], env: { LOG_LEVEL: "debug" } }, "Advanced · 2 set"]]) {
+    const t = page();
+    await openAdv(t, "aws-ops", doc);
+    const adv = advOf(t);
+    assert.ok(adv.className.includes("pfv-editing"));
+    const label = byCls(adv, "pfv-label")[0];
+    assert.strictEqual(label.textContent, word);
+    assert.ok(label.className.includes("pfv-adv-label"), "the label spans the block, so the form sits under it");
+    assert.strictEqual(byCls(label, "pfv-chev").length, 1);
+    assert.ok(adv.className.includes("pfv-open"), "the chevron is turned down");
+    assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "there is nothing to fold while it is edited");
+    assert.ok(byCls(adv, "pfv-edit-body")[0].className.includes("pfv-adv-body"));
+  }
+  // The other blocks keep their plain label.
+  const o = page();
+  await o.box.pfvShow("aws-ops");
+  clickBtn(blockOf(o, "agent"), "Edit");
+  assert.strictEqual(byCls(blockOf(o, "agent"), "pfv-label")[0].className, "pfv-label");
+});
+
+test("a failed save focuses the first invalid field and marks it aria-invalid, pointing at its words; fixing it clears both", async () => {
+  const t = cloudPage();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "reachable"), "+ Add folder or domain");
+  optBtn(t, "reachable", "Folder").click();
+  const input = () => field(t, "folder:1");
+  typeInto(input(), "home/you/runbooks");
+  assert.strictEqual(input().getAttribute("aria-invalid"), null, "nothing is wrong until Save says so");
+  assert.strictEqual(await saveBlock(t, "reachable"), false);
+  assert.strictEqual(Node.focused, input(), "focus is on the field, not on Save");
+  assert.strictEqual(input().getAttribute("aria-invalid"), "true");
+  const words = byCls(blockOf(t, "reachable"), "pfv-ferr")[0];
+  assert.ok(words.id, "the words have an id");
+  assert.strictEqual(input().getAttribute("aria-describedby"), words.id);
+  typeInto(input(), "/home/you/runbooks");
+  assert.strictEqual(input().getAttribute("aria-invalid"), null);
+  assert.strictEqual(input().getAttribute("aria-describedby"), null);
+  assert.strictEqual(await saveBlock(t, "reachable"), true);
+});
+
+test("a refusal from the server focuses its field too: an input, a segmented control, a stored row's Remove", async () => {
+  // Workspace: an input under the picker; the focus must not open the folder dropdown.
+  const w = page();
+  await openWs(w);
+  w.box.putFail = apiErr(400, { error: 'profile "aws-ops": default working dir cannot be contained: it is your home', field: "default_cwd" });
+  lastPicker(w).pick("/home/you");
+  assert.strictEqual(await clickBtn(blockOf(w, "workspace"), "Save"), false);
+  assert.strictEqual(Node.focused, field(w, "folder"));
+  assert.strictEqual(field(w, "folder").getAttribute("aria-invalid"), "true");
+  assert.strictEqual(field(w, "folder").getAttribute("aria-describedby"), byCls(blockOf(w, "workspace"), "pfv-ferr")[0].id);
+  assert.strictEqual(lastPicker(w).opened, 0, "a focus the page moved is not a request for the dropdown");
+  // Agent: a segmented control is not focusable, its lit button is.
+  const a = page();
+  await a.box.pfvShow("aws-ops");
+  clickBtn(blockOf(a, "agent"), "Edit");
+  pickModel(a, "claude-sonnet-5");
+  a.box.putFail = apiErr(400, { error: 'profile "aws-ops": options.effort: "high" is not one of the allowed values', field: "options.effort" });
+  assert.strictEqual(await clickBtn(blockOf(a, "agent"), "Save"), false);
+  const seg = field(a, "options.effort");
+  assert.strictEqual(Node.focused.textContent, "high");
+  assert.ok(seg.contains(Node.focused), "the lit button of the control the refusal is under");
+  assert.strictEqual(seg.getAttribute("aria-invalid"), "true");
+  // A refusal that names a stored row (a folder that is gone) has no input: the row's Remove is read with it and focused.
+  const r = cloudPage();
+  await r.box.pfvShow("aws-ops");
+  clickBtn(blockOf(r, "reachable"), "Edit");
+  clickBtn(blockOf(r, "reachable"), "+ Add folder or domain");
+  optBtn(r, "reachable", "Domain").click();
+  typeInto(field(r, "domain:2"), "ok.example.com");
+  r.box.putFail = gone400();
+  assert.strictEqual(await saveBlock(r, "reachable"), false);
+  const row = rowFor(r, "reachable", "Folder", "/home/you/other-repo/docs");
+  const rm = byText(row, "button", "Remove")[0];
+  assert.strictEqual(Node.focused, rm);
+  assert.strictEqual(rm.getAttribute("aria-describedby"), byCls(row, "pfv-ferr")[0].id);
+  assert.strictEqual(rm.getAttribute("aria-invalid"), null, "a button is not an invalid field");
+});
+
+test("a variable's refusal focuses the row that is wrong, not the first row, and typing clears it", async () => {
+  const t = page();
+  await openAdv(t, "aws-ops");
+  clickBtn(advOf(t), "+ Add variable");
+  typeRow(envRowsOf(t)[0], "OK_ONE", "1");
+  clickBtn(advOf(t), "+ Add variable");
+  typeRow(envRowsOf(t)[1], "1BAD", "x");
+  assert.strictEqual(await clickBtn(advOf(t), "Save"), false);
+  const bad = () => rowName(envRowsOf(t)[1]);
+  assert.strictEqual(Node.focused, bad(), "the second row is the one that is wrong");
+  assert.strictEqual(bad().getAttribute("aria-invalid"), "true");
+  assert.strictEqual(bad().getAttribute("aria-describedby"), byCls(advOf(t), "pfv-ferr")[0].id);
+  assert.strictEqual(rowName(envRowsOf(t)[0]).getAttribute("aria-invalid"), null);
+  typeRow(envRowsOf(t)[1], "GOOD", "x");
+  assert.strictEqual(bad().getAttribute("aria-invalid"), null);
+  assert.strictEqual(bad().getAttribute("aria-describedby"), null);
+});

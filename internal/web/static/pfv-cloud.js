@@ -77,9 +77,12 @@ function pfcToggle(rec, list, e) {
 
 // pfcRowNode: a read view row with its Remove (Undo) at the right. o: {removed, key, toggle, err}.
 function pfcRowNode(rec, r, o) {
-  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id });
+  const rm = pfcRmButton(rec, r.kind + " " + r.name, o.key, o.removed, o.toggle);
+  // A refusal that names a stored row has no input to sit under: the Remove beside it is what answers it (a folder that is gone is
+  // removed or replaced), so that is what reads it and what takes focus.
+  const row = pfvDrawRow(r, rec.known, o.err || "", { edit: true, block: rec.id, bad: (words) => pfvBad(rec, rm, words, true) });
   if (o.removed) row.classList.add("pfv-removed");
-  row.append(pfcRmButton(rec, r.kind + " " + r.name, o.key, o.removed, o.toggle));
+  row.append(rm);
   return row;
 }
 
@@ -247,6 +250,11 @@ function pfcPermWords(levels) {
   return [[write.length ? "Can write: " + words(write) + "." : "", read.length ? "Read only: " + words(read) + "." : ""].filter(Boolean).join(" ")];
 }
 
+// The order Customise lists them in (the mockup's): the three the server lets be written first, then those that are only read.
+// A permission the server adds later is listed last rather than lost.
+const PFC_PERM_ORDER = ["contents", "pull_requests", "issues", "metadata", "actions", "checks", "statuses"];
+const pfcPermOrder = () => PFC_PERM_ORDER.filter((k) => GH_PERMS.includes(k)).concat(GH_PERMS.filter((k) => !PFC_PERM_ORDER.includes(k)));
+
 // pfcPermRow: one permission: ticked means read, and the three the server lets be written also say read or write.
 function pfcPermRow(rec, k) {
   const v = rec.values;
@@ -276,7 +284,7 @@ function pfcPermsField(rec, c) {
   cust.onclick = () => { rec.ui.customise = rec.ui.customise !== true; pfvRedrawForm(rec); };
   pfvReg(rec, "gh:customise", cust);
   body.append(sum, cust);
-  if (rec.ui.customise === true) for (const k of GH_PERMS) body.append(pfcPermRow(rec, k));
+  if (rec.ui.customise === true) for (const k of pfcPermOrder()) body.append(pfcPermRow(rec, k));
   const warn = ghWriteWarning(v.perms, wmModeOf(c.doc) !== "copy");
   if (warn) body.append(pfvMk("p", "pfv-warnw", warn));
   return pfvFieldBox(rec, "github.permissions", "Permissions", body, [], "fieldset");
@@ -299,15 +307,10 @@ function pfcGithubFields(rec, c, i, at, withPerms) {
   const own = pfvTextCtl(rec, "gh:" + i + ":owner", g.owner, true, (val) => { g.owner = val; ownBox.clear(); pfvPaint(); }, () => {});
   own.setAttribute("placeholder", "culiops");
   const ownBox = pfvFieldBox(rec, key("owner"), "GitHub org or user", own, []);
-  const ta = pfvMk("textarea", "pfv-ctl pfv-ctl-mono pfv-area");
-  ta.id = "pfv-f" + ++pfvUid;
-  ta.setAttribute("autocomplete", "off");
-  ta.setAttribute("spellcheck", "false");
-  ta.setAttribute("placeholder", "payments-api, runbooks");
-  ta.value = g.repos;
-  pfvReg(rec, "gh:" + i + ":repos", ta);
-  const reposBox = pfvFieldBox(rec, key("repos"), "Repos", ta, ["Comma separated."]);
-  ta.oninput = () => { g.repos = ta.value; reposBox.clear(); pfvPaint(); };
+  // One line, comma separated (a paste with line breaks is read the same: pfcRepos splits on both).
+  const repos = pfvTextCtl(rec, "gh:" + i + ":repos", g.repos, true, (val) => { g.repos = val; reposBox.clear(); pfvPaint(); }, () => {});
+  repos.setAttribute("placeholder", "payments-api, runbooks");
+  const reposBox = pfvFieldBox(rec, key("repos"), "Repos", repos, ["Comma separated."]);
   out.append(ownBox, reposBox);
   if (withPerms) out.append(pfcPermsField(rec, c));
   return out;

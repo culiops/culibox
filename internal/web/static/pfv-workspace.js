@@ -189,7 +189,11 @@ function pfwCopyFieldNodes(rec, storedCopy) {
   lab.append(cb, pfvMk("span", "pfv-check-t", "Bring work home automatically"));
   const out = [dirBox, shareBox, lab];
   const err = pfvFerr(rec, "clone_no_auto_return");
-  if (err) out.push(pfvMk("p", "pfv-ferr", err));
+  if (err) {
+    const words = pfvMk("p", "pfv-ferr", err);
+    pfvBad(rec, cb, words);
+    out.push(words);
+  }
   return out;
 }
 

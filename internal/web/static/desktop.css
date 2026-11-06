@@ -1818,6 +1818,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
   #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: 12.5px; font-weight: 500; }
+  /* A fieldset's legend is not a grid item, so the field's 5px gap does not reach it: it carries the gap itself (the mockup's Effort legend). */
+  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 5px; }
   #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: 12px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: 12px; color: var(--red); overflow-wrap: anywhere; }
@@ -1827,12 +1829,14 @@
   #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: 12.5px; }
   #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
   #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: 12px; line-height: 18px; }
   /* Where it runs: two cards, the lit one outlined. */
   #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-choice .pfv-flabel { margin-bottom: 3px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-choice > legend.pfv-flabel { margin-bottom: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1861,9 +1865,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
   /* Advanced (editing): the variables and secrets are rows of the page's own grammar (the kind column, the content, Remove or Undo at the right;
      the .pfv-row, .pfv-k, .pfv-rmbtn and .pfv-removed rules of the Cloud rows), the content being the mockup's .kv: a name, and a value or
-     where a secret is read from. The rows' inputs are 32px tall, so the row is centred on them. Look source: option-b/index.html (.kv, tpl-env, tpl-secret). */
+     where a secret is read from. The rows' inputs are 32px tall, and the kind word and Remove sit at their top (the mockup's .row aligns to start). Look source: option-b/index.html (.kv, tpl-env, tpl-secret). */
   #page-host > #settings-modal.as-page #pfv .pfv-env { display: grid; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-env .pfv-row { align-items: center; }
   #page-host > #settings-modal.as-page #pfv .pfv-kv { grid-column: 2 / 4; display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-adds { display: flex; gap: 14px; margin-top: 4px; }
   /* Cloud and tokens, Also reachable (editing): the read view's rows with Remove at the right (Undo while the removal is pending,
@@ -1880,13 +1883,15 @@
   #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: 12px; line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2 / 4; }
   #page-host > #settings-modal.as-page #pfv .pfv-rowedit { grid-column: 2 / -1; margin-top: 12px; padding: 14px 0 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-perms { display: grid; gap: 4px; justify-items: start; }
-  #page-host > #settings-modal.as-page #pfv .pfv-permsum { line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-cust { padding: 0 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; justify-self: stretch; min-height: 30px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perms { display: grid; justify-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-permsum { margin-bottom: 5px; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-cust { padding: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-cust[aria-expanded="true"] { margin-bottom: 10px; }
+  /* A permission and its Read/Write control: side by side while they fit, the control under it (at the left) when they do not. */
+  #page-host > #settings-modal.as-page #pfv .pfv-perm { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 12px; justify-self: stretch; min-height: 30px; }
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 4px; font-size: 12px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: 12px; color: var(--red); }
   /* The stand-in for the "+ Add" picker: the kinds that are an input row. */
   #page-host > #settings-modal.as-page #pfv .pfv-pick { box-sizing: border-box; width: 420px; max-width: 100%; margin-top: 6px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; gap: 1px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
@@ -1924,5 +1929,50 @@
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-kv { grid-column: 2; }
+  }
+
+  /* Narrow windows. The shell takes 502px (sidebar 290 + Settings nav 212), so a 900px window leaves the page 398px and a 701px one 199px,
+     and the block's 120px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
+     no narrow design: these steps only stack what it already draws, in its own grammar, and change nothing above them. The thresholds
+     are the page's width (#pfv), measured: at 624px (a 1126px window) the label column starts to cost the body more than it is worth;
+     at 440px (942px) a row's content, with a kind word and Remove beside it, falls under what a name and a value need; at 300px (802px)
+     it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. */
+  /* The label above its body, the Edit link on the label's line, the body the full width. */
+  @container (max-width: 624px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-block { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-label, #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1; grid-row: 1; }
+    #page-host > #settings-modal.as-page #pfv .pfv-act { grid-column: 2; grid-row: 1; flex-direction: row; align-items: center; gap: 8px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-body, #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 1 / -1; grid-row: 2; }
+    #page-host > #settings-modal.as-page #pfv .pfv-adv-body { margin-top: 0; }
+    /* A row's track may be narrower than its longest word, and a path or an id breaks anywhere rather than run out of the page. */
+    #page-host > #settings-modal.as-page #pfv .pfv-rows { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv :is(.pfv-nm, .pfv-mono) { overflow-wrap: anywhere; }
+    /* The header's title and its actions (with "Unsaved changes" among them) go on two lines rather than squeeze the name into a column. */
+    #page-host > #settings-modal.as-page #pfv .pfv-head { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 12em; }
+    #page-host > #settings-modal.as-page #pfv .pfv-acts { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
+  }
+  /* A row keeps its kind word and its content side by side; Remove or Undo goes on its own line under the content, at the right, so it can
+     never sit on an input. A variable's value goes under its name, a definition under its term. */
+  @container (max-width: 440px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-foot { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-fbtns { margin-left: auto; }
+  }
+  /* The kind word above its content, which then has the whole width. */
+  @container (max-width: 300px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-row { display: flex; flex-direction: column; gap: 2px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { align-self: flex-end; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { column-gap: 12px; }
+    #page-host > #settings-modal.as-page #pfv :is(.pfv-adv-label, .pfv-fold) { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-link { text-align: left; }
+  }
+  /* A 701px window leaves the page 199px: less margin, so Discard and Save still fit beside each other inside the block. */
+  @container (max-width: 240px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 20px 12px 120px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 16px 14px; }
   }
 }

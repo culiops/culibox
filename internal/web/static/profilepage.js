@@ -300,8 +300,9 @@ function pfvDrawLink(label, cls, aria) {
   return b;
 }
 
-// o: {block, edit}. block: the block the row belongs to (the read view's Remove link opens it with the row
-// removed); edit: the row is drawn in the open block, whose Remove column is the way out, so the link is not drawn.
+// o: {block, edit, bad}. block: the block the row belongs to (the read view's Remove link opens it with the row
+// removed); edit: the row is drawn in the open block, whose Remove column is the way out, so the link is not drawn;
+// bad: called with the words of a refusal that names the row, so the open block can point its control at them.
 function pfvDrawScope(r, known, o) {
   const p = pfvMk("p", "pfv-scope");
   const at = o || {};
@@ -346,7 +347,11 @@ function pfvDrawRow(r, known, err, o) {
     s.append(...pfvMonoNodes(sub, known));
     id.append(s);
   }
-  if (err) id.append(pfvMk("p", "pfv-ferr", err));
+  if (err) {
+    const words = pfvMk("p", "pfv-ferr", err);
+    if (o && typeof o.bad === "function") o.bad(words);
+    id.append(words);
+  }
   row.append(id, pfvDrawScope(r, known, o));
   return row;
 }
@@ -432,6 +437,9 @@ function pfvDrawAct(b) {
   return act;
 }
 
+// pfvAdvLabel: what the Advanced label says: the chevron, the name and how many are set.
+const pfvAdvLabel = (b) => [pfvChevronIcon(), b.label, " ", pfvMk("span", "pfv-muted", "· " + b.status)];
+
 // pfvDrawAdvanced: the folded block. "Advanced · N set" opens by itself when N > 0
 // (pfvState.advOpen overrides once the user has toggled it); with nothing set there
 // is nothing to unfold, so the label is not a button.
@@ -440,16 +448,15 @@ function pfvDrawAdvanced(b, known) {
   const sec = pfvMk("section", "pfv-block" + (open ? " pfv-open" : ""));
   sec.dataset.block = b.id;
   const label = pfvMk("h4", "pfv-label pfv-adv-label");
-  const status = pfvMk("span", "pfv-muted", "· " + b.status);
   if (b.count > 0) {
     const fold = pfvMk("button", "pfv-fold");
     fold.type = "button";
     fold.setAttribute("aria-expanded", open ? "true" : "false");
-    fold.append(pfvChevronIcon(), b.label, " ", status);
+    fold.append(...pfvAdvLabel(b));
     fold.onclick = () => { pfvState.advOpen = !open; pfvRender(); };
     label.append(fold);
   } else {
-    label.append(pfvChevronIcon(), b.label, " ", status);
+    label.append(...pfvAdvLabel(b));
   }
   const body = pfvMk("div", "pfv-body pfv-adv-body");
   if (open) {
@@ -735,7 +742,7 @@ function pfvEditCtx() {
 function pfvNewEdit(id, repair) {
   const ed = PFV_EDITORS[id];
   const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [] };
+  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [], invalid: null };
 }
 
 // pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
@@ -1023,9 +1030,11 @@ function pfvPageLeave(why) {
 // it loses nothing. Created once per draw; the parts that change as the user types are
 // filled by pfvFillForm and pfvPaintEdit.
 function pfvDrawEditBlock(b, rec, known) {
-  const sec = pfvMk("section", "pfv-block pfv-editing");
+  // Advanced keeps its fold label while it is edited (the mockup's: the chevron turned down and what is set), the form under it.
+  const adv = b.id === "advanced";
+  const sec = pfvMk("section", "pfv-block pfv-editing" + (adv ? " pfv-open" : ""));
   sec.dataset.block = b.id;
-  const body = pfvMk("div", "pfv-body pfv-edit-body");
+  const body = pfvMk("div", "pfv-body pfv-edit-body" + (adv ? " pfv-adv-body" : ""));
   const top = pfvMk("div", "pfv-top");
   const form = pfvMk("div", "pfv-form" + (PFV_EDITORS[b.id] && PFV_EDITORS[b.id].fields ? " pfv-fields" : ""));
   const foot = pfvMk("div", "pfv-foot");
@@ -1038,7 +1047,12 @@ function pfvDrawEditBlock(b, rec, known) {
   btns.append(discard, save);
   foot.append(status, btns);
   body.append(top, form, foot);
-  sec.append(pfvMk("h4", "pfv-label", b.label), body);
+  let label = pfvMk("h4", "pfv-label", b.label);
+  if (adv) {
+    label = pfvMk("h4", "pfv-label pfv-adv-label");
+    label.append(...pfvAdvLabel(b));
+  }
+  sec.append(label, body);
   rec.block = b;
   rec.known = known;
   rec.nodes = { sec, top, form, status, discard, save };
@@ -1055,6 +1069,7 @@ function pfvFillForm(rec) {
   pfvDisposeRec(rec);
   rec.fields = {};
   rec.first = null;
+  rec.invalid = null;
   rec.consumed = new Set();
   const kids = ed ? ed.draw(rec, pfvEditCtx()) : [pfvDrawBody(rec.block, rec.known, rec)];
   rec.nodes.form.replaceChildren(...kids);
@@ -1069,8 +1084,7 @@ function pfvRedrawForm(rec) {
   pfvFillForm(rec);
   const el = key ? rec.fields[key] : null;
   if (!el) return;
-  // A segmented control is not focusable itself: its lit button is.
-  const target = el.dataset.value !== undefined ? Array.from(el.children).find((b) => b.dataset.segvalue === el.dataset.value) || el.children[0] : el;
+  const target = pfvFocusTarget(el);
   if (target && typeof target.focus === "function") target.focus();
 }
 
@@ -1175,6 +1189,39 @@ function pfvReg(rec, key, el) {
   return el;
 }
 
+// pfvBad: `control` is in error and `words` (the node that says it) is what a screen reader reads for it: aria-invalid and
+// aria-describedby, and the first control of a form to be marked is where focus goes after a refused Save (pfvFocusInvalid).
+// plain: describe only (a Remove button is no input, so it is not "invalid").
+function pfvBad(rec, control, words, plain) {
+  if (!words.id) words.id = "pfv-e" + ++pfvUid;
+  control.setAttribute("aria-describedby", words.id);
+  if (!plain) control.setAttribute("aria-invalid", "true");
+  if (!rec.invalid) rec.invalid = control;
+}
+
+// pfvOk: the error of `control` is gone: it is not invalid any more.
+function pfvOk(control) {
+  control.removeAttribute("aria-invalid");
+  control.removeAttribute("aria-describedby");
+}
+
+// pfvFocusTarget: the node of a control that takes focus. A segmented control is not focusable itself: its lit button is.
+function pfvFocusTarget(el) {
+  return el.dataset && el.dataset.value !== undefined ? Array.from(el.children).find((b) => b.dataset.segvalue === el.dataset.value) || el.children[0] : el;
+}
+
+// pfvFocusInvalid: after a refused Save, focus goes to the first control the refusal is under. True when it did. The folder's
+// dropdown (the Workspace editor's quiet) is not asked for by a focus that is the page's, not the user's.
+function pfvFocusInvalid(rec) {
+  const el = rec && rec.invalid ? pfvFocusTarget(rec.invalid) : null;
+  if (!el || typeof el.focus !== "function") return false;
+  const ui = rec.ui || {};
+  const was = ui.quiet;
+  ui.quiet = true;
+  try { el.focus(); } finally { ui.quiet = was; }
+  return true;
+}
+
 // pfvFieldIs: a refused field path is the control `key`'s: the same path, or an entry of it ("clone_share[1]" is
 // "clone_share"'s).
 const pfvFieldIs = (field, key) => field === key || field.startsWith(key + "[");
@@ -1201,6 +1248,7 @@ function pfvFieldBox(rec, errKey, label, control, hint, tag) {
   const paint = (err) => {
     control.classList.toggle("pfv-bad", err !== "");
     if (err === "" && hints.length === 0) {
+      pfvOk(control);
       if (below) below.hidden = true;
       return;
     }
@@ -1211,6 +1259,8 @@ function pfvFieldBox(rec, errKey, label, control, hint, tag) {
     below.hidden = false;
     below.className = err ? "pfv-ferr" : "pfv-hint";
     below.replaceChildren(...(err ? [err] : hints));
+    if (err) pfvBad(rec, control, below);
+    else pfvOk(control);
   };
   paint(pfvFerr(rec, errKey));
   w.clear = () => {
@@ -1218,6 +1268,8 @@ function pfvFieldBox(rec, errKey, label, control, hint, tag) {
     rec.nudge = false;
     paint("");
   };
+  // The words, while there are any: what a refusal about a list of controls points them at (the variables).
+  w.words = () => (below && !below.hidden && below.className === "pfv-ferr" ? below : null);
   return w;
 }
 
@@ -1422,7 +1474,11 @@ function pfvRunsForm(rec, c) {
   fs.append(pfvMk("legend", "pfv-flabel", "Where it runs"), box, host);
   const out = [fs];
   const err = pfvFerr(rec, "runtime");
-  if (err) out.push(pfvMk("p", "pfv-ferr", err));
+  if (err) {
+    const words = pfvMk("p", "pfv-ferr", err);
+    pfvBad(rec, rec.first, words);
+    out.push(words);
+  }
   const refusal = v.tier === "host" ? pfvHostRefusal(c.doc) : "";
   // A box profile choosing host: what that costs. A private copy gets the refusal below instead.
   if (pfvToHostPending(rec, c) && !refusal) out.push(pfvMk("p", "pfv-consq", pfvHostConsequence(c.doc)));
@@ -1442,6 +1498,7 @@ function pfvRunsForm(rec, c) {
 // --- Agent -------------------------------------------------------------------------------------------------
 
 const PFV_BINS = [["claude", "Claude Code (claude)"], ["bash", "Bash shell (bash)"]];
+const PFV_EFFORT_UNSET = "Not set: Claude Code decides.";
 const PFV_OTHER = "__other__";
 
 function pfvStoredOptions(doc) {
@@ -1519,7 +1576,9 @@ function pfvAgentForm(rec, c) {
       const ctl = pfvSelect(rec, key, [none].concat(choiceList.map((x) => ({ value: x, label: x }))), v.options[d.key] || "", d.key === "model", pickOpt);
       out.push(pfvFieldBox(rec, key, d.label || d.key, ctl, []));
     } else {
-      out.push(pfvFieldBox(rec, key, d.label || d.key, pfvSegCtl(rec, key, choiceList, v.options[d.key] || "", pickOpt), [], "fieldset"));
+      // Effort not set: say who decides (the mockup's line), so an unlit control is not read as an empty choice.
+      const hint = claude && d.key === "effort" && !v.options[d.key] ? [PFV_EFFORT_UNSET] : [];
+      out.push(pfvFieldBox(rec, key, d.label || d.key, pfvSegCtl(rec, key, choiceList, v.options[d.key] || "", pickOpt), hint, "fieldset"));
     }
   }
   if (claude) {
@@ -1556,7 +1615,11 @@ function pfvNetworkForm(rec) {
   lab.append(cb, t);
   const out = [lab];
   const err = pfvFerr(rec, "egress_open");
-  if (err) out.push(pfvMk("p", "pfv-ferr", err));
+  if (err) {
+    const words = pfvMk("p", "pfv-ferr", err);
+    pfvBad(rec, cb, words);
+    out.push(words);
+  }
   if (v.egress_open) out.push(pfvMk("p", "pfv-consq", "The agent could then send this profile's credentials to any website. Every host it contacts is logged in Activity."));
   return out;
 }
@@ -1607,6 +1670,7 @@ async function pfvSaveBlock(id) {
       r.ferrs = [bad];
       pfvFillForm(r);
       pfvPaint();
+      pfvFocusInvalid(r);
       return false;
     }
   }
@@ -1699,7 +1763,10 @@ function pfvShowError(err, fromId) {
     from.top = { kind: "error", text: r.text };
   }
   pfvRender();
-  if (from.nodes && from.nodes.save && typeof from.nodes.save.focus === "function") from.nodes.save.focus();
+  // Focus goes to the first field the refusal is under (this block's, else the block it sent the user to); a refusal no field
+  // holds (a stale profile, say) leaves it on Save.
+  const bad = from.invalid ? from : Object.values(pfvState.edits).find((x) => x.invalid);
+  if (!(bad && pfvFocusInvalid(bad)) && from.nodes && from.nodes.save && typeof from.nodes.save.focus === "function") from.nodes.save.focus();
   return r;
 }
 
