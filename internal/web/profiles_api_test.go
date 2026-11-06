@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/awsprobe"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/store"
 )
 
 func TestProfilesAPI_CreateListDelete(t *testing.T) {
@@ -675,5 +676,163 @@ func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
 		`"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"]}}`)
 	if rec.Code != 204 || rec.Body.Len() != 0 {
 		t.Fatalf("bound: code %d body %s, want 204", rec.Code, rec.Body)
+	}
+}
+
+// TestSaveRefusalCarriesFieldPath pins the wire shape of a 400 save refusal: the
+// sentence an older client matches on, unchanged, plus the "field" path the
+// refusal is about. A refusal that names no field has no "field" key.
+func TestSaveRefusalCarriesFieldPath(t *testing.T) {
+	cwdReason, bad := UnboxableDefaultCwd("/", "/home/nobody", nil)
+	if !bad || cwdReason == "" {
+		t.Fatalf("UnboxableDefaultCwd(/) = %q, %v; the default_cwd row needs a refused directory", cwdReason, bad)
+	}
+	rows := []struct {
+		name  string
+		body  string
+		setup func(*ProfileManager)
+		want  string // the sentence, as today's code words it
+		field string // "" = the refusal names no field
+	}{
+		{
+			name:  "relative context path at index 1",
+			body:  `{"name":"p","bin":"claude","runtime":"box","context_paths":["/srv/ok","relative/dir"]}`,
+			want:  `profile "p": context_paths "relative/dir" must be an absolute path`,
+			field: "context_paths[1]",
+		},
+		{
+			name:  "aws_connections on the host tier",
+			body:  `{"name":"p","bin":"claude","runtime":"host","aws_connections":["acme-read"]}`,
+			want:  `profile "p": aws_connections require runtime: box (set it explicitly); the host tier cannot contain credentials`,
+			field: "aws_connections",
+		},
+		{
+			name:  "undefined token at index 0",
+			body:  `{"name":"p","bin":"claude","runtime":"box","tokens":["nope"]}`,
+			want:  `profile "p": tokens[0] "nope" is not defined in static_tokens`,
+			field: "tokens[0]",
+		},
+		{
+			name:  "bad clone_share entry at index 0",
+			body:  `{"name":"p","bin":"claude","runtime":"box","clone_of":"/srv/repo","default_cwd":"/srv/clone","clone_share":["/abs"]}`,
+			want:  `profile "p": clone_share "/abs": must be relative to clone_of`,
+			field: "clone_share[0]",
+		},
+		{
+			name:  "clone_of on the host tier",
+			body:  `{"name":"p","bin":"claude","runtime":"host","clone_of":"/srv/repo","default_cwd":"/srv/clone"}`,
+			want:  `profile "p": clone mode runs only in a box; remove runtime "host" or clone_of`,
+			field: "clone_of",
+		},
+		{
+			name:  "egress_allow on the host tier",
+			body:  `{"name":"p","bin":"claude","runtime":"host","egress_allow":["example.com"]}`,
+			want:  `profile "p": egress_allow and egress_open need runtime: box (set it explicitly)`,
+			field: "egress_allow",
+		},
+		{
+			name:  "context_paths on an instance that defaults to host",
+			body:  `{"name":"p","bin":"claude","context_paths":["/srv/ok"]}`,
+			setup: func(pm *ProfileManager) { pm.defaultRuntime = config.RuntimeHost },
+			want:  config.ErrContextNeedsBox.Error(),
+			field: "context_paths",
+		},
+		{
+			name: "disk check of the second context path",
+			body: `{"name":"p","bin":"claude","runtime":"box","context_paths":["/srv/ok","/srv/bad"]}`,
+			setup: func(pm *ProfileManager) {
+				pm.SetContextCheck(func(p string) error {
+					if p == "/srv/bad" {
+						return errors.New(`context_paths "/srv/bad": does not exist`)
+					}
+					return nil
+				})
+			},
+			want:  `context_paths "/srv/bad": does not exist`,
+			field: "context_paths[1]",
+		},
+		{
+			name: "disk check of the clone's repo",
+			body: `{"name":"p","bin":"claude","runtime":"box","clone_of":"/srv/repo","default_cwd":"/srv/clone"}`,
+			setup: func(pm *ProfileManager) {
+				pm.SetCloneCheck(func(config.Clone) error { return errors.New(`clone_of "/srv/repo" is not a git repository`) })
+			},
+			want:  `clone_of "/srv/repo" is not a git repository`,
+			field: "clone_of",
+		},
+		{
+			name:  "clone on an instance that defaults to host",
+			body:  `{"name":"p","bin":"claude","clone_of":"/srv/repo","default_cwd":"/srv/clone"}`,
+			setup: func(pm *ProfileManager) { pm.defaultRuntime = config.RuntimeHost },
+			want:  `clone mode needs runtime "box" (this instance defaults to host)`,
+			field: "clone_of",
+		},
+		{
+			name:  "default_cwd a box cannot hold",
+			body:  `{"name":"p","bin":"claude","runtime":"box","default_cwd":"/"}`,
+			want:  "default working dir cannot be contained: " + cwdReason,
+			field: "default_cwd",
+		},
+		{
+			name:  "undefined GitHub App on owner 0",
+			body:  `{"name":"p","bin":"claude","runtime":"box","github":{"owners":[{"owner":"acme","app":"missing","repos":["r"]}]}}`,
+			want:  `profile "p": github.owners[0].app "missing" is not defined in github_apps`,
+			field: "github.owners[0].app",
+		},
+		{
+			name:  "agent account that is not configured",
+			body:  `{"name":"p","bin":"claude","account":"work"}`,
+			want:  `profile "p": agent accounts are not configured`,
+			field: "account",
+		},
+		{
+			name:  "env the account owns",
+			body:  `{"name":"p","bin":"claude","env":{"CLAUDE_CONFIG_DIR":"/x"}}`,
+			want:  `profile "p": CLAUDE_CONFIG_DIR is set by the agent account, not the profile`,
+			field: "env",
+		},
+		{
+			name: "a refusal that names no field",
+			body: `{"name":"p","bin":"bash","box":{"image":"x:1"}}`,
+			want: `profile "p": box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)`,
+		},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			st, err := store.Open(filepath.Join(t.TempDir(), "profiles.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pm := NewProfileManager(nil, nil, "", nil, st, func([]config.AgentConfig) {})
+			pm.home = "/home/nobody"
+			s := &Server{Profiles: pm}
+			if rec := postProfile(s, `{"name":"p","bin":"bash"}`); rec.Code != 201 {
+				t.Fatalf("create: %d %s", rec.Code, rec.Body)
+			}
+			if row.setup != nil {
+				row.setup(pm)
+			}
+			rec := putProfile(t, s, "p", row.body)
+			if rec.Code != 400 {
+				t.Fatalf("PUT: code %d body %s, want 400", rec.Code, rec.Body)
+			}
+			var got map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body is not a JSON object of strings: %s", rec.Body)
+			}
+			if got["error"] != row.want {
+				t.Errorf("error = %q\nwant    %q", got["error"], row.want)
+			}
+			if f, has := got["field"]; has != (row.field != "") || f != row.field {
+				t.Errorf("field = %q (present %v), want %q", f, has, row.field)
+			}
+			wantKeys := 1
+			if row.field != "" {
+				wantKeys = 2
+			}
+			if len(got) != wantKeys {
+				t.Errorf("body has %d keys, want %d: %s", len(got), wantKeys, rec.Body)
+			}
+		})
 	}
 }

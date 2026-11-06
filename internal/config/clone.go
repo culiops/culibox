@@ -113,7 +113,7 @@ func ShareWarnings(shares []string) []string {
 func validateClone(a AgentConfig) error {
 	if a.CloneOf == "" {
 		if len(a.CloneShare) > 0 {
-			return errors.New("clone_share requires clone_of")
+			return WithField("clone_share", errors.New("clone_share requires clone_of"))
 		}
 		if a.CloneNoAutoReturn {
 			return errors.New("clone_no_auto_return requires clone_of")
@@ -121,35 +121,36 @@ func validateClone(a AgentConfig) error {
 		return nil
 	}
 	if err := absClean("clone_of", a.CloneOf); err != nil {
-		return err
+		return WithField("clone_of", err)
 	}
 	if a.DefaultCwd == "" {
-		return errors.New("clone_of requires default_cwd (the clone's directory)")
+		return WithField("default_cwd", errors.New("clone_of requires default_cwd (the clone's directory)"))
 	}
 	if err := absClean("default_cwd", a.DefaultCwd); err != nil {
-		return err
+		return WithField("default_cwd", err)
 	}
 	if pathOverlap(a.CloneOf, a.DefaultCwd) {
-		return fmt.Errorf("clone_of %q and default_cwd %q overlap; the clone must live outside the repo it copies", a.CloneOf, a.DefaultCwd)
+		return WithField("clone_of", fmt.Errorf("clone_of %q and default_cwd %q overlap; the clone must live outside the repo it copies", a.CloneOf, a.DefaultCwd))
 	}
 	if a.Runtime == RuntimeHost {
-		return errors.New("clone mode runs only in a box; remove runtime \"host\" or clone_of")
+		return WithField("clone_of", errors.New("clone mode runs only in a box; remove runtime \"host\" or clone_of"))
 	}
 	if len(a.CloneShare) > maxCloneShares {
-		return fmt.Errorf("clone_share has %d entries; at most %d", len(a.CloneShare), maxCloneShares)
+		return WithField("clone_share", fmt.Errorf("clone_share has %d entries; at most %d", len(a.CloneShare), maxCloneShares))
 	}
 	rels := make([]string, 0, len(a.CloneShare))
-	for _, s := range a.CloneShare {
+	for i, s := range a.CloneShare {
+		field := fmt.Sprintf("clone_share[%d]", i)
 		rel, err := ParseShare(s)
 		if err != nil {
-			return err
+			return WithField(field, err)
 		}
 		for _, prev := range rels {
 			if prev == rel {
-				return fmt.Errorf("clone_share %q: duplicate", rel)
+				return WithField(field, fmt.Errorf("clone_share %q: duplicate", rel))
 			}
 			if pathOverlap(prev, rel) {
-				return fmt.Errorf("clone_share %q and %q nest; share only the outer path", prev, rel)
+				return WithField(field, fmt.Errorf("clone_share %q and %q nest; share only the outer path", prev, rel))
 			}
 		}
 		rels = append(rels, rel)
