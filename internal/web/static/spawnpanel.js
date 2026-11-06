@@ -188,8 +188,9 @@ function spawnPlistSelect() {
 
 // renderSpawnReach paints the "This agent will be able to" box for what the form
 // holds right now: the picked profile, the account and tier on screen, the
-// workspace typed. The names of the instance's connections come from /api/meta
-// (awscEntries); the elevate window and the store state from /api/credentials.
+// workspace typed. The instance's connections and tokens come from /api/meta
+// (awscEntries, stEntries); the elevate window and the store state from
+// /api/credentials; the imports row from /api/meta's bundle_imports.
 function renderSpawnReach() {
   const box = $("spawn-reach");
   if (!box) return;
@@ -200,8 +201,9 @@ function renderSpawnReach() {
     profile: acct ? Object.assign({}, p, { account: acct }) : p,
     tier: spawnCurrentTier(),
     cwd: shortPath(getCwd()),
-    meta: { aws_connections: awscEntries },
+    meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
+    bundleImports,
   });
   paintReachRows(box, rows, { title: "This agent will be able to" });
 }

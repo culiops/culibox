@@ -394,7 +394,9 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 //   o.egressAll  every boxed spawn goes through the egress proxy
 // Network mirrors session.EgressMode: bound = allowlist (open when the form
 // sets egress_open), unbound = open only when egress is mandatory. The inline AWS binding is not edited here, so its
-// name and flags come from the saved view while the form still carries it.
+// name and flags come from the saved view while the form still carries it. The
+// GitHub repos and effective permissions, the extra domains and the readable
+// paths (context_paths, clone_share) ride along for reachModel's lists.
 function pfTouchProfile(form, o) {
   const f = form || {};
   const x = o || {};
@@ -406,14 +408,23 @@ function pfTouchProfile(form, o) {
     const saved = x.view && x.view.aws_inline;
     out.aws_inline = saved ? saved : { name: String(f.aws.label || "") || "aws", prod: f.aws.prod === true };
   }
-  const owners = list(((f.github && f.github.owners) || []).map((w) => w && w.owner));
-  if (owners.length) out.github_owners = owners;
+  const rows = ((f.github && f.github.owners) || []).filter((w) => w && typeof w.owner === "string" && w.owner !== "");
+  const owners = rows.map((w) => w.owner);
+  if (owners.length) {
+    out.github_owners = owners;
+    out.github_repos = rows.map((w) => ({ owner: w.owner, repos: list(w.repos) }));
+    // The effective set, as the server reports it: the stored one, else the defaults.
+    const levels = ghPermLevels(f.github);
+    out.github_permissions = Object.fromEntries(GH_PERMS.filter((k) => levels[k] !== "off").map((k) => [k, levels[k]]));
+  }
   const route = ghRouteOf(f.github);
   if (route.write) out.github_write = true;
   if (route.pat) out.github_pat = true;
   const tokens = list(f.tokens);
   if (tokens.length) out.tokens = tokens;
   if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
+  // What the box may also read or reach (the Reads and Domains rows).
+  for (const k of ["context_paths", "clone_share", "egress_allow"]) if (list(f[k]).length) out[k] = list(f[k]);
   const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
   out.network = bound ? (f.egress_open === true ? "open" : "allowlist") : x.egressAll === true ? "open" : "";
   return out;

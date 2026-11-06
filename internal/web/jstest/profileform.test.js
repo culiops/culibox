@@ -390,8 +390,34 @@ test("pfTouchProfile maps the form's bindings to the view fields reachRows reads
   assert.deepStrictEqual(pfTouchProfile(form, { claude: true }), {
     bin: "claude", account: "work", claude: true,
     aws_connections: ["culipulse-prod"], github_owners: ["culiops"], tokens: ["npm"],
+    github_repos: [{ owner: "culiops", repos: [] }], github_permissions: { contents: "read" },
     network: "allowlist",
   });
+});
+
+test("pfTouchProfile carries egress_allow, clone_share, github repos and permissions", () => {
+  const form = {
+    bin: "claude", clone_of: "/h/r", clone_share: ["CLAUDE.md"], egress_allow: ["api.example.com", "*.example.org"],
+    context_paths: ["/home/you/docs"],
+    github: {
+      owners: [{ owner: "culiops", app: "ci", repos: ["payments-api", "infra"] }, { owner: "", app: "x", repos: ["ignored"] }],
+      permissions: { contents: "write", issues: "read", statuses: "write" },
+    },
+  };
+  const out = pfTouchProfile(form, { claude: true });
+  assert.deepStrictEqual(out.github_repos, [{ owner: "culiops", repos: ["payments-api", "infra"] }]);
+  // The effective set, as the server reports it: write survives only on a writable key.
+  assert.deepStrictEqual(out.github_permissions, { contents: "write", issues: "read", statuses: "read" });
+  assert.deepStrictEqual(out.egress_allow, ["api.example.com", "*.example.org"]);
+  assert.deepStrictEqual(out.clone_share, ["CLAUDE.md"]);
+  assert.deepStrictEqual(out.context_paths, ["/home/you/docs"]);
+  assert.strictEqual(out.clone_of, "/h/r");
+  // No stored permissions means the six defaults, all read, exactly as the server reads it.
+  const dflt = pfTouchProfile({ bin: "claude", github: { owners: [{ owner: "culiops", app: "ci", repos: ["a"] }] } }, {});
+  assert.deepStrictEqual(dflt.github_permissions, { actions: "read", checks: "read", contents: "read", pull_requests: "read", issues: "read", metadata: "read" });
+  // Nothing set: none of the new keys.
+  const bare = pfTouchProfile({ bin: "claude" }, {});
+  for (const k of ["github_repos", "github_permissions", "egress_allow", "clone_share", "context_paths"]) assert.ok(!(k in bare), k);
 });
 
 test("pfTouchProfile names the inline binding from the saved view, else from the form", () => {

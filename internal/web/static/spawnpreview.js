@@ -60,77 +60,232 @@ function spawnStoreLocked(creds) {
   return !!(st && st.initialized && st.locked && st.platform !== "darwin");
 }
 
-// reachRows: the rows of the "This agent will be able to" box.
+// SPAWN_GH_PERM_ORDER: the order GitHub permissions are listed in words (the same
+// order the profile editor lists them, profileform.js GH_PERMS); a key it does not
+// know is listed after these, alphabetically.
+const SPAWN_GH_PERM_ORDER = ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"];
+const SPAWN_TOKEN_NOTE = "Long-lived; the agent can read it while it runs";
+const spawnJoin = (l) => l.filter((x) => typeof x === "string" && x !== "").join(", ");
+const spawnItem = (kind, name, over) => Object.assign({ kind, name, sub: "", scope: "", tag: "", missing: false }, over);
+
+// spawnAWSFacts: what one AWS binding reaches. ent is spawnAWS' entry, metaConns
+// /api/meta's aws_connections, credConns /api/credentials' aws. The inline binding
+// is not in meta/credentials (those list named connections), so its own flags
+// from the profile view are what is known. found: meta lists it (an inline one is
+// always found).
+function spawnAWSFacts(ent, metaConns, credConns) {
+  const name = ent.name;
+  const found = ent.inline ? true : metaConns.some((c) => c && c.name === name);
+  const m = ent.inline ? { prod: ent.prod, write_capable: ent.max > 0 } : metaConns.find((c) => c && c.name === name) || {};
+  const c = ent.inline ? {} : credConns.find((e) => e && e.name === name) || {};
+  const elevate = ent.inline ? (ent.max > 0 ? { max_minutes: ent.max } : null) : c.elevate && typeof c.elevate === "object" ? c.elevate : null;
+  return {
+    m, found,
+    prod: m.prod === true || c.prod === true,
+    write: m.write_capable === true || !!elevate,
+    max: elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0,
+    // The gate admits read-only permission sets only and there is no elevate.
+    direct: ent.mode === "sso_direct" || m.mode === "sso_direct" || c.mode === "sso_direct",
+  };
+}
+
+function spawnAWSScope(f) {
+  if (f.direct) return "Read only. Uses the SSO role directly.";
+  if (!f.write) return "Read only";
+  return "Read only. Write only after you grant a window" + (f.max ? ", max " + f.max + " min" : "") + ".";
+}
+
+// spawnGitHubScope: what a GitHub binding may do, from the EFFECTIVE permission set
+// the server sends. A personal access token is not narrowed by CuliBox. With no
+// set sent nothing is said about permissions, never a guess.
+function spawnGitHubScope(p) {
+  if (p.github_pat === true) return "Personal access token, not narrowed by CuliBox: it reaches whatever the token allows.";
+  const perms = p.github_permissions && typeof p.github_permissions === "object" ? p.github_permissions : {};
+  const at = (k) => (SPAWN_GH_PERM_ORDER.includes(k) ? SPAWN_GH_PERM_ORDER.indexOf(k) : SPAWN_GH_PERM_ORDER.length);
+  const keys = Object.keys(perms).sort((a, b) => at(a) - at(b) || (a < b ? -1 : a > b ? 1 : 0));
+  const words = (l) => l.map((k) => k.replace(/_/g, " ")).join(", ");
+  const write = keys.filter((k) => perms[k] === "write");
+  const read = keys.filter((k) => perms[k] !== "write");
+  const out = [];
+  if (write.length) out.push("Can write: " + words(write) + ".");
+  if (read.length) out.push("Read only: " + words(read) + ".");
+  out.push("1-hour tokens.");
+  return out.join(" ");
+}
+
+// spawnTokenHosts: the hosts a token may go to, host:port when the port is not the
+// TLS default.
+function spawnTokenHosts(hosts) {
+  return (Array.isArray(hosts) ? hosts : [])
+    .filter((h) => h && typeof h.host === "string" && h.host !== "")
+    .map((h) => (Number(h.port) > 0 && Number(h.port) !== 443 ? h.host + ":" + h.port : h.host));
+}
+
+// reachModel: everything the "This agent will be able to" views say, as data, in
+// the words of the profile page (spec 5.3). New session's box (reachRows, below)
+// and the profile read view both draw from it, so neither invents wording.
+//   o.profile       the ProfileView (or what pfTouchProfile builds in its shape)
+//   o.tier          "box" | "host" as the form currently has it
+//   o.cwd           the workspace as it is to be shown
+//   o.meta          /api/meta: aws_connections [{name, prod, write_capable, mode,
+//                   account_id, region}], static_tokens [{name, prod, description,
+//                   env, hosts}]. A list that is absent means nothing is known of
+//                   it, so no name in it is called missing.
+//   o.creds         GET /api/credentials or null: store, aws [{name, prod, elevate}]
+//   o.bundleImports /api/meta bundle_imports: the CLAUDE.md imports item may appear
+// Returns {files, original, cloud, reachable, tokenNote, network, account, store}:
+//   files      the workspace line ("" never; the host says its whole account)
+//   original   the read-only note about a private copy's original, "" when none
+//   cloud      Item[]: AWS, Old-style AWS (the legacy inline binding), GitHub, Token
+//   reachable  Item[]: Folder, From the original, Files (the imports), Domain; none on host
+//   tokenNote  once-per-list plain line when any token is bound, else ""
+//   network    {line, sub, open} for a boxed profile with a posture, else null
+//   account    the agent account as shown ("" for a non-claude profile)
+//   store      {v, tone:"warn"} when the credential store is locked and something is bound, else null
+// Item = {kind, name, sub, scope, tag, missing}: tag "PROD" | "production" | "";
+// missing: the name is bound but /api/meta does not list it (sub, scope and tag
+// are then blank: nothing is guessed about it). AWS and GitHub items also carry
+// `facts` (write, max, direct, pat), what reachRows needs for its one-line wording.
+// Never an ARN, a token value or a reference: only what /api/meta and the profile
+// view name.
+function reachModel(o) {
+  const x = o || {};
+  const p = x.profile || {};
+  const host = x.tier === "host";
+  const metaConns = x.meta && Array.isArray(x.meta.aws_connections) ? x.meta.aws_connections : [];
+  const credConns = x.creds && Array.isArray(x.creds.aws) ? x.creds.aws : [];
+  const metaTokens = x.meta && Array.isArray(x.meta.static_tokens) ? x.meta.static_tokens : [];
+  const awsKnown = !!x.meta && Array.isArray(x.meta.aws_connections);
+  const tokensKnown = !!x.meta && Array.isArray(x.meta.static_tokens);
+
+  const cloud = [];
+  for (const ent of spawnAWS(p)) {
+    const f = spawnAWSFacts(ent, metaConns, credConns);
+    const facts = { write: f.write, max: f.max, direct: f.direct };
+    if (ent.inline) {
+      cloud.push(spawnItem("Old-style AWS", ent.name, { scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts }));
+    } else if (awsKnown && !f.found) {
+      cloud.push(spawnItem("AWS", ent.name, { missing: true, facts }));
+    } else {
+      cloud.push(spawnItem("AWS", ent.name, {
+        sub: spawnJoin([f.m.account_id ? "account " + f.m.account_id : "", f.m.region]),
+        scope: spawnAWSScope(f), tag: f.prod ? "PROD" : "", facts,
+      }));
+    }
+  }
+
+  const repoOf = (owner) => {
+    const e = (Array.isArray(p.github_repos) ? p.github_repos : []).find((r) => r && r.owner === owner);
+    return e ? spawnNames(e.repos) : [];
+  };
+  const ghFacts = { write: p.github_write === true, pat: p.github_pat === true };
+  for (const owner of spawnNames(p.github_owners)) {
+    const repos = repoOf(owner);
+    cloud.push(spawnItem("GitHub", owner, { sub: repos.length ? "repo " + repos.join(", ") : "", scope: spawnGitHubScope(p), facts: ghFacts }));
+  }
+
+  const tokens = spawnNames(p.tokens);
+  for (const name of tokens) {
+    const t = metaTokens.find((e) => e && e.name === name);
+    if (!t) {
+      cloud.push(spawnItem("Token", name, { missing: tokensKnown }));
+      continue;
+    }
+    const hosts = spawnTokenHosts(t.hosts);
+    cloud.push(spawnItem("Token", name, {
+      sub: spawnJoin([t.description].concat(Array.isArray(t.env) ? t.env : [])),
+      scope: hosts.length ? "Reaches " + hosts.join(", ") : "",
+      tag: t.prod === true ? "production" : "",
+    }));
+  }
+
+  const reachable = [];
+  if (!host) {
+    for (const path of spawnNames(p.context_paths)) reachable.push(spawnItem("Folder", path, { scope: "Read only" }));
+    for (const path of spawnNames(p.clone_share)) reachable.push(spawnItem("From the original", path, { scope: "Read only" }));
+    if (x.bundleImports === true && !p.imports_off) {
+      reachable.push(spawnItem("Files", "CLAUDE.md imports", { sub: "The files your CLAUDE.md pulls in with @", scope: "Read-only copies" }));
+    }
+    for (const d of spawnNames(p.egress_allow)) reachable.push(spawnItem("Domain", d, { scope: d.startsWith("*.") ? "HTTPS, its subdomains" : "HTTPS" }));
+  }
+
+  let network = null;
+  if (!host && (p.network === "allowlist" || p.network === "open")) {
+    const open = p.network === "open";
+    network = {
+      line: "Internet only through CuliBox's proxy, HTTPS to hostnames",
+      sub: open
+        ? "All internet hosts (no allowlist)."
+        : "Because this profile holds cloud access and tokens, it is limited to Anthropic, AWS, GitHub and package registries, plus the domains above.",
+      open,
+    };
+  }
+
+  const acct = String(p.account || "");
+  return {
+    files: host ? "your whole user account" : (x.cwd || "the workspace") + " read/write · nothing else on this machine",
+    // A private copy: the box edits its own copy; the original's history is mounted read-only.
+    original: !host && typeof p.clone_of === "string" && p.clone_of !== ""
+      ? spawnDep("shortPath", "./fsops.js")(p.clone_of) + "/.git read-only · the box cannot change your history" : "",
+    cloud,
+    reachable,
+    tokenNote: tokens.length ? SPAWN_TOKEN_NOTE : "",
+    network,
+    account: p.claude ? (acct && acct !== "default" ? acct : "default (~/.claude)") : "",
+    store: spawnStoreLocked(x.creds) && cloud.length ? { v: "credential store locked — unlock before spawn", tone: "warn" } : null,
+  };
+}
+
+// reachRows: the rows of the "This agent will be able to" box, projected from
+// reachModel (one line per fact; the profile page draws the same model in blocks).
 //   profile  the ProfileView (with the account the form currently shows, if the
 //            caller overrides it)
 //   tier     "box" | "host" as the form currently has it
 //   cwd      the workspace as it is to be shown
-//   meta     /api/meta: aws_connections [{name, prod, write_capable}]
+//   meta     /api/meta: aws_connections [{name, prod, write_capable}], static_tokens
 //   creds    GET /api/credentials, or null when it could not be read:
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
+//   bundleImports  /api/meta bundle_imports: lists the CLAUDE.md imports row
 // A row is {k, v, prod?, name?, tone?}. An AWS row with prod set is drawn by the
 // caller as name + a red PROD tag + the rest of v (v starts with name). tone:
 // "warn" (amber, needs you). Containment is never coloured: red is for PROD and
 // write only (the PROD flag), a host session is told in words.
+// Reads, Imports and Domains come after Tokens; on host there are none of them.
 function reachRows(o) {
   const x = o || {};
-  const p = x.profile || {};
-  const host = x.tier === "host";
-  const rows = [];
-  rows.push(host
-    ? { k: "Files", v: "your whole user account" }
-    : { k: "Files", v: (x.cwd || "the workspace") + " read/write · nothing else on this machine" });
-  // A private copy: the box edits its own copy; the original's history is mounted read-only.
-  if (!host && typeof p.clone_of === "string" && p.clone_of !== "") {
-    rows.push({ k: "Original", v: spawnDep("shortPath", "./fsops.js")(p.clone_of) + "/.git read-only · the box cannot change your history" });
-  }
+  const m = reachModel(x);
+  const rows = [{ k: "Files", v: m.files }];
+  if (m.original) rows.push({ k: "Original", v: m.original });
 
-  const metaConns = x.meta && Array.isArray(x.meta.aws_connections) ? x.meta.aws_connections : [];
-  const credConns = x.creds && Array.isArray(x.creds.aws) ? x.creds.aws : [];
-  const awsEntries = spawnAWS(p);
-  for (const ent of awsEntries) {
-    const name = ent.name;
-    // The inline binding is not in meta/credentials (those list named
-    // connections), so its own flags from the profile view are what is known.
-    const m = ent.inline ? { prod: ent.prod, write_capable: ent.max > 0 } : metaConns.find((c) => c && c.name === name) || {};
-    const c = ent.inline ? {} : credConns.find((e) => e && e.name === name) || {};
-    const prod = m.prod === true || c.prod === true;
-    const elevate = ent.inline ? (ent.max > 0 ? { max_minutes: ent.max } : null) : c.elevate && typeof c.elevate === "object" ? c.elevate : null;
-    const writable = m.write_capable === true || !!elevate;
-    const direct = ent.mode === "sso_direct" || m.mode === "sso_direct" || c.mode === "sso_direct";
-    let v = name + " · read";
-    if (direct) {
-      // The gate admits read-only permission sets only and there is no elevate.
-      v += " only · SSO role directly";
-    } else if (writable) {
-      const max = elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0;
-      v += " · write only after you elevate" + (max ? " (max " + max + " min)" : "");
-    } else {
-      v += " only";
-    }
-    const row = { k: "AWS", v, name };
-    if (prod) row.prod = true;
+  for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
+    const f = it.facts;
+    let v = it.name + " · read";
+    if (f.direct) v += " only · SSO role directly";
+    else if (f.write) v += " · write only after you elevate" + (f.max ? " (max " + f.max + " min)" : "");
+    else v += " only";
+    const row = { k: "AWS", v, name: it.name };
+    if (it.tag === "PROD") row.prod = true;
     rows.push(row);
   }
 
-  const owners = spawnNames(p.github_owners);
-  if (owners.length) rows.push({ k: "GitHub", v: ghReachValue(owners, p.github_write === true, p.github_pat === true) });
+  const gh = m.cloud.filter((i) => i.kind === "GitHub");
+  if (gh.length) rows.push({ k: "GitHub", v: ghReachValue(gh.map((i) => i.name), gh[0].facts.write, gh[0].facts.pat) });
 
-  const tokens = spawnNames(p.tokens);
-  if (tokens.length) rows.push({ k: "Tokens", v: tokens.join(", ") });
+  const tokens = m.cloud.filter((i) => i.kind === "Token");
+  if (tokens.length) rows.push({ k: "Tokens", v: tokens.map((i) => i.name).join(", ") });
 
-  if (host) rows.push({ k: "Network", v: "not contained" });
-  else if (p.network === "allowlist") rows.push({ k: "Network", v: "allowlist only" });
-  else if (p.network === "open") rows.push({ k: "Network", v: "open" });
+  const names = (kinds) => m.reachable.filter((i) => kinds.includes(i.kind)).map((i) => i.name);
+  const reads = names(["Folder", "From the original"]);
+  if (reads.length) rows.push({ k: "Reads", v: reads.join(", ") });
+  if (m.reachable.some((i) => i.kind === "Files")) rows.push({ k: "Imports", v: "CLAUDE.md imports, read-only copies" });
+  const domains = names(["Domain"]);
+  if (domains.length) rows.push({ k: "Domains", v: domains.join(", ") });
 
-  if (p.claude) {
-    const a = String(p.account || "");
-    rows.push({ k: "Account", v: a && a !== "default" ? a : "default (~/.claude)" });
-  }
+  if (x.tier === "host") rows.push({ k: "Network", v: "not contained" });
+  else if (m.network) rows.push({ k: "Network", v: m.network.open ? "open" : "allowlist only" });
 
-  if (spawnStoreLocked(x.creds) && (awsEntries.length || owners.length || tokens.length)) {
-    rows.push({ k: "Store", v: "credential store locked — unlock before spawn", tone: "warn" });
-  }
+  if (m.account) rows.push({ k: "Account", v: m.account });
+  if (m.store) rows.push({ k: "Store", v: m.store.v, tone: m.store.tone });
   return rows;
 }
 
@@ -190,5 +345,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
+  module.exports = { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
 }
