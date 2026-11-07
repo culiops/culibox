@@ -81,11 +81,11 @@ function meterModel(label, win, nowSec) {
   // word would read as the nonsensical "now left".
   const c = fmtCountdown(win.resets_at, nowSec);
   const pct = Math.round(raw);
-  // limit: the window is used up. It follows the rounded label, so a number the
-  // label would draw as "100%" or more is never printed as a plain percentage that
-  // reads like 78%. limitText is the sidebar's wording for it: the reset in the
-  // words, or just "limit reached" when no reset time is known (c is "now" then).
-  const limit = pct >= 100;
+  // limit: the window is used up, by the RAW reading (>= 100), not the rounded label: a
+  // 99.5 is drawn "100%" but the account is not at its limit yet, and must not say it is.
+  // limitText is the sidebar's wording for it: the reset in the words, or just "limit
+  // reached" when no reset time is known (c is "now" then).
+  const limit = raw >= 100;
   return {
     label: label,
     pct: pct,

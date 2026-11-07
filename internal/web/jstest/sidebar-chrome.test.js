@@ -96,6 +96,8 @@ test("the sidebar's 100% row hides the percentage and says limit reached with th
   assert.equal(rs.textContent, "limit reached · resets 25m");
   assert.ok(rs.classList.contains("limit"));
   assert.match(five.attrs["aria-label"], /limit reached · resets 25m/);
+  // The text can be cut at a narrow sidebar: the full line is also the element's title.
+  assert.equal(rs.title, "limit reached · resets 25m");
   // The other window is an ordinary row.
   assert.equal(week.children[2].hidden, false);
   assert.equal(week.children[2].textContent, "78%");
@@ -111,15 +113,23 @@ test("the same 100% reading anywhere else (header, phone band) keeps its percent
     assert.equal(pc.textContent, "100%");
     assert.equal(rs.textContent, "25m left");
     assert.equal(rs.className, "rs");
+    assert.equal(rs.title, "", "no title on an ordinary countdown");
     assert.equal(five.attrs["aria-label"], "5h usage 100%, 25m left");
     assert.equal(five.children.length, 4);
   }
 });
 
-test("99% is an ordinary row in the sidebar too; an unknown reset time says only limit reached", () => {
+test("99% and 99.5% are ordinary rows in the sidebar too; an unknown reset time says only limit reached", () => {
   const [ninety] = render({ five_hour: { used_percentage: 99, resets_at: NOW + 60 } }, true);
   assert.equal(ninety.children[2].hidden, false);
   assert.equal(ninety.children[3].textContent, "1m left");
+  // 99.5 is drawn "100%" but is not the limit: no limit line.
+  const [almost] = render({ five_hour: { used_percentage: 99.5, resets_at: NOW + 25 * 60 } }, true);
+  assert.equal(almost.children[2].hidden, false);
+  assert.equal(almost.children[2].textContent, "100%");
+  assert.equal(almost.children[3].textContent, "25m left");
+  assert.equal(almost.children[3].className, "rs");
+  assert.equal(almost.children[3].title, "");
   const [noReset] = render({ five_hour: { used_percentage: 100, resets_at: 0 } }, true);
   assert.equal(noReset.children[3].textContent, "limit reached");
 });
@@ -161,14 +171,22 @@ test("boot paints those titles once, after the sidebar markup exists", () => {
   assert.match(app, /^paintSideHints\(\);$/m);
 });
 
-test("the sidebar top's palette and collapse are kit ghost icon buttons; the palette is a search icon, not the Mac key", () => {
-  const tag = (id) => new RegExp('<button id="' + id + '"[^>]*>[^<]*(?:<svg[\\s\\S]*?</svg>)?[^<]*</button>').exec(html);
+test("the sidebar top's palette and collapse are kit ghost icon buttons; the palette draws a magnifier, not a glyph", () => {
+  const tag = (id) => new RegExp('<button id="' + id + '"[^>]*>[\\s\\S]*?</button>').exec(html);
   for (const id of ["side-palette", "side-collapse"]) {
     const m = tag(id);
     assert.ok(m, id + " not found");
     assert.match(m[0], /class="btn btn-ghost btn-icon btn-sm"/, id);
   }
-  assert.ok(!/id="side-palette"[^>]*>[^<]*(&#8984;|⌘)/.test(html), "the palette button still draws the Mac key");
+  const pal = tag("side-palette")[0];
+  // The tabs.js tabIcon style: 14x14 viewBox, no fill, currentColor, 1.2 stroke, round caps and joins, hidden from AT.
+  const svg = /<svg[^>]*>[\s\S]*?<\/svg>/.exec(pal);
+  assert.ok(svg, "the palette button draws an inline svg");
+  for (const a of ['viewBox="0 0 14 14"', 'aria-hidden="true"', 'fill="none"', 'stroke="currentColor"', 'stroke-width="1.2"',
+    'stroke-linecap="round"', 'stroke-linejoin="round"']) assert.ok(svg[0].includes(a), a);
+  assert.match(svg[0], /<circle /);
+  assert.ok(!/&#8984;|⌘|&#8981;|⌕/.test(pal), "no font glyph is left in the palette button");
+  assert.match(tag("side-collapse")[0], /&#171;/, "the « stays the frame's text glyph");
 });
 
 // ---- F57: the rail, top to bottom: logo, » toggle, +, dots, meters ----------------------------------

@@ -1405,6 +1405,8 @@ function renderRateLimitsInto(host, rl, limitLine) {
     const rs = document.createElement("span");
     rs.className = atLimit ? "rs limit" : "rs";
     rs.textContent = atLimit ? m.limitText : m.reset;
+    // A narrow sidebar cuts the line short: the full text is the title too.
+    if (atLimit) rs.title = m.limitText;
     el.append(name, bar, pc, rs);
     if (note) {
       const ag = document.createElement("span");

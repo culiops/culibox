@@ -123,7 +123,8 @@ test("meterModel returns null for an absent or malformed window", () => {
 });
 
 // F32: at 100% the sidebar says the limit is hit instead of a number that reads like 78%.
-// "pct" is the rounded label, so anything the label would draw as 100% or more is the limit.
+// "limit" follows the RAW used percentage (>= 100), not the rounded label: a 99.5 reading is
+// drawn "100%" but the account is not at its limit yet, and must not say it is.
 test("meterModel marks a window at 100 percent or more as the limit, with the reset in the words", () => {
   const now = 1_700_000_000;
   for (const p of [100, 120]) {
@@ -142,14 +143,16 @@ test("meterModel: a limit with no known reset time says only that the limit is r
   assert.equal(m.limitText, "limit reached");
 });
 
-test("meterModel: 99 is not the limit, 99.5 draws as 100% and is", () => {
+test("meterModel: only a raw 100 or more is the limit; 99, 99.5 and 99.99 are not, even though 99.5 draws as 100%", () => {
   const now = 1_700_000_000;
   const at = (p) => meterModel("5h", { used_percentage: p, resets_at: now + 60 }, now);
-  assert.equal(at(99).limit, false);
-  assert.equal(at(99).limitText, "");
-  assert.equal(at(99.4).limit, false);
-  assert.equal(at(99.5).pct, 100);
-  assert.equal(at(99.5).limit, true);
+  for (const p of [99, 99.4, 99.5, 99.99]) {
+    assert.equal(at(p).limit, false, "raw " + p);
+    assert.equal(at(p).limitText, "", "raw " + p);
+  }
+  assert.equal(at(99.5).pct, 100, "the label still rounds");
+  assert.equal(at(100).limit, true);
+  assert.equal(at(100.4).limit, true);
 });
 
 test("meterModel: a window past its reset is not a limit, and the existing fields are untouched at the limit", () => {

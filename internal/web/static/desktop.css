@@ -507,8 +507,10 @@
   }
   #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
   #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
-  /* #side-palette (the search icon) and #side-collapse (the «) are the kit's .btn .btn-ghost .btn-icon
-     .btn-sm in index.html (m1-1): their look is the kit's, not ours. */
+  /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
+     (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
+     their look is the kit's, not ours. */
+  #side-palette svg { display: block; flex: none; width: 14px; height: 14px; }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
