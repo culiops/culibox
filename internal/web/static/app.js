@@ -5886,34 +5886,85 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-// `extra` (optional) are pane-level rows ({label, run}) shown above the session's
-// own, for a narrow pane header that has no room for their buttons; `s` may then
-// be null (a pane of files has no session).
+// One row of the desktop (kit) session menu: .menu-item > .menu-icon + .menu-text, as frame M5.1
+// draws it. The icon is decoration (aria-hidden); an empty glyph still keeps its 16px slot, so
+// the text of a row with no icon lines up with the rest.
+function kitMenuButton(label, glyph, danger, run) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = danger ? "menu-item is-danger" : "menu-item";
+  b.setAttribute("role", "menuitem");
+  const ic = document.createElement("span");
+  ic.className = "menu-icon";
+  ic.setAttribute("aria-hidden", "true");
+  ic.textContent = glyph;
+  const tx = document.createElement("span");
+  tx.className = "menu-text";
+  tx.textContent = label;
+  b.append(ic, tx);
+  b.onclick = run;
+  return b;
+}
+
+// kitMenuNodes: the kit menu's children. `own` are the pane's own rows ({label, run}), a group
+// of their own when there are any; `items` are menuItems' for the session. A .menu-sep goes
+// between groups and nowhere else (menuGroups drops the empty ones).
+function kitMenuNodes(own, items, s) {
+  const groups = [];
+  if (own.length) groups.push(own.map((it) => kitMenuButton(it.label, "", false, () => { closeSessionMenu(false); it.run(); })));
+  for (const g of menuGroups(items)) {
+    // Close first, then act: an action that opens a dialog would otherwise leave the menu
+    // floating over it.
+    groups.push(g.map((it) => kitMenuButton(it.label, menuIcon(it.id), it.danger, () => { closeSessionMenu(false); runSessionAction(it.id, s); })));
+  }
+  const nodes = [];
+  groups.forEach((g, i) => {
+    if (i > 0) {
+      const sep = document.createElement("div");
+      sep.className = "menu-sep";
+      sep.setAttribute("role", "separator");
+      nodes.push(sep);
+    }
+    nodes.push(...g);
+  });
+  return nodes;
+}
+
+// `extra` (optional) are pane-level rows ({label, run}) shown above the session's own, for a
+// narrow pane header that has no room for their buttons; `s` may then be null (a pane of files
+// has no session). Desktop draws the kit menu (F12); the phone keeps the flat .mi list.
 function openSessionMenu(anchor, s, extra) {
   const menu = $("session-menu");
   if (!menu) return;
-  const own = (extra || []).map((it) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "mi";
-    b.setAttribute("role", "menuitem");
-    b.textContent = it.label;
-    b.onclick = () => { closeSessionMenu(false); it.run(); };
-    return b;
-  });
+  const desktop = !mobileActive(window.innerWidth);
   // Desktop only: a shell listed under its parent gets the short shell menu.
-  const nestedShell = !!s && !mobileActive(window.innerWidth) && isNestedShell(s, lastSessions);
-  const nodes = own.concat(s ? menuItems(s, { nested: nestedShell }).map((it) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = it.danger ? "mi dgr" : "mi";
-    b.setAttribute("role", "menuitem");
-    b.textContent = it.label;
-    // Close first, then act: an action that opens a dialog would otherwise
-    // leave the menu floating over it.
-    b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
-    return b;
-  }) : []);
+  const nestedShell = !!s && desktop && isNestedShell(s, lastSessions);
+  const items = s ? menuItems(s, { nested: nestedShell }) : [];
+  let nodes;
+  if (desktop) {
+    nodes = kitMenuNodes(extra || [], items, s);
+  } else {
+    const own = (extra || []).map((it) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mi";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      b.onclick = () => { closeSessionMenu(false); it.run(); };
+      return b;
+    });
+    nodes = own.concat(items.map((it) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = it.danger ? "mi dgr" : "mi";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      // Close first, then act: an action that opens a dialog would otherwise
+      // leave the menu floating over it.
+      b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
+      return b;
+    }));
+  }
   menu.replaceChildren(...nodes);
   sessionMenuSid = s ? s.id : null;
   placeSessionMenu(menu, anchor);
@@ -5939,7 +5990,7 @@ function placeSessionMenu(menu, anchor) {
   // focus on the trigger, which puts its own items somewhere unpredictable in
   // the tab order — acceptable for a menu of file actions, not for one whose
   // last item ends a running agent.
-  const first = menu.querySelector(".mi");
+  const first = menu.querySelector(".menu-item, .mi");
   if (first) first.focus();
 }
 
@@ -6007,17 +6058,14 @@ document.addEventListener("keydown", (e) => {
   const menu = $("session-menu");
   if (!menu || !menu.classList.contains("open")) return;
   if (e.key === "Escape") { e.preventDefault(); closeSessionMenu(true); return; }
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   // Arrow navigation, which the app's other popover does not have. Same reason
   // as the focus move above: reaching a destructive item must not depend on
-  // tabbing blindly through the document.
-  const items = Array.from(menu.querySelectorAll(".mi"));
-  if (items.length === 0) return;
+  // tabbing blindly through the document. Rows only: a kit menu's .menu-sep
+  // separators are not items, so the keys step over them.
+  const items = Array.from(menu.querySelectorAll(".menu-item, .mi"));
+  const next = menuNavIndex(items.length, items.indexOf(document.activeElement), e.key);
+  if (next === null) return;
   e.preventDefault();
-  const at = items.indexOf(document.activeElement);
-  const next = e.key === "ArrowDown"
-    ? (at < 0 ? 0 : (at + 1) % items.length)
-    : (at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
   items[next].focus();
 });
 

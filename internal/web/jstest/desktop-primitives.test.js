@@ -459,6 +459,45 @@ test("collision guards: a kit part resets the legacy rule it meets (dialog head,
   assert.deepStrictEqual(allParts(rules).filter((p) => hasClass(compounds(p).pop(), "menu") && !p.includes(":has(> .menu-item)")), []);
 });
 
+// The row's ⋯ menu (F12, M5.1) is the kit menu placed by script. Its look is the kit's alone (a second
+// copy of the surface would drift); the page rule only puts back what a script-placed popover needs,
+// which the kit's in-flow `.menu:has(> .menu-item)` resets (fixed, above the panes, closed until .open).
+test("the session row menu is the kit menu: the kit's surface, rows of --h-menu, a page rule for placement only", () => {
+  const kit = parseRules(sections().kit);
+  const menu = ruleFor(kit, [".menu:has(> .menu-item)"]);
+  assert.strictEqual(decl(menu, "background"), "var(--panel)");
+  assert.strictEqual(decl(menu, "border"), "1px solid var(--line)", "a hairline, not the legacy accent border");
+  assert.strictEqual(decl(menu, "border-radius"), "var(--r-card)");
+  assert.strictEqual(decl(menu, "box-shadow"), "var(--e-pop)");
+  assert.strictEqual(decl(menu, "padding"), "4px");
+  const item = ruleFor(kit, [".menu-item"]);
+  assert.strictEqual(decl(item, "height"), "var(--h-menu)", "30px rows");
+  assert.strictEqual(decl(item, "border"), "0", "no divider under each item");
+  assert.strictEqual(decl(item, "font-size"), "var(--t-md)");
+  assert.strictEqual(decl(ruleFor(kit, [".menu-sep"]), "margin"), "4px -4px", "a separator spans the padding");
+  assert.strictEqual(decl(ruleFor(kit, [".menu-item.is-danger", ".menu-item.is-danger .menu-icon"]), "color"), "var(--red)");
+
+  const page = parseRules(sections().rest);
+  const placed = ruleFor(page, ["#session-menu:has(> .menu-item)"]);
+  assert.ok(placed, "a page rule places the kit menu");
+  assert.strictEqual(decl(placed, "position"), "fixed", "script-placed (placeSessionMenu sets left and top)");
+  assert.strictEqual(decl(placed, "z-index"), "40", "above the panes, as the legacy popover was");
+  assert.strictEqual(decl(placed, "display"), "none", "closed until .open: the kit rule's display: flex would show it at once");
+  assert.strictEqual(decl(ruleFor(page, ["#session-menu.open:has(> .menu-item)"]), "display"), "flex");
+  assert.deepStrictEqual(placed.decls.map(([p]) => p).filter((p) => /^(background|border|box-shadow|padding|color|font)/.test(p)), [],
+    "the surface is the kit's: the placement rule paints nothing");
+  // Only the kit-menu children are reached: the tab switcher's .mi rows keep the legacy popover (Plan 3).
+  const inSession = page.filter((r) => parts(r.selector).some((p) => p.includes("#session-menu")));
+  for (const r of inSession) for (const p of parts(r.selector)) {
+    assert.ok(p.includes(":has(> .menu-item)") || /^#session-menu (\.mi|> \.menu-item)/.test(p), "unexpected #session-menu rule: " + p);
+  }
+  assert.strictEqual(decl(ruleFor(page, ["#session-menu .mi"]), "font-size"), "var(--t-md)", "the tab switcher's rows are on the type scale (12.5px was off it)");
+  // A long label never wraps out of its 30px row: it is clipped with an ellipsis.
+  const text = ruleFor(page, ["#session-menu > .menu-item > .menu-text"]);
+  assert.strictEqual(decl(text, "white-space"), "nowrap");
+  assert.strictEqual(decl(text, "text-overflow"), "ellipsis");
+});
+
 test("collision guards: the legacy modifiers are aliases of the kit's", () => {
   const sel = parseRules(sections().kit).map((r) => parts(r.selector));
   const together = (a, b) => sel.some((ps) => ps.includes(a) && ps.includes(b));

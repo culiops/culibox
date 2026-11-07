@@ -914,6 +914,22 @@
      carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
   .cell.needs::after { content: none; }
 
+  /* The row's ⋯ menu (F12, M5.1) is the kit menu, placed by script. Its look is the kit's
+     `.menu:has(> .menu-item)` (panel, hairline, card radius, popover shadow, 30px rows, a separator
+     between groups only); the kit rule renders in flow, so this puts back what a script-placed
+     popover needs: fixed (placeSessionMenu sets left and top), above the panes, closed until .open.
+     240px is the frame's width, wider only for a label that needs it (the narrow pane header's
+     "Close pane (the session keeps running)"). A row is one 30px line, so a long label is clipped
+     rather than wrapped. The tab switcher below has no .menu-item children and keeps the legacy
+     popover until Plan 3; its text goes on the type scale (12.5px was off it). */
+  #session-menu:has(> .menu-item) {
+    position: fixed; z-index: 40; display: none;
+    width: max-content; min-width: 240px; max-width: calc(100vw - 16px);
+  }
+  #session-menu.open:has(> .menu-item) { display: flex; }
+  #session-menu > .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #session-menu .mi { font-size: var(--t-md); }
+
   /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
   .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
   .mi-row:last-child { border-bottom: 0; }
