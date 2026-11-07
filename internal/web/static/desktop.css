@@ -682,8 +682,9 @@
   .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
   .ph-main .ph-dot { flex: none; }
   .ph-name {
-    /* The model shrinks ~1000x faster, and the 1px keeps the sub-pixel share the
-       name still loses from clipping its last letters. */
+    /* Everything beside the name shrinks 10^4 to 10^6 times faster (the meta, then the long
+       chips), so its share of a deficit is under the 1/64px layout unit: at 1000x the name
+       lost 0.2px, enough for Chrome to ellipsize "agent-box" to "agent-b…". */
     flex: 0 1 auto; min-width: 5ch; padding-right: 1px; overflow: hidden; text-overflow: ellipsis;
     font: 600 var(--t-md) var(--font-ui); color: var(--fg);
   }
@@ -697,29 +698,45 @@
   .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
-     long cloud/write chips give way down to a stub, then the name does. */
+     long cloud/write chips give way down to a stub, then the name does: 10^4 times
+     the name's shrink, or a long write chip took the name down with it (the name lost
+     letters in a 726px pane, measured #172). */
   .ph-chip {
     flex: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
     padding: 0 6px; font: 500 var(--t-xs)/18px var(--font-ui); color: var(--muted);
     background: var(--raise); border-radius: var(--r-chip);
   }
-  .ph-chip.cloud, .ph-chip.write { flex: 0 1 auto; min-width: 7ch; }
+  .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
   .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
-  /* The model gives way before the name does: an ellipsis, never a cut letter. */
-  .ph-model {
-    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: var(--t-sm); color: var(--muted);
+  /* The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): the kit's .ph-meta look (mono, --t-xs,
+     --muted), one line after the chips. It gives way before the name does, and gives way in
+     WHOLE items, never as half a value ("$3." says nothing) or a lone "·": the line wraps and
+     its height clips the second row. The row is laid out cost first (row-reverse, with the
+     items' order reversed and the group packed back to the left), so what no longer fits
+     wraps away in the order model, then ctx, then cost; each unit carries its own separator. */
+  .ph-meta {
+    flex: 0 1000000 auto; min-width: 0; display: flex; flex-flow: row-reverse wrap; justify-content: flex-end; align-content: flex-start;
+    height: var(--lh-xs); overflow: hidden;
+    font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap;
   }
-  /* The cost is the last slot: short, so it never shrinks (a clipped "$1." says
-     nothing); the model and the name give way before it. */
-  .ph-cost {
-    flex: none; font-size: var(--t-sm); white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
-  }
+  /* The empty first item makes the line non-empty before the cost is placed, so a cost wider
+     than the room wraps away like the others instead of showing as its first few characters.
+     It is a full line tall: a zero-height first line would put the wrapped row at the top. */
+  .ph-meta::before { content: ""; flex: none; height: var(--lh-xs); }
+  .ph-mi { flex: none; display: flex; align-items: center; white-space: pre; }
+  .mi-cost { order: 1; }
+  .mi-ctx { order: 2; }
+  .mi-model { order: 3; flex: 0 1 auto; min-width: 0; }
+  .ph-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ph-cost { flex: none; }
+  .ph-msep { flex: none; }
+  /* ctx is a button (into Activity), set like its neighbours: the 2px pad is cancelled by the
+     margin, so the line reads as the three words it is. */
   .ph-ctx {
-    flex: none; padding: 1px 4px; font: var(--t-sm) var(--font-ui); font-variant-numeric: tabular-nums;
-    color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
+    flex: none; margin: 0 -2px; padding: 0 2px; font: inherit; font-variant-numeric: inherit;
+    color: inherit; background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   .ph-ctx:hover { color: var(--fg); background: var(--raise); }
   .ph-side { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; overflow: hidden; padding: 1px 2px; }
@@ -735,9 +752,12 @@
   .ph-ico svg { display: block; width: 14px; height: 14px; }
   .ph-tab:hover { color: var(--fg); }
   .ph-tab.on { color: var(--fg); background: var(--raise); }
-  /* Files is a toggle over the pane (the drawer): an underline while open.
-     Terminal, Activity and Access are the pane's views: .on above. */
-  .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
+  /* ONE selected look for a tab (G6): Terminal, Activity and Access are the pane's views, .on.
+     Files over a terminal pane is not a tab but the .ph-files toggle (the kit's .btn[aria-pressed]
+     look, never a tab look). A pane of FILES has Files as its one tab, so while the drawer is open
+     on it the tab takes the same selected look: aria-pressed, which paintDrawerTabs sets. */
+  .ph-tab[aria-pressed="true"] { color: var(--fg); background: var(--raise); }
+  .ph-files { flex: none; }
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   .ph-shell {
     padding: 4px 10px; font: 500 var(--t-sm) var(--font-ui); color: var(--fg); cursor: pointer;
@@ -762,47 +782,55 @@
   .cell-bar button:focus-visible { outline: var(--focus); outline-offset: -2px; }
 
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
-     tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
-     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 557px is
-     the bar's content box (a 577px pane), not tabs.js's NARROW_PANE_PX (560): with
-     the pointer over the header (⋯ ⛶ × in the flow) the wide padding clips Terminal
-     up to a 575px pane (measured with the 13px tabs, #171; #13 had 568 with 12.5px),
-     so the compact look reaches 577 and the wide one starts with 2px to spare. */
-  @container (max-width: 557px) {
+     tabs tighten, + Shell loses its label and the separator goes. Below tabs.js's
+     NARROW_PANE_PX (640) only ⋯ stays in the flow (see .ph-ics.nar; Maximize and Close
+     pane live in its menu), so the hover-revealed ⋯ ⛶ × no longer widen this side
+     there: a plain pane's wide look (3 text tabs, the separator, Files, + Shell, ⋯)
+     fits beside the name's 140px from a 525px pane (#172, 1px steps; #171 had 575 with
+     four tabs and ⋯ ⛶ × hovered). A MAXIMIZED pane keeps its ⛶ pinned beside ⋯ (26px
+     more): its wide look needs 551px and clipped Terminal up to 547. One rule serves both
+     (the plain pane pays 26px of room it did not need, still words): compact up to a 552px
+     pane, which is 532px of content box (the bar's 20px padding), and the wide look
+     starts with 2px to spare. From 640 up a hovered header's 407px needs a 577px pane,
+     which every wide pane exceeds. The frame's 575px panes (m1-1) draw the wide look. */
+  @container (max-width: 532px) {
     .ph-sep { display: none; }
     .ph-tab { padding: 4px 5px; }
+    .ph-files { padding: 0 5px; }
     .ph-shell { font-size: 0; padding: 4px 8px; }
     .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
-  /* Too narrow for four words (the compact text tabs need a 443px pane, 423px of
-     content box, measured with the 13px tabs): the same four tabs as icons, 24px
-     squares like ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized
-     pane keeps its ⛶ in the flow, which costs 26px the + Shell button gives back
-     here, or Terminal clips at 339-354px. The rule holds
-     below 339px too, though + would fit there from a 249px pane: a rare corner
-     (a maximized pane under 339px) kept to one rule. */
-  @container (max-width: 439px) {
+  /* Too narrow for three words beside Files (the compact text look needs a 446px pane,
+     426px of content box, measured): the three tabs and Files as icons, 24px squares like
+     ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized pane keeps its ⛶ in the
+     flow, which costs 26px the + Shell button gives back here, or Terminal clips at
+     330-356px. The rule holds below 330px too, though + would fit there from a 250px
+     pane: a rare corner (a maximized pane under 330px) kept to one rule. */
+  @container (max-width: 427px) {
     .ph-lbl { display: none; }
     .ph-ico { display: block; }
     .ph-tab { padding: 5px; }
+    .ph-files { padding: 0 4px; }
     .cell-bar:has(.ph-max.pin) .ph-shell { display: none; }
   }
-  /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text tabs need
-     a 469px pane (449px of content box): measured, Terminal clipped up to 468. Up to
-     a 470px pane it draws the icons (2px to spare); + Shell keeps its room until the
+  /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text look needs
+     a 472px pane (452px of content box): measured, Terminal clipped up to 471. Up to
+     a 473px pane it draws the icons (2px to spare); + Shell keeps its room until the
      rule above. A plain pane keeps its words down to that rule. */
-  @container (max-width: 450px) {
+  @container (max-width: 453px) {
     .cell-bar:has(.ph-max.pin) .ph-lbl { display: none; }
     .cell-bar:has(.ph-max.pin) .ph-ico { display: block; }
     .cell-bar:has(.ph-max.pin) .ph-tab { padding: 5px; }
+    .cell-bar:has(.ph-max.pin) .ph-files { padding: 0 4px; }
   }
-  /* Too narrow for four icons beside the name's room (a 338px pane or less, 318px
-     of content box): dot, name, chip, + and ⋯. Files and Activity stay one click
-     away in the pane's ⋯ menu (Open files here, Context by tool), Access in the
-     palette. A pane of files has ONE tab (paneTabsClass marks it `one`), which fits
-     in far less: it stays, or the pane loses its only header control (#123). */
-  @container (max-width: 318px) {
-    .ph-tabs:not(.one) { display: none; }
+  /* Too narrow for the icons (three tabs and Files) beside the name's room (a 330px
+     pane or less, 310px of content box; they need 329px, measured): dot, name, chip, +
+     and ⋯. Files (the toggle) and Activity stay one click away in the pane's ⋯ menu
+     (Open files here, Context by tool), Access in the palette. A pane of files has ONE
+     tab (paneTabsClass marks it `one`), which fits in far less: it stays, or the pane
+     loses its only header control (#123). */
+  @container (max-width: 310px) {
+    .ph-tabs:not(.one), .ph-files { display: none; }
   }
   /* The one-tab group's own floor. Beside the name's 140px, + Shell and ⋯ its 24px
      icon is clipped in a pane narrower than 249px (229px of content box), so below
@@ -819,8 +847,9 @@
   }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
-     an 8px gutter: the room goes to the panes, and two panes at 1440px stay
-     above the narrow threshold. */
+     an 8px gutter: the room goes to the panes. Two panes at 1440px (575px each,
+     beside the 290px sidebar) are narrow by design (m1-1 draws them so): one chip,
+     no meta. */
   /* isolation: the xterm scrollbar of a pane (z-index 11) must not paint above
      the drawer (z-index 10) that covers it. */
   #grid { gap: 1px; padding: 0; background: var(--line); isolation: isolate; }

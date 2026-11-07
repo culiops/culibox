@@ -52,8 +52,9 @@ let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it
 // is visible on screen, so the message only has to say why.
 const PANE_LIMIT_MSG = "Pane limit reached.";
 let maximized = null;
-// Below this width a pane's desktop header keeps dot + name + one chip (D9).
-const NARROW_PANE_PX = 560;
+// Below this width a pane's desktop header keeps dot + name + one chip (D9): the
+// meta `haiku-4.5 · ctx 35% · $3.12` (F14) needs the room the tabs and Files take.
+const NARROW_PANE_PX = 640;
 
 // `restoring` is what protects the stored snapshot during boot: every layout call
 // boot makes (applyCap(4) and friends) would otherwise write an empty grid over it
@@ -883,8 +884,8 @@ class Cell {
 
   // renderHeader builds the desktop pane header (spec 5.3): one line, fixed
   // slot order, empty slots collapse. Left: dot, name (a switcher when the pane
-  // holds several tabs), chips, model, context %. Right: Terminal · Files ·
-  // Activity · Access, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
+  // holds several tabs), chips, the meta `model · ctx N% · $cost`. Right: Terminal ·
+  // Activity · Access, the Files toggle, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
   // what shows; this only paints it. Rebuilt on every renderBar like the strip
   // it replaces, so no listener outlives its node.
   renderHeader() {
@@ -964,25 +965,50 @@ class Cell {
       const ab = acctBadgeEl(s);
       if (ab) main.append(ab);
     }
+    // The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): one kit .ph-meta line of up to three
+    // items, the model (raw id in its title), the ctx button and the cost. Each item is a
+    // unit that carries its own trailing " · " (decoration, aria-hidden) when another item
+    // follows, so CSS can drop a whole unit, separator with it, and never leave a lone
+    // "·" or half a value: see .ph-meta in desktop.css.
+    const units = [];
     if (m.model) {
       const mo = el("span", m.model);
-      mo.className = "ph-model mono";
-      main.append(mo);
+      mo.className = "ph-model";
+      if (m.modelTitle) mo.title = m.modelTitle;
+      units.push(["mi-model", mo]);
     }
     if (m.ctx && sid) {
       // R2: the same action as the old tab's usage chip, Context by tool.
       const ctx = el("button", m.ctx);
       ctx.className = "ph-ctx";
-      const ut = typeof usageTitle === "function" ? usageTitle(t.usage()) : "";
-      ctx.title = (ut ? ut + " \u2014 " : "") + "click for context by tool";
+      const u = t.usage();
+      const ut = typeof usageTitle === "function" ? usageTitle(u) : "";
+      ctx.title = "Context used " + u.pct + "%" + (ut ? " \u00B7 " + ut : "") + " \u2014 click for context by tool";
       ctx.onclick = (e) => { e.stopPropagation(); openPaneView(sid, "activity"); };
-      main.append(ctx);
+      units.push(["mi-ctx", ctx]);
     }
     if (m.cost) {
       const cost = el("span", m.cost);
-      cost.className = "ph-cost mono";
+      cost.className = "ph-cost";
       cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
-      main.append(cost);
+      units.push(["mi-cost", cost]);
+    }
+    if (units.length) {
+      const meta = el("span");
+      meta.className = "ph-meta";
+      units.forEach(([kind, node], i) => {
+        const unit = el("span");
+        unit.className = "ph-mi " + kind;
+        unit.append(node);
+        if (i < units.length - 1) {
+          const sp = el("span", " \u00B7 ");
+          sp.className = "ph-msep";
+          sp.setAttribute("aria-hidden", "true");
+          unit.append(sp);
+        }
+        meta.append(unit);
+      });
+      main.append(meta);
     }
 
     const side = el("div");
@@ -992,14 +1018,13 @@ class Cell {
     tabs.className = paneTabsClass(defs);
     tabs.setAttribute("role", "group");
     tabs.setAttribute("aria-label", "Pane views");
-    // Terminal, Activity and Access are the pane's views (.on, one of the
-    // three); Files is the drawer's toggle (.open, paintDrawerTabs). Each tab is
-    // ONE button holding its icon and its label: a narrow pane shows the icon
-    // (CSS, desktop.css), so the tab keeps its name either way (#13).
-    const tabButton = (def) => {
-      const b = el("button");
-      b.title = def.label;
-      b.setAttribute("aria-label", def.label);
+    // Terminal, Activity and Access are the pane's views (.on, one of the three).
+    // Files is not a view: it is the drawer's toggle, a button after the tabs
+    // (below), pressed while the drawer is open (paintDrawerTabs), so exactly one
+    // tab looks selected (G6). A pane of files has no views: Files is its one tab.
+    // Each tab is ONE button holding its icon and its label: a narrow pane shows
+    // the icon (CSS, desktop.css), so the tab keeps its name either way (#13).
+    const withIcon = (b, def) => {
       const ico = el("span");
       ico.className = "ph-ico";
       ico.append(tabIcon(def.icon));
@@ -1008,7 +1033,16 @@ class Cell {
       b.append(ico, lbl);
       return b;
     };
-    // A pane of files has no session to describe: Files alone (paneTabs).
+    const tabButton = (def) => {
+      const b = el("button");
+      b.title = def.label;
+      b.setAttribute("aria-label", def.label);
+      return withIcon(b, def);
+    };
+    const filesPress = (b) => {
+      b.dataset.k = "files";
+      b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+    };
     for (const def of defs) {
       const b = tabButton(def);
       if (def.id === "terminal") {
@@ -1022,8 +1056,7 @@ class Cell {
         };
       } else if (def.id === "files") {
         b.className = "ph-tab";
-        b.dataset.k = "files";
-        b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+        filesPress(b);
       } else {
         b.className = "ph-tab" + (this.view === def.id ? " on" : "");
         b.dataset.v = def.id;
@@ -1041,6 +1074,18 @@ class Cell {
     const sep = el("span");
     sep.className = "ph-sep";
     side.append(tabs, sep);
+    if (term) {
+      // A ghost button, not a tab: its pressed look is the kit's raise + 1px ring.
+      const fdef = paneFilesToggle();
+      const files = el("button");
+      files.className = "btn btn-ghost btn-sm ph-files";
+      files.title = "Files drawer (" + shortcutHint("files.toggle", IS_MAC) + ")";
+      files.setAttribute("aria-label", fdef.label);
+      files.setAttribute("aria-pressed", "false");
+      withIcon(files, fdef);
+      filesPress(files);
+      side.append(files);
+    }
     const sh = el("button", "+ Shell");
     sh.className = "ph-shell";
     sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";

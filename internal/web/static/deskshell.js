@@ -25,12 +25,13 @@ function deskDep(name) {
     minutesLeft: typeof minutesLeft === "function" ? minutesLeft : null,
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
+    shortModel: typeof shortModel === "function" ? shortModel : null,
   };
   if (g[name]) return g[name];
   const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
-    isNestedShell: "./shellnest.js" }[name];
+    isNestedShell: "./shellnest.js", shortModel: "./analytics.js" }[name];
   return require(mod)[name];
 }
 
@@ -198,14 +199,26 @@ function headerSyncKey(name, session) {
   return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null, session ? deskDep("attentionClass")(session) : ""]);
 }
 
+// modelLabel: a model id as the pane header shows it, `haiku-4.5` (F13). Analytics'
+// shortModel drops "claude-" and a trailing -YYYYMMDD; a "-N-M" version tail then
+// reads N.M. The tail is one or two digits a side: "gpt-4-0613" is a build tag, not
+// version 4.613. Nothing to show (null, "") is null, where shortModel would say
+// "(unknown)". The raw id belongs in the title.
+function modelLabel(id) {
+  if (!id) return null;
+  return deskDep("shortModel")(String(id)).replace(/-(\d{1,2})-(\d{1,2})$/, "-$1.$2");
+}
+
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,
 // cloud, model, ctx, cost. Below the narrow threshold only ONE chip survives (the
 // write chip if there is one, else containment) and model/ctx/cost are dropped, so
 // the name keeps the room. The name itself is never shortened here: CSS ellipsis
-// does that, and a test pins that a long name passes through.
+// does that, and a test pins that a long name passes through. The meta reads
+// `haiku-4.5 · ctx 35% · $3.12`: model is the short label (modelTitle the raw id),
+// ctx says what the percentage is.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
+    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
@@ -225,13 +238,14 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
+    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
     dot, name, chips,
-    model: u && u.model ? String(u.model) : null,
-    ctx: u && typeof u.pct === "number" ? u.pct + "%" : null,
+    model: u ? modelLabel(u.model) : null,
+    modelTitle: u && u.model ? String(u.model) : null,
+    ctx: u && typeof u.pct === "number" ? "ctx " + u.pct + "%" : null,
     cost: s ? fmtSessionCost(s.cost_usd) : null,
   };
 }
@@ -400,23 +414,30 @@ function paneTitle(name, tab, session, tabCount) {
   return name + cwd + (tabCount > 1 ? " (" + tabCount + " tabs in this pane)" : "");
 }
 
-// paneTabs: the pane header's tabs, in the order they show. `label` is the text
+// paneTabs: the pane header's view tabs, in the order they show. `label` is the text
 // of a wide header, `icon` the glyph tabIcon draws in its place when the pane is
-// too narrow for four words (#13); the button keeps both, so CSS alone picks. A
-// pane of files has no session to describe: Files alone, no Activity, no Access.
+// too narrow for the words (#13); the button keeps both, so CSS alone picks. A
+// terminal pane has three views, Terminal, Activity and Access, and Files is NOT a
+// tab of them: it opens a drawer over the pane, so it is a toggle button after the
+// tabs (paneFilesToggle) and exactly one tab looks selected (G6). A pane of files has
+// no session to describe: Files alone as its one tab, no Activity, no Access.
 function paneTabs(hasTerm) {
-  const files = { id: "files", label: "Files", icon: "files" };
-  if (!hasTerm) return [files];
+  if (!hasTerm) return [paneFilesToggle()];
   return [
     { id: "terminal", label: "Terminal", icon: "terminal" },
-    files,
     { id: "activity", label: "Activity", icon: "activity" },
     { id: "access", label: "Access", icon: "access" },
   ];
 }
 
+// paneFilesToggle: the Files control's one definition: the toggle after a terminal
+// pane's tabs, and the one tab of a pane of files.
+function paneFilesToggle() {
+  return { id: "files", label: "Files", icon: "files" };
+}
+
 // paneTabsClass: the class of the tab group. A group of one tab (a pane of files) is
-// marked `one`: the narrow-pane rule that hides four icons (desktop.css) leaves it
+// marked `one`: the narrow-pane rule that hides the tabs (desktop.css) leaves it
 // alone, since one 24px icon fits where four do not (#123).
 function paneTabsClass(defs) {
   return defs && defs.length === 1 ? "ph-tabs one" : "ph-tabs";
@@ -424,5 +445,5 @@ function paneTabsClass(defs) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneTabsClass };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel };
 }

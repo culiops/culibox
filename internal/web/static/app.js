@@ -306,9 +306,11 @@ function paintDrawerHead() {
   sess.title = n;
 }
 
-// paintDrawerTabs: the underline on a pane's Files tab follows the drawer
-// (the only header tab with data-k; Activity/Access are views, Cell.setView).
-// Classes only, never a rebuild: see drawerFollowFocus.
+// paintDrawerTabs: the pressed state of a pane's Files control follows the drawer:
+// the toggle button of a terminal pane, or the one Files tab of a pane of files (the
+// only header controls with data-k; Activity/Access are views, Cell.setView). Only
+// aria-pressed moves, which is also what draws it (desktop.css): the kit's one pressed
+// look, never a second selected tab. Never a rebuild: see drawerFollowFocus.
 function paintDrawerTabs(cell) {
   if (!cell || !cell.bar) return;
   const term = cellTerminal(cell);
@@ -316,9 +318,8 @@ function paintDrawerTabs(cell) {
   // A pane of files has no session; its tab is the drawer's only while it is
   // the focused one.
   const mine = drawerState.sessionId === sid && (sid !== null || cell === focusedCell);
-  for (const b of cell.bar.querySelectorAll(".ph-tab[data-k]")) {
+  for (const b of cell.bar.querySelectorAll("[data-k]")) {
     const on = mine && drawerState.open === b.dataset.k;
-    b.classList.toggle("open", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
   }
 }
@@ -2391,7 +2392,7 @@ function buildCardComposer(s) {
 function stripOpenButton(s) {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = "btn";
+  b.className = "btn btn-sm";
   b.textContent = "Open terminal";
   b.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
   return b;

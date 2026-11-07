@@ -110,15 +110,51 @@ test("deskGroups lists a shell right after its parent and does not count it", ()
 });
 
 test("paneHeaderModel: full slots in order for a wide pane", () => {
-  const tab = { kind: "terminal", usage: () => ({ model: "opus-5", pct: 42 }) };
+  const tab = { kind: "terminal", usage: () => ({ model: "claude-haiku-4-5-20251001", pct: 35 }) };
   const s = { ...working, name: "api", aws_connections: [{ name: "prod", label: "prod", account_id: "1", role_arn: "arn:aws:iam::1:role/r", elevated_until: FUTURE }] };
   const m = d.paneHeaderModel({ tab, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
   assert.equal(m.name, "api");
   assert.deepEqual(m.chips.map((c) => c.tone), ["box", "write"]);
   assert.equal(m.chips[1].text, "aws prod \u00b7 WRITE \u00b7 30m");
-  assert.equal(m.model, "opus-5");
-  assert.equal(m.ctx, "42%");
+  assert.equal(m.model, "haiku-4.5", "the short label, not the raw id (G6)");
+  assert.equal(m.modelTitle, "claude-haiku-4-5-20251001", "the raw id stays one hover away");
+  assert.equal(m.ctx, "ctx 35%", "the word says what the number is");
   assert.ok(m.dot && m.dot.cls);
+});
+
+// modelLabel: the model as the pane header shows it (F13). analytics.js's shortModel
+// drops "claude-" and a trailing -YYYYMMDD; a "-N-M" version tail then reads N.M.
+// Analytics' own output is unchanged.
+test("modelLabel: short model names with a dotted version", () => {
+  assert.equal(d.modelLabel("claude-haiku-4-5-20251001"), "haiku-4.5");
+  assert.equal(d.modelLabel("opus-5-5"), "opus-5.5");
+  assert.equal(d.modelLabel("claude-opus-5-5"), "opus-5.5");
+  assert.equal(d.modelLabel("claude-sonnet-4-20250514"), "sonnet-4");
+  assert.equal(d.modelLabel("mixed"), "mixed");
+  assert.equal(d.modelLabel("gpt-4o"), "gpt-4o");
+});
+
+test("modelLabel: nothing to show is null, never Analytics' \"(unknown)\"", () => {
+  assert.equal(d.modelLabel(""), null);
+  assert.equal(d.modelLabel(null), null);
+  assert.equal(d.modelLabel(undefined), null);
+});
+
+test("modelLabel: a build tag is not a version (provider-neutral ids)", () => {
+  assert.equal(d.modelLabel("gpt-4-0613"), "gpt-4-0613", "a 4-digit build tag is not minor version 613");
+  assert.equal(d.modelLabel("claude-opus-4-1-20250805"), "opus-4.1");
+});
+
+test("paneHeaderModel: no usage, or a usage with no model, leaves the meta slots empty", () => {
+  const s = { ...working, cost_usd: 3.12 };
+  const none = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.equal(none.model, null);
+  assert.equal(none.modelTitle, null);
+  assert.equal(none.ctx, null);
+  assert.equal(none.cost, "$3.12");
+  const empty = d.paneHeaderModel({ tab: { kind: "terminal", usage: () => ({ model: "", pct: 12 }) }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.equal(empty.model, null, "an empty model id is no model, not (unknown)");
+  assert.equal(empty.ctx, "ctx 12%");
 });
 
 test("paneHeaderModel narrow on an elevated session: exactly one chip, the write chip", () => {
@@ -129,6 +165,7 @@ test("paneHeaderModel narrow on an elevated session: exactly one chip, the write
   assert.equal(m.chips[0].tone, "write");
   assert.equal(m.model, null);
   assert.equal(m.ctx, null);
+  assert.equal(m.cost, null);
 });
 
 test("paneHeaderModel narrow without a write chip keeps containment; a 200-char name passes through", () => {
@@ -489,12 +526,19 @@ test("headerSyncKey moves with the name and with cost_usd, and not with anything
 
 // paneTabs: the pane header's tabs, in order, each with the label its button
 // shows and the icon it shows instead of the label in a narrow pane (#13).
-test("paneTabs lists the four tabs of a pane with a session, each with its own icon", () => {
+test("paneTabs lists the three views of a pane with a session, each with its own icon; Files is the toggle after them (G6)", () => {
   const t = d.paneTabs(true);
-  assert.deepEqual(t.map((x) => x.id), ["terminal", "files", "activity", "access"]);
-  assert.deepEqual(t.map((x) => x.label), ["Terminal", "Files", "Activity", "Access"]);
+  assert.deepEqual(t.map((x) => x.id), ["terminal", "activity", "access"]);
+  assert.deepEqual(t.map((x) => x.label), ["Terminal", "Activity", "Access"]);
   assert.ok(t.every((x) => typeof x.icon === "string" && x.icon), "every tab names an icon");
   assert.strictEqual(new Set(t.map((x) => x.icon)).size, t.length, "no two tabs share an icon");
+  assert.ok(!t.some((x) => x.id === "files"), "Files is a drawer toggle, never a view tab of a terminal pane");
+});
+
+test("paneFilesToggle is the Files button's one definition, the same as the files-only pane's tab", () => {
+  const f = d.paneFilesToggle();
+  assert.deepEqual([f.id, f.label, f.icon], ["files", "Files", "files"]);
+  assert.deepEqual(d.paneTabs(false)[0], f);
 });
 
 test("paneTabs for a pane of files has Files alone: no session to describe", () => {
