@@ -497,12 +497,16 @@ test("the phone #toast gets role status, or alert for an error (F62); the handle
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "status");
   assert.strictEqual(pg.slot["toast-msg"].textContent, "Saved");
   assert.strictEqual(h1, pg.shell.toastSeqNow());
+  assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "polite");
   const h2 = pg.shell.showToast("End failed: boom", { error: true, human: "Could not end docs.", detail: "boom" });
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "alert");
+  // index.html's static aria-live="polite" would override the alert role's implicit assertive.
+  assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "assertive", "an error interrupts, as role=alert does");
   assert.strictEqual(pg.slot["toast-msg"].textContent, "End failed: boom", "the phone shows msg, not human");
   assert.strictEqual(h2, h1 + 1);
   pg.shell.showToast("Clone needs you", { warn: true });
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "status");
+  assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "polite");
   assert.deepStrictEqual(pg.entries(), [], "nothing reaches the stack on the phone");
 });
 
@@ -543,6 +547,9 @@ test("index.html: #toasts is a labelled polite live region beside #toast; toasts
   const slotEnd = html.indexOf("</div>", html.indexOf('<div id="toast-bar"'));
   const between = html.slice(html.indexOf("</div>", slotEnd + 1) + 6, html.indexOf(host));
   assert.strictEqual(between.trim(), "", "right after #toast");
+  // The phone slot is a live region from page load, before its first toast sets a role (review M5):
+  // a region that only becomes live with its first content is often not announced.
+  assert.ok(html.includes('<div id="toast" aria-live="polite">'), "#toast is polite-live in the markup");
   const stack = html.indexOf('<script src="/toaststack.js"></script>');
   assert.ok(stack > 0, "toaststack.js is loaded");
   assert.ok(stack < html.indexOf('<script src="/shell.js"></script>'), "before shell.js");

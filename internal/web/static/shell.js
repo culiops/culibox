@@ -64,8 +64,14 @@ function showToast(msg, opts) {
   const undoBtn = document.getElementById("toast-undo");
   if (!box) return toastSeq;
   // The slot is one element for every kind, so the role follows the message.
+  // index.html makes it polite-live from load (a region that turns live with its
+  // first content is often not announced); that explicit aria-live would override
+  // role=alert's implicit assertive, so it follows the message too.
   // (Test fakes of the slot carry no setAttribute: pending.test.js, mobileshell.test.js.)
-  if (typeof box.setAttribute === "function") box.setAttribute("role", opts.error ? "alert" : "status");
+  if (typeof box.setAttribute === "function") {
+    box.setAttribute("role", opts.error ? "alert" : "status");
+    box.setAttribute("aria-live", opts.error ? "assertive" : "polite");
+  }
   document.getElementById("toast-msg").textContent = msg;
   box.classList.toggle("err", !!opts.error);
   box.classList.toggle("warn", !!opts.warn && !opts.error);
