@@ -47,6 +47,10 @@ function setFocusedCellRaw(cell) {
   if (typeof updateStatusLine === "function") updateStatusLine();
 }
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
+// The one sentence for hitting the cap (F80). The toasts used to word it three ways;
+// what the app did about it (stacked as a tab, left the tab, kept the shell docked)
+// is visible on screen, so the message only has to say why.
+const PANE_LIMIT_MSG = "Pane limit reached.";
 let maximized = null;
 // Below this width a pane's desktop header keeps dot + name + one chip (D9).
 const NARROW_PANE_PX = 560;
@@ -1808,7 +1812,7 @@ function openTerminal(id, name, opts) {
   let cell;
   if (opts.newPane) {
     if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // new pane, as asked
-    else { cell = focusedCell; showToast("Pane limit reached: opened alongside the current tabs."); }
+    else { cell = focusedCell; showToast(PANE_LIMIT_MSG); }
   } else if (focusedCell && focusedCell.tabs.length === 0) cell = focusedCell; // fill the empty focused cell
   else if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // auto-split a new window
   else cell = focusedCell;                                              // capped → stack as a tab
@@ -1856,7 +1860,7 @@ function moveToOwnPane(from, tab) {
   if (!docked && from.tabs.length === 1) { stay(); return; }
   if (cells.length >= cap) {
     stay();
-    showToast(docked ? "Pane limit reached: the shell stays docked." : "Pane limit reached: the tab stays where it is.");
+    showToast(PANE_LIMIT_MSG);
     return;
   }
   // renderGrid shows only the maximized cell on desktop (`show = max ? [max]
@@ -2100,4 +2104,10 @@ function endRestore(save = true) {
   restoring = false;
   if (!save) { gaveUp = true; return; }
   scheduleSaveLayout(); // fold in whatever boot already built
+}
+
+// tabs.js needs a DOM and cannot be require()d, so nothing loads this under node;
+// the guard keeps the house shape and lets a test that stubs the DOM reach the text.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { PANE_LIMIT_MSG };
 }

@@ -6371,7 +6371,15 @@ initMobileShell();
     const sideEnv = $("side-env");
     if (sideEnv) {
       sideEnv.textContent = meta.env_label;
-      if (meta.env_color) sideEnv.style.background = meta.env_color;
+      // The chip's text colour follows its background (F79): operator config can be
+      // any CSS colour, and the stylesheet's white text is unreadable on a pale one.
+      // backgroundColor, not the shorthand, so no image or gradient can paint here.
+      // An unparseable colour leaves the chip on its stylesheet colours.
+      if (meta.env_color && CSS.supports("color", meta.env_color)) {
+        sideEnv.style.backgroundColor = meta.env_color;
+        const rgb = parseRgb(getComputedStyle(sideEnv).backgroundColor);
+        if (rgb) sideEnv.style.color = envTextColor(rgb);
+      }
       sideEnv.hidden = false;
     }
     strip.hidden = false;
