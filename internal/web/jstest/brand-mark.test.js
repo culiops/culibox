@@ -51,6 +51,10 @@ test("the sidebar logo draws the favicon's glyph in the ground's colours", () =>
   assert.ok(m, "index.html has no .side-logo svg");
   const side = m[0];
   assert.deepStrictEqual(glyph(side), glyph(favicon));
+  // The frame of logo/doorway/glyph-*.svg: the 12-unit glyph with a 1-unit
+  // margin. Another viewBox or offset crops or shifts the mark.
+  assert.match(side, /^<svg\b[^>]*\sviewBox="0 0 14 14"/);
+  assert.match(side, /<g transform="translate\(1 1\)">/);
   assert.match(side, /<path\b[^>]*stroke="var\(--accent\)"/);
   assert.match(side, /<rect\b[^>]*fill="var\(--ok\)"/);
   assert.doesNotMatch(side, /#[0-9a-fA-F]{3,8}\b/, "a fixed colour would ignore the ground");
@@ -63,6 +67,13 @@ test("the needs-you icon is the same mark in its needs state", () => {
   const dot = (svg) => svg.match(/<g\b[\s\S]*<rect\b[^>]*fill="([^"]+)"/)[1].toLowerCase();
   assert.strictEqual(ground(faviconNeeds), ground(favicon));
   assert.strictEqual(stroke(faviconNeeds), stroke(favicon));
+  // The needs state opens the door and moves the dot, nothing else: the work
+  // shape with a yellow dot would not read as a change at 16px.
+  const work = glyph(favicon), needs = glyph(faviconNeeds);
+  assert.notStrictEqual(needs.d, work.d, "the door must open wider");
+  assert.notDeepStrictEqual(needs.rect, work.rect, "the dot must step out");
+  const frame = (svg) => svg.replace(/\sd="[^"]+"/, "").replace(/(<g\b[\s\S]*<rect\b)[^>]*>/, "$1>").replace(/#[0-9a-fA-F]{3,8}\b/g, "");
+  assert.strictEqual(frame(faviconNeeds), frame(favicon));
   assert.strictEqual(dot(favicon), token("--ok"));
   assert.strictEqual(dot(faviconNeeds), token("--warn-fg"));
   // Only the base palette: no colour (purple included) enters through the icon.
