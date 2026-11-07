@@ -408,6 +408,19 @@
   /* Warn is the clone-needs-you toast, so it takes the amber role's surface (the kit's needs-you
      fill: .chip-needs, the ask strip); the border stays --line, as on M8's amber attention chip. */
   .toast.is-warn { background: var(--amber-tint); }
+  /* Stack entry parts (M8.5): the muted "paused" label while the pointer is over the stack, and
+     the one action, a ghost button. Undo is the accent action (M7.5); Copy details stays muted. */
+  .toast-paused { flex: none; font-size: var(--t-xs); color: var(--muted); }
+  .toast-act { flex: none; }
+  .toast-act[data-act="undo"], .toast-act[data-act="undo"]:hover { color: var(--accent); font-weight: var(--w-medium); }
+  /* A progress meter (an upload) takes its own full-width row under the text. A zero basis keeps a
+     long text on the first row beside its buttons instead of pushing them down. */
+  .toast:has(> .meter) { flex-wrap: wrap; row-gap: var(--sp-2); }
+  .toast:has(> .meter) > .toast-text { flex-basis: 0; }
+  .toast > .meter { flex: 0 0 100%; }
+  /* A pending entry's spinner pulses with app.css's spawn-pulse. :where keeps this at (0,1,0), below
+     app.css's reduced-motion `.toast .spin { animation: none }`, which loads before this file. */
+  :where(.toast) .spin { animation: spawn-pulse 1s ease-in-out infinite alternate; }
 
   /* --- kit gaps two or more plans share ------------------------------------- */
   /* Drawn page-local in the mockups (the prefixed classes named below); the values are theirs. */
@@ -1941,6 +1954,15 @@
   #toast-x:hover { background: var(--line); color: var(--fg); }
   #toast-bar { height: 3px; background: var(--line); border-radius: 2px; }
   #toast-bar > i { background: var(--accent); }
+  /* The toast stack (F60): the M1 top-right spot under the pane header (M8 .m8-toasts), newest on
+     top. The column lets clicks through to the terminal around the toasts; only a toast takes the
+     pointer. app.css hides it at every width. The #toast rules above stay for the phone slot. */
+  #toasts {
+    position: fixed; top: 48px; right: var(--sp-4); z-index: 60;
+    display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-2);
+    pointer-events: none;
+  }
+  #toasts > .toast { pointer-events: auto; }
 
   /* Store-locked banner: a --panel strip. It is only ever shown while the store is
      locked and blocks spawns, so the one amber use is the leading dot and the message. */

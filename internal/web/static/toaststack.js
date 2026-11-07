@@ -29,7 +29,9 @@
 // Dedupe. A push whose text and kind equal a listed entry that is not pending
 // and has no undo does not add an entry: that entry moves to the top, takes the
 // push's detail, progress and ms, restarts its timer, and its id is returned.
-// A push that itself carries an undo never dedupes (it would lose the Undo).
+// A push that itself carries an undo never dedupes either: each Undo stays its
+// own entry, with its own id (the page keys the callback by id), and a listed
+// Undo is never the entry a later push replaces.
 //
 // Pause (hover). pause(now) freezes every timed entry's remaining time; while
 // paused nextDeadline() is null and expire() removes nothing. resume(now) sets

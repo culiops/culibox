@@ -3040,7 +3040,8 @@ function startRename(li, span, s) {
         retitleTerminal(s.id, stored);
       } catch (e) {
         span.textContent = was;
-        showToast("Rename failed: " + e.message, { error: true });
+        const f = toastFailText("rename " + cur, e);
+        showToast("Rename failed: " + e.message, { error: true, human: f.text, detail: f.detail });
       }
     }
     refreshSessions();
@@ -5452,7 +5453,10 @@ $("spawn").addEventListener("submit", async (ev) => {
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it
-      showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+      // The desktop sentence drops toastFailText's closing period for the note.
+      const kept = draft.trim() ? " — your first message is kept" : "";
+      const f = toastFailText("start the session", e);
+      showToast("Spawn failed: " + e.message + kept, { error: true, human: f.text.replace(/\.$/, "") + kept, detail: f.detail });
     }
   } finally {
     clearInterval(progTimer);
@@ -6023,23 +6027,28 @@ async function killSession(id) {
   killing.add(id);
   // A boxed session's docker stop can take seconds: a toast covers the wait
   // after the pending delay. It starts here, at the click, so the 300ms clock
-  // is not spent on the re-render below. done() runs (in finally) before the
-  // error toast is shown, so the toast cannot hide "End failed".
+  // is not spent on the re-render below. done(result) (in finally) turns it
+  // into the outcome: on the desktop the same stack entry becomes "Ended <name>"
+  // or the error (F64: a sentence, the raw text behind Copy details); the phone
+  // gets "End failed: <raw>" only, since the row leaving says it ended.
   const sess = (lastSessions || []).find((s) => s.id === id);
-  const done = pendingToast("Ending " + ((sess && (sess.name || sess.id)) || id) + "…");
+  const name = (sess && (sess.name || sess.id)) || id;
+  const done = pendingToast("Ending " + name + "…");
   let failure = null;
+  let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
     await refreshSessions(); // re-render → row shows "ending…"
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
     failure = e;
+    const f = toastFailText("end " + name, e);
+    result = { msg: "End failed: " + e.message, opts: { error: true, human: f.text, detail: f.detail } };
   } finally {
-    done();
+    done(result);
   }
   if (failure) {
     killing.delete(id);
     await refreshSessions();
-    showToast("End failed: " + failure.message, { error: true });
     return;
   }
   killing.delete(id);
@@ -6121,7 +6130,8 @@ async function spawnShellRun(cell, placement, toastWait) {
     else if (!terminalTabFor(s.id)) openTerminal(s.id, s.name); // not in the list yet: never leave it unshown
   } catch (e) {
     // 403 / 404 / 409 carry the server's sentence ("no shell profile").
-    showToast("Shell failed: " + e.message, { error: true });
+    const f = toastFailText("start a shell", e);
+    showToast("Shell failed: " + e.message, { error: true, human: f.text, detail: f.detail });
     if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
     shellSpawning.delete(cell);

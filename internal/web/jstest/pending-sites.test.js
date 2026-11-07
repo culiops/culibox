@@ -87,7 +87,7 @@ test("spawnShellIn: a trigger gets withPending, no trigger gets a toast over the
   assert.ok(run.indexOf(fin) < run.indexOf("await refreshSessions()"));
 });
 
-test("killSession: a toast covers the DELETE, cleared in finally before the error toast", () => {
+test("killSession: a toast covers the DELETE and becomes its result in finally", () => {
   const src = read("app.js");
   const b = body(src, "killSession");
   const start = b.indexOf('pendingToast("Ending " + ');
@@ -101,10 +101,12 @@ test("killSession: a toast covers the DELETE, cleared in finally before the erro
   const tryAt = b.indexOf("try {", start);
   assert.ok(tryAt >= 0 && tryAt < b.indexOf("await refreshSessions()"), "refresh inside try");
   const fin = finallyBlock(b, start);
-  assert.match(fin, /done\(\)/);
-  // The error toast must come after done(), so done() cannot hide it.
-  assert.ok(b.indexOf(fin) < b.indexOf('"End failed: "'), "done() runs before the error toast");
-  assert.ok(b.indexOf('"End failed: "') > 0, "error toast still present");
+  assert.match(fin, /done\(result\)/);
+  // The pending toast turns into the outcome (#171 F64): the failure is the
+  // result handed to done(), not a second toast that done() could hide.
+  assert.match(b, /result = \{ msg: "End failed: " \+ e\.message, opts: \{ error: true, human: f\.text, detail: f\.detail \} \}/);
+  assert.ok(b.indexOf('"End failed: "') < b.indexOf(fin), "the failure result is set before done() runs");
+  assert.doesNotMatch(b, /showToast\("End failed/, "no separate error toast");
 });
 
 test("trigger buttons hand themselves to the action instead of a disabled/finally guard", () => {
