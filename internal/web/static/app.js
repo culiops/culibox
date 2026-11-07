@@ -2566,7 +2566,8 @@ function renderNeedsBody(s, opts) {
 
   const acts = document.createElement("div");
   acts.className = "nacts";
-  // The strip's buttons are all the kit's 24px .btn-sm (Yes also the amber .btn-yes), like Open terminal.
+  // The strip's action row (.nacts) is all the kit's 24px .btn-sm (Yes also the amber .btn-yes), like Open
+  // terminal. The reply composer's send (buildReplyComposer) keeps its own height.
   const sm = inStrip ? " btn-sm" : "";
   if (c.enableReplies) {
     const en = buildEnableRepliesButton(s.id, () => {
@@ -3082,7 +3083,8 @@ function renderSSOBody(s, opts) {
   acts.className = "nacts";
   const signIn = document.createElement("button");
   signIn.type = "button";
-  // In the strip every button is the kit's 24px .btn-sm, Open terminal's size (renderNeedsBody does the same).
+  // In the strip's action row (.nacts) every button is the kit's 24px .btn-sm, Open terminal's size (renderNeedsBody
+  // does the same). The reply composer's send and the locked-store form's Unlock keep their own height.
   const sm = inStrip ? " btn-sm" : "";
   signIn.className = "btn pri" + sm;
   signIn.textContent = waiting ? "Waiting for sign-in…" : l && l.state === "failed" ? "Try again" : "Sign in";

@@ -1137,9 +1137,10 @@
   .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; }
   /* A primary here (the SSO strip's Sign in) and Yes (the kit's amber .btn-yes, the one amber-filled button
      in the product: amber = needs-you only) are kit primitives: the strip's secondary fill, border and hover
-     skip them. :where(...) leaves each rule's weight as it was. Every button the strip builds (Yes, No, Open
-     terminal, Enable / Disallow replies, the sign-in's Sign in and Copy host command) is .btn-sm; the padding
-     and radius override is for a .btn that is not. */
+     skip them. :where(...) leaves each rule's weight as it was. Every button of the action row (.nacts: Yes, No,
+     Open terminal, Enable / Disallow replies, Sign in / Try again, Copy host command) is .btn-sm; the padding
+     and radius override is for a .btn in it that is not. The reply composer's send and the locked-store form's
+     Unlock are .btn.pri outside .nacts and keep their own height. */
   .needstrip .nacts .btn:where(:not(.btn-sm)) { padding: 3px 10px; border-radius: var(--r-ctl); }
   .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)) { background: var(--raise); border: 1px solid var(--line); }
   .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)):hover { background: var(--background3); }
