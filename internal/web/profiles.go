@@ -59,6 +59,13 @@ type ProfileView struct {
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
 	Options    []ProfileOption `json:"options,omitempty"`
+	// RuntimeAsked is the tier a session of this profile asks for: its own
+	// runtime, else the instance's default_runtime as configured, else "" (it
+	// asks for nothing). Runtime above ends in box when nobody named a tier, so
+	// it cannot tell the two apart, and with no box layer they differ: a session
+	// that asks for box is refused, one that asks for nothing runs on this machine
+	// (session.runtimeFor, launcher.RequestedRuntime).
+	RuntimeAsked string `json:"runtime_asked,omitempty"`
 	// AcceptsPrompt: the spawn form may offer a first message (launcher.AcceptsPrompt).
 	AcceptsPrompt bool `json:"accepts_prompt,omitempty"`
 	// Claude: replies (and their default) apply to this profile at all.
@@ -472,6 +479,10 @@ func (m *ProfileManager) Views() []ProfileView {
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a)
+		asked := a.Runtime
+		if asked == "" {
+			asked = m.defaultRuntime
+		}
 		bound := a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0
 		source := ProfileSourceConfig
 		switch {
@@ -486,6 +497,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			Editable:      source == ProfileSourceRuntime,
 			Source:        source,
 			Runtime:       rt,
+			RuntimeAsked:  asked,
 			DefaultCwd:    a.DefaultCwd,
 			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
 			Claude:        launcher.IsClaudeBin(a.Bin),

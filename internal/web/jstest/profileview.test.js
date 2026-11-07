@@ -220,6 +220,18 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
   assert.strictEqual(noTier("colima is not installed").lines[2], "Until it is, sessions start on this machine, uncontained.");
   assert.strictEqual(noTier("run `agent-box doctor` for details").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
   assert.strictEqual(noTier("").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
+  // The instance's own default_runtime: box is a tier a session of this profile asks for, and with no box layer that is refused.
+  const asked = (runtimeAsked, reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, view: { ...awsOpsView, runtime_asked: runtimeAsked }, doc: unnamedDoc })), "runs").lines[2];
+  assert.strictEqual(asked("box", "Docker is not installed"), "Sessions with this profile can't start until Docker is installed.");
+  assert.strictEqual(asked("box", "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
+  assert.strictEqual(asked("box", "run `agent-box doctor` for details"), "Sessions with this profile can't start until boxes are available.");
+  assert.strictEqual(asked("", "Docker is not installed"), "Until it is, sessions start on this machine, uncontained.", "nothing asked: an older server, or no default_runtime");
+  assert.strictEqual(asked(undefined, "Docker is not installed"), "Until it is, sessions start on this machine, uncontained.");
+  // The stored profile comes first: a stored host or box tier is not the default's to change.
+  const hostDoc = { ...unnamedDoc, runtime: "host" };
+  const storedHost = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, runtime: "host", runtime_asked: "host" }, doc: hostDoc })), "runs");
+  assert.strictEqual(storedHost.lines.length, 2, "a host profile gets no box consequence at all");
+  assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, runtime_asked: "" } })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.", "a stored box is named whatever the row says");
   // A stored box tier is a named one: today's sentence stays.
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.");
 });

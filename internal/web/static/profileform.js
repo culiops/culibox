@@ -99,11 +99,13 @@ function segFromRuntime(stored, resolved) {
   return resolved === "host" ? "host" : "box";
 }
 
-// profileNeedsBox: whether the profile holds anything only a box accepts, or only
-// honours: an AWS binding or connection, a token, a GitHub binding, a network
-// allowlist or open egress, a readable host folder, a private copy. The server
-// saves every one of these only with an explicit runtime: box. p is the profile
-// as it will be sent. A list or object with nothing in it holds nothing.
+// profileNeedsBox: whether the profile holds anything that needs a box: an AWS
+// binding or connection, a token, a GitHub binding, a network allowlist or open
+// egress, a readable host folder, a private copy. p is the profile as it will be
+// sent. A list or object with nothing in it holds nothing. The credentials and the
+// egress are refused by the server without an explicit runtime: box; a readable
+// folder or a private copy is only honoured in a box, though the server saves it
+// with a blank tier when the instance default resolves to box.
 function profileNeedsBox(p) {
   const x = p && typeof p === "object" ? p : {};
   const listed = (k) => Array.isArray(x[k]) && x[k].length > 0;
@@ -120,12 +122,13 @@ function profileNeedsBox(p) {
 // One exception: with no box layer, a profile naming no tier is lit "box" only
 // because a blank resolves to box there. What that costs depends on what the
 // profile holds (profile is the whole profile as it will be sent):
-//  - nothing only a box accepts: it stays blank. An explicit box would leave a
+//  - nothing that needs a box: it stays blank. An explicit box would leave a
 //    profile that could still run on this machine unable to start, and a blank
 //    goes back to box once containment exists.
-//  - something only a box accepts (profileNeedsBox): "box" is sent, because the
-//    server refuses a token, a connection, egress or a readable folder without
-//    it. The profile then waits for a box, as it would have to anyway.
+//  - something that needs a box (profileNeedsBox): "box" is sent. The server
+//    refuses a token, a connection, a GitHub binding or egress without it, and a
+//    readable folder or a private copy only works in a box, so naming box makes
+//    the profile wait for one instead of starting on this machine without them.
 // The seg still offers host.
 function runtimeToSend(seg, stored, boxAvailable, profile) {
   if (!boxAvailable && !stored && seg === "box") return profileNeedsBox(profile) ? "box" : "";

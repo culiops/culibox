@@ -473,6 +473,17 @@ test("boxes unavailable on a profile that names no tier: it says its sessions st
   assert.strictEqual(sub[1].textContent, "Until it is, sessions start on this machine, uncontained.");
 });
 
+test("boxes unavailable, a profile that names no tier under default_runtime box: the list row's runtime_asked keeps the can't-start line", async () => {
+  const t = page({
+    boxRuntime: "", boxUnavailableReason: "Docker is not installed",
+    profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime_asked: "box" }) : p)),
+  });
+  t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+  await t.box.pfvShow("infra-terraform");
+  const runs = byCls(t.els["pfv-in"], "pfv-block")[0];
+  assert.strictEqual(byCls(runs, "pfv-sub")[1].textContent, "Sessions with this profile can't start until Docker is installed.");
+});
+
 test("Advanced is folded with its count, and opens by itself when something is set", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
@@ -2701,9 +2712,9 @@ test("with no box layer a runtime-less profile that holds nothing box-only stays
   assert.strictEqual(host.box.puts[0].runtime, "host");
 });
 
-// #164: with no box layer, a profile that stores no tier reads "In a box" only because a blank resolves to box. The server saves a
-// token, connection, GitHub binding, egress or readable folder only with an explicit box, so the save names it when the profile
-// being sent holds one of them, whichever block is saved.
+// #164: with no box layer, a profile that stores no tier reads "In a box" only because a blank resolves to box. The server refuses a
+// token, connection, GitHub binding or egress without an explicit box, and a readable folder or a private copy only works in a box,
+// so the save names it when the profile being sent holds one of them, whichever block is saved.
 test("with no box layer a runtime-less profile that holds credentials saves an explicit box, whichever block is saved", async () => {
   const save = {
     cloud: (t) => { clickBtn(blockOf(t, "cloud"), "Edit"); t.box.pfvAddRow("cloud", { kind: "token", name: "gh-pat" }); },

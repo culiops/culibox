@@ -118,9 +118,9 @@ test("with no box layer, an unset tier lit as box stays unset", () => {
   assert.strictEqual(runtimeToSend("box", "", true), "box");
 });
 
-// What only a box can hold: the server saves each of these only with an explicit
-// runtime: box (and a box is the only place that honours them).
-test("a profile needs a box when it holds anything only a box accepts", () => {
+// What needs a box: the credentials and egress are refused without an explicit
+// runtime: box, and a readable folder or a private copy only works in a box.
+test("a profile needs a box when it holds anything that needs one", () => {
   assert.strictEqual(profileNeedsBox({ name: "p", bin: "claude", runtime: "", default_cwd: "/w" }), false);
   assert.strictEqual(profileNeedsBox({ aws: { source_profile: "old" } }), true, "the legacy inline AWS binding");
   assert.strictEqual(profileNeedsBox({ aws_connections: ["prod-read"] }), true);
@@ -145,7 +145,7 @@ test("empty and missing shapes hold nothing that needs a box", () => {
   assert.strictEqual(profileNeedsBox({ tokens: "gh-pat" }), false, "a list key that is not a list is not a grant");
 });
 
-test("with no box layer, an unset tier lit as box is sent as box once the profile holds something only a box accepts", () => {
+test("with no box layer, an unset tier lit as box is sent as box once the profile holds something that needs one", () => {
   const holds = { tokens: ["gh-pat"] };
   assert.strictEqual(runtimeToSend("box", "", false, holds), "box", "a blank would be refused by the server");
   assert.strictEqual(runtimeToSend("box", "", false, { name: "p" }), "", "nothing box-only: still left unset");

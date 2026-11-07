@@ -139,6 +139,53 @@ func TestViewsRuntimeFallsBackToBox(t *testing.T) {
 	}
 }
 
+// With no box layer a session that asks for box is refused, and one that asks for
+// nothing runs on this machine (session.runtimeFor). What a session asks for is
+// the profile's own tier, else the raw instance default_runtime, else nothing
+// (launcher.RequestedRuntime), and Runtime above cannot say it: it ends in box
+// when nobody named a tier. So the view carries it as RuntimeAsked, for the page
+// to tell "In a box, as nobody said otherwise" from "In a box, by name".
+func TestViewsExposeTheTierASessionAsksFor(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "unset", Bin: "claude"},
+		{Name: "boxed", Bin: "claude", Runtime: config.RuntimeBox},
+	}
+	fs := newFakeStore()
+	fs.m["hosted"] = config.AgentConfig{Name: "hosted", Bin: "claude", Runtime: config.RuntimeHost}
+	asked := func(def string) map[string]string {
+		m := NewProfileManager(seeds, nil, def, nil, fs, func([]config.AgentConfig) {})
+		got := map[string]string{}
+		for _, v := range m.Views() {
+			got[v.Name] = v.RuntimeAsked
+		}
+		return got
+	}
+	for _, tc := range []struct{ def, unset, boxed, hosted string }{
+		{"", "", config.RuntimeBox, config.RuntimeHost},
+		{config.RuntimeBox, config.RuntimeBox, config.RuntimeBox, config.RuntimeHost},
+		{config.RuntimeHost, config.RuntimeHost, config.RuntimeBox, config.RuntimeHost},
+	} {
+		got := asked(tc.def)
+		if got["unset"] != tc.unset || got["boxed"] != tc.boxed || got["hosted"] != tc.hosted {
+			t.Errorf("default_runtime %q: asked unset=%q boxed=%q hosted=%q, want unset=%q boxed=%q hosted=%q",
+				tc.def, got["unset"], got["boxed"], got["hosted"], tc.unset, tc.boxed, tc.hosted)
+		}
+	}
+}
+
+// A profile that asks for nothing leaves the key out, so an older page and every
+// existing payload read exactly as before.
+func TestProfileViewLeavesRuntimeAskedOutWhenNothingIsAsked(t *testing.T) {
+	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	b, err := json.Marshal(m.Views()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "runtime_asked") {
+		t.Errorf("runtime_asked must be omitted when nothing is asked: %s", b)
+	}
+}
+
 // The server half of the editor's tier fix: a profile stored as "box" stays box
 // on an instance whose default is host. The editor now always sends the tier it
 // shows, so this is what makes an explicit "box" survive the default.

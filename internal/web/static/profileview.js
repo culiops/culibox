@@ -118,10 +118,11 @@ function pfvGithubLogins(doc) {
 // pfvUnavailable: the two lines a box tier profile shows when there is no box
 // layer. reason is /api/meta's box_unavailable_reason, already a clause
 // ("Docker is not installed", "run `agent-box doctor` for details"). named says
-// the stored profile names runtime: box. Then a session cannot start without a
-// box, and the line says so. A profile that names no tier only RESOLVES to box:
-// with no box layer a session that names no tier runs on this machine, with no
-// container, so the line says that instead (internal/session runtimeFor).
+// a session of this profile asks for box, by the profile's own runtime or by the
+// instance's default_runtime. Then it is refused without a box, and the line says
+// so. A profile that asks for nothing only RESOLVES to box: with no box layer such
+// a session runs on this machine, with no container, so the line says that instead
+// (internal/session runtimeFor).
 function pfvUnavailable(reason, named) {
   const r = pfvText(reason);
   const m = /^(Docker|colima) is not installed$/i.exec(r);
@@ -197,7 +198,7 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
   return { id: "workspace", label: "Workspace", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
 }
 
-// named: the stored profile names runtime: box (see pfvUnavailable).
+// named: a session of this profile asks for box (see pfvUnavailable).
 function pfvRunsBlock(host, copy, unavailable, reason, edit, named) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
   const u = pfvUnavailable(reason, named);
@@ -260,9 +261,14 @@ function pfvReadView(o) {
   const unavailable = typeof x.boxRuntime === "string" && x.boxRuntime === "";
   const copy = !host && pfvText(pfvField(view, doc, "clone_of")) !== "";
   const a = pfvAgentParts(view, doc);
+  // Whether a session of this profile asks for box. The stored profile's own tier comes first; only a profile that stores none
+  // takes what the instance's default_runtime asks (the list row's runtime_asked: runtime is the resolved tier, which ends in
+  // box when nobody said anything, so it cannot tell the two apart).
+  const stored = doc.runtime === "box" || doc.runtime === "host";
+  const named = stored ? doc.runtime === "box" : view.runtime_asked === "box";
 
   const blocks = [
-    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, doc.runtime === "box"),
+    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, named),
     pfvWorkspaceBlock(view, doc, host, edit),
     pfvAgentBlock(view, doc, a, edit),
   ];

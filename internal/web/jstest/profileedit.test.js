@@ -124,9 +124,9 @@ test("mergeBlock runs sends the tier explicitly, and stays blank only with no bo
   assert.strictEqual(pinned.runtime, "box", "a stored box stays");
 });
 
-// With no box layer a blank runtime is only kept for a profile that holds nothing the server accepts in a box alone: a token, a
-// connection, a GitHub binding, egress, a readable folder or a private copy is refused without an explicit box (#164).
-test("mergeBlock runs names box on a no-box-layer instance when the profile holds something only a box accepts", () => {
+// With no box layer a blank runtime is only kept for a profile that holds nothing that needs a box: a token, a connection, a GitHub
+// binding or egress is refused without an explicit box, and a readable folder or a private copy only works in a box (#164).
+test("mergeBlock runs names box on a no-box-layer instance when the profile holds something that needs a box", () => {
   const noBox = { tier: "box", boxAvailable: false };
   for (const held of [{ tokens: ["t"] }, { aws_connections: ["prod-read"] }, { context_paths: ["/srv/docs"] }, { egress_allow: ["a.example.com"] }, { egress_open: true }, { github: { owners: [{ owner: "culiops", app: "bot", repos: [] }] } }, { clone_of: "/src/repo" }]) {
     const out = pfvMergeBlock(Object.assign({ name: "p", bin: "claude" }, held), "runs", noBox);
@@ -698,7 +698,7 @@ test("duplicate keeps every binding and resets the copy folder", () => {
   assert.strictEqual(moved.default_cwd, "/home/you/box-clones/other");
 });
 
-test("duplicate on an instance with no box layer names box only when the copy holds something only a box accepts", () => {
+test("duplicate on an instance with no box layer names box only when the copy holds something that needs a box", () => {
   const bare = { name: "plain", bin: "claude", default_cwd: "/home/you/work", rev: "r1" };
   assert.ok(!("runtime" in pfvDuplicateDoc(bare, "plain-2", { tier: "box", boxAvailable: false })), "nothing box-only: left unset");
   const held = Object.assign({}, bare, { tokens: ["gh-pat"] });

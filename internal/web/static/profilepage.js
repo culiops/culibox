@@ -1998,8 +1998,8 @@ async function pfvSaveBlock(id) {
     }
   }
   // Whichever block it is, a save writes the tier the page shows (spec 9 rule 1): a profile that stores no runtime reads as the
-  // instance's default, and the server wants an explicit box for credentials, egress and readable folders. The tier did not change,
-  // so there is nothing to confirm. With no box layer runtimeToSend keeps a blank unless the profile holds something only a box accepts.
+  // instance's default, and the server wants an explicit box for credentials and egress. The tier did not change,
+  // so there is nothing to confirm. With no box layer runtimeToSend keeps a blank unless the profile holds something that needs a box.
   if (!tierMerged) doc = pfvMergeBlock(doc, "runs", { tier: c.tier, boxAvailable: c.boxAvailable });
   // A box profile becoming host: say what that costs and what it removes, then save it without. Cancel saves nothing and
   // leaves the form as it is.
