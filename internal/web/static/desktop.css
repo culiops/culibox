@@ -98,7 +98,7 @@
     --ansi-12: #98c2ff; --ansi-13: #d8b2f6; --ansi-14: #86d9e8; --ansi-15: #f2f4f6;
   }
 
-  body { font-family: var(--font-ui); font-size: 13px; background: var(--bg); }
+  body { font-family: var(--font-ui); font-size: var(--t-md); background: var(--bg); }
 
   /* Monospace stays for the terminal, code, paths and ids. */
   .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
@@ -128,10 +128,10 @@
   #side-top { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 14px 12px 10px; }
   .side-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .side-logo { flex: none; }
-  .side-name { font-size: 14px; font-weight: 600; white-space: nowrap; }
-  #side-version { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .side-name { font-size: var(--t-lg); font-weight: 600; white-space: nowrap; }
+  #side-version { font-size: var(--t-sm); color: var(--muted); white-space: nowrap; }
   #side-env {
-    font-size: 10px; font-weight: 700; letter-spacing: .05em; color: #fff; background: var(--raise);
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; color: #fff; background: var(--raise);
     padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
   }
   #side-version[hidden], #side-env[hidden] { display: none; }
@@ -139,18 +139,18 @@
   .side-fill { flex: 1; }
   #side-top .layouts { gap: 3px; }
   #side-top .layouts button {
-    min-width: 26px; height: 24px; padding: 0 7px; font: 500 12px var(--font-ui); line-height: 1;
+    min-width: 26px; height: 24px; padding: 0 7px; font: 500 var(--t-sm) var(--font-ui); line-height: 1;
     background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
   }
   #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
   #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
   #side-palette, #side-collapse {
-    width: 26px; height: 24px; padding: 0; font: 13px var(--font-ui); line-height: 1; cursor: pointer;
+    width: 26px; height: 24px; padding: 0; font: var(--t-md) var(--font-ui); line-height: 1; cursor: pointer;
     background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
   }
   #side-palette:hover, #side-collapse:hover { color: var(--fg); background: var(--raise); }
   .pbtn {
-    width: 100%; padding: 8px 12px; font: 600 13px var(--font-ui); cursor: pointer;
+    width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: #0b1220; border: 0; border-radius: var(--r-ctl);
   }
   .pbtn:hover { filter: brightness(1.08); }
@@ -178,8 +178,8 @@
   }
   #limits-side { display: flex; flex-direction: column; gap: 6px; }
   #limits-side[hidden] { display: none; }
-  #limits-side .acct-lab { font-size: 11px; color: var(--faint); }
-  #limits-side .mtr { gap: 8px; font-size: 12px; color: var(--muted); }
+  #limits-side .acct-lab { font-size: var(--t-xs); color: var(--muted); }
+  #limits-side .mtr { gap: 8px; font-size: var(--t-sm); color: var(--muted); }
   #limits-side .mtr > span:first-child { width: 2.4em; }
   #limits-side .mtr .bar { flex: 1; width: auto; min-width: 24px; height: 4px; border-radius: 2px; background: var(--line); }
   #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
@@ -187,14 +187,14 @@
   #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
   #limits-side .mtr.hot .bar i { background: var(--fg); }
   #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
-  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
   #side-cost { font-variant-numeric: tabular-nums; }
   #side-cost[hidden] { display: none; }
   #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
   #side-elevated.hot { color: var(--red); font-weight: 600; }
   .side-links { display: flex; gap: 2px; margin: 0 -6px; }
   .side-links button {
-    padding: 5px 8px; font: 12.5px var(--font-ui); cursor: pointer;
+    padding: 5px 8px; font: var(--t-md) var(--font-ui); cursor: pointer;
     background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
   }
   .side-links button:hover { color: var(--fg); background: var(--raise); }
@@ -205,7 +205,7 @@
   .side-links button { position: relative; }
   .side-links button:not([hidden]) ~ button:not([hidden])::before {
     content: "·"; position: absolute; left: -1px; top: 50%; transform: translate(-50%, -50%);
-    font-weight: 400; color: var(--faint); pointer-events: none;
+    font-weight: 400; color: var(--muted); pointer-events: none;
   }
 
 
@@ -221,7 +221,7 @@
   .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
   .ri .dot { width: 10px; height: 10px; }
   /* + under the logo is the one primary control of the rail (p2). */
-  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 18px var(--font-ui); color: #0b1220; background: var(--accent); }
+  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 var(--t-xl) var(--font-ui); color: #0b1220; background: var(--accent); }
   .ri.add:hover { background: var(--accent); filter: brightness(1.08); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
   .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
@@ -237,8 +237,8 @@
   /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
   #sessions { padding: 2px 8px 8px; }
   .grp {
-    list-style: none; padding: 14px 6px 5px; font-size: 11px; font-weight: 500;
-    letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+    list-style: none; padding: 14px 6px 5px; font-size: var(--t-xs); font-weight: 500;
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
   }
   .grp:first-child { padding-top: 6px; }
   .grp.hot { color: var(--amber); }
@@ -252,19 +252,19 @@
   #sessions .drow.inpane { box-shadow: inset 2px 0 0 var(--faint); }
   #sessions .drow.sel.inpane { box-shadow: inset 2px 0 0 var(--accent); }
   #sessions .drow .dot { margin-top: 5px; }
-  #sessions .drow .sname { gap: 6px; font-size: 13px; line-height: 18px; }
+  #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: 18px; }
   #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
   #sessions .drow .bdg { flex: none; }
   /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
      an open write window is red (D23). */
   .dchip {
-    flex: none; padding: 0 6px; font: 500 11px/17px var(--font-ui); white-space: nowrap;
+    flex: none; padding: 0 6px; font: 500 var(--t-xs)/17px var(--font-ui); white-space: nowrap;
     color: var(--muted); background: var(--raise); border-radius: var(--r-chip);
   }
   /* The session's cost: muted mono text, no border, before the chip. Never
      shrinks or wraps, so the name (flex:1, min-width:0) truncates first. */
   .dcost {
-    flex: none; font-size: 11px; line-height: 17px; white-space: nowrap;
+    flex: none; font-size: var(--t-xs); line-height: 17px; white-space: nowrap;
     font-variant-numeric: tabular-nums; color: var(--muted);
   }
   .dchip.host { box-shadow: inset 0 0 0 1px var(--faint); }
@@ -288,7 +288,7 @@
   #sessions .drow .kbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #sessions .drow .nm:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
   #sessions .drow .sub {
-    margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); cursor: pointer;
+    margin-top: 2px; font-size: var(--t-sm); line-height: 16px; color: var(--muted); cursor: pointer;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #sessions .drow .sub.amber { color: var(--amber); }
@@ -297,7 +297,7 @@
      session's so the row reads as a child. */
   #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 18px; }
   #sessions .drow .nest-arrow {
-    flex: none; width: 9px; font: 400 12px/18px var(--font-ui); color: var(--faint); text-align: center;
+    flex: none; width: 9px; font: 400 var(--t-sm)/18px var(--font-ui); color: var(--muted); text-align: center;
   }
   #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 6px; margin-right: 1px; }
   #sessions .drow.nested .nm { color: var(--muted); }
@@ -325,7 +325,7 @@
     /* The model shrinks ~1000x faster, and the 1px keeps the sub-pixel share the
        name still loses from clipping its last letters. */
     flex: 0 1 auto; min-width: 5ch; padding-right: 1px; overflow: hidden; text-overflow: ellipsis;
-    font: 600 13.5px var(--font-ui); color: var(--fg);
+    font: 600 var(--t-md) var(--font-ui); color: var(--fg);
   }
   .ph-switch {
     display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 6px; margin: 0 -6px;
@@ -333,14 +333,14 @@
   }
   .ph-switch:hover { background: var(--raise); }
   .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .ph-cnt { flex: none; font-weight: 500; font-size: 12px; color: var(--muted); }
-  .ph-st { flex: none; font-size: 12px; color: var(--muted); }
+  .ph-cnt { flex: none; font-weight: 500; font-size: var(--t-sm); color: var(--muted); }
+  .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
      long cloud/write chips give way down to a stub, then the name does. */
   .ph-chip {
     flex: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
-    padding: 0 6px; font: 500 11px/18px var(--font-ui); color: var(--muted);
+    padding: 0 6px; font: 500 var(--t-xs)/18px var(--font-ui); color: var(--muted);
     background: var(--raise); border-radius: var(--r-chip);
   }
   .ph-chip.cloud, .ph-chip.write { flex: 0 1 auto; min-width: 7ch; }
@@ -350,15 +350,15 @@
   /* The model gives way before the name does: an ellipsis, never a cut letter. */
   .ph-model {
     flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 11.5px; color: var(--muted);
+    font-size: var(--t-sm); color: var(--muted);
   }
   /* The cost is the last slot: short, so it never shrinks (a clipped "$1." says
      nothing); the model and the name give way before it. */
   .ph-cost {
-    flex: none; font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
+    flex: none; font-size: var(--t-sm); white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
   }
   .ph-ctx {
-    flex: none; padding: 1px 4px; font: 12px var(--font-ui); font-variant-numeric: tabular-nums;
+    flex: none; padding: 1px 4px; font: var(--t-sm) var(--font-ui); font-variant-numeric: tabular-nums;
     color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   .ph-ctx:hover { color: var(--fg); background: var(--raise); }
@@ -367,7 +367,7 @@
   .ph-tabs { display: flex; align-items: center; gap: 2px; }
   .ph-tab {
     display: inline-flex; align-items: center;
-    padding: 4px 9px; font: 12.5px var(--font-ui); color: var(--muted);
+    padding: 4px 9px; font: var(--t-md) var(--font-ui); color: var(--muted);
     background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
   }
   /* Each tab holds its icon and its word; only the narrow rule below swaps them. */
@@ -380,7 +380,7 @@
   .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   .ph-shell {
-    padding: 4px 10px; font: 500 12px var(--font-ui); color: var(--fg); cursor: pointer;
+    padding: 4px 10px; font: 500 var(--t-sm) var(--font-ui); color: var(--fg); cursor: pointer;
     background: var(--raise); border: 0; border-radius: var(--r-ctl);
   }
   .ph-shell:hover { background: var(--line); }
@@ -390,12 +390,12 @@
      while its pane is maximized, so the way back is never hidden. */
   .ph-ic {
     flex: none; width: 0; height: 24px; padding: 0; overflow: hidden; opacity: 0;
-    font: 14px var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
+    font: var(--t-md) var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
   .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
-  .ph-more { font-size: 15px; }
+  .ph-more { font-size: var(--t-lg); }
   /* A narrow header's one control is always visible, never an overlay. */
   .ph-ics.nar .ph-more { width: 24px; opacity: 1; }
   .ph-max.pin { color: var(--fg); }
@@ -412,7 +412,7 @@
     .ph-sep { display: none; }
     .ph-tab { padding: 4px 5px; }
     .ph-shell { font-size: 0; padding: 4px 8px; }
-    .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
+    .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
   /* Too narrow for four words (the compact text tabs need a 440px pane): the same
      four tabs as icons, 24px squares like ⋯ ⛶ ×, still named by title and
@@ -508,7 +508,7 @@
   .mi-row .mi { flex: 1; min-width: 0; border-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mi.cur { color: var(--accent); }
   .mi-x {
-    flex: none; width: 34px; font: 15px var(--font-ui); color: var(--muted); cursor: pointer;
+    flex: none; width: 34px; font: var(--t-lg) var(--font-ui); color: var(--muted); cursor: pointer;
     background: transparent; border: 0;
   }
   .mi-x:hover { color: var(--red); background: var(--raise); }
@@ -544,7 +544,7 @@
   .dr-sess { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
   .dr-fill { flex: 1; }
   #drawer-x, #drawer-max {
-    flex: none; width: 26px; height: 24px; font: 13px var(--font-ui); color: var(--muted); cursor: pointer;
+    flex: none; width: 26px; height: 24px; font: var(--t-md) var(--font-ui); color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
   #drawer-x:hover, #drawer-max:hover { color: var(--fg); background: var(--raise); }
@@ -591,7 +591,7 @@
      the tree column does not clip it; .ft-opt/.ft-note rows are shared. */
   .dr-goto { flex: none; padding: 6px 8px 0; }
   #drawer-goto-in {
-    width: 100%; box-sizing: border-box; padding: 4px 7px; font: 12px var(--font-ui);
+    width: 100%; box-sizing: border-box; padding: 4px 7px; font: var(--t-sm) var(--font-ui);
     color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
   }
   #drawer-goto-in::placeholder { color: var(--muted); }
@@ -604,14 +604,14 @@
   #drawer[data-noroot="1"] .dr-goto { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
-  .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--t-sm); line-height: 1.5; }
   #drawer[data-noroot="1"] .dr-tnote { display: block; }
   #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }
   #drawer[data-noroot="1"] .dr-vempty { visibility: hidden; } /* "pick a file in the tree": there is none */
   .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
   .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
-  .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: 12px; }
+  .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: var(--t-sm); }
   /* Long lines scroll, never wrap. */
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
@@ -621,12 +621,17 @@
   #drawer .ft-branch { letter-spacing: -.25ch; }
   /* A file (or a folder above one) the agent changed: a dot after the name. */
   /* Demoted behind the git badge (gitstatus.js): smaller, after it, and alone on
-     a file git has no mark for (edited then reverted, or outside a repo). */
-  #drawer .ft-chg { flex: none; color: var(--accent); font-size: 6px; line-height: 1; padding: 0 3px; }
+     a file git has no mark for (edited then reverted, or outside a repo). It is a
+     6px circle drawn by ::before, not the ● glyph at a 6px font size: the type
+     scale has no 6px step, and a shape does not move with the font. filetree.js
+     still builds it with the glyph as text and a title, so the text is pushed out
+     of the 6px box and clipped, and the title stays for hover and assistive tech. */
+  #drawer .ft-chg { position: relative; flex: none; width: 6px; height: 6px; margin: 0 3px; overflow: hidden; text-indent: 100%; white-space: nowrap; color: var(--accent); }
+  #drawer .ft-chg::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: currentColor; }
   /* "The agent may change this file again": neutral with an accent edge, never
      amber or red (D23). Shown wherever a desktop viewer edits. */
   .edit-warn {
-    display: block; flex: none; padding: 6px 12px; font: 400 12px var(--font-ui); color: var(--muted);
+    display: block; flex: none; padding: 6px 12px; font: 400 var(--t-sm) var(--font-ui); color: var(--muted);
     background: var(--panel); border-bottom: 1px solid var(--line); border-left: 2px solid var(--accent);
   }
 
@@ -638,16 +643,16 @@
      wording and gates as the old sidebar card; only the place moved. */
   .needstrip {
     flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
-    gap: 6px 10px; padding: 6px 12px; min-width: 0; font-size: 12px;
+    gap: 6px 10px; padding: 6px 12px; min-width: 0; font-size: var(--t-sm);
     background: color-mix(in srgb, var(--amber) 9%, var(--bg)); border-bottom: 1px solid var(--line);
   }
   .needstrip .nbody { display: contents; }
-  .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+  .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: var(--t-sm); white-space: nowrap; }
   .needstrip .peektxt {
     grid-area: 1 / 2; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     cursor: pointer; font-weight: 400; color: var(--fg);
   }
-  .needstrip .peektxt.ask { font: 11.5px var(--font-mono); }
+  .needstrip .peektxt.ask { font: var(--t-sm) var(--font-mono); }
   .needstrip .peektxt.muted { font-style: italic; color: var(--muted); }
   .needstrip .peektxt:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip); }
   .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -660,12 +665,12 @@
   .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
   .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
   .needstrip .askfull {
-    min-width: 0; padding: 6px 8px; font: 11.5px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
+    min-width: 0; padding: 6px 8px; font: var(--t-sm)/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
     background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-chip);
   }
   .needstrip .rep { display: flex; gap: 6px; }
   .needstrip .rep .fld { flex: 1; min-width: 0; }
-  .needstrip .peek-why, .needstrip .maskhint { font-size: 11.5px; color: var(--muted); }
+  .needstrip .peek-why, .needstrip .maskhint { font-size: var(--t-sm); color: var(--muted); }
   /* An expired AWS sign-in or a locked store: the form is the content, so the
      body keeps its own layout beside the label. */
   .needstrip.rich { display: flex; align-items: flex-start; }
@@ -679,11 +684,11 @@
      mockup's 620px column. */
   .empst {
     display: grid; gap: 18px; width: 100%; max-width: 620px; padding: 30px; box-sizing: border-box;
-    font-family: var(--font-ui); font-size: 13px; line-height: 1.45; color: var(--fg);
+    font-family: var(--font-ui); font-size: var(--t-md); line-height: 1.45; color: var(--fg);
   }
   #grid .empst { color: var(--fg); } /* beats app.css's `#grid .placeholder` muted */
-  .empst-title { margin: 0; font-size: 20px; font-weight: 600; }
-  .empst-sub { margin: 0; color: var(--muted); font-size: 13px; }
+  .empst-title { margin: 0; font-size: var(--t-xl); font-weight: 600; }
+  .empst-sub { margin: 0; color: var(--muted); font-size: var(--t-md); }
   .empst-rows, .empst-steps { display: grid; gap: 6px; }
   .empst-steps { gap: 8px; }
   .empst-row, .empst-step {
@@ -693,25 +698,25 @@
   .empst-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; }
   .empst-step { grid-template-columns: 26px minmax(0, 1fr) auto; padding: 12px 14px; }
   .empst-name, .empst-t { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
-  .empst-touch, .empst-d { grid-column: 1; color: var(--muted); font-size: 11.5px; min-width: 0; overflow-wrap: anywhere; }
-  .empst-step .empst-d { grid-column: 2; font-size: 12px; }
+  .empst-touch, .empst-d { grid-column: 1; color: var(--muted); font-size: var(--t-sm); min-width: 0; overflow-wrap: anywhere; }
+  .empst-step .empst-d { grid-column: 2; font-size: var(--t-sm); }
   .empst-row .btn, .empst-step .btn, .empst-step .pbtn { grid-row: 1 / 3; align-self: center; }
   .empst-step .btn, .empst-step .pbtn { grid-column: 3; }
   .empst-row .btn { grid-column: 2; }
   .empst .btn {
-    padding: 4px 10px; font: 400 12px var(--font-ui); color: var(--fg); background: var(--raise);
+    padding: 4px 10px; font: 400 var(--t-sm) var(--font-ui); color: var(--fg); background: var(--raise);
     border: 0; border-radius: var(--r-ctl); cursor: pointer; white-space: nowrap;
   }
   .empst .btn:hover { background: var(--background3); }
-  .empst .pbtn { width: auto; padding: 6px 12px; font-size: 12.5px; white-space: nowrap; }
+  .empst .pbtn { width: auto; padding: 6px 12px; font-size: var(--t-md); white-space: nowrap; }
   .empst button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   .empst-n {
     grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
-    font-size: 12px; font-weight: 600; background: var(--raise); color: var(--muted);
+    font-size: var(--t-sm); font-weight: 600; background: var(--raise); color: var(--muted);
   }
-  .empst-hint { display: flex; flex-wrap: wrap; gap: 14px; color: var(--faint); font-size: 12px; }
+  .empst-hint { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: var(--t-sm); }
   .empst-kbd {
-    font: 11px var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;
+    font: var(--t-xs) var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;
     border-radius: var(--r-chip); padding: 0 5px; color: var(--muted);
   }
 
@@ -721,7 +726,7 @@
      (the dialog's own 88vh cap, passed down through .dlg-body to #ask-body,
      which scrolls) is in app.css so phones get it too. Here only the desktop
      font. */
-  #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; }
+  #ask-modal.info #ask-body { font: var(--t-sm)/1.7 var(--font-mono); white-space: pre; }
 
   /* --- pane views: Activity / Access (spec 5.7, 5.8; ea-3.png, sa-1.png) ---- */
   /* div.pane-view covers the agent's half of the pane body, below the header
@@ -735,15 +740,15 @@
   .cell-body.has-view > .tab-body { visibility: hidden; }
   .pane-view {
     position: absolute; inset: 0; z-index: 2; min-width: 0; min-height: 0; overflow: auto;
-    background: var(--bg); color: var(--fg); font: 13px var(--font-ui);
+    background: var(--bg); color: var(--fg); font: var(--t-md) var(--font-ui);
   }
   .cell-body.dock-below > .pane-view { bottom: calc(var(--dock-ratio, 0.4) * 100%); }
   .cell-body.dock-right > .pane-view { right: calc(var(--dock-ratio, 0.4) * 100%); }
   .pane-view:focus { outline: none; }
   /* A view whose content is not built yet: its name and the session. */
   .pv-ph { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; }
-  .pv-ph-t { margin: 0; font: 600 14px var(--font-ui); color: var(--fg); }
-  .pv-ph-s { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .pv-ph-t { margin: 0; font: 600 var(--t-lg) var(--font-ui); color: var(--fg); }
+  .pv-ph-s { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
 
   /* --- companion-shell dock (spec 5.5; sl-1.png right, v5-3.png below) ----- */
   /* The pane body becomes [tab | dock]. Dragging the splitter moves only
@@ -773,17 +778,17 @@
   .dock-tabs { flex: 0 1 auto; display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
   .dock-bar > .ph-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dock-tab, .dock-add {
-    padding: 1px 3px; font: 600 12px/18px var(--font-ui); color: var(--muted);
+    padding: 1px 3px; font: 600 var(--t-sm)/18px var(--font-ui); color: var(--muted);
     background: none; border: 0; border-radius: var(--r-chip); cursor: pointer; white-space: nowrap;
   }
   .dock-tab.on, .dock-tab:hover, .dock-add:hover { color: var(--fg); }
-  .dock-add { font-weight: 500; font-size: 13px; }
+  .dock-add { font-weight: 500; font-size: var(--t-md); }
   .dock-add:disabled { opacity: .45; cursor: default; }
-  .dock-dot { color: var(--faint); font-size: 12px; }
-  .dock-st { color: var(--muted); font-size: 11px; }
+  .dock-dot { color: var(--muted); font-size: var(--t-sm); }
+  .dock-st { color: var(--muted); font-size: var(--t-xs); }
   .dock-cwd {
     flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--muted); font-size: 12px;
+    color: var(--muted); font-size: var(--t-sm);
   }
   .dock-ics { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-left: auto; }
   .dock-ic {
@@ -829,24 +834,24 @@
   .ac-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); min-width: 0; overflow: hidden; }
   .ac-card.elevated { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
   .ac-head { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; }
-  .ac-title { font: 600 13px var(--font-ui); color: var(--fg); }
-  .ac-meta { margin-left: auto; color: var(--muted); font-size: 12px; text-align: right; }
-  .ac-lab { font-size: 11px; color: var(--muted); }
+  .ac-title { font: 600 var(--t-md) var(--font-ui); color: var(--fg); }
+  .ac-meta { margin-left: auto; color: var(--muted); font-size: var(--t-sm); text-align: right; }
+  .ac-lab { font-size: var(--t-xs); color: var(--muted); }
   .ac-val { margin-top: 3px; color: var(--fg); overflow-wrap: anywhere; }
-  .ac-sub { margin-top: 2px; color: var(--faint); font-size: 11.5px; overflow-wrap: anywhere; }
+  .ac-sub { margin-top: 2px; color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
   .ac-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid var(--line); }
   .ac-cols .ac-cell { padding: 10px 14px; box-shadow: -1px 0 0 var(--line); }
   .ac-tier.host { display: inline-block; padding: 0 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--faint); }
   .ac-kvs { border-top: 1px solid var(--line); padding: 6px 14px; }
   .ac-kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 4px 0; }
   .ac-kvv { min-width: 0; overflow-wrap: anywhere; }
-  .ac-cloneline { color: var(--muted); font-size: 12px; }
+  .ac-cloneline { color: var(--muted); font-size: var(--t-sm); }
   .ac-cloneline.warn { color: var(--fg); font-weight: 600; }
   .ac-ok { color: var(--ok); }
   .ac-bad, .ac-write { color: var(--danger); }
   .ac-need { color: var(--amber); }
   .ac-empty { padding: 14px; color: var(--muted); }
-  .ac-note { padding: 0 14px 8px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .ac-note { padding: 0 14px 8px; color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
   .ac-note.err { color: var(--danger); }
 
   /* The open write window: a red band across the top of the credentials card. */
@@ -854,7 +859,7 @@
     display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--fg);
   }
-  .ac-banner strong { color: var(--danger); font-weight: 700; }
+  .ac-banner strong { color: var(--danger); font-weight: 600; }
   .ac-btxt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
   .ac-dropnow { flex: none; border-color: var(--danger); color: var(--danger); border-radius: var(--r-ctl); }
 
@@ -865,7 +870,7 @@
   .ac-nameline { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .ac-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ac-prod {
-    flex: none; font: 700 10px/16px var(--font-ui); letter-spacing: .04em; padding: 0 5px;
+    flex: none; font: 600 var(--t-xs)/16px var(--font-ui); letter-spacing: .04em; padding: 0 5px;
     color: var(--danger); border: 1px solid var(--danger); border-radius: var(--r-chip);
   }
   .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
@@ -883,12 +888,12 @@
   .ac-pcol.grow { flex: 1 1 200px; }
   .ac-pcol .fld { width: 100%; box-sizing: border-box; border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); }
   .ac-panel .seg { border-radius: var(--r-ctl); border-color: var(--line); overflow: hidden; }
-  .ac-prole { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
-  .ac-hint { color: var(--muted); font-size: 11.5px; }
+  .ac-prole { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
+  .ac-hint { color: var(--muted); font-size: var(--t-sm); }
   .ac-hint:empty { display: none; }
   .ac-err { color: var(--danger); overflow-wrap: anywhere; }
   .ac-err[hidden] { display: none; }
-  .ac-warn { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
+  .ac-warn { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-size: var(--t-sm); overflow-wrap: anywhere; }
   .ac-warn ul { margin: 4px 0 0; padding-left: 16px; }
   .ac-pbtns { display: flex; justify-content: flex-end; gap: 8px; }
 
@@ -896,7 +901,7 @@
   .ac-ev { border-top: 1px solid var(--line); overflow-x: auto; }
   .ac-evrow { display: grid; grid-template-columns: 90px 80px minmax(160px, 1fr) 150px 70px; min-width: 520px; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--line); align-items: stretch; }
   .ac-evrow:first-child { border-top: 0; }
-  .ac-evhead { padding-top: 8px; padding-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .ac-evhead { padding-top: 8px; padding-bottom: 8px; text-transform: uppercase; letter-spacing: var(--track-caps); }
   .ac-evt { font-variant-numeric: tabular-nums; }
   .ac-evs { min-width: 0; overflow-wrap: anywhere; }
   .ac-evs .ac-sub { font-family: var(--font-ui); }
@@ -913,37 +918,37 @@
     .act-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: stretch; }
     .act-side { border-top: 0; border-left: 1px solid var(--line); padding-top: 14px; }
   }
-  .act-lab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .act-note { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .act-lab { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--track-caps); }
+  .act-note { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
   .act-note[hidden] { display: none; }
-  .act-lead { padding: 14px 16px 4px; font-size: 13px; }
+  .act-lead { padding: 14px 16px 4px; font-size: var(--t-md); }
   .act-empty { padding: 14px 16px; color: var(--muted); }
-  .act-err { color: var(--danger); font-size: 12px; }
+  .act-err { color: var(--danger); font-size: var(--t-sm); }
 
   .act-tiles { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
   .act-tile { min-width: 0; }
-  .act-n { font: 700 17px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
-  .act-tl { margin-top: 1px; color: var(--muted); font-size: 12px; }
+  .act-n { font: 600 var(--t-xl) var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
+  .act-tl { margin-top: 1px; color: var(--muted); font-size: var(--t-sm); }
 
   .act-msg { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .act-msgtxt { color: var(--fg); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow-y: auto; }
   .act-msgtxt.act-quiet { color: var(--muted); font-style: italic; }
   .act-msg .rep { display: flex; gap: 6px; }
   .act-msg .rep .fld { flex: 1; min-width: 0; }
-  .act-msg .peek-why { display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+  .act-msg .peek-why { display: block; margin-top: 4px; font-size: var(--t-sm); color: var(--muted); }
   .act-msg .peek-why:empty { display: none; }
   .act-msgtail:empty { display: none; }
 
   .act-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; }
   .act-pills { display: flex; flex-wrap: wrap; gap: 6px; }
   .act-pill {
-    padding: 2px 11px; font: 500 12px/20px var(--font-ui); color: var(--muted); background: none;
+    padding: 2px 11px; font: 500 var(--t-sm)/20px var(--font-ui); color: var(--muted); background: none;
     border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
   }
   .act-pill:hover { color: var(--fg); }
   .act-pill.on { color: var(--fg); background: var(--raise); border-color: var(--faint); }
   .act-pill:focus-visible, .act-row:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  .act-live { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: 12px; }
+  .act-live { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: var(--t-sm); }
   .act-live.stale { color: var(--muted); }
   .act-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
@@ -957,12 +962,12 @@
   .act-row.ask .act-kind { color: var(--amber); }
   .act-row.you { background: var(--panel); border-top-color: var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; }
   .act-row.you .act-kind { color: var(--accent); }
-  .act-time { color: var(--faint); font: 12px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .act-time { color: var(--muted); font: var(--t-sm) var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .act-kind { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .act-detail { min-width: 0; font: 12.5px var(--font-mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .act-row.you .act-detail { font-family: var(--font-ui); font-size: 13px; }
+  .act-detail { min-width: 0; font: var(--t-md) var(--font-mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-row.you .act-detail { font-family: var(--font-ui); font-size: var(--t-md); }
   .act-row.open .act-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
-  .act-out { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .act-out { color: var(--muted); font-size: var(--t-sm); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   /* Tone classes are compounded with .act-out: a bare .act-err/.act-ok declared
      earlier loses to .act-out's muted colour (equal specificity, later rule). */
   .act-ok, .act-out.act-ok { color: var(--ok); }
@@ -975,10 +980,10 @@
   .act-foot .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 4px 12px; }
 
   .act-sec { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
-  .act-sech { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .act-sech { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--track-caps); }
   .act-st { flex: 1; min-width: 0; }
-  .act-sech .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 1px 8px; font-size: 11px; text-transform: none; letter-spacing: 0; }
-  .act-tool { display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 34px; gap: 10px; align-items: center; font-size: 12.5px; }
+  .act-sech .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 1px 8px; font-size: var(--t-xs); text-transform: none; letter-spacing: 0; }
+  .act-tool { display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 34px; gap: 10px; align-items: center; font-size: var(--t-md); }
   .act-tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .act-tbar { display: block; height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
   .act-tbar i { display: block; height: 100%; background: var(--accent); }
@@ -986,7 +991,7 @@
   .act-ctx { margin: -2px 0 12px; display: flex; flex-direction: column; gap: 5px; }
   .act-ctxbar { height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
   .act-ctxbar i { display: block; height: 100%; background: var(--accent); }
-  .act-file { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; font: 12px var(--font-mono); }
+  .act-file { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; font: var(--t-sm) var(--font-mono); }
   .act-fpath { min-width: 0; overflow-wrap: anywhere; }
   .act-fdelta { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -1008,11 +1013,11 @@
   #spawn-modal .dlg-title {
     position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
     box-sizing: border-box; width: 100%; margin: 0; padding: 16px 20px; background: none;
-    border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 600; color: var(--fg);
+    border-bottom: 1px solid var(--line); font-size: var(--t-lg); font-weight: 600; color: var(--fg);
   }
   #spawn-modal .dlg-head { position: absolute; top: 26px; right: 10px; transform: translateY(-50%); padding: 0; border: 0; background: none; }
-  #spawn-modal .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
-  #spawn-modal .dlg-x::before { content: "Esc"; font-size: 12px; }
+  #spawn-modal .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
+  #spawn-modal .dlg-x::before { content: "Esc"; font-size: var(--t-sm); }
   #spawn-modal .dlg-x:hover { color: var(--fg); background: var(--raise); }
   #spawn-modal .dlg-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #spawn-modal .dlg-body { display: flex; padding: 0; }
@@ -1023,7 +1028,7 @@
        inside it (so a long list, or the filter, cannot stretch the dialog). */
     contain: size; align-self: stretch;
   }
-  .sp-head { padding: 2px 10px 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  .sp-head { padding: 2px 10px 8px; font-size: var(--t-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); }
   .sp-item {
     display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; box-sizing: border-box;
     padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
@@ -1035,24 +1040,24 @@
      without moving anything. */
   #sp-search {
     flex: none; width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 10px;
-    font: 13px var(--font-ui); color: var(--fg); background: var(--bg);
+    font: var(--t-md) var(--font-ui); color: var(--fg); background: var(--bg);
     border: 1px solid var(--line); border-radius: var(--r-ctl);
   }
-  #sp-search::placeholder { color: var(--faint); }
+  #sp-search::placeholder { color: var(--muted); }
   #sp-search:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   #sp-rows {
     display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 0; margin: -2px; padding: 2px; overflow-y: auto;
   }
   #sp-rows .sp-item { flex: none; }
   .sp-item[hidden] { display: none; }
-  .sp-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .sp-empty { padding: 8px 10px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   .sp-item:hover { background: var(--raise); }
   .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
-  .sp-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-  .sp-touch { font-size: 12px; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+  .sp-name { font-size: var(--t-md); font-weight: 600; overflow-wrap: anywhere; }
+  .sp-touch { font-size: var(--t-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
 
   #spawn { flex: 1; min-width: 0; align-content: start; padding: 14px 18px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
-  #spawn label { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--muted); }
+  #spawn label { text-transform: none; letter-spacing: 0; font-size: var(--t-sm); color: var(--muted); }
   #spawn select, #spawn input, #spawn textarea { border-color: var(--line); border-radius: var(--r-ctl); }
   .spawn-lbl-model { display: inline; }
   #spawn-agent-row, #spawn-prompt-hint { display: none; }
@@ -1087,25 +1092,25 @@
     border: 1px solid var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono);
   }
   #spawn input[type="checkbox"] { accent-color: var(--accent); }
-  #spawn-name-row input::placeholder { color: var(--faint); }
+  #spawn-name-row input::placeholder { color: var(--muted); }
 
   /* The reach box: what this session will be able to touch, from the profile. */
   #spawn-reach { display: block; box-sizing: border-box; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
-  .sr-title { margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--fg); }
-  .sr-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; padding: 3px 0; font-size: 13px; line-height: 1.45; }
+  .sr-title { margin-bottom: 8px; font-size: var(--t-md); font-weight: 600; color: var(--fg); }
+  .sr-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; padding: 3px 0; font-size: var(--t-md); line-height: 1.45; }
   .sr-k { color: var(--muted); }
   .sr-v { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
   .sr-row.tone-warn .sr-v { color: var(--amber); }
   .sr-prod {
     margin: 0 6px; padding: 0 5px; border: 1px solid var(--red); border-radius: var(--r-chip);
-    font-size: 10px; font-weight: 700; letter-spacing: .05em; color: var(--red);
+    font-size: var(--t-xs); font-weight: 600; letter-spacing: .05em; color: var(--red);
   }
 
   #spawn .spawn-actions {
     position: sticky; bottom: 0; z-index: 2; margin-top: 4px; padding: 12px 0 14px;
     background: var(--panel); border-top: 1px solid var(--line);
   }
-  #spawn-foot-hint { display: inline; margin-right: auto; font-size: 12px; color: var(--faint); }
+  #spawn-foot-hint { display: inline; margin-right: auto; font-size: var(--t-sm); color: var(--muted); }
 
   /* --- pages (S4): Settings, Analytics and Audit in the pane area ---------- */
   /* pagehost.js re-parents the dialog into #page-host and shows it non-modally;
@@ -1126,9 +1131,9 @@
      grid: the header across, the nav down the left, the open panel and its
      footer to the right. */
   #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 15px; font-weight: 600; color: var(--fg); }
-  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
+  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
 
   /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
@@ -1138,7 +1143,7 @@
     grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 0;
     padding: 14px 10px 80px; border: 0; border-right: 1px solid var(--line); background: var(--bg); overflow-y: auto;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 2px; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
@@ -1150,7 +1155,7 @@
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
   #page-host > #settings-modal.as-page > #settings-tabs .t {
     display: flex; align-items: center; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
-    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+    background: transparent; font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
   }
   #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--panel); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
@@ -1169,7 +1174,7 @@
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
   #page-host > #settings-modal.as-page > .dft .btn {
     padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
-    background: var(--raise); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+    background: var(--raise); font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
   }
   #page-host > #settings-modal.as-page > .dft .btn:hover { background: var(--line); }
   #page-host > #settings-modal.as-page > .dft .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
@@ -1178,7 +1183,7 @@
   #page-host > #settings-modal.as-page > .dft .btn.gh:hover { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page > .dft .btn.dgr { background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page > .dft .btn.dgr:hover { background: var(--danger-tint); }
-  #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: 13px; }
+  #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: var(--t-md); }
 
   /* Profiles: #manage spans the footer's row too (the old form's footer, #foot-manage, is not drawn here). */
   #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
@@ -1187,32 +1192,32 @@
      and fields are the page's (.pfv-*), but its segmented controls (buildSeg), its
      checkboxes and its picker hints are the shared ones, and take the page's tokens here. */
   #page-host > #settings-modal.as-page #manage .seg { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #manage .hint { font-size: 12px; line-height: 1.6; }
+  #page-host > #settings-modal.as-page #manage .hint { font-size: var(--t-sm); line-height: 1.6; }
 
   /* Agent accounts, API tokens, Appearance, About: the same content, on the
      page's tokens. */
-  #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: var(--t-sm); line-height: 1.6; color: var(--muted); }
   #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
     padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl); background: var(--raise);
-    font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+    font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
   }
   #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
-  #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: 13px; }
-  #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: 12px; }
+  #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
-  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: 13px; }
+  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
   #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
   #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #about-version { font-size: 14px; color: var(--fg); }
-  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #about-version { font-size: var(--t-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: var(--t-sm); color: var(--muted); }
 
   /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
      bordered table per provider. Colour roles (D23): amber = needs you (missing,
@@ -1222,18 +1227,18 @@
   #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 14px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: var(--t-md); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: var(--t-md); line-height: 1.4; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st::before { display: inline-block; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.ready { color: var(--ok); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: 12.5px; line-height: 1.6; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:hover { background: var(--line); }
   /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
      encrypted store" (186px) spilled past the warning box, in the strip and again in
@@ -1245,13 +1250,13 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
 
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab { width: 100%; border-collapse: collapse; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: var(--t-md); line-height: 1.4; overflow-wrap: anywhere; }
   /* Names break between words, never inside one ("Missin/g"). */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-nm { display: inline-block; max-width: 100%; }
@@ -1282,11 +1287,11 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: 12.5px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: 11.5px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: var(--t-xs); line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }
@@ -1300,7 +1305,7 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: var(--t-md); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::-webkit-details-marker { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::before { content: "▸ "; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold[open] > summary::before { content: "▾ "; }
@@ -1326,52 +1331,52 @@
      #page-host > #audit-page.as-page so the page rules outrank the dialog's own. */
   .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
   .ac-link:hover { text-decoration: underline; }
-  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
   #page-host > #audit-page.as-page > .dhd h2 { margin: 0; font: inherit; }
   #page-host > #audit-page.as-page #au-range { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
   #page-host > #audit-page.as-page #au-range button:hover { background: var(--raise); color: var(--fg); }
   #page-host > #audit-page.as-page #au-range button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
-  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; text-decoration: none; }
+  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); text-decoration: none; }
   #page-host > #audit-page.as-page #au-csv:hover { background: var(--line); }
-  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: var(--t-sm); }
   #page-host > #audit-page.as-page #au-esc:hover { color: var(--fg); background: var(--raise); }
 
   #page-host > #audit-page.as-page .au-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); flex: none; border-bottom: 1px solid var(--line); }
   #page-host > #audit-page.as-page .au-kpi { padding: 14px 20px; min-width: 0; }
   #page-host > #audit-page.as-page .au-kpi + .au-kpi { border-left: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-n { font-size: 20px; font-weight: 600; color: var(--fg); }
-  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page .au-n { font-size: var(--t-xl); font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: var(--t-md); color: var(--muted); }
 
   #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
   #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
-  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; cursor: pointer; }
+  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); cursor: pointer; }
   #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
   #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
-  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
 
   #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
   #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); }
   #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
   #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
   #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 116px; }
   #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
-  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: var(--t-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: var(--t-sm); color: var(--muted); }
   #page-host > #audit-page.as-page #au-table td.au-kind { color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: 12px; }
-  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
   #page-host > #audit-page.as-page #au-table tr.au-elev { background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
   #page-host > #audit-page.as-page #au-table td.au-bad { color: var(--red); }
   #page-host > #audit-page.as-page #au-table td.au-ok { color: var(--ok); }
   #page-host > #audit-page.as-page #au-table td.au-empty { height: 96px; padding: 0 20px; text-align: center; color: var(--muted); }
   #page-host > #audit-page.as-page #au-table td.au-empty.au-bad { color: var(--red); }
 
-  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: var(--t-sm); color: var(--muted); }
   #page-host > #audit-page.as-page .au-foot .grow { flex: 1; }
-  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 12px; color: var(--fg); }
+  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-sm); color: var(--fg); }
   #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
   #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
 
@@ -1384,7 +1389,7 @@
   #page-host > #analytics-modal.as-page > .dlg-title {
     grid-column: 1; grid-row: 1; position: static; transform: none; pointer-events: auto; align-self: stretch; width: auto; max-width: none;
     margin: 0; padding: 15px 8px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
-    font-size: 16px; font-weight: 600; letter-spacing: 0; color: var(--fg);
+    font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; color: var(--fg);
     /* Level with the head's first row, also when the head wraps to two. */
     display: flex; align-items: flex-start; white-space: nowrap;
   }
@@ -1396,37 +1401,37 @@
   #page-host > #analytics-modal.as-page #analytics-range { display: none; }
   #page-host > #analytics-modal.as-page #an-ctl { display: flex; align-items: center; }
   #page-host > #analytics-modal.as-page #an-tabs { flex-wrap: nowrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 9px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 9px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); white-space: nowrap; }
   #page-host > #analytics-modal.as-page #an-tabs button:hover { color: var(--fg); background: var(--raise); }
   #page-host > #analytics-modal.as-page #an-tabs button.act { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls { flex-wrap: nowrap; gap: 2px; margin: 0; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls > span { display: none; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 8px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 8px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); white-space: nowrap; }
   #page-host > #analytics-modal.as-page #an-ctl .an-chip:hover { color: var(--fg); background: var(--raise); }
   #page-host > #analytics-modal.as-page #an-ctl .an-chip.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
-  #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); }
   #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
   #page-host > #analytics-modal.as-page #analytics-refresh:disabled { opacity: .6; cursor: default; }
-  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
-  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: 12px; }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: var(--t-sm); }
   #page-host > #analytics-modal.as-page .dlg-head > .dlg-x:hover { color: var(--fg); background: var(--raise); }
   #page-host > #analytics-modal.as-page > .dlg-body { grid-column: 1 / -1; grid-row: 2; padding: 20px; background: var(--bg); }
 
   /* Cards: --panel, --r-card, 1px --line. */
   #page-host > #analytics-modal.as-page .an-customrow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
-  #page-host > #analytics-modal.as-page .an-customrow .an-chip { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
-  #page-host > #analytics-modal.as-page .an-date { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page .an-customrow .an-chip { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); }
+  #page-host > #analytics-modal.as-page .an-date { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font-family: var(--font-ui); font-size: var(--t-md); }
   #page-host > #analytics-modal.as-page .an-kpis { gap: 12px; margin-bottom: 16px; }
   #page-host > #analytics-modal.as-page .an-kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
-  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: 22px; font-weight: 600; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: var(--t-kpi); font-weight: 600; color: var(--fg); }
   #page-host > #analytics-modal.as-page .an-kpi .v.cost { color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: 13px; letter-spacing: 0; text-transform: none; }
+  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: var(--t-md); letter-spacing: 0; text-transform: none; }
   #page-host > #analytics-modal.as-page .an-box { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
-  #page-host > #analytics-modal.as-page .an-box h4 { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-box h4 { font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #analytics-modal.as-page .an-section { margin: 0 0 16px; }
-  #page-host > #analytics-modal.as-page .an-section h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-section h3 { margin: 0 0 4px; font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-hint { margin: 0 0 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #analytics-modal.as-page .an-grid2 { gap: 12px; }
   #page-host > #analytics-modal.as-page .an-hbar .track { background: var(--raise); }
   /* Each header sits over its own column (#169 F01): text columns left, number
@@ -1452,11 +1457,11 @@
   dialog:not([box-])::backdrop, #ask-modal::backdrop { background: rgba(5, 7, 9, .62); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) {
     background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r-dlg);
-    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px/1.45 var(--font-ui); overflow: hidden;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md)/1.45 var(--font-ui); overflow: hidden;
   }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dhd {
     height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--panel);
-    font-size: 15px; font-weight: 600; color: var(--fg);
+    font-size: var(--t-lg); font-weight: 600; color: var(--fg);
   }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dbd.pad { padding: 16px 20px; }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dft {
@@ -1465,7 +1470,7 @@
   /* Buttons: secondary = --raise, primary = filled accent with dark text, ghost = text
      only, destructive = red text. */
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn {
-    padding: 6px 12px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise);
+    padding: 6px 12px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise);
     border: 0; border-radius: var(--r-ctl);
   }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:hover { background: var(--background3); }
@@ -1477,30 +1482,30 @@
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr:hover { background: var(--danger-tint); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:disabled,
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.off { opacity: .5; cursor: default; text-decoration: none; }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh { padding: 2px 8px; font-size: 18px; line-height: 1; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh { padding: 2px 8px; font-size: var(--t-xl); line-height: 1; }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:focus-visible,
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld { border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld { border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
 
   /* Report a problem. */
   #bug-modal { width: 760px; }
-  #bug-modal .flab { display: block; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+  #bug-modal .flab { display: block; margin-bottom: 6px; font-size: var(--t-sm); color: var(--muted); }
   #bug-modal #bug-what { min-height: 64px; margin-bottom: 14px; padding: 8px 10px; border-radius: var(--r-ctl); }
   #bug-modal #bug-preview {
     padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
-    font: 12px/1.5 var(--font-mono); color: var(--fg);
+    font: var(--t-sm)/1.5 var(--font-mono); color: var(--fg);
   }
-  #bug-modal .hint { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+  #bug-modal .hint { margin: 10px 0 0; font-size: var(--t-sm); color: var(--muted); }
   #bug-modal #bug-status { margin: 0; color: var(--muted); }
   #bug-modal #bug-status a { color: var(--accent); }
 
   /* Ask / confirm / prompt dialog (shell.js askDialog). The box frame is hidden: a
      plain card, the title as a header, the close cross in the corner. */
-  #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px/1.5 var(--font-ui); overflow: hidden; }
+  #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md)/1.5 var(--font-ui); overflow: hidden; }
   #ask-modal::before { display: none; }
   #ask-modal .dlg-title {
     position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
-    margin: 0; padding: 16px 44px 4px 20px; background: none; font-size: 15px; font-weight: 600; color: var(--fg);
+    margin: 0; padding: 16px 44px 4px 20px; background: none; font-size: var(--t-lg); font-weight: 600; color: var(--fg);
     /* A long title wraps (the whole name of what is deleted stays readable) and
        keeps 44px clear for the close cross. */
     box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
@@ -1510,11 +1515,11 @@
   #ask-modal .dlg-x:hover { background: var(--raise); color: var(--fg); }
   #ask-modal .dlg-x:focus-visible, #ask-modal .ask-actions button:focus-visible, #ask-modal #ask-input:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #ask-modal .dlg-body { padding: 4px 20px 18px; }
-  #ask-modal #ask-body { margin: 6px 0 10px; font-size: 13px; color: var(--muted); }
-  #ask-modal #ask-label { display: block; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
-  #ask-modal #ask-input { padding: 7px 10px; background: var(--bg); border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
+  #ask-modal #ask-body { margin: 6px 0 10px; font-size: var(--t-md); color: var(--muted); }
+  #ask-modal #ask-label { display: block; margin: 0 0 6px; font-size: var(--t-sm); color: var(--muted); }
+  #ask-modal #ask-input { padding: 7px 10px; background: var(--bg); border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
   #ask-modal .ask-actions { gap: 8px; margin-top: 16px; }
-  #ask-modal .ask-actions button { padding: 6px 14px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
+  #ask-modal .ask-actions button { padding: 6px 14px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
   #ask-modal .ask-actions button:hover { background: var(--background3); border: 0; }
   #ask-modal #ask-ok { background: var(--accent); color: var(--bg); font-weight: 600; }
   #ask-modal #ask-ok:hover { background: var(--accent); filter: brightness(1.08); }
@@ -1526,42 +1531,42 @@
      enough for the list, and under the body a lead line, the list (a kind and its names) and the question. */
   #ask-modal.wide { width: 500px; max-width: calc(100vw - 40px); }
   #ask-modal #ask-extra[hidden] { display: none; }
-  #ask-modal .ask-note { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
-  #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: 12.5px; }
+  #ask-modal .ask-note { margin: 14px 0 0; font-size: var(--t-sm); color: var(--muted); }
+  #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); }
   #ask-modal .ask-list dt { color: var(--muted); }
   #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
-  #ask-modal .ask-mono { font-family: var(--font-mono); font-size: 12px; }
+  #ask-modal .ask-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #ask-modal .ask-q { margin: 14px 0 0; }
 
   /* Command palette. */
-  #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px var(--font-ui); overflow: hidden; }
+  #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md) var(--font-ui); overflow: hidden; }
   #pal-inputwrap { border-bottom: 1px solid var(--line); }
-  #pal-prompt { font: 14px var(--font-mono); }
-  #pal-input { background: transparent; font: 14px var(--font-ui); }
-  #pal-hints { font-size: 11.5px; color: var(--faint); }
+  #pal-prompt { font: var(--t-md) var(--font-mono); }
+  #pal-input { background: transparent; font: var(--t-md) var(--font-ui); }
+  #pal-hints { font-size: var(--t-sm); color: var(--muted); }
   #pal-list { padding: 6px; }
-  #pal-list .pal-head { padding: 10px 12px 4px; font-size: 11px; letter-spacing: .06em; color: var(--faint); border-left-width: 2px; }
+  #pal-list .pal-head { padding: 10px 12px 4px; font-size: var(--t-xs); letter-spacing: var(--track-caps); color: var(--muted); border-left-width: 2px; }
   #pal-list .pal-head:first-child { padding-top: 4px; }
-  #pal-list li.pal-row { padding: 7px 10px; border-left-width: 2px; border-radius: var(--r-ctl); font-size: 13px; }
+  #pal-list li.pal-row { padding: 7px 10px; border-left-width: 2px; border-radius: var(--r-ctl); font-size: var(--t-md); }
   #pal-list li.pal-row:hover { background: var(--raise); }
   #pal-list li.pal-row.sel { background: var(--raise); border-left-color: var(--accent); }
-  #pal-list .pal-hint { font-family: var(--font-mono); color: var(--faint); }
+  #pal-list .pal-hint { font-family: var(--font-mono); color: var(--muted); }
   #pal-list li.pal-row.sel .pal-hint { color: var(--muted); }
   #pal-list .pal-copy { border-radius: var(--r-chip); }
   #pal-list .pal-copy:hover { background: var(--line); }
   #pal-list .pal-copy:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  #pal-empty { padding: 16px 20px; font-size: 13px; color: var(--muted); }
+  #pal-empty { padding: 16px 20px; font-size: var(--t-md); color: var(--muted); }
 
   /* Toast: a --raise card, a left rule only for error (red) and warn (amber; the clone
      "needs you" case). Undo is an accent ghost button. */
   #toast {
     gap: 12px; padding: 10px 12px 10px 14px; background: var(--raise); border: 1px solid var(--line);
     border-left: 3px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
-    font: 13px/1.45 var(--font-ui); color: var(--fg);
+    font: var(--t-md)/1.45 var(--font-ui); color: var(--fg);
   }
   #toast.err { border-left-color: var(--red); }
   #toast.warn { border-left-color: var(--amber); }
-  #toast-undo { padding: 3px 10px; background: transparent; color: var(--accent); border: 0; border-radius: var(--r-ctl); font: 500 12.5px var(--font-ui); }
+  #toast-undo { padding: 3px 10px; background: transparent; color: var(--accent); border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); }
   #toast-undo:hover { background: var(--sel-soft); color: var(--accent); }
   #toast-x { padding: 1px 6px; border-radius: var(--r-chip); color: var(--muted); }
   #toast-x:hover { background: var(--line); color: var(--fg); }
@@ -1571,11 +1576,11 @@
 
   /* Store-locked banner: a --panel strip. It is only ever shown while the store is
      locked and blocks spawns, so the one amber use is the leading dot and the message. */
-  #store-banner { padding: 8px 16px; gap: 8px 14px; background: var(--panel); color: var(--fg); border-bottom: 1px solid var(--line); font-size: 13px; }
+  #store-banner { padding: 8px 16px; gap: 8px 14px; background: var(--panel); color: var(--fg); border-bottom: 1px solid var(--line); font-size: var(--t-md); }
   #store-banner .storebanner-msg { color: var(--amber); }
   #store-banner .storebanner-msg::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; vertical-align: middle; border-radius: 50%; background: var(--amber); }
-  #store-banner .storepass { padding: 5px 10px; border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
-  #store-banner .btn { padding: 5px 12px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
+  #store-banner .storepass { padding: 5px 10px; border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
+  #store-banner .btn { padding: 5px 12px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
   #store-banner .btn:hover { background: var(--background3); }
   #store-banner .btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
   #store-banner .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
@@ -1586,14 +1591,14 @@
      later, so these are prefixed to outrank it). The tokens above already remap its
      colours and type: this adds the 360px card and the control radii. */
   body > main.card { max-width: 360px; padding: 28px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); }
-  body > main.card h1 { font-size: 18px; font-weight: 600; letter-spacing: 0; }
-  body > main.card .sub { font-size: 13px; color: var(--muted); }
-  body > main.card label { font-size: 12px; }
-  body > main.card input[type=password] { padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: 13px; }
+  body > main.card h1 { font-size: var(--t-xl); font-weight: 600; letter-spacing: 0; }
+  body > main.card .sub { font-size: var(--t-md); color: var(--muted); }
+  body > main.card label { font-size: var(--t-sm); }
+  body > main.card input[type=password] { padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: var(--t-md); }
   body > main.card input[type=password]:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
-  body > main.card button { padding: 9px 12px; background: var(--accent); color: var(--bg); border-radius: var(--r-ctl); font-size: 13px; font-weight: 600; }
+  body > main.card button { padding: 9px 12px; background: var(--accent); color: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); font-weight: 600; }
   body > main.card button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
-  body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: 13px; }
+  body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: var(--t-md); }
 
   /* --- Profile overview (spec 5.1-5.4) --------------------------------------- */
   /* Settings > Profiles on the page: the profiles nested under Profiles in the nav,
@@ -1606,7 +1611,7 @@
      the other tabs keep their 170px, and so their tables and footers keep the widths they were measured at. */
   #page-host > #settings-modal.as-page.tall { grid-template-columns: 212px minmax(0, 1fr); }
   #page-host > #settings-modal.as-page > #foot-manage { display: none; }
-  #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 13px/1.5 var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 var(--t-md)/1.5 var(--font-ui); }
   /* The sidebar's width handle is a 7px band between it and the page. On Settings it takes no room (the
      mockup has none, and the page starts at the sidebar's edge) but stays a draggable edge, with its grip
      showing on hover. Other pages keep the band. */
@@ -1622,12 +1627,12 @@
   #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on { background: transparent; color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; margin: 2px 0 6px 12px; padding-left: 6px; border-left: 1px solid var(--line); }
   #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: block; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md) var(--font-ui); text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--panel); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { justify-content: flex-start; color: var(--accent); }
   #page-host > #settings-modal.as-page .pfv-lock { flex: none; }
 
@@ -1635,12 +1640,12 @@
   #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
   #page-host > #settings-modal.as-page #pfv .pfv-head-main { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 10px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 11px/1 var(--font-mono); }
+  #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-lg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-xs)/1 var(--font-mono); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-host { box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 13px var(--font-ui); white-space: nowrap; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: #0b1220; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
@@ -1653,25 +1658,25 @@
   #page-host > #settings-modal.as-page #pfv .pfv-menu-item:hover { background: var(--raise); }
   #page-host > #settings-modal.as-page #pfv .pfv-menu-red { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-menu-item:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: 12.5px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: var(--t-sm); color: var(--red); }
 
   /* The sheet: a card of blocks, a label column, the plain-words values, Edit at the right. */
-  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 120px minmax(0, 1fr) 56px; column-gap: 20px; position: relative; padding: 18px 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-label { font-size: 13px; font-weight: 600; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-label { font-size: var(--t-md); font-weight: 600; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-body { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-act { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 13px/20px var(--font-ui); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 var(--t-md)/20px var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-link:hover { text-decoration: underline; }
   /* Remove and "Move to a saved connection" sit inside a scope line, so they take its size. */
-  #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-main { line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-sub { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-red { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-red + .pfv-sub { margin-top: 2px; }
@@ -1681,25 +1686,25 @@
   /* A grant is a row: kind, name (and its tag), scope in words. */
   #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: 14px; align-items: start; }
-  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: 12px; line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: 12.5px; line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: var(--t-sm); line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
-  #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-add { margin-top: 8px; }
 
   /* Branches that did not come home: today's amber chip and rows (the old list and form). */
   #page-host > #settings-modal.as-page #pfv .pfv-nhome { grid-column: 2 / -1; display: grid; gap: 6px; justify-items: start; }
-  #page-host > #settings-modal.as-page #pfv .pfv-nh-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--warn); border-radius: var(--r-chip); background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--warn); border-radius: var(--r-chip); background: var(--warn-bg); color: var(--warn-fg); font-size: var(--t-xs); white-space: nowrap; }
   #page-host > #settings-modal.as-page #pfv .pfv-nh-row { display: grid; gap: 1px; justify-self: stretch; padding: 6px 8px; border-left: 2px solid var(--warn); background: var(--warn-bg); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-nh-why { font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-nh-fix { font-family: var(--font-mono); font-size: 11.5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-nh-detail { font-size: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-why { font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-fix { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-detail { font-size: var(--t-sm); }
 
   /* Advanced: its own card, folded, "Advanced · N set". */
   #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1 / 3; display: flex; align-items: center; gap: 6px; }
@@ -1709,7 +1714,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-open .pfv-chev { transform: rotate(90deg); }
   #page-host > #settings-modal.as-page #pfv .pfv-muted { color: var(--muted); font-weight: 400; }
   #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-dl { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 16px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dl { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 16px; font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dt { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
 
@@ -1723,21 +1728,21 @@
   #page-host > #settings-modal.as-page #pfv .pfv-nudge { box-shadow: inset 0 0 0 1px var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; }
   #page-host > #settings-modal.as-page #pfv .pfv-top:empty { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: 12.5px; color: var(--red); }
-  #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: var(--t-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-form { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
   #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: 12.5px; font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: var(--t-sm); font-weight: 500; }
   /* A fieldset's legend is not a grid item, so the field's 5px gap does not reach it: it carries the gap itself (the mockup's Effort legend). */
   #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: 12px; color: var(--red); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 13px var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: var(--t-sm); color: var(--red); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 var(--t-md) var(--font-ui); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--faint); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
   #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
   /* The mockup's .in::placeholder (muted, not the browser's grey) and its invalid-and-focused field: the red border stays under the focus ring
@@ -1745,10 +1750,10 @@
   #page-host > #settings-modal.as-page #pfv .pfv-ctl::placeholder { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl.pfv-bad:focus-visible { border-color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: 12px; line-height: 18px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: var(--t-sm); line-height: 18px; }
   /* Where it runs: two cards, the lit one outlined. */
   #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
   #page-host > #settings-modal.as-page #pfv .pfv-choice > legend.pfv-flabel { margin-bottom: 8px; }
@@ -1759,23 +1764,23 @@
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: 12px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 11.5px/1 var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }
   #page-host > #settings-modal.as-page #pfv .pfv-okdot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: 12.5px; color: var(--red); }
-  #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: var(--t-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: var(--t-sm); }
   /* Network: one switch, its consequence under it. */
   #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-check input { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
-  #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: 12px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: var(--t-md); }
   /* Workspace: the folder picker's dropdown (fixed under the field by wspicker.js, so the page's own scroll never clips it), the
      note under the field for a search that found nothing, and the textarea for the shared files. The rows are the shared
      .ft-opt/.ft-note ones. */
   #page-host > #settings-modal.as-page #pfv .pfv-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
   #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
   /* Advanced (editing): the variables and secrets are rows of the page's own grammar (the kind column, the content, Remove or Undo at the right;
@@ -1787,7 +1792,7 @@
   /* Cloud and tokens, Also reachable (editing): the read view's rows with Remove at the right (Undo while the removal is pending,
      the row struck through), an input row for a folder, a domain or a GitHub owner being added, and the owner's fields under its
      row. Look source: option-b/index.html (.rm, .row.removed, .row-edit, .perm) and the b-aws, b-err, b-err2 and b-picker shots. */
-  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn { min-width: 54px; height: 20px; padding: 0 4px; text-align: right; border: 0; border-radius: var(--r-chip); background: none; color: var(--muted); font: 400 12px var(--font-ui); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn { min-width: 54px; height: 20px; padding: 0 4px; text-align: right; border: 0; border-radius: var(--r-chip); background: none; color: var(--muted); font: 400 var(--t-sm) var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:hover { color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed :is(.pfv-nm, .pfv-rsub, .pfv-scope, .pfv-mono) { text-decoration: line-through; color: var(--muted); }
@@ -1795,7 +1800,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-miss { text-decoration: line-through; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-act-link { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-tag { color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: 12px; line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: var(--t-sm); line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2 / 4; }
   #page-host > #settings-modal.as-page #pfv .pfv-rowedit { grid-column: 2 / -1; margin-top: 12px; padding: 14px 0 4px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-perms { display: grid; justify-items: start; }
@@ -1805,8 +1810,8 @@
   /* A permission and its Read/Write control: side by side while they fit, the control under it (at the left) when they do not. */
   #page-host > #settings-modal.as-page #pfv .pfv-perm { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 12px; justify-self: stretch; min-height: 30px; }
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: 12px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: var(--t-sm); color: var(--red); }
   /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
      than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it. */
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
@@ -1819,9 +1824,9 @@
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick-g { padding: 8px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-g { padding: 8px 10px 2px; font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt[hidden] { display: none; }
@@ -1832,15 +1837,15 @@
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled .pfv-opt-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: var(--t-sm); color: var(--muted); }
   /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
   #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-dirty { display: inline-flex; align-items: center; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-st-invalid { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-nudge { color: var(--fg); }
-  #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-fbtns { display: flex; flex: none; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
@@ -1849,13 +1854,13 @@
   #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .6); }
   #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
   /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
-  #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-unsaved[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-unsaved .pfv-link { font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved .pfv-link { font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-saved[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-saved-ic { flex: none; color: var(--ok); }
-  #page-host > #settings-modal.as-page #pfv .pfv-warn { margin-bottom: 16px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-warn { margin-bottom: 16px; font-size: var(--t-sm); color: var(--muted); }
 
   /* New profile, Duplicate and the first steps of a new profile (pfv-new.js). Look source: profile-mockups/option-b/index.html (.np-card,
      .np-foot, .np-after, .dup-h, .dup-foot, .next) and the b-new, b-nobox-new, b-dup and b-created shots. The card holds the fields, the
@@ -1863,20 +1868,20 @@
   #page-host > #settings-modal.as-page #pfv .pfv-newcard { max-width: 488px; padding: 22px 24px; background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-newfoot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
   #page-host > #settings-modal.as-page #pfv .pfv-dupfoot { align-items: center; margin-top: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-newafter { max-width: 488px; margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-newafter { max-width: 488px; margin-top: 14px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dup-h { margin-top: 30px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-dup-note { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-dup-note { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-next { margin-bottom: 26px; padding: 16px 20px; background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-next-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; margin-bottom: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-head:last-child { margin-bottom: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-p { font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-next-h { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-h { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-next-list { display: flex; flex-wrap: wrap; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-btn { display: grid; gap: 1px; min-width: min(200px, 100%); padding: 9px 14px; border: 0; border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-btn:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-next-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-next-t { font-weight: 500; }
-  #page-host > #settings-modal.as-page #pfv .pfv-next-d { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-d { font-size: var(--t-sm); color: var(--muted); }
 
   /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
   @container (max-width: 863px) {
@@ -1955,13 +1960,13 @@
   #page-host > #settings-modal.as-page > #cred-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .55); }
   #page-host > #settings-modal.as-page > #cred-drawer:not([hidden]) {
     display: flex; flex-direction: column; position: fixed; top: 0; right: 0; bottom: 0; z-index: 51; box-sizing: border-box; width: 540px; max-width: 100%;
-    background: var(--panel); color: var(--fg); font: 400 13px/1.5 var(--font-ui);
+    background: var(--panel); color: var(--fg); font: 400 var(--t-md)/1.5 var(--font-ui);
     border-left: 1px solid var(--line); border-radius: var(--r-dlg) 0 0 var(--r-dlg); box-shadow: -24px 0 72px rgba(0, 0, 0, .55);
   }
   #page-host > #settings-modal.as-page > #cred-drawer:focus { outline: none; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-status { margin: 0; padding: 8px 22px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-status { margin: 0; padding: 8px 22px; border-top: 1px solid var(--line); font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .grow { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 18px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .grow { flex: 1; min-width: 0; margin: 0; font-size: var(--t-sm); line-height: 18px; }
   /* The three parts, as the mockup's .drawer is made: a header band that stays put (the flow's crumb and intro), a body that scrolls, a
      foot. The Credentials flows draw into them (opts.head, opts.host, opts.foot) and their own rules are the Credentials tab's (the
      `:is(#creds, #cred-drawer)` twins above); everything below is the drawer's skin over them: the mockup's header, section heads in
@@ -1969,58 +1974,58 @@
      of two columns. Scoped to #cred-drawer, so the Credentials tab is the same as it was. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head { padding: 18px 22px 16px; border-bottom: 1px solid var(--line); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head:empty { display: none; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb { display: block; font-size: 12px; line-height: 18px; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb { display: block; font-size: var(--t-sm); line-height: 18px; color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk { color: var(--muted); text-decoration: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk:hover { color: var(--fg); text-decoration: underline; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb b { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; line-height: 22.5px; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .intro { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb b { display: block; margin-top: 4px; font-size: var(--t-lg); font-weight: 600; line-height: 22.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .intro { margin: 6px 0 0; font-size: var(--t-sm); line-height: 1.5; color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; padding: 20px 22px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec { gap: 8px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h { min-height: 0; padding: 0; border-bottom: 0; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h { min-height: 0; padding: 0; border-bottom: 0; font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h .count { margin-left: 4px; font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint { margin: 0; font-size: 12px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint { margin: 0; font-size: var(--t-sm); line-height: 1.5; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint:empty { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body section[aria-label="Host profiles"] > .stack { gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp { gap: 10px; padding: 0; border: 0; background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .tx { gap: 0; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .nm { font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .d { font-size: 12px; line-height: 18px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .d { font-size: var(--t-sm); line-height: 18px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="checkbox"], #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="radio"] { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .pf-check { align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .pf-check { align-items: flex-start; gap: 10px; font-size: var(--t-md); line-height: 1.5; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .bdg.kind { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 0; border-radius: var(--r-chip); background: var(--line); font: 500 11px/1 var(--font-mono); letter-spacing: 0; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .bdg.kind { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 0; border-radius: var(--r-chip); background: var(--line); font: 500 var(--t-xs)/1 var(--font-mono); letter-spacing: 0; color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .bdg.kind { background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow { gap: 10px; border: 0; border-radius: var(--r-card); background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font: 400 13px var(--font-ui); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: 12.5px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: var(--t-md); font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; background: var(--line); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok { align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok > span:first-child { flex: none; font-size: 12px; color: var(--ok); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary { display: inline-flex; font-size: 13px; font-weight: 500; list-style: none; color: var(--accent); border-radius: var(--r-chip); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok { align-items: center; gap: 6px; font-size: var(--t-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok > span:first-child { flex: none; font-size: var(--t-sm); color: var(--ok); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary { display: inline-flex; font-size: var(--t-md); font-weight: 500; list-style: none; color: var(--accent); border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary::-webkit-details-marker { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tiles { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile { gap: 2px; padding: 9px 11px; border-color: var(--line); border-radius: var(--r-ctl); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .n { font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .s { font-size: 12px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .s { font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on { border-color: var(--muted); background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on .n { color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg { display: flex; gap: 2px; height: 32px; max-width: none; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); box-sizing: border-box; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button { display: flex; align-items: center; padding: 0 12px; border: 0; border-radius: var(--r-chip); background: transparent; font: 400 12.5px var(--font-ui); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button { display: flex; align-items: center; padding: 0 12px; border: 0; border-radius: var(--r-chip); background: transparent; font: 400 var(--t-md) var(--font-ui); color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button.on { background: var(--raise); font-weight: 500; color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate { margin-top: -2px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 14px; border: 0; border-radius: var(--r-card); background: var(--raise); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate > :is(.lead, .hint, .ent-err, .btn) { grid-column: 1 / -1; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .lead { margin: 0; font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .ent-err:empty { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; background: var(--line); color: var(--fg); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn.pri { color: #0b1220; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):hover { background: var(--line); }
