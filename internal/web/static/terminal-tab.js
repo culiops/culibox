@@ -300,6 +300,61 @@ function installSwipe(term, el, onSwipe) {
   return () => { el.removeEventListener("touchstart", onStart); el.removeEventListener("touchmove", onMove); el.removeEventListener("touchend", onEnd); };
 }
 
+// termTheme (F05) is the xterm theme. A phone keeps the old pure black, nothing
+// else: its options are exactly what they were before the kit tokens existed.
+// A desktop builds it from the kit's custom properties (desktop.css :root, only
+// defined above the breakpoint): get(name) reads one of them and an empty token
+// leaves its key out, so xterm keeps its own default for that colour (and the
+// background falls back to the old black). The names are xterm's own option
+// names; selectionBackground is what the vendored xterm reads (its theme
+// service takes e.selectionBackground, not the older `selection`; see
+// xterm/xterm.js).
+const TERM_ANSI_NAMES = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+  "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+function termTheme(get, mobile) {
+  if (mobile) return { background: "#000000" };
+  const theme = {};
+  const put = (key, token) => {
+    const v = String(get(token) || "").trim();
+    if (v) theme[key] = v;
+  };
+  put("background", "--term-bg");
+  put("foreground", "--term-fg");
+  put("cursor", "--term-cursor");
+  put("cursorAccent", "--bg");
+  put("selectionBackground", "--term-sel");
+  TERM_ANSI_NAMES.forEach((name, i) => put(name, "--ansi-" + i));
+  if (!theme.background) theme.background = "#000000";
+  return theme;
+}
+
+// The desktop theme is read from the stylesheet once per desktop entry and
+// kept: a crossing to the phone drops it, so the next desktop entry reads the
+// tokens again. Every caller gets its own copy, so no two terminals share an
+// options object.
+let termThemeDesktop = null;
+function currentTermTheme() {
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) {
+    termThemeDesktop = null;
+    return termTheme(null, true);
+  }
+  if (!termThemeDesktop) {
+    // No stylesheet to read (a bare harness): every token is empty, so the theme is the black.
+    const cs = typeof getComputedStyle === "function" && typeof document !== "undefined" ? getComputedStyle(document.documentElement) : null;
+    termThemeDesktop = termTheme((name) => (cs ? cs.getPropertyValue(name) : ""), false);
+  }
+  return Object.assign({}, termThemeDesktop);
+}
+
+// applyTermThemeAll re-themes every open terminal, pane tabs and docked shells
+// alike (tabs.js eachTerminal). The breakpoint listener (app.js) calls it on a
+// crossing: a terminal is built once and reparented between pane and dock, never
+// rebuilt, so it would otherwise keep the theme of the width it was born at.
+function applyTermThemeAll() {
+  if (typeof eachTerminal !== "function") return;
+  eachTerminal((t) => { if (t.applyTheme) t.applyTheme(); });
+}
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -366,7 +421,7 @@ class TerminalTab {
       // so xterm's measurement is unaffected.
       cursorBlink: true, fontFamily: 'ui-monospace, Menlo, monospace, "Symbols Nerd Font"',
       fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
-      scrollback: 5000, theme: { background: "#000000" },
+      scrollback: 5000, theme: currentTermTheme(),
       // xterm defaults to 1 line per wheel notch, which crawls over a 5000-line
       // scrollback. 3 matches vim's default. Alt+wheel multiplies on top of this
       // (fastScrollSensitivity), so the fast gear stays proportional at 15.
@@ -755,6 +810,13 @@ class TerminalTab {
     if (status === null || status === "exited") { this.clearRetry(); this.markEnded(status === "exited"); return; }
     if (status === "detached") { this.showTrouble("detached"); return; }
     this.showTrouble("offline"); // server is up, socket is not: keep retrying
+  }
+
+  // applyTheme gives this terminal the theme of the current width (a desktop's
+  // graphite, a phone's black). xterm repaints on the option change; the pane's
+  // padding is CSS, so the size is untouched and no refit is needed.
+  applyTheme() {
+    if (this.term) this.term.options.theme = currentTermTheme();
   }
 
   // _scheduleFit coalesces a burst of ResizeObserver callbacks (e.g. a splitter
@@ -1190,5 +1252,5 @@ function termKeyAction(e, mac, hasSelection) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { TerminalTab, resizeToSend, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { TerminalTab, termTheme, currentTermTheme, applyTermThemeAll, resizeToSend, makeWebglPool, webglCapFor, webglPool, loadWebgl, dropWebgl, termKeyAction, osc52Decision, osc52Gesture, osc52Lines, osc52HintText, isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

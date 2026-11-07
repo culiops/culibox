@@ -6438,6 +6438,9 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
+    // F05: the terminals were built at the old width; a desktop's graphite and a phone's black are
+    // set on the live xterm objects (pane tabs and docked shells), nothing is rebuilt.
+    if (typeof applyTermThemeAll === "function") applyTermThemeAll();
   });
 }
 // Account limits change slowly and the file only updates when a claude statusLine

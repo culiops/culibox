@@ -88,8 +88,8 @@
     --focus-w: 2px; --focus-off: 2px;
     --pane-ring: inset 0 0 0 1px var(--accent);  /* the focused pane, only with 2+ panes (D26) */
 
-    /* The xterm theme. Defined here only: terminal-tab.js still passes xterm its own
-       colours until a later change applies these. */
+    /* The xterm theme: terminal-tab.js termTheme reads these once per desktop entry
+       (a phone leaves them undefined and keeps xterm on pure black). */
     --term-bg: var(--bg); --term-fg: var(--fg); --term-cursor: var(--accent);
     --term-sel: #283a54;
     --ansi-0: #23282f; --ansi-1: #ec6a6e; --ansi-2: #5ccb8f; --ansi-3: #e2b65e;
@@ -855,6 +855,18 @@
      the drawer (z-index 10) that covers it. */
   #grid { gap: 1px; padding: 0; background: var(--line); isolation: isolate; }
   #grid.empty { background: var(--bg); }
+
+  /* The terminal surface (F05, m1-1/m1-2): graphite, not a black embed. The xterm
+     theme (terminal-tab.js termTheme) paints --term-bg; the pane around it and
+     the padding that frames it are the same colour, so there is no seam where
+     the cell ends and the terminal starts. 6px 10px is the kit's .term padding;
+     A phone keeps the black cell and 4px: both are the shared rules in app.css.
+     content-box: the fit addon sizes the grid from the parent's computed width and
+     height and only subtracts the padding of .xterm itself. Under the global
+     border-box those include .pane-term's own padding, so the grid came out up to
+     a padding too big and the last row ran into the dock or the cell edge. */
+  .cell { background: var(--bg); }
+  .pane-term { box-sizing: content-box; padding: 6px 10px; background: var(--term-bg); }
 
   /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
   .cell.focus:not(.drop-hot) { outline: none; }
