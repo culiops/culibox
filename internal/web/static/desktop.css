@@ -766,8 +766,9 @@
   }
   /* Too narrow for four words (the compact text tabs need a 443px pane, 423px of
      content box, measured with the 13px tabs): the same four tabs as icons, 24px
-     squares like ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized pane keeps its ⛶ in the flow, which costs 26px
-     the + Shell button gives back, or Terminal clips at 339-354px. The rule holds
+     squares like ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized
+     pane keeps its ⛶ in the flow, which costs 26px the + Shell button gives back
+     here, or Terminal clips at 339-354px. The rule holds
      below 339px too, though + would fit there from a 249px pane: a rare corner
      (a maximized pane under 339px) kept to one rule. */
   @container (max-width: 439px) {
