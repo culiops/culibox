@@ -144,7 +144,7 @@ test("rowSig changes on every field a row or card renders, and only those", () =
     ask_full: "Bash(x y)", summary: "bye", replyable: true, attached: true, cwd: "/y" })) {
     assert.notStrictEqual(rowSig(Object.assign({}, base, { [k]: v }), local), s0, k);
   }
-  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, replies: true, sending: true, expanded: true, answering: true, elev: true })) {
+  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, replies: true, sending: true, expanded: true, answering: true, elev: true, takenOver: true })) {
     assert.notStrictEqual(rowSig(base, Object.assign({}, local, { [k]: v })), s0, k);
   }
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");

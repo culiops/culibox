@@ -566,7 +566,16 @@ class TerminalTab {
   title() { return this.name; }
   status() { return this.statusText; }
   setTitle(name) { this.name = name || this.id; this.onUpdate?.(); }
-  setStatus(t) { this.statusText = t; this.onUpdate?.(); }
+  setStatus(t) {
+    const wasTaken = this.statusText === "taken over";
+    this.statusText = t;
+    this.onUpdate?.();
+    // The desktop sidebar row reads "open in another tab" while this tab is parked
+    // as taken over (app.js rowLocal, F55): repaint the list on the way in and out
+    // rather than at the next 3 s poll. The phone's rows do not read it.
+    if (wasTaken !== (t === "taken over") && typeof refreshSessions === "function"
+        && !(typeof mobileActive === "function" && mobileActive(window.innerWidth))) refreshSessions();
+  }
   activity() { return this.activityState; }
   // needWhy: why the tab reads "waiting" when the agent is not ("sso"), else "".
   needWhy() { return this.needWhyState || ""; }

@@ -178,6 +178,7 @@ function paletteShellCommands(mac, desktop, act) {
     ];
   }
   return [
+    { id: "next-needs", kind: "view", label: "Next that needs you", hint: palReg().shortcutHint("session.nextNeeds", mac), run: act.nextNeeds },
     { id: "activity-view", kind: "view", label: "Activity", hint: "", run: act.activityView },
     { id: "access-view", kind: "view", label: "Access", hint: "", run: act.accessView },
     { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: palReg().shortcutHint("files.toggle", mac), run: act.filesDrawer },
@@ -282,9 +283,10 @@ function paletteCommands(mac) {
     accessView: () => paletteOpenView("access"),
     steerRail: toggleSteerRail,
     toggleFiles: () => togglePane("files"),
+    nextNeeds: goNextNeedsYou,
   });
   const shellCmd = (id) => shell.find((c) => c.id === id);
-  for (const id of ["activity-view", "access-view", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
+  for (const id of ["next-needs", "activity-view", "access-view", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: palReg().shortcutHint("sidebar.toggle", mac), run: () => togglePane("sessions") });
   for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot({ fresh: true }) });

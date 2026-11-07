@@ -723,3 +723,87 @@ test("headerSyncKey moves when a session goes from blocked to done (the header's
   assert.notEqual(d.headerSyncKey("api", { ...A.turn, attention: "block" }), d.headerSyncKey("api", A.turn));
   assert.equal(d.headerSyncKey("api", { ...A.turn, attention: "done" }), d.headerSyncKey("api", A.turn));
 });
+
+// --- F55 (#172): detached and taken over read the same on the row and on the dot ---
+const DETACHED = "detached \u00b7 reconnecting";
+
+test("rowSubline: a detached session reads 'detached · reconnecting', ahead of its summary", () => {
+  assert.deepEqual(d.rowSubline({ id: "x", activity: "detached" }), { text: DETACHED, amber: false });
+  assert.deepEqual(d.rowSubline({ id: "x", activity: "detached", summary: "fixing tests" }), { text: DETACHED, amber: false });
+});
+
+test("rowSubline: a session taken over by another tab reads 'open in another tab'", () => {
+  assert.deepEqual(d.rowSubline(A.working, { takenOver: true }), { text: "open in another tab", amber: false });
+  assert.deepEqual(d.rowSubline({ ...A.working, summary: "fixing tests" }, { takenOver: true }), { text: "open in another tab", amber: false });
+  assert.deepEqual(d.rowSubline(A.turn, { takenOver: true }), { text: "open in another tab", amber: false });
+  // No opts, or takenOver false: nothing changes.
+  assert.deepEqual(d.rowSubline({ ...A.working, summary: "fixing tests" }), { text: "fixing tests", amber: false });
+  assert.deepEqual(d.rowSubline({ ...A.working, summary: "fixing tests" }, { takenOver: false }), { text: "fixing tests", amber: false });
+  assert.deepEqual(d.rowSubline(A.turn, {}), d.rowSubline(A.turn));
+});
+
+test("rowSubline: a blocked session keeps its amber ask whatever the connection says", () => {
+  assert.equal(d.rowSubline(A.ask, { takenOver: true }).amber, true);
+  assert.ok(d.rowSubline(A.ask, { takenOver: true }).text.startsWith("asks: "));
+  assert.equal(d.rowSubline({ ...A.ask, activity: "detached" }).amber, true);
+});
+
+test("deskDot: the tooltip says detached / open in another tab; the dot's colour class is the one it had", () => {
+  const det = d.deskDot({ id: "x", activity: "detached" });
+  assert.deepEqual(det, { cls: "dot detached", title: DETACHED });
+  const away = d.deskDot(A.working, { takenOver: true });
+  assert.deepEqual(away, { cls: "dot working", title: "open in another tab" });
+  const awayTurn = d.deskDot(A.turn, { takenOver: true });
+  assert.equal(awayTurn.title, "open in another tab");
+  assert.equal(awayTurn.cls.includes("waiting"), false, "a finished turn is still not amber");
+  // A blocked session keeps its blocked wording (amber means blocked on you).
+  assert.deepEqual(d.deskDot(A.ask, { takenOver: true }), { cls: "dot waiting", title: "waiting for input" });
+  // No opts: the old answers.
+  assert.equal(d.deskDot(A.working).title, "working");
+  assert.equal(d.deskDot(A.idle).title, "idle");
+});
+
+// --- F69 (#172): Next that needs you ---
+const ids = (s) => (s ? s.id : s);
+
+test("nextNeedsYou: blocked sessions first, then done, each in sidebar order; the next after the current one", () => {
+  // Sidebar order (the list's order within a group): needs you (ask, sso, store), done (turn), running, idle.
+  const list = [A.idle, A.turn, A.working, A.ask, A.sso, A.store];
+  assert.deepEqual(d.jumpOrder(list, false).map((s) => s.id), ["ask", "sso", "store", "turn", "work", "idle"]);
+  assert.equal(ids(d.nextNeedsYou(list, null)), "ask", "no current session: the first one that needs you");
+  assert.equal(ids(d.nextNeedsYou(list, "ask")), "sso");
+  assert.equal(ids(d.nextNeedsYou(list, "sso")), "store");
+  assert.equal(ids(d.nextNeedsYou(list, "store")), "turn", "blocked ones first, then done");
+  assert.equal(ids(d.nextNeedsYou(list, "turn")), "ask", "wraps");
+});
+
+test("nextNeedsYou: a current session that does not need you starts from the first that does", () => {
+  const list = [A.ask, A.turn, A.working, A.idle];
+  assert.equal(ids(d.nextNeedsYou(list, "work")), "ask");
+  assert.equal(ids(d.nextNeedsYou(list, "idle")), "ask");
+  assert.equal(ids(d.nextNeedsYou(list, "gone")), "ask");
+});
+
+test("nextNeedsYou: the current session when it is the only one, null when none", () => {
+  assert.equal(ids(d.nextNeedsYou([A.ask, A.working, A.idle], "ask")), "ask");
+  assert.equal(ids(d.nextNeedsYou([A.turn, A.working], "turn")), "turn");
+  assert.equal(ids(d.nextNeedsYou([A.ask, A.working], "work")), "ask");
+  assert.equal(d.nextNeedsYou([A.working, A.idle], "work"), null);
+  assert.equal(d.nextNeedsYou([], "x"), null);
+  assert.equal(d.nextNeedsYou(null, null), null);
+});
+
+test("nextNeedsYou: an exited session never asks, and a nested shell is not a target", () => {
+  const dead = { id: "dead", name: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
+  assert.equal(d.nextNeedsYou([dead, A.working], null), null);
+  const sh = { id: "sh", name: "sh", activity: "waiting", parent_id: "work", created: "2026-10-27T09:00:00Z" };
+  assert.equal(d.nextNeedsYou([A.working, sh], null), null, "a shell waiting under its parent is not an agent that needs you");
+  assert.equal(ids(d.nextNeedsYou([A.working, sh, A.turn], null)), "turn");
+});
+
+test("nextNeedsYou reads the same list without the server's attention field", () => {
+  const list = [A.idle, A.turn, A.working, A.ask, A.sso, A.store];
+  for (const cur of [null, "ask", "sso", "store", "turn"]) {
+    assert.equal(ids(d.nextNeedsYou(list.map(noAttn), cur)), ids(d.nextNeedsYou(list, cur)), String(cur));
+  }
+});

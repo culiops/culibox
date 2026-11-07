@@ -112,7 +112,8 @@ test("renderRail48: a finished turn's dot is neutral and its hover says your tur
 
 test("renderSession: the desktop (compact) row draws deskDot, the phone's row keeps sessionDot", () => {
   const src = fnSrc(read("app.js"), "renderSession");
-  assert.match(src, /const act = compact \? deskDot\(s\) : sessionDot\(s\);/);
+  // The page's takenOver fact rides along (F55); the phone row never reads it.
+  assert.match(src, /const act = compact \? deskDot\(s, \{ takenOver \}\) : sessionDot\(s\);/);
 });
 
 test("desktop.css: the group header's colour is the kit's, and the done strip is neutral", () => {

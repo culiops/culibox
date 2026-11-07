@@ -1321,7 +1321,8 @@ function hintShortcuts() {
 // On the phone layout each row stacks (keys, then the description indented): the
 // aligned desktop columns are wider than the dialog. Decided when it opens (#59).
 function showShortcuts() {
-  const rows = helpRows(IS_MAC);
+  // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
+  const rows = helpRows(IS_MAC).filter((r) => !(mobileActive(window.innerWidth) && r.label === scEntry("session.nextNeeds").label));
   const runtime = tierRuntimeLabel(boxRuntime);
   return askDialog({
     title: "Keyboard shortcuts",
@@ -2177,22 +2178,28 @@ function renderSession(s, opts) {
   li.title = s.id; // tiebreaker when two labels match
 
   // The desktop row's dot is deskDot (a finished turn is neutral, F21-B); the
-  // phone's rows (never compact) keep sessionDot.
-  const act = compact ? deskDot(s) : sessionDot(s);
+  // phone's rows (never compact) keep sessionDot. takenOver: another tab of this
+  // browser took the session over, a fact only this page's terminal tab knows;
+  // the compact row's dot and sub-line say so in the shared connection words (F55).
+  const tab = terminalTabFor(s.id);
+  const takenOver = compact && !!tab && tab.status() === "taken over";
+  const act = compact ? deskDot(s, { takenOver }) : sessionDot(s);
   const adot = document.createElement("span");
   adot.className = act.cls;
   // Someone else is holding this session from another browser. It rides ON the
   // activity dot as an outline rather than as a second marker: the row has one
   // status light, and a second square beside it read as a second state.
-  const tab = terminalTabFor(s.id);
   const elsewhere = attachedElsewhere(s, !!tab && tab.status() === "connected");
   if (elsewhere) adot.classList.add("watching");
-  const label = elsewhere
+  // A taken-over row keeps the outline (another tab holds the session) but its
+  // tooltip is the connection word alone: "open in another tab" already says who.
+  const viewed = elsewhere && !takenOver;
+  const label = viewed
     ? (act.title ? act.title + "; someone is viewing this session elsewhere"
                  : "Someone is viewing this session elsewhere")
     : act.title;
   if (label) {
-    adot.title = elsewhere
+    adot.title = viewed
       ? "Someone is viewing this session in another browser or device. Opening it here disconnects them."
       : act.title;
     adot.setAttribute("role", "img");
@@ -2246,7 +2253,7 @@ function renderSession(s, opts) {
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
 
   if (compact) {
-    paintCompactRow(li, sname, grow, s);
+    paintCompactRow(li, sname, grow, s, { takenOver });
     return li;
   }
 
@@ -2333,8 +2340,9 @@ function renderSession(s, opts) {
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
 // the ⋯ menu button and the sub-line. The chip carries the tier or the open
 // write window; the account and AWS binding are in the row's tooltip instead of
-// further chips, so a row never grows a second line of badges.
-function paintCompactRow(li, sname, grow, s) {
+// further chips, so a row never grows a second line of badges. conn is what only
+// the page knows about the connection ({ takenOver }), for the sub-line's words.
+function paintCompactRow(li, sname, grow, s, conn) {
   const nowMs = Date.now();
   const chip = rowChip(s, nowMs, boxRuntime);
   const facts = [s.id];
@@ -2374,7 +2382,7 @@ function paintCompactRow(li, sname, grow, s) {
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
   // A nested shell has no sub-line: it has no summary and no ask to show.
-  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s);
+  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
@@ -3228,6 +3236,9 @@ function rowLocal(s) {
   return {
     killing: killing.has(s.id),
     heldHere: !!tab && tab.status() === "connected",
+    // Parked on "taken over": the row reads "open in another tab" (F55). Not
+    // derivable from the session record, so it must move the signature.
+    takenOver: !!tab && tab.status() === "taken over",
     // No context %: the compact row does not draw it (the pane header does), and
     // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
@@ -6728,6 +6739,26 @@ bindShortcut("session.jump", (e, ctx) => {
   // true, so the digit is swallowed either way and never falls through to the agent.
   if (s) openTerminal(s.id, s.name);
   return true;
+});
+
+// Next that needs you (F69): Mod+Shift+J and the palette's command. Goes to the
+// next session blocked on you, then those whose turn is done, in the sidebar's
+// order (nextNeedsYou, deskshell.js), and wraps. "Goes to" is exactly what
+// Mod+digit does: openTerminal focuses the session's pane or opens it. With
+// nothing waiting it does nothing, but the key is still consumed (true), as an
+// out-of-range digit is: it must not fall through to the browser's own binding.
+function goNextNeedsYou() {
+  const s = nextNeedsYou(lastSessions, selectedSessionId());
+  if (s) openTerminal(s.id, s.name);
+  return true;
+}
+
+// Desktop only: the phone has no sidebar groups, so the key is not ours there.
+// A held key repeats: swallow it, or it would spin through every waiting session.
+bindShortcut("session.nextNeeds", (e, ctx) => {
+  if (ctx.mobile) return false;
+  if (e.repeat) return true;
+  return goNextNeedsYou();
 });
 
 // Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused

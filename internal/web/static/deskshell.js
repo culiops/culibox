@@ -26,12 +26,13 @@ function deskDep(name) {
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
     shortModel: typeof shortModel === "function" ? shortModel : null,
+    connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
   };
   if (g[name]) return g[name];
   const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
-    isNestedShell: "./shellnest.js", shortModel: "./analytics.js" }[name];
+    isNestedShell: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js" }[name];
   return require(mod)[name];
 }
 
@@ -61,6 +62,22 @@ function jumpOrder(sessions, mobile) {
   const list = sessions || [];
   const agents = list.some((s) => nested(s, list)) ? list.filter((s) => !nested(s, list)) : list;
   return mobile ? agents : deskOrder(deskGroups(agents));
+}
+
+// nextNeedsYou: Mod+Shift+J (F69). The session to go to: those blocked on you
+// first, then those that finished their turn, each in the sidebar's order
+// (jumpOrder, so nested shells are not targets), the first one after currentId
+// and wrapping round. A currentId that is not one of them (a working session, a
+// viewer, nothing) starts from the first. The current session itself when it is
+// the only one; null when nothing needs you (the shortcut then does nothing).
+// Returns the session record, as jumpTarget does.
+function nextNeedsYou(sessions, currentId) {
+  const attn = deskDep("attentionClass");
+  const order = jumpOrder(sessions, false);
+  const list = order.filter((s) => attn(s) === "block").concat(order.filter((s) => attn(s) === "done"));
+  if (!list.length) return null;
+  const at = list.findIndex((s) => s.id === currentId);
+  return list[(at + 1) % list.length]; // at -1 (not a candidate) lands on the first
 }
 
 // deskOrder: the groups flattened in the order the sidebar shows them. Mod+1…9
@@ -118,9 +135,14 @@ function rowChip(s, nowMs, boxRuntime) {
 // or "your turn" when the agent left none: the group header already says it is
 // done, so no "your turn:" prefix and no amber. (No idle duration: the session
 // record carries none.) A sign-in line carries view: "access": a click opens the
-// session's Access view, where sign-in lives.
-function rowSubline(s) {
+// session's Access view, where sign-in lives. A session the daemon has lost, or
+// whose terminal another tab took over (opts.takenOver, a fact only the page
+// knows), reads that instead of its summary (F55): one connection vocabulary,
+// connStateLabel. Blocked on you still wins: an ask is the more urgent line.
+function rowSubline(s, opts) {
   const attn = deskDep("attentionClass")(s);
+  const conn = attn === "block" ? "" : deskDep("connStateLabel")(deskConnState(s, opts));
+  if (conn) return { text: conn, amber: false };
   if (attn === "done") return { text: deskDep("plainSummary")(s.summary) || "your turn", amber: false };
   if (attn === "block") {
     // A named connection's expired sign-in on an agent that is not itself
@@ -140,20 +162,34 @@ function rowSubline(s) {
   return { text: deskDep("plainSummary")(v.summary) || deskDot(v).title || "", amber: false };
 }
 
+// deskConnState: the connection state a row reads, as a connStateLabel key.
+// "taken-over" is the page's own fact (the terminal tab here is parked because
+// another tab took the session; the session record cannot say so), so the
+// caller passes it as opts.takenOver; "detached" is the record's activity.
+function deskConnState(s, opts) {
+  if (opts && opts.takenOver) return "taken-over";
+  return s && s.activity === "detached" ? "detached" : "";
+}
+
 // deskDot: the activity dot (class + title) on every desktop surface that draws
 // one for a session: the sidebar row, the icon rail, the pane header and the
 // command palette's session rows. It is
 // sessionDot, except that a finished turn is the neutral idle dot titled "your
 // turn" (F21-B: amber means blocked on you and nothing else), and that an exited
-// session, which never asks, is not painted amber by a need it left behind. The
-// phone's dots stay on sessionDot.
-function deskDot(s) {
+// session, which never asks, is not painted amber by a need it left behind. A
+// detached or taken-over session keeps its dot's colour but its title is the
+// connection word (F55, as rowSubline); a blocked one keeps the blocked title.
+// The phone's dots stay on sessionDot.
+function deskDot(s, opts) {
   const v = s || {};
   const a = deskDep("attentionClass")(v);
   const act = deskDep("activityClass");
-  if (a === "done") return { cls: act("idle").cls, title: "your turn" };
-  if (!a && deskDep("needsYou")(v)) return act(v.activity);
-  return deskDep("sessionDot")(v);
+  let dot;
+  if (a === "done") dot = { cls: act("idle").cls, title: "your turn" };
+  else if (!a && deskDep("needsYou")(v)) dot = act(v.activity);
+  else dot = deskDep("sessionDot")(v);
+  const conn = a === "block" ? "" : deskDep("connStateLabel")(deskConnState(v, opts));
+  return conn ? { cls: dot.cls, title: conn } : dot;
 }
 
 // deskWriteChip: the one red chip, "aws <conn> · WRITE · 23m": which connection
@@ -455,6 +491,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }
