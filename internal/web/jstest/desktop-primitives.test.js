@@ -210,7 +210,7 @@ test("the kit section is fenced once, right after the #169 disabled rules", () =
   assert.strictEqual(raw.split(OPEN).length, 2, "one opening marker");
   assert.strictEqual(raw.split(CLOSE).length, 2, "one closing marker");
   const { at } = sections();
-  const disabled = raw.indexOf("#ft-menu button:disabled { opacity: 1; }");
+  const disabled = raw.indexOf("#ft-menu button:disabled, #ft-refresh[disabled] { color: var(--fg); }");
   const shell = raw.indexOf("header, #hint { display: none; }");
   assert.ok(disabled > 0 && disabled < at, "after the #169 disabled rules");
   assert.ok(shell > at, "before the first page rule, so every page rule further down still wins");
@@ -424,6 +424,96 @@ test("field labels are sentence case; .grp-label is the only uppercase kit rule 
   assert.strictEqual(decl(label, "color"), "var(--fg)");
   const upper = rules.filter((r) => decl(r, "text-transform") === "uppercase").map((r) => r.selector);
   assert.deepStrictEqual(upper, [".grp-label"]);
+});
+
+// One disabled look on desktop (#171, "Added from the #169 box session", M7): opacity .42 and
+// cursor: not-allowed, #169's rule. The bespoke looks (.ph-shell, .dock-add, .cell-sh, #ft-refresh,
+// #analytics-refresh, the dialog .btn at .45/.5/.6 and cursor: default; .pfv-opt and #ft-menu muted at
+// full opacity) are folded into it. A disabled rule in desktop.css keeps only what is not the look
+// (text-decoration, a hover fill, filter). Where a heavier rule would give a disabled control a look of
+// its own (a shared app.css rule, or a page rule's resting cursor: pointer), ONE desktop rule restates
+// #169's values for exactly those selectors, at their own weight. A muted disabled colour is reset: the
+// .42 already dims the control's own colours, and dimming muted text twice is a second look.
+const ONE_LOOK = ':is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"]))';
+const NOT_BUSY = ':where(:not(.busy, [aria-busy="true"]))';
+const RESTATED = [
+  ".cell-sh:disabled", "#ft-refresh[disabled]", "#analytics-refresh:disabled", "#ask-ok:disabled", "#bug-modal .btn:disabled",
+  "#page-host > #settings-modal.as-page #pfv .pfv-opt:disabled",
+];
+const MUTED_RESET = ["#ft-menu button:disabled", "#ft-refresh[disabled]"];
+const bareSel = (sel) => sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "").replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "");
+// isDisabledPart: a selector that matches a closed control: :disabled, [disabled] or the .off class,
+// outside :not() and :where() (`:hover:not(:disabled)` is the open control).
+const isDisabledPart = (p) => /:disabled|\[disabled\]|\.off(?![\w-])/.test(bareSel(p));
+const isRestate = (r) => JSON.stringify(r.decls) === JSON.stringify([["opacity", ".42"], ["cursor", "not-allowed"]]) &&
+  parts(r.selector).every((p) => p.endsWith(NOT_BUSY) && p !== ONE_LOOK);
+// lookOffenders: disabled rules of `src` other than #169's and the restate rule that set opacity or cursor.
+function lookOffenders(src) {
+  const out = [];
+  for (const r of parseRules(src)) {
+    if (!parts(r.selector).some(isDisabledPart) || r.selector === ONE_LOOK || isRestate(r)) continue;
+    for (const [p, v] of r.decls) if (p === "opacity" || p === "cursor") out.push(r.selector + " { " + p + ": " + v + " }");
+  }
+  return out;
+}
+// sharedLooks: rules of `app` (outside the phone block) on a disabled form control (:disabled or
+// [disabled], not a busy one) that set an opacity or cursor other than the one look, or a muted colour,
+// at more weight than #169's (0,1,1) where it is the look: the selectors desktop.css must answer.
+function sharedLooks(app) {
+  const look = [], muted = [];
+  for (const r of parseRules(app)) {
+    if (/max-width:\s*700px/.test(r.at)) continue;
+    for (const part of parts(r.selector)) {
+      if (!/:disabled|\[disabled\]/.test(bareSel(part)) || /\.busy(?![\w-])/.test(part)) continue;
+      const own = r.decls.some(([p, v]) => (p === "opacity" && v !== ".42") || (p === "cursor" && v !== "not-allowed"));
+      if (own && cmpSpec(specificity(part), [0, 1, 1]) > 0) look.push(part);
+      if (r.decls.some(([p, v]) => p === "color" && /^var\(--(muted|faint)\)$/.test(v))) muted.push(part);
+    }
+  }
+  return { look, muted };
+}
+
+test("one disabled look: no other disabled rule in desktop.css sets an opacity or a cursor", () => {
+  const all = stripComments(raw);
+  const rules = parseRules(all);
+  assert.strictEqual(rules.filter((r) => r.selector === ONE_LOOK).length, 1, "#169's rule, once");
+  assert.deepStrictEqual(lookOffenders(all), [], "a disabled look of its own");
+  const restate = rules.filter(isRestate);
+  assert.strictEqual(restate.length, 1, "one rule restates the look");
+  const restated = parts(restate[0].selector).map((p) => p.slice(0, -NOT_BUSY.length));
+  assert.deepStrictEqual(restated, RESTATED);
+  assert.ok(restated.includes(".cell-sh:disabled"), ".cell-sh:disabled (app.css, shared with the phone) has its desktop override");
+  assert.ok(!rules.some((r) => parts(r.selector).some(isDisabledPart) && r.decls.some(([p, v]) => p === "color" && /^var\(--(muted|faint)\)$/.test(v))), "no muted disabled colour in desktop.css");
+  const reset = rules.find((r) => JSON.stringify(parts(r.selector)) === JSON.stringify(MUTED_RESET));
+  assert.ok(reset, "the muted disabled colours of app.css are reset on desktop");
+  assert.deepStrictEqual(reset.decls, [["color", "var(--fg)"]], "to the controls' resting colour");
+});
+
+test("one disabled look: every heavier shared app.css disabled look is answered on desktop", () => {
+  const app = stripComments(fs.readFileSync(path.join(STATIC, "app.css"), "utf8"));
+  const { look, muted } = sharedLooks(app);
+  assert.deepStrictEqual(look.filter((p) => !RESTATED.includes(p)), [], "restate these in desktop.css");
+  assert.deepStrictEqual(muted.filter((p) => !MUTED_RESET.includes(p)), [], "reset these colours in desktop.css");
+  assert.ok(look.includes(".cell-sh:disabled") && look.includes("#ft-refresh[disabled]"), "the scan sees the shared looks");
+});
+
+test("one disabled look: the checks find what they should (fixtures)", () => {
+  const desk = `@media (min-width: 701px) {
+    ${ONE_LOOK} { opacity: .42; cursor: not-allowed; }
+    .a:disabled${NOT_BUSY} { opacity: .42; cursor: not-allowed; }
+    .x:disabled { opacity: .45; cursor: default; }
+    .y .btn.off { opacity: .5; }
+    .z:hover:not(:disabled) { cursor: pointer; }
+    .w:disabled { text-decoration: none; }
+  }`;
+  assert.deepStrictEqual(lookOffenders(desk), [".x:disabled { opacity: .45 }", ".x:disabled { cursor: default }", ".y .btn.off { opacity: .5 }"]);
+  const app = `.p:disabled { opacity: .45; cursor: default; }
+    #q[disabled] { opacity: .5; color: var(--muted); }
+    #r button:disabled { cursor: not-allowed; color: var(--muted); }
+    .busy:disabled { cursor: progress; }
+    .s.off { opacity: .55; }
+    @media (max-width: 700px) { #t:disabled { opacity: .5; } }`;
+  assert.deepStrictEqual(sharedLooks(app), { look: [".p:disabled", "#q[disabled]"], muted: ["#q[disabled]", "#r button:disabled"] });
 });
 
 test("the checks find what they should (fixtures)", () => {

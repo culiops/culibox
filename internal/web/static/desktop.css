@@ -109,14 +109,24 @@
   /* Disabled reads as closed, not deleted (#169 F03). primitives.css strikes every
      disabled control through; here it is dimmed and re-cursored instead, the look
      the .off primitive already has (.42, not-allowed). The rule weighs (0,1,1), the
-     :not sitting in :where so it adds nothing: it beats .btn's pointer, and any
-     class-level disabled look (.ph-shell:disabled, .cell-sh:disabled) beats it.
-     Two disabled looks set only a muted colour, so they also say opacity: 1
-     (#ft-menu here, .pfv-opt with the profile page). A control at work (withPending:
+     :not sitting in :where so it adds nothing: it beats .btn's pointer. It is the one
+     disabled look on desktop (#171, M7): only it and its restatement below set a
+     disabled opacity or cursor (jstest/desktop-primitives.test.js). A control at work (withPending:
      aria-busy at once, .busy after 300 ms) is busy, not closed. */
   button:disabled, [disabled] { text-decoration: none; }
   :is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
-  #ft-menu button:disabled { opacity: 1; }
+  /* The same look, restated at their own weight where a heavier rule would win: app.css's
+     shared disabled looks (.cell-sh .45, #ft-refresh, #bug-modal .btn and #ask-ok .5, each
+     with cursor: default; the phone keeps them) and the resting cursor: pointer of
+     #analytics-refresh (app.css) and the profile page's .pfv-opt. */
+  .cell-sh:disabled:where(:not(.busy, [aria-busy="true"])),
+  #ft-refresh[disabled]:where(:not(.busy, [aria-busy="true"])),
+  #analytics-refresh:disabled:where(:not(.busy, [aria-busy="true"])),
+  #ask-ok:disabled:where(:not(.busy, [aria-busy="true"])),
+  #bug-modal .btn:disabled:where(:not(.busy, [aria-busy="true"])),
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled:where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
+  /* The .42 dims a control's own colours; app.css's muted disabled text would be dimmed twice. */
+  #ft-menu button:disabled, #ft-refresh[disabled] { color: var(--fg); }
 
   /* === kit primitives (2026-11, #171) === */
   /* The design kit's components (docs/superpowers/design/2026-11-ui-audit, ui-kit.css) under the
@@ -724,7 +734,6 @@
     background: var(--raise); border: 0; border-radius: var(--r-ctl);
   }
   .ph-shell:hover { background: var(--line); }
-  .ph-shell:disabled { opacity: .45; cursor: default; }
   .ph-shell[hidden] { display: none; }
   /* ⋯ ⛶ × take no room until the header is hovered or holds focus; ⛶ stays
      while its pane is maximized, so the way back is never hidden. */
@@ -1027,7 +1036,6 @@
   .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
   /* The one amber-filled button in the product: Yes (amber = needs-you only). */
   .needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri)) { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
-  .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
   .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
   .needstrip .askfull {
     min-width: 0; padding: 6px 8px; font: var(--t-sm)/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
@@ -1149,7 +1157,6 @@
   }
   .dock-tab.on, .dock-tab:hover, .dock-add:hover { color: var(--fg); }
   .dock-add { font-weight: 500; font-size: var(--t-md); }
-  .dock-add:disabled { opacity: .45; cursor: default; }
   .dock-dot { color: var(--muted); font-size: var(--t-sm); }
   .dock-st { color: var(--muted); font-size: var(--t-xs); }
   .dock-cwd {
@@ -1793,7 +1800,6 @@
   #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
   #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); }
   #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
-  #page-host > #analytics-modal.as-page #analytics-refresh:disabled { opacity: .6; cursor: default; }
   #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
   #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: var(--t-sm); }
   #page-host > #analytics-modal.as-page .dlg-head > .dlg-x:hover { color: var(--fg); background: var(--raise); }
@@ -1865,7 +1871,7 @@
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr { background: transparent; color: var(--red); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr:hover { background: var(--danger-tint); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:disabled,
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.off { opacity: .5; cursor: default; text-decoration: none; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.off { text-decoration: none; }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh { padding: 2px 8px; font-size: var(--t-xl); line-height: 1; }
   /* The .fld border above is 0,4,1: out-ranks the kit's field focus (0,3,2), so the field takes it again here. */
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -1911,7 +1917,7 @@
   #ask-modal:not(.info) #ask-ok { background: var(--accent); color: var(--on-fill); font-weight: 600; }
   #ask-modal #ask-ok:hover { filter: none; }
   #ask-modal:not(.info) #ask-ok:where(:not(:disabled)):hover { background: var(--accent-hover); }
-  #ask-modal #ask-ok:disabled { opacity: .5; cursor: default; filter: none; text-decoration: none; }
+  #ask-modal #ask-ok:disabled { filter: none; text-decoration: none; }
   /* Destructive confirm: red text on a clear button, never a red fill. */
   #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
@@ -2239,10 +2245,10 @@
   #page-host > #settings-modal.as-page #pfv .pfv-opt[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:hover:not(:disabled) { background: var(--raise); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { background: var(--raise); outline: 2px solid var(--accent); outline-offset: -2px; }
-  /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's). */
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { cursor: default; text-decoration: none; opacity: 1; }
+  /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's).
+     It is dimmed like every disabled control (the rules after #169's). */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { text-decoration: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled .pfv-opt-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: var(--t-sm); color: var(--muted); }
