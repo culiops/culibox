@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, awsSig, awsRailRows, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, awsSig, awsRailRows, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -130,6 +130,92 @@ test("menuItems for a nested shell keeps rename, files, copy cwd, new pane and e
   const last = menuItems(sh, { nested: true }).pop();
   assert.equal(last.danger, true);
   assert.ok(menuItems(sh).map((i) => i.id).includes("duplicate"), "no opts: unchanged");
+});
+
+// menuGroups: the kit menu draws the items in four groups (M5.1), a hairline between groups and
+// none under every item. The grouping is a fact about the items, so it lives here and not in the
+// DOM builder.
+const gids = (groups) => groups.map((g) => g.map((i) => i.id));
+
+test("menuGroups: a full session is rename | the where-actions | the control actions | end", () => {
+  const live = { claude: true, cwd: "/x", status: "live", activity: "working", clone_of: "/r", runtime: "box" };
+  assert.deepStrictEqual(gids(menuGroups(menuItems(live))), [
+    ["rename"],
+    ["files", "attribution", "copycwd", "newpane"],
+    ["interrupt", "replies-on", "bringhome", "duplicate"],
+    ["end"],
+  ]);
+  // An ended session: Restart joins the control group, after the reply opt-in's slot and before Duplicate.
+  const ended = { claude: true, cwd: "/x", status: "exited", exited: true, resumable: true };
+  assert.deepStrictEqual(gids(menuGroups(menuItems(ended))), [
+    ["rename"], ["files", "attribution", "copycwd", "newpane"], ["restart", "duplicate"], ["end"],
+  ]);
+  // Stop replies sits where Allow replies does.
+  assert.deepStrictEqual(gids(menuGroups(menuItems({ claude: true, status: "live", activity: "working", replyable: true })))[2], ["interrupt", "replies-off", "duplicate"]);
+});
+
+test("menuGroups: End session… is last and alone", () => {
+  for (const s of [{ claude: true, cwd: "/x", status: "live", activity: "working" }, { claude: false }, {}, { status: "exited", exited: true }]) {
+    const groups = menuGroups(menuItems(s));
+    const last = groups[groups.length - 1];
+    assert.deepStrictEqual(gids([last]), [["end"]]);
+    assert.strictEqual(last[0].danger, true);
+    assert.strictEqual(groups.flat().filter((i) => i.danger).length, 1, "nothing else is red");
+  }
+});
+
+test("menuGroups: a nested shell is rename | files, copy cwd, new pane | end", () => {
+  const sh = { claude: false, cwd: "/home/x", status: "live", parent_id: "p" };
+  assert.deepStrictEqual(gids(menuGroups(menuItems(sh, { nested: true }))), [["rename"], ["files", "copycwd", "newpane"], ["end"]]);
+  assert.deepStrictEqual(gids(menuGroups(menuItems({ parent_id: "p" }, { nested: true }))), [["rename"], ["newpane"], ["end"]]);
+});
+
+test("menuGroups: an empty group is dropped, so there are never two separators in a row", () => {
+  for (const s of [{}, { claude: true }, { claude: false, cwd: "/x" }, { status: "exited", exited: true }, { parent_id: "p" }]) {
+    for (const opts of [undefined, { nested: true }]) {
+      const groups = menuGroups(menuItems(s, opts));
+      assert.ok(groups.length > 0 && groups.every((g) => g.length > 0), JSON.stringify([s, opts]));
+    }
+  }
+  // No cwd, not a claude: the where-actions group is one item, not an empty hole.
+  assert.deepStrictEqual(gids(menuGroups(menuItems({ claude: false }))), [["rename"], ["newpane"], ["duplicate"], ["end"]]);
+  assert.deepStrictEqual(menuGroups([]), []);
+  assert.deepStrictEqual(menuGroups(null), []);
+});
+
+test("menuGroups: every item comes through once, in menuItems' own order", () => {
+  const full = { claude: true, cwd: "/x", status: "live", activity: "working", clone_of: "/r", runtime: "box" };
+  for (const s of [full, { claude: true, cwd: "/x", status: "exited", exited: true }, {}]) {
+    const items = menuItems(s);
+    assert.deepStrictEqual(menuGroups(items).flat(), items);
+  }
+  // An id the groups do not know is kept (a menu item must not vanish), with the control actions.
+  const odd = [{ id: "rename", label: "Rename…" }, { id: "future", label: "Future" }, { id: "end", label: "End session…", danger: true }];
+  assert.deepStrictEqual(gids(menuGroups(odd)), [["rename"], ["future"], ["end"]]);
+});
+
+test("menuGroups: an id that is an Object.prototype name joins the control group and never throws", () => {
+  const protoIds = ["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf"];
+  const items = [{ id: "rename", label: "Rename…" }, ...protoIds.map((id) => ({ id, label: id })), { id: "end", label: "End session…", danger: true }];
+  let groups;
+  assert.doesNotThrow(() => { groups = menuGroups(items); });
+  assert.deepStrictEqual(gids(groups), [["rename"], protoIds, ["end"]]);
+});
+
+// The icon is a KIND the DOM code draws as inline SVG (a font glyph is tofu where no installed font has it).
+test("menuIcon: the kind of drawing each row has, and none for the two the frame draws no icon for", () => {
+  assert.deepStrictEqual(
+    ["rename", "files", "attribution", "copycwd", "newpane", "interrupt", "bringhome", "duplicate", "end"].map(menuIcon),
+    ["pencil", "files", "pie", "copy", "split", "pause", "tray", "duplicate", "end"]);
+  for (const id of ["replies-on", "replies-off", "restart", "nope", undefined]) assert.strictEqual(menuIcon(id), "", String(id));
+  // Every id menuItems can produce has an answer (a string), so the builder never prints "undefined".
+  const every = menuItems({ claude: true, cwd: "/x", status: "live", activity: "working", clone_of: "/r", runtime: "box" })
+    .concat(menuItems({ status: "exited", exited: true }));
+  for (const i of every) assert.strictEqual(typeof menuIcon(i.id), "string", i.id);
+  // No two rows share a drawing: Copy working directory and Duplicate in particular stay apart.
+  const kinds = new Map(every.map((i) => [i.id, menuIcon(i.id)]));
+  const drawn = [...kinds.values()].filter((k) => k !== "");
+  assert.strictEqual(new Set(drawn).size, drawn.length, "one kind per id");
 });
 
 // The number keys address the sidebar list the operator is looking at, 1-based.

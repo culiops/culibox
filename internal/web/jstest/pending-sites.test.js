@@ -109,6 +109,22 @@ test("killSession: a toast covers the DELETE and becomes its result in finally",
   assert.doesNotMatch(b, /showToast\("End failed/, "no separate error toast");
 });
 
+test("buildReplyComposer: the Send button wears Sending… while the POST runs; the outcome is the line under the field, not a toast (F65)", () => {
+  const src = read("app.js");
+  const b = body(src, "buildReplyComposer");
+  const start = b.indexOf('withPending(send, "Sending…"');
+  assert.ok(start >= 0, "withPending on the Send button");
+  const call = b.slice(start, b.indexOf("if (ok)", start));
+  assert.match(call, /sendReplyFor\(s, text, [^\n]*\{ quiet: true \}\)/, "the desktop send asks for no Sent toast");
+  // pendingSends is latched before and cleared in the finally, as before.
+  assert.ok(b.indexOf("pendingSends.add(s.id)") < start);
+  assert.match(finallyBlock(b, start), /pendingSends\.delete\(s\.id\)/);
+  // The phone's senders keep the toast: only the composer opts out.
+  assert.match(body(src, "sendReplyFor"), /if \(!\(opts && opts\.quiet\)\) showToast\("Sent"\)/);
+  assert.match(src, /sendReplyFor\(s, digit\)/, "the phone card's quick replies call it with no options");
+  assert.match(src, /sendReplyFor\(s, text\)\.then/, "the phone's reply sheet too");
+});
+
 test("trigger buttons hand themselves to the action instead of a disabled/finally guard", () => {
   const term = read("terminal-tab.js");
   assert.match(term, /restartSession\(\{ id: this\.id \}, rb\)/);

@@ -24,8 +24,15 @@ function hhmm(iso) {
 test("the toggle leads and the add trails, even with no sessions", () => {
   const items = railItems([], {});
   assert.deepStrictEqual(items.map((i) => i.kind), ["toggle", "new"]);
-  assert.strictEqual(items[0].label, "Show sidebar");
+  assert.strictEqual(items[0].label, "Show sidebar (Ctrl+Shift+B)");
   assert.strictEqual(items[1].label, "New session");
+});
+
+// F57: the way back to the sidebar is the frame's ghost "»", named with the real chord.
+test("the toggle is the » glyph and names the chord of this platform", () => {
+  assert.strictEqual(railItems([], {})[0].glyph, "\u00bb");
+  assert.strictEqual(railItems([], { mac: false })[0].label, "Show sidebar (Ctrl+Shift+B)");
+  assert.strictEqual(railItems([], { mac: true })[0].label, "Show sidebar (\u21e7\u2318B)");
 });
 
 test("one item per session, in the list's own order", () => {
@@ -78,6 +85,34 @@ test("a rail entry carries the session name as its hover title", () => {
   const [, a, b] = railItems([{ id: "abc123", name: "review", activity: "waiting" }, { id: "d" }], {});
   assert.strictEqual(a.title, "review");
   assert.strictEqual(b.title, "d", "an unnamed session titles by id");
+});
+
+// F21-B (#172): a finished turn is neutral on the rail too: no amber dot, and the
+// hover says whose turn it is. The session's name never carries the suffix.
+test("a finished turn is not an alert: its dot is neutral and it says it is your turn", () => {
+  const [, t] = railItems([{ id: "a", name: "review", activity: "waiting", need: "turn", attention: "done" }], {});
+  assert.strictEqual(t.attention, "done");
+  assert.strictEqual(t.alert, false);
+  assert.strictEqual(t.title, "review \u00b7 your turn");
+  assert.strictEqual(t.label, "review \u2014 your turn");
+  assert.strictEqual(t.name, "review", "the tab title never carries the suffix");
+  const [, u] = railItems([{ id: "a", name: "review", activity: "waiting", need: "turn" }], {});
+  assert.strictEqual(u.attention, "done", "derived when the server sends no field");
+});
+
+test("a blocked session is an alert with attention block; a working one has neither", () => {
+  const [, a, w] = railItems([{ id: "a", name: "n", activity: "waiting", need: "ask", attention: "block" }, { id: "b", name: "m", activity: "working" }], {});
+  assert.strictEqual(a.attention, "block");
+  assert.strictEqual(a.alert, true);
+  assert.strictEqual(a.title, "n");
+  assert.strictEqual(w.attention, "");
+  assert.strictEqual(w.alert, false);
+});
+
+test("an exited session's stale sign-in need is no alert on the rail", () => {
+  const [, s] = railItems([{ id: "a", name: "n", exited: true, activity: "done", need: "sso" }], {});
+  assert.strictEqual(s.attention, "");
+  assert.strictEqual(s.alert, false);
 });
 
 test("an entry is elevated only while a write window is open, on the record or a connection", () => {

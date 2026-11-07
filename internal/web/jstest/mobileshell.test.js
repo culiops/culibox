@@ -253,3 +253,48 @@ test("showToast without the mobile shell loaded (shell.js loads first) does not 
     assert.equal(box.style.bottom, "");
   } finally { hideToast(); toastCleanup(); }
 });
+
+// --- F21-B (#172): the phone does not get a Done · your turn group ------------------
+// The phone's list passes this exact status function (app.js refreshSessions):
+// a finished turn is "waiting" there, so it keeps its card under Needs you.
+const fs = require("node:fs");
+const path = require("node:path");
+const mobileStatusFn = (needsYou) => (s) => (needsYou(s) ? "waiting" : s.activity);
+
+test("the phone still passes sessionGroups its own needsYou status fn (pins the call site)", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  assert.ok(app.includes('sessionGroups(lastSessions, (s) => (needsYou(s) ? "waiting" : s.activity))'),
+    "the phone's statusFn changed: it must never return your-turn");
+});
+
+test("sessionGroups with the phone's statusFn: a finished turn stays in Needs you, no Done group", () => {
+  const { needsYou } = require("../static/attention.js");
+  const turn = { id: "t", activity: "waiting", need: "turn", attention: "done" };
+  const ask = { id: "a", activity: "waiting", need: "ask", attention: "block" };
+  const work = { id: "w", activity: "working" };
+  const g = m.sessionGroups([work, turn, ask], mobileStatusFn(needsYou));
+  assert.deepEqual(g.map((x) => x.key), ["needs-you", "running"]);
+  assert.deepEqual(g.map((x) => x.label), ["Needs you", "Running"]);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["t", "a"]);
+});
+
+test("sessionGroups: the your-turn bucket sits right after needs-you and is dropped when empty", () => {
+  const sessions = [{ id: "i", status: "idle" }, { id: "r", status: "working" }, { id: "y", status: "your-turn" }, { id: "n", status: "waiting" }];
+  const g = m.sessionGroups(sessions, (s) => s.status);
+  assert.deepEqual(g, [
+    { key: "needs-you", label: "Needs you", count: 1, sessions: [sessions[3]] },
+    { key: "your-turn", label: "Done · your turn", count: 1, sessions: [sessions[2]] },
+    { key: "running", label: "Running", count: 1, sessions: [sessions[1]] },
+    { key: "idle", label: "Idle", count: 1, sessions: [sessions[0]] },
+  ]);
+  assert.deepEqual(m.sessionGroups([{ id: "n", status: "waiting" }], (s) => s.status).map((x) => x.key), ["needs-you"]);
+});
+
+test("sessionGroups: a nested shell rides with its parent in the your-turn group", () => {
+  const p = { id: "p", status: "your-turn" };
+  const c = { id: "c", status: "working", parent_id: "p", created: "2026-10-27T09:00:00Z" };
+  const g = m.sessionGroups([c, p], (s) => s.status);
+  assert.deepEqual(g.map((x) => x.key), ["your-turn"]);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["p", "c"]);
+  assert.equal(g[0].count, 1);
+});

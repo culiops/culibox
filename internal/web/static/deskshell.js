@@ -13,6 +13,8 @@ function deskDep(name) {
   const g = {
     sessionGroups: typeof sessionGroups === "function" ? sessionGroups : null,
     needsYou: typeof needsYou === "function" ? needsYou : null,
+    attentionClass: typeof attentionClass === "function" ? attentionClass : null,
+    activityClass: typeof activityClass === "function" ? activityClass : null,
     cardContent: typeof cardContent === "function" ? cardContent : null,
     plainSummary: typeof plainSummary === "function" ? plainSummary : null,
     needLabel: typeof needLabel === "function" ? needLabel : null,
@@ -23,23 +25,32 @@ function deskDep(name) {
     minutesLeft: typeof minutesLeft === "function" ? minutesLeft : null,
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
+    shortModel: typeof shortModel === "function" ? shortModel : null,
+    connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
   };
   if (g[name]) return g[name];
-  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js", plainSummary: "./attention.js",
+  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
-    isNestedShell: "./shellnest.js" }[name];
+    isNestedShell: "./shellnest.js", shortModel: "./analytics.js", connStateLabel: "./activity.js" }[name];
   return require(mod)[name];
 }
 
 const DESK_RECENT_MAX = 3;
 
-// deskGroups: the sidebar's groups. Same buckets as the mobile Sessions screen;
-// a session that needsYou for a non-activity reason (expired AWS sign-in, locked
-// store) is bucketed as waiting, like its dot.
+// deskGroups: the sidebar's groups. The mobile Sessions screen's buckets plus
+// "Done · your turn" right after Needs you (F21-B): a session blocked on you
+// (an ask, an expired AWS sign-in, a locked store) is bucketed as waiting, like
+// its dot, and one that finished its turn leaves amber for its own neutral group.
+// attentionClass, not needsYou, decides: an exited session never asks, so a stale
+// need on a dead one no longer puts it in Needs you. The phone's list does not
+// come through here and keeps needsYou (app.js refreshSessions).
 function deskGroups(sessions) {
-  const needs = deskDep("needsYou");
-  return deskDep("sessionGroups")(sessions, (s) => (needs(s) ? "waiting" : s.activity));
+  const attn = deskDep("attentionClass");
+  return deskDep("sessionGroups")(sessions, (s) => {
+    const a = attn(s);
+    return a === "block" ? "waiting" : a === "done" ? "your-turn" : s.activity;
+  });
 }
 
 // jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
@@ -51,6 +62,22 @@ function jumpOrder(sessions, mobile) {
   const list = sessions || [];
   const agents = list.some((s) => nested(s, list)) ? list.filter((s) => !nested(s, list)) : list;
   return mobile ? agents : deskOrder(deskGroups(agents));
+}
+
+// nextNeedsYou: Mod+Shift+J (F69). The session to go to: those blocked on you
+// first, then those that finished their turn, each in the sidebar's order
+// (jumpOrder, so nested shells are not targets), the first one after currentId
+// and wrapping round. A currentId that is not one of them (a working session, a
+// viewer, nothing) starts from the first. The current session itself when it is
+// the only one; null when nothing needs you (the shortcut then does nothing).
+// Returns the session record, as jumpTarget does.
+function nextNeedsYou(sessions, currentId) {
+  const attn = deskDep("attentionClass");
+  const order = jumpOrder(sessions, false);
+  const list = order.filter((s) => attn(s) === "block").concat(order.filter((s) => attn(s) === "done"));
+  if (!list.length) return null;
+  const at = list.findIndex((s) => s.id === currentId);
+  return list[(at + 1) % list.length]; // at -1 (not a candidate) lands on the first
 }
 
 // deskOrder: the groups flattened in the order the sidebar shows them. Mod+1…9
@@ -103,11 +130,21 @@ function rowChip(s, nowMs, boxRuntime) {
 }
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
-// needs you; otherwise its summary, else the activity word the old row showed.
-// (No idle duration: the session record carries none.) A sign-in line carries
-// view: "access": a click opens the session's Access view, where sign-in lives.
-function rowSubline(s) {
-  if (deskDep("needsYou")(s)) {
+// is blocked on you; otherwise its summary, else the activity word the old row
+// showed. A finished turn (F21-B) reads its summary like any session at rest, muted,
+// or "your turn" when the agent left none: the group header already says it is
+// done, so no "your turn:" prefix and no amber. (No idle duration: the session
+// record carries none.) A sign-in line carries view: "access": a click opens the
+// session's Access view, where sign-in lives. A session the daemon has lost, or
+// whose terminal another tab took over (opts.takenOver, a fact only the page
+// knows), reads that instead of its summary (F55): one connection vocabulary,
+// connStateLabel. Blocked on you still wins: an ask is the more urgent line.
+function rowSubline(s, opts) {
+  const attn = deskDep("attentionClass")(s);
+  const conn = attn === "block" ? "" : deskDep("connStateLabel")(deskConnState(s, opts));
+  if (conn) return { text: conn, amber: false };
+  if (attn === "done") return { text: deskDep("plainSummary")(s.summary) || "your turn", amber: false };
+  if (attn === "block") {
     // A named connection's expired sign-in on an agent that is not itself
     // waiting has no needLabel and would read "Waiting for input.", which says
     // nothing about the sign-in.
@@ -117,12 +154,65 @@ function rowSubline(s) {
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
     const text = deskDep("cardContent")(s, { plain: true }).text;
+    // An ask that is a tool call reads as the frames draw it: "Asks to run" and the call after it (the
+    // command alone for Bash), the call in mono (machine text). needLabel keeps its "asks" word, which the
+    // phone card shares. An ask with no tool call (s.ask empty: the text is the agent's own words or the
+    // waiting line) keeps the plain "asks: <text>" below: it does not claim anything is about to run.
+    if (why === "asks" && s.ask) {
+      const lead = "Asks to run ";
+      const mono = bashCommand(s.ask) || text;
+      return { text: lead + mono, amber: true, lead, mono };
+    }
     const out = { text: why ? why + ": " + text : text, amber: true };
     if (s.need === "sso") out.view = "access";
     return out;
   }
   const v = s || {};
-  return { text: deskDep("plainSummary")(v.summary) || deskDep("sessionDot")(v).title || "", amber: false };
+  return { text: deskDep("plainSummary")(v.summary) || deskDot(v).title || "", amber: false };
+}
+
+// bashCommand: the command of a pending Bash call, from the ask text the server sends
+// ("Bash(<command>)", cut at askMax with a trailing "…" and no closing paren when long). The
+// ask strip and the row's sub-line show it after "Asks to run", where "Bash(" and ")" are
+// noise. Only the outer parenthesis goes, so $(…) and subshells stay whole. null for any
+// other tool (the caller keeps "Tool(args)") and for an empty command: "Bash()" says more
+// than a bare "Asks to run".
+function bashCommand(ask) {
+  const t = String(ask == null ? "" : ask);
+  if (!t.startsWith("Bash(")) return null;
+  let cmd = t.slice(5);
+  if (cmd.endsWith(")")) cmd = cmd.slice(0, -1);
+  return cmd.trim() === "" ? null : cmd;
+}
+
+// deskConnState: the connection state a row reads, as a connStateLabel key.
+// "taken-over" is the page's own fact (the terminal tab here is parked because
+// another tab took the session; the session record cannot say so), so the
+// caller passes it as opts.takenOver; "detached" is the record's activity.
+function deskConnState(s, opts) {
+  if (opts && opts.takenOver) return "taken-over";
+  return s && s.activity === "detached" ? "detached" : "";
+}
+
+// deskDot: the activity dot (class + title) on every desktop surface that draws
+// one for a session: the sidebar row, the icon rail, the pane header and the
+// command palette's session rows. It is
+// sessionDot, except that a finished turn is the neutral idle dot titled "your
+// turn" (F21-B: amber means blocked on you and nothing else), and that an exited
+// session, which never asks, is not painted amber by a need it left behind. A
+// detached or taken-over session keeps its dot's colour but its title is the
+// connection word (F55, as rowSubline); a blocked one keeps the blocked title.
+// The phone's dots stay on sessionDot.
+function deskDot(s, opts) {
+  const v = s || {};
+  const a = deskDep("attentionClass")(v);
+  const act = deskDep("activityClass");
+  let dot;
+  if (a === "done") dot = { cls: act("idle").cls, title: "your turn" };
+  else if (!a && deskDep("needsYou")(v)) dot = act(v.activity);
+  else dot = deskDep("sessionDot")(v);
+  const conn = a === "block" ? "" : deskDep("connStateLabel")(deskConnState(v, opts));
+  return conn ? { cls: dot.cls, title: conn } : dot;
 }
 
 // deskWriteChip: the one red chip, "aws <conn> · WRITE · 23m": which connection
@@ -162,22 +252,37 @@ function fmtSessionCost(n) {
 // session's name and its formatted cost (cost_usd moves on the 2m ingest with no
 // other signal, e.g. on an idle session). The cost is formatted here, not taken
 // from paneHeaderModel, so a narrow pane (which hides it) does not look stale.
+// The attention word is in it too: a turn that finishes turns the header's dot
+// from amber to neutral, with no other signal in the key.
 function headerSyncKey(name, session) {
-  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null]);
+  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null, session ? deskDep("attentionClass")(session) : ""]);
+}
+
+// modelLabel: a model id as the pane header shows it, `haiku-4.5` (F13). Analytics'
+// shortModel drops "claude-" and a trailing -YYYYMMDD; a "-N-M" version tail then
+// reads N.M. The major is ONE digit and the minor one or two: "gpt-4-0613" is a build tag,
+// not version 4.613, and a dated id ("gpt-4o-2024-08-06") ends in -MM-DD, not a 08.06
+// version. Nothing to show (null, "") is null, where shortModel would say
+// "(unknown)". The raw id belongs in the title.
+function modelLabel(id) {
+  if (!id) return null;
+  return deskDep("shortModel")(String(id)).replace(/-(\d)-(\d{1,2})$/, "-$1.$2");
 }
 
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,
 // cloud, model, ctx, cost. Below the narrow threshold only ONE chip survives (the
 // write chip if there is one, else containment) and model/ctx/cost are dropped, so
 // the name keeps the room. The name itself is never shortened here: CSS ellipsis
-// does that, and a test pins that a long name passes through.
+// does that, and a test pins that a long name passes through. The meta reads
+// `haiku-4.5 · ctx 35% · $3.12`: model is the short label (modelTitle the raw id),
+// ctx says what the percentage is.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
+    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
-  const dot = s ? deskDep("sessionDot")(s) : null;
+  const dot = s ? deskDot(s) : null;
   const chips = [];
   const cont = s ? deskContainmentChip(s, boxRuntime) : null;
   if (cont) chips.push(cont);
@@ -193,15 +298,39 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
+    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
     dot, name, chips,
-    model: u && u.model ? String(u.model) : null,
-    ctx: u && typeof u.pct === "number" ? u.pct + "%" : null,
+    model: u ? modelLabel(u.model) : null,
+    modelTitle: u && u.model ? String(u.model) : null,
+    ctx: u && typeof u.pct === "number" ? "ctx " + u.pct + "%" : null,
     cost: s ? fmtSessionCost(s.cost_usd) : null,
   };
+}
+
+// metaUnitsOff: which units of the pane header's meta the wrap pushed off its one line
+// (`tops`: each unit's top, `box`: the meta's {top, bottom}). They are clipped by the
+// meta's height, and tabs.js marks them .mi-off (visibility: hidden), which takes them out
+// of the tab order and out of what a screen reader announces. Off = starting at or below
+// the line's bottom, with half a pixel of tolerance. A header with no layout (a detached
+// pane, display: none) has no line, so nothing is off there.
+function metaUnitsOff(tops, box) {
+  if (!box || !(box.bottom - box.top > 0)) return tops.map(() => false);
+  return tops.map((t) => t >= box.bottom - 0.5);
+}
+
+// headerDot: the pane header's dot. The session record's dot (paneHeaderModel's
+// `dot`, i.e. deskDot) wins whenever the pane has one: a finished turn is neutral
+// and an exited session is not painted amber by a need it left behind, whatever
+// activity the terminal tab last had pushed to it. Only a pane whose session is
+// not in the list (or whose list has not loaded) falls back to the tab's own
+// pushed activity; a viewer tab has none.
+function headerDot(model, tab) {
+  if (model && model.dot) return model.dot;
+  if (!tab || tab.kind !== "terminal" || typeof tab.activity !== "function") return null;
+  return deskDep("activityClass")(tab.activity(), typeof tab.needWhy === "function" ? tab.needWhy() : "");
 }
 
 // drawerFor: the pane drawer's next state when the header's Files tab is
@@ -215,12 +344,16 @@ function drawerFor(state, kind, sessionId) {
 }
 
 // needStripModel: the ask strip under a pane header, null unless the session
-// needs you. cardContent's text is the command for an ask, else the need's own sentence.
+// asks for you. cardContent's text is the command for an ask, else the need's own
+// sentence. tone is "block" for a session blocked on you (amber) and "done" for
+// a finished turn (F21-B: neutral; the strip stays because it carries the reply
+// field). An exited session has no strip: it never asks.
 function needStripModel(s) {
-  if (!deskDep("needsYou")(s)) return null;
+  const tone = deskDep("attentionClass")(s);
+  if (!tone || !deskDep("needsYou")(s)) return null;
   const c = deskDep("cardContent")(s);
   // A waiting session can have no named need; label it as the row's dot does.
-  return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text };
+  return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text, tone };
 }
 
 // stripLabel: the strip's visible label, in sentence case. An ask reads "Asks to
@@ -242,7 +375,7 @@ function stripKey(s, activeKind, repliesEnabled) {
   void activeKind; // part of the signature on purpose: it must NOT matter
   if (!s) return "";
   return JSON.stringify([
-    s.id, s.need || "", s.activity || "", s.ask || "", deskHash(s.ask_full), s.summary || "",
+    s.id, s.need || "", s.activity || "", deskDep("attentionClass")(s), s.ask || "", deskHash(s.ask_full), s.summary || "",
     !!s.replyable, !!s.claude, repliesEnabled === true,
     s.aws ? JSON.stringify(s.aws) : "", JSON.stringify(s.aws_connections || null),
     // The composer's gate (sendState): it turns true a few seconds after a
@@ -352,29 +485,36 @@ function paneTitle(name, tab, session, tabCount) {
   return name + cwd + (tabCount > 1 ? " (" + tabCount + " tabs in this pane)" : "");
 }
 
-// paneTabs: the pane header's tabs, in the order they show. `label` is the text
+// paneTabs: the pane header's view tabs, in the order they show. `label` is the text
 // of a wide header, `icon` the glyph tabIcon draws in its place when the pane is
-// too narrow for four words (#13); the button keeps both, so CSS alone picks. A
-// pane of files has no session to describe: Files alone, no Activity, no Access.
+// too narrow for the words (#13); the button keeps both, so CSS alone picks. A
+// terminal pane has three views, Terminal, Activity and Access, and Files is NOT a
+// tab of them: it opens a drawer over the pane, so it is a toggle button after the
+// tabs (paneFilesToggle) and exactly one tab looks selected (G6). A pane of files has
+// no session to describe: Files alone as its one tab, no Activity, no Access.
 function paneTabs(hasTerm) {
-  const files = { id: "files", label: "Files", icon: "files" };
-  if (!hasTerm) return [files];
+  if (!hasTerm) return [paneFilesToggle()];
   return [
     { id: "terminal", label: "Terminal", icon: "terminal" },
-    files,
     { id: "activity", label: "Activity", icon: "activity" },
     { id: "access", label: "Access", icon: "access" },
   ];
 }
 
+// paneFilesToggle: the Files control's one definition: the toggle after a terminal
+// pane's tabs, and the one tab of a pane of files.
+function paneFilesToggle() {
+  return { id: "files", label: "Files", icon: "files" };
+}
+
 // paneTabsClass: the class of the tab group. A group of one tab (a pane of files) is
-// marked `one`: the narrow-pane rule that hides four icons (desktop.css) leaves it
+// marked `one`: the narrow-pane rule that hides the tabs (desktop.css) leaves it
 // alone, since one 24px icon fits where four do not (#123).
 function paneTabsClass(defs) {
   return defs && defs.length === 1 ? "ph-tabs one" : "ph-tabs";
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneTabsClass };
+  module.exports = { deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline, bashCommand,
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

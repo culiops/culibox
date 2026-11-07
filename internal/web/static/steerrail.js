@@ -9,8 +9,16 @@
 // square with no accessible name is a control a screen reader announces as
 // "button" and nothing more.
 
-function railNeedsYou(s) {
-  return (typeof needsYou === "function" ? needsYou : require("./attention.js").needsYou)(s);
+// railAttention: "block" (blocked on you), "done" (finished its turn) or "" — what
+// the desktop's dots draw (attentionClass, attention.js). A finished turn is no
+// longer an alert here: the rail's dot is neutral and the hover says it is your turn.
+function railAttention(s) {
+  return (typeof attentionClass === "function" ? attentionClass : require("./attention.js").attentionClass)(s);
+}
+
+// railDot: the session's dot, the one the sidebar row and the pane header draw.
+function railDot(s) {
+  return (typeof deskDot === "function" ? deskDot : require("./deskshell.js").deskDot)(s);
 }
 
 // railElevated: a write window is open on the session (deskshell.js owns the rule).
@@ -18,14 +26,24 @@ function railElevated(s, nowMs) {
   return (typeof sessionElevated === "function" ? sessionElevated : require("./deskshell.js").sessionElevated)(s, nowMs);
 }
 
+// railHint: a rail button's name with its chord from the registry (shortcuts.js).
+function railHint(label, id, mac) {
+  return (typeof hintTitle === "function" ? hintTitle : require("./shortcuts.js").hintTitle)(label, id, mac);
+}
+
+// The toggle is the frame's ghost "»" (the sidebar's "«" turned around), first in the
+// item list; the DOM puts it at the top of the rail, level with the sidebar's collapse.
+// ctx.mac picks the chord's spelling in its name.
 function railItems(sessions, ctx) {
   const c = ctx || {};
   const nowMs = typeof c.nowMs === "number" ? c.nowMs : Date.now();
-  const out = [{ kind: "toggle", label: "Show sidebar", glyph: "☰", on: false, alert: false, elevated: false }];
+  const out = [{ kind: "toggle", label: railHint("Show sidebar", "sidebar.toggle", !!c.mac), glyph: "\u00bb", on: false, alert: false, elevated: false }];
   for (const s of sessions || []) {
-    // needsYou, not activity alone: an expired AWS sign-in wants the operator
-    // while the agent still reads "working".
-    const waiting = railNeedsYou(s);
+    // attentionClass, not activity alone: an expired AWS sign-in blocks on the
+    // operator while the agent still reads "working".
+    const attention = railAttention(s);
+    const waiting = attention === "block";
+    const done = attention === "done";
     const name = (s && (s.name || s.id)) || "";
     out.push({
       kind: "session",
@@ -36,14 +54,17 @@ function railItems(sessions, ctx) {
       // "— waiting for you" suffix for the button's accessible name and tooltip
       // only; it must never reach a tab title.
       name: name,
-      label: waiting ? name + " — waiting for you" : name,
+      label: waiting ? name + " — waiting for you" : done ? name + " — your turn" : name,
       activity: (s && s.activity) || "",
+      attention,
+      dot: railDot(s),
       on: !!c.focusedId && !!s && s.id === c.focusedId,
       alert: !!waiting,
       // elevated: a write window is open (the rail draws a red ring). title is
-      // the hover text: the bare name, so a dot alone says which session it is.
+      // the hover text: the bare name, so a dot alone says which session it is,
+      // and for a finished turn "name · your turn" (the dot is neutral).
       elevated: railElevated(s, nowMs),
-      title: name,
+      title: done ? name + " \u00b7 your turn" : name,
     });
   }
   out.push({ kind: "new", label: "New session", glyph: "+", on: false, alert: false, elevated: false });

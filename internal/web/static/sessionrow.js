@@ -108,6 +108,78 @@ function menuItems(s, opts) {
   return items;
 }
 
+// MENU_GROUP_OF: which of the kit menu's four groups an item sits in (frame M5.1): the name on
+// its own, where the session is (files, context, copy cwd, new pane), what can be done to it
+// (interrupt, replies, restart, bring home, duplicate), and the way out. menuItems already
+// returns the items in this order; the groups only say where the hairlines go.
+const MENU_GROUP_OF = {
+  rename: 0,
+  files: 1, attribution: 1, copycwd: 1, newpane: 1,
+  interrupt: 2, "replies-on": 2, "replies-off": 2, restart: 2, bringhome: 2, duplicate: 2,
+  end: 3,
+};
+
+// menuGroups: menuItems' list split into the groups the desktop menu separates, empty ones
+// dropped, so a separator is only ever BETWEEN two groups that both have something in them (no
+// double line, none first or last). Order within a group is the input's. An item whose id the
+// table does not know joins the control actions, or the last group when it is the danger one:
+// a menu item must not vanish because it was added without a row here.
+function menuGroups(items) {
+  const groups = [[], [], [], []];
+  for (const it of items || []) {
+    // Own properties only: an id such as "constructor" must not find Object.prototype's member.
+    const known = Object.prototype.hasOwnProperty.call(MENU_GROUP_OF, it.id);
+    const g = it.danger ? 3 : known ? MENU_GROUP_OF[it.id] : 2;
+    groups[g].push(it);
+  }
+  return groups.filter((g) => g.length > 0);
+}
+
+// MENU_ICON: the drawing in each row's 16px icon slot, as a KIND the DOM code (menuIconSvg in
+// app.js) draws as inline SVG in the product's icon style. A font glyph is not used: the frame's
+// placeholder characters are tofu wherever no installed font has them. Reply opt-in and Restart
+// have none drawn, so they keep an empty slot and their text lines up with the rest. One kind per
+// id; Copy working directory and Duplicate are neighbours, so they differ (Duplicate adds a plus).
+const MENU_ICON = {
+  rename: "pencil", files: "files", attribution: "pie", copycwd: "copy", newpane: "split",
+  interrupt: "pause", bringhome: "tray", duplicate: "duplicate", end: "end",
+};
+
+// menuIcon: the icon kind for a menuItems id, "" where there is none.
+function menuIcon(id) {
+  return Object.prototype.hasOwnProperty.call(MENU_ICON, id) ? MENU_ICON[id] : "";
+}
+
+// menuNavIndex: where the arrow keys move focus inside the open menu. `count` rows, focus on row
+// `at` (-1 when it is on none of them, e.g. a tab switcher's close button). Down and Up wrap; from
+// outside the rows Down lands on the first and Up on the last; Home and End jump. null means the
+// key is not the menu's, so the caller leaves it alone.
+function menuNavIndex(count, at, key) {
+  if (!(count > 0)) return null;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowDown") return at < 0 ? 0 : (at + 1) % count;
+  if (key === "ArrowUp") return at < 0 ? count - 1 : (at - 1 + count) % count;
+  return null;
+}
+
+// MENU_GAP / ROW_MENU_GAP: the space between what a menu hangs from and the menu. A ⋯ button leaves 4px
+// (the kit's popover offset); a sidebar row leaves 5: the 1px between two rows plus the same 4px, where
+// m5-1's anchor sits (a zero-height sibling after the row, the menu 4px below it).
+const MENU_GAP = 4;
+const ROW_MENU_GAP = 5;
+
+// menuPlace: where #session-menu goes ({left, top} in px). `r` is what it hangs from ({right, top,
+// bottom}): the ⋯ that opened it, or the whole row when the ⋯ sits in a sidebar row. The menu's right
+// edge is r's, `gap` px below it; it opens above r instead when it would reach into the viewport's last
+// 8px, and keeps 8px from the viewport's left and right edges. w and h are the menu's own size.
+function menuPlace(r, w, h, vw, vh, gap) {
+  const left = Math.max(8, Math.min(vw - w - 8, r.right - w));
+  const below = r.bottom + gap;
+  const top = below + h <= vh - 8 ? below : Math.max(8, r.top - h - 4);
+  return { left, top };
+}
+
 // PALETTE_ACTION_IDS: the menu actions the palette offers for the focused
 // session, in the palette's order (spec §2.6). End session keeps its own
 // per-session palette row.
@@ -529,6 +601,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuNavIndex, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

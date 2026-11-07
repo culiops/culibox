@@ -74,6 +74,7 @@ test("renderChord", () => {
   both(first("shell.below"), "⌃⇧`", "Ctrl+Shift+`");
   both(first("session.jump"), "⌘1…9", "Ctrl+1…9");
   both(first("files.toggle"), "⇧⌘E", "Ctrl+Shift+E");
+  both(first("session.nextNeeds"), "⇧⌘J", "Ctrl+Shift+J");
   both(first("palette.insert"), "⌘↵", "Ctrl+↵");
   both(first("zoom.in"), "⌘=", "Ctrl+=");
   both(first("help.open"), "⌘/", "Ctrl+/");
@@ -144,7 +145,8 @@ test("shortcutFor: Ctrl+Shift+K is not the palette on mac, and plain keys never 
   assert.strictEqual(SC.shortcutFor(ev("KeyK", "k", { ctrl: true }), true, NONE), null);
   assert.strictEqual(SC.shortcutFor(ev("Space", " "), false, NONE), null);
   assert.strictEqual(SC.shortcutFor(ev("Space", " ", { shift: true }), false, NONE), null);
-  assert.strictEqual(SC.shortcutFor(ev("KeyJ", "J", { ctrl: true, shift: true }), false, NONE), null);
+  // Ctrl+Shift+J was once the palette's chord; it is Next that needs you now (F69), never the palette.
+  assert.strictEqual(SC.shortcutFor(ev("KeyJ", "J", { ctrl: true, shift: true }), false, NONE), "session.nextNeeds");
 });
 
 test("shortcutFor: Alt, AltGr or the other platform modifier disqualify a palette chord", () => {
@@ -171,6 +173,7 @@ test("shortcutFor: Ctrl+Shift+- stays free for readline undo", () => {
 const R1 = {
   "palette.open": [1, 1, 0, 1, 1], "palette.open.alt": [1, 1, 0, 1, 1], "help.open": [1, 1, 1, 0, 1],
   "sidebar.toggle": [1, 0, 0, 0, 1], "files.toggle": [1, 0, 0, 0, 1], "session.jump": [1, 0, 0, 0, 1],
+  "session.nextNeeds": [1, 0, 0, 0, 1],
   "shell.below": [1, 0, 0, 0, 0], "files.goto": [0, 1, 1, 0, 0],
   "zoom.in": [1, 0, 0, 0, 0], "zoom.out": [1, 0, 0, 0, 0], "zoom.reset": [1, 0, 0, 0, 0],
 };
@@ -508,4 +511,33 @@ test("#58: help has no Old keys group; the permanent fallback stays", () => {
     assert.ok(SC.helpRows(mac).some((r) => r.label === "Command palette (fallback)"));
   }
   assert.ok(!SC.SHORTCUTS.some((s) => "legacy" in s));
+});
+
+// F69 (#172): Next that needs you. The founder chose Mod+Shift+J; it fires in the
+// terminal and on the page, never in the editor, a text input or a dialog.
+test("session.nextNeeds: Mod+Shift+J, listed in the help dialog with its chord on each platform", () => {
+  const e = entry("session.nextNeeds");
+  assert.ok(e, "registered");
+  assert.strictEqual(e.label, "Next that needs you");
+  assert.strictEqual(e.group, "Sessions & panes");
+  assert.strictEqual(e.status, "bound");
+  assert.strictEqual(SC.shortcutHint("session.nextNeeds", false), "Ctrl+Shift+J");
+  assert.strictEqual(SC.shortcutHint("session.nextNeeds", true), "⇧⌘J");
+  assert.strictEqual(SC.helpRows(false).find((r) => r.label === "Next that needs you").keys, "Ctrl+Shift+J");
+  assert.strictEqual(SC.helpRows(true).find((r) => r.label === "Next that needs you").keys, "⇧⌘J");
+  assert.strictEqual(SC.helpRows(false).find((r) => r.label === "Next that needs you").group, "Sessions & panes");
+  // Listed right after the numbered jump, in the same group.
+  const ids = SC.SHORTCUTS.map((s) => s.id);
+  assert.strictEqual(ids.indexOf("session.nextNeeds"), ids.indexOf("session.jump") + 1);
+});
+
+test("session.nextNeeds: the chord dispatches on a terminal and on the page, not in the editor, an input or a dialog", () => {
+  for (const [mac, mods] of [[false, { ctrl: true, shift: true }], [true, { meta: true, shift: true }]]) {
+    const e = () => ev("KeyJ", "J", mods);
+    assert.strictEqual(SC.shortcutFor(e(), mac, NONE), "session.nextNeeds", "page, mac=" + mac);
+    assert.strictEqual(SC.shortcutFor(e(), mac, ctxWith("inTerminal")), "session.nextNeeds", "terminal, mac=" + mac);
+    for (const k of ["inEditor", "inInput", "dialogOpen"]) assert.strictEqual(SC.shortcutFor(e(), mac, ctxWith(k)), null, k + " mac=" + mac);
+    // Without Shift it is not ours (Ctrl+J is the terminal's newline).
+    assert.strictEqual(SC.shortcutFor(ev("KeyJ", "j", { ctrl: !mac, meta: mac }), mac, NONE), null);
+  }
 });

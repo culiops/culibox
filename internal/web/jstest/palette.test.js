@@ -1,7 +1,8 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint } = require("../static/palette.js");
+const { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, palSessionDot } = require("../static/palette.js");
+const { activityClass } = require("../static/activity.js");
 
 // Ctrl+Enter (⌘+Enter on mac) inserts the selected file's path at the prompt.
 // Plain Enter must keep opening the viewer, so the modifier is what separates
@@ -127,10 +128,35 @@ test("paletteShellCommands: hints are the registry's, per platform", () => {
   assert.equal(hint(false, true, "shortcuts"), "Ctrl+/");
 });
 
+// F69 (#172): Next that needs you is a sidebar command, so the palette lists it on
+// desktop only, with the chord as its hint; the phone's palette is unchanged.
+test("paletteShellCommands: desktop lists Next that needs you with its chord, and runs the callback", () => {
+  const { paletteShellCommands } = require("../static/palette.js");
+  const ran = [];
+  const cmds = paletteShellCommands(false, true, { nextNeeds: () => ran.push("next") });
+  const c = cmds.find((x) => x.label === "Next that needs you");
+  assert.ok(c, "listed");
+  assert.equal(c.kind, "view");
+  assert.equal(c.hint, "Ctrl+Shift+J");
+  c.run();
+  assert.deepEqual(ran, ["next"]);
+  assert.equal(paletteShellCommands(true, true, {}).find((x) => x.label === "Next that needs you").hint, "\u21e7\u2318J");
+  assert.equal(cmds.filter((x) => x.label === "Next that needs you").length, 1);
+});
+
 test("paletteShellCommands: mobile keeps the old entries and gets none of the new", () => {
   const { paletteShellCommands } = require("../static/palette.js");
   const ids = paletteShellCommands(false, false, {}).map((c) => c.id);
   assert.deepEqual(ids.sort(), ["steer-rail", "toggle-files"]);
+  assert.ok(!paletteShellCommands(false, false, {}).some((c) => c.label === "Next that needs you"), "no sidebar groups on a phone");
+});
+
+test("paletteCommands offers every desktop shell command it builds (Next that needs you is wired in, not just defined)", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "../static/palette.js"), "utf8");
+  const i = src.indexOf("function paletteCommands(");
+  const body = src.slice(i, src.indexOf("\n}\n", i));
+  assert.match(body, /"next-needs"/);
+  assert.match(body, /nextNeeds: /);
 });
 
 test("paletteShellSpawn: desktop offers + Shell below (the shortcut), right and own pane", () => {
@@ -219,4 +245,34 @@ test("palettePageCommands: mobile keeps exactly today's two Settings entries", (
   ]);
   cmds.forEach((c) => c.run());
   assert.deepEqual(ran, ["manage", "settings"]);
+});
+
+// F21-B (#172): a finished turn is neutral in the command palette too. Desktop
+// draws a session's dot with deskDot; the phone keeps activityClass(s.activity)
+// byte-for-byte (its finished turn is still the amber "waiting" dot).
+const palTurn = { id: "t", name: "turn", activity: "waiting", need: "turn", attention: "done", claude: true };
+const palAsk = { id: "a", name: "ask", activity: "waiting", need: "ask", attention: "block", claude: true };
+
+test("palSessionDot: on desktop a finished turn is the neutral idle dot titled your turn", () => {
+  const d = palSessionDot(palTurn, false);
+  assert.deepStrictEqual(d, { cls: activityClass("idle").cls, title: "your turn" });
+  assert.strictEqual(d.cls.includes("waiting"), false);
+  assert.deepStrictEqual(palSessionDot({ ...palTurn, attention: undefined }, false), d, "derived without the server field");
+});
+
+test("palSessionDot: on desktop a blocked session keeps the amber waiting dot", () => {
+  assert.deepStrictEqual(palSessionDot(palAsk, false), activityClass("waiting"));
+});
+
+test("palSessionDot: the phone's dot is activityClass(s.activity), unchanged", () => {
+  assert.deepStrictEqual(palSessionDot(palTurn, true), activityClass("waiting"));
+  assert.deepStrictEqual(palSessionDot(palAsk, true), activityClass("waiting"));
+  for (const a of ["working", "idle", "done", "crashed", "detached", "bogus", undefined]) {
+    assert.deepStrictEqual(palSessionDot({ activity: a }, true), activityClass(a), String(a));
+  }
+});
+
+test("paletteSessions draws its dot through palSessionDot", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "palette.js"), "utf8");
+  assert.match(src, /const act = palSessionDot\(s, mobile\);/);
 });

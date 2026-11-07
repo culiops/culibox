@@ -85,9 +85,13 @@ function reconcileRows(ul, sessions, render, sigOf) {
 // rowSig is the signature of everything a desktop row or needs-you card
 // renders: the session's own fields plus page-local state (`local`) the row
 // reads — a teardown in flight, whether this page holds the terminal, the
-// context %, the tier label, a reply in flight, and a nested shell's "shell N"
-// label (which moves when a sibling appears or goes). A field the row does not
-// render must NOT be here, or the row re-renders (and drops focus) for nothing.
+// context %, the tier label, a reply in flight, a terminal parked because
+// another tab took the session (the row then reads "open in another tab"), and
+// a nested shell's "shell N" label (which moves when a sibling appears or goes).
+// A field the row does not render must NOT be here, or the row re-renders (and
+// drops focus) for nothing.
+// The row's attention (blocked / finished turn, attentionClass) is derived from
+// exited, activity, need and aws_connections, which the sig already lists.
 function rowSig(s, local) {
   const v = s || {};
   const l = local || {};
@@ -95,7 +99,7 @@ function rowSig(s, local) {
     v.id, v.parent_id || "", l.shellLabel || "", v.name || "", v.agent || "", v.cwd || "", v.runtime || "",
     v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
-    !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
+    !!l.killing, !!l.heldHere, !!l.takenOver, typeof l.pct === "number" ? l.pct : null,
     l.boxRuntime || "", !!l.replies, !!l.sending, !!l.expanded, !!l.answering, !!l.elev,
     // The AWS chip (label, prod, the amber write state) and the SSO card's text
     // read the binding; elevated_until appears and goes with a grant and a drop.
