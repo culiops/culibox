@@ -731,6 +731,12 @@ type Info struct {
 	// blocked AND replyable — the one case the card can answer (Manager.Answer
 	// refuses every other). Filled by List only.
 	AskFull string `json:"ask_full,omitempty"`
+	// Attention is how the session asks for the operator, one word for the
+	// desktop sidebar's groups: "block" (blocked on you), "done" (finished its
+	// turn) or empty. Derived from Exited, Activity and Need (see attentionOf),
+	// so it is provider-neutral and never set on an exited session. Filled by
+	// List only, after every raise above has settled.
+	Attention string `json:"attention,omitempty"`
 	// Resumable: an exited claude (host, or a non-exclusive box) whose
 	// conversation id is known — Restart will try to continue it (`--resume`);
 	// for a boxed one that still depends on the transcript being in the box at
@@ -3007,6 +3013,7 @@ func (m *Manager) List() []Info {
 				applyStoreNeed(&out[i])
 			}
 		}
+		out[i].Attention = attentionOf(out[i])
 	}
 	return out
 }
