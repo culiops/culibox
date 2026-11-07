@@ -205,10 +205,14 @@ test("boxes unavailable on a box profile is an error line with the reason", () =
 // A profile that stores no tier only RESOLVES to box. With no box layer a session that names no tier runs on this machine, uncontained
 // (internal/session runtimeFor), so "can't start" would be false for it; the page says what really happens.
 test("boxes unavailable on a profile that names no tier says its sessions start on this machine", () => {
-  // The stored profile names no tier; the list row's runtime is the one it resolves to (box).
+  // The stored profile names no tier; the list row's runtime is the one it resolves to (box). It holds no readable folder and no
+  // private copy: a session that asks for no tier and needs neither runs on this machine (the next test is the ones that are refused).
   const unnamedDoc = { ...awsOpsDoc };
   delete unnamedDoc.runtime;
-  const noTier = (reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, doc: unnamedDoc })), "runs");
+  delete unnamedDoc.context_paths;
+  const unnamedView = { ...awsOpsView };
+  delete unnamedView.context_paths;
+  const noTier = (reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, view: unnamedView, doc: unnamedDoc })), "runs");
   const docker = noTier("Docker is not installed");
   assert.deepStrictEqual(docker.lines, [
     "In a box",
@@ -221,7 +225,7 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
   assert.strictEqual(noTier("run `agent-box doctor` for details").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
   assert.strictEqual(noTier("").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
   // The instance's own default_runtime: box is a tier a session of this profile asks for, and with no box layer that is refused.
-  const asked = (runtimeAsked, reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, view: { ...awsOpsView, runtime_asked: runtimeAsked }, doc: unnamedDoc })), "runs").lines[2];
+  const asked = (runtimeAsked, reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, view: { ...unnamedView, runtime_asked: runtimeAsked }, doc: unnamedDoc })), "runs").lines[2];
   assert.strictEqual(asked("box", "Docker is not installed"), "Sessions with this profile can't start until Docker is installed.");
   assert.strictEqual(asked("box", "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
   assert.strictEqual(asked("box", "run `agent-box doctor` for details"), "Sessions with this profile can't start until boxes are available.");
@@ -234,6 +238,36 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...awsOpsView, runtime_asked: "" } })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.", "a stored box is named whatever the row says");
   // A stored box tier is a named one: today's sentence stays.
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.");
+});
+
+// A readable folder and a private copy only work in a box: a session that asks for no tier is refused for either when there is no
+// box layer (internal/session: readable folders on the host, a clone on the host), though the server can store such a profile with no
+// tier (the default resolves to box). So "sessions start on this machine" would be false for it, and the line says can't start.
+test("boxes unavailable on a profile that names no tier but holds a readable folder or a private copy: its sessions are refused", () => {
+  const bare = { ...awsOpsDoc };
+  delete bare.runtime;
+  delete bare.context_paths;
+  const bareView = { ...awsOpsView };
+  delete bareView.context_paths;
+  const line = (view, doc, reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason || "Docker is not installed", view, doc })), "runs").lines[2];
+  const CANT = "Sessions with this profile can't start until Docker is installed.";
+  const SPAWNS = "Until it is, sessions start on this machine, uncontained.";
+  const folders = ["/home/you/other-repo/docs"];
+  const repo = "/home/you/work/k8s-gitops";
+  assert.strictEqual(line(bareView, bare), SPAWNS, "nothing that needs a box: unchanged");
+  // A readable folder, from the list row or from the stored profile alone.
+  assert.strictEqual(line({ ...bareView, context_paths: folders }, bare), CANT);
+  assert.strictEqual(line(bareView, { ...bare, context_paths: folders }), CANT);
+  assert.strictEqual(line({ ...bareView, context_paths: [] }, { ...bare, context_paths: [] }), SPAWNS, "an empty list holds nothing");
+  // A private copy, the same two ways.
+  assert.strictEqual(line({ ...bareView, clone_of: repo }, bare), CANT);
+  assert.strictEqual(line(bareView, { ...bare, clone_of: repo }), CANT);
+  assert.strictEqual(line({ ...bareView, clone_of: "  " }, { ...bare, clone_of: "" }), SPAWNS, "a blank copy source is no copy");
+  // The reason's wording still shapes the sentence.
+  assert.strictEqual(line({ ...bareView, context_paths: folders }, bare, "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
+  assert.strictEqual(line({ ...bareView, clone_of: repo }, bare, "run `agent-box doctor` for details"), "Sessions with this profile can't start until boxes are available.");
+  // A profile that stores host is not a box profile at all: it gets no consequence line.
+  assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...bareView, runtime: "host" }, doc: { ...bare, runtime: "host" } })), "runs").lines.length, 2);
 });
 
 // With no box layer the list view reports no network posture for a boxed profile; the

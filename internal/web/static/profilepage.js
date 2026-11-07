@@ -662,6 +662,9 @@ async function pfvShow(name) {
   if (same && pfvState.openBlock) return; // a block was opened while this was out
   // The edit a forced close kept of this profile comes back, drawn from what was typed (the read above showed the profile is there).
   if (pfvKept && pfvKept.name === pick) {
+    // Unless the window crossed to a phone again while it was read: the page is gone, and a form drawn on it (a folder picker puts
+    // listeners on the document) would never be released. Nothing is drawn, and the edit stays kept for the next open.
+    if (!pfvOnPage()) return;
     pfvRestoreKept();
     return;
   }

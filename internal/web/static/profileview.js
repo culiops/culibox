@@ -117,17 +117,17 @@ function pfvGithubLogins(doc) {
 
 // pfvUnavailable: the two lines a box tier profile shows when there is no box
 // layer. reason is /api/meta's box_unavailable_reason, already a clause
-// ("Docker is not installed", "run `agent-box doctor` for details"). named says
-// a session of this profile asks for box, by the profile's own runtime or by the
-// instance's default_runtime. Then it is refused without a box, and the line says
-// so. A profile that asks for nothing only RESOLVES to box: with no box layer such
-// a session runs on this machine, with no container, so the line says that instead
-// (internal/session runtimeFor).
-function pfvUnavailable(reason, named) {
+// ("Docker is not installed", "run `agent-box doctor` for details"). refused says
+// a session of this profile is refused without a box (pfvReadView works it out): it
+// asks for box, or it holds a readable folder or a private copy, which a session on
+// this machine refuses. Then the line says so. A profile that asks for nothing and
+// holds neither only RESOLVES to box: with no box layer such a session runs on this
+// machine, with no container, so the line says that instead (internal/session runtimeFor).
+function pfvUnavailable(reason, refused) {
   const r = pfvText(reason);
   const m = /^(Docker|colima) is not installed$/i.exec(r);
   let consequence;
-  if (named) consequence = "Sessions with this profile can't start until " + (m ? m[1] + " is installed" : "boxes are available") + ".";
+  if (refused) consequence = "Sessions with this profile can't start until " + (m ? m[1] + " is installed" : "boxes are available") + ".";
   else consequence = (m ? "Until it is" : "Until boxes are available") + ", sessions start on this machine, uncontained.";
   return {
     line: "Boxes are unavailable on this machine" + (r ? ": " + r : "") + ".",
@@ -198,10 +198,10 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
   return { id: "workspace", label: "Workspace", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
 }
 
-// named: a session of this profile asks for box (see pfvUnavailable).
-function pfvRunsBlock(host, copy, unavailable, reason, edit, named) {
+// refused: a session of this profile is refused without a box layer (see pfvUnavailable).
+function pfvRunsBlock(host, copy, unavailable, reason, edit, refused) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
-  const u = pfvUnavailable(reason, named);
+  const u = pfvUnavailable(reason, refused);
   if (host) {
     // The spec's sentence, verbatim, on one line (spec 5.4). The muted line under it
     // carries only the boxes-unavailable reason when there is one, quietly: not an
@@ -261,14 +261,17 @@ function pfvReadView(o) {
   const unavailable = typeof x.boxRuntime === "string" && x.boxRuntime === "";
   const copy = !host && pfvText(pfvField(view, doc, "clone_of")) !== "";
   const a = pfvAgentParts(view, doc);
-  // Whether a session of this profile asks for box. The stored profile's own tier comes first; only a profile that stores none
-  // takes what the instance's default_runtime asks (the list row's runtime_asked: runtime is the resolved tier, which ends in
-  // box when nobody said anything, so it cannot tell the two apart).
+  // Whether a session of this profile is refused without a box layer. It asks for box: the stored profile's own tier comes first;
+  // only a profile that stores none takes what the instance's default_runtime asks (the list row's runtime_asked: runtime is the
+  // resolved tier, which ends in box when nobody said anything, so it cannot tell the two apart). Or it holds a readable folder
+  // or a private copy: those are refused on this machine, and a profile that names no tier can hold them (the server saves it,
+  // because its default resolves to box), so such a session is refused rather than started uncontained.
   const stored = doc.runtime === "box" || doc.runtime === "host";
-  const named = stored ? doc.runtime === "box" : view.runtime_asked === "box";
+  const asksBox = stored ? doc.runtime === "box" : view.runtime_asked === "box";
+  const refused = asksBox || copy || pfvList(pfvField(view, doc, "context_paths")).length > 0;
 
   const blocks = [
-    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, named),
+    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, refused),
     pfvWorkspaceBlock(view, doc, host, edit),
     pfvAgentBlock(view, doc, a, edit),
   ];

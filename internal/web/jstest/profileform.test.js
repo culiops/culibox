@@ -130,6 +130,9 @@ test("a profile needs a box when it holds anything that needs one", () => {
   assert.strictEqual(profileNeedsBox({ github: { owners: [{ owner: "culiops", app: "bot", repos: [] }] } }), true);
   assert.strictEqual(profileNeedsBox({ egress_open: true }), true);
   assert.strictEqual(profileNeedsBox({ clone_of: "/home/you/work/repo" }), true, "a private copy");
+  // An object counts as held with nothing in it: the server checks that the binding is set, not what is in it.
+  assert.strictEqual(profileNeedsBox({ aws: {} }), true);
+  assert.strictEqual(profileNeedsBox({ github: {} }), true);
 });
 
 test("empty and missing shapes hold nothing that needs a box", () => {

@@ -102,10 +102,11 @@ function segFromRuntime(stored, resolved) {
 // profileNeedsBox: whether the profile holds anything that needs a box: an AWS
 // binding or connection, a token, a GitHub binding, a network allowlist or open
 // egress, a readable host folder, a private copy. p is the profile as it will be
-// sent. A list or object with nothing in it holds nothing. The credentials and the
-// egress are refused by the server without an explicit runtime: box; a readable
-// folder or a private copy is only honoured in a box, though the server saves it
-// with a blank tier when the instance default resolves to box.
+// sent. An empty list holds nothing; an object counts as held whether or not it has
+// anything in it ("aws": {} and "github": {}), because the server checks only that it
+// is set. The credentials and the egress are refused by the server without an explicit
+// runtime: box; a readable folder or a private copy is only honoured in a box, though
+// the server saves it with a blank tier when the instance default resolves to box.
 function profileNeedsBox(p) {
   const x = p && typeof p === "object" ? p : {};
   const listed = (k) => Array.isArray(x[k]) && x[k].length > 0;

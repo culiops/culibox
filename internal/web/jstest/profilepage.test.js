@@ -4381,6 +4381,59 @@ test("the typed text of each editor outlives a forced close: the other command, 
   assert.strictEqual(c.run("pfvState").edits.cloud.values.perms.contents, "off");
 });
 
+test("a restore does not land on a page that has closed again: the edit stays kept for the next desktop open", async () => {
+  const t = page();
+  const picker = await openWs(t);
+  picker.pick("/home/you/other-folder");
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(t.box.pickers.length, 1);
+  // Settings opens again and its read is out; the window crosses to a phone before it lands.
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (p === "/api/profiles/aws-ops" && !(o && o.method)) await new Promise((r) => { release = r; }); return real(p, o); };
+  const showing = t.box.pfvShow();
+  await settle();
+  t.box.pageLeaveHook("force");
+  t.els["settings-modal"].classList.remove("as-page");
+  release();
+  await showing;
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), [], "no form was drawn on the closed page");
+  assert.strictEqual(t.box.pickers.length, 1, "so no folder picker took listeners on it");
+  assert.strictEqual(keptOf(t).name, "aws-ops", "and the edit was not used up");
+  // The next time the desktop page is open it comes back.
+  t.box.api = real;
+  t.els["settings-modal"].classList.add("as-page");
+  await t.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), ["workspace"]);
+  assert.strictEqual(field(t, "folder").value, "/home/you/other-folder");
+  assert.strictEqual(t.run("pfvKept"), null);
+});
+
+test("what is restored is a copy: the dropped form's own objects cannot change it afterwards", async () => {
+  const t = page();
+  const pk = await openWs(t);
+  pickMode(t, "copy");
+  typeInto(field(t, "copy-dir"), "/home/you/box-clones/mine");
+  pickMode(t, "folder");
+  pk.pick("/home/you/other-folder");
+  // The objects the form held, as a late callback of the dropped form could still reach them.
+  const rec = t.run("pfvState").edits.workspace;
+  const [values, stash, init] = [rec.values, rec.ui.copyStash, rec.ui.copyInit];
+  assert.ok(stash && init, "the editor has both to keep");
+  t.box.pageLeaveHook("force");
+  values.folder = "/tampered";
+  values.shareText = "tampered";
+  stash.copyDir = "/tampered";
+  init.copyDir = "/tampered";
+  await t.box.pfvShow();
+  const back = t.run("pfvState").edits.workspace;
+  assert.strictEqual(back.values.folder, "/home/you/other-folder");
+  assert.strictEqual(back.values.shareText, "");
+  assert.strictEqual(back.ui.copyStash.copyDir, "/home/you/box-clones/mine");
+  assert.strictEqual(back.ui.copyInit.copyDir, "");
+  assert.notStrictEqual(back.values, values);
+});
+
 test("the New profile page is not kept by a forced close: its record is the page", async () => {
   const t = await newPage();
   typeName(t, "scratch");
