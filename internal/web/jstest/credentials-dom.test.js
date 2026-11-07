@@ -1895,6 +1895,29 @@ test("framed token add: the crumb says Tokens, the intro is in the header, no tr
   assert.strictEqual(opts.host.textContent.includes("Paste the value to store."), false);
 });
 
+// F11 (#171): one primary per view. A host with its own foot (the profile page's drawer) has Save
+// there as the primary, so the store step's Create is a secondary in it; the tab (the phone's path
+// too) keeps Create primary.
+test("the store step's Create is a secondary beside a host's Save, the primary in the tab", async () => {
+  const noStore = { initialized: false, locked: false, platform: "linux", passphrase_mode: true };
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials" ? { ...base(path), store: noStore } : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.strictEqual(btnIn(opts.host, "Create the encrypted store").className, "btn", "token add in the drawer");
+  assert.strictEqual(btnIn(opts.foot, "Save").className, "btn pri", "the foot's Save is the view's primary");
+  const a = page({ tab: true });
+  const app = hostOpts();
+  a.box.reply = credReply({ store: { initialized: false, locked: false, platform: "darwin", passphrase_mode: false } });
+  await a.box.credAppForm(null, app.opts);
+  assert.strictEqual(btnIn(app.opts.host, "Create the encrypted store").className, "btn", "GitHub App add in a host");
+  const q = page({ tab: true });
+  q.box.reply = credReply({ store: noStore });
+  await q.box.credTokenAdd(null, "sentry");
+  assert.strictEqual(btnIn(q.byId["creds-body"], "Create the encrypted store").className, "btn pri", "the tab");
+});
+
 test("framed token add with no store: the card opens with the lead, and Save's refusal is the same sentence in the foot", async () => {
   const p = page({ tab: true });
   const { opts } = framedOpts();

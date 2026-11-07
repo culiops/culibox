@@ -30,9 +30,10 @@ const sections = () => {
   return f;
 };
 
-// parseRules: every style rule of `src` (comments stripped) as { selector, decls: [[prop, value]] },
+// parseRules: every style rule of `src` (comments stripped) as { selector, decls: [[prop, value]], at },
 // empty ones included (the kit's `.chip-sso {}` is a rule: the neutral chip). At-rule containers
-// (@media) are walked through. A ";" or a brace inside quotes or parentheses is part of the value.
+// (@media) are walked through; `at` is the chain of them around the rule. A ";" or a brace inside
+// quotes or parentheses is part of the value.
 function parseRules(src) {
   const rules = [];
   const stack = [];
@@ -53,7 +54,8 @@ function parseRules(src) {
     if (ch === "(") paren++;
     else if (ch === ")") paren--;
     if (paren === 0 && ch === "{") {
-      stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: [] });
+      const at = stack.filter((r) => r.selector.startsWith("@")).map((r) => r.selector).join(" ");
+      stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: [], at });
       buf = "";
     } else if (paren === 0 && ch === ";") {
       flush();
@@ -101,16 +103,105 @@ const decl = (rule, prop) => (rule.decls.find(([p]) => p === prop) || [])[1];
 const ruleFor = (rules, partList) => rules.find((r) => JSON.stringify(parts(r.selector)) === JSON.stringify(partList));
 const allParts = (rules) => rules.flatMap((r) => parts(r.selector));
 
-// primaryOffenders: rules of `src` that restyle a legacy primary (.pri) with a colour of their own.
-// A `.pri` inside :not() excludes the primary from a page rule, which is how a page keeps its
-// secondary look without reaching the primary, so it does not count.
+// primaryOffenders: rules of `src` that restyle a legacy primary (.btn.pri, the kit's alias) with a
+// colour of their own. A `.pri` inside :not() excludes the primary from a page rule, which is how a
+// page keeps its secondary look without reaching the primary, so it does not count. A `.pri` on
+// another component (the viewer toolbar's .vt-btn.pri) is not the kit's; primaryHoverGaps holds it.
 const COLOUR_PROPS = new Set(["background", "background-color", "color", "border-color", "border", "filter"]);
 function primaryOffenders(src) {
   const out = [];
   for (const r of parseRules(src)) {
-    const hit = parts(r.selector).some((p) => hasClass(p.replace(/:not\([^()]*\)/g, ""), "pri"));
+    const hit = parts(r.selector).some((p) => compounds(p).some((c) => {
+      const bare = c.replace(/:not\([^()]*\)/g, "");
+      return hasClass(bare, "pri") && hasClass(bare, "btn");
+    }));
     if (!hit) continue;
     for (const [p, v] of r.decls) if (COLOUR_PROPS.has(p)) out.push(r.selector + " { " + p + ": " + v + " }");
+  }
+  return out;
+}
+
+// unguardedBtn: page rules that paint a .btn (background or color) without excluding the primary.
+// Such a rule reaches a .btn.pri as well and out-ranks the kit primary (0,2,0): the primary turns
+// secondary, or, where only the fill is set, dark --on-fill text lands on a dark fill. A rule's .btn
+// compound is safe when it carries :not(.pri) (pages use :where(:not(.pri)), which keeps the
+// rule's weight) or a weight a primary never has (.gh, .dgr); a .pri compound is primaryOffenders'.
+// What it can see: selectors that name .btn. A .btn styled only through its id (#au-more) or a type
+// selector (`.x button`) is invisible to it.
+const PAINT_PROPS = new Set(["background", "background-color", "color"]);
+function unguardedBtn(src) {
+  const out = [];
+  for (const r of parseRules(src)) {
+    const paint = r.decls.filter(([p]) => PAINT_PROPS.has(p));
+    if (!paint.length) continue;
+    for (const part of parts(r.selector)) {
+      const last = compounds(part).pop();
+      const bare = last.replace(/:not\([^()]*\)/g, "");
+      if (!hasClass(last, "btn") || /:not\(\.pri\)/.test(last)) continue;
+      if (hasClass(bare, "gh") || hasClass(bare, "dgr") || hasClass(bare, "pri")) continue;
+      out.push(part + " { " + paint.map(([p, v]) => p + ": " + v).join("; ") + " }");
+    }
+  }
+  return out;
+}
+
+// specificity of one selector, as [ids, classes, types]. :where() counts nothing; :not(), :is() and
+// :has() count their most specific argument. Enough for the selectors in these sheets.
+function specificity(sel) {
+  const n = [0, 0, 0];
+  const add = (v) => { n[0] += v[0]; n[1] += v[1]; n[2] += v[2]; };
+  let s = sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "");
+  s = s.replace(/:(?:not|is|has)\(((?:[^()]|\([^()]*\))*)\)/g, (m, args) => {
+    add(parts(args.replace(/^\s*[>+~]/, "")).map(specificity).sort(cmpSpec).pop() || [0, 0, 0]);
+    return "";
+  });
+  s = s.replace(/\[[^\]]*\]/g, () => { n[1]++; return ""; });
+  s = s.replace(/::[\w-]+/g, () => { n[2]++; return ""; });
+  s = s.replace(/#[\w-]+/g, () => { n[0]++; return ""; });
+  s = s.replace(/\.[\w-]+/g, () => { n[1]++; return ""; });
+  s = s.replace(/:[\w-]+(\([^()]*\))?/g, () => { n[1]++; return ""; });
+  for (const t of s.split(/[\s>+~]+/)) if (/^[a-z][\w-]*$/i.test(t)) n[2]++;
+  return n;
+}
+const cmpSpec = (x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+
+// A filled primary that is not the kit's .btn.pri: an accent fill with dark text. The scan cannot
+// tell a button from a highlight, so every rule it finds is classified below, and a new one fails
+// until it is: a primary must be 600 and hover to --accent-hover on desktop, like the kit's.
+const filledAccent = (r) => r.decls.some(([p, v]) => p === "background" && v === "var(--accent)") &&
+  r.decls.some(([p, v]) => p === "color" && /^var\(--(on-fill|bg)\)$/.test(v));
+const FILLED_PRIMARIES = [
+  "desktop.css .pbtn", "desktop.css .ri.add", "desktop.css #ask-modal:not(.info) #ask-ok",
+  "desktop.css #page-host > #settings-modal.as-page #pfv .pfv-btn-primary", "desktop.css body > main.card button",
+  "app.css #ask-ok", "app.css #spawn button[type=\"submit\"]", "app.css .vt-btn.pri",
+];
+const FILLED_NOT_CONTROLS = [
+  "app.css .CodeMirror.cm-s-default span.cm-find-cur", "app.css .CodeMirror.cm-s-default span.cm-find-cur span", // the editor's current find match
+];
+const unwrap = (sel) => sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "").replace(/:not\([^()]*\)/g, "");
+// primaryHoverGaps: the classified primaries of `sheets` ({ name: css }) that are not 600 or have no
+// desktop rule (in `desk`) hovering them to --accent-hover at their weight or more; and any filled
+// rule not classified yet.
+function primaryHoverGaps(sheets, desk) {
+  const out = [];
+  const hovers = parseRules(desk).filter((r) => r.decls.some(([p, v]) => p === "background" && v === "var(--accent-hover)")).flatMap((r) => parts(r.selector));
+  for (const [name, css] of Object.entries(sheets)) {
+    for (const r of parseRules(css)) {
+      if (/max-width:\s*700px/.test(r.at) || !filledAccent(r)) continue;
+      const w = (r.decls.find(([p]) => p === "font-weight") || [])[1] || ((r.decls.find(([p]) => p === "font") || [])[1] || "").split(" ")[0];
+      for (const part of parts(r.selector)) {
+        const id = name + " " + part;
+        if (FILLED_NOT_CONTROLS.includes(id)) continue;
+        if (!FILLED_PRIMARIES.includes(id)) { out.push(id + ": unclassified accent fill with dark text"); continue; }
+        if (!["600", "var(--w-semibold)"].includes(w)) out.push(id + ": weight " + (w || "unset"));
+        const want = unwrap(part) + ":hover";
+        const ok = hovers.some((h) => {
+          const u = unwrap(h);
+          return (u === want || u.endsWith(" " + want) || u.endsWith(">" + want)) && cmpSpec(specificity(h), specificity(part)) >= 0;
+        });
+        if (!ok) out.push(id + ": no desktop hover to --accent-hover");
+      }
+    }
   }
   return out;
 }
@@ -180,6 +271,7 @@ test("primary is one look: the kit's filled accent, aliased to the legacy .btn.p
   assert.strictEqual(decl(pri, "background"), "var(--accent)");
   assert.strictEqual(decl(pri, "color"), "var(--on-fill)");
   assert.ok(["600", "var(--w-semibold)"].includes(decl(pri, "font-weight")), "weight 600");
+  assert.strictEqual(decl(pri, "border-color"), "transparent", "the kit's border: primitives.css's accent one would ring the hover fill");
   const hover = ruleFor(rules, [".btn-primary:hover", ".btn.pri:hover"]);
   assert.ok(hover, ".btn-primary:hover, .btn.pri:hover rule");
   assert.strictEqual(decl(hover, "background"), "var(--accent-hover)");
@@ -190,6 +282,9 @@ test("no other primary look is left in desktop.css", () => {
   assert.doesNotMatch(all, /#0b1220/i, "the hard-coded primary text colour");
   assert.doesNotMatch(all, /filter:\s*brightness/, "a brightened primary: the hover is --accent-hover");
   assert.deepStrictEqual(primaryOffenders(sections().rest), [], "page rules that restyle a primary");
+  assert.deepStrictEqual(unguardedBtn(sections().rest), [], "page rules that paint every .btn, the primary too");
+  const app = stripComments(fs.readFileSync(path.join(STATIC, "app.css"), "utf8"));
+  assert.deepStrictEqual(primaryHoverGaps({ "desktop.css": sections().rest, "app.css": app }, sections().rest), [], "filled primaries outside the kit");
 });
 
 test("Close and Cancel are never primary: the Keyboard shortcuts dialog's Close is a secondary", () => {
@@ -308,12 +403,37 @@ test("the checks find what they should (fixtures)", () => {
     .z .btn:where(:not(.pri)) { background: var(--raise); color: var(--fg); }
     .w .btn.pri { padding: 0 12px; }
     .v :is(.btn.pri, .pbtn) { color: var(--bg); }
+    .u .vt-btn.pri:hover { background: var(--accent-hover); }
   }`;
   assert.deepStrictEqual(primaryOffenders(css), [
     ".x .btn.pri { background: var(--accent) }",
     ".y .btn.pri:hover { filter: none }",
     ".v :is(.btn.pri, .pbtn) { color: var(--bg) }",
   ]);
+  const btnCss = `@media (min-width: 701px) {
+    .a .btn { background: var(--raise); }
+    .b .btn:hover, .b .btn.gh { color: var(--fg); }
+    .c .btn:where(:not(.pri)) { background: var(--raise); }
+    .d .btn:not(.dgr) { color: var(--muted); }
+    .e .btn { padding: 0 12px; }
+    .f .btn .kbd-hint { color: var(--muted); }
+  }`;
+  assert.deepStrictEqual(unguardedBtn(btnCss), [
+    ".a .btn { background: var(--raise) }",
+    ".b .btn:hover { color: var(--fg) }",
+    ".d .btn:not(.dgr) { color: var(--muted) }",
+  ]);
+  assert.deepStrictEqual(specificity("#page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri))"), [2, 3, 0]);
+  assert.deepStrictEqual(specificity("#spawn button[type=\"submit\"]"), [1, 1, 1]);
+  assert.deepStrictEqual(specificity(".seg:has(> .seg-item) > .seg-item:hover"), [0, 4, 0]);
+  const gapApp = `.vt-btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
+    .hl { background: var(--accent); color: var(--bg); }
+    @media (max-width: 700px) { .phone { background: var(--accent); color: var(--bg); } }`;
+  assert.deepStrictEqual(primaryHoverGaps({ "app.css": gapApp }, ".vt-btn:hover { background: var(--accent-hover); }"), [
+    "app.css .vt-btn.pri: no desktop hover to --accent-hover",
+    "app.css .hl: unclassified accent fill with dark text",
+  ], "a hover of lower weight does not count; the phone block is not desktop");
+  assert.deepStrictEqual(primaryHoverGaps({ "app.css": gapApp.split("\n")[0] }, ".viewer .vt-btn.pri:hover:not(.vt-off) { background: var(--accent-hover); }"), []);
   assert.deepStrictEqual(compounds(".seg:has(> .seg-item) > .seg-item[aria-pressed=\"true\"]"), [".seg:has(> .seg-item)", ".seg-item[aria-pressed=\"true\"]"]);
   assert.deepStrictEqual(parts(".a, :is(.b, .c) .d"), [".a", ":is(.b, .c) .d"]);
   assert.ok(hasClass(".seg-item", "seg-item") && !hasClass(".seg-item", "seg"), "class match is whole-name");

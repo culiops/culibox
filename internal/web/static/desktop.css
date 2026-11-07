@@ -185,7 +185,9 @@
   }
   .btn:hover { background: var(--line); }
   /* One primary look (F11): filled accent, dark text, 600. */
-  .btn-primary, .btn.pri { background: var(--accent); color: var(--on-fill); font-weight: var(--w-semibold); }
+  /* The border is the kit's transparent one: primitives.css gives .btn.pri an accent border, which
+     would ring the lighter hover fill. */
+  .btn-primary, .btn.pri { background: var(--accent); color: var(--on-fill); font-weight: var(--w-semibold); border-color: transparent; }
   .btn-primary:hover, .btn.pri:hover { background: var(--accent-hover); }
   .btn-ghost, .btn.gh { background: transparent; color: var(--muted); }
   .btn-ghost:hover, .btn.gh:hover { background: var(--hover); color: var(--fg); }
@@ -421,9 +423,9 @@
     box-shadow: inset 0 0 0 2px var(--line); border: 2px solid transparent; border-top-color: var(--muted);
   }
 
-  /* An author display beats the UA's [hidden] { display: none }: without these a hidden .btn
-     (#au-more, a footer's toggled button) would show. .dot is left out: the legacy dot was
-     already inline-block. */
+  /* An author display beats the UA's [hidden] { display: none }: without these a .btn whose
+     hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
+     legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
     .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin)[hidden],
   .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item)[hidden], .field:has(> .field-label)[hidden],
@@ -928,6 +930,8 @@
   /* ... unless Wrap lines is on (id + class here beats app.css's .viewer-wrap rule, so say it again). */
   #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
   .viewer-wrap #drawer .viewer-pre { white-space: pre-wrap; width: auto; min-width: 0; }
+  /* The viewer toolbar's Save is app.css's filled primary (.vt-btn.pri); its hover is the kit's (F11). */
+  .vt-btn.pri:hover:not(.vt-off) { background: var(--accent-hover); border-color: var(--accent-hover); }
   /* 1.5ch per depth level instead of 2ch: every prefix is two characters a
      level, so a uniform squeeze keeps the │ columns aligned across rows. */
   #drawer .ft-branch { letter-spacing: -.25ch; }
@@ -976,7 +980,7 @@
   .needstrip .nacts .btn:where(:not(.pri)):hover { background: var(--background3); }
   .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
   /* The one amber-filled button in the product: Yes (amber = needs-you only). */
-  .needstrip .nacts .btn[data-choice="yes"] { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
+  .needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri)) { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
   .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
   .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
   .needstrip .askfull {
@@ -1019,10 +1023,12 @@
   .empst-step .btn, .empst-step .pbtn { grid-column: 3; }
   .empst-row .btn { grid-column: 2; }
   .empst .btn {
-    padding: 4px 10px; font: 400 var(--t-sm) var(--font-ui); color: var(--fg); background: var(--raise);
+    padding: 4px 10px; font-family: var(--font-ui); font-size: var(--t-sm); line-height: normal;
     border: 0; border-radius: var(--r-ctl); cursor: pointer; white-space: nowrap;
   }
-  .empst .btn:hover { background: var(--background3); }
+  /* The page paints its secondaries only: a primary here would be the kit's. */
+  .empst .btn:where(:not(.pri)) { font-weight: 400; color: var(--fg); background: var(--raise); }
+  .empst .btn:where(:not(.pri)):hover { background: var(--background3); }
   .empst .pbtn { width: auto; padding: 6px 12px; font-size: var(--t-md); white-space: nowrap; }
   .empst button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   .empst-n {
@@ -1191,7 +1197,7 @@
   .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
   /* Grant is the kit primary (it was an accent outline, F11): the secondary fill skips it. */
   .ac-acts .btn, .ac-pbtns .btn, .ac-dropnow { border-radius: var(--r-ctl); padding: 4px 10px; }
-  .ac-acts .btn, .ac-pbtns .btn:where(:not(.pri)), .ac-dropnow { background: var(--raise); border-color: var(--line); }
+  .ac-acts .btn:where(:not(.pri)), .ac-pbtns .btn:where(:not(.pri)), .ac-dropnow { background: var(--raise); border-color: var(--line); }
   .ac-acts .btn.dgr, .ac-dropnow { border-color: var(--danger); color: var(--danger); }
   .ac-sso { padding: 0 14px 10px; }
   .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 10px 12px; }
@@ -1293,12 +1299,14 @@
   .act-add, .act-del { color: var(--muted); }
   .act-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 16px 16px; }
   .act-foot:empty { display: none; }
-  .act-foot .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 4px 12px; }
+  .act-foot .btn { border-radius: var(--r-ctl); padding: 4px 12px; }
+  .act-foot .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
 
   .act-sec { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
   .act-sech { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--track-caps); }
   .act-st { flex: 1; min-width: 0; }
-  .act-sech .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 1px 8px; font-size: var(--t-xs); text-transform: none; letter-spacing: 0; }
+  .act-sech .btn { border-radius: var(--r-ctl); padding: 1px 8px; font-size: var(--t-xs); text-transform: none; letter-spacing: 0; }
+  .act-sech .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
   .act-tool { display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 34px; gap: 10px; align-items: center; font-size: var(--t-md); }
   .act-tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .act-tbar { display: block; height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
@@ -1375,6 +1383,8 @@
   #spawn { flex: 1; min-width: 0; align-content: start; padding: 14px 18px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
   #spawn label { text-transform: none; letter-spacing: 0; font-size: var(--t-sm); color: var(--muted); }
   #spawn select, #spawn input, #spawn textarea { border-color: var(--line); border-radius: var(--r-ctl); }
+  /* The submit is app.css's filled primary; its hover is the kit's (F11). */
+  #spawn button[type="submit"]:where(:not(:disabled)):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .spawn-lbl-model { display: inline; }
   #spawn-agent-row, #spawn-prompt-hint { display: none; }
   /* #tier-explain is shown and hidden by an inline style (syncRuntimeField); the
@@ -1518,8 +1528,12 @@
      page's tokens. */
   #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: var(--t-sm); line-height: 1.6; color: var(--muted); }
   #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
-    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl); background: var(--raise);
-    font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
+    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
+    font-family: var(--font-ui); font-size: var(--t-md);
+  }
+  /* Agent accounts' Save token is the kit primary (F11): the secondary fill skips it. */
+  #page-host > #settings-modal.as-page > #tokens .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #accounts .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #settings .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #about .btn:where(:not(.pri)) {
+    background: var(--raise); color: var(--fg);
   }
   #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
@@ -1615,8 +1629,8 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)):hover { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-x > td { padding: 0; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
@@ -1917,6 +1931,8 @@
   body > main.card input[type=password] { padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: var(--t-md); }
   body > main.card input[type=password]:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   body > main.card button { padding: 9px 12px; background: var(--accent); color: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); font-weight: 600; }
+  /* login.html brightens it on hover; the kit's primary hover is a colour (F11). */
+  body > main.card button:where(:not(:disabled)):hover { background: var(--accent-hover); filter: none; }
   body > main.card button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
   body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: var(--t-md); }
 
@@ -1966,7 +1982,8 @@
   #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: var(--on-fill); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: var(--on-fill); font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(:disabled)):hover { background: var(--accent-hover); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
@@ -2325,7 +2342,8 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: var(--t-md); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; background: var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn:where(:not(.pri)) { background: var(--line); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: var(--t-md); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok { align-items: center; gap: 6px; font-size: var(--t-md); color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok > span:first-child { flex: none; font-size: var(--t-sm); color: var(--ok); }
@@ -2344,8 +2362,10 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate > :is(.lead, .hint, .ent-err, .btn) { grid-column: 1 / -1; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .lead { margin: 0; font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .ent-err:empty { display: none; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; background: var(--line); color: var(--fg); font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; }
+  /* Create the encrypted store is a secondary here: the foot's Save is the view's primary. */
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn:where(:not(.pri)) { background: var(--line); color: var(--fg); font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2) { background: transparent; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)) { background: transparent; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)):hover { background: var(--line); }
 }
