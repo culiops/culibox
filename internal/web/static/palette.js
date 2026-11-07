@@ -80,6 +80,14 @@ function palSessionSub(s, mobile) {
   return (typeof plainSummary === "function" ? plainSummary : require("./attention.js").plainSummary)(sum);
 }
 
+// palSessionDot: a session row's dot. Desktop draws deskDot, the sidebar's and the
+// pane header's dot, so a finished turn is neutral here too (F21-B: amber means
+// blocked on you); the phone keeps activityClass(s.activity) exactly as it was.
+function palSessionDot(s, mobile) {
+  if (mobile) return (typeof activityClass === "function" ? activityClass : require("./activity.js").activityClass)((s || {}).activity);
+  return (typeof deskDot === "function" ? deskDot : require("./deskshell.js").deskDot)(s);
+}
+
 // palReg: the registry's hint renderers. In the browser they are globals of
 // shortcuts.js (loaded first); under node --test they come from the module.
 function palReg() {
@@ -143,10 +151,10 @@ function paletteSessions(mac) {
     const name = s.name || s.id;
     // No digit hint on mobile: the jump shortcut has no keyboard there.
     const hintN = !mobile && i < 9 ? palReg().jumpHint(i + 1, mac) : "";
-    // Reuses the same activityClass() the sidebar's own status dot is built
-    // from (activity.js), so a session row here and its sidebar row always
-    // agree on colour/label for the same state.
-    const act = activityClass(s.activity);
+    // The same dot the sidebar row is built from (deskDot on desktop, activityClass
+    // on the phone), so a session row here and its sidebar row agree on
+    // colour/label for the same state.
+    const act = palSessionDot(s, mobile);
     return {
       kind: "session", label: name, hint: hintN || (s.cwd ? shortPath(s.cwd) : ""),
       sub: palSessionSub(s, mobile), match: palSessionMatchText(s),
@@ -590,5 +598,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palSessionSub, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
+  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palSessionSub, palSessionDot, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
 }

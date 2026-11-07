@@ -140,7 +140,8 @@ function rowSubline(s) {
 }
 
 // deskDot: the activity dot (class + title) on every desktop surface that draws
-// one for a session: the sidebar row, the icon rail and the pane header. It is
+// one for a session: the sidebar row, the icon rail, the pane header and the
+// command palette's session rows. It is
 // sessionDot, except that a finished turn is the neutral idle dot titled "your
 // turn" (F21-B: amber means blocked on you and nothing else), and that an exited
 // session, which never asks, is not painted amber by a need it left behind. The
@@ -204,14 +205,11 @@ function headerSyncKey(name, session) {
 // does that, and a test pins that a long name passes through.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, attention: "", name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
+    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
   const dot = s ? deskDot(s) : null;
-  // attention: the header paints the terminal's own pushed activity over `dot`
-  // (tabs.js renderHeader), except for a finished turn, which must stay neutral.
-  const attention = s ? deskDep("attentionClass")(s) : "";
   const chips = [];
   const cont = s ? deskContainmentChip(s, boxRuntime) : null;
   if (cont) chips.push(cont);
@@ -227,15 +225,27 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, attention, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
+    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
-    dot, attention, name, chips,
+    dot, name, chips,
     model: u && u.model ? String(u.model) : null,
     ctx: u && typeof u.pct === "number" ? u.pct + "%" : null,
     cost: s ? fmtSessionCost(s.cost_usd) : null,
   };
+}
+
+// headerDot: the pane header's dot. The session record's dot (paneHeaderModel's
+// `dot`, i.e. deskDot) wins whenever the pane has one: a finished turn is neutral
+// and an exited session is not painted amber by a need it left behind, whatever
+// activity the terminal tab last had pushed to it. Only a pane whose session is
+// not in the list (or whose list has not loaded) falls back to the tab's own
+// pushed activity; a viewer tab has none.
+function headerDot(model, tab) {
+  if (model && model.dot) return model.dot;
+  if (!tab || tab.kind !== "terminal" || typeof tab.activity !== "function") return null;
+  return deskDep("activityClass")(tab.activity(), typeof tab.needWhy === "function" ? tab.needWhy() : "");
 }
 
 // drawerFor: the pane drawer's next state when the header's Files tab is
@@ -413,6 +423,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneTabsClass };
 }

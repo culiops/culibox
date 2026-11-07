@@ -910,11 +910,9 @@ class Cell {
 
     const main = el("div");
     main.className = "ph-main";
-    // The terminal's own pushed activity, like the old tab dot; a viewer has none.
-    // A finished turn takes the model's neutral dot instead: the tab's activity
-    // for it is "waiting", which would paint the one colour reserved for a block.
-    const a = t && t.kind === "terminal" && typeof t.activity === "function" && m.attention !== "done"
-      ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : m.dot;
+    // The session record's dot (deskDot) when the pane has one; the terminal's own
+    // pushed activity only without a record; a viewer has none (headerDot).
+    const a = headerDot(m, t);
     if (a) {
       const dot = el("span");
       dot.className = a.cls + " ph-dot";

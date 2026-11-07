@@ -88,6 +88,8 @@ function reconcileRows(ul, sessions, render, sigOf) {
 // context %, the tier label, a reply in flight, and a nested shell's "shell N"
 // label (which moves when a sibling appears or goes). A field the row does not
 // render must NOT be here, or the row re-renders (and drops focus) for nothing.
+// The row's attention (blocked / finished turn, attentionClass) is derived from
+// exited, activity, need and aws_connections, which the sig already lists.
 function rowSig(s, local) {
   const v = s || {};
   const l = local || {};

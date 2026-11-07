@@ -1,7 +1,8 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint } = require("../static/palette.js");
+const { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, palSessionDot } = require("../static/palette.js");
+const { activityClass } = require("../static/activity.js");
 
 // Ctrl+Enter (⌘+Enter on mac) inserts the selected file's path at the prompt.
 // Plain Enter must keep opening the viewer, so the modifier is what separates
@@ -219,4 +220,34 @@ test("palettePageCommands: mobile keeps exactly today's two Settings entries", (
   ]);
   cmds.forEach((c) => c.run());
   assert.deepEqual(ran, ["manage", "settings"]);
+});
+
+// F21-B (#172): a finished turn is neutral in the command palette too. Desktop
+// draws a session's dot with deskDot; the phone keeps activityClass(s.activity)
+// byte-for-byte (its finished turn is still the amber "waiting" dot).
+const palTurn = { id: "t", name: "turn", activity: "waiting", need: "turn", attention: "done", claude: true };
+const palAsk = { id: "a", name: "ask", activity: "waiting", need: "ask", attention: "block", claude: true };
+
+test("palSessionDot: on desktop a finished turn is the neutral idle dot titled your turn", () => {
+  const d = palSessionDot(palTurn, false);
+  assert.deepStrictEqual(d, { cls: activityClass("idle").cls, title: "your turn" });
+  assert.strictEqual(d.cls.includes("waiting"), false);
+  assert.deepStrictEqual(palSessionDot({ ...palTurn, attention: undefined }, false), d, "derived without the server field");
+});
+
+test("palSessionDot: on desktop a blocked session keeps the amber waiting dot", () => {
+  assert.deepStrictEqual(palSessionDot(palAsk, false), activityClass("waiting"));
+});
+
+test("palSessionDot: the phone's dot is activityClass(s.activity), unchanged", () => {
+  assert.deepStrictEqual(palSessionDot(palTurn, true), activityClass("waiting"));
+  assert.deepStrictEqual(palSessionDot(palAsk, true), activityClass("waiting"));
+  for (const a of ["working", "idle", "done", "crashed", "detached", "bogus", undefined]) {
+    assert.deepStrictEqual(palSessionDot({ activity: a }, true), activityClass(a), String(a));
+  }
+});
+
+test("paletteSessions draws its dot through palSessionDot", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "palette.js"), "utf8");
+  assert.match(src, /const act = palSessionDot\(s, mobile\);/);
 });

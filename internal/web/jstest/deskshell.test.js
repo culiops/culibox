@@ -621,16 +621,38 @@ test("stripHoldKey does not move with attention alone (a typed reply survives)",
   assert.equal(d.stripHoldKey({ ...base, attention: "block" }, true), d.stripHoldKey({ ...base, attention: "done" }, true));
 });
 
-test("paneHeaderModel: a finished turn's dot is the neutral one, and the model says it is done", () => {
+test("paneHeaderModel: a finished turn's dot is the neutral one; a blocked one stays amber", () => {
   const tab = { kind: "terminal" };
   const m = d.paneHeaderModel({ tab, session: A.turn, nowMs: NOW, boxRuntime: "runc", narrow: false });
   assert.deepEqual(m.dot, d.deskDot(A.turn));
-  assert.equal(m.attention, "done");
   const b = d.paneHeaderModel({ tab, session: A.ask, nowMs: NOW, boxRuntime: "runc", narrow: false });
   assert.equal(b.dot.cls, "dot waiting");
-  assert.equal(b.attention, "block");
-  const w = d.paneHeaderModel({ tab, session: A.working, nowMs: NOW, boxRuntime: "runc", narrow: true });
-  assert.equal(w.attention, "");
+});
+
+// The header's dot: the session record (deskDot, through paneHeaderModel) wins
+// over the terminal tab's own pushed activity whenever the record exists; the
+// tab's activity is only the fallback for a pane whose session is not in the list.
+test("headerDot: the session record wins over the tab's pushed activity", () => {
+  const pushedWaiting = { kind: "terminal", activity: () => "waiting", needWhy: () => "" };
+  const header = (session, tab = pushedWaiting) => d.headerDot(d.paneHeaderModel({ tab, session, nowMs: NOW, boxRuntime: "runc", narrow: false }), tab);
+  assert.equal(header(A.turn).cls.includes("waiting"), false, "a finished turn is neutral even though the tab says waiting");
+  assert.equal(header(A.turn).title, "your turn");
+  assert.equal(header(A.ask).cls, "dot waiting");
+  assert.equal(header(A.sso).title, "AWS sign-in needed");
+  const dead = { id: "dead", name: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
+  assert.equal(header(dead).cls, "dot done", "an exited session with a stale sign-in need is not amber, whatever the tab pushed");
+  assert.equal(header(dead).cls.includes("waiting"), false);
+  assert.equal(header(A.working, { kind: "terminal", activity: () => "waiting", needWhy: () => "" }).cls, "dot working");
+});
+
+test("headerDot: with no session record the terminal's pushed activity is the dot; a viewer has none", () => {
+  const tab = { kind: "terminal", activity: () => "waiting", needWhy: () => "sso" };
+  const m = d.paneHeaderModel({ tab, session: null, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.deepEqual(d.headerDot(m, tab), { cls: "dot waiting", title: "AWS sign-in needed" });
+  const noPush = { kind: "terminal" };
+  assert.equal(d.headerDot(d.paneHeaderModel({ tab: noPush, session: null, nowMs: NOW, boxRuntime: "", narrow: false }), noPush), null);
+  const viewer = { kind: "viewer", path: "/a/b.md", name: "b.md" };
+  assert.equal(d.headerDot(d.paneHeaderModel({ tab: viewer, session: null, nowMs: NOW, boxRuntime: "", narrow: false }), viewer), null);
 });
 
 test("headerSyncKey moves when a session goes from blocked to done (the header's dot changes)", () => {

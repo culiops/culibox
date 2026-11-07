@@ -184,3 +184,18 @@ test("rowSig changes when a shell's label changes, and when its parent does", ()
   assert.notStrictEqual(rowSig(Object.assign({}, sh, { parent_id: "" }), { shellLabel: "shell 1" }), s0);
   assert.strictEqual(rowSig(Object.assign({}, sh), { shellLabel: "shell 1" }), s0);
 });
+
+// F21-B (#172): the desktop row's dot, group and sub-line follow attentionClass,
+// which is derived from fields the sig already lists (exited, activity, need,
+// aws_connections), so a row repaints exactly when its attention moves.
+test("rowSig tells an ask from a finished turn from a working session", () => {
+  const ask = { id: "s", name: "n", activity: "waiting", need: "ask", ask: "ls", attention: "block" };
+  const turn = { id: "s", name: "n", activity: "waiting", need: "turn", attention: "done" };
+  const working = { id: "s", name: "n", activity: "working" };
+  assert.notStrictEqual(rowSig(ask, {}), rowSig(turn, {}));
+  assert.notStrictEqual(rowSig(turn, {}), rowSig(working, {}));
+  assert.notStrictEqual(rowSig(ask, {}), rowSig(working, {}));
+  // Even with every other rendered field equal, the need alone moves it.
+  assert.notStrictEqual(rowSig({ ...turn, ask: "" }, {}), rowSig({ ...turn, need: "ask", ask: "" }, {}));
+  assert.notStrictEqual(rowSig({ ...turn, exited: true }, {}), rowSig(turn, {}), "a session that ends is repainted");
+});

@@ -128,3 +128,12 @@ test("desktop.css: the group header's colour is the kit's, and the done strip is
   const lab = rule(".needstrip.is-done .ns-label");
   assert.match(lab, /color:\s*var\(--muted\)/);
 });
+
+test("tabs.js renderHeader paints the dot through headerDot, never the tab's activity over a session record", () => {
+  const src = read("tabs.js");
+  const start = src.indexOf("  renderHeader() {");
+  assert.ok(start >= 0, "renderHeader not found");
+  const body = src.slice(start, src.indexOf("\n  }\n", start));
+  assert.match(body, /const a = headerDot\(m, t\);/);
+  assert.ok(!/activityClass\(/.test(body), "renderHeader must not call activityClass itself");
+});
