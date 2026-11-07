@@ -698,7 +698,16 @@ test("rename, spawn and + Shell keep msg for the phone and add the human sentenc
   const app = read("app.js");
   assert.match(app, /const f = toastFailText\("rename " \+ cur, e\);\s*showToast\("Rename failed: " \+ e\.message, \{ error: true, human: f\.text, detail: f\.detail \}\);/);
   assert.match(app, /toastFailText\("start the session", e\)/);
-  assert.match(app, /showToast\("Spawn failed: " \+ e\.message \+ kept, \{ error: true, human: f\.text\.replace\(\/\\\.\$\/, ""\) \+ kept, detail: f\.detail \}\);/);
   assert.match(app, /const kept = draft\.trim\(\) \? " — your first message is kept" : "";/);
+  // The spawn sentence, run as written: the closing period gives way to the note only when there
+  // is a note; without one the sentence keeps its full stop like every other (review M1).
+  const m = /showToast\("Spawn failed: " \+ e\.message \+ kept, \{ error: true, human: ([^\n]*?), detail: f\.detail \}\);/.exec(app);
+  assert.ok(m, "the spawn failure toast");
+  const human = new Function("f", "kept", "return " + m[1] + ";");
+  const failed = toastFailText("start the session", { message: "boom", status: 500 });
+  assert.strictEqual(human(failed, ""), "Could not start the session.");
+  assert.strictEqual(human(failed, " — your first message is kept"), "Could not start the session — your first message is kept");
+  const named = toastFailText("start the session", { message: "Profile not found.", status: 404 });
+  assert.strictEqual(human(named, ""), "Could not start the session: Profile not found.", "a server sentence keeps its own period");
   assert.match(app, /const f = toastFailText\("start a shell", e\);\s*showToast\("Shell failed: " \+ e\.message, \{ error: true, human: f\.text, detail: f\.detail \}\);/);
 });

@@ -5453,10 +5453,11 @@ $("spawn").addEventListener("submit", async (ev) => {
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it
-      // The desktop sentence drops toastFailText's closing period for the note.
+      // The desktop sentence drops toastFailText's closing period for the note, and
+      // only when there is a note.
       const kept = draft.trim() ? " — your first message is kept" : "";
       const f = toastFailText("start the session", e);
-      showToast("Spawn failed: " + e.message + kept, { error: true, human: f.text.replace(/\.$/, "") + kept, detail: f.detail });
+      showToast("Spawn failed: " + e.message + kept, { error: true, human: kept ? f.text.replace(/\.$/, "") + kept : f.text, detail: f.detail });
     }
   } finally {
     clearInterval(progTimer);
