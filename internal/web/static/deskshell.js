@@ -14,6 +14,7 @@ function deskDep(name) {
     sessionGroups: typeof sessionGroups === "function" ? sessionGroups : null,
     needsYou: typeof needsYou === "function" ? needsYou : null,
     cardContent: typeof cardContent === "function" ? cardContent : null,
+    plainSummary: typeof plainSummary === "function" ? plainSummary : null,
     needLabel: typeof needLabel === "function" ? needLabel : null,
     connSSOSources: typeof connSSOSources === "function" ? connSSOSources : null,
     sessionDot: typeof sessionDot === "function" ? sessionDot : null,
@@ -24,7 +25,7 @@ function deskDep(name) {
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
   };
   if (g[name]) return g[name];
-  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js",
+  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
     isNestedShell: "./shellnest.js" }[name];
@@ -115,13 +116,13 @@ function rowSubline(s) {
     }
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
-    const text = deskDep("cardContent")(s).text;
+    const text = deskDep("cardContent")(s, { plain: true }).text;
     const out = { text: why ? why + ": " + text : text, amber: true };
     if (s.need === "sso") out.view = "access";
     return out;
   }
   const v = s || {};
-  return { text: v.summary || deskDep("sessionDot")(v).title || "", amber: false };
+  return { text: deskDep("plainSummary")(v.summary) || deskDep("sessionDot")(v).title || "", amber: false };
 }
 
 // deskWriteChip: the one red chip, "aws <conn> · WRITE · 23m": which connection

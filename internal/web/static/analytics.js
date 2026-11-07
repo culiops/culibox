@@ -548,7 +548,7 @@ function anModels(root) {
   const mc = collapseZeroCost(d.byModel); // fold $0 (unpriced) models into "other"
   const box = el("div", "an-box");
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"]));
+  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1));
   const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
   for (const x of mc) {
     const tr = el("tr");
@@ -556,9 +556,9 @@ function anModels(root) {
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, document.createTextNode(shortModel(x.model)));
     const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
-    tr.append(nm, anTd(usd(x.cost)), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim"),
-      anTd(fmtCompact(x.tokens), "dim"), anTd(String(x.prompts), "dim"),
-      anTd(fmtCompact(x.outPerPrompt), "dim"), anTd(crShare + "%", "dim"));
+    tr.append(nm, anTd(usd(x.cost), "num"), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim num"),
+      anTd(fmtCompact(x.tokens), "dim num"), anTd(String(x.prompts), "dim num"),
+      anTd(fmtCompact(x.outPerPrompt), "dim num"), anTd(crShare + "%", "dim num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
@@ -591,10 +591,10 @@ function anProjects(root) {
 
   const s2 = anSection("Detail");
   const box2 = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"]));
+  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"], 1));
   for (const p of d.byProject) {
     const tr = el("tr");
-    tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost)), anTd(fmtCompact(p.tokens), "dim"), anTd(String(p.prompts), "dim"));
+    tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost), "num"), anTd(fmtCompact(p.tokens), "dim num"), anTd(String(p.prompts), "dim num"));
     tbl.appendChild(tr);
   }
   box2.appendChild(anTableWrap(tbl)); s2.appendChild(box2); root.appendChild(s2);
@@ -628,11 +628,11 @@ function anSessions(root) {
 
   const sec = anSection("Top sessions by cost", "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"]));
+  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4));
   for (const s of d.topSessions) {
     const tr = el("tr");
     tr.append(anTd(s.sid, "mono"), anTd(s.day, "dim"), anTd(projShort(s.project), "mono"),
-      anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim"), anTd(String(s.prompts), "dim"), anTd(usd(s.cost)));
+      anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim num"), anTd(String(s.prompts), "dim num"), anTd(usd(s.cost), "num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
@@ -793,7 +793,9 @@ function anSection(title, hint) {
 }
 function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
-function anHead(cols) { const tr = el("tr"); for (const c of cols) tr.appendChild(el("th", null, c)); return tr; }
+// anHead: the header row. Columns from firstNum on hold numbers: their header gets
+// "num" like their cells (anTd(text, "num")), so desktop.css can right-align both.
+function anHead(cols, firstNum) { const tr = el("tr"); cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, c))); return tr; }
 // anTableWrap keeps a wide table scrollable on its own on narrow viewports, so
 // the dialog body never scrolls horizontally.
 function anTableWrap(tbl) { const d = el("div", "an-tablewrap"); d.appendChild(tbl); return d; }
