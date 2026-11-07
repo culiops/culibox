@@ -235,7 +235,7 @@ const KIT_CLASSES = [
 ];
 const KIT_SELECTORS = [
   "select.input", "textarea.input", ".input.mono", ".input.input-sm", ".grp-label.is-needs",
-  ".field > .field-label", ".field > .field-help", ".field > .field-error", ".btn .kbd-hint",
+  ".field-label .opt", ".btn .kbd-hint",
   ".seg > .seg-item.is-on", ".is-on.is-danger", ".dot.is-elevated", ".meter > i", ".kpi-value.is-bad",
   ".tbl .num", ".tbl td.sub", ".tbl tr.is-elevated", ".menu-item.is-danger",
   ".dlg > .dlg-head", ".dlg > .dlg-head > .dlg-title", ".dlg > .dlg-body", ".dlg > .dlg-foot", ".dlg > .dlg-foot .hint",
@@ -384,7 +384,7 @@ test("collision guards: .btn grows (min-height), it never clips at a fixed heigh
   assert.strictEqual(decl(ruleFor(rules, [".btn-lg"]), "min-height"), "var(--h-lg)");
 });
 
-test("collision guards: the parts of a dialog, table and field sit under their kit root", () => {
+test("collision guards: the parts of a dialog and table sit under their kit root", () => {
   // Remove each allowed scoped form; whatever is left of a part name is unscoped.
   const scoped = [
     [/\.dlg > \.dlg-head > \.dlg-title(?![\w-])/g, /\.dlg-title(?![\w-])/],
@@ -393,13 +393,70 @@ test("collision guards: the parts of a dialog, table and field sit under their k
     [/(:where\(\.dlg\)|\.dlg) \.dlg-close(?![\w-])/g, /\.dlg-close(?![\w-])/],
     [/\.tbl \.num(?![\w-])/g, /\.num(?![\w-])/],
     [/\.tbl td\.sub(?![\w-])/g, /\.sub(?![\w-])/],
-    [/\.field > \.field-(label|help|error)(?![\w-])/g, /\.field-(label|help|error)(?![\w-])/],
   ];
   const loose = [];
   for (const p of allParts(parseRules(sections().kit))) {
     for (const [ok, bad] of scoped) if (bad.test(p.replace(/:has\([^()]*\)/g, "").replace(ok, ""))) loose.push(p);
   }
   assert.deepStrictEqual(loose, [], "the legacy dialog legend, .num, .hint and .sub keep their own look");
+});
+
+// .field-label, .field-help and .field-error are kit names no legacy markup or legacy rule wears, so nothing
+// of a legacy container can collide with them: they are styled standalone. Under `.field >` only, the
+// checkbox row's label (`.check > div > label.field-label`, M7.4 "Read only") drew 13px/400 and a bare
+// `span.field-label` drew muted/400 (VERIFY-B 1.3 item 1). The .field CONTAINER is the other case: pfv
+// builds its own .field, so only a .field with a kit child takes the kit's column (guard above).
+test("collision guards: the field parts are standalone kit names, the .field container stays scoped", () => {
+  const rules = parseRules(sections().kit);
+  const own = (name) => rules.find((r) => parts(r.selector).includes(name));
+  const label = own(".field-label");
+  assert.ok(label, ".field-label has an unscoped rule");
+  assert.strictEqual(decl(label, "font-size"), "var(--t-sm)");
+  assert.strictEqual(decl(label, "line-height"), "var(--lh-sm)");
+  assert.strictEqual(decl(label, "font-weight"), "var(--w-medium)");
+  assert.strictEqual(decl(label, "color"), "var(--fg)");
+  const help = own(".field-help");
+  assert.ok(help, ".field-help has an unscoped rule");
+  assert.strictEqual(decl(help, "font-size"), "var(--t-sm)");
+  assert.strictEqual(decl(help, "line-height"), "var(--lh-sm)");
+  assert.strictEqual(decl(help, "color"), "var(--muted)");
+  const err = own(".field-error");
+  assert.ok(err, ".field-error has an unscoped rule");
+  assert.strictEqual(decl(err, "font-size"), "var(--t-sm)");
+  assert.strictEqual(decl(err, "color"), "var(--red)");
+  assert.ok(own(".field-label .opt"), "the optional marker inside a label");
+  assert.deepStrictEqual(allParts(rules).filter((p) => /\.field\s*>\s*\.field-/.test(p)), [], "no part rule is scoped to a direct .field child");
+  assert.ok(ruleFor(rules, [".field:has(> .field-label)"]), "the container is matched through its kit child");
+  // Why unscoped is safe: no legacy stylesheet has a rule on these names.
+  for (const f of ["app.css", "primitives.css", "tokens.css"]) {
+    const css = stripComments(fs.readFileSync(path.join(STATIC, f), "utf8"));
+    assert.doesNotMatch(css, /\.field-(label|help|error)(?![\w-])/, f + " has a rule on a kit field part");
+  }
+});
+
+// A kit part that sits on a legacy rule's element must reset what that rule sets, or the part is not the
+// frame's (VERIFY-B 1.3 items 2, 3 and 5). The legacy rules, by line in app.css: `.dlg-head` border-bottom,
+// `.hint` margin-top and line-height 1.65, `.menu` position: fixed, z-index 40, display: none.
+test("collision guards: a kit part resets the legacy rule it meets (dialog head, foot hint, menu popover)", () => {
+  const rules = parseRules(sections().kit);
+  const app = parseRules(stripComments(fs.readFileSync(path.join(STATIC, "app.css"), "utf8")));
+  const legacy = (sel) => app.find((r) => !/max-width/.test(r.at) && JSON.stringify(parts(r.selector)) === JSON.stringify([sel]));
+  assert.ok(decl(legacy(".dlg-head"), "border-bottom"), "the scan sees app.css's .dlg-head divider");
+  assert.ok(decl(legacy(".hint"), "margin-top") && decl(legacy(".hint"), "line-height"), "the scan sees app.css's .hint margin and line-height");
+  assert.strictEqual(decl(legacy(".menu"), "position"), "fixed", "the scan sees app.css's .menu popover");
+
+  const head = ruleFor(rules, [".dlg > .dlg-head"]);
+  assert.strictEqual(decl(head, "border"), "0", "the frame's dialog head has no divider");
+  assert.strictEqual(decl(head, "padding"), "var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5)", "and keeps the kit's padding");
+  const hint = ruleFor(rules, [".dlg > .dlg-foot .hint"]);
+  assert.strictEqual(decl(hint, "margin"), "0", "the foot hint sits on the button baseline");
+  assert.strictEqual(decl(hint, "line-height"), "var(--lh-sm)", "at the kit's line height, not .hint's 1.65");
+  const menu = ruleFor(rules, [".menu:has(> .menu-item)"]);
+  assert.strictEqual(decl(menu, "position"), "static", "the primitive renders in flow, as drawn (a JS-placed popover adds its own placement)");
+  assert.strictEqual(decl(menu, "z-index"), "auto");
+  assert.strictEqual(decl(menu, "display"), "flex");
+  // The legacy popover (children without .menu-item) is not reached: every kit rule that names .menu carries the guard.
+  assert.deepStrictEqual(allParts(rules).filter((p) => hasClass(compounds(p).pop(), "menu") && !p.includes(":has(> .menu-item)")), []);
 });
 
 test("collision guards: the legacy modifiers are aliases of the kit's", () => {
@@ -449,8 +506,8 @@ test("inputs rest on --faint and focus on the accent (G12)", () => {
 
 test("field labels are sentence case; .grp-label is the only uppercase kit rule (F17)", () => {
   const rules = parseRules(sections().kit);
-  const label = rules.find((r) => parts(r.selector).includes(".field > .field-label"));
-  assert.ok(label, ".field > .field-label rule");
+  const label = rules.find((r) => parts(r.selector).includes(".field-label"));
+  assert.ok(label, ".field-label rule");
   assert.strictEqual(decl(label, "text-transform"), undefined);
   assert.strictEqual(decl(label, "font-size"), "var(--t-sm)");
   assert.strictEqual(decl(label, "font-weight"), "var(--w-medium)");

@@ -138,8 +138,13 @@
          (.btn.pri = .btn-primary, .btn.gh, .btn.dgr, .dot.working, .dot.waiting, .dot.crashed);
        - a different legacy container (.seg of plain buttons, the .menu/.open popover), and .field
          the same way: matched only through its kit child, :has(> .seg-item | .menu-item | .field-label);
-       - the parts of a dialog, table and field sit under their kit root (.dlg > .dlg-head,
-         .tbl .num, .field > .field-label): the legacy dialog legend, .num, .hint and .sub stay.
+       - the parts of a dialog and table sit under their kit root (.dlg > .dlg-head, .tbl .num):
+         the legacy dialog legend, .num, .hint and .sub stay. Where such a part sits on an element a
+         legacy rule also reaches, it resets what that rule sets (.dlg-head's divider, .hint's margin,
+         the .menu popover's position);
+       - .field-label, .field-help and .field-error are kit names nothing legacy wears (app.css and
+         primitives.css have no rule on them): they are styled standalone, so a label in a .check
+         row or a bare span draws as the frame. Only the .field container is matched by its child.
      Disabled is #169's rule above; the kit's own .45 is not repeated. Not here: the canvas helpers
      (.dc-*, the .ab root, support.js atomics), the static-state classes (.is-hover, .is-focus,
      .is-disabled), focus rings (Task 4) and the shell (sidebar, rail, pane, ask strip, terminal:
@@ -276,11 +281,12 @@
 
   /* --- fields --------------------------------------------------------------- */
   .field:has(> .field-label) { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  /* Sentence case (F17): the group label above is the only uppercase. */
-  .field > .field-label { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-medium); color: var(--fg); }
-  .field > .field-label .opt { color: var(--muted); font-weight: var(--w-regular); }
-  .field > .field-help { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .field > .field-error { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+  /* Sentence case (F17): the group label above is the only uppercase. Standalone, not under .field >:
+     the checkbox row's `.check > div > label.field-label` and a bare span wear them too. */
+  .field-label { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-medium); color: var(--fg); }
+  .field-label .opt { color: var(--muted); font-weight: var(--w-regular); }
+  .field-help { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .field-error { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
   /* G12: an input's border at rest is --faint (3.05:1 on the panel), so an empty field is seen. */
   .input {
     height: var(--h-lg); width: 100%; padding: 0 10px; border-radius: var(--r-ctl);
@@ -367,7 +373,10 @@
   .tbl tr:last-child td { border-bottom: 0; }
 
   /* --- popover menu, tooltip ------------------------------------------------ */
+  /* position and z-index reset app.css's `.menu` popover box (fixed, z 40): the primitive renders in
+     flow, as drawn. A popover placed by script (Plans 2-6) adds its own placement rule. */
   .menu:has(> .menu-item) {
+    position: static; z-index: auto;
     display: flex; flex-direction: column; min-width: 220px; padding: 4px; background: var(--panel);
     border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop);
   }
@@ -397,14 +406,16 @@
     display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--r-dlg); box-shadow: var(--e-dlg); overflow: hidden;
   }
-  .dlg > .dlg-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5); }
+  /* border: 0 resets app.css's `.dlg-head` divider; the frame's head has none. */
+  .dlg > .dlg-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5); border: 0; }
   .dlg > .dlg-head > .dlg-title { flex: 1 1 auto; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: var(--w-semibold); }
   /* .btn.btn-ghost.btn-icon.dlg-close, titled "Close (Esc)". :where keeps it at the kit's weight,
      so the ghost hover still lights it. */
   :where(.dlg) .dlg-close { color: var(--muted); }
   .dlg > .dlg-body { padding: 0 var(--sp-5) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
   .dlg > .dlg-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
-  .dlg > .dlg-foot .hint { flex: 1 1 auto; color: var(--muted); font-size: var(--t-sm); }
+  /* margin and line-height reset app.css's `.hint` (7px above, 1.65): the hint sits on the buttons' baseline. */
+  .dlg > .dlg-foot .hint { flex: 1 1 auto; margin: 0; color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-sm); }
 
   /* --- toast ---------------------------------------------------------------- */
   .toast {
@@ -1410,10 +1421,13 @@
     padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
     background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-ctl);
   }
+  /* A row's keyboard ring is the inset 2px one: #sp-rows below scrolls (overflow clips both axes)
+     with only 2px of padding, which an outset 2px-wide ring at offset 2 (4px out) would be cut by. */
+  .sp-item:focus-visible { outline: var(--focus); outline-offset: -2px; }
   /* The profile filter (>= 8 rows): the heading and the box stay put and #sp-rows
-     scrolls under them, so the box is always in view however long the list. The
-     -2px/2px pair keeps a row's focus ring from being clipped by the scroller
-     without moving anything. */
+     scrolls under them, so the box is always in view however long the list. Its -2px
+     margin and 2px padding cancel out (no layout shift); they were there for an outset
+     ring and are kept as they were, the ring being inset now. */
   #sp-search {
     flex: none; width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 10px;
     font: var(--t-md) var(--font-ui); color: var(--fg); background: var(--bg);
