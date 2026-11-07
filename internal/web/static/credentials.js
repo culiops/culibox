@@ -1110,8 +1110,22 @@ function credCellNode(c) {
   if (c.tag) main.appendChild(credBadge("prod", c.tag));
   if (c.seed) main.appendChild(credBadge("seed", "from config.json"));
   td.appendChild(main);
-  if (c.sub) td.appendChild(credEl("div", "c-sub" + (c.subMono ? " mono" : ""), c.sub));
+  if (c.sub) td.appendChild(c.subMono ? credMonoSub(c.sub) : credEl("div", "c-sub", c.sub));
   return td;
+}
+
+// credMonoSub: a machine value's sub-line (hosts, a role). Where its column is too
+// narrow it breaks after a dot rather than inside a label ("...example.co" / "m"): a
+// <wbr> after each dot gives the line those places first. The text is unchanged.
+function credMonoSub(text) {
+  const d = credEl("div", "c-sub mono");
+  const segs = String(text).split(".");
+  segs.forEach((s, i) => {
+    const last = i === segs.length - 1;
+    d.appendChild(document.createTextNode(last ? s : s + "."));
+    if (!last) d.appendChild(document.createElement("wbr"));
+  });
+  return d;
 }
 
 // credTable: the group's table. One <tbody class="crow"> per entry: the row, and
@@ -1192,7 +1206,9 @@ function credSection(g) {
   const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
   const add = kind && credActionHandlers[kind] && credActionHandlers[kind].add;
   if (typeof add === "function") {
-    const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
+    // In the tables AWS's add is a secondary like the other sections' adds: desktop.css used to
+    // restyle the primary as one, now the markup says so (F11, #171). The cards keep it primary.
+    const b = credEl("button", "btn" + (g.key === "aws" && !tables ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
     b.type = "button";
     b.onclick = () => add(g, loadCredentials);
     h.appendChild(b);
@@ -2744,7 +2760,10 @@ async function credRefreshView() {
 // seccomp refusal shows the server's own sentence, word for word. The passphrase
 // fields are emptied after every attempt. `hold` marks the fields so a repaint of
 // the tab waits while one is being typed in. `lead`, when given, is a sentence the card opens with.
-function credStoreCreateNode(onDone, hold, lead) {
+// `secondary`: the card sits in a host whose own foot carries the view's primary Save (the
+// drawer's opts.foot), so Create is a secondary there (one primary per view, F11 #171). The tab,
+// the phone's path too, keeps it primary.
+function credStoreCreateNode(onDone, hold, lead, secondary) {
   const st = (credView && credView.store) || {};
   // The server's own answer (the keyring in use), which is what store init checks.
   const passMode = !!st.passphrase_mode;
@@ -2767,7 +2786,7 @@ function credStoreCreateNode(onDone, hold, lead) {
   }
   const err = credEl("div", "ent-err");
   err.setAttribute("role", "alert");
-  const btn = credEl("button", "btn pri", "Create the encrypted store");
+  const btn = credEl("button", secondary ? "btn" : "btn pri", "Create the encrypted store");
   btn.type = "button";
   btn.onclick = async () => {
     const a = fields[0] ? fields[0].value : "";
@@ -2983,7 +3002,7 @@ function credTokenDetails(t, taken, opts) {
     hints = [];
     if (!credStoreReady()) {
       // In a framed host the card opens with the sentence Save would refuse with (the mockup's lead).
-      valuesHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintValues(); }, false, opts && opts.head ? CRED_STORE_FIRST : ""));
+      valuesHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintValues(); }, false, opts && opts.head ? CRED_STORE_FIRST : "", !!opts));
       return;
     }
     const nodes = [];
@@ -3196,7 +3215,7 @@ async function credAppForm(entry, opts) {
       nodes.push(f.col, credEl("p", "hint"));
       nodes[1].appendChild(credLink("Paste the key instead", () => { useFile = false; paintKey(); }));
     } else if (!credStoreReady()) {
-      nodes.push(credStoreCreateNode(async () => { await credRefreshView(); paintKey(); }, false));
+      nodes.push(credStoreCreateNode(async () => { await credRefreshView(); paintKey(); }, false, "", !!opts));
       const p = credEl("p", "hint");
       p.appendChild(credLink("Advanced: use a file instead", () => { useFile = true; paintKey(); }));
       nodes.push(p);

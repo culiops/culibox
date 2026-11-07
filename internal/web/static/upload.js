@@ -32,7 +32,14 @@ function uploadFiles(files, destDir, opts) {
   for (const f of list) fd.append("file", f, f.name);
 
   const label = list.length === 1 ? list[0].name : list.length + " files";
-  showToast("Uploading " + label + "…", { progress: 0, ms: 60000 });
+  // One toast per upload: progress and the result replace it in place on the
+  // desktop stack (the phone's one slot is overwritten anyway). showToast
+  // answers a new handle when the old toast was dismissed, so keep its answer.
+  let toast = showToast("Uploading " + label + "…", { progress: 0, ms: 60000 });
+  const failed = (msg, err) => {
+    const f = toastFailText("upload " + label, err);
+    toast = showToast("Upload failed: " + msg, { error: true, human: f.text, detail: f.detail, replace: toast });
+  };
 
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
@@ -40,29 +47,31 @@ function uploadFiles(files, destDir, opts) {
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const frac = e.loaded / e.total;
-      showToast("Uploading " + label + ": " + Math.round(frac * 100) + "%",
-        { progress: frac, ms: 60000 });
+      toast = showToast("Uploading " + label + ": " + Math.round(frac * 100) + "%",
+        { progress: frac, ms: 60000, replace: toast });
     };
     xhr.onload = () => {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch (_) {}
       if (xhr.status !== 200 || !data) {
-        showToast("Upload failed: " + ((data && data.error) || ("HTTP " + xhr.status)), { error: true });
+        const why = (data && data.error) || "";
+        failed(why || ("HTTP " + xhr.status), { message: why, status: xhr.status });
         resolve(null);
         return;
       }
-      reportUpload(data, destDir);
+      reportUpload(data, destDir, toast);
       if (opts.onDone) opts.onDone(data);
       resolve(data);
     };
-    xhr.onerror = () => { showToast("Upload failed: connection lost", { error: true }); resolve(null); };
+    xhr.onerror = () => { failed("connection lost", { message: "connection lost" }); resolve(null); };
     xhr.send(fd);
   });
 }
 
 // reportUpload turns the per-part result into one honest sentence. A rename is
-// never silent: the file you dropped is not the file that landed.
-function reportUpload(data, destDir) {
+// never silent: the file you dropped is not the file that landed. `toast` is the
+// upload's progress toast, which the sentence replaces in place.
+function reportUpload(data, destDir, toast) {
   const ok = data.uploaded || [], bad = data.errors || [];
   if (bad.length) {
     const first = bad[0];
@@ -70,7 +79,7 @@ function reportUpload(data, destDir) {
       (ok.length ? ok.length + " uploaded · " : "") +
       "failed on " + (first.name || "file") + ": " + first.error +
       (bad.length > 1 ? " (+" + (bad.length - 1) + " more)" : ""),
-      { error: true });
+      { error: true, replace: toast });
     return;
   }
   const renamed = ok.filter((u) => u.renamed_from);
@@ -78,10 +87,10 @@ function reportUpload(data, destDir) {
     const u = ok[0];
     showToast(u.renamed_from
       ? u.renamed_from + " already existed, saved as " + u.name + " in " + shortPath(destDir)
-      : "Uploaded " + u.name + " to " + shortPath(destDir));
+      : "Uploaded " + u.name + " to " + shortPath(destDir), { replace: toast });
   } else {
     showToast("Uploaded " + ok.length + " files to " + shortPath(destDir) +
-      (renamed.length ? " (" + renamed.length + " renamed)" : ""));
+      (renamed.length ? " (" + renamed.length + " renamed)" : ""), { replace: toast });
   }
 }
 
@@ -285,7 +294,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint, makeDropZone };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint, makeDropZone, uploadFiles };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when

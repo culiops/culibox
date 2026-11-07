@@ -28,7 +28,7 @@ function fn(src, name) {
 // A parent node that swaps children the way the DOM does. Removing the focused
 // input fires its blur, as Chrome does, so the Escape-then-blur path runs too.
 function renameIn({ name = "old", label = name, nested = false, patch = async () => ({}) } = {}) {
-  const calls = { patch: [], retitle: [], toast: [], refresh: 0 };
+  const calls = { patch: [], retitle: [], toast: [], toastOpts: [], refresh: 0 };
   const box = { focused: null };
   const parent = {
     child: null,
@@ -46,7 +46,8 @@ function renameIn({ name = "old", label = name, nested = false, patch = async ()
     },
     api: async (p, opts) => { calls.patch.push([p, JSON.parse(opts.body)]); return patch(); },
     retitleTerminal: (id, v) => calls.retitle.push([id, v]),
-    showToast: (msg) => calls.toast.push(msg),
+    showToast: (msg, opts) => { calls.toast.push(msg); calls.toastOpts.push(opts); },
+    toastFailText: require("../static/toaststack.js").toastFailText,
     refreshSessions: () => { calls.refresh++; },
   });
   new vm.Script("let editing = false;\n" + fn(APP, "startRename") + "\nglobalThis.startRename = startRename;").runInContext(ctx);
@@ -120,6 +121,8 @@ test("a failed save keeps the old name, and says so", async () => {
   assert.strictEqual(t.parent.child, t.span);
   assert.strictEqual(t.span.textContent, "old");
   assert.deepStrictEqual(t.calls.toast, ["Rename failed: 409 name taken"]);
+  // The desktop stack shows a sentence and keeps the raw text for Copy details (#171 F64).
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(t.calls.toastOpts)), [{ error: true, human: "Could not rename old.", detail: "409 name taken" }]);
   assert.deepStrictEqual(t.calls.retitle, []);
 });
 

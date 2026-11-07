@@ -336,3 +336,120 @@ test("withPending: a connected element is relabelled in place, no toast", async 
   assert.strictEqual(el.textContent, "+ Shell");
   assert.strictEqual(ui.visible(), false);
 });
+
+// done(result): the pending toast turns into its result. shell.js's
+// toastStacked() picks the home: the desktop stack (handles, resolveToast in
+// place) or the phone slot (today's own-text hide, then the result). These
+// stub the shell.js side to pin what pending.js asks of it on each path.
+const STUBS = ["toastStacked", "showToast", "hideToast", "resolveToast", "dismissToast", "document"];
+function stubToasts(t, stacked) {
+  const calls = [];
+  const msg = { textContent: "" };
+  installDocument(msg);
+  let next = 41;
+  globalThis.toastStacked = () => stacked;
+  globalThis.showToast = (text, opts) => { calls.push(["show", text, opts]); msg.textContent = text; return next++; };
+  globalThis.hideToast = () => { calls.push(["hide"]); };
+  globalThis.resolveToast = (h, text, opts) => { calls.push(["resolve", h, text, opts]); return h; };
+  globalThis.dismissToast = (h) => { calls.push(["dismiss", h]); };
+  t.after(() => { for (const k of STUBS) delete globalThis[k]; });
+  return { calls, msg };
+}
+const ENDED = { msg: "Ended docs", opts: { desktopOnly: true } };
+const FAILED = { msg: "End failed: boom", opts: { error: true, human: "Could not end docs.", detail: "boom (HTTP 500)" } };
+
+test("desktop: a shown pending entry resolves in place into its result", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, true);
+  const done = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  done(FAILED);
+  assert.deepStrictEqual(calls, [
+    ["show", "Ending docs…", { sticky: true }],
+    ["resolve", 41, FAILED.msg, FAILED.opts],
+  ]);
+});
+
+test("desktop: a pending entry that never showed pushes the result, desktop-only ones too", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, true);
+  const done = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS - 1);
+  done(ENDED);
+  t.mock.timers.tick(PENDING_DELAY_MS * 2);
+  assert.deepStrictEqual(calls, [["show", ENDED.msg, ENDED.opts]]);
+});
+
+test("desktop: done() with no result dismisses its own entry by handle; a second done is a no-op", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, true);
+  const done = pendingToast("Working…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  done();
+  done(ENDED);
+  assert.deepStrictEqual(calls, [["show", "Working…", { sticky: true }], ["dismiss", 41]]);
+});
+
+test("desktop: a toast shown before the delay does not stop the pending entry (the stack holds both)", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, true);
+  globalThis.toastSeqNow = (() => { let n = 0; return () => n++; })(); // the slot moved on
+  t.after(() => { delete globalThis.toastSeqNow; });
+  const done = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  done(ENDED);
+  assert.deepStrictEqual(calls.map((c) => c[0]), ["show", "resolve"]);
+});
+
+test("phone: done(result) hides its own pending toast, then shows the result", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, false);
+  const done = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  done(FAILED);
+  assert.deepStrictEqual(calls, [
+    ["show", "Ending docs…", { sticky: true }],
+    ["hide"],
+    ["show", FAILED.msg, FAILED.opts],
+  ]);
+});
+
+test("phone: a desktop-only result shows nothing after the hide", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, false);
+  const done = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  done(ENDED);
+  assert.deepStrictEqual(calls, [["show", "Ending docs…", { sticky: true }], ["hide"]]);
+  const fast = pendingToast("Ending docs…");
+  fast(ENDED);
+  assert.strictEqual(calls.length, 2, "never shown, desktop only: nothing at all");
+});
+
+test("phone: a result after a fast finish shows; a toast that replaced the pending one is not hidden", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls, msg } = stubToasts(t, false);
+  const fast = pendingToast("Ending docs…");
+  fast(FAILED);
+  assert.deepStrictEqual(calls, [["show", FAILED.msg, FAILED.opts]]);
+  calls.length = 0;
+  const slow = pendingToast("Ending docs…");
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  msg.textContent = "Saved"; // another toast took the slot
+  slow(FAILED);
+  assert.deepStrictEqual(calls, [["show", "Ending docs…", { sticky: true }], ["show", FAILED.msg, FAILED.opts]]);
+});
+
+test("withPending: on the desktop a detached element's label is a stack entry, dismissed by handle", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { calls } = stubToasts(t, true);
+  const el = fakeEl("+ Shell");
+  el.isConnected = false;
+  const d = deferred();
+  const p = withPending(el, "Starting shell…", () => d.promise);
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  assert.deepStrictEqual(calls, [["show", "Starting shell…", { sticky: true }]]);
+  d.resolve();
+  await p;
+  assert.deepStrictEqual(calls, [["show", "Starting shell…", { sticky: true }], ["dismiss", 41]]);
+});

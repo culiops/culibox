@@ -361,6 +361,13 @@ function acctRow(a, limits, now) {
   return li;
 }
 
+// acctPageMode: Settings is the desktop page (#settings-modal.as-page), not the
+// modal the phone uses.
+function acctPageMode() {
+  const m = document.getElementById("settings-modal");
+  return !!m && m.classList.contains("as-page");
+}
+
 function acctBtn(text, cls, onclick) {
   const b = document.createElement("button");
   b.type = "button";
@@ -407,7 +414,9 @@ function acctTokenBox(a, editing) {
   inp.placeholder = "Paste a setup-token";
   inp.title = "A token printed by claude setup-token";
   inp.setAttribute("aria-label", "Token for agent account " + a.name);
-  const save = acctBtn("Save token", "btn pri", () => acctTokenSave(a, inp, save));
+  // A row action, one per account without a token: on the desktop page a
+  // secondary, so the view keeps one primary (F11). The modal keeps it primary.
+  const save = acctBtn("Save token", acctPageMode() ? "btn" : "btn pri", () => acctTokenSave(a, inp, save));
   inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); save.click(); } };
   box.append(inp, save);
   if (editing) box.appendChild(acctBtn("Cancel", "btn", () => { inp.value = ""; box.replaceWith(acctTokenBox(a, false)); }));

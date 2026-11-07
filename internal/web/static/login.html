@@ -41,19 +41,39 @@
       font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
     }
     button:hover { filter: brightness(1.08); }
+    /* Checking: the POST can sleep up to 5 s on a wrong guess. primitives.css strikes a
+       disabled control through (phone); this one is busy, not deleted. */
+    button:disabled { text-decoration: none; opacity: .65; cursor: progress; filter: none; }
     .err {
       background: var(--danger-tint); border: 1px solid var(--danger);
       color: var(--danger); font-size: 12.5px; border-radius: var(--radius);
       padding: 8px 10px; margin: 0 0 16px;
     }
+    /* Arrived after the session expired (?reason=expired): plain text above the field. */
+    .notice { color: var(--fg); font-size: 12.5px; line-height: 1.5; margin: 0 0 16px; }
+    /* Token link (/login#token=...): the head script sets html.token-mode before first
+       paint, and the card shows only this line while the body script submits the token. */
+    .signing { display: none; margin: 0; padding: 24px 0; text-align: center; color: var(--muted); font-size: 14px; }
+    html.token-mode .signing { display: block; }
+    html.token-mode .card > :not(.signing) { display: none; }
     [hidden] { display: none; }
   </style>
+  <script>
+    // A /login#token=<token> link auto-submits, and the fragment never reaches the
+    // server, so the page has to decide here, before first paint, to hide the empty
+    // form. Same pattern as the body script below; keep the two in step.
+    if (/(?:^|&)token=[A-Za-z0-9_-]+/.test(location.hash.slice(1))) {
+      document.documentElement.classList.add("token-mode");
+    }
+  </script>
 </head>
 <body>
   <main class="card">
     <h1>CuliBox</h1>
     <p class="sub">Sign in to manage your agent sessions on this box.</p>
-    <div class="err" id="err" hidden>Wrong password — try again.</div>
+    <p class="signing" id="signing">Signing in…</p>
+    <p class="notice" id="expired" hidden>Your login expired, sign in again.</p>
+    <div class="err" id="err" hidden>Wrong password or token.</div>
     <form method="POST" action="/login">
       <!-- Single operator: the username is fixed and hidden. It exists so a
            password manager can associate the saved credential (the server
@@ -65,20 +85,62 @@
     </form>
   </main>
   <script>
-    // The POST handler bounces a failed browser login back to /login?e=1.
-    if (new URLSearchParams(location.search).get("e") === "1") {
-      document.getElementById("err").hidden = false;
-    }
-    // Token mode: `agent-box serve` prints /login#token=<token>. The fragment
-    // never reaches the server; strip it from the URL bar and history before
-    // anything else, then submit it as the password. A wrong token comes back
-    // as /login?e=1 with no fragment, so this cannot loop.
-    const m = /(?:^|&)token=([A-Za-z0-9_-]+)/.exec(location.hash.slice(1));
-    if (m) {
-      history.replaceState(null, "", location.pathname + location.search);
-      document.getElementById("password").value = m[1];
-      document.querySelector("form").submit();
-    }
+    (function () {
+      const form = document.querySelector("form");
+      const btn = form.querySelector("button");
+      const pw = document.getElementById("password");
+      const idle = btn.textContent;
+      let busy = false;
+
+      // Nothing from the URL is ever shown: each parameter only chooses between the
+      // fixed lines in the markup, by exact comparison. The POST handler bounces a
+      // failed browser login to /login?e=1; the auth guard sends a browser whose
+      // session expired to /login?reason=expired. A wrong guess on the expired page
+      // comes back as ?e=1, so the error replaces the expired line, never joins it.
+      const q = new URLSearchParams(location.search);
+      if (q.get("e") === "1") {
+        document.getElementById("err").hidden = false;
+      } else if (q.get("reason") === "expired") {
+        document.getElementById("expired").hidden = false;
+      }
+
+      // A wrong guess sleeps the POST for up to 5 s. Show that it is working and refuse
+      // a second submit, which would only add another failure. The field goes readOnly,
+      // not disabled: a disabled field is not submitted.
+      form.addEventListener("submit", function (ev) {
+        if (busy) { ev.preventDefault(); return; }
+        busy = true;
+        btn.textContent = "Checking…";
+        btn.disabled = true;
+        btn.setAttribute("aria-busy", "true");
+        pw.readOnly = true;
+      });
+      // Back after a submit can restore this page from the back/forward cache exactly as
+      // it was left: busy, or hidden behind "Signing in…", with the password (or the
+      // token a link filled in) still in the masked field. A normal load's own pageshow
+      // has persisted=false and must change nothing.
+      window.addEventListener("pageshow", function (ev) {
+        if (!ev.persisted) return;
+        busy = false;
+        btn.textContent = idle;
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+        pw.readOnly = false;
+        pw.value = "";
+        document.documentElement.classList.remove("token-mode");
+      });
+
+      // Token mode: `agent-box serve` prints /login#token=<token>. The fragment
+      // never reaches the server; strip it from the URL bar and history before
+      // anything else, then submit it as the password. A wrong token comes back
+      // as /login?e=1 with no fragment, so this cannot loop (and the form shows).
+      const m = /(?:^|&)token=([A-Za-z0-9_-]+)/.exec(location.hash.slice(1));
+      if (m) {
+        history.replaceState(null, "", location.pathname + location.search);
+        pw.value = m[1];
+        form.submit();
+      }
+    })();
   </script>
 </body>
 </html>

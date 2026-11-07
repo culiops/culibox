@@ -3040,7 +3040,8 @@ function startRename(li, span, s) {
         retitleTerminal(s.id, stored);
       } catch (e) {
         span.textContent = was;
-        showToast("Rename failed: " + e.message, { error: true });
+        const f = toastFailText("rename " + cur, e);
+        showToast("Rename failed: " + e.message, { error: true, human: f.text, detail: f.detail });
       }
     }
     refreshSessions();
@@ -5452,7 +5453,11 @@ $("spawn").addEventListener("submit", async (ev) => {
     } else {
       closeSpawn();
       spawnPromptDraft = draft; // reopening New session restores it
-      showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+      // The desktop sentence drops toastFailText's closing period for the note, and
+      // only when there is a note.
+      const kept = draft.trim() ? " — your first message is kept" : "";
+      const f = toastFailText("start the session", e);
+      showToast("Spawn failed: " + e.message + kept, { error: true, human: kept ? f.text.replace(/\.$/, "") + kept : f.text, detail: f.detail });
     }
   } finally {
     clearInterval(progTimer);
@@ -6023,23 +6028,28 @@ async function killSession(id) {
   killing.add(id);
   // A boxed session's docker stop can take seconds: a toast covers the wait
   // after the pending delay. It starts here, at the click, so the 300ms clock
-  // is not spent on the re-render below. done() runs (in finally) before the
-  // error toast is shown, so the toast cannot hide "End failed".
+  // is not spent on the re-render below. done(result) (in finally) turns it
+  // into the outcome: on the desktop the same stack entry becomes "Ended <name>"
+  // or the error (F64: a sentence, the raw text behind Copy details); the phone
+  // gets "End failed: <raw>" only, since the row leaving says it ended.
   const sess = (lastSessions || []).find((s) => s.id === id);
-  const done = pendingToast("Ending " + ((sess && (sess.name || sess.id)) || id) + "…");
+  const name = (sess && (sess.name || sess.id)) || id;
+  const done = pendingToast("Ending " + name + "…");
   let failure = null;
+  let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
     await refreshSessions(); // re-render → row shows "ending…"
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
     failure = e;
+    const f = toastFailText("end " + name, e);
+    result = { msg: "End failed: " + e.message, opts: { error: true, human: f.text, detail: f.detail } };
   } finally {
-    done();
+    done(result);
   }
   if (failure) {
     killing.delete(id);
     await refreshSessions();
-    showToast("End failed: " + failure.message, { error: true });
     return;
   }
   killing.delete(id);
@@ -6121,7 +6131,8 @@ async function spawnShellRun(cell, placement, toastWait) {
     else if (!terminalTabFor(s.id)) openTerminal(s.id, s.name); // not in the list yet: never leave it unshown
   } catch (e) {
     // 403 / 404 / 409 carry the server's sentence ("no shell profile").
-    showToast("Shell failed: " + e.message, { error: true });
+    const f = toastFailText("start a shell", e);
+    showToast("Shell failed: " + e.message, { error: true, human: f.text, detail: f.detail });
     if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
     shellSpawning.delete(cell);
@@ -6361,7 +6372,18 @@ initMobileShell();
     const sideEnv = $("side-env");
     if (sideEnv) {
       sideEnv.textContent = meta.env_label;
-      if (meta.env_color) sideEnv.style.background = meta.env_color;
+      // The chip's text colour follows its background (F79): operator config can be
+      // any CSS colour, and the stylesheet's white text is unreadable on a pale one.
+      // backgroundColor, not the shorthand, so no image or gradient can paint here.
+      // The colour is applied only with a text colour picked for it: one the page
+      // cannot read back as rgb (oklch(), lab() and color() come back unconverted)
+      // is taken off again, so the chip keeps its stylesheet background and text.
+      if (meta.env_color && CSS.supports("color", meta.env_color)) {
+        sideEnv.style.backgroundColor = meta.env_color;
+        const rgb = parseRgb(getComputedStyle(sideEnv).backgroundColor);
+        if (rgb) sideEnv.style.color = envTextColor(rgb);
+        else sideEnv.style.backgroundColor = "";
+      }
       sideEnv.hidden = false;
     }
     strip.hidden = false;

@@ -1410,7 +1410,7 @@
     #spawn .spawn-actions button.busy:disabled { text-decoration: none; cursor: progress; }
     .spawn-progress::before, .pending-line::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: spawn-pulse 1s ease-in-out infinite alternate; }
     @keyframes spawn-pulse { from { opacity: .25; } to { opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { .spawn-progress::before, .pending-line::before { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .spawn-progress::before, .pending-line::before, .toast .spin { animation: none; } }
     /* Shared pending idiom (pending.js). Neutral: muted text + the accent pulse
        above, never amber or red. .busy marks a control whose action is still
        running (it is also disabled); .pending-line is the status row painted
@@ -1820,6 +1820,9 @@
     #toast-undo:hover { border-color: var(--accent); color: #fff; }
     #toast-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
     #toast-x:hover { color: var(--fg); }
+    /* The desktop toast stack (shell.js renders it; desktop.css shows it above
+       700px). The phone keeps the one #toast slot above. */
+    #toasts { display: none; }
 
     #grid {
       flex: 1; min-width: 0; display: grid; gap: 8px; padding: 8px; background: var(--bg);
