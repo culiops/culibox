@@ -94,7 +94,8 @@ let pageLeaveHook = null;
 // shut by the time this returns. A caller that acts on the panes must read the answer (closePageHolds below does):
 // going on after "stay" would act behind a page the user chose to keep. why "force" closes whatever the hook would
 // say: the layout is leaving under the page (the window crossed to a phone). The hook is told, so it can end what it
-// holds (the profile page drops its edit and releases its pickers), and is never asked.
+// holds (the profile page ends its edit, releases its pickers and keeps what was typed for when that profile opens
+// again), and is never asked.
 function closePage(why) {
   if (!pageNow) return true;
   const dlg = pageNow.dlg;

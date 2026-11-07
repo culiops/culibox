@@ -93,8 +93,11 @@ test("crossing to mobile closes the page", () => {
   const src = read("app.js");
   const at = src.indexOf('window.matchMedia(mobileMediaQuery()).addEventListener("change"');
   assert.ok(at >= 0);
-  // "force": the layout is leaving under the page, so the profile page's leave hook is not asked.
-  assert.match(src.slice(at, at + 400), /closePage\("force"\)/);
+  // "force": the layout is leaving under the page, so the profile page's leave hook is not asked (it is told, and keeps what was
+  // typed). Read up to the next statement of the handler, so the comment above the call can say that at any length.
+  const upTo = src.indexOf("applyCollapsed(", at);
+  assert.ok(upTo > at);
+  assert.match(src.slice(at, upTo), /closePage\("force"\)/);
 });
 
 test("the Audit link shows only when the server has an audit store", () => {

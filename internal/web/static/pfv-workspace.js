@@ -258,6 +258,9 @@ pfvRegisterEditor("workspace", {
   values: pfwValues,
   draw: pfwDraw,
   check: pfwCheck,
+  // What a forced close keeps with the edit (see PFV_EDITORS): the copy fields stashed and as opened, the copy folder that follows the
+  // folder while it is still the suggestion, and the text a refused Save left in the folder field. Not the picker, nor the inputs.
+  keep: ["copyInit", "copyStash", "autoDir", "typed"],
   // The next session of a private copy is built from a new box; a folder in a box is drawn without the line (the mockup).
   note: (rec, c) => c.tier === "box" && rec.values.mode === "copy",
   fields: true,

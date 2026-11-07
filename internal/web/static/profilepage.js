@@ -42,6 +42,10 @@ const pfvState = {
 };
 // The newest pfvShow wins: a slower answer for a profile you have left is dropped.
 let pfvSeq = 0;
+// What a forced close kept of an edit (pfvKeepEdits), until that profile opens on the desktop page again (pfvShow restores it) or it is
+// gone: null, or {name, doc, openBlock, edits}: the profile, the stored profile the edit was made against, the block that was open and one
+// {id, repair, values, init, ui} per open block. Plain data of this page load only, none of the page it came from.
+let pfvKept = null;
 // Counts the times the New profile page was opened: a pfvShow that was waiting for the list when it was must not draw over it.
 let pfvPageGen = 0;
 // What the page is drawn from, as a string (pfvKey) and what the nav lists (pfvNavKey):
@@ -602,7 +606,8 @@ function pfvDrawErrors() {
 // profile under a highlighted nav row); showing the one on screen again keeps it
 // drawn and redraws only if the answer differs. While a block of that profile is
 // open it does nothing at all: the tab being selected again must not redraw or
-// refetch from under an edit.
+// refetch from under an edit. A profile that a forced close kept an edit of (pfvKept) comes back with it: once the
+// profile has been read, the block opens again with what was typed (pfvRestoreKept).
 async function pfvShow(name) {
   if (!pfvOnPage()) return;
   // The Profiles tab selected again (no profile named) leaves the New profile page as it is, with what was typed.
@@ -615,6 +620,8 @@ async function pfvShow(name) {
   let pick = name;
   if (!pick || !has(pick)) pick = has(pfvState.name) ? pfvState.name : (profiles.find((p) => p.editable) || profiles[0] || {}).name || "";
   if (pick !== "" && pick === pfvState.name && pfvState.openBlock) return;
+  // An edit kept for a profile the list no longer has (deleted elsewhere) has nowhere to go.
+  if (pfvKept && !has(pfvKept.name)) pfvKept = null;
   const seq = ++pfvSeq;
   const same = pick !== "" && pick === pfvState.name && pfvState.doc !== null;
   if (pick !== pfvState.name) {
@@ -645,12 +652,19 @@ async function pfvShow(name) {
   let doc;
   try { doc = await api("/api/profiles/" + encodeURIComponent(pick)); }
   catch (e) {
+    // The profile an edit was kept for is gone: what was typed has nowhere to go. Any other failure says nothing about it.
+    if (pfvKept && pfvKept.name === pick && e && e.status === 404) pfvKept = null;
     // A block opened while this was out is being edited: the failed refresh says nothing it needs.
     if (seq === pfvSeq && !pfvState.openBlock) { pfvState.errors = ["Load failed: " + e.message]; pfvRender(); }
     return;
   }
   if (seq !== pfvSeq) return;
   if (same && pfvState.openBlock) return; // a block was opened while this was out
+  // The edit a forced close kept of this profile comes back, drawn from what was typed (the read above showed the profile is there).
+  if (pfvKept && pfvKept.name === pick) {
+    pfvRestoreKept();
+    return;
+  }
   pfvState.doc = doc;
   pfvState.errors = [];
   if (same) pfvRefresh();
@@ -719,12 +733,15 @@ async function pfvDelete() {
 // form is a stack of labelled fields (a 16px rhythm, 440px wide); without it the form flows
 // as it likes. A block of rows has two more: add(rec, what) puts a pending row in (what is
 // pfvAddRow's) and answers the key of the control to focus, "" when it added nothing;
-// remove(rec, row) marks the read view's row removed. A block with no entry here is drawn
+// remove(rec, row) marks the read view's row removed. keep: the names of the rec.ui fields that hold what the user typed or
+// chose (a stash, a text the form is not showing), as opposed to what the form built (nodes, pickers, a fetch's flag): they go
+// with the edit when a forced close keeps it (pfvKeepEdits), and nothing else of rec.ui does. A block with no entry here is drawn
 // but its Edit link does nothing; one that a refused save opens
 // is drawn read-only with the refusal under the row it names, so the user can see what is wrong.
 const PFV_EDITORS = {
   runs: { values: pfvRunsValues, draw: pfvRunsForm, merge: pfvRunsMerge, note: pfvRunsNote, hideSave: pfvRunsHideSave, saveLabel: pfvRunsSaveLabel },
-  agent: { values: pfvAgentValues, draw: pfvAgentForm, merge: pfvAgentMerge, fields: true },
+  // The command typed under "Other command..." waits behind the select when another command is picked, for the way back.
+  agent: { values: pfvAgentValues, draw: pfvAgentForm, merge: pfvAgentMerge, fields: true, keep: ["binOther", "otherText"] },
   network: { values: pfvNetworkValues, draw: pfvNetworkForm, note: pfvNetworkNote },
 };
 
@@ -793,10 +810,13 @@ function pfvEditCtx() {
 // by field key (focus goes back to one after a redraw). ui: state of the form that is not a value.
 // sent: the block was part of the last save (pfvSaveBlock), so a refusal's list index counts in the list its merge
 // built; a block that was not (a repair block, or one open and clean) had its stored lists sent as they are.
-function pfvNewEdit(id, repair) {
+// seed: a record a forced close kept ({values, init, ui}, see pfvKept): the form starts from what was typed, not from the stored
+// profile, and init stays what it was when the block was first opened, so a change is still told from none.
+function pfvNewEdit(id, repair, seed) {
   const ed = PFV_EDITORS[id];
-  const values = ed ? ed.values(pfvEditCtx()) : null;
-  return { id, values, init: pfvStable(pfvSettled(id, values)), repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: {}, disposers: [], invalid: [] };
+  const values = seed ? seed.values : ed ? ed.values(pfvEditCtx()) : null;
+  const init = seed ? seed.init : pfvStable(pfvSettled(id, values));
+  return { id, values, init, repair: repair === true, sent: false, nudge: false, top: null, ferrs: [], consumed: new Set(), nodes: null, sigs: {}, fields: {}, first: null, block: null, known: [], ui: seed ? seed.ui : {}, disposers: [], invalid: [] };
 }
 
 // pfvDisposeRec: the record's form is going away (drawn again, closed or dropped): what it built that
@@ -1001,6 +1021,40 @@ function pfvEndEdits() {
   pfvRender();
 }
 
+// pfvKeepEdits: the page is going whatever the user would say (the window crossed to a phone), and what was typed goes into pfvKept,
+// in memory and for this page load only, to come back when that profile opens on the desktop page again (pfvRestoreKept). Only an edit
+// that holds a change is kept (an open block with none is dropped, as it always was), and not the New profile page, whose record is
+// the page. Per open block it keeps what the controls hold, what the block was opened with (so a change is still told from none) and
+// the rec.ui fields its editor names (PFV_EDITORS keep); copied, so nothing that lingers on the form being dropped can write into it.
+// It keeps the stored profile the edit was made against, too: the edit's save carries that revision, so a profile that changed
+// elsewhere meanwhile answers the save as stale (Reload) instead of being overwritten with what was typed on an older copy.
+function pfvKeepEdits() {
+  if (pfvState.page !== "" || !pfvAnyDirty()) return;
+  const edits = Object.values(pfvState.edits).filter((rec) => rec.values !== null).map((rec) => {
+    const ed = PFV_EDITORS[rec.id];
+    const ui = {};
+    for (const k of ed && ed.keep ? ed.keep : []) if (rec.ui[k] !== undefined) ui[k] = rec.ui[k];
+    return pfeClone({ id: rec.id, repair: rec.repair, values: rec.values, init: rec.init, ui });
+  });
+  pfvKept = { name: pfvState.name, doc: pfvState.doc, openBlock: pfvState.openBlock, edits };
+}
+
+// pfvRestoreKept: the profile an edit was kept for is on screen again and was read (pfvShow). The page is the one the edit was made on:
+// its blocks open as forms drawn from what was typed, the one that was open is open, and the header and the blocks say Unsaved changes
+// as they would have. The profile it holds is the kept one, not the read that just landed: the save then carries the kept revision.
+// It comes back once; from here the records are the page's own.
+function pfvRestoreKept() {
+  const k = pfvKept;
+  pfvKept = null;
+  for (const e of k.edits) pfvState.edits[e.id] = pfvNewEdit(e.id, e.repair, e);
+  pfvState.openBlock = k.openBlock;
+  pfvState.doc = k.doc;
+  pfvState.errors = [];
+  pfvClearSaved();
+  pfvSyncOpen();
+  pfvRender();
+}
+
 // pfvLeaving: the question before the desktop profile page goes away from the profile it shows. true, itself and
 // not a promise, when nothing is asked: not the desktop page (a phone's modal and its old form never see a
 // question) or nothing changed (open blocks without changes simply end). Otherwise pfvLeaveGuard's promise.
@@ -1181,7 +1235,8 @@ function pfvCloseDrawer() {
 }
 
 // pfvDropDrawer: the page is going whatever the user would say (the window crossed to a phone), so the drawer goes with it: nothing is
-// asked, nothing waits, and nothing is reported (the edit it would add to ends with the page).
+// asked, nothing waits, and nothing is reported. What its flow had already created is a row of the block by now and is kept with the
+// edit (pfvKeepEdits); what was half filled in the drawer itself is lost.
 function pfvDropDrawer() {
   const d = pfvDrawer;
   if (!d) {
@@ -1271,14 +1326,17 @@ function pfvEscTarget() {
 // pfvPageLeave: pagehost.js's pageLeaveHook while the desktop Settings page is the open page; for any other page,
 // a phone's modal included, it answers true and does nothing. why "force" is a close that cannot be refused (the
 // window crossed to a phone): the edit ends through pfvDropEdits, so no folder picker keeps a listener on a page that
-// is gone and no edit waits for the next time Settings opens. why "esc" is the Esc key: a layer inside the page
+// is gone, and what was typed is kept as data (pfvKeepEdits) for the next time that profile opens on the desktop
+// page. why "esc" is the Esc key: a layer inside the page
 // takes it (an open picker closes, the drawer closes itself, a question answers itself) and the page stays;
 // only an Esc that no layer wants is a way out. Every other close asks the same question as any way out.
 function pfvPageLeave(why) {
   if (!pfvOnPage()) return true;
-  // The window crossed to a phone: the page goes whatever the user would say, so nothing is asked and nothing is kept.
+  // The window crossed to a phone: the page goes whatever the user would say, so nothing is asked. The edit goes, and what was typed
+  // in it is kept for when this profile is on the desktop page again.
   if (why === "force") {
     pfvDropDrawer();
+    pfvKeepEdits();
     pfvEndEdits();
     return true;
   }
@@ -2025,7 +2083,9 @@ async function pfvSaveBlock(id) {
       if (pfvState.name === name) pfvShowError(e, id);
       return false;
     }
-    // It is written: a pfvShow GET that was already out when the block was opened would answer with the profile as it was before this
+    // It is written: an edit a forced close kept of it while the save was out is saved too, and must not come back as unsaved.
+    if (pfvKept && pfvKept.name === name) pfvKept = null;
+    // A pfvShow GET that was already out when the block was opened would answer with the profile as it was before this
     // save, so every older answer is dropped from here on. Not when the user has moved to another profile since: the GET that move
     // sent is that profile's own, and dropping it would leave the pane blank.
     if (pfvState.name === name) pfvSeq++;

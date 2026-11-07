@@ -6372,7 +6372,8 @@ setInterval(refreshSessions, 3000);
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
     // A phone has no pages: the dialog goes home closed, the panes come back. "force": the layout is leaving under
-    // the page, so its leave hook (unsaved profile changes) is not asked and keeps what was typed.
+    // the page, so its leave hook (unsaved profile changes) is not asked: it ends the edit and keeps what was typed
+    // in memory, for when that profile opens on the desktop page again.
     closePage("force");
     // Mobile's Files screen expects #files-pane back in #sidebar.
     // The pane-collapse html classes follow the layout: the stored state on

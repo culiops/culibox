@@ -3687,6 +3687,8 @@ const dirtyAgent = async (t, name) => {
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
 };
+// What a forced close kept (pfvKept), as plain data so it compares across the sandbox's realm; null when nothing is.
+const keptOf = (t) => { const k = t.run("pfvKept"); return k === null ? null : JSON.parse(JSON.stringify(k)); };
 
 test("switching to host lists what will be removed and saves without it", async () => {
   const t = cloudPage();
@@ -4103,7 +4105,7 @@ test("the Esc layer for a picker is read from the open blocks, so it cannot disa
   assert.strictEqual(t.box.pfvEscTarget(), "page");
 });
 
-test("a forced close (the window crossed to a phone) ends the edit through pfvDropEdits without asking", async () => {
+test("a forced close (the window crossed to a phone) ends the edit through pfvDropEdits without asking, and keeps what was typed", async () => {
   const t = page();
   const asked = recordAsks(t, false);
   const picker = await openWs(t);
@@ -4112,20 +4114,302 @@ test("a forced close (the window crossed to a phone) ends the edit through pfvDr
   assert.strictEqual(t.box.pageLeaveHook("force"), true);
   assert.strictEqual(asked.length, 0, "never asked");
   assert.strictEqual(picker.destroyed, true, "the folder picker's listeners are released");
-  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), [], "the live state has no edit left");
   assert.deepStrictEqual([t.run("pfvState").pending, t.run("pfvState").openBlock], [false, ""]);
+  // What was typed is kept, beside the page: the profile, the profile as the edit was made against, the block that was open, and per
+  // block only what redraws the typed form. Nothing of the page it came from (nodes, listeners, pickers, refusals).
+  const k = keptOf(t);
+  assert.deepStrictEqual([k.name, k.doc.rev, k.openBlock], ["aws-ops", "r1", "workspace"]);
+  assert.deepStrictEqual(k.edits.map((e) => e.id), ["workspace"]);
+  assert.deepStrictEqual(Object.keys(k.edits[0]).sort(), ["id", "init", "repair", "ui", "values"]);
+  assert.strictEqual(k.edits[0].values.folder, "/home/you/other-folder");
+  assert.strictEqual(k.edits[0].repair, false);
   // So reopening Settings on another tab and pressing Esc asks nothing about a profile that is not on screen.
   assert.strictEqual(t.box.pageLeaveHook("esc"), true);
   assert.strictEqual(t.box.pfvTabLeave("creds"), true);
   assert.strictEqual(asked.length, 0);
   // The read view is what comes back.
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
-  // On a phone's modal the hook is inert for "force" too.
+  // On a phone's modal the hook is inert for "force" too: it drops nothing and keeps nothing.
   const m = page();
   await dirtyAgent(m);
   m.els["settings-modal"].classList.remove("as-page");
   assert.strictEqual(m.box.pageLeaveHook("force"), true);
   assert.strictEqual(m.run("pfvState").pending, true, "it drops nothing there");
+  assert.deepStrictEqual(Object.keys(m.run("pfvState").edits), ["agent"]);
+  assert.strictEqual(keptOf(m), null, "and keeps nothing");
+});
+
+// --- R43 (b): a forced close keeps what was typed, for when that profile opens on the desktop page again -------------------
+
+test("a kept edit comes back when that profile opens on the desktop page again: typed values, dirty, in edit mode, asking before it is left", async () => {
+  const t = page();
+  const asked = recordAsks(t, false);
+  await dirtyAgent(t);
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0, "the page closed as the read view");
+  // Reopening Settings > Profiles shows the profile it was on: pfvShow() with no name.
+  await t.box.pfvShow();
+  const st = t.run("pfvState");
+  assert.strictEqual(st.name, "aws-ops");
+  assert.deepStrictEqual(Object.keys(st.edits), ["agent"]);
+  assert.deepStrictEqual([st.openBlock, st.pending], ["agent", true]);
+  assert.ok(blockOf(t, "agent").className.includes("pfv-editing"), "the block is a form again");
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5", "with exactly what was typed");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-st-dirty"), ["Unsaved changes"], "the block says so");
+  assert.strictEqual(unsavedNote(t).hidden, false, "and so does the header");
+  assert.strictEqual(byText(blockOf(t, "agent"), "button", "Discard").length, 1);
+  assert.strictEqual(t.run("pfvKept"), null, "it came back once: nothing is kept any more");
+  assert.strictEqual(t.box.puts.length, 0, "coming back writes nothing");
+  // It is an unsaved edit like any other: leaving asks.
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), false);
+  assert.strictEqual(asked.length, 1);
+  assert.strictEqual(asked[0].title, "Discard unsaved changes?");
+  // A second forced close keeps it again, and a Discard on the restored edit ends it for good.
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(keptOf(t).edits[0].values.options.model, "claude-sonnet-5");
+  await t.box.pfvShow();
+  recordAsks(t, true);
+  assert.strictEqual(await t.box.pfvLeaveGuard("leave"), true);
+  assert.strictEqual(t.run("pfvKept"), null);
+  await t.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), [], "discarded: the next open is the read view");
+});
+
+test("a kept edit is saved against the profile it was typed on, so a profile changed elsewhere meanwhile refuses it as stale", async () => {
+  const t = page();
+  await dirtyAgent(t);
+  t.box.pageLeaveHook("force");
+  // Somebody saved the profile while Settings was closed.
+  t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { rev: "r9", options: { model: "claude-opus-5", effort: "high" } });
+  await t.box.pfvShow();
+  assert.strictEqual(t.run("pfvState").doc.rev, "r1", "the page holds the profile the edit was made against, not a copy newer than it");
+  t.box.putFail = apiErr(409, { error: "the profile changed", code: "profile_changed" });
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), false);
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.strictEqual(t.box.puts[0].rev, "r1", "the save carries the revision the edit began at");
+  assert.strictEqual(t.box.puts[0].options.model, "claude-sonnet-5");
+  assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-top-err"), ["This profile changed elsewhere Reload"], "the existing stale path, never a silent overwrite");
+  await clickBtn(blockOf(t, "agent"), "Reload");
+  assert.strictEqual(t.run("pfvState").doc.rev, "r9");
+  assert.strictEqual(t.run("pfvState").pending, false);
+  // Unchanged elsewhere, the same restore saves.
+  const u = page();
+  await dirtyAgent(u);
+  u.box.pageLeaveHook("force");
+  await u.box.pfvShow();
+  assert.strictEqual(await clickBtn(blockOf(u, "agent"), "Save"), true);
+  assert.strictEqual(u.box.puts[0].rev, "r1");
+  assert.strictEqual(u.box.puts[0].options.model, "claude-sonnet-5");
+  assert.strictEqual(u.run("pfvState").pending, false);
+});
+
+test("a clean open block is not kept; neither is anything when the page was never edited", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(keptOf(t), null, "no block open");
+  const u = page();
+  await openWs(u);
+  assert.strictEqual(u.run("pfvState").pending, false);
+  u.box.pageLeaveHook("force");
+  assert.strictEqual(keptOf(u), null, "an open editor that holds no change is dropped as before");
+  await u.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(u.run("pfvState").edits), []);
+  // A change typed and typed back is no change either.
+  const w = page();
+  await openWs(w);
+  lastPicker(w).pick("/home/you/other-folder");
+  lastPicker(w).pick("/home/you/work/payments-api");
+  assert.strictEqual(w.run("pfvState").pending, false);
+  w.box.pageLeaveHook("force");
+  assert.strictEqual(keptOf(w), null);
+});
+
+test("a nav click on the profile the edit was kept for brings it back too; another profile does not, and the edit waits for its own", async () => {
+  const t = page();
+  recordAsks(t, true);
+  await dirtyAgent(t);
+  t.box.pageLeaveHook("force");
+  t.box.pfvRenderNav();
+  // Another profile first: shown as it is, the kept edit untouched.
+  nav(t, "runbook-host").click();
+  await settle();
+  await settle();
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.strictEqual(keptOf(t).name, "aws-ops", "still kept");
+  // Reopening Settings shows runbook-host (the one on screen): that does not restore aws-ops's edit onto it.
+  await t.box.pfvShow();
+  assert.strictEqual(t.run("pfvState").name, "runbook-host");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.strictEqual(keptOf(t).name, "aws-ops");
+  // Its own nav row: the edit is back.
+  nav(t, "aws-ops").click();
+  await settle();
+  await settle();
+  const st = t.run("pfvState");
+  assert.strictEqual(st.name, "aws-ops");
+  assert.deepStrictEqual([st.openBlock, st.pending], ["agent", true]);
+  assert.strictEqual(field(t, "options.model").value, "claude-sonnet-5");
+  assert.strictEqual(st.doc.rev, "r1");
+  assert.strictEqual(t.run("pfvKept"), null);
+});
+
+test("a kept edit of a profile that is gone is dropped; a read that fails for another reason keeps it for the next open", async () => {
+  const t = page();
+  await dirtyAgent(t);
+  t.box.pageLeaveHook("force");
+  t.box.getFail = apiErr(404, { error: "no such profile" });
+  await t.box.pfvShow();
+  assert.strictEqual(t.run("pfvKept"), null, "the profile is gone: what was typed has nowhere to go");
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  t.box.getFail = null;
+  await t.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), [], "and it does not come back later");
+  // The list has stopped naming it (deleted elsewhere, and the page's list knows): dropped too, and the next profile shows.
+  const v = page();
+  await dirtyAgent(v);
+  v.box.pageLeaveHook("force");
+  v.box.profiles = v.box.profiles.filter((p) => p.name !== "aws-ops");
+  await v.box.pfvShow();
+  assert.strictEqual(v.run("pfvKept"), null);
+  assert.notStrictEqual(v.run("pfvState").name, "aws-ops");
+  assert.deepStrictEqual(Object.keys(v.run("pfvState").edits), []);
+  const u = page();
+  await dirtyAgent(u);
+  u.box.pageLeaveHook("force");
+  u.box.getFail = new Error("offline");
+  await u.box.pfvShow();
+  assert.strictEqual(keptOf(u).name, "aws-ops", "an offline read says nothing about the profile");
+  assert.deepStrictEqual(Object.keys(u.run("pfvState").edits), []);
+  u.box.getFail = null;
+  await u.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(u.run("pfvState").edits), ["agent"]);
+  assert.strictEqual(field(u, "options.model").value, "claude-sonnet-5");
+});
+
+test("every open block is kept in the order it was opened, the open one still open, with pending rows and removals", async () => {
+  const t = pickPage({ awscEntries: PICK_AWS.filter((e) => e.name !== "staging-read") });
+  await t.box.pfvShow("aws-ops");
+  // The Remove link of a row the instance no longer defines: the block opens with that row removed (pending); then a token is added.
+  byText(rowFor(t, "cloud", "AWS", "staging-read"), "button", "Remove")[0].click();
+  clickBtn(blockOf(t, "cloud"), "+ Add access");
+  assert.strictEqual(t.run("pfvState").picker, "cloud");
+  optBtn(t, "cloud", "pagerduty").click();
+  // A refused save opens another block on top: it holds no change itself.
+  t.box.pfvOpenRepair("reachable");
+  t.box.pfvRender();
+  t.run("pfvState").openBlock = "cloud";
+  t.box.pageLeaveHook("force");
+  const k = keptOf(t);
+  assert.deepStrictEqual(k.edits.map((e) => e.id), ["cloud", "reachable"]);
+  assert.deepStrictEqual(k.edits.map((e) => e.repair), [false, true]);
+  assert.strictEqual(k.openBlock, "cloud");
+  assert.strictEqual(k.edits[0].values.aws.find((e) => e.name === "staging-read").removed, true);
+  assert.strictEqual(k.edits[0].values.tokens.find((e) => e.name === "pagerduty").fresh, true);
+  assert.ok(k.edits[0].ui.picker === undefined && k.edits[0].ui.pickNodes === undefined, "no picker, no node");
+  await t.box.pfvShow();
+  const st = t.run("pfvState");
+  assert.deepStrictEqual(Object.keys(st.edits), ["cloud", "reachable"]);
+  assert.strictEqual(st.openBlock, "cloud");
+  assert.strictEqual(st.pending, true);
+  assert.ok(rowFor(t, "cloud", "AWS", "staging-read").className.includes("pfv-removed"), "the removal is still pending");
+  assert.ok(rowFor(t, "cloud", "Token", "pagerduty"), "and so is the added token");
+  assert.ok(blockOf(t, "reachable").className.includes("pfv-editing"));
+  assert.strictEqual(st.picker, "", "an open picker is not brought back");
+  assert.strictEqual(t.box.pfvEscTarget(), "page");
+  assert.strictEqual(t.box.puts.length, 0);
+  assert.strictEqual(await saveBlock(t, "cloud"), true);
+  assert.deepStrictEqual(t.box.puts[0].aws_connections, ["prod-read"], "and it saves as typed");
+  assert.ok(t.box.puts[0].tokens.includes("pagerduty"));
+});
+
+test("the typed text of each editor outlives a forced close: the other command, the copy's fields, the permission rows", async () => {
+  // Agent: Other command... typed "mycmd", then claude again: the text waits behind the select for the way back.
+  const a = page();
+  await dirtyAgent(a);
+  pickBin(a, "__other__");
+  typeInto(field(a, "bin-text"), "mycmd");
+  pickBin(a, "claude");
+  assert.strictEqual(a.run("pfvState").edits.agent.values.bin, "claude");
+  a.box.pageLeaveHook("force");
+  assert.deepStrictEqual(keptOf(a).edits[0].ui, { binOther: false, otherText: "mycmd" });
+  await a.box.pfvShow();
+  assert.strictEqual(field(a, "bin").value, "claude");
+  pickBin(a, "__other__");
+  assert.strictEqual(field(a, "bin-text").value, "mycmd", "what was typed in Other is still there");
+  // Workspace: the copy's fields stashed while the block works in the folder, what the copy fields were opened with (so a copy and
+  // back is no change), where the suggested copy folder is followed from, and text a refused Save left in the folder field.
+  const w = page();
+  const pk = await openWs(w);
+  pickMode(w, "copy");
+  typeInto(field(w, "copy-dir"), "/home/you/box-clones/mine");
+  typeInto(field(w, "share"), "README.md");
+  pickMode(w, "folder");
+  pk.pick("/home/you/other-folder");
+  const half = lastPicker(w).opts.input;
+  half.value = "half/typed";
+  assert.strictEqual(await saveBlock(w, "workspace"), false, "the folder field shows text that is not the folder");
+  assert.strictEqual(w.run("pfvState").edits.workspace.ui.typed, "half/typed");
+  w.box.pageLeaveHook("force");
+  const ws = keptOf(w).edits[0].ui;
+  assert.deepStrictEqual(Object.keys(ws).sort(), ["autoDir", "copyInit", "copyStash", "typed"], "and no node, picker or input of the form");
+  assert.strictEqual(ws.copyStash.copyDir, "/home/you/box-clones/mine");
+  assert.strictEqual(ws.copyStash.shareText, "README.md");
+  await w.box.pfvShow();
+  assert.strictEqual(field(w, "folder").value, "half/typed", "the refused text is still in the field");
+  assert.strictEqual(w.run("pfvState").edits.workspace.values.folder, "/home/you/other-folder");
+  pickMode(w, "copy");
+  assert.strictEqual(field(w, "copy-dir").value, "/home/you/box-clones/mine", "the copy fields come back from the stash");
+  assert.strictEqual(field(w, "share").value, "README.md");
+  pickMode(w, "folder");
+  assert.strictEqual(w.run("pfvState").edits.workspace.values.copyDir, "", "and the way back is the profile's own, as opened");
+  // Cloud: the permission rows that were folded open stay open.
+  const c = cloudPage();
+  await c.box.pfvShow("aws-ops");
+  clickBtn(blockOf(c, "cloud"), "Edit");
+  byText(blockOf(c, "cloud"), "button", "Customise")[0].click();
+  tick(c, "gh:perm:contents", false);
+  assert.strictEqual(c.run("pfvState").pending, true);
+  c.box.pageLeaveHook("force");
+  assert.deepStrictEqual(keptOf(c).edits[0].ui, { customise: true });
+  await c.box.pfvShow();
+  assert.strictEqual(field(c, "gh:perm:contents").checked, false, "the row is drawn, as it was left");
+  assert.strictEqual(c.run("pfvState").edits.cloud.values.perms.contents, "off");
+});
+
+test("the New profile page is not kept by a forced close: its record is the page", async () => {
+  const t = await newPage();
+  typeName(t, "scratch");
+  assert.strictEqual(t.run("pfvState").page, "new");
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(t.run("pfvKept"), null);
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.strictEqual(t.run("pfvState").page, "");
+  await t.box.pfvShow();
+  assert.strictEqual(t.run("pfvState").page, "");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
+});
+
+test("an edit whose save goes through while the window crosses to a phone does not come back", async () => {
+  const t = page();
+  await dirtyAgent(t);
+  let release;
+  const real = t.box.api;
+  t.box.api = async (p, o) => { if (o && o.method === "PUT") await new Promise((r) => { release = r; }); return real(p, o); };
+  const saving = clickBtn(blockOf(t, "agent"), "Save");
+  await settle();
+  t.box.pageLeaveHook("force");
+  assert.strictEqual(keptOf(t).name, "aws-ops", "kept while its fate is unknown");
+  release();
+  assert.strictEqual(await saving, true);
+  assert.strictEqual(t.box.puts.length, 1);
+  assert.strictEqual(t.run("pfvKept"), null, "it was written: it must not return as an unsaved edit");
+  await t.box.pfvShow();
+  assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
 });
 
 // --- Task 11 slice gate: the edit blocks as the mockup draws them -------------------------------------------------------
@@ -5446,6 +5730,29 @@ test("a forced close (the window crossed to a phone) takes the drawer with the p
   assert.strictEqual(st.drops, 1, "dropped, not reported: the edit it would have added to is gone");
   assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0]);
   assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
+  assert.strictEqual(t.run("pfvKept"), null, "the block held no change: nothing is kept");
+});
+
+test("a forced close keeps what the drawer's flow had already created, as pending rows; the half-filled drawer form is lost", async () => {
+  const d = drawerPage({ awscEntries: PICK_AWS });
+  const { t, st } = d;
+  defineAfterRefresh(t, { aws: [{ name: "lab-a", account_id: "555555555555", region: "eu-west-1" }] });
+  const first = await openDrawerFrom(d, "New AWS connection…");
+  first.opts.onCreated(["lab-a"], "aws");
+  await settle();
+  assert.ok(rowFor(t, "cloud", "AWS", "lab-a"), "the created connection is a pending row of the block");
+  st.busy = true;
+  assert.strictEqual(t.box.pageLeaveHook("force"), true);
+  assert.strictEqual(d.drawer.hidden, true);
+  assert.deepStrictEqual([d.body.children.length, d.foot.children.length], [0, 0], "nothing typed in the drawer lingers");
+  const k = keptOf(t);
+  assert.strictEqual(k.edits[0].values.aws.find((e) => e.name === "lab-a").fresh, true);
+  assert.deepStrictEqual(Object.keys(k.edits[0]).sort(), ["id", "init", "repair", "ui", "values"]);
+  await t.box.pfvShow();
+  assert.ok(rowFor(t, "cloud", "AWS", "lab-a"), "the row is back");
+  assert.strictEqual(t.run("pfvState").pending, true);
+  assert.strictEqual(t.run("pfvState").drawer, false, "the drawer is not");
+  assert.strictEqual(d.drawer.hidden, true);
 });
 
 test("Tab cycles inside the open drawer, and a Tab from outside it goes in", async () => {

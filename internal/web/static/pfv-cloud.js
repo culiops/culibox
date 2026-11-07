@@ -782,6 +782,8 @@ const pfcBlankNew = (e, ...props) => e.fresh === true && props.every((p) => Stri
 
 pfvRegisterEditor("cloud", {
   values: pfcCloudValues, draw: pfcCloudDraw, merge: pfcCloudMerge, check: pfcCloudCheck, add: pfcCloudAdd, remove: pfcCloudRemove,
+  // The permission rows folded open stay open when a forced close keeps the edit (see PFV_EDITORS); the open "+ Add" choice does not.
+  keep: ["customise"],
   settled: (v) => Object.assign({}, v, { gh: v.gh.filter((g) => !pfcBlankNew(g, "owner", "repos")) }),
   // Only a box has this block, so a save always gives the next session a new box.
   note: (rec, c) => c.tier === "box",
