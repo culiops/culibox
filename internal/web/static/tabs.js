@@ -157,6 +157,14 @@ class Cell {
       });
       this._ro.observe(this.el);
     }
+    // The header's meta wraps in whole units (desktop.css); the ones that no longer fit are
+    // clipped, and fitPaneMeta takes them out of the tab order and the accessibility tree. This
+    // observes the current meta (renderHeader re-points it at every rebuild), so a width change
+    // that moves a unit re-runs the fit. dispose() disconnects it.
+    this._metaRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+      const meta = this.bar.querySelector(".ph-meta");
+      if (meta) fitPaneMeta(meta);
+    }) : null;
     // Explicit so the sentinel is deliberate, not an implicit `undefined`
     // that syncNeeds' first call happens to treat correctly.
     this._needsKey = "";
@@ -1087,7 +1095,7 @@ class Cell {
       side.append(files);
     }
     const sh = el("button", "+ Shell");
-    sh.className = "ph-shell";
+    sh.className = "btn btn-ghost btn-sm ph-shell";
     sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     sh.onclick = (e) => {
@@ -1136,6 +1144,14 @@ class Cell {
     side.append(ics);
 
     this.bar.replaceChildren(main, side);
+    // The meta is new: observe it instead of the one just replaced, then fit it now (the bar is
+    // laid out; a pane with no layout gets nothing hidden, and the observer fires when it has).
+    const metaEl = this.bar.querySelector(".ph-meta");
+    if (this._metaRo) {
+      this._metaRo.disconnect();
+      if (metaEl) this._metaRo.observe(metaEl);
+    }
+    if (metaEl) fitPaneMeta(metaEl);
     paintDrawerTabs(this);
   }
 
@@ -1253,6 +1269,7 @@ class Cell {
 
   dispose() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+    if (this._metaRo) { this._metaRo.disconnect(); this._metaRo = null; }
     this.dropStrip();
     this._dropView();
     this.tabs.forEach((t) => t.dispose?.());
@@ -1288,6 +1305,15 @@ function dockIcon(kind) {
     add("path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" });
   }
   return svg;
+}
+
+// fitPaneMeta: mark the units of a pane header's meta that the wrap pushed off its line
+// (.mi-off, visibility: hidden: not focusable, not announced) and clear the mark on those
+// that fit again. The rule itself is deskshell.js's metaUnitsOff.
+function fitPaneMeta(meta) {
+  const units = Array.from(meta.children);
+  const off = metaUnitsOff(units.map((u) => u.getBoundingClientRect().top), meta.getBoundingClientRect());
+  units.forEach((u, i) => u.classList.toggle("mi-off", off[i]));
 }
 
 // tabIcon: the pane header's tab glyphs as inline SVG, in dockIcon's style, for a

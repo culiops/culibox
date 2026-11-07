@@ -250,6 +250,17 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   };
 }
 
+// metaUnitsOff: which units of the pane header's meta the wrap pushed off its one line
+// (`tops`: each unit's top, `box`: the meta's {top, bottom}). They are clipped by the
+// meta's height, and tabs.js marks them .mi-off (visibility: hidden), which takes them out
+// of the tab order and out of what a screen reader announces. Off = starting at or below
+// the line's bottom, with half a pixel of tolerance. A header with no layout (a detached
+// pane, display: none) has no line, so nothing is off there.
+function metaUnitsOff(tops, box) {
+  if (!box || !(box.bottom - box.top > 0)) return tops.map(() => false);
+  return tops.map((t) => t >= box.bottom - 0.5);
+}
+
 // headerDot: the pane header's dot. The session record's dot (paneHeaderModel's
 // `dot`, i.e. deskDot) wins whenever the pane has one: a finished turn is neutral
 // and an exited session is not painted amber by a need it left behind, whatever
@@ -445,5 +456,5 @@ function paneTabsClass(defs) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

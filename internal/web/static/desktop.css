@@ -732,6 +732,9 @@
   .ph-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .ph-cost { flex: none; }
   .ph-msep { flex: none; }
+  /* A unit the wrap pushed off the line (tabs.js fitPaneMeta marks it): clipped already, and now not
+     focusable and not announced either. visibility, not display, so the fit is measured on the same boxes. */
+  .mi-off { visibility: hidden; }
   /* ctx is a button (into Activity), set like its neighbours: the 2px pad is cancelled by the
      margin, so the line reads as the three words it is. */
   .ph-ctx {
@@ -742,15 +745,17 @@
   .ph-side { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; overflow: hidden; padding: 1px 2px; }
   .ph-ics { display: contents; }
   .ph-tabs { display: flex; align-items: center; gap: 2px; }
+  /* The kit's .ptab (ui-kit.css, m1-1/m1-2): 24px, --t-sm medium, --muted; hover --hover; the
+     one selected look is below. */
   .ph-tab {
     display: inline-flex; align-items: center;
-    padding: 4px 9px; font: var(--t-md) var(--font-ui); color: var(--muted);
-    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+    height: var(--h-sm); padding: 0 10px; font: var(--w-medium) var(--t-sm) var(--font-ui); color: var(--muted);
+    background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   /* Each tab holds its icon and its word; only the narrow rule below swaps them. */
   .ph-ico { display: none; }
   .ph-ico svg { display: block; width: 14px; height: 14px; }
-  .ph-tab:hover { color: var(--fg); }
+  .ph-tab:hover { color: var(--fg); background: var(--hover); }
   .ph-tab.on { color: var(--fg); background: var(--raise); }
   /* ONE selected look for a tab (G6): Terminal, Activity and Access are the pane's views, .on.
      Files over a terminal pane is not a tab but the .ph-files toggle (the kit's .btn[aria-pressed]
@@ -759,24 +764,23 @@
   .ph-tab[aria-pressed="true"] { color: var(--fg); background: var(--raise); }
   .ph-files { flex: none; }
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
-  .ph-shell {
-    padding: 4px 10px; font: 500 var(--t-sm) var(--font-ui); color: var(--fg); cursor: pointer;
-    background: var(--raise); border: 0; border-radius: var(--r-ctl);
-  }
-  .ph-shell:hover { background: var(--line); }
+  /* + Shell is the kit's .btn .btn-ghost .btn-sm (tabs.js): its look is the kit's, not ours. */
   .ph-shell[hidden] { display: none; }
-  /* ⋯ ⛶ × take no room until the header is hovered or holds focus; ⛶ stays
-     while its pane is maximized, so the way back is never hidden. */
+  /* ⋯ ⛶ × keep their 24px at all times and only fade in while the header is hovered or holds focus,
+     so the pointer entering never moves the header (F18: the meta's room is the same in or out).
+     No pointer-events while they are invisible, so a click cannot land on an icon nobody sees;
+     keyboard focus reveals them like the pointer. ⛶ stays while its pane is maximized, so the way
+     back is never hidden. */
   .ph-ic {
-    flex: none; width: 0; height: 24px; padding: 0; overflow: hidden; opacity: 0;
+    flex: none; width: 24px; height: 24px; padding: 0; overflow: hidden; opacity: 0; pointer-events: none;
     font: var(--t-md) var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
-  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
+  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { opacity: 1; pointer-events: auto; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
   .ph-more { font-size: var(--t-lg); }
   /* A narrow header's one control is always visible, never an overlay. */
-  .ph-ics.nar .ph-more { width: 24px; opacity: 1; }
+  .ph-ics.nar .ph-more { opacity: 1; pointer-events: auto; }
   .ph-max.pin { color: var(--fg); }
   .ph-del:hover { color: var(--red); }
   .cell-bar button:focus-visible { outline: var(--focus); outline-offset: -2px; }
@@ -784,63 +788,62 @@
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
      tabs tighten, + Shell loses its label and the separator goes. Below tabs.js's
      NARROW_PANE_PX (640) only ⋯ stays in the flow (see .ph-ics.nar; Maximize and Close
-     pane live in its menu), so the hover-revealed ⋯ ⛶ × no longer widen this side
-     there: a plain pane's wide look (3 text tabs, the separator, Files, + Shell, ⋯)
-     fits beside the name's 140px from a 525px pane (#172, 1px steps; #171 had 575 with
-     four tabs and ⋯ ⛶ × hovered). A MAXIMIZED pane keeps its ⛶ pinned beside ⋯ (26px
-     more): its wide look needs 551px and clipped Terminal up to 547. One rule serves both
-     (the plain pane pays 26px of room it did not need, still words): compact up to a 552px
-     pane, which is 532px of content box (the bar's 20px padding), and the wide look
-     starts with 2px to spare. From 640 up a hovered header's 407px needs a 577px pane,
-     which every wide pane exceeds. The frame's 575px panes (m1-1) draw the wide look. */
-  @container (max-width: 532px) {
+     pane live in its menu), so ⋯ ⛶ × (which always keep their 24px each, wide) do not
+     widen this side there: a plain pane's wide look (3 text tabs, the separator, Files,
+     + Shell, ⋯) fits beside the name's 140px from a 521px pane (#172, 1px steps; #171 had
+     575 with four tabs and ⋯ ⛶ × hovered). A MAXIMIZED pane keeps its ⛶ pinned beside ⋯
+     (26px more): its wide look needs 547px and clipped Terminal up to 546. One rule serves
+     both (the plain pane pays 26px of room it did not need, still words): compact up to a
+     548px pane, which is 528px of content box (the bar's 20px padding), and the wide look
+     starts with 2px to spare. From 640 up the side column is 402px, a 572px pane, which
+     every wide pane exceeds. The frame's 575px panes (m1-1) draw the wide look. */
+  @container (max-width: 528px) {
     .ph-sep { display: none; }
-    .ph-tab { padding: 4px 5px; }
+    .ph-tab { padding: 0 5px; }
     .ph-files { padding: 0 5px; }
-    .ph-shell { font-size: 0; padding: 4px 8px; }
+    .ph-shell { font-size: 0; padding: 0 8px; gap: 0; }
     .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
-  /* Too narrow for three words beside Files (the compact text look needs a 446px pane,
-     426px of content box, measured): the three tabs and Files as icons, 24px squares like
-     ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized pane keeps its ⛶ in the
-     flow, which costs 26px the + Shell button gives back here, or Terminal clips at
-     330-356px. The rule holds below 330px too, though + would fit there from a 250px
-     pane: a rare corner (a maximized pane under 330px) kept to one rule. */
-  @container (max-width: 427px) {
+  /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
+     419px of content box, measured): the three tabs and Files as icons, 24px squares like
+     ⋯ ⛶ ×, still named by title and aria-label (#13); the tabs' 0 5px padding above makes
+     the icon one. A maximized pane keeps its ⛶ in the flow, which costs 26px the + Shell
+     button gives back here, or Terminal clips at 328-357px. The rule holds below 328px
+     too, though + would fit there from a 227px pane: a rare corner (a maximized pane
+     under 328px) kept to one rule. */
+  @container (max-width: 420px) {
     .ph-lbl { display: none; }
     .ph-ico { display: block; }
-    .ph-tab { padding: 5px; }
     .ph-files { padding: 0 4px; }
     .cell-bar:has(.ph-max.pin) .ph-shell { display: none; }
   }
   /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text look needs
-     a 472px pane (452px of content box): measured, Terminal clipped up to 471. Up to
-     a 473px pane it draws the icons (2px to spare); + Shell keeps its room until the
+     a 465px pane (445px of content box): measured, Terminal clipped up to 464. Up to
+     a 466px pane it draws the icons (2px to spare); + Shell keeps its room until the
      rule above. A plain pane keeps its words down to that rule. */
-  @container (max-width: 453px) {
+  @container (max-width: 446px) {
     .cell-bar:has(.ph-max.pin) .ph-lbl { display: none; }
     .cell-bar:has(.ph-max.pin) .ph-ico { display: block; }
-    .cell-bar:has(.ph-max.pin) .ph-tab { padding: 5px; }
     .cell-bar:has(.ph-max.pin) .ph-files { padding: 0 4px; }
   }
-  /* Too narrow for the icons (three tabs and Files) beside the name's room (a 330px
-     pane or less, 310px of content box; they need 329px, measured): dot, name, chip, +
+  /* Too narrow for the icons (three tabs and Files) beside the name's room (a 332px
+     pane or less, 312px of content box; they need 331px, measured): dot, name, chip, +
      and ⋯. Files (the toggle) and Activity stay one click away in the pane's ⋯ menu
      (Open files here, Context by tool), Access in the palette. A pane of files has ONE
      tab (paneTabsClass marks it `one`), which fits in far less: it stays, or the pane
      loses its only header control (#123). */
-  @container (max-width: 310px) {
+  @container (max-width: 312px) {
     .ph-tabs:not(.one), .ph-files { display: none; }
   }
   /* The one-tab group's own floor. Beside the name's 140px, + Shell and ⋯ its 24px
-     icon is clipped in a pane narrower than 249px (229px of content box), so below
-     it the tab hides too. 236px leaves 8px of slack: Files shows from a 257px pane. */
+     icon is clipped in a pane narrower than 253px (233px of content box), so below
+     it the tab hides too. 236px leaves 4px of slack: Files shows from a 257px pane. */
   @container (max-width: 236px) {
     .ph-tabs.one { display: none; }
   }
-  /* + Shell (25px, the compact "+" above) fits beside the name's 140px and ⋯ from
-     a 223px pane (203px of content box); below it, the name keeps its room and
-     the + goes too. 210px leaves 7px of slack and clears the 202px panes of four
+  /* + Shell (26.7px, the compact "+" above) fits beside the name's 140px and ⋯ from
+     a 227px pane (207px of content box); below it, the name keeps its room and
+     the + goes too. 210px leaves 4px of slack and clears the 202px panes of four
      columns at 701px. */
   @container (max-width: 210px) {
     .ph-shell { display: none; }

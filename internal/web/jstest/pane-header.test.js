@@ -55,7 +55,11 @@ function el(tag) {
     get textContent() { return e.children.map((k) => k.textContent).join(""); },
     set textContent(v) { e.children = []; if (v !== "") e.append(String(v)); },
     all() { return e.children.flatMap((k) => (k.all ? [k, ...k.all()] : [k])); },
-    // Only the selectors the cut-out code uses: `[data-k]`.
+    // Only the selectors the cut-out code uses: a single `.class`, and `[data-k]`.
+    querySelector(sel) {
+      assert.match(sel, /^\.[\w-]+$/, "unexpected selector " + sel);
+      return e.all().find((n) => n.classList && n.classList.contains(sel.slice(1))) || null;
+    },
     querySelectorAll(sel) {
       assert.strictEqual(sel, "[data-k]", "unexpected selector " + sel);
       return e.all().filter((n) => n.dataset && n.dataset.k !== undefined);
@@ -72,6 +76,9 @@ require("../static/analytics.js");
 const TAB_SRC = read("tabs.js");
 const APP_SRC = read("app.js");
 
+// calls that are the header's own bookkeeping (the meta observer and fit), not a press
+const userCalls = (c) => !/^(ro\.|fitPaneMeta)/.test(c);
+
 // A header for one cell. `opts`: usage, session, narrow, tabs (kinds), view, drawer, maximized.
 function header(opts = {}) {
   const sess = opts.session === undefined ? { id: "s1", name: "agent-box", activity: "working", runtime: "box", cost_usd: 3.12 } : opts.session;
@@ -83,6 +90,7 @@ function header(opts = {}) {
   const cell = {
     tabs: [active], activeTab: active, view: opts.view || "terminal", _narrow: !!opts.narrow, _hdrKey: "",
     bar: el("div"), activate() {}, setView() {}, toggleView(v) { calls.push("toggleView:" + v); }, dock: null,
+    _metaRo: { disconnect() { calls.push("ro.disconnect"); }, observe(n) { calls.push("ro.observe:" + n.className); } },
   };
   const ctx = vm.createContext({
     document: { createElement: el }, window: { shellProfile: "bash" }, Date, String, JSON, Math, Number, Array, Object,
@@ -95,7 +103,7 @@ function header(opts = {}) {
     openPaneView: (sid, v) => calls.push("openPaneView:" + sid + ":" + v), closeDrawerFor() {}, setFocusedCell() {},
     headerDrawerPress: (c, kind, sid) => calls.push("drawerPress:" + kind + ":" + sid),
     spawnShellIn() {}, toggleSessionMenuAt() {}, toggleMax() {}, removeCell() {}, openTabSwitcher() {},
-    paintDrawerTabs: undefined,
+    paintDrawerTabs: undefined, fitPaneMeta: (m) => calls.push("fitPaneMeta:" + m.className),
   });
   ctx.paintDrawerTabs = (c) => {
     // The real one, over the real bar: the drawer is open on s1 when opts.drawer.
@@ -134,7 +142,7 @@ test("the ctx stays a button into Activity: text `ctx 35%`, a title starting `Co
   assert.match(ctx.title, /^Context used 35%/);
   assert.match(ctx.title, /click for context by tool/);
   ctx.onclick({ stopPropagation() {} });
-  assert.deepStrictEqual(h.calls, ["openPaneView:s1:activity"]);
+  assert.deepStrictEqual(h.calls.filter(userCalls), ["openPaneView:s1:activity"]);
 });
 
 test("the meta separators are decoration, and each unit carries its own so CSS can drop a unit whole", () => {
@@ -182,7 +190,7 @@ test("a terminal pane's tabs are Terminal, Activity, Access; Files is a button a
   assert.deepStrictEqual(files.children.map((n) => n.className), ["ph-ico", "ph-lbl"], "icon and word both kept: the narrow rule picks");
   assert.strictEqual(files.textContent, "Files");
   files.onclick({ stopPropagation() {} });
-  assert.deepStrictEqual(h.calls, ["drawerPress:files:s1"]);
+  assert.deepStrictEqual(h.calls.filter(userCalls), ["drawerPress:files:s1"]);
 });
 
 test("with the Files drawer open exactly ONE tab looks selected, and Files is the pressed button", () => {
@@ -250,4 +258,50 @@ test("the ask strip's Open terminal is a small secondary button, as drawn", () =
   assert.strictEqual(b.type, "button");
   b.onclick();
   assert.deepStrictEqual(calls, ["close:s1", "open:s1:agent-box"]);
+});
+
+test("+ Shell is the kit's ghost button, not a bespoke one, and keeps its hooks", () => {
+  const h = header();
+  const [sh] = h.byClass("ph-shell");
+  assert.strictEqual(sh.className, "btn btn-ghost btn-sm ph-shell");
+  assert.strictEqual(sh.textContent, "+ Shell");
+  assert.match(sh.title, /^New shell for this session/);
+  assert.strictEqual(sh.hidden, false);
+  const none = header({ files: true, session: null, usage: null });
+  assert.strictEqual(none.byClass("ph-shell")[0].className, "btn btn-ghost btn-sm ph-shell", "a pane of files too");
+});
+
+// A unit the wrap pushed off the first line is clipped; fitPaneMeta marks it .mi-off (visibility:
+// hidden: out of the tab order and out of the accessibility tree). renderHeader runs it after every
+// build and keeps ONE observer on the current meta, so a resize that moves a unit re-runs it.
+test("renderHeader fits the meta after building it and observes it, replacing the old observation", () => {
+  const h = header();
+  const [meta] = h.byClass("ph-meta");
+  assert.deepStrictEqual(h.calls.filter((c) => /^(ro|fitPaneMeta)/.test(c)), ["ro.disconnect", "ro.observe:ph-meta", "fitPaneMeta:ph-meta"]);
+  assert.ok(meta.children.every((u) => !u.classList.contains("mi-off")), "built visible; the fit decides");
+  const narrow = header({ narrow: true });
+  assert.deepStrictEqual(narrow.calls.filter((c) => /^(ro|fitPaneMeta)/.test(c)), ["ro.disconnect"], "no meta: the old observation is dropped, nothing new");
+});
+
+test("fitPaneMeta toggles .mi-off on the units the wrap left below the line, using metaUnitsOff", () => {
+  const mk = (tops) => tops.map((t) => { const u = { top: t, classes: new Set(), getBoundingClientRect() { return { top: t, bottom: t + 16 }; } }; u.classList = { toggle: (c, on) => { if (on) u.classes.add(c); else u.classes.delete(c); } }; return u; });
+  const ctx = vm.createContext({ metaUnitsOff: desk.metaUnitsOff, Array });
+  vm.runInContext("globalThis.f = " + fnSrc(TAB_SRC, "fitPaneMeta"), ctx);
+  const run = (tops, box) => {
+    const units = mk(tops);
+    ctx.f({ children: units, getBoundingClientRect: () => box });
+    return units.map((u) => u.classes.has("mi-off"));
+  };
+  assert.deepStrictEqual(run([100, 100, 100], { top: 100, bottom: 116 }), [false, false, false]);
+  assert.deepStrictEqual(run([100, 100, 116], { top: 100, bottom: 116 }), [false, false, true]);
+  assert.deepStrictEqual(run([116, 116, 116], { top: 100, bottom: 116 }), [true, true, true]);
+  assert.deepStrictEqual(run([0, 0, 0], { top: 0, bottom: 0 }), [false, false, false], "no layout: nothing hidden");
+  // And back: a unit that fits again is shown again (the same units, re-fitted).
+  const units = mk([100, 116, 132]);
+  const meta = { children: units, getBoundingClientRect: () => ({ top: 100, bottom: 116 }) };
+  ctx.f(meta);
+  assert.deepStrictEqual(units.map((u) => u.classes.has("mi-off")), [false, true, true]);
+  units.forEach((u, i) => { u.getBoundingClientRect = () => ({ top: 100, bottom: 116 }); });
+  ctx.f(meta);
+  assert.deepStrictEqual(units.map((u) => u.classes.has("mi-off")), [false, false, false]);
 });

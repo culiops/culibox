@@ -145,6 +145,26 @@ test("modelLabel: a build tag is not a version (provider-neutral ids)", () => {
   assert.equal(d.modelLabel("claude-opus-4-1-20250805"), "opus-4.1");
 });
 
+// metaUnitsOff: the units of the meta that the wrap pushed off its one line. They are clipped, and
+// tabs.js makes them visibility:hidden, which takes them out of the tab order and out of what a
+// screen reader announces. A unit is off when it starts at or below the line's bottom; a header
+// with no layout (a detached pane, display:none) has no line, so nothing is off there.
+test("metaUnitsOff: units below the first line are off, units on it are not", () => {
+  const box = { top: 100, bottom: 116 };
+  assert.deepEqual(d.metaUnitsOff([100, 100, 100], box), [false, false, false], "all on the line");
+  assert.deepEqual(d.metaUnitsOff([100, 100, 116], box), [false, false, true], "the model wrapped to the second row");
+  assert.deepEqual(d.metaUnitsOff([100, 116, 132], box), [false, true, true], "ctx and model wrapped");
+  assert.deepEqual(d.metaUnitsOff([116, 116, 116], box), [true, true, true], "no room at all");
+  assert.deepEqual(d.metaUnitsOff([100, 115.6, 116], box), [false, true, true], "sub-pixel: 0.5px of tolerance either way");
+  assert.deepEqual(d.metaUnitsOff([100, 115.4, 116], box), [false, false, true]);
+});
+
+test("metaUnitsOff: a header with no layout hides nothing, and an empty meta is empty", () => {
+  assert.deepEqual(d.metaUnitsOff([0, 0, 0], { top: 0, bottom: 0 }), [false, false, false]);
+  assert.deepEqual(d.metaUnitsOff([5], null), [false]);
+  assert.deepEqual(d.metaUnitsOff([], { top: 0, bottom: 16 }), []);
+});
+
 test("paneHeaderModel: no usage, or a usage with no model, leaves the meta slots empty", () => {
   const s = { ...working, cost_usd: 3.12 };
   const none = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
