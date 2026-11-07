@@ -478,9 +478,14 @@ test("the ask strip is the kit's .ask: 8px 12px on --amber-tint, Open terminal a
   // The padding and radius override skips .btn-sm, so Open terminal is the kit's 24px chip-radius button.
   assert.ok(rulesFor(".needstrip .nacts .btn:where(:not(.btn-sm))").some((b) => /padding:\s*3px 10px/.test(b) && /border-radius:\s*var\(--r-ctl\)/.test(b)));
   assert.deepStrictEqual(rulesFor(".needstrip .nacts .btn"), [], "no override reaches a .btn-sm");
-  assert.match(decl(".needstrip .nacts"), /align-items:\s*center/, "a 28px Yes does not stretch the 24px Open terminal");
-  const yes = decl('.needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri))');
-  assert.match(yes, /color:\s*var\(--on-fill\)/);
+  assert.match(decl(".needstrip .nacts"), /align-items:\s*center/, "the buttons centre on the line");
+  // Yes is the kit's amber .btn-yes (amber fill, --on-fill text): the strip's secondary fill, border and hover skip it.
+  assert.match(decl(".btn-yes"), /background:\s*var\(--amber\)[^}]*color:\s*var\(--on-fill\)/);
+  const skip = ".needstrip .nacts .btn:where(:not(.pri):not(.btn-yes))";
+  assert.ok(rulesFor(skip).some((b) => /background:\s*var\(--raise\)/.test(b)), "the secondary fill skips Yes");
+  assert.ok(rulesFor(skip + ":hover").length === 1 && rulesFor(".needstrip .nacts .btn.off:where(:not(.pri):not(.btn-yes))").length === 1);
+  assert.deepStrictEqual(rulesFor('.needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri))'), [], "no bespoke Yes rule left");
+  assert.match(decl(".btn-yes:disabled:hover"), /background:\s*var\(--amber\)/, "a disabled Yes keeps its fill on hover");
   assert.ok(!/#1a1304/i.test(block), "no raw dark text left in the strip");
 });
 
@@ -488,6 +493,10 @@ test("sidebar group labels and rows follow the frame's rhythm", () => {
   assert.match(decl(".grp"), /padding:\s*12px 8px 4px/);
   assert.deepStrictEqual(rulesFor(".grp:first-child"), [], "the first label has the same 12px above it");
   const row = decl("#sessions .drow");
+  // Hover is half a step (--hover), always quieter than the selected row's --raise: a hovered row never reads as a second selected one.
+  assert.match(decl("#sessions .drow:hover"), /background:\s*var\(--hover\)/);
+  assert.match(decl("#sessions .drow.sel"), /background:\s*var\(--raise\)/);
+  assert.ok(block.lastIndexOf("#sessions .drow.sel {") > block.lastIndexOf("#sessions .drow:hover {"), "selected + hovered stays --raise (declared later, same weight)");
   assert.match(row, /gap:\s*10px/);
   assert.match(row, /padding:\s*6px 8px/);
   assert.match(decl("#sessions .drow .sname"), /line-height:\s*var\(--lh-md\)/);
@@ -527,6 +536,7 @@ test("the row ⋯ shows on hover, on the selected row and while its own menu is 
 
 test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New session, 12px links", () => {
   assert.match(decl("#side-top"), /padding:\s*12px 16px/);
+  assert.match(decl("#side-top"), /gap:\s*var\(--sp-3\)/, "12px between the top rows, as .m1-side-top");
   assert.match(decl("#side-new"), /height:\s*var\(--h-ctl\)/);
   assert.match(decl("#side-foot"), /padding:\s*12px 16px/);
   assert.match(decl(".side-links button"), /font:\s*var\(--t-sm\) var\(--font-ui\)/);

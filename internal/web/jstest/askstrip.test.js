@@ -212,6 +212,35 @@ test("task 9b: the strip's command is what the frame draws, the command alone af
   assert.strictEqual(e.getAttribute("aria-expanded"), "true");
 });
 
+test("task 9b: every button of the strip is the kit's 24px .btn-sm, Yes also the amber .btn-yes", () => {
+  const p = page();
+  const b = body(p, ASK, true);
+  const [yes, no] = yesNo(b);
+  assert.strictEqual(yes.className, "btn btn-sm btn-yes");
+  assert.strictEqual(no.className, "btn btn-sm", "No is the secondary .btn-sm");
+  assert.ok(!yes.cls.has("off") && !no.cls.has("off"));
+  const open = b.byClass("nacts")[0].buttons().find((x) => x.textContent === "Open terminal");
+  assert.ok(open.cls.has("btn-sm"));
+  // Disabled keeps the classes (the look is CSS): the collapsed ask.
+  const c = yesNo(body(page(), ASK, false));
+  assert.deepStrictEqual(c.map((x) => x.className), ["btn btn-sm btn-yes off", "btn btn-sm off"]);
+  // Reply controls in the strip are small too: Disallow replies (replies on, a replyable turn), Enable replies.
+  const turn = { id: "t", name: "t", activity: "waiting", need: "turn", claude: true, replyable: true, summary: "done" };
+  const dis = body(page(), turn, false).byClass("nacts")[0].buttons().find((x) => x.textContent === "Disallow replies");
+  assert.strictEqual(dis.className, "btn btn-sm");
+  const en = body(page(), { ...turn, replyable: false }, false).byClass("nacts")[0].buttons()[0];
+  assert.ok(en.cls.has("btn-sm"), "Enable replies");
+});
+
+test("task 9b: outside the strip (the needs-you card) Yes/No keep the plain .btn", () => {
+  const p = page();
+  p.box.lastSessions = [ASK];
+  p.box.cardExpanded.add(ASK.id); p.box.cardAskSeen.set(ASK.id, ASK.ask_full);
+  const b = p.box.renderNeedsBody(ASK, {});
+  const [yes, no] = yesNo(b);
+  assert.deepStrictEqual([yes.textContent, yes.className, no.className], ["1 Yes", "btn", "btn"]);
+});
+
 test("task 9b: the strip's mask note follows the command it shows", () => {
   const p = page();
   const b = body(p, { ...ASK, ask: "Bash(echo [masked:aws-key-id])" }, false);

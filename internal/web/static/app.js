@@ -2565,8 +2565,10 @@ function renderNeedsBody(s, opts) {
 
   const acts = document.createElement("div");
   acts.className = "nacts";
+  // The strip's buttons are all the kit's 24px .btn-sm (Yes also the amber .btn-yes), like Open terminal.
+  const sm = inStrip ? " btn-sm" : "";
   if (c.enableReplies) {
-    acts.appendChild(buildEnableRepliesButton(s.id, () => {
+    const en = buildEnableRepliesButton(s.id, () => {
       // replyable is in the signature, so the card re-rendered with its reply
       // field; land the operator in it rather than on <body>.
       // Desktop has no card: the field is in the ask strip over the pane.
@@ -2574,7 +2576,9 @@ function renderNeedsBody(s, opts) {
       const strip = mobileActive(window.innerWidth) ? null : Array.from(document.querySelectorAll(".needstrip")).find((n) => n.dataset.sid === s.id);
       const fld = (li && li.querySelector(".nbody .fld")) || (strip && strip.querySelector(".fld"));
       if (fld) fld.focus();
-    }));
+    });
+    if (inStrip) en.classList.add("btn-sm");
+    acts.appendChild(en);
   }
   if (c.reply) {
     // The card's counterpart to the sidebar peek panel's "Allow replies from
@@ -2583,7 +2587,7 @@ function renderNeedsBody(s, opts) {
     // the surface an operator actually answers from.
     const dis = document.createElement("button");
     dis.type = "button";
-    dis.className = "btn";
+    dis.className = "btn" + sm;
     dis.textContent = "Disallow replies";
     dis.title = "Revoke this session's sidebar-reply permission";
     dis.onclick = async () => {
@@ -2605,7 +2609,7 @@ function renderNeedsBody(s, opts) {
     const pair = [["yes", inStrip ? "Yes" : "1 Yes"], ["no", "No"]].map(([choice, label]) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "btn";
+      b.className = "btn" + sm + (inStrip && choice === "yes" ? " btn-yes" : "");
       b.textContent = label;
       b.disabled = !ans.enabled || pendingAnswers.has(s.id);
       b.classList.toggle("off", b.disabled);

@@ -221,6 +221,7 @@
   /* Disabled: #169's dimmed look above; here only the hover keeps the resting fill. */
   .btn:disabled:hover { background: var(--raise); }
   .btn-primary:disabled:hover, .btn.pri:disabled:hover { background: var(--accent); }
+  .btn-yes:disabled:hover { background: var(--amber); }
   .btn-ghost:disabled:hover, .btn.gh:disabled:hover, .btn-danger:disabled:hover, .btn.dgr:disabled:hover { background: transparent; }
 
   /* --- segmented control (every range, view, 1-2-4 and box/host switch) ----- */
@@ -488,7 +489,7 @@
   header, #hint { display: none; }
 
   /* --- sidebar top -------------------------------------------------------- */
-  #side-top { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 12px 16px; }
+  #side-top { display: flex; flex: none; flex-direction: column; gap: var(--sp-3); padding: 12px 16px; }
   .side-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .side-logo { flex: none; }
   .side-name { font-size: var(--t-lg); font-weight: 600; white-space: nowrap; }
@@ -621,7 +622,7 @@
     position: relative; gap: 10px; align-items: flex-start; padding: 6px 8px; margin-bottom: 1px;
     border: 0; border-radius: var(--r-chip); background: transparent;
   }
-  #sessions .drow:hover { background: var(--raise); }
+  #sessions .drow:hover { background: var(--hover); } /* half a step: quieter than the selected row's --raise */
   #sessions .drow.sel { background: var(--raise); }
   /* Open in some pane (not necessarily the focused one): a 2px bar on the sidebar's own edge (the
      row sits 8px in), 6px short of the row's top and bottom, faint (m1-1's .is-in-pane). The selected
@@ -1133,14 +1134,13 @@
   .needstrip .peektxt:focus-visible { border-radius: var(--r-chip); }
   .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
   .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; }
-  /* A primary here (the SSO strip's Sign in) is the kit primitive: the strip's secondary fill,
-     border and hover skip it. :where(:not(.pri)) leaves each rule's weight as it was. */
+  /* A primary here (the SSO strip's Sign in) and Yes (the kit's amber .btn-yes, the one amber-filled button
+     in the product: amber = needs-you only) are kit primitives: the strip's secondary fill, border and hover
+     skip them. :where(...) leaves each rule's weight as it was. Yes, No and Open terminal are all .btn-sm. */
   .needstrip .nacts .btn:where(:not(.btn-sm)) { padding: 3px 10px; border-radius: var(--r-ctl); }
-  .needstrip .nacts .btn:where(:not(.pri)) { background: var(--raise); border: 1px solid var(--line); }
-  .needstrip .nacts .btn:where(:not(.pri)):hover { background: var(--background3); }
-  .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
-  /* The one amber-filled button in the product: Yes (amber = needs-you only). */
-  .needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri)) { background: var(--amber); border-color: var(--amber); color: var(--on-fill); font-weight: 600; }
+  .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)) { background: var(--raise); border: 1px solid var(--line); }
+  .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)):hover { background: var(--background3); }
+  .needstrip .nacts .btn.off:where(:not(.pri):not(.btn-yes)) { background: var(--raise); }
   .needstrip .askfull, .needstrip .askmsg, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
   /* An expanded ask: line 1 stays the command; what the agent said before it is the next line (F51). */
   .needstrip .askmsg { color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
