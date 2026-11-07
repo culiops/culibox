@@ -3009,7 +3009,7 @@ function startRename(li, span, s) {
   // wrapper) — swap it out of its real parent, not the row.
   const parent = span.parentNode;
   let finished = false;
-  const finish = async (commit, byKey) => {
+  const finish = async (commit) => {
     if (finished) return;
     finished = true;
     editing = false;
@@ -3025,9 +3025,6 @@ function startRename(li, span, s) {
     const nested = li.classList.contains("nested");
     if (save && !nested) span.textContent = v;
     if (input.parentNode) input.parentNode.replaceChild(span, input);
-    // Enter/Escape leave the keyboard on the row's name, not on <body>; a blur
-    // leaves focus wherever the click put it.
-    if (byKey) span.focus();
     if (save) {
       try {
         const info = await api("/api/sessions/" + encodeURIComponent(s.id), {
@@ -3049,8 +3046,8 @@ function startRename(li, span, s) {
     refreshSessions();
   };
   input.onkeydown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true, true); }
-    else if (e.key === "Escape") { e.preventDefault(); finish(false, true); }
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
   };
   input.onblur = () => finish(true);
   parent.replaceChild(input, span);

@@ -23,6 +23,17 @@ test("plainSummary drops bold and strong-underscore markers", () => {
   assert.strictEqual(plainSummary("Fixed **the flaky"), "Fixed the flaky");
 });
 
+test("plainSummary drops a bold that wraps code, and leaves link-shaped code alone", () => {
+  assert.strictEqual(plainSummary("**Updated `config.go`**"), "Updated config.go");
+  assert.strictEqual(plainSummary("The last commit subject is: **merge: `fix/ui` into main**"),
+    "The last commit subject is: merge: fix/ui into main");
+  assert.strictEqual(plainSummary("Fixed **`internal/web/app.js`** and tests"), "Fixed internal/web/app.js and tests");
+  assert.strictEqual(plainSummary("**Fixed `nil` deref in `Rename`.** Tests pass."), "Fixed nil deref in Rename. Tests pass.");
+  assert.strictEqual(plainSummary("Calls `handlers[type](event)` on each message"), "Calls handlers[type](event) on each message");
+  // The placeholder characters cannot be smuggled in to pull out another span.
+  assert.strictEqual(plainSummary("a \uE0000\uE001 b `c`"), "a 0 b c");
+});
+
 test("plainSummary keeps a ** that is not emphasis: globs, exponents, a lone pair", () => {
   assert.strictEqual(plainSummary("Run tests on **/*.test.js"), "Run tests on **/*.test.js");
   assert.strictEqual(plainSummary("2**10 = 1024"), "2**10 = 1024");

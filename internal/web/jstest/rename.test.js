@@ -38,7 +38,7 @@ function renameIn({ name = "old", label = name, nested = false, patch = async ()
       if (box.focused === prev) { box.focused = null; if (prev.onblur) prev.onblur(); }
     },
   };
-  const span = { textContent: label, parentNode: parent, focused: 0, focus() { this.focused++; } };
+  const span = { textContent: label, parentNode: parent };
   parent.child = span;
   const ctx = vm.createContext({
     document: {
@@ -69,7 +69,6 @@ test("rename then Escape puts the old name back and saves nothing", async () => 
   assert.deepStrictEqual(t.calls.patch, [], "the blur from removing the input did not commit");
   assert.strictEqual(t.editing(), false);
   assert.strictEqual(t.calls.refresh, 1);
-  assert.strictEqual(t.span.focused, 1, "the keyboard lands back on the name, not on <body>");
 });
 
 test("rename then Enter shows the new name", async () => {
@@ -136,7 +135,7 @@ test("Enter with the name unchanged, or blank, puts the name back without a save
   }
 });
 
-test("blur commits like Enter, once, and leaves focus where the click put it", async () => {
+test("blur commits like Enter, once", async () => {
   const t = renameIn();
   t.input.value = "by-blur";
   t.input.onblur();
@@ -144,5 +143,4 @@ test("blur commits like Enter, once, and leaves focus where the click put it", a
   await t.settle();
   assert.strictEqual(t.span.textContent, "by-blur");
   assert.strictEqual(t.calls.patch.length, 1);
-  assert.strictEqual(t.span.focused, 0);
 });
