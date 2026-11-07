@@ -863,6 +863,79 @@ test("applyTermThemeAll themes every terminal eachTerminal yields, pane tabs and
   });
 });
 
+// A crossing always re-reads the stylesheet (applyTermThemeAll drops the cache first), so a theme
+// cached from an empty first read (tokens not applied yet) cannot stick, and neither can a stale one.
+function withTokens(tokens, fn) {
+  const saved = ["window", "document", "getComputedStyle", "mobileActive", "eachTerminal"].map((k) => [k, global[k], k in global]);
+  const reads = { n: 0 };
+  global.window = { innerWidth: 1440 };
+  global.document = { documentElement: {} };
+  global.getComputedStyle = () => ({ getPropertyValue: (name) => { reads.n++; return tokens.v[name] || ""; } });
+  global.mobileActive = (w) => Number(w) <= 700;
+  // Start from no cached desktop theme whatever ran before: one phone read drops it.
+  global.window.innerWidth = 390;
+  require("../static/terminal-tab.js").currentTermTheme();
+  global.window.innerWidth = 1440;
+  try { fn(reads); } finally {
+    for (const [k, v, had] of saved) { if (had) global[k] = v; else delete global[k]; }
+  }
+}
+
+test("applyTermThemeAll clears the cached desktop theme, so an empty first read does not stick", () => {
+  const { applyTermThemeAll, currentTermTheme, TerminalTab } = require("../static/terminal-tab.js");
+  const tokens = { v: {} }; // the kit tokens are not defined yet: every read is empty
+  withTokens(tokens, (reads) => {
+    assert.deepStrictEqual(currentTermTheme(), { background: "#000000" });
+    tokens.v = { "--term-bg": "#0d0f12", "--term-fg": "#e6e8eb" }; // the stylesheet has arrived
+    assert.strictEqual(currentTermTheme().background, "#000000", "without a crossing the cache is kept");
+    const t = Object.create(TerminalTab.prototype);
+    t.term = { options: { theme: { background: "#000000" } } };
+    global.eachTerminal = (cb) => cb(t);
+    const before = reads.n;
+    applyTermThemeAll();
+    assert.ok(reads.n > before, "the crossing reads the tokens again");
+    assert.strictEqual(t.term.options.theme.background, "#0d0f12");
+    assert.strictEqual(t.term.options.theme.foreground, "#e6e8eb");
+    assert.strictEqual(currentTermTheme().background, "#0d0f12", "and the fresh read is what later terminals copy");
+  });
+});
+
+test("applyTermThemeAll drops the cache even when there is no terminal to theme yet", () => {
+  const { applyTermThemeAll, currentTermTheme } = require("../static/terminal-tab.js");
+  const tokens = { v: { "--term-bg": "#111111" } };
+  withTokens(tokens, () => {
+    assert.strictEqual(currentTermTheme().background, "#111111");
+    tokens.v = { "--term-bg": "#222222" };
+    delete global.eachTerminal; // tabs.js not loaded: nothing to theme
+    applyTermThemeAll();
+    assert.strictEqual(currentTermTheme().background, "#222222");
+  });
+});
+
+test("the breakpoint listener re-themes the terminals BEFORE renderGrid, so a terminal the grid builds on the crossing copies a fresh theme", () => {
+  const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
+  const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
+  const at = app.indexOf('if (typeof mobileMediaQuery === "function" && window.matchMedia) {');
+  assert.ok(at > 0);
+  const block = app.slice(at, app.indexOf("\n}\n", at) + 3);
+  const calls = [];
+  const log = (n) => () => { calls.push(n); return { ignoreCollapsed: false }; };
+  let cb = null;
+  const ctx = {
+    window: { innerWidth: 390, matchMedia: () => ({ addEventListener: (_, f) => { cb = f; } }) },
+    mobileMediaQuery: () => "(max-width: 700px)", closePage: log("closePage"), applyCollapsed: log("applyCollapsed"),
+    bootFlags: log("bootFlags"), deskStorage: () => ({}), readCollapsed: () => ({}), mobileActive: () => false,
+    restoreDrawerNodes: log("restoreDrawerNodes"), paintSideCost: log("paintSideCost"), paintSteerToggle: log("paintSteerToggle"),
+    refreshSessions: log("refreshSessions"), renderGrid: log("renderGrid"), applyTermThemeAll: log("applyTermThemeAll"),
+  };
+  vm.runInNewContext(block, ctx);
+  assert.equal(typeof cb, "function", "the handler registered");
+  cb();
+  assert.ok(calls.includes("applyTermThemeAll") && calls.includes("renderGrid"));
+  assert.ok(calls.indexOf("applyTermThemeAll") < calls.indexOf("renderGrid"), "order: " + calls.join(" > "));
+  assert.strictEqual(calls.filter((c) => c === "applyTermThemeAll").length, 1, "once");
+});
+
 test("the breakpoint listener re-themes the terminals, and the constructor builds its theme from termTheme", () => {
   const fs = require("node:fs"), path = require("node:path");
   const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");

@@ -120,6 +120,8 @@ function toggleSidebar() {
   const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
+  // Shown again: the splitter's aria-valuenow reads the drawn width (a page loaded hidden never had one).
+  if (!hidden && typeof syncSplitterAria === "function") syncSplitterAria();
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
@@ -2839,10 +2841,25 @@ const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to r
 // state, not the card's. pruneSSODone decides each poll whether it stays.
 const ssoDone = new Map();
 
+// ssoDoneHeard: the ids whose kept line has been drawn as a live region already. The strip
+// is rebuilt whenever something else on it moves, and a rebuilt live region reads out again:
+// the line is announced the first time it appears for a sign-in, and drawn silently after.
+// It follows ssoDone: a line that goes away (or a new sign-in) is announced fresh next time.
+const ssoDoneHeard = new Set();
+
+// ssoDoneFirstShow: true the first time the line for `id` is drawn since its sign-in
+// finished (buildSSODoneLine adds role="status" then and only then).
+function ssoDoneFirstShow(id) {
+  if (ssoDoneHeard.has(id)) return false;
+  ssoDoneHeard.add(id);
+  return true;
+}
+
 // markSSODone: this tab's sign-in for `id` just finished (next to the toast).
 function markSSODone(id) {
   const s = lastSessions.find((x) => x.id === id);
   ssoDone.set(id, s ? s.activity : "");
+  ssoDoneHeard.delete(id);
   // The strip is drawn from the poll; do not wait for the next one.
   if (!mobileActive(window.innerWidth)) cells.forEach((c) => c.repaintReply());
 }
@@ -2861,13 +2878,14 @@ function pruneSSODone() {
   for (const [id, prev] of Array.from(ssoDone)) {
     const s = byId.get(id);
     if (s && ssoDoneKeep(prev, s.activity, !!s.exited)) ssoDone.set(id, s.activity);
-    else ssoDone.delete(id);
+    else { ssoDone.delete(id); ssoDoneHeard.delete(id); }
   }
 }
 
 // dismissSSODone: the ✕.
 function dismissSSODone(id) {
   ssoDone.delete(id);
+  ssoDoneHeard.delete(id);
   cells.forEach((c) => c.repaintReply());
 }
 
@@ -6710,10 +6728,11 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     else paintSideCost(); // the footer was skipped while narrow
     paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
-    if (typeof renderGrid === "function") renderGrid();
     // F05: the terminals were built at the old width; a desktop's graphite and a phone's black are
-    // set on the live xterm objects (pane tabs and docked shells), nothing is rebuilt.
+    // set on the live xterm objects (pane tabs and docked shells), nothing is rebuilt. Before
+    // renderGrid, which may build terminals of its own: this call has dropped the cache, so they read the tokens fresh.
     if (typeof applyTermThemeAll === "function") applyTermThemeAll();
+    if (typeof renderGrid === "function") renderGrid();
   });
 }
 // Account limits change slowly and the file only updates when a claude statusLine

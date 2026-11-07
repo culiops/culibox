@@ -438,9 +438,10 @@ function ssoPage(sessions) {
   };
   const ctx = vm.createContext(box);
   new vm.Script([
-    declSrc(appSrc, "SSO_DONE_TOAST"), declSrc(appSrc, "ssoDone"),
+    declSrc(appSrc, "SSO_DONE_TOAST"), declSrc(appSrc, "ssoDone"), declSrc(appSrc, "ssoDoneHeard"),
     fnSrc(appSrc, "markSSODone"), fnSrc(appSrc, "pruneSSODone"), fnSrc(appSrc, "dismissSSODone"), fnSrc(appSrc, "ssoDoneShown"),
-    "globalThis.api = { markSSODone, pruneSSODone, dismissSSODone, ssoDoneShown, ssoDone, SSO_DONE_TOAST };",
+    fnSrc(appSrc, "ssoDoneFirstShow"),
+    "globalThis.api = { markSSODone, pruneSSODone, dismissSSODone, ssoDoneShown, ssoDoneFirstShow, ssoDone, ssoDoneHeard, SSO_DONE_TOAST };",
   ].join("\n")).runInContext(ctx);
   return { box, api: box.api, synced, toasts, clock };
 }
@@ -502,10 +503,12 @@ test("F63: buildNeedStrip draws the line with a ✕, alone as a neutral strip or
   const tabs = read("tabs.js");
   const mk = (done) => {
     const dismissed = [];
+    const heard = new Set();
     const box = {
       document: { createElement: (t) => new Node(t) }, cardContent: () => ({}), cardExpanded: new Set(), stripLabel: (l) => l,
       renderNeedsBody: () => new Node("div"), ResizeObserver: undefined, SSO_DONE_TOAST: "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.",
       ssoDoneShown: () => done, dismissSSODone: (id) => dismissed.push(id),
+      ssoDoneFirstShow: (id) => { if (heard.has(id)) return false; heard.add(id); return true; },
     };
       const ctx = vm.createContext(box);
     new vm.Script(fnSrc(tabs, "buildSSODoneLine") + "\n" + fnSrc(tabs, "buildNeedStrip") + "\nglobalThis.buildNeedStrip = buildNeedStrip;").runInContext(ctx);
@@ -534,6 +537,53 @@ test("F63: buildNeedStrip draws the line with a ✕, alone as a neutral strip or
   // Not kept: nothing added.
   const none = mk(false).build({ id: "a" }, { label: "asks", text: "t", tone: "block" }, null);
   assert.strictEqual(none.byClass("ssodone").length, 0);
+});
+
+// The line is a live region the first time it appears for a sign-in, so a screen reader reads it once;
+// a strip rebuild (a poll that moved something else) draws it again without the role and stays quiet.
+test("F63: the kept line is role=status only the first time it appears; a rebuild is silent", () => {
+  const tabs = read("tabs.js");
+  const heard = new Set();
+  const box = { document: { createElement: (t) => new Node(t) }, SSO_DONE_TOAST: "Signed in.", dismissSSODone() {},
+    ssoDoneFirstShow: (id) => { if (heard.has(id)) return false; heard.add(id); return true; } };
+  const ctx = vm.createContext(box);
+  new vm.Script(fnSrc(tabs, "buildSSODoneLine") + "\nglobalThis.build = buildSSODoneLine;").runInContext(ctx);
+  const first = box.build({ id: "a" });
+  assert.strictEqual(first.getAttribute("role"), "status", "first appearance: announced");
+  const again = box.build({ id: "a" });
+  assert.strictEqual(again.getAttribute("role"), null, "a rebuild of the same line: not announced again");
+  assert.strictEqual(again.byClass("ssodone-txt")[0].textContent, "Signed in.", "it still draws the same line");
+  assert.strictEqual(box.build({ id: "b" }).getAttribute("role"), "status", "another session's line is its own first");
+});
+
+test("F63: a line that goes away (✕, prune, a new sign-in) is announced again the next time it appears", () => {
+  const p = ssoPage([{ id: "a", activity: "waiting" }, { id: "g", activity: "waiting" }]);
+  const { api } = p;
+  p.api.markSSODone("a");
+  assert.strictEqual(api.ssoDoneFirstShow("a"), true);
+  assert.strictEqual(api.ssoDoneFirstShow("a"), false, "second build of the same line");
+  assert.strictEqual(api.ssoDoneFirstShow("a"), false);
+  // another sign-in finishes for the same session: a new line, announced
+  api.markSSODone("a");
+  assert.strictEqual(api.ssoDoneFirstShow("a"), true);
+  // the ✕
+  api.dismissSSODone("a");
+  assert.strictEqual(api.ssoDoneHeard.has("a"), false);
+  api.markSSODone("a");
+  assert.strictEqual(api.ssoDoneFirstShow("a"), true);
+  // a prune that drops it (the session started working again, or left the list)
+  api.markSSODone("g");
+  assert.strictEqual(api.ssoDoneFirstShow("g"), true);
+  p.box.lastSessions = [{ id: "a", activity: "working" }];
+  api.pruneSSODone();
+  assert.strictEqual(api.ssoDoneHeard.has("g"), false, "left the list");
+  assert.strictEqual(api.ssoDoneHeard.has("a"), false, "took the retry up");
+  // a kept line stays heard across polls
+  api.markSSODone("a");
+  assert.strictEqual(api.ssoDoneFirstShow("a"), true);
+  p.box.lastSessions = [{ id: "a", activity: "waiting" }];
+  api.pruneSSODone();
+  assert.strictEqual(api.ssoDoneFirstShow("a"), false, "still the same line after a poll");
 });
 
 // --- Cell.syncStrip: when the pane's strip is rebuilt ------------------------------------

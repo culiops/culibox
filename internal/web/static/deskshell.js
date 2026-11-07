@@ -260,12 +260,13 @@ function headerSyncKey(name, session) {
 
 // modelLabel: a model id as the pane header shows it, `haiku-4.5` (F13). Analytics'
 // shortModel drops "claude-" and a trailing -YYYYMMDD; a "-N-M" version tail then
-// reads N.M. The tail is one or two digits a side: "gpt-4-0613" is a build tag, not
-// version 4.613. Nothing to show (null, "") is null, where shortModel would say
+// reads N.M. The major is ONE digit and the minor one or two: "gpt-4-0613" is a build tag,
+// not version 4.613, and a dated id ("gpt-4o-2024-08-06") ends in -MM-DD, not a 08.06
+// version. Nothing to show (null, "") is null, where shortModel would say
 // "(unknown)". The raw id belongs in the title.
 function modelLabel(id) {
   if (!id) return null;
-  return deskDep("shortModel")(String(id)).replace(/-(\d{1,2})-(\d{1,2})$/, "-$1.$2");
+  return deskDep("shortModel")(String(id)).replace(/-(\d)-(\d{1,2})$/, "-$1.$2");
 }
 
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,

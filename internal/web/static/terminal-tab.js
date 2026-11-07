@@ -350,7 +350,12 @@ function currentTermTheme() {
 // alike (tabs.js eachTerminal). The breakpoint listener (app.js) calls it on a
 // crossing: a terminal is built once and reparented between pane and dock, never
 // rebuilt, so it would otherwise keep the theme of the width it was born at.
+//
+// It drops the cached desktop theme first, so a crossing always reads the tokens
+// again: a read made before the stylesheet applied (every token empty, so the
+// plain black) cannot stick, and a terminal built after this copies the fresh one.
 function applyTermThemeAll() {
+  termThemeDesktop = null;
   if (typeof eachTerminal !== "function") return;
   eachTerminal((t) => { if (t.applyTheme) t.applyTheme(); });
 }

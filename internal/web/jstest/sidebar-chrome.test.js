@@ -235,10 +235,14 @@ test("#split-v is a focusable vertical separator with its bounds and a name", ()
 function wireSplitter(width) {
   const handle = new El("div");
   const sidebar = new El("aside");
+  // The drawn width follows --sidebar-w once a step sets it, as it does in the page.
   sidebar.getBoundingClientRect = () => ({ left: 0, width });
   const log = { set: [], saved: [], fit: 0 };
   const ctx = {
-    document: { getElementById: (id) => (id === "split-v" ? handle : sidebar), documentElement: { style: { setProperty() {} } } },
+    document: {
+      getElementById: (id) => (id === "split-v" ? handle : sidebar),
+      documentElement: { style: { setProperty: (k, v) => { if (k === "--sidebar-w") width = parseFloat(v); } } },
+    },
     stepWidth: DS.stepWidth, widthKeyDir: DS.widthKeyDir,
     fitAll() { log.fit++; }, localStorage: { setItem: (k, v) => log.saved.push([k, v]) },
   };
@@ -250,7 +254,7 @@ function wireSplitter(width) {
     handle.handlers.keydown(Object.assign({ key: k, preventDefault() { prevented = true; } }, mods));
     return prevented;
   };
-  return { handle, log, key };
+  return { handle, log, key, sidebar, setWidth: (w) => { width = w; } };
 }
 
 test("ArrowRight widens the sidebar by 16px and ArrowLeft narrows it; the width is kept and the terminals refit", () => {
@@ -267,11 +271,18 @@ test("ArrowRight widens the sidebar by 16px and ArrowLeft narrows it; the width 
 
 test("the keys stop at 200 and 560, and any other key is left alone", () => {
   const max = wireSplitter(560);
-  max.key("ArrowRight");
-  assert.deepEqual(max.log.saved, [["agent-box:sidebarWidth", "560"]]);
+  assert.equal(max.key("ArrowRight"), true, "the key is still the splitter's: the page does not scroll");
+  assert.deepEqual(max.log.saved, [], "a press at the clamp changes nothing, so nothing is written");
+  assert.equal(max.log.fit, 0, "and the terminals do not refit");
   const min = wireSplitter(200);
-  min.key("ArrowLeft");
-  assert.deepEqual(min.log.saved, [["agent-box:sidebarWidth", "200"]]);
+  assert.equal(min.key("ArrowLeft"), true);
+  assert.deepEqual(min.log.saved, []);
+  assert.equal(min.log.fit, 0);
+  // Steps that land on a bound still count: 550 -> 560 moves, and the next press at 560 does not.
+  const edge = wireSplitter(550);
+  edge.key("ArrowRight");
+  assert.deepEqual(edge.log.saved, [["agent-box:sidebarWidth", "560"]]);
+  assert.equal(edge.log.fit, 1);
   const other = wireSplitter(290);
   for (const k of ["ArrowUp", "Enter", "Tab", "Home"]) assert.equal(other.key(k), false, k);
   assert.deepEqual(other.log.saved, []);
@@ -282,9 +293,58 @@ test("the keys stop at 200 and 560, and any other key is left alone", () => {
   assert.deepEqual(chord.log.saved, []);
 });
 
+test("a held key stops writing once the sidebar is at the clamp", () => {
+  const s = wireSplitter(540);
+  for (let i = 0; i < 6; i++) s.key("ArrowRight"); // 556, 560, then four repeats at 560
+  assert.deepEqual(s.log.saved, [["agent-box:sidebarWidth", "556"], ["agent-box:sidebarWidth", "560"]]);
+  assert.equal(s.log.fit, 2);
+  assert.equal(s.handle.attrs["aria-valuenow"], "560");
+  const l = wireSplitter(220);
+  for (let i = 0; i < 4; i++) l.key("ArrowLeft"); // 204, 200, then two repeats at 200
+  assert.equal(l.log.saved.length, 2);
+  assert.equal(l.log.fit, 2);
+});
+
 test("the splitter's current width is what it measures when no key has been pressed", () => {
   const s = wireSplitter(333);
   assert.equal(s.handle.attrs["aria-valuenow"], "333");
+});
+
+test("a page loaded with the sidebar hidden does not keep announcing the static 290 once the handle is focused", () => {
+  const s = wireSplitter(0); // hidden: drawn width 0, nothing to read yet
+  assert.equal(s.handle.attrs["aria-valuenow"], undefined);
+  s.setWidth(333); // the sidebar is shown at its stored width
+  assert.equal(typeof s.handle.handlers.focus, "function", "the handle resyncs when it takes focus");
+  s.handle.handlers.focus({});
+  assert.equal(s.handle.attrs["aria-valuenow"], "333");
+  s.setWidth(0); // hidden again: a focus on a zero-width handle leaves the last value
+  s.handle.handlers.focus({});
+  assert.equal(s.handle.attrs["aria-valuenow"], "333");
+});
+
+test("toggleSidebar's show path resyncs the splitter's aria-valuenow from the drawn width; the hide path does not", () => {
+  const handle = new El("div");
+  handle.attrs["aria-valuenow"] = "290"; // index.html's static value
+  const sidebar = new El("aside");
+  let hidden = true, drawn = 0;
+  sidebar.getBoundingClientRect = () => ({ left: 0, width: hidden ? 0 : drawn });
+  const root = { classList: { toggle: (c) => { hidden = !hidden; return hidden; } } };
+  const els = { "split-v": handle, sidebar, rail48: null, "sidebar-toggle": null, "side-collapse": null };
+  const ctx = {
+    window: { innerWidth: 1440 }, mobileActive: () => false, localStorage: { setItem() {} },
+    document: { activeElement: null, documentElement: root, getElementById: (id) => els[id] || null },
+    $: (id) => els[id] || null, renderGrid() {}, renderRail48() {},
+  };
+  const head = shell.slice(shell.indexOf("function syncSplitterAria"), shell.indexOf("function persistSidebarWidth"));
+  vm.runInNewContext(head + "\n" + fn(app, "toggleSidebar") + "\nglobalThis.t = toggleSidebar;", ctx);
+  drawn = 412;
+  ctx.t(); // hidden -> shown
+  assert.equal(hidden, false);
+  assert.equal(handle.attrs["aria-valuenow"], "412");
+  drawn = 500;
+  ctx.t(); // shown -> hidden: the sidebar is not drawn, nothing to read
+  assert.equal(hidden, true);
+  assert.equal(handle.attrs["aria-valuenow"], "412");
 });
 
 // ---- #sessions .kbtn: the row's ⋯ takes the kit look (Plan 1 follow-up 1) ------------------------------

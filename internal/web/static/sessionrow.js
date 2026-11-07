@@ -127,8 +127,10 @@ const MENU_GROUP_OF = {
 function menuGroups(items) {
   const groups = [[], [], [], []];
   for (const it of items || []) {
-    const g = it.danger ? 3 : MENU_GROUP_OF[it.id];
-    groups[g === undefined ? 2 : g].push(it);
+    // Own properties only: an id such as "constructor" must not find Object.prototype's member.
+    const known = Object.prototype.hasOwnProperty.call(MENU_GROUP_OF, it.id);
+    const g = it.danger ? 3 : known ? MENU_GROUP_OF[it.id] : 2;
+    groups[g].push(it);
   }
   return groups.filter((g) => g.length > 0);
 }

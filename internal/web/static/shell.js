@@ -593,6 +593,17 @@ function setSidebarWidth(px) {
   return px;
 }
 
+// syncSplitterAria: aria-valuenow follows the width the sidebar is drawn at. A page loaded with the
+// sidebar hidden paints no width (0), so the static 290 in index.html would be announced until
+// the first step: this re-reads it when the sidebar is shown and when the handle takes focus.
+function syncSplitterAria() {
+  const sidebar = document.getElementById("sidebar");
+  const sep = document.getElementById("split-v");
+  if (!sidebar || !sep) return;
+  const drawn = Math.round(sidebar.getBoundingClientRect().width);
+  if (drawn > 0) sep.setAttribute("aria-valuenow", String(drawn));
+}
+
 function persistSidebarWidth(px) {
   try { localStorage.setItem(WIDTH_KEY, String(px)); } catch (_) {}
 }
@@ -716,12 +727,17 @@ function initWidthSplitter() {
     if (!dir || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     e.preventDefault();
     const cur = sidebar.getBoundingClientRect().width;
-    persistSidebarWidth(setSidebarWidth(stepWidth(cur, dir, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_STEP)));
+    const next = stepWidth(cur, dir, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_STEP);
+    // At a clamp (or a held key at one) the step lands where the sidebar already is: no
+    // localStorage write and no refit per repeat.
+    if (next === cur) return;
+    persistSidebarWidth(setSidebarWidth(next));
     fitAll();
   });
-  // aria-valuenow starts at the width the page was painted with (the stored one, applied pre-paint).
-  const drawn = Math.round(sidebar.getBoundingClientRect().width);
-  if (drawn > 0) handle.setAttribute("aria-valuenow", String(drawn));
+  // aria-valuenow starts at the width the page was painted with (the stored one, applied
+  // pre-paint), and is re-read when the handle takes focus (it may have been hidden at load).
+  handle.addEventListener("focus", syncSplitterAria);
+  syncSplitterAria();
 }
 
 // --- ask dialog --------------------------------------------------------------

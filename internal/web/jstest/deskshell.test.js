@@ -142,6 +142,10 @@ test("modelLabel: nothing to show is null, never Analytics' \"(unknown)\"", () =
 
 test("modelLabel: a build tag is not a version (provider-neutral ids)", () => {
   assert.equal(d.modelLabel("gpt-4-0613"), "gpt-4-0613", "a 4-digit build tag is not minor version 613");
+  // A dated id ends in -MM-DD: only a -<1 digit>-<1-2 digits> pair is a version, so "-08-06" is not 8.06.
+  assert.equal(d.modelLabel("gpt-4o-2024-08-06"), "gpt-4o-2024-08-06");
+  assert.equal(d.modelLabel("gpt-4o-mini-2024-07-18"), "gpt-4o-mini-2024-07-18");
+  assert.equal(d.modelLabel("claude-opus-4-10"), "opus-4.10", "a two-digit minor is still a version");
   assert.equal(d.modelLabel("claude-opus-4-1-20250805"), "opus-4.1");
 });
 

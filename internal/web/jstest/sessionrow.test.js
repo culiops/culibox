@@ -194,6 +194,14 @@ test("menuGroups: every item comes through once, in menuItems' own order", () =>
   assert.deepStrictEqual(gids(menuGroups(odd)), [["rename"], ["future"], ["end"]]);
 });
 
+test("menuGroups: an id that is an Object.prototype name joins the control group and never throws", () => {
+  const protoIds = ["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf"];
+  const items = [{ id: "rename", label: "Rename…" }, ...protoIds.map((id) => ({ id, label: id })), { id: "end", label: "End session…", danger: true }];
+  let groups;
+  assert.doesNotThrow(() => { groups = menuGroups(items); });
+  assert.deepStrictEqual(gids(groups), [["rename"], protoIds, ["end"]]);
+});
+
 // The icon is a KIND the DOM code draws as inline SVG (a font glyph is tofu where no installed font has it).
 test("menuIcon: the kind of drawing each row has, and none for the two the frame draws no icon for", () => {
   assert.deepStrictEqual(
