@@ -1,0 +1,323 @@
+// The desktop primitives layer (UI plan 1, #171): the design kit's components under the kit's
+// own class names, in ONE fenced section of desktop.css that Plans 2-6 port the pages onto. Read
+// as text, like desktop-scope.test.js and desktop-type.test.js. It pins:
+//   - every class the later plans use has a rule there, with no page prefix and no hex;
+//   - one primary look (F11): the kit's filled accent, and no page rule restyles a primary;
+//   - the collision guards, so a legacy element that already wears a kit name keeps its look;
+//   - inputs rest on --faint and focus on the accent (G12); field labels are sentence case (F17).
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const STATIC = path.join(__dirname, "..", "static");
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
+const raw = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8");
+
+const OPEN = "/* === kit primitives (2026-11, #171) === */";
+const CLOSE = "/* === end kit primitives === */";
+
+// The fence is found in the raw text, before any comment is stripped: the markers are comments.
+function fence(src) {
+  const a = src.indexOf(OPEN);
+  const b = src.indexOf(CLOSE);
+  if (a < 0 || b < a) return null;
+  return { at: a, kit: stripComments(src.slice(a + OPEN.length, b)), rest: stripComments(src.slice(0, a) + src.slice(b + CLOSE.length)) };
+}
+const sections = () => {
+  const f = fence(raw);
+  assert.ok(f, "desktop.css has the fenced kit section");
+  return f;
+};
+
+// parseRules: every style rule of `src` (comments stripped) as { selector, decls: [[prop, value]] },
+// empty ones included (the kit's `.chip-sso {}` is a rule: the neutral chip). At-rule containers
+// (@media) are walked through. A ";" or a brace inside quotes or parentheses is part of the value.
+function parseRules(src) {
+  const rules = [];
+  const stack = [];
+  let buf = "";
+  let paren = 0;
+  let quote = null;
+  const flush = () => {
+    const d = buf.trim();
+    buf = "";
+    if (!d || !stack.length) return;
+    const i = d.indexOf(":");
+    if (i < 0) return;
+    stack[stack.length - 1].decls.push([d.slice(0, i).trim().toLowerCase(), d.slice(i + 1).replace(/\s+/g, " ").trim()]);
+  };
+  for (const ch of src) {
+    if (quote) { buf += ch; if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; buf += ch; continue; }
+    if (ch === "(") paren++;
+    else if (ch === ")") paren--;
+    if (paren === 0 && ch === "{") {
+      stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: [] });
+      buf = "";
+    } else if (paren === 0 && ch === ";") {
+      flush();
+    } else if (paren === 0 && ch === "}") {
+      flush();
+      const done = stack.pop();
+      if (done && !done.selector.startsWith("@")) rules.push(done);
+    } else {
+      buf += ch;
+    }
+  }
+  return rules;
+}
+
+// parts: a selector list split on its top-level commas (not the ones inside :is() / :not()).
+function parts(sel) {
+  const out = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of sel) {
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// compounds: one selector split on its combinators, outside parentheses and brackets.
+function compounds(sel) {
+  const out = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of sel) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    if (depth === 0 && /[\s>+~]/.test(ch)) { if (cur) out.push(cur); cur = ""; } else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+const hasClass = (sel, name) => new RegExp("\\." + name.replace(/[-]/g, "\\-") + "(?![\\w-])").test(sel);
+const decl = (rule, prop) => (rule.decls.find(([p]) => p === prop) || [])[1];
+const ruleFor = (rules, partList) => rules.find((r) => JSON.stringify(parts(r.selector)) === JSON.stringify(partList));
+const allParts = (rules) => rules.flatMap((r) => parts(r.selector));
+
+// primaryOffenders: rules of `src` that restyle a legacy primary (.pri) with a colour of their own.
+// A `.pri` inside :not() excludes the primary from a page rule, which is how a page keeps its
+// secondary look without reaching the primary, so it does not count.
+const COLOUR_PROPS = new Set(["background", "background-color", "color", "border-color", "border", "filter"]);
+function primaryOffenders(src) {
+  const out = [];
+  for (const r of parseRules(src)) {
+    const hit = parts(r.selector).some((p) => hasClass(p.replace(/:not\([^()]*\)/g, ""), "pri"));
+    if (!hit) continue;
+    for (const [p, v] of r.decls) if (COLOUR_PROPS.has(p)) out.push(r.selector + " { " + p + ": " + v + " }");
+  }
+  return out;
+}
+
+test("the kit section is fenced once, right after the #169 disabled rules", () => {
+  assert.strictEqual(raw.split(OPEN).length, 2, "one opening marker");
+  assert.strictEqual(raw.split(CLOSE).length, 2, "one closing marker");
+  const { at } = sections();
+  const disabled = raw.indexOf("#ft-menu button:disabled { opacity: 1; }");
+  const shell = raw.indexOf("header, #hint { display: none; }");
+  assert.ok(disabled > 0 && disabled < at, "after the #169 disabled rules");
+  assert.ok(shell > at, "before the first page rule, so every page rule further down still wins");
+});
+
+// The Produces list of the plan (Task 3): the names Task 7 and Plans 2-6 write in their markup.
+const KIT_CLASSES = [
+  "t-xs", "t-sm", "t-md", "t-lg", "t-xl", "t-kpi", "w-500", "w-600", "fg", "muted", "mono", "tnum", "ellipsis",
+  "c-accent", "c-amber", "c-ok", "c-red", "link", "link-add", "grp-label", "is-needs",
+  "field", "field-label", "field-help", "field-error", "input", "check", "check-box",
+  "btn", "btn-primary", "btn-ghost", "btn-danger", "btn-yes", "btn-sm", "btn-lg", "btn-icon", "kbd-hint",
+  "seg", "seg-item", "is-on", "is-danger",
+  "chip", "chip-box", "chip-host", "chip-sso", "chip-env", "chip-prod", "chip-write", "chip-ok", "chip-needs", "chip-error", "chip-dot", "chip-fg",
+  "dot", "dot-run", "dot-needs", "dot-idle", "dot-detached", "dot-crashed", "is-elevated", "kbd", "meter",
+  "page-head", "page-head-text", "page-title", "page-desc", "page-actions", "section-title", "nav-item",
+  "card", "card-head", "kpi-row", "kpi", "kpi-value", "is-bad", "kpi-label", "tbl", "num", "sub",
+  "menu", "menu-item", "menu-icon", "menu-text", "menu-kbd", "menu-sep", "menu-label", "tip",
+  "scrim", "dlg", "dlg-head", "dlg-title", "dlg-close", "dlg-body", "dlg-foot", "hint",
+  "toast", "toast-text", "is-error", "is-warn",
+  // Kit gaps two or more plans need (drawn page-local in the mockups).
+  "toolbar", "input-sm", "card-outline", "card-row", "empty-state", "fold", "opt-card", "opt-card-title", "spin",
+];
+const KIT_SELECTORS = [
+  "select.input", "textarea.input", ".input.mono", ".input.input-sm", ".grp-label.is-needs",
+  ".field > .field-label", ".field > .field-help", ".field > .field-error", ".btn .kbd-hint",
+  ".seg > .seg-item.is-on", ".is-on.is-danger", ".dot.is-elevated", ".meter > i", ".kpi-value.is-bad",
+  ".tbl .num", ".tbl td.sub", ".tbl tr.is-elevated", ".menu-item.is-danger",
+  ".dlg > .dlg-head", ".dlg > .dlg-head > .dlg-title", ".dlg > .dlg-body", ".dlg > .dlg-foot", ".dlg > .dlg-foot .hint",
+  ".toast.is-error", ".toast.is-warn",
+];
+
+test("every class the later plans use has a rule in the kit section", () => {
+  const sel = allParts(parseRules(sections().kit));
+  assert.deepStrictEqual(KIT_CLASSES.filter((c) => !sel.some((p) => hasClass(p, c))), [], "classes with no kit rule");
+  assert.deepStrictEqual(KIT_SELECTORS.filter((s) => !sel.some((p) => p.includes(s))), [], "selectors with no kit rule");
+});
+
+test("no page prefix and no hex in the kit section", () => {
+  const rules = parseRules(sections().kit);
+  const prefixed = allParts(rules).filter((p) => /#|\.as-page(?![\w-])|\.m\d+-|\.dc-|\.ab(?![\w-])/.test(p));
+  assert.deepStrictEqual(prefixed, [], "a primitive is never scoped to a page");
+  const hex = [];
+  const alpha = [];
+  for (const r of rules) {
+    for (const [p, v] of r.decls) {
+      if (/#[0-9a-f]{3,8}\b/i.test(v)) hex.push(r.selector + " { " + p + ": " + v + " }");
+      for (const m of v.match(/rgba?\([^)]*\)/g) || []) if (m.replace(/\s/g, "") !== "rgba(240,106,106,.45)") alpha.push(r.selector + " { " + p + ": " + v + " }");
+    }
+  }
+  assert.deepStrictEqual(hex, [], "colours are tokens");
+  assert.deepStrictEqual(alpha, [], "the one literal colour is the kit's red outline");
+});
+
+test("primary is one look: the kit's filled accent, aliased to the legacy .btn.pri", () => {
+  const rules = parseRules(sections().kit);
+  const pri = ruleFor(rules, [".btn-primary", ".btn.pri"]);
+  assert.ok(pri, ".btn-primary, .btn.pri rule");
+  assert.strictEqual(decl(pri, "background"), "var(--accent)");
+  assert.strictEqual(decl(pri, "color"), "var(--on-fill)");
+  assert.ok(["600", "var(--w-semibold)"].includes(decl(pri, "font-weight")), "weight 600");
+  const hover = ruleFor(rules, [".btn-primary:hover", ".btn.pri:hover"]);
+  assert.ok(hover, ".btn-primary:hover, .btn.pri:hover rule");
+  assert.strictEqual(decl(hover, "background"), "var(--accent-hover)");
+});
+
+test("no other primary look is left in desktop.css", () => {
+  const all = stripComments(raw);
+  assert.doesNotMatch(all, /#0b1220/i, "the hard-coded primary text colour");
+  assert.doesNotMatch(all, /filter:\s*brightness/, "a brightened primary: the hover is --accent-hover");
+  assert.deepStrictEqual(primaryOffenders(sections().rest), [], "page rules that restyle a primary");
+});
+
+test("Close and Cancel are never primary: the Keyboard shortcuts dialog's Close is a secondary", () => {
+  // askDialog({ info: true }) is the read-only dialog (showShortcuts); its OK button is "Close".
+  const bad = parseRules(sections().rest).filter((r) =>
+    parts(r.selector).some((p) => p.includes("#ask-ok") && !p.includes(":not(.info)")) &&
+    /var\(--accent(-hover)?\)/.test(decl(r, "background") || ""));
+  assert.deepStrictEqual(bad.map((r) => r.selector), [], "#ask-ok is filled only outside the info dialog");
+  assert.match(fs.readFileSync(path.join(STATIC, "app.js"), "utf8"), /confirmLabel: "Close",\s*info: true/);
+});
+
+test("collision guards: kit containers that share a legacy name are matched by their kit child", () => {
+  const rules = parseRules(sections().kit);
+  const guard = { seg: ":has(> .seg-item)", menu: ":has(> .menu-item)", field: ":has(> .field-label)" };
+  const loose = [];
+  for (const p of allParts(rules)) {
+    const last = compounds(p).pop();
+    for (const [name, has] of Object.entries(guard)) if (hasClass(last, name) && !last.includes(has)) loose.push(p);
+  }
+  assert.deepStrictEqual(loose, [], "a legacy .seg, .menu popover or .field must not take a kit container rule");
+  const seg = ruleFor(rules, [".seg:has(> .seg-item)"]);
+  assert.ok(seg, ".seg:has(> .seg-item) rule");
+  assert.strictEqual(decl(seg, "border"), "0", "primitives.css's .seg border does not reach a kit seg");
+});
+
+test("collision guards: .btn grows (min-height), it never clips at a fixed height", () => {
+  const rules = parseRules(sections().kit);
+  const btn = ruleFor(rules, [".btn"]);
+  assert.ok(btn, ".btn rule");
+  assert.strictEqual(decl(btn, "min-height"), "var(--h-ctl)");
+  const fixed = rules.filter((r) => parts(r.selector).some((p) => hasClass(p, "btn")) && decl(r, "height") !== undefined);
+  assert.deepStrictEqual(fixed.map((r) => r.selector), [], "no kit .btn rule sets height");
+  assert.strictEqual(decl(ruleFor(rules, [".btn-sm"]), "min-height"), "var(--h-sm)");
+  assert.strictEqual(decl(ruleFor(rules, [".btn-lg"]), "min-height"), "var(--h-lg)");
+});
+
+test("collision guards: the parts of a dialog, table and field sit under their kit root", () => {
+  // Remove each allowed scoped form; whatever is left of a part name is unscoped.
+  const scoped = [
+    [/\.dlg > \.dlg-head > \.dlg-title(?![\w-])/g, /\.dlg-title(?![\w-])/],
+    [/\.dlg > \.dlg-(head|body|foot)(?![\w-])/g, /\.dlg-(head|body|foot)(?![\w-])/],
+    [/\.dlg > \.dlg-foot \.hint(?![\w-])/g, /\.hint(?![\w-])/],
+    [/(:where\(\.dlg\)|\.dlg) \.dlg-close(?![\w-])/g, /\.dlg-close(?![\w-])/],
+    [/\.tbl \.num(?![\w-])/g, /\.num(?![\w-])/],
+    [/\.tbl td\.sub(?![\w-])/g, /\.sub(?![\w-])/],
+    [/\.field > \.field-(label|help|error)(?![\w-])/g, /\.field-(label|help|error)(?![\w-])/],
+  ];
+  const loose = [];
+  for (const p of allParts(parseRules(sections().kit))) {
+    for (const [ok, bad] of scoped) if (bad.test(p.replace(/:has\([^()]*\)/g, "").replace(ok, ""))) loose.push(p);
+  }
+  assert.deepStrictEqual(loose, [], "the legacy dialog legend, .num, .hint and .sub keep their own look");
+});
+
+test("collision guards: the legacy modifiers are aliases of the kit's", () => {
+  const sel = parseRules(sections().kit).map((r) => parts(r.selector));
+  const together = (a, b) => sel.some((ps) => ps.includes(a) && ps.includes(b));
+  for (const [kit, legacy] of [[".btn-ghost", ".btn.gh"], [".btn-danger", ".btn.dgr"], [".dot-run", ".dot.working"], [".dot-needs", ".dot.waiting"], [".dot-crashed", ".dot.crashed"]]) {
+    assert.ok(together(kit, legacy), kit + " and " + legacy + " share a rule");
+  }
+});
+
+test("collision guards: no second disabled look, and a hidden kit element stays hidden", () => {
+  const rules = parseRules(sections().kit);
+  const dim = rules.filter((r) => /:disabled/.test(r.selector) && decl(r, "opacity") !== undefined);
+  assert.deepStrictEqual(dim.map((r) => r.selector), [], "#169's rule is the one disabled look");
+  // An author display beats the UA's [hidden] { display: none } (a hidden legacy .btn, #au-more,
+  // would show). Every kit rule that sets a display has a [hidden] partner, except .dot: the legacy
+  // dot was already inline-block, and its behaviour is not this layer's to change.
+  const hidden = rules.filter((r) => parts(r.selector).every((p) => p.endsWith("[hidden]")) && decl(r, "display") === "none");
+  const covered = (p) => hidden.some((h) => parts(h.selector).some((q) => {
+    if (q === p + "[hidden]") return true;
+    const m = q.match(/^:is\(([^()]*)\)\[hidden\]$/);
+    return !!m && m[1].split(",").map((s) => s.trim()).includes(p);
+  }));
+  const shown = [];
+  for (const r of rules) {
+    const d = decl(r, "display");
+    if (!d || d === "none" || d === "contents") continue;
+    for (const p of parts(r.selector)) if (p !== ".dot" && !covered(p)) shown.push(p);
+  }
+  assert.deepStrictEqual(shown, [], "kit rules with a display and no [hidden] partner");
+});
+
+test("inputs rest on --faint and focus on the accent (G12)", () => {
+  const rules = parseRules(sections().kit);
+  const input = ruleFor(rules, [".input"]);
+  assert.ok(input, ".input rule");
+  assert.strictEqual(decl(input, "border"), "1px solid var(--faint)");
+  const fld = ruleFor(rules, [".fld"]);
+  assert.ok(fld, ".fld rule: the legacy field primitive");
+  assert.strictEqual(decl(fld, "border-color"), "var(--faint)");
+  const focus = rules.find((r) => parts(r.selector).includes(".input:focus") && parts(r.selector).includes(".fld:focus"));
+  assert.ok(focus, ".input:focus, .fld:focus rule");
+  assert.strictEqual(decl(focus, "border-color"), "var(--accent)");
+  assert.strictEqual(decl(focus, "box-shadow"), "0 0 0 1px var(--accent)");
+  assert.strictEqual(decl(focus, "outline"), "none");
+});
+
+test("field labels are sentence case; .grp-label is the only uppercase kit rule (F17)", () => {
+  const rules = parseRules(sections().kit);
+  const label = rules.find((r) => parts(r.selector).includes(".field > .field-label"));
+  assert.ok(label, ".field > .field-label rule");
+  assert.strictEqual(decl(label, "text-transform"), undefined);
+  assert.strictEqual(decl(label, "font-size"), "var(--t-sm)");
+  assert.strictEqual(decl(label, "font-weight"), "var(--w-medium)");
+  assert.strictEqual(decl(label, "color"), "var(--fg)");
+  const upper = rules.filter((r) => decl(r, "text-transform") === "uppercase").map((r) => r.selector);
+  assert.deepStrictEqual(upper, [".grp-label"]);
+});
+
+test("the checks find what they should (fixtures)", () => {
+  const css = `@media (min-width: 701px) {
+    .x .btn.pri { background: var(--accent); }
+    .y .btn.pri:hover { filter: none; }
+    .z .btn:where(:not(.pri)) { background: var(--raise); color: var(--fg); }
+    .w .btn.pri { padding: 0 12px; }
+    .v :is(.btn.pri, .pbtn) { color: var(--bg); }
+  }`;
+  assert.deepStrictEqual(primaryOffenders(css), [
+    ".x .btn.pri { background: var(--accent) }",
+    ".y .btn.pri:hover { filter: none }",
+    ".v :is(.btn.pri, .pbtn) { color: var(--bg) }",
+  ]);
+  assert.deepStrictEqual(compounds(".seg:has(> .seg-item) > .seg-item[aria-pressed=\"true\"]"), [".seg:has(> .seg-item)", ".seg-item[aria-pressed=\"true\"]"]);
+  assert.deepStrictEqual(parts(".a, :is(.b, .c) .d"), [".a", ":is(.b, .c) .d"]);
+  assert.ok(hasClass(".seg-item", "seg-item") && !hasClass(".seg-item", "seg"), "class match is whole-name");
+  const f = fence("a { } " + OPEN + " .k { color: red; } /* c */ " + CLOSE + " .r { color: blue; }");
+  assert.strictEqual(f.kit.trim(), ".k { color: red; }");
+  assert.ok(f.rest.includes(".r") && !f.rest.includes(".k"));
+});

@@ -371,6 +371,20 @@ test("a narrow page paints cards, a wide page paints tables, from the same view"
   assert.strictEqual(wide.querySelectorAll(".cstrip").length, 1);
 });
 
+// F11 (#171): Close and secondary actions are never primary, and a primary is never restyled as a
+// secondary by CSS. In the tables the AWS section's add sits in the section header beside the
+// others' secondary adds, so the markup says secondary there; the cards keep it the primary.
+test("the AWS add is a secondary in the tables and the primary in the cards", () => {
+  const view = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
+  const add = (width) => {
+    const p = page({ width });
+    p.box.renderCredentials(view);
+    return p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Add AWS accounts");
+  };
+  assert.strictEqual(add(900).className, "btn", "tables");
+  assert.strictEqual(add(500).className, "btn pri", "cards");
+});
+
 test("a modal keeps its own amber strip", () => {
   const p = page({ asPage: false, width: 900 });
   p.box.renderCredentials({ store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [tok("sentry-prod")], values: [], legacy_secrets: [], invalid: [] });

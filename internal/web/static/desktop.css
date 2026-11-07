@@ -118,6 +118,318 @@
   :is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
   #ft-menu button:disabled { opacity: 1; }
 
+  /* === kit primitives (2026-11, #171) === */
+  /* The design kit's components (docs/superpowers/design/2026-11-ui-audit, ui-kit.css) under the
+     kit's own class names, the layer Plans 2-6 port the pages onto. It sits before every page rule
+     on purpose: a page rule further down wins at equal or higher specificity, so a page keeps its
+     look until its plan deletes its own rules. Tokens only, no page prefix, no hex
+     (jstest/desktop-primitives.test.js). Kit names that legacy markup already wears:
+       - the same component: the kit rule applies, and the legacy modifier is an alias
+         (.btn.pri = .btn-primary, .btn.gh, .btn.dgr, .dot.working, .dot.waiting, .dot.crashed);
+       - a different legacy container (.seg of plain buttons, the .menu/.open popover), and .field
+         the same way: matched only through its kit child, :has(> .seg-item | .menu-item | .field-label);
+       - the parts of a dialog, table and field sit under their kit root (.dlg > .dlg-head,
+         .tbl .num, .field > .field-label): the legacy dialog legend, .num, .hint and .sub stay.
+     Disabled is #169's rule above; the kit's own .45 is not repeated. Not here: the canvas helpers
+     (.dc-*, the .ab root, support.js atomics), the static-state classes (.is-hover, .is-focus,
+     .is-disabled), focus rings (Task 4) and the shell (sidebar, rail, pane, ask strip, terminal:
+     Plan 2). */
+
+  /* The kit draws inside a canvas root whose reset makes form controls inherit the font and takes
+     the margin off headings. The app has no such root, so the kit's own controls and headings
+     carry that reset, at zero specificity as in the kit: any class rule still wins (a legacy .btn
+     keeps primitives.css's font). */
+  :where(.btn, .seg-item, .nav-item, .menu-item, .link, .input) { font: inherit; }
+  :where(.page-title, .page-desc, .section-title, .dlg > .dlg-head > .dlg-title) { margin: 0; }
+
+  /* --- type ----------------------------------------------------------------- */
+  .t-xs { font-size: var(--t-xs); line-height: var(--lh-xs); }
+  .t-sm { font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .t-md { font-size: var(--t-md); line-height: var(--lh-md); }
+  .t-lg { font-size: var(--t-lg); line-height: var(--lh-lg); }
+  .t-xl { font-size: var(--t-xl); line-height: var(--lh-xl); }
+  .t-kpi { font-size: var(--t-kpi); line-height: var(--lh-kpi); }
+  .w-500 { font-weight: var(--w-medium); }
+  .w-600 { font-weight: var(--w-semibold); }
+  .fg { color: var(--fg); }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--font-mono); } /* machine text only */
+  .tnum { font-variant-numeric: tabular-nums; }
+  .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .c-accent { color: var(--accent); }
+  .c-amber { color: var(--amber); }
+  .c-ok { color: var(--ok); }
+  .c-red { color: var(--red); }
+
+  /* Links, and the inline "+ Add …" action inside a block. */
+  .link { color: var(--accent); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
+  .link:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .link-add::before { content: "+ "; }
+
+  /* The group label is the only uppercase text in the product. */
+  .grp-label {
+    font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
+  }
+  .grp-label.is-needs { color: var(--amber); }
+  .grp-label .n { font-variant-numeric: tabular-nums; }
+
+  /* --- buttons -------------------------------------------------------------- */
+  /* min-height where the kit says height: a legacy .btn that wraps (the store strip's "Create the
+     encrypted store" at a 701px window) grows to two lines instead of clipping. */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: var(--h-ctl); padding: 0 12px; border-radius: var(--r-ctl); border: 1px solid transparent;
+    background: var(--raise); color: var(--fg); font-size: var(--t-md); font-weight: var(--w-medium);
+    white-space: nowrap; cursor: pointer; text-decoration: none;
+  }
+  .btn:hover { background: var(--line); }
+  /* One primary look (F11): filled accent, dark text, 600. */
+  .btn-primary, .btn.pri { background: var(--accent); color: var(--on-fill); font-weight: var(--w-semibold); }
+  .btn-primary:hover, .btn.pri:hover { background: var(--accent-hover); }
+  .btn-ghost, .btn.gh { background: transparent; color: var(--muted); }
+  .btn-ghost:hover, .btn.gh:hover { background: var(--hover); color: var(--fg); }
+  .btn-danger, .btn.dgr { background: transparent; color: var(--red); border-color: rgba(240,106,106,.45); }
+  .btn-danger:hover, .btn.dgr:hover { background: var(--red-tint); border-color: var(--red); }
+  /* Amber fill: the ask strip's Yes only (amber = an agent needs you). */
+  .btn-yes { background: var(--amber); color: var(--on-fill); font-weight: var(--w-semibold); }
+  .btn-yes:hover { background: var(--amber-hover); }
+  .btn-sm { min-height: var(--h-sm); padding: 0 8px; font-size: var(--t-sm); border-radius: var(--r-chip); }
+  .btn-lg { min-height: var(--h-lg); padding: 0 14px; }
+  .btn-icon { width: var(--h-ctl); padding: 0; }
+  .btn-icon.btn-sm { width: var(--h-sm); }
+  .btn .kbd-hint { font-family: var(--font-mono); font-size: var(--t-xs); opacity: .75; font-weight: var(--w-regular); }
+  /* A toggle (Files, + Shell) pressed: raise and a faint inset ring, never a tab look. */
+  .btn[aria-pressed="true"], .btn.is-pressed { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
+  /* Disabled: #169's dimmed look above; here only the hover keeps the resting fill. */
+  .btn:disabled:hover { background: var(--raise); }
+  .btn-primary:disabled:hover, .btn.pri:disabled:hover { background: var(--accent); }
+  .btn-ghost:disabled:hover, .btn.gh:disabled:hover, .btn-danger:disabled:hover, .btn.dgr:disabled:hover { background: transparent; }
+
+  /* --- segmented control (every range, view, 1-2-4 and box/host switch) ----- */
+  /* The items are scoped under .seg: primitives.css's `.seg button` (0,1,1) would out-rank a bare
+     .seg-item. Its border is reset here for the same reason. */
+  .seg:has(> .seg-item) {
+    display: inline-flex; gap: 2px; padding: 2px; border: 0; border-radius: var(--r-ctl);
+    background: var(--bg); box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .seg > .seg-item {
+    height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip);
+    background: transparent; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium);
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .seg > .seg-item:hover { color: var(--fg); background: var(--hover); }
+  .seg > .seg-item[aria-pressed="true"], .seg > .seg-item.is-on { background: var(--raise); color: var(--fg); }
+  /* The containment switch with host chosen: host is the destructive role. */
+  .seg > .seg-item.is-on.is-danger, .seg > .seg-item[aria-pressed="true"].is-danger { background: var(--red-tint); color: var(--red); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); }
+
+  /* --- chips, status dot, kbd, meter ---------------------------------------- */
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px;
+    border-radius: var(--r-chip); background: var(--raise); color: var(--muted);
+    font-size: var(--t-xs); line-height: 18px; font-weight: var(--w-medium); white-space: nowrap;
+  }
+  .chip-box, .chip-host { font-family: var(--font-mono); font-weight: var(--w-regular); } /* containment is a machine word */
+  .chip-host { box-shadow: inset 0 0 0 1px var(--faint); }
+  .chip-sso { } /* neutral, sans "SSO" */
+  .chip-env { color: var(--fg); font-weight: var(--w-semibold); letter-spacing: .02em; }
+  .chip-prod, .chip-write, .chip-error {
+    color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-weight: var(--w-semibold);
+  }
+  .chip-write { font-family: var(--font-mono); }
+  .chip-ok { color: var(--ok); }
+  .chip-needs { color: var(--amber); background: var(--amber-tint); }
+  .chip-dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip-fg { color: var(--fg); } /* a chip whose word is the value (Tier on the Access card) */
+  /* On a raised surface a chip steps down to the panel: raise on raise is invisible. */
+  .is-selected .chip:not(.chip-prod):not(.chip-write):not(.chip-error):not(.chip-needs),
+  .on-raise .chip:not(.chip-prod):not(.chip-write):not(.chip-error):not(.chip-needs),
+  .s-raise .chip:not(.chip-prod):not(.chip-write):not(.chip-error):not(.chip-needs) { background: var(--panel); }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; background: var(--muted); }
+  .dot-run, .dot.working { background: var(--ok); }
+  .dot-needs, .dot.waiting { background: var(--amber); }
+  .dot-idle { background: var(--muted); }
+  .dot-detached { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  .dot-crashed, .dot.crashed { background: var(--red); }
+  .dot.is-elevated { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red); }
+
+  .kbd {
+    display: inline-flex; align-items: center; justify-content: center; height: 20px; min-width: 20px; padding: 0 5px;
+    border-radius: var(--r-chip); background: var(--raise); box-shadow: inset 0 -1px 0 var(--line), inset 0 0 0 1px var(--line);
+    font-family: var(--font-mono); font-size: var(--t-xs); color: var(--fg);
+  }
+  .meter { position: relative; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; flex: 1 1 auto; }
+  .meter > i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+
+  /* --- fields --------------------------------------------------------------- */
+  .field:has(> .field-label) { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  /* Sentence case (F17): the group label above is the only uppercase. */
+  .field > .field-label { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-medium); color: var(--fg); }
+  .field > .field-label .opt { color: var(--muted); font-weight: var(--w-regular); }
+  .field > .field-help { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .field > .field-error { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+  /* G12: an input's border at rest is --faint (3.05:1 on the panel), so an empty field is seen. */
+  .input {
+    height: var(--h-lg); width: 100%; padding: 0 10px; border-radius: var(--r-ctl);
+    background: var(--bg); border: 1px solid var(--faint); color: var(--fg); font-size: var(--t-md);
+  }
+  .input::placeholder { color: var(--muted); }
+  .input:hover { border-color: var(--muted); }
+  /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that
+     sets its own border still wins until its plan adopts .input. */
+  .fld { border-color: var(--faint); }
+  .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
+  .input.mono { font-family: var(--font-mono); font-size: var(--t-sm); }
+  textarea.input { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; line-height: var(--lh-md); }
+  select.input {
+    appearance: none; padding-right: 28px; background-repeat: no-repeat; background-position: right 10px center;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5'/%3E%3C/svg%3E");
+  }
+  .check { display: flex; gap: 8px; align-items: flex-start; }
+  .check input { accent-color: var(--accent); width: 14px; height: 14px; margin: 3px 0 0; }
+  /* The checkbox drawn from tokens: an outline on --bg, checked = accent fill and a mark. */
+  .check-box {
+    appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 14px; height: 14px; margin: 3px 0 0;
+    border-radius: var(--r-chip); background: var(--bg); box-shadow: inset 0 0 0 1px var(--muted); cursor: pointer;
+  }
+  .check-box:checked { background: var(--accent); box-shadow: none; }
+  .check-box:checked::after {
+    content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+    border: solid var(--on-fill); border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+
+  /* --- page header, section title, page nav --------------------------------- */
+  .page-head { display: flex; align-items: flex-start; gap: var(--sp-4); padding: var(--sp-6) var(--sp-8) var(--sp-5); }
+  .page-head-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .page-title { font-size: var(--t-xl); line-height: var(--lh-xl); font-weight: var(--w-semibold); color: var(--fg); }
+  .page-desc { font-size: var(--t-md); line-height: var(--lh-md); color: var(--muted); }
+  .page-actions { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+  .section-title { font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: var(--w-semibold); }
+  /* A page's nav row: the sidebar's row style. */
+  .nav-item {
+    display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: var(--r-chip);
+    color: var(--fg); background: transparent; border: 0; width: 100%; text-align: left; cursor: pointer;
+  }
+  .nav-item:hover { background: var(--hover); }
+  .nav-item[aria-current="page"], .nav-item.is-on { background: var(--raise); font-weight: var(--w-medium); }
+
+  /* --- card, KPI ------------------------------------------------------------ */
+  .card { background: var(--panel); border-radius: var(--r-card); }
+  .card-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line); }
+  .kpi-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); background: var(--panel); border-radius: var(--r-card); }
+  .kpi { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .kpi + .kpi { box-shadow: inset 1px 0 0 var(--line); }
+  .kpi-value { font-size: var(--t-kpi); line-height: var(--lh-kpi); font-weight: var(--w-semibold); font-variant-numeric: tabular-nums; color: var(--fg); }
+  .kpi-label { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .kpi-value.is-bad { color: var(--red); } /* refused or write elevations > 0 only */
+
+  /* --- table ---------------------------------------------------------------- */
+  .tbl { width: 100%; border-collapse: collapse; font-size: var(--t-md); color: var(--fg); }
+  .tbl th {
+    height: var(--h-row); padding: 0 var(--sp-3); text-align: left; font-size: var(--t-sm);
+    font-weight: var(--w-medium); color: var(--muted); border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  /* A td's colour inherits, so .c-ok / .c-red / .muted on a cell win. */
+  .tbl td { height: var(--h-row); padding: 0 var(--sp-3); text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .tbl .num { text-align: right; font-variant-numeric: tabular-nums; } /* on the th and the td */
+  .tbl td.sub { color: var(--muted); }
+  .tbl tbody tr:hover { background: var(--hover); }
+  .tbl tr.is-elevated { background: var(--red-tint); }
+  .tbl tr:last-child td { border-bottom: 0; }
+
+  /* --- popover menu, tooltip ------------------------------------------------ */
+  .menu:has(> .menu-item) {
+    display: flex; flex-direction: column; min-width: 220px; padding: 4px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop);
+  }
+  .menu-item {
+    display: flex; align-items: center; gap: 10px; height: var(--h-menu); padding: 0 10px; border: 0;
+    border-radius: var(--r-chip); background: transparent; color: var(--fg); font-size: var(--t-md);
+    text-align: left; cursor: pointer; width: 100%;
+  }
+  .menu-item:hover { background: var(--raise); }
+  .menu-icon { width: 16px; flex: none; color: var(--muted); display: inline-flex; justify-content: center; }
+  .menu-text { flex: 1 1 auto; min-width: 0; }
+  .menu-kbd { flex: none; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
+  .menu-sep { height: 1px; background: var(--line); margin: 4px -4px; }
+  .menu-label { padding: 6px 10px 2px; } /* with .grp-label */
+  /* Destructive: always last, after a .menu-sep. */
+  .menu-item.is-danger, .menu-item.is-danger .menu-icon { color: var(--red); }
+  .menu-item.is-danger:hover { background: var(--red-tint); }
+  /* Inverse, so a tooltip never reads as a surface. */
+  .tip {
+    display: inline-block; padding: 4px 8px; border-radius: var(--r-chip); background: var(--fg); color: var(--on-fill);
+    font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-medium); white-space: nowrap; box-shadow: var(--e-pop);
+  }
+
+  /* --- dialog shell --------------------------------------------------------- */
+  .scrim { background: var(--scrim); }
+  .dlg {
+    display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-dlg); box-shadow: var(--e-dlg); overflow: hidden;
+  }
+  .dlg > .dlg-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5); }
+  .dlg > .dlg-head > .dlg-title { flex: 1 1 auto; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: var(--w-semibold); }
+  /* .btn.btn-ghost.btn-icon.dlg-close, titled "Close (Esc)". :where keeps it at the kit's weight,
+     so the ghost hover still lights it. */
+  :where(.dlg) .dlg-close { color: var(--muted); }
+  .dlg > .dlg-body { padding: 0 var(--sp-5) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+  .dlg > .dlg-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
+  .dlg > .dlg-foot .hint { flex: 1 1 auto; color: var(--muted); font-size: var(--t-sm); }
+
+  /* --- toast ---------------------------------------------------------------- */
+  .toast {
+    display: flex; align-items: center; gap: 10px; min-width: 280px; max-width: 420px; padding: 8px 8px 8px 12px;
+    background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop);
+    font-size: var(--t-md); color: var(--fg);
+  }
+  .toast-text { flex: 1 1 auto; min-width: 0; }
+  .toast .dot { margin-right: 2px; }
+  .toast.is-error { background: var(--red-tint); border-color: rgba(240,106,106,.45); }
+  /* Warn is the clone-needs-you toast, so it takes the amber role's surface (the kit's needs-you
+     fill: .chip-needs, the ask strip); the border stays --line, as on M8's amber attention chip. */
+  .toast.is-warn { background: var(--amber-tint); }
+
+  /* --- kit gaps two or more plans share ------------------------------------- */
+  /* Drawn page-local in the mockups (the prefixed classes named below); the values are theirs. */
+  /* Toolbar row under a page header (M3 .m3-tools, M7's filter row). Its padding is the page's. */
+  .toolbar { display: flex; align-items: center; gap: var(--sp-3); flex: none; }
+  /* The 28px field a toolbar row carries (M7's filter field). */
+  .input.input-sm { height: var(--h-ctl); }
+  /* Outlined card: a .card with the hairline ring (M8 .m8-login). */
+  .card-outline { box-shadow: inset 0 0 0 1px var(--line); }
+  /* Rows of one card, a hairline between them (M2 .m2-blk + .m2-blk). */
+  .card-row + .card-row { border-top: 1px solid var(--line); }
+  /* Empty state (M6 .m6-empty with its .m6-emptyin column, as one element): centred, its lines
+     stacked and capped at the drawn column width. */
+  .empty-state {
+    flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: var(--sp-2); padding: var(--sp-10); text-align: center;
+  }
+  .empty-state > * { max-width: 440px; }
+  /* Disclosure row (M2 .m2-fold): a ghost button with the chevron, then a count and a note. */
+  .fold { display: flex; align-items: center; gap: var(--sp-2); padding: 0 2px; }
+  /* Radio option card (M2 .m2-opt, .m2-optt; on a .check label): the chosen one has the selected fill. */
+  .opt-card { padding: 10px 12px; border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
+  .opt-card.is-on, .opt-card:has(> input:checked) { background: var(--raise); }
+  .opt-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  /* Pending spinner (M8 .m8-spin), drawn still. */
+  .spin {
+    display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
+    box-shadow: inset 0 0 0 2px var(--line); border: 2px solid transparent; border-top-color: var(--muted);
+  }
+
+  /* An author display beats the UA's [hidden] { display: none }: without these a hidden .btn
+     (#au-more, a footer's toggled button) would show. .dot is left out: the legacy dot was
+     already inline-block. */
+  :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
+    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin)[hidden],
+  .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item)[hidden], .field:has(> .field-label)[hidden],
+  .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
+  /* === end kit primitives === */
+
   /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
   /* The controls moved into the sidebar top and footer. #env-strip stays: it is
      the 3px whole-page environment signal (spec 7), and #side-env repeats the
@@ -151,9 +463,9 @@
   #side-palette:hover, #side-collapse:hover { color: var(--fg); background: var(--raise); }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
-    background: var(--accent); color: #0b1220; border: 0; border-radius: var(--r-ctl);
+    background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
   }
-  .pbtn:hover { filter: brightness(1.08); }
+  .pbtn:hover { background: var(--accent-hover); }
   #side-top button:focus-visible, #side-foot button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
@@ -221,8 +533,8 @@
   .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
   .ri .dot { width: 10px; height: 10px; }
   /* + under the logo is the one primary control of the rail (p2). */
-  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 var(--t-xl) var(--font-ui); color: #0b1220; background: var(--accent); }
-  .ri.add:hover { background: var(--accent); filter: brightness(1.08); }
+  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 var(--t-xl) var(--font-ui); color: var(--on-fill); background: var(--accent); }
+  .ri.add:hover { background: var(--accent-hover); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
   .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
   .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
@@ -657,9 +969,12 @@
   .needstrip .peektxt:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip); }
   .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
   .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; gap: 6px; margin: 0; }
-  .needstrip .nacts .btn { padding: 3px 10px; border-radius: var(--r-ctl); background: var(--raise); border: 1px solid var(--line); }
-  .needstrip .nacts .btn:hover { background: var(--background3); }
-  .needstrip .nacts .btn.off { background: var(--raise); }
+  /* A primary here (the SSO strip's Sign in) is the kit primitive: the strip's secondary fill,
+     border and hover skip it. :where(:not(.pri)) leaves each rule's weight as it was. */
+  .needstrip .nacts .btn { padding: 3px 10px; border-radius: var(--r-ctl); }
+  .needstrip .nacts .btn:where(:not(.pri)) { background: var(--raise); border: 1px solid var(--line); }
+  .needstrip .nacts .btn:where(:not(.pri)):hover { background: var(--background3); }
+  .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
   /* The one amber-filled button in the product: Yes (amber = needs-you only). */
   .needstrip .nacts .btn[data-choice="yes"] { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
   .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
@@ -874,9 +1189,10 @@
     color: var(--danger); border: 1px solid var(--danger); border-radius: var(--r-chip);
   }
   .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
-  .ac-acts .btn, .ac-pbtns .btn, .ac-dropnow { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 4px 10px; }
+  /* Grant is the kit primary (it was an accent outline, F11): the secondary fill skips it. */
+  .ac-acts .btn, .ac-pbtns .btn, .ac-dropnow { border-radius: var(--r-ctl); padding: 4px 10px; }
+  .ac-acts .btn, .ac-pbtns .btn:where(:not(.pri)), .ac-dropnow { background: var(--raise); border-color: var(--line); }
   .ac-acts .btn.dgr, .ac-dropnow { border-color: var(--danger); color: var(--danger); }
-  .ac-pbtns .btn.pri { border-color: var(--accent); color: var(--accent); }
   .ac-sso { padding: 0 14px 10px; }
   .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 10px 12px; }
 
@@ -1174,11 +1490,11 @@
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
   #page-host > #settings-modal.as-page > .dft .btn {
     padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
-    background: var(--raise); font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
+    font-family: var(--font-ui); font-size: var(--t-md);
   }
-  #page-host > #settings-modal.as-page > .dft .btn:hover { background: var(--line); }
-  #page-host > #settings-modal.as-page > .dft .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-  #page-host > #settings-modal.as-page > .dft .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  /* Save / Done are the kit primary (F11): the footer's secondary fill skips them. */
+  #page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri)) { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > .dft .btn.gh { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page > .dft .btn.gh:hover { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page > .dft .btn.dgr { background: transparent; color: var(--red); }
@@ -1238,13 +1554,15 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
+  /* A primary (Save, Create the encrypted store) is the kit primitive (F11): the page's secondary
+     fill, border and hover skip it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:where(:not(.pri)) { border-color: var(--line); background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:where(:not(.pri)):hover { background: var(--line); }
   /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
      encrypted store" (186px) spilled past the warning box, in the strip and again in
      the passphrase form it opens. The label wraps inside the strip instead. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
@@ -1283,8 +1601,6 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-md); }
@@ -1470,12 +1786,12 @@
   /* Buttons: secondary = --raise, primary = filled accent with dark text, ghost = text
      only, destructive = red text. */
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn {
-    padding: 6px 12px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise);
+    padding: 6px 12px; font-family: var(--font-ui); font-size: var(--t-md); line-height: normal;
     border: 0; border-radius: var(--r-ctl);
   }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:hover { background: var(--background3); }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  /* The primary is the kit primitive (F11): the secondary's weight, fill and hover skip it. */
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:where(:not(.pri)) { font-weight: 400; color: var(--fg); background: var(--raise); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:where(:not(.pri)):hover { background: var(--background3); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.gh { background: transparent; color: var(--muted); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.gh:hover { background: var(--raise); color: var(--fg); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr { background: transparent; color: var(--red); }
@@ -1521,8 +1837,12 @@
   #ask-modal .ask-actions { gap: 8px; margin-top: 16px; }
   #ask-modal .ask-actions button { padding: 6px 14px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
   #ask-modal .ask-actions button:hover { background: var(--background3); border: 0; }
-  #ask-modal #ask-ok { background: var(--accent); color: var(--bg); font-weight: 600; }
-  #ask-modal #ask-ok:hover { background: var(--accent); filter: brightness(1.08); }
+  /* OK is the primary, in the kit's look, except in the read-only Keyboard shortcuts dialog
+     (askDialog info), where it is "Close": Close is never primary (F11), so there it keeps the
+     row's secondary look. app.css brightens #ask-ok on hover; here the hover is a colour. */
+  #ask-modal:not(.info) #ask-ok { background: var(--accent); color: var(--on-fill); font-weight: 600; }
+  #ask-modal #ask-ok:hover { filter: none; }
+  #ask-modal:not(.info) #ask-ok:where(:not(:disabled)):hover { background: var(--accent-hover); }
   #ask-modal #ask-ok:disabled { opacity: .5; cursor: default; filter: none; text-decoration: none; }
   /* Destructive confirm: red text on a clear button, never a red fill. */
   #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
@@ -1580,10 +1900,10 @@
   #store-banner .storebanner-msg { color: var(--amber); }
   #store-banner .storebanner-msg::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; vertical-align: middle; border-radius: 50%; background: var(--amber); }
   #store-banner .storepass { padding: 5px 10px; border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
-  #store-banner .btn { padding: 5px 12px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
-  #store-banner .btn:hover { background: var(--background3); }
-  #store-banner .btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
-  #store-banner .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  #store-banner .btn { padding: 5px 12px; font-family: var(--font-ui); font-size: var(--t-md); line-height: normal; border: 0; border-radius: var(--r-ctl); }
+  /* Unlock is the kit primary (F11): the banner's secondary weight, fill and hover skip it. */
+  #store-banner .btn:where(:not(.pri)) { font-weight: 400; color: var(--fg); background: var(--raise); }
+  #store-banner .btn:where(:not(.pri)):hover { background: var(--background3); }
   #store-banner .storeerr { color: var(--red); }
   #store-banner .storepass:focus-visible, #store-banner .btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
@@ -1646,7 +1966,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: #0b1220; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: var(--on-fill); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
@@ -2026,7 +2346,6 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .ent-err:empty { display: none; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; background: var(--line); color: var(--fg); font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn.pri { color: #0b1220; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):hover { background: var(--line); }
 }

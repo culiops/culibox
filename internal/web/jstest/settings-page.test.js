@@ -183,7 +183,7 @@ test("base app.css hides the Credentials drawer and its scrim; desktop.css shows
 });
 
 // Task 15 gate fix (R67/R68): the drawer's skin is the mockup's, scoped to #cred-drawer (the Credentials tab keeps its own rules).
-test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap, a two-column store card, a neutral region bar, the page's own primary text", () => {
+test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap, a two-column store card, a neutral region bar, the kit's primary", () => {
   const css = stripComments(DESK_CSS);
   const D = "#page-host > #settings-modal.as-page > #cred-drawer";
   const rule = (sel) => { const at = css.indexOf("\n  " + sel + " {"); assert.ok(at >= 0, "rule: " + sel); return css.slice(at, css.indexOf("}", at)); };
@@ -201,9 +201,10 @@ test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap,
   assert.doesNotMatch(seg, /--accent/);
   assert.match(rule(D + " > #cred-drawer-body .seg button.on"), /background: var\(--raise\); font-weight: 500; color: var\(--fg\)/);
   assert.match(rule(D + " > #cred-drawer-body .seg"), /display: flex;/);
-  // The primary button reads #0b1220 as the page's own block Save does.
-  assert.match(css, /#pfv \.pfv-btn-primary \{ background: var\(--accent\); color: #0b1220; \}/);
-  assert.match(rule(D + " > #cred-drawer-foot > .btn.pri"), /color: #0b1220/);
+  // One primary look (F11, #171): the page's block Save reads --on-fill, and the foot's Save is the
+  // kit's .btn.pri with no colour of its own.
+  assert.match(css, /#pfv \.pfv-btn-primary \{ background: var\(--accent\); color: var\(--on-fill\); \}/);
+  assert.ok(!css.includes("\n  " + D + " > #cred-drawer-foot > .btn.pri {"), "no foot rule restyles the primary");
   // Buttons and labels are --t-md (13px); the native boxes 14px.
   assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: var\(--t-md\)/);
   assert.match(rule(D + " > #cred-drawer-body .pf-check"), /font-size: var\(--t-md\)/);

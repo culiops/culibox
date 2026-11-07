@@ -1192,7 +1192,9 @@ function credSection(g) {
   const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
   const add = kind && credActionHandlers[kind] && credActionHandlers[kind].add;
   if (typeof add === "function") {
-    const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
+    // In the tables AWS's add is a secondary like the other sections' adds: desktop.css used to
+    // restyle the primary as one, now the markup says so (F11, #171). The cards keep it primary.
+    const b = credEl("button", "btn" + (g.key === "aws" && !tables ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
     b.type = "button";
     b.onclick = () => add(g, loadCredentials);
     h.appendChild(b);
