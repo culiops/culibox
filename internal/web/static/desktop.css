@@ -2418,7 +2418,9 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: var(--t-md); font-weight: 500; }
+  /* The drawer's primary keeps the kit's 600 (F11); the secondaries are 500. */
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn:where(:not(.pri)) { font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn:where(:not(.pri)) { background: var(--line); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: var(--t-md); }
@@ -2442,7 +2444,8 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; }
   /* Create the encrypted store is a secondary here: the foot's Save is the view's primary. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn:where(:not(.pri)) { background: var(--line); color: var(--fg); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:where(:not(.pri)) { font-weight: 500; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)):hover { background: var(--line); }
 }

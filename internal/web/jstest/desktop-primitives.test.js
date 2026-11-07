@@ -287,6 +287,39 @@ test("no other primary look is left in desktop.css", () => {
   assert.deepStrictEqual(primaryHoverGaps({ "desktop.css": sections().rest, "app.css": app }, sections().rest), [], "filled primaries outside the kit");
 });
 
+// weightOffenders: page rules that set a .btn's weight to anything but the primary's 600 without excluding the
+// primary. Such a rule (0,4,0 and up) out-ranks the kit's .btn.pri weight, so the view's primary draws at
+// the secondary's 500 (F11: one primary look). Excluded as unguardedBtn does: :not(.pri), .gh, .dgr, .pri.
+function weightOffenders(src) {
+  const out = [];
+  for (const r of parseRules(src)) {
+    const font = decl(r, "font");
+    const m = font && /^(\d{3}|var\(--w-[a-z]+\))\s/.exec(font);
+    const w = decl(r, "font-weight") || (m && m[1]);
+    if (!w || w === "600" || w === "var(--w-semibold)") continue;
+    for (const part of parts(r.selector)) {
+      const last = compounds(part).pop();
+      const bare = last.replace(/:not\([^()]*\)/g, "");
+      if (!hasClass(last, "btn") || /:not\(\.pri\)/.test(last)) continue;
+      if (hasClass(bare, "gh") || hasClass(bare, "dgr") || hasClass(bare, "pri")) continue;
+      out.push(part + " { font-weight: " + w + " }");
+    }
+  }
+  return out;
+}
+
+test("a primary keeps its 600 weight: no page rule weighs every .btn, the primary too", () => {
+  assert.deepStrictEqual(weightOffenders(sections().rest), [], "page rules that draw the primary at a secondary's weight");
+  const fx = `@media (min-width: 701px) {
+    .a .btn { font-size: var(--t-md); font-weight: 500; }
+    .b .btn:where(:not(.pri)) { font-weight: 500; }
+    .c > .btn { font: 500 var(--t-md) var(--font-ui); }
+    .d .btn.gh { font-weight: 400; }
+    .e .btn { font-weight: 600; }
+  }`;
+  assert.deepStrictEqual(weightOffenders(fx), [".a .btn { font-weight: 500 }", ".c > .btn { font-weight: 500 }"]);
+});
+
 // "Save as host…" is the profile page's block Save (pfv-btn pfv-btn-primary) with .pfv-btn-host added
 // (profilepage.js): red text on a clear button, never a fill. Its own rule wins over the primary's by
 // order only, so any primary rule of more weight (a :hover) or setting what it does not (the weight)
