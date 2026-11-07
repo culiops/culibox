@@ -161,6 +161,23 @@ function menuNavIndex(count, at, key) {
   return null;
 }
 
+// MENU_GAP / ROW_MENU_GAP: the space between what a menu hangs from and the menu. A ⋯ button leaves 4px
+// (the kit's popover offset); a sidebar row leaves 5: the 1px between two rows plus the same 4px, where
+// m5-1's anchor sits (a zero-height sibling after the row, the menu 4px below it).
+const MENU_GAP = 4;
+const ROW_MENU_GAP = 5;
+
+// menuPlace: where #session-menu goes ({left, top} in px). `r` is what it hangs from ({right, top,
+// bottom}): the ⋯ that opened it, or the whole row when the ⋯ sits in a sidebar row. The menu's right
+// edge is r's, `gap` px below it; it opens above r instead when it would reach into the viewport's last
+// 8px, and keeps 8px from the viewport's left and right edges. w and h are the menu's own size.
+function menuPlace(r, w, h, vw, vh, gap) {
+  const left = Math.max(8, Math.min(vw - w - 8, r.right - w));
+  const below = r.bottom + gap;
+  const top = below + h <= vh - 8 ? below : Math.max(8, r.top - h - 4);
+  return { left, top };
+}
+
 // PALETTE_ACTION_IDS: the menu actions the palette offers for the focused
 // session, in the palette's order (spec §2.6). End session keeps its own
 // per-session palette row.
@@ -582,6 +599,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuNavIndex, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuNavIndex, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

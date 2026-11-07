@@ -455,3 +455,93 @@ test("a meta unit that wrapped off the line is visibility: hidden: out of the ta
   assert.match(off, /visibility:\s*hidden/);
   assert.ok(!/display:\s*none/.test(off), "no layout change: the fit is measured on the same boxes");
 });
+
+// ---- task 9b: the session workspace's chrome takes the frames' metrics (ui-kit.css .ph .ask .srow .rail; m1-1, m5-1) ----------
+// Each value is the kit's own, as a token; a raw px is only where the kit writes one (the 2px bar, the 6/8/12/16 paddings).
+const decl = (sel) => rulesFor(sel).join(" ");
+
+test("the pane header is the kit's .ph: --panel, --h-ph high, 12px left and 6px right", () => {
+  const bar = rulesFor(".cell-bar").find((b) => /container-type/.test(b));
+  assert.ok(bar, ".cell-bar rule");
+  assert.match(bar, /height:\s*var\(--h-ph\)/);
+  assert.match(bar, /padding:\s*0 6px 0 12px/);
+  assert.match(bar, /background:\s*var\(--panel\)/);
+  assert.match(bar, /border-bottom:\s*1px solid var\(--line\)/);
+});
+
+test("the ask strip is the kit's .ask: 8px 12px on --amber-tint, Open terminal a real .btn-sm, Yes text --on-fill", () => {
+  const strip = decl(".needstrip");
+  assert.match(strip, /padding:\s*8px 12px/);
+  assert.match(strip, /background:\s*var\(--amber-tint\)/);
+  assert.ok(!/color-mix/.test(strip), "no mixed tint");
+  assert.match(decl(".needstrip.is-done"), /background:\s*var\(--panel\)/, "the neutral strip is unchanged");
+  // The padding and radius override skips .btn-sm, so Open terminal is the kit's 24px chip-radius button.
+  assert.ok(rulesFor(".needstrip .nacts .btn:where(:not(.btn-sm))").some((b) => /padding:\s*3px 10px/.test(b) && /border-radius:\s*var\(--r-ctl\)/.test(b)));
+  assert.deepStrictEqual(rulesFor(".needstrip .nacts .btn"), [], "no override reaches a .btn-sm");
+  assert.match(decl(".needstrip .nacts"), /align-items:\s*center/, "a 28px Yes does not stretch the 24px Open terminal");
+  const yes = decl('.needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri))');
+  assert.match(yes, /color:\s*var\(--on-fill\)/);
+  assert.ok(!/#1a1304/i.test(block), "no raw dark text left in the strip");
+});
+
+test("sidebar group labels and rows follow the frame's rhythm", () => {
+  assert.match(decl(".grp"), /padding:\s*12px 8px 4px/);
+  assert.deepStrictEqual(rulesFor(".grp:first-child"), [], "the first label has the same 12px above it");
+  const row = decl("#sessions .drow");
+  assert.match(row, /gap:\s*10px/);
+  assert.match(row, /padding:\s*6px 8px/);
+  assert.match(decl("#sessions .drow .sname"), /line-height:\s*var\(--lh-md\)/);
+  assert.match(decl("#sessions .drow:not(.nested) .nm"), /font-weight:\s*var\(--w-medium\)/);
+  const sub = decl("#sessions .drow .sub");
+  assert.match(sub, /line-height:\s*var\(--lh-sm\)/);
+  assert.ok(!/margin-top/.test(sub), "the sub-line sits right under the name");
+  assert.match(decl(".dchip"), /font:\s*500 var\(--t-xs\)\/18px/, "18px high chip");
+  assert.match(decl(".dchip.box"), /font-family:\s*var\(--font-mono\)[^}]*font-weight:\s*var\(--w-regular\)/, "the tier is mono 400 like .chip-box");
+  assert.match(decl("#sessions .drow.nested"), /padding:\s*3px 8px 4px 26px/);
+});
+
+test("the in-pane bar sits on the sidebar's edge on every in-pane row, faint, accent on the selected one", () => {
+  const bar = decl("#sessions .drow.inpane::before");
+  assert.match(bar, /left:\s*-8px/);
+  assert.match(bar, /top:\s*6px/);
+  assert.match(bar, /bottom:\s*6px/);
+  assert.match(bar, /width:\s*2px/);
+  assert.match(bar, /border-radius:\s*1px/);
+  assert.match(bar, /background:\s*var\(--faint\)/);
+  assert.match(decl("#sessions .drow.sel.inpane::before"), /background:\s*var\(--accent\)/, "C1: the selected row keeps the accent bar");
+  assert.deepStrictEqual(rulesFor("#sessions .drow.inpane"), [], "no inset shadow on the row any more");
+  assert.ok(!rulesFor("#sessions .drow.sel").some((b) => /box-shadow/.test(b)));
+});
+
+test("the row ⋯ shows on hover, on the selected row and while its own menu is open, pressed in the last case", () => {
+  const shown = rulesFor('#sessions .drow .kbtn[aria-expanded="true"]');
+  assert.ok(shown.some((b) => /background:\s*var\(--raise\)/.test(b) && /box-shadow:\s*inset 0 0 0 1px var\(--faint\)/.test(b)), "the kit's pressed look");
+  const reveal = rulesFor("#sessions .drow:hover .kbtn").join(" ");
+  assert.match(reveal, /opacity:\s*1/);
+  assert.match(reveal, /width:\s*var\(--h-sm\)/);
+  assert.ok(rulesFor("#sessions .drow.sel .kbtn").some((b) => /opacity:\s*1/.test(b)), "the selected row's ⋯ stays");
+  assert.ok(rulesFor('#sessions .drow .kbtn[aria-expanded="true"]').some((b) => /opacity:\s*1/.test(b) && /width:\s*var\(--h-sm\)/.test(b)), "an open menu's ⋯ is neither collapsed nor transparent");
+  // The pressed look is declared after the hover fill, so hovering the open menu's ⋯ keeps it pressed (the kit's order).
+  assert.ok(block.lastIndexOf('#sessions .drow .kbtn[aria-expanded="true"] {') > block.indexOf("#sessions .drow .kbtn:hover {"));
+});
+
+test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New session, 12px links", () => {
+  assert.match(decl("#side-top"), /padding:\s*12px 16px/);
+  assert.match(decl("#side-new"), /height:\s*var\(--h-ctl\)/);
+  assert.match(decl("#side-foot"), /padding:\s*12px 16px/);
+  assert.match(decl(".side-links button"), /font:\s*var\(--t-sm\) var\(--font-ui\)/);
+  assert.match(decl(".side-links"), /margin:\s*0 -8px/, "the first link's word starts on the 16px edge");
+});
+
+test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button (accent, p2)", () => {
+  const rail = decl(".sidebar-hidden .rail48");
+  assert.match(rail, /padding:\s*12px 0 10px/);
+  assert.match(rail, /gap:\s*6px/);
+  assert.match(decl(".ri"), /width:\s*32px[^}]*height:\s*32px|height:\s*32px[^}]*width:\s*32px/);
+  assert.match(decl(".ri"), /border-radius:\s*var\(--r-ctl\)/);
+  const add = decl(".ri.add");
+  assert.match(add, /width:\s*var\(--h-sm\)/);
+  assert.match(add, /height:\s*var\(--h-sm\)/);
+  assert.match(add, /background:\s*var\(--accent\)/, "the decided accent stays");
+  assert.match(decl(".ri.on"), /background:\s*var\(--raise\)[^}]*box-shadow:\s*inset 2px 0 0 var\(--accent\)/, "C1: selected = raise + the accent inset");
+});

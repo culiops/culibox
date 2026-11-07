@@ -294,3 +294,28 @@ test("the desktop row's ⋯ is a kit ghost icon button; the phone row's is not t
   const phone = app.slice(app.indexOf('kb.className = "kbtn";'));
   assert.ok(phone.includes('kb.className = "kbtn";'), "the phone row keeps the bare kbtn");
 });
+
+// ---- task 9b: paintCompactRow against stand-ins --------------------------------------------------------
+// paintCompactRow is cut out and run against the stand-ins it reads; rowSubline is the real one.
+function paintRow(s, over) {
+  const D = require("../static/deskshell.js");
+  const li = new El("li");
+  li.classList.add("drow");
+  if (over && over.nested) li.classList.add("nested");
+  const sname = new El("div"), grow = new El("div");
+  const ctx = {
+    document: { createElement: (t) => new El(t) }, Date, boxRuntime: "", window: { HOME_DIR: "" },
+    rowChip: () => null, acctBadge: () => null, awsBadge: () => null, fmtSessionCost: () => "", tierBadge: () => null,
+    rowSubline: D.rowSubline, rowMenuOpenFor: () => false, openSessionMenu: () => {}, openTerminal: () => {}, openPaneView: () => false, wmCopyLine: () => "", sessionWorkHome: () => "",
+  };
+  vm.runInNewContext(fn(app, "paintCompactRow") + "\npaintCompactRow(li, sname, grow, s, {});", Object.assign(ctx, { li, sname, grow, s }, over && over.ctx));
+  return { li, sname, grow, sub: grow.children[0] };
+}
+const ASKING = { id: "a", name: "a", activity: "waiting", need: "ask", ask: "Bash(terraform plan -out=tf.plan)" };
+
+test("the row's ⋯ is built collapsed, and expanded when it is the opener of the open menu (task 9b)", () => {
+  const kbOf = (r) => r.sname.children.find((c) => c.className.includes("kbtn"));
+  assert.equal(kbOf(paintRow(ASKING)).getAttribute("aria-expanded"), "false");
+  assert.equal(kbOf(paintRow(ASKING, { ctx: { rowMenuOpenFor: (id) => id === "a" } })).getAttribute("aria-expanded"), "true");
+  assert.equal(kbOf(paintRow(ASKING)).getAttribute("aria-haspopup"), "menu");
+});

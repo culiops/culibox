@@ -2377,6 +2377,8 @@ function paintCompactRow(li, sname, grow, s, conn) {
   kb.textContent = "⋯"; // U+22EF, as on the mobile row
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
+  // The kit's disclosure state: expanded while this row's own menu is open (desktop.css shows it pressed).
+  kb.setAttribute("aria-expanded", rowMenuOpenFor(s.id) ? "true" : "false");
   kb.title = "Session actions";
   // No stopPropagation: see the mobile row's note on the document-click closers.
   kb.onclick = () => openSessionMenu(kb, s);
@@ -5610,8 +5612,28 @@ $("spawn").addEventListener("submit", async (ev) => {
 // open menu changes nothing.
 let sessionMenuSid = null;
 let sessionMenuAnchor = null;
+// The session whose sidebar row's ⋯ opened the open menu (null when a pane header's ⋯, the tab
+// switcher or nothing did): that ⋯ reads expanded, whichever node the row is by then.
+let sessionMenuRowSid = null;
 
 function sessionMenuId() { return sessionMenuSid; }
+
+// rowMenuOpenFor: whether the menu open right now hangs from this session's sidebar row.
+function rowMenuOpenFor(sid) {
+  const menu = $("session-menu");
+  return !!sid && sessionMenuRowSid === sid && !!menu && menu.classList.contains("open");
+}
+
+// syncRowMenuExpanded: the row ⋯ whose menu is open says aria-expanded="true" (desktop.css keeps it
+// shown and draws it pressed, m5-1), every other row's says "false". Found by session id, not by the
+// node the menu was opened from: the list rebuilds a row under an open menu (paintCompactRow sets
+// the same state on the new node).
+function syncRowMenuExpanded() {
+  for (const kb of document.querySelectorAll("#sessions .drow .kbtn[aria-expanded]")) {
+    const li = kb.closest(".drow");
+    kb.setAttribute("aria-expanded", li && rowMenuOpenFor(li.dataset.sid) ? "true" : "false");
+  }
+}
 
 function closeSessionMenu(restoreFocus) {
   const menu = $("session-menu");
@@ -5619,6 +5641,8 @@ function closeSessionMenu(restoreFocus) {
   const a = sessionMenuAnchor;
   sessionMenuSid = null;
   sessionMenuAnchor = null;
+  sessionMenuRowSid = null;
+  syncRowMenuExpanded();
   // Focus goes back where it came from, but only when the trigger is still on
   // the page: a poll may have replaced the row while the menu was open.
   if (restoreFocus && a && a.isConnected) a.focus();
@@ -6154,17 +6178,19 @@ function openSessionMenu(anchor, s, extra) {
 // header's tab switcher, which reuses the same element and its closing rules.
 function placeSessionMenu(menu, anchor) {
   sessionMenuAnchor = anchor;
+  // A sidebar row's ⋯ hangs the menu from the whole row (m5-1: below it, the menu's right edge on
+  // the row's), not from the 24px button, so the menu never covers the row's own sub-line.
+  const row = anchor.closest ? anchor.closest("#sessions .drow") : null;
+  sessionMenuRowSid = row ? row.dataset.sid || null : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
-  const r = anchor.getBoundingClientRect();
-  const w = menu.offsetWidth;
-  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  syncRowMenuExpanded();
   // Rows sit anywhere down the rail, so a menu opened near the bottom flips
   // above its row rather than clipping. The height has to be measured AFTER the
   // items are in, because the item list varies per session.
-  const h = menu.offsetHeight;
-  const below = r.bottom + 4;
-  menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
+  const pos = menuPlace((row || anchor).getBoundingClientRect(), menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight, row ? ROW_MENU_GAP : MENU_GAP);
+  menu.style.left = pos.left + "px";
+  menu.style.top = pos.top + "px";
   // Focus lands on the first item. The precedent popover in this app leaves
   // focus on the trigger, which puts its own items somewhere unpredictable in
   // the tab order — acceptable for a menu of file actions, not for one whose

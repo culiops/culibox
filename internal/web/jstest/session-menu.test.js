@@ -11,7 +11,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { menuItems, menuGroups, menuIcon, menuNavIndex } = require("../static/sessionrow.js");
+const { menuItems, menuGroups, menuIcon, menuNavIndex, menuPlace, MENU_GAP, ROW_MENU_GAP } = require("../static/sessionrow.js");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 function fnSrc(src, name) {
@@ -235,4 +235,87 @@ test("the menu's keyboard handler walks the .menu-item rows (separators are not 
   assert.match(handler, /querySelectorAll\("\.menu-item, \.mi"\)/);
   assert.match(handler, /menuNavIndex\(/);
   assert.match(handler, /Escape/);
+});
+
+// ---- task 9b: where the menu hangs, and the ⋯ that stays pressed while it is open ----------------------------------------
+test("menuPlace: a ⋯ leaves 4px below it, right-aligned; a sidebar row leaves 5px (m5-1: the row gap and the 4px)", () => {
+  assert.strictEqual(MENU_GAP, 4);
+  assert.strictEqual(ROW_MENU_GAP, 5);
+  // The frame's sidebar: the row spans x 8-282 and ends at y 380; the menu is 240 wide, its right edge on the row's.
+  const row = { right: 282, top: 330, bottom: 380 };
+  assert.deepStrictEqual(menuPlace(row, 240, 340, 1440, 900, ROW_MENU_GAP), { left: 42, top: 385 });
+  // The same menu from the row's own 24px ⋯ (right edge 274): 9px further left, 19px up into the row's lines.
+  const dots = { right: 274, top: 332, bottom: 356 };
+  assert.deepStrictEqual(menuPlace(dots, 240, 340, 1440, 900, MENU_GAP), { left: 34, top: 360 });
+});
+
+test("menuPlace: opens above when it would reach the viewport's last 8px, and never closer than 8px to an edge", () => {
+  const row = { right: 282, top: 700, bottom: 750 };
+  assert.deepStrictEqual(menuPlace(row, 240, 340, 1440, 900, ROW_MENU_GAP), { left: 42, top: 356 }, "above: the row's top - height - 4");
+  // Exactly fitting below stays below; one pixel more flips.
+  assert.strictEqual(menuPlace({ right: 282, top: 500, bottom: 547 }, 240, 340, 1440, 900, ROW_MENU_GAP).top, 552);
+  assert.strictEqual(menuPlace({ right: 282, top: 500, bottom: 548 }, 240, 340, 1440, 900, ROW_MENU_GAP).top, 500 - 340 - 4);
+  assert.strictEqual(menuPlace({ right: 100, top: 10, bottom: 40 }, 240, 900, 1440, 900, 4).top, 8, "never above the viewport");
+  assert.strictEqual(menuPlace({ right: 100, top: 10, bottom: 40 }, 240, 100, 1440, 900, 4).left, 8, "never left of 8px");
+  assert.strictEqual(menuPlace({ right: 1500, top: 10, bottom: 40 }, 240, 100, 1440, 900, 4).left, 1440 - 240 - 8, "nor right of it");
+});
+
+// placeSessionMenu / closeSessionMenu / syncRowMenuExpanded run against stand-ins: two sidebar rows' ⋯ buttons, one pane header's.
+function rowsPage() {
+  const attrs = (init) => { const a = Object.assign({}, init); return { get: (k) => (k in a ? a[k] : null), set: (k, v) => { a[k] = String(v); }, has: (k) => k in a, a }; };
+  const mkRow = (sid, rect) => {
+    const li = { dataset: { sid }, getBoundingClientRect: () => rect };
+    const at = attrs({ "aria-expanded": "false" });
+    const kb = { getAttribute: at.get, setAttribute: at.set, hasAttribute: at.has, isConnected: true, focus() {}, closest: (sel) => (sel === ".drow" || sel === "#sessions .drow" ? li : null), getBoundingClientRect: () => ({ right: rect.right - 8, top: rect.top + 2, bottom: rect.top + 26 }), at };
+    return { li, kb };
+  };
+  const a = mkRow("a", { right: 282, top: 100, bottom: 150 });
+  const b = mkRow("b", { right: 282, top: 160, bottom: 210 });
+  const header = { closest: () => null, getBoundingClientRect: () => ({ right: 900, top: 0, bottom: 36 }) };
+  const open = new Set();
+  const menu = { classList: { add: (c) => open.add(c), remove: (c) => open.delete(c), contains: (c) => open.has(c) }, style: {}, offsetWidth: 240, offsetHeight: 300, querySelector: () => null };
+  const ctx = vm.createContext({
+    $: (id) => (id === "session-menu" ? menu : null),
+    document: { querySelectorAll: (sel) => { assert.strictEqual(sel, "#sessions .drow .kbtn[aria-expanded]"); return [a.kb, b.kb]; } },
+    window: { innerWidth: 1440, innerHeight: 900 },
+    menuPlace, MENU_GAP, ROW_MENU_GAP, sessionMenuSid: null,
+  });
+  const app = read("app.js");
+  const src = ["let sessionMenuAnchor = null;", "let sessionMenuRowSid = null;", "let sessionMenuSid = null;", fnSrc(app, "rowMenuOpenFor"), fnSrc(app, "syncRowMenuExpanded"), fnSrc(app, "closeSessionMenu"), fnSrc(app, "placeSessionMenu"),
+    "globalThis.place = placeSessionMenu; globalThis.close = closeSessionMenu; globalThis.openFor = rowMenuOpenFor;"].join("\n");
+  new vm.Script(src).runInContext(ctx);
+  return { a, b, header, menu, ctx, state: (k) => a.kb.getAttribute("aria-expanded") + "/" + b.kb.getAttribute("aria-expanded") };
+}
+
+test("a row ⋯ opens its menu from the row, reads expanded while it is open, and not once it closes", () => {
+  const p = rowsPage();
+  p.ctx.place(p.menu, p.a.kb);
+  assert.strictEqual(p.menu.style.left, "42px", "the menu's right edge on the row's (x 282)");
+  assert.strictEqual(p.menu.style.top, "155px", "5px under the row's bottom (150), not 19px into it");
+  assert.strictEqual(p.state(), "true/false");
+  assert.strictEqual(p.ctx.openFor("a"), true);
+  p.ctx.close(false);
+  assert.strictEqual(p.state(), "false/false");
+  assert.strictEqual(p.ctx.openFor("a"), false);
+});
+
+test("opening another row's menu moves the expanded state; a pane header's ⋯ expands no row", () => {
+  const p = rowsPage();
+  p.ctx.place(p.menu, p.a.kb);
+  p.ctx.place(p.menu, p.b.kb);
+  assert.strictEqual(p.state(), "false/true");
+  p.ctx.place(p.menu, p.header);
+  assert.strictEqual(p.state(), "false/false", "the menu hangs from the pane header now");
+  assert.strictEqual(p.menu.style.top, "40px", "a ⋯ outside the list keeps the 4px under it");
+  assert.strictEqual(p.menu.style.left, "660px");
+});
+
+test("a row rebuilt under an open menu is built expanded (paintCompactRow reads rowMenuOpenFor)", () => {
+  const app = read("app.js");
+  const paint = fnSrc(app, "paintCompactRow");
+  assert.match(paint, /kb\.setAttribute\("aria-expanded", rowMenuOpenFor\(s\.id\) \? "true" : "false"\);/);
+  assert.match(paint, /kb\.setAttribute\("aria-haspopup", "menu"\);/);
+  // The phone's row ⋯ opens the sheet and has no such state.
+  const phone = app.slice(app.indexOf('kb.className = "kbtn";'));
+  assert.ok(!/aria-expanded/.test(phone.slice(0, phone.indexOf("right.appendChild(kb)"))), "the phone row's ⋯ keeps its attributes");
 });
