@@ -172,7 +172,7 @@ const filledAccent = (r) => r.decls.some(([p, v]) => p === "background" && v ===
   r.decls.some(([p, v]) => p === "color" && /^var\(--(on-fill|bg)\)$/.test(v));
 const FILLED_PRIMARIES = [
   "desktop.css .pbtn", "desktop.css .ri.add", "desktop.css #ask-modal:not(.info) #ask-ok",
-  "desktop.css #page-host > #settings-modal.as-page #pfv .pfv-btn-primary", "desktop.css body > main.card button",
+  "desktop.css #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host))", "desktop.css body > main.card button",
   "app.css #ask-ok", "app.css #spawn button[type=\"submit\"]", "app.css .vt-btn.pri",
 ];
 const FILLED_NOT_CONTROLS = [
@@ -285,6 +285,36 @@ test("no other primary look is left in desktop.css", () => {
   assert.deepStrictEqual(unguardedBtn(sections().rest), [], "page rules that paint every .btn, the primary too");
   const app = stripComments(fs.readFileSync(path.join(STATIC, "app.css"), "utf8"));
   assert.deepStrictEqual(primaryHoverGaps({ "desktop.css": sections().rest, "app.css": app }, sections().rest), [], "filled primaries outside the kit");
+});
+
+// "Save as host…" is the profile page's block Save (pfv-btn pfv-btn-primary) with .pfv-btn-host added
+// (profilepage.js): red text on a clear button, never a fill. Its own rule wins over the primary's by
+// order only, so any primary rule of more weight (a :hover) or setting what it does not (the weight)
+// would reach it. So every rule on .pfv-btn-primary that paints or weighs it excludes the host variant.
+const HOST_REACH = new Set(["background", "background-color", "color", "font-weight", "font", "box-shadow"]);
+function hostReach(src) {
+  const out = [];
+  for (const r of parseRules(src)) {
+    const set = r.decls.filter(([p]) => HOST_REACH.has(p));
+    if (!set.length) continue;
+    for (const part of parts(r.selector)) {
+      const last = compounds(part).pop();
+      if (!hasClass(last.replace(/:not\([^()]*\)/g, ""), "pfv-btn-primary")) continue;
+      if (/:not\([^()]*\.pfv-btn-host(?![\w-])[^()]*\)/.test(last)) continue;
+      out.push(part + " { " + set.map(([p, v]) => p + ": " + v).join("; ") + " }");
+    }
+  }
+  return out;
+}
+
+test("Save as host… keeps its red, clear look: no primary rule reaches .pfv-btn-host", () => {
+  assert.deepStrictEqual(hostReach(stripComments(raw)), []);
+  const host = parseRules(stripComments(raw)).find((r) => parts(r.selector).some((p) => p.endsWith("#pfv .pfv-btn-host")));
+  assert.ok(host, "the host variant's rule");
+  assert.strictEqual(decl(host, "background"), "none");
+  assert.strictEqual(decl(host, "color"), "var(--red)");
+  assert.deepStrictEqual(hostReach(`.x .pfv-btn-primary:hover { background: red; } .y .pfv-btn-primary:where(:not(.pfv-btn-host, :disabled)):hover { background: red; } .z .pfv-btn-primary .i { color: red; }`),
+    [".x .pfv-btn-primary:hover { background: red }"], "fixture");
 });
 
 test("Close and Cancel are never primary: the Keyboard shortcuts dialog's Close is a secondary", () => {

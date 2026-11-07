@@ -1982,8 +1982,10 @@
   #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: var(--on-fill); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(:disabled)):hover { background: var(--accent-hover); }
+  /* The kit's primary (F11), except "Save as host…" (.pfv-btn-host, below): red text on a clear
+     button, never a fill, and no accent hover. :where keeps the weights. */
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host)) { background: var(--accent); color: var(--on-fill); font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host, :disabled)):hover { background: var(--accent-hover); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }

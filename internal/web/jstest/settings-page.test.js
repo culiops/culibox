@@ -203,8 +203,9 @@ test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap,
   assert.match(rule(D + " > #cred-drawer-body .seg"), /display: flex;/);
   // One primary look (F11, #171): the page's block Save is the kit's fill, text, 600 and hover, and the
   // foot's Save is the kit's .btn.pri with no colour of its own.
-  assert.match(css, /#pfv \.pfv-btn-primary \{ background: var\(--accent\); color: var\(--on-fill\); font-weight: 600; \}/);
-  assert.match(css, /#pfv \.pfv-btn-primary:where\(:not\(:disabled\)\):hover \{ background: var\(--accent-hover\); \}/);
+  // "Save as host…" (.pfv-btn-host) is excluded: it stays red on a clear button.
+  assert.match(css, /#pfv \.pfv-btn-primary:where\(:not\(\.pfv-btn-host\)\) \{ background: var\(--accent\); color: var\(--on-fill\); font-weight: 600; \}/);
+  assert.match(css, /#pfv \.pfv-btn-primary:where\(:not\(\.pfv-btn-host, :disabled\)\):hover \{ background: var\(--accent-hover\); \}/);
   assert.ok(!css.includes("\n  " + D + " > #cred-drawer-foot > .btn.pri {"), "no foot rule restyles the primary");
   // Buttons and labels are --t-md (13px); the native boxes 14px.
   assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: var\(--t-md\)/);
