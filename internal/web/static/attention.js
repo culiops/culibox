@@ -66,6 +66,37 @@ function needLabel(s) {
   return "";
 }
 
+// plainSummary: the agent's last message without its markdown, for the desktop
+// lines that show it on one line (the row sub-line, the ask strip, the palette).
+// The server sends it raw, and a `**` drawn as text was the first thing read on
+// the most-watched line of the product. Code spans are set aside first and come
+// back at the end without their backticks, so nothing inside them is touched and
+// a bold around one (`**merge: \`fix/ui\` into main**`) still pairs. A link or
+// image keeps its label; paired `**…**` and `__…__` go, and so does a `**` left
+// opening a word by a summary cut off mid-bold, but not a glob's `**/` or an
+// exponent; a line-start `#` goes; whitespace collapses to one line. The display
+// mask's `[masked:…]` is never a link (the strip's mask note looks for it).
+// Display only, never sanitising: every caller writes it with textContent. Never
+// for an ask, which is a tool call, not markdown (see cardContent). Cut to 1000
+// characters first: the server sends at most 120 runes, and this runs on every
+// 3 s repaint.
+function plainSummary(text) {
+  const codes = [];
+  // A pair matches only across text with no other pair in it, the nearest opener
+  // first, so a glob's `**` never pairs with the bold after it.
+  return String(text == null ? "" : text).slice(0, 1000)
+    .replace(/[\uE000\uE001]/g, "")
+    .replace(/(`+)([\s\S]*?)\1/g, (_, ticks, code) => "\uE000" + (codes.push(code) - 1) + "\uE001")
+    .replace(/!?\[(?!masked:)([^\]\n]*)\]\((?:[^()\s]|\([^()\s]*\))*\)/g, "$1")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/(^|\W)\*\*(?=[^\s*])((?:(?!\*\*)[\s\S])*?[^\s*])\*\*(?!\w)/g, "$1$2")
+    .replace(/(^|\s)\*\*(?=[^\s*/])/g, "$1")
+    .replace(/(^|\W)__(?=[^\s_])((?:(?!__)[\s\S])*?[^\s_])__(?!\w)/g, "$1$2")
+    .replace(/`/g, "")
+    .replace(/\uE000(\d+)\uE001/g, (_, i) => codes[i])
+    .replace(/\s+/g, " ").trim();
+}
+
 // cardContent decides which blocks a desktop needs-you card renders.
 //  - ask: the tool call it wants to run. No reply field and no digit buttons —
 //    the server refuses any message to a pending/blocked session by design (a
@@ -83,8 +114,12 @@ function needLabel(s) {
 //    send to such a session (ErrNoTranscript) regardless of `replyable` — so
 //    a reply field here would be dead on arrival. Same shape as a
 //    non-claude session on purpose: neither has a real answer path from this card.
-function cardContent(s) {
+// opts.plain: the summary as plainSummary text, for the desktop's one-line
+// surfaces. The ask is never touched: it is the command Yes would answer, and a
+// stripped `__pycache__` would show one the agent is not going to run.
+function cardContent(s, opts) {
   const v = s || {};
+  const summary = opts && opts.plain ? plainSummary(v.summary) : v.summary;
   // Kill-switch: the text is the peek and stays; only the reply paths close.
   const on = globalThis.repliesEnabled === true;
   // An SSO need outranks turn/ask for WHICH card shows, but it must not take
@@ -98,12 +133,12 @@ function cardContent(s) {
     return { title: "Store locked", text: storeLockedText(), unlock: true, ask: false, reply: false, enableReplies: false };
   }
   if (v.need === "ask") {
-    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
+    return { text: v.ask || summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
   }
   if (!v.claude || !v.need) {
-    return { text: v.summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
+    return { text: summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
   }
-  return { text: v.summary || "No summary", ask: false, reply: on && !!v.replyable, enableReplies: on && !v.replyable };
+  return { text: summary || "No summary", ask: false, reply: on && !!v.replyable, enableReplies: on && !v.replyable };
 }
 
 // maskHint: the one-line note under text the server's display mask touched.
@@ -339,7 +374,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
+  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }
