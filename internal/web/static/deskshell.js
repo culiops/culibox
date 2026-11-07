@@ -13,6 +13,8 @@ function deskDep(name) {
   const g = {
     sessionGroups: typeof sessionGroups === "function" ? sessionGroups : null,
     needsYou: typeof needsYou === "function" ? needsYou : null,
+    attentionClass: typeof attentionClass === "function" ? attentionClass : null,
+    activityClass: typeof activityClass === "function" ? activityClass : null,
     cardContent: typeof cardContent === "function" ? cardContent : null,
     plainSummary: typeof plainSummary === "function" ? plainSummary : null,
     needLabel: typeof needLabel === "function" ? needLabel : null,
@@ -25,7 +27,7 @@ function deskDep(name) {
     isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
   };
   if (g[name]) return g[name];
-  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js", plainSummary: "./attention.js",
+  const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", attentionClass: "./attention.js", activityClass: "./activity.js", cardContent: "./attention.js", plainSummary: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
     isNestedShell: "./shellnest.js" }[name];
@@ -34,12 +36,19 @@ function deskDep(name) {
 
 const DESK_RECENT_MAX = 3;
 
-// deskGroups: the sidebar's groups. Same buckets as the mobile Sessions screen;
-// a session that needsYou for a non-activity reason (expired AWS sign-in, locked
-// store) is bucketed as waiting, like its dot.
+// deskGroups: the sidebar's groups. The mobile Sessions screen's buckets plus
+// "Done · your turn" right after Needs you (F21-B): a session blocked on you
+// (an ask, an expired AWS sign-in, a locked store) is bucketed as waiting, like
+// its dot, and one that finished its turn leaves amber for its own neutral group.
+// attentionClass, not needsYou, decides: an exited session never asks, so a stale
+// need on a dead one no longer puts it in Needs you. The phone's list does not
+// come through here and keeps needsYou (app.js refreshSessions).
 function deskGroups(sessions) {
-  const needs = deskDep("needsYou");
-  return deskDep("sessionGroups")(sessions, (s) => (needs(s) ? "waiting" : s.activity));
+  const attn = deskDep("attentionClass");
+  return deskDep("sessionGroups")(sessions, (s) => {
+    const a = attn(s);
+    return a === "block" ? "waiting" : a === "done" ? "your-turn" : s.activity;
+  });
 }
 
 // jumpOrder: the list Mod+1…9 and the palette's first nine index into. On
@@ -103,11 +112,16 @@ function rowChip(s, nowMs, boxRuntime) {
 }
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
-// needs you; otherwise its summary, else the activity word the old row showed.
-// (No idle duration: the session record carries none.) A sign-in line carries
-// view: "access": a click opens the session's Access view, where sign-in lives.
+// is blocked on you; otherwise its summary, else the activity word the old row
+// showed. A finished turn (F21-B) reads its summary like any session at rest, muted,
+// or "your turn" when the agent left none: the group header already says it is
+// done, so no "your turn:" prefix and no amber. (No idle duration: the session
+// record carries none.) A sign-in line carries view: "access": a click opens the
+// session's Access view, where sign-in lives.
 function rowSubline(s) {
-  if (deskDep("needsYou")(s)) {
+  const attn = deskDep("attentionClass")(s);
+  if (attn === "done") return { text: deskDep("plainSummary")(s.summary) || "your turn", amber: false };
+  if (attn === "block") {
     // A named connection's expired sign-in on an agent that is not itself
     // waiting has no needLabel and would read "Waiting for input.", which says
     // nothing about the sign-in.
@@ -122,7 +136,22 @@ function rowSubline(s) {
     return out;
   }
   const v = s || {};
-  return { text: deskDep("plainSummary")(v.summary) || deskDep("sessionDot")(v).title || "", amber: false };
+  return { text: deskDep("plainSummary")(v.summary) || deskDot(v).title || "", amber: false };
+}
+
+// deskDot: the activity dot (class + title) on every desktop surface that draws
+// one for a session: the sidebar row, the icon rail and the pane header. It is
+// sessionDot, except that a finished turn is the neutral idle dot titled "your
+// turn" (F21-B: amber means blocked on you and nothing else), and that an exited
+// session, which never asks, is not painted amber by a need it left behind. The
+// phone's dots stay on sessionDot.
+function deskDot(s) {
+  const v = s || {};
+  const a = deskDep("attentionClass")(v);
+  const act = deskDep("activityClass");
+  if (a === "done") return { cls: act("idle").cls, title: "your turn" };
+  if (!a && deskDep("needsYou")(v)) return act(v.activity);
+  return deskDep("sessionDot")(v);
 }
 
 // deskWriteChip: the one red chip, "aws <conn> · WRITE · 23m": which connection
@@ -162,8 +191,10 @@ function fmtSessionCost(n) {
 // session's name and its formatted cost (cost_usd moves on the 2m ingest with no
 // other signal, e.g. on an idle session). The cost is formatted here, not taken
 // from paneHeaderModel, so a narrow pane (which hides it) does not look stale.
+// The attention word is in it too: a turn that finishes turns the header's dot
+// from amber to neutral, with no other signal in the key.
 function headerSyncKey(name, session) {
-  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null]);
+  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null, session ? deskDep("attentionClass")(session) : ""]);
 }
 
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,
@@ -173,11 +204,14 @@ function headerSyncKey(name, session) {
 // does that, and a test pins that a long name passes through.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
+    return { dot: null, attention: "", name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
-  const dot = s ? deskDep("sessionDot")(s) : null;
+  const dot = s ? deskDot(s) : null;
+  // attention: the header paints the terminal's own pushed activity over `dot`
+  // (tabs.js renderHeader), except for a finished turn, which must stay neutral.
+  const attention = s ? deskDep("attentionClass")(s) : "";
   const chips = [];
   const cont = s ? deskContainmentChip(s, boxRuntime) : null;
   if (cont) chips.push(cont);
@@ -193,11 +227,11 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
+    return { dot, attention, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
-    dot, name, chips,
+    dot, attention, name, chips,
     model: u && u.model ? String(u.model) : null,
     ctx: u && typeof u.pct === "number" ? u.pct + "%" : null,
     cost: s ? fmtSessionCost(s.cost_usd) : null,
@@ -215,12 +249,16 @@ function drawerFor(state, kind, sessionId) {
 }
 
 // needStripModel: the ask strip under a pane header, null unless the session
-// needs you. cardContent's text is the command for an ask, else the need's own sentence.
+// asks for you. cardContent's text is the command for an ask, else the need's own
+// sentence. tone is "block" for a session blocked on you (amber) and "done" for
+// a finished turn (F21-B: neutral; the strip stays because it carries the reply
+// field). An exited session has no strip: it never asks.
 function needStripModel(s) {
-  if (!deskDep("needsYou")(s)) return null;
+  const tone = deskDep("attentionClass")(s);
+  if (!tone || !deskDep("needsYou")(s)) return null;
   const c = deskDep("cardContent")(s);
   // A waiting session can have no named need; label it as the row's dot does.
-  return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text };
+  return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text, tone };
 }
 
 // stripLabel: the strip's visible label, in sentence case. An ask reads "Asks to
@@ -242,7 +280,7 @@ function stripKey(s, activeKind, repliesEnabled) {
   void activeKind; // part of the signature on purpose: it must NOT matter
   if (!s) return "";
   return JSON.stringify([
-    s.id, s.need || "", s.activity || "", s.ask || "", deskHash(s.ask_full), s.summary || "",
+    s.id, s.need || "", s.activity || "", deskDep("attentionClass")(s), s.ask || "", deskHash(s.ask_full), s.summary || "",
     !!s.replyable, !!s.claude, repliesEnabled === true,
     s.aws ? JSON.stringify(s.aws) : "", JSON.stringify(s.aws_connections || null),
     // The composer's gate (sendState): it turns true a few seconds after a
@@ -375,6 +413,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, jumpOrder, deskDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneTabsClass };
 }

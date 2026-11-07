@@ -104,7 +104,8 @@ test("cardContent without plain is unchanged (the mobile card keeps today's text
 });
 
 test("rowSubline (the desktop sidebar's second line) shows plain text", () => {
-  assert.deepStrictEqual(rowSubline(turn), { text: "your turn: Done: merge: x in main", amber: true });
+  // A finished turn (F21-B) reads its plain summary, muted: no "your turn:" prefix, no amber.
+  assert.deepStrictEqual(rowSubline(turn), { text: "Done: merge: x in main", amber: false });
   assert.deepStrictEqual(rowSubline(ask), { text: "asks: Bash(rm -rf __pycache__ **/x.pyc)", amber: true });
   assert.deepStrictEqual(rowSubline({ activity: "working", summary: "## Plan\n**step 1**" }), { text: "Plan step 1", amber: false });
 });

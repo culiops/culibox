@@ -13,6 +13,27 @@ function needsYou(s) {
   return !!s && (s.activity === "waiting" || s.need === "sso" || s.need === "store_locked" || connSSOSources(s).length > 0);
 }
 
+// attentionClass: how a session asks for the operator on the desktop sidebar, in
+// one word: "block" (an agent is blocked on you: an ask, an expired sign-in, a
+// locked store, a prompt it cannot name), "done" (it finished its turn) or ""
+// (nothing to look at; an exited session never asks). It only DRAWS and GROUPS
+// (the desktop's rows, dots and strip): needsYou above stays what the tab title,
+// the favicon and the notifications count, so a finished turn is still counted
+// there (Plan 7 changes that). The server sends the word as `attention`
+// (internal/session/attention.go); a payload without it, or with a word this
+// client does not know, is read here by the same rules, and both read one
+// fixture (internal/session/testdata/attention-cases.json). An expired sign-in
+// on a named connection blocks even when the record carries no need, as in
+// needsYou, and outranks a finished turn.
+function attentionClass(s) {
+  if (!s) return "";
+  if (s.attention === "block" || s.attention === "done") return s.attention;
+  if (s.exited) return "";
+  if (s.need === "ask" || s.need === "sso" || s.need === "store_locked" || connSSOSources(s).length > 0) return "block";
+  if (s.need === "turn") return "done";
+  return s.activity === "waiting" ? "block" : "";
+}
+
 // connSSOSources: the distinct sign-in sources a session with named AWS
 // connections waits on (sorted), [] for any other session. The list entry
 // carries sso_expired per connection; any one of them wants the operator.
@@ -374,7 +395,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
+  module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

@@ -3,7 +3,9 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { needsYou, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const fs = require("node:fs");
+const path = require("node:path");
+const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -392,4 +394,45 @@ test("sso outranks store_locked for which card shows; label and tab dot name the
   assert.strictEqual(tabNeedWhy({ activity: "working", need: "store_locked" }), "store");
   assert.strictEqual(tabNeedWhy({ activity: "waiting", need: "store_locked" }), "");
   assert.strictEqual(sessionDot({ activity: "working", need: "store_locked" }).title, "Store locked");
+});
+
+// attentionClass: how a session asks for the operator on the desktop sidebar.
+// The Go side (internal/session/attention.go) and this function read ONE fixture,
+// so the two cannot drift: the server's field, and the client's own derivation
+// for a payload without it.
+const attentionCases = JSON.parse(fs.readFileSync(path.join(__dirname, "../../session/testdata/attention-cases.json"), "utf8"));
+
+test("attentionClass: the shared fixture has rows to check", () => {
+  assert.ok(attentionCases.length >= 10);
+});
+
+for (const c of attentionCases) {
+  test("attentionClass derives '" + c.want + "' without the server field: " + c.name, () => {
+    const info = { ...c.info };
+    delete info.attention;
+    assert.strictEqual(attentionClass(info), c.want);
+  });
+  test("attentionClass reads the server field when it is sent: " + c.name, () => {
+    // The server omits the field when it is "", so a row that wants "" sends none.
+    const info = { ...c.info };
+    if (c.want) info.attention = c.want;
+    assert.strictEqual(attentionClass(info), c.want);
+  });
+}
+
+test("attentionClass: the server's word wins over the client's reading, only for block and done", () => {
+  assert.strictEqual(attentionClass({ activity: "working", attention: "block" }), "block");
+  assert.strictEqual(attentionClass({ activity: "waiting", need: "ask", attention: "done" }), "done");
+  assert.strictEqual(attentionClass({ activity: "waiting", need: "ask", attention: "nonsense" }), "block", "an unknown word falls back to deriving");
+});
+
+test("attentionClass: an expired connection sign-in blocks even with no need on the record (older payload)", () => {
+  assert.strictEqual(attentionClass({ activity: "working", aws_connections: [{ name: "a", sso_expired: "acme" }] }), "block");
+  assert.strictEqual(attentionClass({ activity: "waiting", need: "turn", aws_connections: [{ name: "a", sso_expired: "acme" }] }), "block", "sign-in outranks a finished turn");
+});
+
+test("attentionClass: nothing, or a session that is not there, is ''", () => {
+  assert.strictEqual(attentionClass(null), "");
+  assert.strictEqual(attentionClass(undefined), "");
+  assert.strictEqual(attentionClass({}), "");
 });

@@ -80,6 +80,34 @@ test("a rail entry carries the session name as its hover title", () => {
   assert.strictEqual(b.title, "d", "an unnamed session titles by id");
 });
 
+// F21-B (#172): a finished turn is neutral on the rail too: no amber dot, and the
+// hover says whose turn it is. The session's name never carries the suffix.
+test("a finished turn is not an alert: its dot is neutral and it says it is your turn", () => {
+  const [, t] = railItems([{ id: "a", name: "review", activity: "waiting", need: "turn", attention: "done" }], {});
+  assert.strictEqual(t.attention, "done");
+  assert.strictEqual(t.alert, false);
+  assert.strictEqual(t.title, "review \u00b7 your turn");
+  assert.strictEqual(t.label, "review \u2014 your turn");
+  assert.strictEqual(t.name, "review", "the tab title never carries the suffix");
+  const [, u] = railItems([{ id: "a", name: "review", activity: "waiting", need: "turn" }], {});
+  assert.strictEqual(u.attention, "done", "derived when the server sends no field");
+});
+
+test("a blocked session is an alert with attention block; a working one has neither", () => {
+  const [, a, w] = railItems([{ id: "a", name: "n", activity: "waiting", need: "ask", attention: "block" }, { id: "b", name: "m", activity: "working" }], {});
+  assert.strictEqual(a.attention, "block");
+  assert.strictEqual(a.alert, true);
+  assert.strictEqual(a.title, "n");
+  assert.strictEqual(w.attention, "");
+  assert.strictEqual(w.alert, false);
+});
+
+test("an exited session's stale sign-in need is no alert on the rail", () => {
+  const [, s] = railItems([{ id: "a", name: "n", exited: true, activity: "done", need: "sso" }], {});
+  assert.strictEqual(s.attention, "");
+  assert.strictEqual(s.alert, false);
+});
+
 test("an entry is elevated only while a write window is open, on the record or a connection", () => {
   const now = Date.parse("2026-10-27T10:00:00Z");
   const live = "2026-10-27T10:30:00Z", gone = "2026-10-27T09:00:00Z";

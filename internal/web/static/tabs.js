@@ -911,7 +911,9 @@ class Cell {
     const main = el("div");
     main.className = "ph-main";
     // The terminal's own pushed activity, like the old tab dot; a viewer has none.
-    const a = t && t.kind === "terminal" && typeof t.activity === "function"
+    // A finished turn takes the model's neutral dot instead: the tab's activity
+    // for it is "waiting", which would paint the one colour reserved for a block.
+    const a = t && t.kind === "terminal" && typeof t.activity === "function" && m.attention !== "done"
       ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : m.dot;
     if (a) {
       const dot = el("span");
@@ -1296,7 +1298,8 @@ function dockHolding(id) {
   return cells.find((c) => c.dockTabs.has(id)) || null;
 }
 
-// buildNeedStrip: the desktop ask strip (spec 5.3). The amber label, then
+// buildNeedStrip: the desktop ask strip (spec 5.3). The amber label (muted, on
+// the panel, for a finished turn: .is-done), then
 // renderNeedsBody's blocks (app.js): the one-line mono text (click expands it to
 // the full message), Yes/No and the composer ONLY when replies are on and the
 // session is replyable, and Open terminal. D24: with replies off that is the
@@ -1313,6 +1316,8 @@ function buildNeedStrip(s, model, onSize) {
   const rich = !!(c.sso || c.unlock);
   if (rich) strip.classList.add("rich");
   if (cardExpanded.has(s.id)) strip.classList.add("open");
+  // A finished turn is neutral (F21-B); only an agent blocked on you is amber.
+  if (model.tone === "done") strip.classList.add("is-done");
   const label = document.createElement("span");
   label.className = "ns-label";
   label.textContent = stripLabel(model.label);

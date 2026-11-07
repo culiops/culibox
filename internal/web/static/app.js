@@ -594,7 +594,7 @@ function renderRail48() {
   if (!rail) return;
   // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
   const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId() });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || ""].join(":")).join("|");
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
@@ -607,8 +607,9 @@ function renderRail48() {
     b.title = it.kind === "session" ? it.title : it.label;
     if (it.kind === "session") {
       const d = document.createElement("span");
-      // An expired sign-in needs you while the agent still works: the dot says so too.
-      d.className = activityClass(it.alert ? "waiting" : it.activity).cls;
+      // deskDot is the row's and the pane header's dot: an expired sign-in
+      // blocks on you while the agent still works, and a finished turn is neutral.
+      d.className = it.dot.cls;
       b.appendChild(d);
       // it.name, not it.label: label carries "— waiting for you" for the
       // button's accessible name, and a freshly-opened tab is titled from this
@@ -2121,7 +2122,9 @@ function renderSession(s, opts) {
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
-  const act = sessionDot(s);
+  // The desktop row's dot is deskDot (a finished turn is neutral, F21-B); the
+  // phone's rows (never compact) keep sessionDot.
+  const act = compact ? deskDot(s) : sessionDot(s);
   const adot = document.createElement("span");
   adot.className = act.cls;
   // Someone else is holding this session from another browser. It rides ON the
@@ -2334,9 +2337,15 @@ function paintCompactRow(li, sname, grow, s) {
 function renderDesktopEntry(it) {
   if (it.header) {
     const h = document.createElement("li");
-    h.className = it.key === "needs-you" ? "grp hot" : "grp";
+    // The kit's group label (uppercase, muted) carries the type; only Needs you
+    // is amber. "Done · your turn" is as neutral as Running and Idle. .grp keeps
+    // the sidebar's own spacing.
+    h.className = "grp grp-label" + (it.key === "needs-you" ? " is-needs" : "");
     h.dataset.sid = it.id;
-    h.textContent = it.label + " \u00b7 " + it.count;
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = String(it.count);
+    h.append(it.label + " \u00b7 ", n);
     return h;
   }
   return renderSession(it.s, { compact: true });

@@ -80,22 +80,25 @@ function mobileNestDep() {
 // that need a person first, then the ones doing work, then everything at rest.
 // "waiting" is the only needs-you state; "working" is running; anything else
 // (idle/done/detached/crashed/unknown) is at rest. Empty groups are dropped so
-// no header ever sits above nothing.
+// no header ever sits above nothing. The desktop sidebar's statusFn also says
+// "your-turn" for a session that finished its turn (deskGroups, F21-B): its
+// neutral "Done · your turn" group sits right after Needs you. The phone's
+// statusFn never returns it, so a phone list has no such group.
 function sessionGroups(sessions, statusFn) {
   const nest = mobileNestDep();
   const list = sessions || [];
   const kids = nest.shellChildren(list);
-  const buckets = { "needs-you": [], running: [], idle: [] };
+  const buckets = { "needs-you": [], "your-turn": [], running: [], idle: [] };
   for (const s of list) {
     // A nested shell rides with its parent (below), never in a bucket of its own.
     if (nest.isNestedShell(s, list)) continue;
     const st = statusFn ? statusFn(s) : s.status;
     // statusFn maps a session that needsYou (waiting, or an expired AWS sign-in) to "waiting".
-    const key = st === "waiting" ? "needs-you" : st === "working" ? "running" : "idle";
+    const key = st === "waiting" ? "needs-you" : st === "your-turn" ? "your-turn" : st === "working" ? "running" : "idle";
     buckets[key].push(s);
   }
-  const labels = { "needs-you": "Needs you", running: "Running", idle: "Idle" };
-  return ["needs-you", "running", "idle"]
+  const labels = { "needs-you": "Needs you", "your-turn": "Done \u00b7 your turn", running: "Running", idle: "Idle" };
+  return ["needs-you", "your-turn", "running", "idle"]
     .filter((k) => buckets[k].length)
     .map((k) => {
       // count is the agents; the shells listed after each are not counted.

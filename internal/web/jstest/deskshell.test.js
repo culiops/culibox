@@ -511,3 +511,129 @@ test("paneTabsClass marks a one-tab group, and only that", () => {
   assert.strictEqual(d.paneTabsClass(d.paneTabs(true)), "ph-tabs");
   assert.strictEqual(d.paneTabsClass([]), "ph-tabs");
 });
+
+// --- F21-B (#172): a finished turn is "Done · your turn", not amber Needs you ---
+// ask, sso, store_locked and a finished turn, as the server sends them (with
+// `attention`) and as an older payload without it.
+const A = {
+  ask: { id: "ask", name: "ask", activity: "waiting", need: "ask", ask: "rm -rf build", claude: true, attention: "block" },
+  sso: { id: "sso", name: "sso", activity: "working", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }], attention: "block" },
+  store: { id: "store", name: "store", activity: "working", need: "store_locked", attention: "block" },
+  turn: { id: "turn", name: "turn", activity: "waiting", need: "turn", claude: true, summary: "**Merged** `fix/ui`; your move", attention: "done" },
+  working: { id: "work", name: "work", activity: "working" },
+  idle: { id: "idle", name: "idle", activity: "idle" },
+};
+const noAttn = (s) => { const c = { ...s }; delete c.attention; return c; };
+const mixed = [A.ask, A.sso, A.store, A.turn, A.working, A.idle];
+
+test("deskGroups: a finished turn leaves Needs you for its own Done · your turn group, right after it", () => {
+  const g = d.deskGroups(mixed);
+  assert.deepEqual(g.map((x) => x.key), ["needs-you", "your-turn", "running", "idle"]);
+  assert.deepEqual(g.map((x) => x.label), ["Needs you", "Done · your turn", "Running", "Idle"]);
+  assert.deepEqual(g.map((x) => x.count), [3, 1, 1, 1]);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["ask", "sso", "store"]);
+  assert.deepEqual(g[1].sessions.map((s) => s.id), ["turn"]);
+});
+
+test("deskGroups: the same list without the server's attention field groups the same", () => {
+  const g = d.deskGroups(mixed.map(noAttn));
+  assert.deepEqual(g.map((x) => [x.key, x.count, x.sessions.map((s) => s.id)]),
+    d.deskGroups(mixed).map((x) => [x.key, x.count, x.sessions.map((s) => s.id)]));
+});
+
+test("deskGroups: Done · your turn is dropped when empty, and Mod+N order follows the sidebar", () => {
+  assert.deepEqual(d.deskGroups([A.ask, A.working]).map((x) => x.key), ["needs-you", "running"]);
+  assert.deepEqual(d.jumpOrder(mixed, false).map((s) => s.id), ["ask", "sso", "store", "turn", "work", "idle"]);
+});
+
+test("deskGroups: an exited session with a stale sign-in need is at rest, not in Needs you", () => {
+  const dead = { id: "dead", name: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
+  const g = d.deskGroups([dead]);
+  assert.deepEqual(g.map((x) => x.key), ["idle"]);
+});
+
+test("a nested shell rides with its parent in the Done · your turn group", () => {
+  const sh = { id: "sh", name: "sh", activity: "working", parent_id: "turn", created: "2026-10-27T09:00:00Z" };
+  const g = d.deskGroups([A.turn, sh]);
+  assert.deepEqual(g.map((x) => x.key), ["your-turn"]);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["turn", "sh"]);
+  assert.equal(g[0].count, 1);
+});
+
+test("rowSubline: a finished turn reads its summary, muted, no amber and no 'your turn:' prefix", () => {
+  assert.deepEqual(d.rowSubline(A.turn), { text: "Merged fix/ui; your move", amber: false });
+  assert.deepEqual(d.rowSubline(noAttn(A.turn)), { text: "Merged fix/ui; your move", amber: false });
+  assert.deepEqual(d.rowSubline({ ...A.turn, summary: "" }), { text: "your turn", amber: false });
+  assert.deepEqual(d.rowSubline({ ...A.turn, summary: undefined }), { text: "your turn", amber: false });
+});
+
+test("rowSubline: a blocked session is still amber", () => {
+  assert.equal(d.rowSubline(A.ask).amber, true);
+  assert.ok(d.rowSubline(A.ask).text.startsWith("asks: "));
+  assert.equal(d.rowSubline(A.sso).amber, true);
+  assert.equal(d.rowSubline(A.store).amber, true);
+});
+
+test("rowSubline: an exited session's stale sign-in need is not an amber line", () => {
+  const dead = { id: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
+  assert.equal(d.rowSubline(dead).amber, false);
+  assert.equal(d.rowSubline(dead).text, "exited", "the dot's word for a dead session, not 'AWS sign-in needed'");
+});
+
+test("deskDot: a finished turn is the neutral idle dot titled 'your turn'; blocked stays the amber waiting dot", () => {
+  const idleDot = require("../static/activity.js").activityClass("idle");
+  assert.deepEqual(d.deskDot(A.turn), { cls: idleDot.cls, title: "your turn" });
+  assert.deepEqual(d.deskDot(noAttn(A.turn)), { cls: idleDot.cls, title: "your turn" });
+  assert.equal(d.deskDot(A.turn).cls.includes("waiting"), false);
+  assert.equal(d.deskDot(A.ask).cls, "dot waiting");
+  assert.equal(d.deskDot(A.sso).cls, "dot waiting");
+  assert.equal(d.deskDot(A.sso).title, "AWS sign-in needed");
+  assert.equal(d.deskDot(A.store).title, "Store locked");
+  assert.equal(d.deskDot(A.working).cls, "dot working");
+  assert.equal(d.deskDot(A.idle).cls, "dot idle");
+});
+
+test("deskDot: an exited session with a stale sign-in need is not an amber dot", () => {
+  const dead = { id: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
+  assert.equal(d.deskDot(dead).cls, "dot done");
+});
+
+test("needStripModel: a finished turn's strip is tone done, a blocked one is tone block; the label stays", () => {
+  const t = d.needStripModel(A.turn);
+  assert.equal(t.tone, "done");
+  assert.equal(t.label, "your turn");
+  assert.equal(d.stripLabel(t.label), "Your turn");
+  assert.equal(d.needStripModel(A.ask).tone, "block");
+  assert.equal(d.needStripModel(A.sso).tone, "block");
+  assert.equal(d.needStripModel(A.store).tone, "block");
+  assert.equal(d.needStripModel(A.working), null);
+  assert.equal(d.needStripModel({ id: "dead", exited: true, activity: "done", need: "sso" }), null, "an exited session has no strip");
+});
+
+test("stripKey: the same session as blocked and as done is not the same strip", () => {
+  const base = { id: "w", activity: "waiting", need: "turn", summary: "x", replyable: true, claude: true };
+  assert.notEqual(d.stripKey({ ...base, attention: "block" }, "terminal", true), d.stripKey({ ...base, attention: "done" }, "terminal", true));
+  assert.equal(d.stripKey({ ...base, attention: "done" }, "terminal", true), d.stripKey({ ...base, attention: "done" }, "viewer", true), "tab kind still does not matter");
+});
+
+test("stripHoldKey does not move with attention alone (a typed reply survives)", () => {
+  const base = { id: "w", activity: "waiting", need: "turn", replyable: true, claude: true };
+  assert.equal(d.stripHoldKey({ ...base, attention: "block" }, true), d.stripHoldKey({ ...base, attention: "done" }, true));
+});
+
+test("paneHeaderModel: a finished turn's dot is the neutral one, and the model says it is done", () => {
+  const tab = { kind: "terminal" };
+  const m = d.paneHeaderModel({ tab, session: A.turn, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.deepEqual(m.dot, d.deskDot(A.turn));
+  assert.equal(m.attention, "done");
+  const b = d.paneHeaderModel({ tab, session: A.ask, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.equal(b.dot.cls, "dot waiting");
+  assert.equal(b.attention, "block");
+  const w = d.paneHeaderModel({ tab, session: A.working, nowMs: NOW, boxRuntime: "runc", narrow: true });
+  assert.equal(w.attention, "");
+});
+
+test("headerSyncKey moves when a session goes from blocked to done (the header's dot changes)", () => {
+  assert.notEqual(d.headerSyncKey("api", { ...A.turn, attention: "block" }), d.headerSyncKey("api", A.turn));
+  assert.equal(d.headerSyncKey("api", { ...A.turn, attention: "done" }), d.headerSyncKey("api", A.turn));
+});

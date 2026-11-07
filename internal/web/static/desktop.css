@@ -598,12 +598,11 @@
 
   /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
   #sessions { padding: 2px 8px 8px; }
-  .grp {
-    list-style: none; padding: 14px 6px 5px; font-size: var(--t-xs); font-weight: 500;
-    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
-  }
+  /* A group header is `li.grp.grp-label`: the kit's .grp-label draws the type
+     (uppercase, muted; .is-needs makes Needs you amber and nothing else), .grp
+     only the sidebar's spacing. "Done · your turn" is as neutral as Running. */
+  .grp { list-style: none; padding: 14px 6px 5px; }
   .grp:first-child { padding-top: 6px; }
-  .grp.hot { color: var(--amber); }
   #sessions .drow {
     position: relative; gap: 9px; align-items: flex-start; padding: 7px 8px 8px; margin-bottom: 1px;
     border: 0; border-radius: var(--r-chip); background: transparent;
@@ -1031,6 +1030,10 @@
   }
   .needstrip .nbody { display: contents; }
   .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: var(--t-sm); white-space: nowrap; }
+  /* A finished turn (F21-B): the same strip, neutral. It stays because it carries
+     the reply field; amber is for an agent blocked on you. */
+  .needstrip.is-done { background: var(--panel); }
+  .needstrip.is-done .ns-label { color: var(--muted); }
   .needstrip .peektxt {
     grid-area: 1 / 2; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     cursor: pointer; font-weight: 400; color: var(--fg);
