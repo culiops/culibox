@@ -712,23 +712,21 @@
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
   /* The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): the kit's .ph-meta look (mono, --t-xs,
      --muted), one line after the chips. It gives way before the name does, and gives way in
-     WHOLE items, never as half a value ("$3." says nothing) or a lone "·": the line wraps and
-     its height clips the second row. The row is laid out cost first (row-reverse, with the
-     items' order reversed and the group packed back to the left), so what no longer fits
-     wraps away in the order model, then ctx, then cost; each unit carries its own separator. */
+     WHOLE units, never as half a value ("$3." says nothing) or a lone "·": the line wraps and
+     its height clips the second row. The wrap places units in DOM order and drops the last
+     first, so the order IS the priority: cost, then ctx, then the model (F14: a 700px pane
+     keeps haiku-4.5 and ctx 35%). Each unit after the first leads with its own separator. */
   .ph-meta {
-    flex: 0 1000000 auto; min-width: 0; display: flex; flex-flow: row-reverse wrap; justify-content: flex-end; align-content: flex-start;
+    flex: 0 1000000 auto; min-width: 0; display: flex; flex-flow: row wrap; align-content: flex-start;
     height: var(--lh-xs); overflow: hidden;
     font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap;
   }
-  /* The empty first item makes the line non-empty before the cost is placed, so a cost wider
+  /* The empty first item makes the line non-empty before the first unit is placed, so a unit wider
      than the room wraps away like the others instead of showing as its first few characters.
      It is a full line tall: a zero-height first line would put the wrapped row at the top. */
   .ph-meta::before { content: ""; flex: none; height: var(--lh-xs); }
   .ph-mi { flex: none; display: flex; align-items: center; white-space: pre; }
-  .mi-cost { order: 1; }
-  .mi-ctx { order: 2; }
-  .mi-model { order: 3; flex: 0 1 auto; min-width: 0; }
+  .mi-model { flex: 0 1 auto; min-width: 0; }
   .ph-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .ph-cost { flex: none; }
   .ph-msep { flex: none; }

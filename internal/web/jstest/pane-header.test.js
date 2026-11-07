@@ -145,15 +145,22 @@ test("the ctx stays a button into Activity: text `ctx 35%`, a title starting `Co
   assert.deepStrictEqual(h.calls.filter(userCalls), ["openPaneView:s1:activity"]);
 });
 
-test("the meta separators are decoration, and each unit carries its own so CSS can drop a unit whole", () => {
-  const h = header();
+// The meta gives way in the order cost, then ctx, then model (F14: the model label is the point, the cost goes
+// first). The wrap places units in DOM order and drops the LAST first, so the DOM order is the priority:
+// model, ctx, cost. A separator leads every unit but the first, so whatever is left never ends on a lone "·".
+test("the meta units are in priority order (model, ctx, cost) and each separator leads its unit", () => {
+  const h = header({ usage: { model: "claude-haiku-4-5-20251001", effort: "high", pct: 35, contextTokens: 70000 } });
   const seps = h.all.filter((n) => n.classList && n.classList.contains("ph-msep"));
   assert.strictEqual(seps.length, 2);
-  assert.ok(seps.every((n) => n.textContent === " · " && n.attrs["aria-hidden"] === "true"));
+  assert.ok(seps.every((n) => n.textContent === " · " && n.attrs["aria-hidden"] === "true"), "decoration, not text a reader hears");
   const [meta] = h.byClass("ph-meta");
-  assert.deepStrictEqual(meta.children.map((u) => u.className), ["ph-mi mi-model", "ph-mi mi-ctx", "ph-mi mi-cost"], "model, ctx, cost: the reading order");
-  assert.deepStrictEqual(meta.children.map((u) => u.children.some((k) => k.classList.contains("ph-msep"))), [true, true, false], "a separator trails every unit but the last");
-  assert.deepStrictEqual(meta.children.map((u) => u.children[0].className), ["ph-model", "ph-ctx", "ph-cost"]);
+  assert.deepStrictEqual(meta.children.map((u) => u.className), ["ph-mi mi-model", "ph-mi mi-ctx", "ph-mi mi-cost"], "the last unit is the first to give way: cost");
+  assert.deepStrictEqual(meta.children.map((u) => u.children[0].classList.contains("ph-msep")), [false, true, true], "a separator leads every unit but the first");
+  assert.deepStrictEqual(meta.children.map((u) => u.children[u.children.length - 1].className), ["ph-model", "ph-ctx", "ph-cost"], "the value is the unit's last child: no trailing separator to dangle");
+  assert.strictEqual(meta.textContent, "haiku-4.5 · ctx 35% · $3.12");
+  // Dropping from the end leaves a clean line at every step.
+  const text = (n) => meta.children.slice(0, n).map((u) => u.textContent).join("");
+  assert.deepStrictEqual([3, 2, 1].map(text), ["haiku-4.5 · ctx 35% · $3.12", "haiku-4.5 · ctx 35%", "haiku-4.5"]);
 });
 
 test("no usage and no cost: no meta slot at all; a lone cost keeps no stray separator", () => {

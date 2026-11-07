@@ -392,14 +392,17 @@ test("the Files toggle is the kit's ghost button, not a tab: no bespoke look, on
   assert.strictEqual(headerRule(/^\s*\.ph-lbl\s*\{/).body.match(/\.ph-files \{ padding: 0 4px; \}/).length, 1, "icon mode: a 24px square");
 });
 
-test("the meta is the kit's .ph-meta look (mono, --t-xs, --muted) and gives way in whole units", () => {
+test("the meta is the kit's .ph-meta look (mono, --t-xs, --muted) and gives way in whole units, cost first", () => {
   const m = rulesFor(".ph-meta").join(" ");
   assert.match(m, /font:\s*var\(--t-xs\)\/var\(--lh-xs\) var\(--font-mono\)/);
   assert.match(m, /color:\s*var\(--muted\)/);
-  assert.match(m, /flex-flow:\s*row-reverse wrap/, "cost is placed first, so the model wraps away first");
+  // The wrap places units in DOM order and drops the last first, so the DOM order (model, ctx, cost) IS the give-way
+  // order, cost first (F14, #172 acceptance: a 700px pane keeps haiku-4.5 and ctx 35%). Nothing reverses or reorders it.
+  assert.match(m, /flex-flow:\s*row wrap/, "plain row wrap: the last unit wraps away first");
+  assert.ok(!/row-reverse|wrap-reverse|direction/.test(m), "no reversed flow");
+  assert.deepStrictEqual([".mi-cost", ".mi-ctx", ".mi-model"].flatMap((c) => rulesFor(c)).filter((b) => /order:/.test(b)), [], "no unit is re-ordered: the DOM order is the priority");
   assert.match(m, /height:\s*var\(--lh-xs\)/, "the second row is clipped");
   assert.match(m, /overflow:\s*hidden/);
-  assert.deepStrictEqual([".mi-cost", ".mi-ctx", ".mi-model"].map((c) => /order:\s*(\d)/.exec(rulesFor(c).join(" "))[1]), ["1", "2", "3"], "reading order stays model, ctx, cost");
   assert.match(rulesFor(".ph-meta::before").join(" "), /height:\s*var\(--lh-xs\)/, "the zero-width first item is a full line tall");
   // The meta shrinks far faster than the name, so the name never loses a sub-pixel to Chrome's ellipsis.
   const shrink = (sel) => +/flex:\s*0\s+(\d+)\s+auto/.exec(rulesFor(sel).join(" "))[1];

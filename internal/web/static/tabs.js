@@ -974,10 +974,11 @@ class Cell {
       if (ab) main.append(ab);
     }
     // The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): one kit .ph-meta line of up to three
-    // items, the model (raw id in its title), the ctx button and the cost. Each item is a
-    // unit that carries its own trailing " · " (decoration, aria-hidden) when another item
-    // follows, so CSS can drop a whole unit, separator with it, and never leave a lone
-    // "·" or half a value: see .ph-meta in desktop.css.
+    // items, the model (raw id in its title), the ctx button and the cost. The wrap places
+    // units in this order and drops the LAST first, so the order IS the priority: the cost
+    // gives way first, then ctx, then the model (F14: the model label is the point). Each
+    // unit after the first LEADS with its " · " (decoration, aria-hidden), so whatever is
+    // left never ends on a lone separator: see .ph-meta in desktop.css.
     const units = [];
     if (m.model) {
       const mo = el("span", m.model);
@@ -1007,13 +1008,13 @@ class Cell {
       units.forEach(([kind, node], i) => {
         const unit = el("span");
         unit.className = "ph-mi " + kind;
-        unit.append(node);
-        if (i < units.length - 1) {
+        if (i > 0) {
           const sp = el("span", " \u00B7 ");
           sp.className = "ph-msep";
           sp.setAttribute("aria-hidden", "true");
           unit.append(sp);
         }
+        unit.append(node);
         meta.append(unit);
       });
       main.append(meta);
