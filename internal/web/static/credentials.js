@@ -1110,8 +1110,22 @@ function credCellNode(c) {
   if (c.tag) main.appendChild(credBadge("prod", c.tag));
   if (c.seed) main.appendChild(credBadge("seed", "from config.json"));
   td.appendChild(main);
-  if (c.sub) td.appendChild(credEl("div", "c-sub" + (c.subMono ? " mono" : ""), c.sub));
+  if (c.sub) td.appendChild(c.subMono ? credMonoSub(c.sub) : credEl("div", "c-sub", c.sub));
   return td;
+}
+
+// credMonoSub: a machine value's sub-line (hosts, a role). Where its column is too
+// narrow it breaks after a dot rather than inside a label ("...example.co" / "m"): a
+// <wbr> after each dot gives the line those places first. The text is unchanged.
+function credMonoSub(text) {
+  const d = credEl("div", "c-sub mono");
+  const segs = String(text).split(".");
+  segs.forEach((s, i) => {
+    const last = i === segs.length - 1;
+    d.appendChild(document.createTextNode(last ? s : s + "."));
+    if (!last) d.appendChild(document.createElement("wbr"));
+  });
+  return d;
 }
 
 // credTable: the group's table. One <tbody class="crow"> per entry: the row, and

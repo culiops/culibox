@@ -1668,9 +1668,12 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
+  /* Env is 26%: its 12px host (F06) needs 203px for artifactory.acme.example.com, and 25% gave
+     199 at a 1440 window ("...example.co" / "m"). Status and Used by gave half a point each:
+     Status still holds "environment" (77px) at 1280; a smaller Token wraps the token names. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 26%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 14.5%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }

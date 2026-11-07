@@ -283,6 +283,25 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // its column open past the section's box (overflow: hidden): a 30-character name cut
 // Delete off at 1240 px, a 60-character one scrolled the whole page. The name wraps like
 // the GitHub and token tables' (hyphens first, mid-word only past the column).
+// The token and GitHub tables (table-layout: fixed, shares of the width). Measured on the seeded page (Task 10a, fix
+// wave): the tables are 922 px wide at a 1440 window and 762 px at 1280, a cell's padding is 32 px. The Env column's
+// 12px host (F06) needs 203 px for artifactory.acme.example.com (25% gave it 199 at 1440: "...example.co" / "m"); the
+// Status column keeps its longest word ("environment", 77 px) whole at 1280.
+test("the token tables give the 12px host one line at 1440 and keep Status's words whole at 1280", () => {
+  const share = (n) => {
+    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(' + n + ")").join(" ");
+    const m = /width:\s*([\d.]+)%/.exec(r);
+    assert.ok(m, "column " + n + " has a share");
+    return +m[1];
+  };
+  const [token, env, status, actions] = [share(1), share(2), share(3), share(5)];
+  assert.ok(env / 100 * 922 - 32 >= 203, "Env holds artifactory.acme.example.com at 1440: " + env + "%");
+  assert.ok(status / 100 * 762 - 32 >= 77, "Status holds \"environment\" at 1280: " + status + "%");
+  assert.strictEqual(token, 20, "Token keeps its share: less wraps the token names (measured: +54 px of rows at 1440)");
+  assert.strictEqual(actions, 16, "Actions keeps its share: Edit and Delete");
+  assert.ok(100 - token - env - status - actions >= 23, "Used by keeps its share within half a point");
+});
+
 test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {
   assert.ok(!/\[data-group="aws"\][^{}]*\.c-nm[^{}]*\{[^}]*white-space:\s*nowrap/.test(block), "no nowrap on the AWS name");
   assert.ok(rulesFor(CREDS + " .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");

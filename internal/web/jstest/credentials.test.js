@@ -604,8 +604,8 @@ test("desktop creds table: fixed-layout column widths are percentages", () => {
   const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
   const widths = [...css.matchAll(/\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th:nth-child\(\d\) \{ width: ([^;]+); \}/g)].map((m) => m[1]);
   assert.ok(widths.length >= 4, "column widths are declared");
-  for (const w of widths) assert.match(w, /^\d+%$/);
-  assert.ok(widths.reduce((n, w) => n + parseInt(w, 10), 0) < 100, "Used by keeps a share");
+  for (const w of widths) assert.match(w, /^\d+(\.\d+)?%$/);
+  assert.ok(widths.reduce((n, w) => n + parseFloat(w), 0) < 100, "Used by keeps a share");
   assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
 });
 

@@ -2030,3 +2030,16 @@ test("the Credentials tab still renders the old DOM: ' / ' crumb, the error unde
   assert.strictEqual(opts.host.lastChild.className, "ent-err");
   assert.ok(opts.host.querySelector("p.honest"));
 });
+
+// Fix wave (#171, VERIFY-A section 7): a host that does not fit its column broke inside a label
+// ("artifactory.acme.example.co" / "m"). The mono sub-line puts a <wbr> after each dot, so where it
+// must wrap it wraps after a dot; its text, what is read and copied, is unchanged.
+test("a host sub-line breaks after a dot, never inside a label", () => {
+  const p = page({ width: 900 });
+  const table = p.box.credTable(group([tok("artifactory", { hosts: ["artifactory.acme.example.com", "cdn.example.io"] })]));
+  const sub = table.querySelectorAll(".c-sub")[0];
+  assert.ok(sub.classList.contains("mono"));
+  assert.strictEqual(sub.textContent, "artifactory.acme.example.com, cdn.example.io");
+  const kinds = sub.children.map((c) => (c instanceof Node ? c.tag : JSON.stringify(c.textContent)));
+  assert.deepStrictEqual(kinds, ['"artifactory."', "wbr", '"acme."', "wbr", '"example."', "wbr", '"com, cdn."', "wbr", '"example."', "wbr", '"io"']);
+});
