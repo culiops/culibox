@@ -652,26 +652,29 @@ func CheckCredentialRefs(a AgentConfig, c Config, optDefs map[string]OptionDef) 
 // ValidateProfile validates a single profile (used for runtime-stored profiles)
 // against the given option definitions.
 func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
-	if a.Name == "" || a.Bin == "" {
-		return errors.New("profile requires a name and bin")
+	if a.Name == "" {
+		return WithField("name", errors.New("profile requires a name and bin"))
+	}
+	if a.Bin == "" {
+		return WithField("bin", errors.New("profile requires a name and bin"))
 	}
 	if strings.TrimSpace(a.Box.Image) != "" {
 		return fmt.Errorf("profile %q: box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)", a.Name)
 	}
 	for _, n := range extraca.DeniedEnvNames {
 		if _, set := a.Env[n]; set {
-			return fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n)
+			return WithField("env", fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n))
 		}
 	}
 	switch a.BasePolicy() {
 	case BaseClean, BaseLogin, BaseInherit:
 	default:
-		return fmt.Errorf("profile %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base)
+		return WithField("base", fmt.Errorf("profile %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base))
 	}
 	switch a.RuntimePolicy() {
 	case RuntimeBox, RuntimeHost:
 	default:
-		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
+		return WithField("runtime", fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime))
 	}
 	if err := validateAWS(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
@@ -695,25 +698,26 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	for k, v := range a.Options {
+		field := "options." + k
 		def, ok := optDefs[k]
 		if !ok {
-			return fmt.Errorf("profile %q sets unknown option %q", a.Name, k)
+			return WithField(field, fmt.Errorf("profile %q sets unknown option %q", a.Name, k))
 		}
 		if !def.AppliesTo(a.Bin) {
-			return fmt.Errorf("profile %q sets option %q that does not apply to bin %q", a.Name, k, a.Bin)
+			return WithField(field, fmt.Errorf("profile %q sets option %q that does not apply to bin %q", a.Name, k, a.Bin))
 		}
 		switch def.Type {
 		case OptBool:
 			if _, ok := v.(bool); !ok {
-				return fmt.Errorf("profile %q option %q must be a bool", a.Name, k)
+				return WithField(field, fmt.Errorf("profile %q option %q must be a bool", a.Name, k))
 			}
 		case OptEnum:
 			if s, ok := v.(string); !ok || !contains(def.Choices, s) {
-				return fmt.Errorf("profile %q option %q must be one of %v", a.Name, k, def.Choices)
+				return WithField(field, fmt.Errorf("profile %q option %q must be one of %v", a.Name, k, def.Choices))
 			}
 		}
 		if def.Env != "" && contains(a.Secrets, def.Env) {
-			return fmt.Errorf("profile %q option %q env %q collides with a declared secret", a.Name, k, def.Env)
+			return WithField(field, fmt.Errorf("profile %q option %q env %q collides with a declared secret", a.Name, k, def.Env))
 		}
 	}
 	return nil

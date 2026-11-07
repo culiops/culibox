@@ -457,6 +457,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
+	boxUnavailable := "" // why boxRuntime is empty, when the layer failed to build; published in /api/meta
 	var layer *boxLayer
 	var boxes *box.Manager
 	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg))
@@ -464,6 +465,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.
 		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
+		boxUnavailable = boxUnavailableReason(err)
 	} else {
 		layer, boxes = l, l.boxes
 		// Not fatal (D8): without the key the darwin listeners and the relay
@@ -785,6 +787,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		CloneUnavailable: cloneUnavailableReason(h),
 		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 		ScratchDirs:      web.ScratchCandidates(os.Getenv, os.Getuid(), os.TempDir()),
+
+		// Why BoxRuntime is empty when the containment layer failed to build.
+		BoxUnavailableReason: boxUnavailable,
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

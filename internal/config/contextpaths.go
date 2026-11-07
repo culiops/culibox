@@ -88,31 +88,32 @@ func validateContextPaths(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime == RuntimeHost {
-		return ErrContextNeedsBox
+		return WithField("context_paths", ErrContextNeedsBox)
 	}
 	if len(a.ContextPaths) > maxContextPaths {
-		return fmt.Errorf("context_paths has %d entries; at most %d", len(a.ContextPaths), maxContextPaths)
+		return WithField("context_paths", fmt.Errorf("context_paths has %d entries; at most %d", len(a.ContextPaths), maxContextPaths))
 	}
 	for i, p := range a.ContextPaths {
+		field := fmt.Sprintf("context_paths[%d]", i)
 		if err := checkContextPath(p); err != nil {
-			return err
+			return WithField(field, err)
 		}
 		for _, prev := range a.ContextPaths[:i] {
 			if prev == p {
-				return fmt.Errorf("context_paths %q: duplicate", p)
+				return WithField(field, fmt.Errorf("context_paths %q: duplicate", p))
 			}
 			if pathOverlap(prev, p) {
-				return fmt.Errorf("context_paths %q and %q nest; list only the outer path", prev, p)
+				return WithField(field, fmt.Errorf("context_paths %q and %q nest; list only the outer path", prev, p))
 			}
 		}
 		// default_cwd and clone_of are not guaranteed clean here (an in-place
 		// profile's default_cwd is never validated as clean), and pathOverlap
 		// needs clean paths, so clean them or "/b/" would miss "/b/docs".
 		if a.DefaultCwd != "" && pathOverlap(p, filepath.Clean(a.DefaultCwd)) {
-			return fmt.Errorf("context_paths %q overlaps default_cwd %q; the workspace is already mounted", p, a.DefaultCwd)
+			return WithField(field, fmt.Errorf("context_paths %q overlaps default_cwd %q; the workspace is already mounted", p, a.DefaultCwd))
 		}
 		if a.CloneOf != "" && pathOverlap(p, filepath.Clean(a.CloneOf)) {
-			return fmt.Errorf("context_paths %q overlaps clone_of %q; clone_share is the way to share part of that repo", p, a.CloneOf)
+			return WithField(field, fmt.Errorf("context_paths %q overlaps clone_of %q; clone_share is the way to share part of that repo", p, a.CloneOf))
 		}
 	}
 	return nil

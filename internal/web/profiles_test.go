@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -135,6 +136,53 @@ func TestViewsRuntimeFallsBackToBox(t *testing.T) {
 	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	if rt := m.Views()[0].Runtime; rt != config.RuntimeBox {
 		t.Errorf("with no instance default the view must report box, got %q", rt)
+	}
+}
+
+// With no box layer a session that asks for box is refused, and one that asks for
+// nothing runs on this machine (session.runtimeFor). What a session asks for is
+// the profile's own tier, else the raw instance default_runtime, else nothing
+// (launcher.RequestedRuntime), and Runtime above cannot say it: it ends in box
+// when nobody named a tier. So the view carries it as RuntimeAsked, for the page
+// to tell "In a box, as nobody said otherwise" from "In a box, by name".
+func TestViewsExposeTheTierASessionAsksFor(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "unset", Bin: "claude"},
+		{Name: "boxed", Bin: "claude", Runtime: config.RuntimeBox},
+	}
+	fs := newFakeStore()
+	fs.m["hosted"] = config.AgentConfig{Name: "hosted", Bin: "claude", Runtime: config.RuntimeHost}
+	asked := func(def string) map[string]string {
+		m := NewProfileManager(seeds, nil, def, nil, fs, func([]config.AgentConfig) {})
+		got := map[string]string{}
+		for _, v := range m.Views() {
+			got[v.Name] = v.RuntimeAsked
+		}
+		return got
+	}
+	for _, tc := range []struct{ def, unset, boxed, hosted string }{
+		{"", "", config.RuntimeBox, config.RuntimeHost},
+		{config.RuntimeBox, config.RuntimeBox, config.RuntimeBox, config.RuntimeHost},
+		{config.RuntimeHost, config.RuntimeHost, config.RuntimeBox, config.RuntimeHost},
+	} {
+		got := asked(tc.def)
+		if got["unset"] != tc.unset || got["boxed"] != tc.boxed || got["hosted"] != tc.hosted {
+			t.Errorf("default_runtime %q: asked unset=%q boxed=%q hosted=%q, want unset=%q boxed=%q hosted=%q",
+				tc.def, got["unset"], got["boxed"], got["hosted"], tc.unset, tc.boxed, tc.hosted)
+		}
+	}
+}
+
+// A profile that asks for nothing leaves the key out, so an older page and every
+// existing payload read exactly as before.
+func TestProfileViewLeavesRuntimeAskedOutWhenNothingIsAsked(t *testing.T) {
+	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	b, err := json.Marshal(m.Views()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "runtime_asked") {
+		t.Errorf("runtime_asked must be omitted when nothing is asked: %s", b)
 	}
 }
 
@@ -817,6 +865,83 @@ func TestProfileViewTouches(t *testing.T) {
 		if strings.Contains(string(b), bad) {
 			t.Errorf("profile JSON contains %q: %s", bad, b)
 		}
+	}
+}
+
+// The read view lists what a profile reaches: GitHub repos per owner, the
+// effective GitHub permissions, extra domains and the clone's shared paths.
+// Names, repos, paths and hosts only: no App name, no token reference.
+func TestProfileViewReadViewFields(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{
+			Name: "ops", Bin: "claude", Runtime: config.RuntimeBox,
+			GitHub: &config.GitHubBinding{
+				Owners: []config.GitHubOwner{
+					{Owner: "acme", App: "acme-app", Repos: []string{"web", "api"}},
+					{Owner: "culiops", Token: "pat-secret-name", Repos: []string{"box"}},
+				},
+				Permissions: map[string]string{"contents": "write", "issues": "read", "metadata": "read"},
+			},
+			EgressAllow: []string{"api.example.com", "*.example.org"},
+			CloneOf:     "/home/u/repo", DefaultCwd: "/home/u/repo-clone", CloneShare: []string{"CLAUDE.md"},
+		},
+		{
+			Name: "defaults", Bin: "claude", Runtime: config.RuntimeBox,
+			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "acme-app", Repos: []string{"web"}}}},
+		},
+		{Name: "plain", Bin: "claude", Runtime: config.RuntimeBox},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	v := got["ops"]
+	wantRepos := []ProfileGitHubRepos{{Owner: "acme", Repos: []string{"web", "api"}}, {Owner: "culiops", Repos: []string{"box"}}}
+	if !reflect.DeepEqual(v.GitHubRepos, wantRepos) {
+		t.Errorf("github_repos = %+v, want %+v", v.GitHubRepos, wantRepos)
+	}
+	if want := map[string]string{"contents": "write", "issues": "read", "metadata": "read"}; !reflect.DeepEqual(v.GitHubPermissions, want) {
+		t.Errorf("github_permissions = %v, want %v", v.GitHubPermissions, want)
+	}
+	if !slices.Equal(v.EgressAllow, []string{"api.example.com", "*.example.org"}) {
+		t.Errorf("egress_allow = %v", v.EgressAllow)
+	}
+	if !slices.Equal(v.CloneShare, []string{"CLAUDE.md"}) {
+		t.Errorf("clone_share = %v", v.CloneShare)
+	}
+	// With no permissions set, the effective (default) set is what is listed.
+	if d := got["defaults"].GitHubPermissions; !reflect.DeepEqual(d, config.DefaultGitHubPermissions()) {
+		t.Errorf("defaults: github_permissions = %v, want %v", d, config.DefaultGitHubPermissions())
+	}
+	// A profile with no GitHub binding carries none of it, on the wire either.
+	if p := got["plain"]; p.GitHubRepos != nil || p.GitHubPermissions != nil || p.EgressAllow != nil || p.CloneShare != nil {
+		t.Errorf("plain profile carries read-view fields: %+v", p)
+	}
+	raw, err := json.Marshal(got["plain"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"github_repos", "github_permissions", "egress_allow", "clone_share"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("plain profile JSON carries %q: %s", key, raw)
+		}
+	}
+	// Names only: no App name, token reference or value rides along.
+	all, err := json.Marshal(pm.Views())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"acme-app", "pat-secret-name", "role_arn", `"value"`, "arn:aws"} {
+		if strings.Contains(string(all), bad) {
+			t.Errorf("profile JSON contains %q: %s", bad, all)
+		}
+	}
+	// The slices are copies: a caller changing the view cannot reach the profile.
+	v.GitHubRepos[0].Repos[0] = "changed"
+	v.EgressAllow[0] = "changed"
+	if again, _ := pm.Get("ops"); again.GitHub.Owners[0].Repos[0] != "web" || again.EgressAllow[0] != "api.example.com" {
+		t.Errorf("the view aliases the stored profile: %+v", again)
 	}
 }
 

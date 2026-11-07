@@ -103,3 +103,78 @@ test("index.html ships #ask-alt hidden, after Cancel", () => {
   const html = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "index.html"), "utf8");
   assert.match(html, /<button id="ask-cancel"[^>]*>Cancel<\/button>\s*<button id="ask-alt"[^>]*\bhidden\b/);
 });
+
+// --- askDialog opts.extra and opts.focusCancel (the profile page's "Save as host" lists what it removes) ----------------------
+
+// shell.js on a fake DOM with the ask dialog's parts, enough to run askDialog and answer it.
+function askEnv() {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const mk = (extra) => Object.assign({ textContent: "", hidden: false, disabled: false, value: "", placeholder: "", focus() { askEnvFocus.at = this; } }, extra);
+  let askEnvFocus = { at: null };
+  const closeFns = [];
+  const cls = new Set();
+  const d = mk({
+    open: false, returnValue: "",
+    classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
+    addEventListener: (ev, fn) => { if (ev === "close") closeFns.push(fn); },
+    removeEventListener: (ev, fn) => { const i = closeFns.indexOf(fn); if (ev === "close" && i >= 0) closeFns.splice(i, 1); },
+    showModal() { this.open = true; },
+    close(v) { this.returnValue = v || ""; this.open = false; for (const f of closeFns.slice()) f(); },
+  });
+  const extra = mk({ children: [], replaceChildren(...k) { this.children = k; } });
+  const els = {
+    "ask-modal": d, "ask-input": mk(), "ask-ok": mk(), "ask-title": mk(), "ask-body": mk(), "ask-cancel": mk(), "ask-alt": mk(),
+    "ask-label": mk(), "ask-x": mk(), "ask-extra": extra,
+  };
+  const ctx = vm.createContext({ document: { getElementById: (id) => els[id] || null }, Promise, Array });
+  new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "shell.js"), "utf8"), { filename: "shell.js" }).runInContext(ctx);
+  return { ctx, els, cls, focus: () => askEnvFocus.at };
+}
+
+test("askDialog puts opts.extra under the body, widens the card, and the next ask without it clears both", async () => {
+  const t = askEnv();
+  const note = { textContent: "A host profile cannot hold these" };
+  const list = { textContent: "AWS connections prod-read" };
+  const first = t.ctx.askConfirm({ title: "Save as host", body: "body", extra: [note, list], danger: true, confirmLabel: "Save as host" });
+  assert.deepStrictEqual(t.els["ask-extra"].children, [note, list]);
+  assert.strictEqual(t.els["ask-extra"].hidden, false);
+  assert.strictEqual(t.cls.has("wide"), true);
+  assert.strictEqual(t.els["ask-body"].textContent, "body");
+  t.els["ask-modal"].close("confirm");
+  assert.strictEqual(await first, true);
+  // Another question, no extra: nothing of the last one is left (the same reset as the cancel label).
+  const second = t.ctx.askConfirm({ title: "Delete profile", body: "sure?", confirmLabel: "Delete", danger: true });
+  assert.deepStrictEqual(t.els["ask-extra"].children, []);
+  assert.strictEqual(t.els["ask-extra"].hidden, true);
+  assert.strictEqual(t.cls.has("wide"), false);
+  t.els["ask-modal"].close("cancel");
+  assert.strictEqual(await second, false);
+  // A single node is accepted as well as a list.
+  const third = t.ctx.askConfirm({ title: "t", body: "b", extra: note });
+  assert.deepStrictEqual(t.els["ask-extra"].children, [note]);
+  t.els["ask-modal"].close("cancel");
+  await third;
+});
+
+test("askDialog focuses OK by default and Cancel when asked (a yes that must not be one keypress away)", async () => {
+  const t = askEnv();
+  const a = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.focus(), t.els["ask-ok"]);
+  t.els["ask-modal"].close("cancel");
+  await a;
+  const b = t.ctx.askConfirm({ title: "t", body: "b", focusCancel: true });
+  assert.strictEqual(t.focus(), t.els["ask-cancel"]);
+  t.els["ask-modal"].close("cancel");
+  await b;
+});
+
+test("the ask dialog has a hidden extra slot under the body, and the extra classes have rules", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  assert.match(html, /<p id="ask-body"><\/p>\s*<div id="ask-extra" hidden><\/div>/);
+  const css = fs.readFileSync(path.join(__dirname, "..", "static", "desktop.css"), "utf8");
+  for (const sel of ["#ask-modal.wide", "#ask-modal .ask-note", "#ask-modal .ask-list", "#ask-modal .ask-mono", "#ask-modal .ask-q"]) assert.ok(css.includes(sel), sel);
+});

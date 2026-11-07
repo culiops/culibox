@@ -214,37 +214,38 @@ func ValidGitHubRepo(s string) bool {
 // formed.
 func (b GitHubBinding) Validate() error {
 	if len(b.Owners) == 0 {
-		return errors.New("github.owners needs at least one owner")
+		return WithField("github.owners", errors.New("github.owners needs at least one owner"))
 	}
 	seen := map[string]bool{}
 	for i, o := range b.Owners {
+		at := fmt.Sprintf("github.owners[%d]", i)
 		if !ValidGitHubOwner(o.Owner) {
-			return fmt.Errorf("github.owners[%d].owner %q is not a GitHub login (letters, digits, -; at most 39 characters)", i, o.Owner)
+			return WithField(at+".owner", fmt.Errorf("github.owners[%d].owner %q is not a GitHub login (letters, digits, -; at most 39 characters)", i, o.Owner))
 		}
 		if k := strings.ToLower(o.Owner); seen[k] {
-			return fmt.Errorf("github.owners[%d].owner %q is listed twice (logins are case-insensitive)", i, o.Owner)
+			return WithField(at+".owner", fmt.Errorf("github.owners[%d].owner %q is listed twice (logins are case-insensitive)", i, o.Owner))
 		} else {
 			seen[k] = true
 		}
 		if hasApp, hasTok := strings.TrimSpace(o.App) != "", o.Token != ""; hasApp == hasTok {
-			return fmt.Errorf("github.owners[%d]: set exactly one of app or token", i)
+			return WithField(at+".app", fmt.Errorf("github.owners[%d]: set exactly one of app or token", i))
 		}
 		if o.Token != "" && !tokenNameRe.MatchString(o.Token) {
-			return fmt.Errorf("github.owners[%d].token %q is not an entry name", i, o.Token)
+			return WithField(at+".token", fmt.Errorf("github.owners[%d].token %q is not an entry name", i, o.Token))
 		}
 		if len(o.Repos) == 0 {
-			return fmt.Errorf("github.owners[%d].repos needs at least one repository", i)
+			return WithField(at+".repos", fmt.Errorf("github.owners[%d].repos needs at least one repository", i))
 		}
 		if len(o.Repos) > maxGitHubRepos {
-			return fmt.Errorf("github.owners[%d].repos has more than %d entries", i, maxGitHubRepos)
+			return WithField(at+".repos", fmt.Errorf("github.owners[%d].repos has more than %d entries", i, maxGitHubRepos))
 		}
 		repos := map[string]bool{}
 		for j, r := range o.Repos {
 			if !ValidGitHubRepo(r) {
-				return fmt.Errorf("github.owners[%d].repos[%d] %q is not a repository name (letters, digits, . _ -)", i, j, r)
+				return WithField(at+".repos", fmt.Errorf("github.owners[%d].repos[%d] %q is not a repository name (letters, digits, . _ -)", i, j, r))
 			}
 			if repos[r] {
-				return fmt.Errorf("github.owners[%d].repos[%d] %q is listed twice", i, j, r)
+				return WithField(at+".repos", fmt.Errorf("github.owners[%d].repos[%d] %q is listed twice", i, j, r))
 			}
 			repos[r] = true
 		}
@@ -252,14 +253,14 @@ func (b GitHubBinding) Validate() error {
 	// Non-nil but empty is refused: EffectivePermissions would read it as the
 	// defaults, so a client that sent "none ticked" would silently get six reads.
 	if b.Permissions != nil && len(b.Permissions) == 0 {
-		return errors.New("github.permissions: empty; omit it for the defaults or tick at least one")
+		return WithField("github.permissions", errors.New("github.permissions: empty; omit it for the defaults or tick at least one"))
 	}
 	for _, k := range slices.Sorted(maps.Keys(b.Permissions)) {
 		if !slices.Contains(githubPermissionKeys, k) {
-			return fmt.Errorf("github.permissions: %q is not an allowed permission (want one of %s)", k, strings.Join(githubPermissionKeys, ", "))
+			return WithField("github.permissions", fmt.Errorf("github.permissions: %q is not an allowed permission (want one of %s)", k, strings.Join(githubPermissionKeys, ", ")))
 		}
 		if v := b.Permissions[k]; !GitHubPermissionAllowed(k, v) {
-			return fmt.Errorf("github.permissions: %q cannot be %q: only %s may be \"write\", every other permission is \"read\"", k, v, strings.Join(githubWritableKeys, ", "))
+			return WithField("github.permissions", fmt.Errorf("github.permissions: %q cannot be %q: only %s may be \"write\", every other permission is \"read\"", k, v, strings.Join(githubWritableKeys, ", ")))
 		}
 	}
 	if len(b.EgressAllow) > maxEgressAllow {
@@ -359,7 +360,8 @@ func CheckGitHubApps(a AgentConfig, apps []GitHubApp) error {
 			continue
 		}
 		if !slices.ContainsFunc(apps, func(x GitHubApp) bool { return x.Name == o.App }) {
-			return undefinedRef(RefGitHubApp, o.App, "github.owners[%d].app %q is not defined in github_apps", i, o.App)
+			return WithField(fmt.Sprintf("github.owners[%d].app", i),
+				undefinedRef(RefGitHubApp, o.App, "github.owners[%d].app %q is not defined in github_apps", i, o.App))
 		}
 	}
 	return nil
@@ -373,7 +375,7 @@ func validateGitHub(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime != RuntimeBox {
-		return errors.New("github binding requires runtime: box (set it explicitly); the host tier cannot contain credentials")
+		return WithField("github", errors.New("github binding requires runtime: box (set it explicitly); the host tier cannot contain credentials"))
 	}
 	return a.GitHub.Validate()
 }
@@ -399,14 +401,18 @@ func validateEgressPolicy(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime != RuntimeBox {
-		return errors.New("egress_allow and egress_open need runtime: box (set it explicitly)")
+		field := "egress_open"
+		if len(a.EgressAllow) > 0 {
+			field = "egress_allow"
+		}
+		return WithField(field, errors.New("egress_allow and egress_open need runtime: box (set it explicitly)"))
 	}
 	if len(a.EgressAllow) > maxEgressAllow {
-		return fmt.Errorf("egress_allow has more than %d entries", maxEgressAllow)
+		return WithField("egress_allow", fmt.Errorf("egress_allow has more than %d entries", maxEgressAllow))
 	}
 	for i, p := range a.EgressAllow {
 		if err := hostmatch.ValidPattern(p); err != nil {
-			return fmt.Errorf("egress_allow[%d] %q: %v", i, p, err)
+			return WithField(fmt.Sprintf("egress_allow[%d]", i), fmt.Errorf("egress_allow[%d] %q: %v", i, p, err))
 		}
 	}
 	return nil

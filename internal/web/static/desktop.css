@@ -56,7 +56,7 @@
   .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
 
   /* Secrets and key material are machine text. */
-  #creds textarea.fld, #creds .fld.secret-area { font-family: var(--font-mono); }
+  :is(#creds, #cred-drawer) textarea.fld, :is(#creds, #cred-drawer) .fld.secret-area { font-family: var(--font-mono); }
 
   /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
   /* The controls moved into the sidebar top and footer. #env-strip stays: it is
@@ -1060,13 +1060,13 @@
   /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
   #page-host > dialog.as-page[box-]::before { display: none; }
 
-  /* --- Settings page (S4): grouped nav, the regrouped profile form ---------- */
+  /* --- Settings page (S4): grouped nav ----------------------------------------- */
   /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
      #settings-modal rules in app.css carry an id, and this outranks them. A
      grid: the header across, the nav down the left, the open panel and its
      footer to the right. */
   #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 15px; font-weight: 600; color: var(--fg); }
   #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
   #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: 12px; }
   #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
@@ -1075,11 +1075,11 @@
      tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
      `order` regroups it here. */
   #page-host > #settings-modal.as-page > #settings-tabs {
-    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 2px;
-    padding: 10px 8px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 0;
+    padding: 14px 10px 80px; border: 0; border-right: 1px solid var(--line); background: var(--bg); overflow-y: auto;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 6px; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 2px; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
@@ -1089,10 +1089,10 @@
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
   #page-host > #settings-modal.as-page > #settings-tabs .t {
-    padding: 7px 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
-    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--muted);
+    display: flex; align-items: center; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--panel); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
 
   /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
@@ -1120,171 +1120,17 @@
   #page-host > #settings-modal.as-page > .dft .btn.dgr:hover { background: var(--danger-tint); }
   #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: 13px; }
 
-  /* Profiles: the list (200px) runs the full height, and the sticky footer
-     starts at the form column. #manage spans the footer's row too, so the form
-     scrolls under the footer and keeps room for it at the bottom. */
+  /* Profiles: #manage spans the footer's row too (the old form's footer, #foot-manage, is not drawn here). */
   #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
-  #page-host > #settings-modal.as-page > #foot-manage { position: relative; z-index: 1; margin-left: 200px; }
-  /* The 200px starts the footer at the form column. When the dialog itself (the
-     container: measured, 747px is the narrowest that holds the one-line footer past
-     that margin) is narrower, the footer takes the whole panel. */
-  #page-host > #settings-modal.as-page { container-type: inline-size; }
-  @container (max-width: 750px) {
-    #page-host > #settings-modal.as-page > #foot-manage { margin-left: 0; }
-  }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-delete { order: 1; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate { order: 2; }
-  #page-host > #settings-modal.as-page > #foot-manage .grow { order: 3; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-discard { order: 4; display: inline-block; }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-save { order: 5; }
-  /* Duplicate reads as a quiet action beside Delete…; a built-in profile
-     makes it the primary (syncEditorActions adds .pri) and the rule above fills it. */
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri) { background: transparent; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri):hover { background: var(--raise); }
 
-  #page-host > #settings-modal.as-page #manage .plist { width: 200px; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
-  #page-host > #settings-modal.as-page #manage .plist > .grow { display: none; }
-  #page-host > #settings-modal.as-page #manage .plist ul { display: flex; flex-direction: column; gap: 2px; overflow: visible; }
-  #page-host > #settings-modal.as-page #manage .pitem {
-    padding: 8px 10px; border: 0; border-left: 2px solid transparent; border-radius: var(--r-chip);
-    box-shadow: none; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
-  }
-  #page-host > #settings-modal.as-page #manage .pitem:hover { background: var(--raise); }
-  #page-host > #settings-modal.as-page #manage .pitem.on { background: var(--raise); border-left-color: var(--accent); box-shadow: none; }
-  /* Two lines (pg-1b): the name, then "claude · box" / "built-in · host", which
-     carries the built-in marker, so the right-hand "built-in" goes. */
-  #page-host > #settings-modal.as-page #manage .pitem { flex-wrap: wrap; row-gap: 1px; }
-  #page-host > #settings-modal.as-page #manage .pitem .lk { display: none; }
-  #page-host > #settings-modal.as-page #manage .pitem .psub { display: block; flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); }
-  #page-host > #settings-modal.as-page #manage .plist-foot { padding: 8px 10px; border: 0; }
-  #page-host > #settings-modal.as-page #manage .plist-foot .btn { width: auto; padding: 0; border: 0; background: none; font-family: var(--font-ui); font-size: 13px; color: var(--accent); }
-  #page-host > #settings-modal.as-page #manage .plist-foot .btn:hover { text-decoration: underline; }
-
-  /* The form: a 4-track grid, so a field takes half (two tracks) and model ·
-     effort share one half. The three unnamed .frow wrappers and #pf-options
-     are display: contents, so their columns are grid items placed by `order`
-     (visual only: readForm scans #pf-options, and mobile keeps DOM order).
-     Rows with an id keep their own display, so their [hidden] still hides them.
-       Can touch
-       AGENT          name | account; binary | model · effort
-       WHERE IT RUNS  containment | default workspace; readable host paths
-       WHAT IT CAN TOUCH  AWS connections | GitHub; legacy AWS; tokens
-       Advanced ▸     base environment, the other options, replies, args, allowlist */
-  #page-host > #settings-modal.as-page #manage .ped {
-    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
-    padding: 18px 22px 84px; background: var(--bg);
-    /* The footer (#foot-manage) is 56px and overlays the bottom of this
-       scroller, so scroll-into-view "nearest" (setDialogError) would count a
-       line under it as visible. 72px = footer 56px + 16px clearance. */
-    scroll-padding-bottom: 72px;
-  }
-  /* Full-width, the footer also sits over the list's foot; and while the dialog is
-     narrower than 559px (measured, Discard showing: the buttons are 316px, with 30px
-     of gaps, 40px of padding and the 170px nav) the one line no longer fits and the
-     footer takes two, 89px, so the form leaves room under it too. 580px is that width
-     plus room for a font that renders the buttons a little wider. */
-  @container (max-width: 750px) {
-    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 66px; }
-  }
-  @container (max-width: 580px) {
-    #page-host > #settings-modal.as-page #manage .plist { padding-bottom: 106px; }
-    #page-host > #settings-modal.as-page #manage .ped { padding-bottom: 116px; scroll-padding-bottom: 104px; }
-  }
-  #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
-  #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
-  #page-host > #settings-modal.as-page #manage #pf-lock { order: 1; }
-  #page-host > #settings-modal.as-page #manage #pf-touch { order: 2; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="agent"] { order: 10; }
-  #page-host > #settings-modal.as-page #manage #pf-name-col { order: 11; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-account-col { order: 12; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-bin-col { order: 13; grid-column: 1 / span 2; }
-  /* Model and effort stack in the right half, beside Binary: their segmented
-     controls carry real model ids, which never fit side by side in a quarter. */
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
-  #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-mode-block { order: 23; }
-  #page-host > #settings-modal.as-page #manage #pf-mode-block .pf-mode-cards { display: grid; grid-template-columns: 1fr 1fr; }
-  #page-host > #settings-modal.as-page #manage #pf-copy-block { order: 24; }
-  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 25; }
-  #page-host > #settings-modal.as-page #manage #pf-imports-row { order: 26; }
-  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
-  #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }
-  /* The GitHub block is only half the editor wide, so an owner row cannot hold
-     App or token, Owner and remove side by side (the fields shrink under
-     120px). Same stack as the phone: App or token with remove at the end of
-     the first line, then Owner and Repositories each on a full line, then the
-     PAT note. */
-  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 10px; align-items: start; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { grid-column: 2; grid-row: 1; align-self: end; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.own, #page-host > #settings-modal.as-page .pf-gh-owner .fcol.repos, #page-host > #settings-modal.as-page .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
-  /* The remove cell is a .fcol with the class "rm", which collides with the
-     3px progress-bar .rm rule above (grey fill, fixed height): it painted an
-     empty dark box over the x. Reset the bar's paint so only the button shows. */
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { height: auto; padding: 0; background: none; border-radius: 0; position: static; }
-  #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
-  #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
-  #page-host > #settings-modal.as-page #manage #pf-net-block { order: 35; }
-  #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
-  #page-host > #settings-modal.as-page #manage #pf-base-col { order: 41; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #pf-options > .frow { order: 42; grid-column: span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-replyable-row { order: 43; }
-  #page-host > #settings-modal.as-page #manage #pf-args-row { order: 44; }
-  #page-host > #settings-modal.as-page #manage #pf-env-block { order: 45; }
-  #page-host > #settings-modal.as-page #manage .ped > .hint { order: 46; }
-  #page-host > #settings-modal.as-page #manage #settings-err { order: 50; }
-  /* Advanced, folded: the fields are still in the form (readForm reads them),
-     just not drawn. */
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-base-col,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-options > .frow:not([data-opt="model"]):not([data-opt="effort"]):not([data-opt="effortLevel"]),
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-replyable-row,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-args-row,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-env-block,
-  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) > .hint { display: none; }
-
-  #page-host > #settings-modal.as-page #manage .pf-touch {
-    display: flex; gap: 22px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line);
-    border-radius: var(--r-card); font-size: 13px; line-height: 1.5;
-  }
-  .sr-ik { flex: none; color: var(--muted); }
-  .sr-iv { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
-  .sr-part.tone-warn { color: var(--amber); }
-  #page-host > #settings-modal.as-page #manage .pf-sec { display: block; margin: 6px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-  #page-host > #settings-modal.as-page #manage .pf-adv {
-    display: block; width: 100%; margin: 4px 0 14px; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line);
-    background: none; text-align: left; font-family: var(--font-ui); font-size: 13px; color: var(--muted); cursor: pointer;
-  }
-  #page-host > #settings-modal.as-page #manage .pf-adv::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page #manage .ped.adv-open .pf-adv::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page #manage .pf-adv:hover { color: var(--fg); }
-
-  /* Labels and fields per pg-1b: sentence-case 12.5px labels, 34px fields with
-     6px corners; mono only for machine text (paths, binaries, model names). */
-  #page-host > #settings-modal.as-page #manage .flab { margin-bottom: 6px; font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--muted); }
-  #page-host > #settings-modal.as-page #manage .fld {
-    min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl);
-    background: var(--bg); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
-  }
-  #page-host > #settings-modal.as-page #manage textarea.fld { min-height: 0; line-height: 1.5; }
-  #page-host > #settings-modal.as-page #manage #pf-bin, #page-host > #settings-modal.as-page #manage #pf-cwd, #page-host > #settings-modal.as-page #manage #pf-cwd-custom, #page-host > #settings-modal.as-page #manage #pf-context, #page-host > #settings-modal.as-page #manage #pf-args,
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] .fld, #page-host > #settings-modal.as-page #manage #pf-env-rows .fld { font-family: var(--font-mono); font-size: 12.5px; }
+  /* The profile page's own controls, as the form drew them: sentence-case labels
+     and fields are the page's (.pfv-*), but its segmented controls (buildSeg), its
+     checkboxes and its picker hints are the shared ones, and take the page's tokens here. */
   #page-host > #settings-modal.as-page #manage .seg { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
   #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
   #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
-  /* An option's segmented control wraps inside its column rather than run past it. */
-  #page-host > #settings-modal.as-page #pf-options .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; }
-  #page-host > #settings-modal.as-page #pf-options .seg button { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #manage .lockbar, #page-host > #settings-modal.as-page #manage .pf-sumbox, #page-host > #settings-modal.as-page #manage .pf-confirm { border-radius: var(--r-card); }
-  #page-host > #settings-modal.as-page #manage .warnbox { border-radius: var(--r-ctl); }
-  #page-host > #settings-modal.as-page #manage .ped .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #manage .ped .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  #page-host > #settings-modal.as-page #manage .ped .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page #manage .hint { font-size: 12px; line-height: 1.6; }
 
   /* Agent accounts, API tokens, Appearance, About: the same content, on the
@@ -1313,42 +1159,42 @@
      locked, expired, not checked), red = write / prod / error, green = status;
      mono only for machine text (account ids, role names, client ids, env names,
      hosts). The card rules in app.css stay for the mobile modal. */
-  #page-host > #settings-modal.as-page #creds-body { gap: 14px; }
-  #page-host > #settings-modal.as-page #creds .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
-  #page-host > #settings-modal.as-page #creds .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
-  #page-host > #settings-modal.as-page #creds .cstrip .txt { font-size: 13px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .cstrip .txt b { color: var(--fg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #creds .cstrip.need .txt b { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
-  #page-host > #settings-modal.as-page #creds .st::before { display: none; }
-  #page-host > #settings-modal.as-page #creds .cstrip .st { gap: 7px; }
-  #page-host > #settings-modal.as-page #creds .cstrip .st::before { display: inline-block; }
-  #page-host > #settings-modal.as-page #creds .st.ready { color: var(--ok); }
-  #page-host > #settings-modal.as-page #creds .st.missing, #page-host > #settings-modal.as-page #creds .st.locked, #page-host > #settings-modal.as-page #creds .st.notset { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .st.invalid { color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .hint { font-size: 12.5px; line-height: 1.6; }
-  #page-host > #settings-modal.as-page #creds .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 14px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st::before { display: inline-block; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.ready { color: var(--ok); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: 12.5px; line-height: 1.6; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:hover { background: var(--line); }
   /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
      encrypted store" (186px) spilled past the warning box, in the strip and again in
      the passphrase form it opens. The label wraps inside the strip instead. */
-  #page-host > #settings-modal.as-page #creds .cstrip .btn { max-width: 100%; white-space: normal; }
-  #page-host > #settings-modal.as-page #creds .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #creds .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .btn.dgr:hover { background: var(--danger-tint); }
-  #page-host > #settings-modal.as-page #creds .warnbox, #page-host > #settings-modal.as-page #creds .amberbox, #page-host > #settings-modal.as-page #creds .confirm { border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
 
-  #page-host > #settings-modal.as-page #creds .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .hint, #page-host > #settings-modal.as-page #creds .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
-  #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab { width: 100%; border-collapse: collapse; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
   /* Names break between words, never inside one ("Missin/g"). */
-  #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
-  #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-nm { display: inline-block; max-width: 100%; }
   /* AWS sizes its columns to content, so its name must be allowed to wrap: a nowrap
      name held its column open past the section's box (a 30-character one cut Delete
      off at 1240px, a 60-character one scrolled the page). It breaks at hyphens first,
@@ -1357,60 +1203,61 @@
      min-content width, so it held the column open all the same: `anywhere` does. Only
      the name's own cell: every plain cell is a .c-nm, and the account id and Used by
      must not split mid-word. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm { overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="aws"] .ctab tr > td:first-child .c-nm { overflow-wrap: anywhere; }
   /* Status wraps between words ("Stored (store locked)" stays in its column).
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
-  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: break-word; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .st { white-space: normal; overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv { overflow-wrap: normal; }
   /* The GitHub and token tables share one set of column starts (pg-2). AWS has
      its own columns and keeps the automatic layout. Every width is a share of the
      table: fixed px columns starved Used by to 0px below a ~1150px window. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-main { color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-main.mono { font-size: 12.5px; }
-  #page-host > #settings-modal.as-page #creds .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab .c-sub.mono { font-size: 11.5px; }
-  #page-host > #settings-modal.as-page #creds .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
-  #page-host > #settings-modal.as-page #creds .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.ok { color: var(--ok); }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.ok::before { content: "✓ "; }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.warn { color: var(--amber); }
-  #page-host > #settings-modal.as-page #creds .ctab .pv.bad { color: var(--red); }
-  #page-host > #settings-modal.as-page #creds .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act { justify-content: flex-end; }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-x > td { padding: 0; }
-  #page-host > #settings-modal.as-page #creds .ctab .ctab-ex > * { margin: 0 16px 12px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: 11.5px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.bad { color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-x > td { padding: 0; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
-  #page-host > #settings-modal.as-page #creds .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #creds .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
-  #page-host > #settings-modal.as-page #creds .vfold > summary::-webkit-details-marker { display: none; }
-  #page-host > #settings-modal.as-page #creds .vfold > summary::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page #creds .vfold[open] > summary::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
-  #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
-  #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::-webkit-details-marker { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold[open] > summary::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .btn { align-self: flex-start; }
   /* The card's room is #creds-body (the window minus the sidebar, the nav and the
-     padding), which is 178px at 701px. app.css stacks a card in one column only for a
+     padding), which is 178px at 701px; the drawer's body, #cred-drawer-body, is a
+     container the same way. app.css stacks a card in one column only for a
      window of 700px or less, so between 701 and about 745 the info column was 18px next
      to Edit and Delete. The same three rules, keyed on the body like the table/card
      switch is: the two-column card measured clean down to a 227px body, 300px leaves room. */
-  #page-host > #settings-modal.as-page #creds-body { container-type: inline-size; }
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { container-type: inline-size; }
   @container (max-width: 300px) {
-    #page-host > #settings-modal.as-page #creds .ent { grid-template-columns: 1fr; padding: 12px; }
-    #page-host > #settings-modal.as-page #creds .ent-act { align-self: stretch; }
-    #page-host > #settings-modal.as-page #creds .ent-act .btn { flex: 1; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent { grid-template-columns: 1fr; padding: 12px; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act { align-self: stretch; }
+    #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act .btn { flex: 1; }
   }
 
   /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
@@ -1611,6 +1458,16 @@
   /* Destructive confirm: red text on a clear button, never a red fill. */
   #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
+  /* A question that lists what it affects (the profile page's "Save as host", shell.js askDialog opts.extra): a card wide
+     enough for the list, and under the body a lead line, the list (a kind and its names) and the question. */
+  #ask-modal.wide { width: 500px; max-width: calc(100vw - 40px); }
+  #ask-modal #ask-extra[hidden] { display: none; }
+  #ask-modal .ask-note { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
+  #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: 12.5px; }
+  #ask-modal .ask-list dt { color: var(--muted); }
+  #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
+  #ask-modal .ask-mono { font-family: var(--font-mono); font-size: 12px; }
+  #ask-modal .ask-q { margin: 14px 0 0; }
 
   /* Command palette. */
   #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px var(--font-ui); overflow: hidden; }
@@ -1673,4 +1530,434 @@
   body > main.card button { padding: 9px 12px; background: var(--accent); color: var(--bg); border-radius: var(--r-ctl); font-size: 13px; font-weight: 600; }
   body > main.card button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
   body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: 13px; }
+
+  /* --- Profile overview (spec 5.1-5.4) --------------------------------------- */
+  /* Settings > Profiles on the page: the profiles nested under Profiles in the nav,
+     and the read view of one profile (profilepage.js) in place of the list column,
+     the form and its footer. Look source: profile-mockups/option-b/index.html. The
+     old form stays in the DOM (the phone's modal uses it); it is
+     only not drawn here. */
+  #page-host > #settings-modal.as-page #manage > .plist, #page-host > #settings-modal.as-page #manage > .ped { display: none; }
+  /* The nav is 212px on Profiles, where it carries the profile names (the mockup's width);
+     the other tabs keep their 170px, and so their tables and footers keep the widths they were measured at. */
+  #page-host > #settings-modal.as-page.tall { grid-template-columns: 212px minmax(0, 1fr); }
+  #page-host > #settings-modal.as-page > #foot-manage { display: none; }
+  #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 13px/1.5 var(--font-ui); }
+  /* The sidebar's width handle is a 7px band between it and the page. On Settings it takes no room (the
+     mockup has none, and the page starts at the sidebar's edge) but stays a draggable edge, with its grip
+     showing on hover. Other pages keep the band. */
+  body.page-settings-modal #split-v { width: 0; border: 0; background: none; z-index: 2; }
+  body.page-settings-modal #split-v::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; }
+  body.page-settings-modal #split-v::after { background: transparent; }
+  body.page-settings-modal #split-v:hover::after, body.page-settings-modal #split-v.dragging::after { background: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 940px; padding: 28px 32px 140px; }
+  #page-host > #settings-modal.as-page #pfv :is(h2, h3, h4, p, dl, dd) { margin: 0; padding: 0; }
+  #page-host > #settings-modal.as-page .pfv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* The nav: Profiles stays bold while its profiles show, the profile on screen is the raised row. */
+  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on { background: transparent; color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; margin: 2px 0 6px 12px; padding-left: 6px; border-left: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: block; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--panel); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { justify-content: flex-start; color: var(--accent); }
+  #page-host > #settings-modal.as-page .pfv-lock { flex: none; }
+
+  /* The header: name, containment chip, the agent line; Start session and the menu. */
+  #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-head-main { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 10px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 11px/1 var(--font-mono); }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip-host { box-shadow: inset 0 0 0 1px var(--faint); }
+  #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 13px var(--font-ui); white-space: nowrap; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary { background: var(--accent); color: #0b1220; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
+  #page-host > #settings-modal.as-page #pfv .pfv-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 190px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+  #page-host > #settings-modal.as-page #pfv .pfv-menu[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-menu-item { display: block; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-menu-item:hover { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-menu-red { color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-menu-item:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: 12.5px; color: var(--red); }
+
+  /* The sheet: a card of blocks, a label column, the plain-words values, Edit at the right. */
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 120px minmax(0, 1fr) 56px; column-gap: 20px; position: relative; padding: 18px 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-label { font-size: 13px; font-weight: 600; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-body { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-act { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 13px/20px var(--font-ui); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-link:hover { text-decoration: underline; }
+  /* Remove and "Move to a saved connection" sit inside a scope line, so they take its size. */
+  #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-main { line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-sub { margin-top: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-red { color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-red + .pfv-sub { margin-top: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
+
+  /* A grant is a row: kind, name (and its tag), scope in words. */
+  #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: 14px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: 12px; line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: 12.5px; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+  #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-add { margin-top: 8px; }
+
+  /* Branches that did not come home: today's amber chip and rows (the old list and form). */
+  #page-host > #settings-modal.as-page #pfv .pfv-nhome { grid-column: 2 / -1; display: grid; gap: 6px; justify-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border: 1px solid var(--warn); border-radius: var(--r-chip); background: var(--warn-bg); color: var(--warn-fg); font-size: 11px; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-row { display: grid; gap: 1px; justify-self: stretch; padding: 6px 8px; border-left: 2px solid var(--warn); background: var(--warn-bg); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-why { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-fix { font-family: var(--font-mono); font-size: 11.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-nh-detail { font-size: 12px; }
+
+  /* Advanced: its own card, folded, "Advanced · N set". */
+  #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1 / 3; display: flex; align-items: center; gap: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 2 / 3; margin-top: 4px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-fold { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; line-height: 20px; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-chev { flex: none; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-open .pfv-chev { transform: rotate(90deg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-muted { color: var(--muted); font-weight: 400; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-dl { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 16px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dl dt { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
+
+  /* --- Editing one block (spec 5.5, 5.6) ------------------------------------------ */
+  /* The open block is raised (--raise), its Edit link is gone, and its body spans to the right edge. Look source:
+     profile-mockups/option-b/index.html (.block.editing, .fields, .opt-card, .b-foot) and the b-err / b-err2 shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-editing { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-editing:only-child { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nudge { box-shadow: inset 0 0 0 1px var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-top:empty { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: 12.5px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-form { min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: 12.5px; font-weight: 500; }
+  /* A fieldset's legend is not a grid item, so the field's 5px gap does not reach it: it carries the gap itself (the mockup's Effort legend). */
+  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: 12px; color: var(--red); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 13px var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--faint); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
+  #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
+  /* The mockup's .in::placeholder (muted, not the browser's grey) and its invalid-and-focused field: the red border stays under the focus ring
+     (.field.has-err .in outranks .in:focus-visible's transparent border), so a refused field still reads as one. */
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl::placeholder { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl.pfv-bad:focus-visible { border-color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: 12px; line-height: 18px; }
+  /* Where it runs: two cards, the lit one outlined. */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-choice > legend.pfv-flabel { margin-bottom: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-on { border-color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
+  #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 11.5px/1 var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-okdot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: 12.5px; color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: 12.5px; }
+  /* Network: one switch, its consequence under it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: 12.5px; }
+  /* Workspace: the folder picker's dropdown (fixed under the field by wspicker.js, so the page's own scroll never clips it), the
+     note under the field for a search that found nothing, and the textarea for the shared files. The rows are the shared
+     .ft-opt/.ft-note ones. */
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
+  /* Advanced (editing): the variables and secrets are rows of the page's own grammar (the kind column, the content, Remove or Undo at the right;
+     the .pfv-row, .pfv-k, .pfv-rmbtn and .pfv-removed rules of the Cloud rows), the content being the mockup's .kv: a name, and a value or
+     where a secret is read from. The rows' inputs are 32px tall, and the kind word and Remove sit at their top (the mockup's .row aligns to start). Look source: option-b/index.html (.kv, tpl-env, tpl-secret). */
+  #page-host > #settings-modal.as-page #pfv .pfv-env { display: grid; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-kv { grid-column: 2 / 4; display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-adds { display: flex; gap: 14px; margin-top: 4px; }
+  /* Cloud and tokens, Also reachable (editing): the read view's rows with Remove at the right (Undo while the removal is pending,
+     the row struck through), an input row for a folder, a domain or a GitHub owner being added, and the owner's fields under its
+     row. Look source: option-b/index.html (.rm, .row.removed, .row-edit, .perm) and the b-aws, b-err, b-err2 and b-picker shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn { min-width: 54px; height: 20px; padding: 0 4px; text-align: right; border: 0; border-radius: var(--r-chip); background: none; color: var(--muted); font: 400 12px var(--font-ui); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-rmbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed :is(.pfv-nm, .pfv-rsub, .pfv-scope, .pfv-mono) { text-decoration: line-through; color: var(--muted); }
+  /* "Not found in Credentials" stays red while its removal is pending (founder decision); the strike says it is pending. */
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-miss { text-decoration: line-through; }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-act-link { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-removed .pfv-tag { color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-inote { font-size: 12px; line-height: 20px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields { grid-column: 2 / 4; }
+  #page-host > #settings-modal.as-page #pfv .pfv-rowedit { grid-column: 2 / -1; margin-top: 12px; padding: 14px 0 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-perms { display: grid; justify-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-permsum { margin-bottom: 5px; line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-cust { padding: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-cust[aria-expanded="true"] { margin-bottom: 10px; }
+  /* A permission and its Read/Write control: side by side while they fit, the control under it (at the left) when they do not. */
+  #page-host > #settings-modal.as-page #pfv .pfv-perm { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 12px; justify-self: stretch; min-height: 30px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: 12px; color: var(--red); }
+  /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
+     than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-addwrap { margin-top: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-addwrap > .pfv-add { margin-top: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; width: 420px; max-width: 100%; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-find { display: block; margin: 2px 0 4px; max-width: none; }
+  /* Tall enough for the mockup's whole list (578px); a longer one scrolls here, under the filter, instead of running down the page. It keeps the
+     height it opened at (--pfv-pick-min, set by pfv-cloud.js) while the filter hides options, so the page does not scroll under the user as they type. */
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-g { padding: 8px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:hover:not(:disabled) { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { background: var(--raise); outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's). */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { cursor: default; text-decoration: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled .pfv-opt-t { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 12px; color: var(--muted); }
+  /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
+  #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-dirty { display: inline-flex; align-items: center; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-st-nudge { color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-fbtns { display: flex; flex: none; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost:hover { background: var(--line); }
+  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). */
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .6); }
+  #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
+  /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-unsaved .pfv-link { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved[hidden] { display: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-saved-ic { flex: none; color: var(--ok); }
+  #page-host > #settings-modal.as-page #pfv .pfv-warn { margin-bottom: 16px; font-size: 12.5px; color: var(--muted); }
+
+  /* New profile, Duplicate and the first steps of a new profile (pfv-new.js). Look source: profile-mockups/option-b/index.html (.np-card,
+     .np-foot, .np-after, .dup-h, .dup-foot, .next) and the b-new, b-nobox-new, b-dup and b-created shots. The card holds the fields, the
+     two tier cards and the hints of an open block (the .pfv-field, .pfv-choice, .pfv-card rules above); only its frame and footer are its own. */
+  #page-host > #settings-modal.as-page #pfv .pfv-newcard { max-width: 488px; padding: 22px 24px; background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-newfoot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dupfoot { align-items: center; margin-top: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-newafter { max-width: 488px; margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-dup-h { margin-top: 30px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-dup-note { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next { margin-bottom: 26px; padding: 16px 20px; background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; margin-bottom: 12px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-head:last-child { margin-bottom: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-p { font-weight: 600; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-h { font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-btn { display: grid; gap: 1px; min-width: min(200px, 100%); padding: 9px 14px; border: 0; border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-t { font-weight: 500; }
+  #page-host > #settings-modal.as-page #pfv .pfv-next-d { font-size: 12px; color: var(--muted); }
+
+  /* Below 863px of page (a 1365px window, as the mockup draws it) the scope moves under the name, so a mono id never clips. */
+  @container (max-width: 863px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-scope { grid-column: 2; margin-top: 2px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 3; grid-row: 1; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-field, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rowfields, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-kv { grid-column: 2; }
+  }
+
+  /* Narrow windows. The shell takes 502px (sidebar 290 + Settings nav 212), so a 900px window leaves the page 398px and a 701px one 199px,
+     and the block's 120px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
+     no narrow design: these steps only stack what it already draws, in its own grammar, and change nothing above them. The thresholds
+     are the page's width (#pfv), measured: at 624px (a 1126px window) the label column starts to cost the body more than it is worth;
+     at 440px (942px) a row's content, with a kind word and Remove beside it, falls under what a name and a value need; at 300px (802px)
+     it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. The permissions have
+     a step of their own, at 390px (see it). */
+  /* The label above its body, the Edit link on the label's line, the body the full width. */
+  @container (max-width: 624px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-block { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-label, #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1; grid-row: 1; }
+    #page-host > #settings-modal.as-page #pfv .pfv-act { grid-column: 2; grid-row: 1; flex-direction: row; align-items: center; gap: 8px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-body, #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 1 / -1; grid-row: 2; }
+    #page-host > #settings-modal.as-page #pfv .pfv-adv-body { margin-top: 0; }
+    /* A row's track may be narrower than its longest word, and a path or an id breaks anywhere rather than run out of the page. */
+    #page-host > #settings-modal.as-page #pfv .pfv-rows { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv :is(.pfv-nm, .pfv-mono) { overflow-wrap: anywhere; }
+    /* The header's title and its actions (with "Unsaved changes" among them) go on two lines rather than squeeze the name into a column. */
+    #page-host > #settings-modal.as-page #pfv .pfv-head { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 12em; }
+    #page-host > #settings-modal.as-page #pfv .pfv-acts { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
+  }
+  /* A row keeps its kind word and its content side by side; Remove or Undo goes on its own line under the content, at the right, so it can
+     never sit on an input. A variable's value goes under its name, a definition under its term. */
+  @container (max-width: 440px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-row { grid-template-columns: 52px minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-foot { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-fbtns { margin-left: auto; }
+  }
+  /* Every permission stacks the same way (the permission, then its Read/Write control under it) once the longest one no longer fits beside
+     its control, so the list reads as one column instead of one row dropping its control and its neighbours not. "pull requests" and its
+     control need 213px; the permissions have the page less 170px (less 104px from 300px down), so 213px is gone at 383px; 390px keeps a margin. */
+  @container (max-width: 390px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-perm { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; justify-content: center; }
+    /* An option's segmented control (Agent's Effort, and Advanced's choices) wraps onto a second line when its choices no longer fit in one:
+       "low medium high xhigh max" needs 284px and the body has the page less 104px (less 52px from 240px down), so it is 388px that runs out;
+       390px keeps a margin. Without it the control's own width held its grid track open past the block. A choice stays one button, and one
+       that is long (a stored value the list no longer has) wraps its text; every line is 26px tall, as the single line is. */
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; height: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; }
+  }
+  /* The kind word above its content, which then has the whole width. */
+  @container (max-width: 300px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-row { display: flex; flex-direction: column; gap: 2px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { align-self: flex-end; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { column-gap: 12px; }
+    #page-host > #settings-modal.as-page #pfv :is(.pfv-adv-label, .pfv-fold) { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #pfv .pfv-link { text-align: left; }
+    /* The New profile card gives its text the room its padding took. The chip after "In a box" wraps instead of leaving its card, on this
+       page's cards (New profile, Duplicate) and on Runs in's alike: they are the same two cards. */
+    #page-host > #settings-modal.as-page #pfv .pfv-newcard { padding: 16px 14px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-card .pfv-card-t { flex-wrap: wrap; gap: 2px 8px; }
+  }
+  /* A window under 743px leaves the page under 241px (199px at 701px): less margin, so Discard and Save still fit beside each other inside the block. */
+  @container (max-width: 240px) {
+    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 20px 12px 120px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 16px 14px; }
+  }
+  /* --- the Credentials drawer over the profile page (spec 5.7; the mockup's `drawer` and `drawer-tok` states) ----------- */
+  /* A scrim and a drawer, both fixed and so out of the page's grid; neither is a .dbd or a .dft (selectSettingsTab hides those). They
+     show only while profilepage.js has opened them (the [hidden] they are born with); app.css hides them for good on a phone. The
+     Credentials add flows draw their crumb and intro into the head, themselves into the body and their buttons into the foot; their own rules are the `#creds` ones (the
+     `:is(#creds, #cred-drawer)` twins above). */
+  #page-host > #settings-modal.as-page > #cred-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .55); }
+  #page-host > #settings-modal.as-page > #cred-drawer:not([hidden]) {
+    display: flex; flex-direction: column; position: fixed; top: 0; right: 0; bottom: 0; z-index: 51; box-sizing: border-box; width: 540px; max-width: 100%;
+    background: var(--panel); color: var(--fg); font: 400 13px/1.5 var(--font-ui);
+    border-left: 1px solid var(--line); border-radius: var(--r-dlg) 0 0 var(--r-dlg); box-shadow: -24px 0 72px rgba(0, 0, 0, .55);
+  }
+  #page-host > #settings-modal.as-page > #cred-drawer:focus { outline: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-status { margin: 0; padding: 8px 22px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .grow { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 18px; }
+  /* The three parts, as the mockup's .drawer is made: a header band that stays put (the flow's crumb and intro), a body that scrolls, a
+     foot. The Credentials flows draw into them (opts.head, opts.host, opts.foot) and their own rules are the Credentials tab's (the
+     `:is(#creds, #cred-drawer)` twins above); everything below is the drawer's skin over them: the mockup's header, section heads in
+     sentence case, the host's profiles as one panel, a connection as a raised card, 13px buttons and labels, the store step as a card
+     of two columns. Scoped to #cred-drawer, so the Credentials tab is the same as it was. */
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head { padding: 18px 22px 16px; border-bottom: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head:empty { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb { display: block; font-size: 12px; line-height: 18px; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk { color: var(--muted); text-decoration: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb a.lnk:hover { color: var(--fg); text-decoration: underline; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .crumb b { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; line-height: 22.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-head .intro { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; padding: 20px 22px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec { gap: 8px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h { min-height: 0; padding: 0; border-bottom: 0; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .sec-h .count { margin-left: 4px; font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint { margin: 0; font-size: 12px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hint:empty { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body section[aria-label="Host profiles"] > .stack { gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp { gap: 10px; padding: 0; border: 0; background: transparent; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .tx { gap: 0; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .nm { font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .d { font-size: 12px; line-height: 18px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="checkbox"], #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body input[type="radio"] { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .pf-check { align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.5; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .bdg.kind { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border: 0; border-radius: var(--r-chip); background: var(--line); font: 500 11px/1 var(--font-mono); letter-spacing: 0; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .hp .bdg.kind { background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow { gap: 10px; border: 0; border-radius: var(--r-card); background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h { gap: 8px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font: 400 13px var(--font-ui); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body :is([id$="-role_arn"], [id$="-source_profile"], [id$="-region"], [id$="-elevRole"], textarea.fld) { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .btn { font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow .btn { height: 32px; padding: 0 12px; border: 0; background: var(--line); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok { align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .res .l.ok > span:first-child { flex: none; font-size: 12px; color: var(--ok); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary { display: inline-flex; font-size: 13px; font-weight: 500; list-style: none; color: var(--accent); border-radius: var(--r-chip); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body details summary::-webkit-details-marker { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tiles { gap: 8px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile { gap: 2px; padding: 9px 11px; border-color: var(--line); border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .n { font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile .s { font-size: 12px; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on { border-color: var(--muted); background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .tile.on .n { color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg { display: flex; gap: 2px; height: 32px; max-width: none; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); box-sizing: border-box; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button { display: flex; align-items: center; padding: 0 12px; border: 0; border-radius: var(--r-chip); background: transparent; font: 400 12.5px var(--font-ui); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .seg button.on { background: var(--raise); font-weight: 500; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate { margin-top: -2px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; padding: 14px; border: 0; border-radius: var(--r-card); background: var(--raise); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate > :is(.lead, .hint, .ent-err, .btn) { grid-column: 1 / -1; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .lead { margin: 0; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .ent-err:empty { display: none; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; background: var(--line); color: var(--fg); font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: 13px; font-weight: 500; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn.pri { color: #0b1220; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2) { background: transparent; }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):hover { background: var(--line); }
 }

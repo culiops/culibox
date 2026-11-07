@@ -310,161 +310,164 @@
        Scoped to #creds so the short generic names (.st, .ent, .sec, .meta) cannot
        leak into the rest of the page. Square corners and the app's tokens, as
        the approved mockup. Colour is secondary: every chip and verdict carries
-       its meaning in text as well. */
-    #creds-body { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
-    #creds .stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-    #creds .sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-    #creds .sec-h {
+       its meaning in text as well. The add flows also run in the drawer over the
+       profile page (#cred-drawer), so each rule names :is(#creds, #cred-drawer):
+       the same specificity as #creds alone. The phone block below stays #creds
+       only: the drawer is desktop-only. */
+    #creds-body, #cred-drawer-body { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+    :is(#creds, #cred-drawer) .stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    :is(#creds, #cred-drawer) .sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    :is(#creds, #cred-drawer) .sec-h {
       display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-height: 36px; padding-bottom: 6px;
       font-size: 10.5px; letter-spacing: .09em; color: var(--muted); text-transform: uppercase;
       border-bottom: 1px solid var(--border);
     }
-    #creds .sec-h .count { letter-spacing: 0; }
-    #creds .sec-h .btn { text-transform: none; letter-spacing: 0; }
-    #creds .strip {
+    :is(#creds, #cred-drawer) .sec-h .count { letter-spacing: 0; }
+    :is(#creds, #cred-drawer) .sec-h .btn { text-transform: none; letter-spacing: 0; }
+    :is(#creds, #cred-drawer) .strip {
       display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 11px 14px;
       border: 1px solid var(--warn); background: var(--warn-bg);
     }
-    #creds .strip .txt { flex: 1 1 260px; min-width: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-    #creds .strip .txt b { font-weight: 700; color: var(--warn); }
-    #creds .strip .storeslot { flex: 1 1 260px; }
-    #creds .hint { margin-top: 0; overflow-wrap: anywhere; }
-    #creds .hint.warnline { color: var(--warn-fg); }
-    #creds .st {
+    :is(#creds, #cred-drawer) .strip .txt { flex: 1 1 260px; min-width: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .strip .txt b { font-weight: 700; color: var(--warn); }
+    :is(#creds, #cred-drawer) .strip .storeslot { flex: 1 1 260px; }
+    :is(#creds, #cred-drawer) .hint { margin-top: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .hint.warnline { color: var(--warn-fg); }
+    :is(#creds, #cred-drawer) .st {
       font-size: 10.5px; padding: 1px 7px; border: 1px solid var(--border); line-height: 16px;
       display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
     }
-    #creds .st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
-    #creds .st.ready { color: var(--ok); border-color: var(--ok); }
-    #creds .st.missing, #creds .st.invalid { color: var(--danger); border-color: var(--danger); }
-    #creds .st.locked, #creds .st.notset { color: var(--warn); border-color: var(--warn); }
-    #creds .st.invalid::before, #creds .st.notset::before { border-radius: 0; }
-    #creds .st.locked::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
-    #creds .st.notset::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
-    #creds .ent {
+    :is(#creds, #cred-drawer) .st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+    :is(#creds, #cred-drawer) .st.ready { color: var(--ok); border-color: var(--ok); }
+    :is(#creds, #cred-drawer) .st.missing, :is(#creds, #cred-drawer) .st.invalid { color: var(--danger); border-color: var(--danger); }
+    :is(#creds, #cred-drawer) .st.locked, :is(#creds, #cred-drawer) .st.notset { color: var(--warn); border-color: var(--warn); }
+    :is(#creds, #cred-drawer) .st.invalid::before, :is(#creds, #cred-drawer) .st.notset::before { border-radius: 0; }
+    :is(#creds, #cred-drawer) .st.locked::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+    :is(#creds, #cred-drawer) .st.notset::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+    :is(#creds, #cred-drawer) .ent {
       border: 1px solid var(--border); background: var(--bg); padding: 12px 14px;
       display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: start;
     }
-    #creds .ent.danger { border-color: var(--danger); }
-    #creds .ent-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
-    #creds .ent-top .nm { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; }
-    #creds .ent-top .lab { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-    #creds .ent-act { display: flex; gap: 6px; align-self: start; }
-    #creds .ent-act:empty { display: none; }
-    #creds .ent-body { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
-    #creds .ent-err { margin: 0; color: var(--danger); font-size: 11.5px; overflow-wrap: anywhere; }
-    #creds .ent-desc { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-    #creds .meta { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; font-size: 11.5px; }
-    #creds .meta > div { display: flex; gap: 7px; min-width: 0; }
-    #creds .meta dt { color: var(--muted); flex: none; }
-    #creds .meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-    #creds .verdict { font-size: 11.5px; display: flex; gap: 8px; align-items: baseline; }
-    #creds .verdict.ok { color: var(--ok); }
-    #creds .verdict.warn { color: var(--warn); }
-    #creds .verdict.bad { color: var(--danger); }
-    #creds .verdict .g { flex: none; }
-    #creds .verdict b { font-weight: 400; }
-    #creds .verdict .when { color: var(--muted); }
-    #creds .honest { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 8px; }
-    #creds .warnbox { margin-top: 0; font-size: 11.5px; overflow-wrap: anywhere; }
-    #creds .warnbox .remedy { margin-top: 6px; color: var(--fg); }
-    #creds .amberbox {
+    :is(#creds, #cred-drawer) .ent.danger { border-color: var(--danger); }
+    :is(#creds, #cred-drawer) .ent-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+    :is(#creds, #cred-drawer) .ent-top .nm { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .ent-top .lab { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .ent-act { display: flex; gap: 6px; align-self: start; }
+    :is(#creds, #cred-drawer) .ent-act:empty { display: none; }
+    :is(#creds, #cred-drawer) .ent-body { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+    :is(#creds, #cred-drawer) .ent-err { margin: 0; color: var(--danger); font-size: 11.5px; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .ent-desc { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .meta { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; font-size: 11.5px; }
+    :is(#creds, #cred-drawer) .meta > div { display: flex; gap: 7px; min-width: 0; }
+    :is(#creds, #cred-drawer) .meta dt { color: var(--muted); flex: none; }
+    :is(#creds, #cred-drawer) .meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+    :is(#creds, #cred-drawer) .verdict { font-size: 11.5px; display: flex; gap: 8px; align-items: baseline; }
+    :is(#creds, #cred-drawer) .verdict.ok { color: var(--ok); }
+    :is(#creds, #cred-drawer) .verdict.warn { color: var(--warn); }
+    :is(#creds, #cred-drawer) .verdict.bad { color: var(--danger); }
+    :is(#creds, #cred-drawer) .verdict .g { flex: none; }
+    :is(#creds, #cred-drawer) .verdict b { font-weight: 400; }
+    :is(#creds, #cred-drawer) .verdict .when, #cred-drawer .l .when { color: var(--muted); }
+    :is(#creds, #cred-drawer) .honest { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 8px; }
+    :is(#creds, #cred-drawer) .warnbox { margin-top: 0; font-size: 11.5px; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .warnbox .remedy { margin-top: 6px; color: var(--fg); }
+    :is(#creds, #cred-drawer) .amberbox {
       border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
       font-size: 11.5px; padding: 10px 12px; line-height: 1.6; overflow-wrap: anywhere;
     }
-    #creds .bdg.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
-    #creds .bdg.seed { color: var(--muted); }
+    :is(#creds, #cred-drawer) .bdg.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
+    :is(#creds, #cred-drawer) .bdg.seed { color: var(--muted); }
     /* Header and rows are separate grids: every column is explicit so they line up
        (an auto last column sizes to the buttons in a row, to nothing in the header). */
-    #creds .sv {
+    :is(#creds, #cred-drawer) .sv {
       display: grid; grid-template-columns: minmax(0, 1.3fr) 110px minmax(0, 1.6fr) 150px; gap: 6px 14px;
       align-items: center; padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 12px;
     }
-    #creds .sv.head { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
-    #creds .sv .k { display: none; color: var(--muted); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
-    #creds .sv .id { font-weight: 700; overflow-wrap: anywhere; }
-    #creds .sv .refs { min-width: 0; overflow-wrap: anywhere; }
-    #creds .sv .refs.none { color: var(--muted); }
-    #creds .sv .acts { display: flex; gap: 6px; justify-content: flex-end; }
-    #creds .leg {
+    :is(#creds, #cred-drawer) .sv.head { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+    :is(#creds, #cred-drawer) .sv .k { display: none; color: var(--muted); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
+    :is(#creds, #cred-drawer) .sv .id { font-weight: 700; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .sv .refs { min-width: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .sv .refs.none { color: var(--muted); }
+    :is(#creds, #cred-drawer) .sv .acts { display: flex; gap: 6px; justify-content: flex-end; }
+    :is(#creds, #cred-drawer) .leg {
       display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; padding: 8px 2px;
       border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline;
     }
-    #creds .leg > * { min-width: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .leg > * { min-width: 0; overflow-wrap: anywhere; }
     /* Add / Edit AWS connection (credentials.js awsPaintFlow). */
-    #creds .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-size: 12px; color: var(--muted); }
-    #creds .crumb b { color: var(--fg); font-weight: 400; overflow-wrap: anywhere; }
-    #creds a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
-    #creds .intro { margin: 0; font-size: 12.5px; line-height: 1.6; }
-    #creds .hp { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
-    #creds .hp .tx { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
-    #creds .hp .nm { font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; overflow-wrap: anywhere; }
-    #creds .hp .d { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
-    #creds .hp .dim { opacity: .42; }
-    #creds .hp .stop { font-size: 11.5px; color: var(--warn); }
-    #creds input[type="checkbox"], #creds input[type="radio"] { accent-color: var(--accent); margin: 0; flex: none; width: 15px; height: 15px; }
-    #creds .hp input[type="checkbox"] { margin-top: 3px; }
-    #creds .bdg.kind { color: var(--accent); border-color: var(--accent); }
-    #creds .bdg.warnb { color: var(--warn); border-color: var(--warn); }
-    #creds .arow { border: 1px solid var(--border); background: var(--bg); padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-    #creds .awsnote { display: none; }
-    #creds .arow.danger { border-color: var(--danger); }
-    #creds .arow-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
-    #creds .arow-h .nm { font-weight: 700; overflow-wrap: anywhere; }
-    #creds .arow-h .btn { margin-left: auto; }
-    #creds .frow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0; }
-    #creds .frow .full { grid-column: 1 / -1; }
-    #creds .fcol { min-width: 0; }
-    #creds .flab { display: block; margin-bottom: 7px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-    #creds .fld { box-sizing: border-box; min-width: 0; border-radius: 0; }
-    #creds textarea.fld { resize: vertical; font-family: var(--font-family); }
-    #creds .fld.ro { background: var(--surface-2); color: var(--muted); }
-    #creds .roleline { display: flex; gap: 8px; min-width: 0; }
-    #creds .roleline .fld { flex: 1; }
-    #creds .roles { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; max-height: 220px; overflow-y: auto; }
-    #creds .roles label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
-    #creds .roles label.on { border-color: var(--accent); background: var(--sel-soft); }
-    #creds .rolesbox .hint { margin-top: 7px; }
-    #creds .rolefilter { margin-top: 8px; width: 100%; box-sizing: border-box; }
-    #creds .roles .rolebdg { margin-left: auto; flex-shrink: 0; }
-    #creds .pf-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-    #creds .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
-    #creds .res { display: flex; flex-direction: column; gap: 8px; font-size: 12px; min-width: 0; }
-    #creds .res:empty { display: none; }
-    #creds .res .l { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; }
-    #creds .res .l.ok { color: var(--ok); }
-    #creds .res .ent-err { margin: 0; }
-    #creds details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
-    #creds details[open] summary { margin-bottom: 10px; }
-    #creds .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
-    #creds .gate { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-    #creds .gate .gatelist { margin: 0; padding-left: 18px; overflow-wrap: anywhere; font-size: 11.5px; }
-    #creds .gate .hint { margin: 0; }
-    #creds .gate.bad, #creds .gate.warn { padding: 10px 12px; }
-    #creds .ssopanel { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); }
-    #creds .ssopanel .hint { margin: 0; }
-    #creds .ssocode { font-size: 18px; letter-spacing: .12em; font-weight: 700; }
-    #creds .cmd { font: inherit; overflow-wrap: anywhere; color: var(--fg); }
-    #creds .confirm { grid-column: 1 / -1; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
-    #creds .confirm p { margin: 0; overflow-wrap: anywhere; }
-    #creds .confirm .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    :is(#creds, #cred-drawer) .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-size: 12px; color: var(--muted); }
+    :is(#creds, #cred-drawer) .crumb b { color: var(--fg); font-weight: 400; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .intro { margin: 0; font-size: 12.5px; line-height: 1.6; }
+    :is(#creds, #cred-drawer) .hp { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+    :is(#creds, #cred-drawer) .hp .tx { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+    :is(#creds, #cred-drawer) .hp .nm { font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .hp .d { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .hp .dim { opacity: .42; }
+    :is(#creds, #cred-drawer) .hp .stop { font-size: 11.5px; color: var(--warn); }
+    :is(#creds, #cred-drawer) input[type="checkbox"], :is(#creds, #cred-drawer) input[type="radio"] { accent-color: var(--accent); margin: 0; flex: none; width: 15px; height: 15px; }
+    :is(#creds, #cred-drawer) .hp input[type="checkbox"] { margin-top: 3px; }
+    :is(#creds, #cred-drawer) .bdg.kind { color: var(--accent); border-color: var(--accent); }
+    :is(#creds, #cred-drawer) .bdg.warnb { color: var(--warn); border-color: var(--warn); }
+    :is(#creds, #cred-drawer) .arow { border: 1px solid var(--border); background: var(--bg); padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    :is(#creds, #cred-drawer) .awsnote { display: none; }
+    :is(#creds, #cred-drawer) .arow.danger { border-color: var(--danger); }
+    :is(#creds, #cred-drawer) .arow-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+    :is(#creds, #cred-drawer) .arow-h .nm { font-weight: 700; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .arow-h .btn { margin-left: auto; }
+    :is(#creds, #cred-drawer) .frow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0; }
+    :is(#creds, #cred-drawer) .frow .full { grid-column: 1 / -1; }
+    :is(#creds, #cred-drawer) .fcol { min-width: 0; }
+    :is(#creds, #cred-drawer) .flab { display: block; margin-bottom: 7px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    :is(#creds, #cred-drawer) .fld { box-sizing: border-box; min-width: 0; border-radius: 0; }
+    :is(#creds, #cred-drawer) textarea.fld { resize: vertical; font-family: var(--font-family); }
+    :is(#creds, #cred-drawer) .fld.ro { background: var(--surface-2); color: var(--muted); }
+    :is(#creds, #cred-drawer) .roleline { display: flex; gap: 8px; min-width: 0; }
+    :is(#creds, #cred-drawer) .roleline .fld { flex: 1; }
+    :is(#creds, #cred-drawer) .roles { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; max-height: 220px; overflow-y: auto; }
+    :is(#creds, #cred-drawer) .roles label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .roles label.on { border-color: var(--accent); background: var(--sel-soft); }
+    :is(#creds, #cred-drawer) .rolesbox .hint { margin-top: 7px; }
+    :is(#creds, #cred-drawer) .rolefilter { margin-top: 8px; width: 100%; box-sizing: border-box; }
+    :is(#creds, #cred-drawer) .roles .rolebdg { margin-left: auto; flex-shrink: 0; }
+    :is(#creds, #cred-drawer) .pf-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+    :is(#creds, #cred-drawer) .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
+    :is(#creds, #cred-drawer) .res { display: flex; flex-direction: column; gap: 8px; font-size: 12px; min-width: 0; }
+    :is(#creds, #cred-drawer) .res:empty { display: none; }
+    :is(#creds, #cred-drawer) .res .l { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .res .l.ok { color: var(--ok); }
+    :is(#creds, #cred-drawer) .res .ent-err { margin: 0; }
+    :is(#creds, #cred-drawer) details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+    :is(#creds, #cred-drawer) details[open] summary { margin-bottom: 10px; }
+    :is(#creds, #cred-drawer) .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
+    :is(#creds, #cred-drawer) .gate { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    :is(#creds, #cred-drawer) .gate .gatelist { margin: 0; padding-left: 18px; overflow-wrap: anywhere; font-size: 11.5px; }
+    :is(#creds, #cred-drawer) .gate .hint { margin: 0; }
+    :is(#creds, #cred-drawer) .gate.bad, :is(#creds, #cred-drawer) .gate.warn { padding: 10px 12px; }
+    :is(#creds, #cred-drawer) .ssopanel { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); }
+    :is(#creds, #cred-drawer) .ssopanel .hint { margin: 0; }
+    :is(#creds, #cred-drawer) .ssocode { font-size: 18px; letter-spacing: .12em; font-weight: 700; }
+    :is(#creds, #cred-drawer) .cmd { font: inherit; overflow-wrap: anywhere; color: var(--fg); }
+    :is(#creds, #cred-drawer) .confirm { grid-column: 1 / -1; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
+    :is(#creds, #cred-drawer) .confirm p { margin: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .confirm .btns { display: flex; flex-wrap: wrap; gap: 8px; }
     /* Add / Edit token, GitHub App and stored value (credentials.js credOpenForm). */
-    #creds .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-    #creds .tile { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); text-align: left; cursor: pointer; border-radius: 0; min-width: 0; font: inherit; }
-    #creds .tile .n { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
-    #creds .tile .s { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
-    #creds .tile.on { border-color: var(--accent); background: var(--sel); }
-    #creds .tile.on .n { color: var(--accent); }
-    #creds .seg { max-width: 100%; }
-    #creds .seg button { min-width: 0; overflow-wrap: anywhere; }
-    #creds select.fld { width: 100%; }
-    #creds .fld.secret-area { -webkit-text-security: disc; text-security: disc; resize: vertical; min-height: 96px; font-family: var(--font-family); }
-    #creds .storecreate { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
-    #creds .storecreate .hint { margin: 0; }
-    #creds .storecreate .btn { align-self: flex-start; }
-    #creds .strip .storecreate { flex: 1 1 100%; }
-    #creds .sv .confirm { margin-top: 4px; }
-    #foot-creds-add .hint { margin: 0; }
+    :is(#creds, #cred-drawer) .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    :is(#creds, #cred-drawer) .tile { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); text-align: left; cursor: pointer; border-radius: 0; min-width: 0; font: inherit; }
+    :is(#creds, #cred-drawer) .tile .n { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .tile .s { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) .tile.on { border-color: var(--accent); background: var(--sel); }
+    :is(#creds, #cred-drawer) .tile.on .n { color: var(--accent); }
+    :is(#creds, #cred-drawer) .seg { max-width: 100%; }
+    :is(#creds, #cred-drawer) .seg button { min-width: 0; overflow-wrap: anywhere; }
+    :is(#creds, #cred-drawer) select.fld { width: 100%; }
+    :is(#creds, #cred-drawer) .fld.secret-area { -webkit-text-security: disc; text-security: disc; resize: vertical; min-height: 96px; font-family: var(--font-family); }
+    :is(#creds, #cred-drawer) .storecreate { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
+    :is(#creds, #cred-drawer) .storecreate .hint { margin: 0; }
+    :is(#creds, #cred-drawer) .storecreate .btn { align-self: flex-start; }
+    :is(#creds, #cred-drawer) .strip .storecreate { flex: 1 1 100%; }
+    :is(#creds, #cred-drawer) .sv .confirm { margin-top: 4px; }
+    #foot-creds-add .hint, #cred-drawer-foot .hint { margin: 0; }
     @media (max-width: 700px) {
       #creds .btn { min-height: var(--tap); }
       #creds .fld { min-height: var(--tap); font-size: 13px; }
@@ -1429,6 +1432,11 @@
        page above 700px): the nav's group labels, the profile form's Can touch
        box, section heads and Advanced fold, Discard, and About's runtime line. */
     .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime { display: none; }
+    /* The desktop page's profile overview and its nav list (desktop.css shows them
+       on the page above 700px); a phone keeps the form. */
+    #pfv, #pf-navlist { display: none; }
+    /* The Credentials drawer over the profile page and its scrim (desktop.css shows them on the page, while the page has opened one). */
+    #cred-scrim, #cred-drawer { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;

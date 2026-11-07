@@ -195,7 +195,7 @@ func validateAWS(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime != RuntimeBox {
-		return errors.New("aws binding requires runtime: box (set it explicitly); the host tier cannot contain credentials")
+		return WithField("aws", errors.New("aws binding requires runtime: box (set it explicitly); the host tier cannot contain credentials"))
 	}
-	return a.AWS.Validate()
+	return WithField("aws", a.AWS.Validate())
 }

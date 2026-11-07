@@ -99,16 +99,40 @@ function segFromRuntime(stored, resolved) {
   return resolved === "host" ? "host" : "box";
 }
 
+// profileNeedsBox: whether the profile holds anything that needs a box: an AWS
+// binding or connection, a token, a GitHub binding, a network allowlist or open
+// egress, a readable host folder, a private copy. p is the profile as it will be
+// sent. An empty list holds nothing; an object counts as held whether or not it has
+// anything in it ("aws": {} and "github": {}), because the server checks only that it
+// is set. The credentials and the egress are refused by the server without an explicit
+// runtime: box; a readable folder or a private copy is only honoured in a box, though
+// the server saves it with a blank tier when the instance default resolves to box.
+function profileNeedsBox(p) {
+  const x = p && typeof p === "object" ? p : {};
+  const listed = (k) => Array.isArray(x[k]) && x[k].length > 0;
+  const held = (k) => x[k] !== null && typeof x[k] === "object";
+  return held("aws") || held("github") || x.egress_open === true ||
+    listed("aws_connections") || listed("tokens") || listed("egress_allow") || listed("context_paths") ||
+    (typeof x.clone_of === "string" && x.clone_of.trim() !== "");
+}
+
 // What to send as runtime: the tier the seg shows, always. Sending it
 // explicitly is what keeps a profile on the tier the editor lit when the
 // instance default is host — a blank would hand the tier back to that default.
 // The stored value is a defensive fallback only; the seg always has a value.
 // One exception: with no box layer, a profile naming no tier is lit "box" only
-// because a blank resolves to box there. Pinning it would make the profile
-// unspawnable (the server refuses an explicit box), so it stays blank and goes
-// back to box once containment exists. The seg still offers host.
-function runtimeToSend(seg, stored, boxAvailable) {
-  if (!boxAvailable && !stored && seg === "box") return "";
+// because a blank resolves to box there. What that costs depends on what the
+// profile holds (profile is the whole profile as it will be sent):
+//  - nothing that needs a box: it stays blank. An explicit box would leave a
+//    profile that could still run on this machine unable to start, and a blank
+//    goes back to box once containment exists.
+//  - something that needs a box (profileNeedsBox): "box" is sent. The server
+//    refuses a token, a connection, a GitHub binding or egress without it, and a
+//    readable folder or a private copy only works in a box, so naming box makes
+//    the profile wait for one instead of starting on this machine without them.
+// The seg still offers host.
+function runtimeToSend(seg, stored, boxAvailable, profile) {
+  if (!boxAvailable && !stored && seg === "box") return profileNeedsBox(profile) ? "box" : "";
   if (seg === "box" || seg === "host") return seg;
   return stored === "box" || stored === "host" ? stored : "";
 }
@@ -386,39 +410,6 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
   return (ticked || []).filter((n) => !(was.has(n) && !now.has(n)));
 }
 
-// pfTouchProfile: what the editor holds now (readForm's request body) in the
-// ProfileView shape reachRows reads (spawnpreview.js), so the Settings page's
-// "Can touch" line and the New session box follow one set of rules.
-//   o.view       the saved ProfileView of this profile, or null for a draft
-//   o.claude     the form's binary is claude (spawnform.js isClaudeBinName)
-//   o.egressAll  every boxed spawn goes through the egress proxy
-// Network mirrors session.EgressMode: bound = allowlist (open when the form
-// sets egress_open), unbound = open only when egress is mandatory. The inline AWS binding is not edited here, so its
-// name and flags come from the saved view while the form still carries it.
-function pfTouchProfile(form, o) {
-  const f = form || {};
-  const x = o || {};
-  const list = (l) => (Array.isArray(l) ? l.filter((n) => typeof n === "string" && n !== "") : []);
-  const out = { bin: String(f.bin || ""), account: String(f.account || ""), claude: x.claude === true };
-  const conns = list(f.aws_connections);
-  if (conns.length) out.aws_connections = conns;
-  if (f.aws && typeof f.aws === "object") {
-    const saved = x.view && x.view.aws_inline;
-    out.aws_inline = saved ? saved : { name: String(f.aws.label || "") || "aws", prod: f.aws.prod === true };
-  }
-  const owners = list(((f.github && f.github.owners) || []).map((w) => w && w.owner));
-  if (owners.length) out.github_owners = owners;
-  const route = ghRouteOf(f.github);
-  if (route.write) out.github_write = true;
-  if (route.pat) out.github_pat = true;
-  const tokens = list(f.tokens);
-  if (tokens.length) out.tokens = tokens;
-  if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
-  const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
-  out.network = bound ? (f.egress_open === true ? "open" : "allowlist") : x.egressAll === true ? "open" : "";
-  return out;
-}
-
 // autoReturnToSend: the auto-return switch's part of a save. The field is the
 // off switch (omitted means on), so a ticked box sends nothing. Only a private
 // copy may carry it (the server refuses it without clone_of): wmFieldsToSend
@@ -522,14 +513,12 @@ function profileSourceLabel(source) {
   return "";
 }
 
-// profileListLabels: the two things the Profiles list prints for a profile (#121):
-// the badge (read-only profiles only) and the second line, "<what> · <runtime>",
-// where <what> is the binary of a profile you own and the source of one you do not.
+// profileListLabels: what the Profiles list prints for a profile (#121): the
+// badge, for read-only profiles only.
 function profileListLabels(p) {
-  const label = p.editable ? "" : profileSourceLabel(p.source);
-  return { badge: label, sub: [p.editable ? p.bin : label, p.runtime].filter(Boolean).join(" · ") };
+  return { badge: p.editable ? "" : profileSourceLabel(p.source) };
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }
