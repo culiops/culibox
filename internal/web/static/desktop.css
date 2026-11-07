@@ -744,19 +744,20 @@
 
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
      tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
-     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 550px is
-     the bar's content box (a 570px pane), not tabs.js's NARROW_PANE_PX (560): with
-     the pointer over the header the wide padding clipped Terminal from 561 to 568
-     (#13), so the compact look must reach 568. */
-  @container (max-width: 550px) {
+     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 557px is
+     the bar's content box (a 577px pane), not tabs.js's NARROW_PANE_PX (560): with
+     the pointer over the header (⋯ ⛶ × in the flow) the wide padding clips Terminal
+     up to a 575px pane (measured with the 13px tabs, #171; #13 had 568 with 12.5px),
+     so the compact look reaches 577 and the wide one starts with 2px to spare. */
+  @container (max-width: 557px) {
     .ph-sep { display: none; }
     .ph-tab { padding: 4px 5px; }
     .ph-shell { font-size: 0; padding: 4px 8px; }
     .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
-  /* Too narrow for four words (the compact text tabs need a 440px pane): the same
-     four tabs as icons, 24px squares like ⋯ ⛶ ×, still named by title and
-     aria-label (#13). A maximized pane keeps its ⛶ in the flow, which costs 26px
+  /* Too narrow for four words (the compact text tabs need a 443px pane, 423px of
+     content box, measured with the 13px tabs): the same four tabs as icons, 24px
+     squares like ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized pane keeps its ⛶ in the flow, which costs 26px
      the + Shell button gives back, or Terminal clips at 339-354px. The rule holds
      below 339px too, though + would fit there from a 249px pane: a rare corner
      (a maximized pane under 339px) kept to one rule. */
@@ -765,6 +766,15 @@
     .ph-ico { display: block; }
     .ph-tab { padding: 5px; }
     .cell-bar:has(.ph-max.pin) .ph-shell { display: none; }
+  }
+  /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text tabs need
+     a 469px pane (449px of content box): measured, Terminal clipped up to 468. Up to
+     a 470px pane it draws the icons (2px to spare); + Shell keeps its room until the
+     rule above. A plain pane keeps its words down to that rule. */
+  @container (max-width: 450px) {
+    .cell-bar:has(.ph-max.pin) .ph-lbl { display: none; }
+    .cell-bar:has(.ph-max.pin) .ph-ico { display: block; }
+    .cell-bar:has(.ph-max.pin) .ph-tab { padding: 5px; }
   }
   /* Too narrow for four icons beside the name's room (a 338px pane or less, 318px
      of content box): dot, name, chip, + and ⋯. Files and Activity stay one click
