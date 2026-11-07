@@ -81,8 +81,10 @@ function phoneSlot() {
 const GLOBALS = ["document", "window", "mobileActive", "createToastStack", "copyText"];
 
 // A page at `width` with the real shell.js (fresh module state) and toaststack.js.
-// `host: false` leaves #toasts out of the page.
-function page(t, { width = 1280, host = true } = {}) {
+// `host: false` leaves #toasts out of the page. `blur: false` is Firefox and
+// Safari: removing the focused node moves focus to the body and fires no
+// blur/focusout at all (Bugzilla 559561); the default is Chrome's behaviour.
+function page(t, { width = 1280, host = true, blur = true } = {}) {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
   const p = require.resolve("../static/shell.js");
   delete require.cache[p];
@@ -108,7 +110,7 @@ function page(t, { width = 1280, host = true } = {}) {
     if (!toasts || !n.contains(doc.activeElement)) return;
     const was = doc.activeElement;
     doc.activeElement = null;
-    toasts.fire("focusout", { target: was, relatedTarget: null });
+    if (blur) toasts.fire("focusout", { target: was, relatedTarget: null });
   };
   t.after(() => { for (const k of GLOBALS) delete globalThis[k]; El.beforeRemove = null; });
   const entries = () => toasts.children.map(view);
@@ -308,6 +310,50 @@ test("Undo and × on the focused toast: the blur fired by its removal does not b
   assert.deepStrictEqual(pg.entries(), []);
 });
 
+// Keyboard focus on the toast's own button, as Tab then Enter leaves it.
+function keyFocus(pg, btn) {
+  btn.focusVisible = true;
+  pg.doc.activeElement = btn;
+  pg.toasts.fire("focusin", { target: btn });
+}
+
+test("no blur on removal (Firefox, Safari): a keyboard Undo leaves the remaining toast timed", (t) => {
+  const pg = page(t, { blur: false });
+  let undone = 0;
+  pg.shell.showToast("Saved");
+  pg.shell.showToast("Spawned docs", { undo: () => { undone++; } });
+  keyFocus(pg, pg.node(0).find("toast-act"));
+  assert.strictEqual(pg.entries()[1].paused, "paused", "keyboard focus inside pauses");
+  pg.node(0).find("toast-act").onclick();
+  assert.strictEqual(undone, 1);
+  assert.deepStrictEqual(pg.entries().map((e) => [e.text, e.paused]), [["Saved", null]], "focus went with the toast");
+  t.mock.timers.tick(6000);
+  assert.deepStrictEqual(pg.entries(), [], "and its timer runs");
+});
+
+test("no blur on removal (Firefox, Safari): a keyboard × leaves the remaining toast timed", (t) => {
+  const pg = page(t, { blur: false });
+  pg.shell.showToast("Saved");
+  pg.shell.showToast("Copied");
+  keyFocus(pg, pg.node(0).find("toast-x"));
+  assert.strictEqual(pg.entries()[1].paused, "paused");
+  pg.node(0).find("toast-x").onclick();
+  assert.deepStrictEqual(pg.entries().map((e) => [e.text, e.paused]), [["Saved", null]]);
+  t.mock.timers.tick(6000);
+  assert.deepStrictEqual(pg.entries(), []);
+});
+
+test("no blur on removal: an error's keyboard × resumes the timed toasts under it", (t) => {
+  const pg = page(t, { blur: false });
+  pg.shell.showToast("Saved");
+  pg.shell.showToast("End failed: x", { error: true });
+  keyFocus(pg, pg.node(0).find("toast-x"));
+  pg.node(0).find("toast-x").onclick();
+  assert.deepStrictEqual(pg.entries().map((e) => [e.text, e.paused]), [["Saved", null]]);
+  t.mock.timers.tick(6000);
+  assert.deepStrictEqual(pg.entries(), []);
+});
+
 test("hover pauses every timer and labels the timed entries paused; leaving resumes the rest", (t) => {
   const pg = page(t);
   pg.shell.showToast("End failed: x", { error: true });
@@ -488,9 +534,11 @@ test("a page with no #toasts host keeps the slot at any width", (t) => {
 });
 
 // --- static wiring ------------------------------------------------------------------
-test("index.html: #toasts is a labelled region beside #toast; toaststack.js loads before shell.js", () => {
+test("index.html: #toasts is a labelled polite live region beside #toast; toaststack.js loads before shell.js", () => {
   const html = read("index.html");
-  const host = '<div id="toasts" role="region" aria-label="Notifications"></div>';
+  // aria-live on the host: a role=status entry inserted with its text already
+  // set is not announced by many screen readers; an addition to a live region is.
+  const host = '<div id="toasts" role="region" aria-label="Notifications" aria-live="polite"></div>';
   assert.ok(html.includes(host), "the stack host");
   const slotEnd = html.indexOf("</div>", html.indexOf('<div id="toast-bar"'));
   const between = html.slice(html.indexOf("</div>", slotEnd + 1) + 6, html.indexOf(host));

@@ -210,6 +210,16 @@ function toastSync() {
   if (toastHover || toastFocus) toastStack.pause(now);
   else toastStack.resume(now);
   renderToasts();
+  // The render may have removed the focused toast (its Undo or ×, by keyboard).
+  // Chrome fires focusout from inside remove(); Firefox and Safari fire nothing
+  // and just move focus to the body. So look again: focus that left with its
+  // toast ends the pause, and one more pass resumes and re-renders. That pass
+  // starts with toastFocus false, so it cannot come back here.
+  if (toastFocus && !(host && host.contains(document.activeElement))) {
+    toastFocus = false;
+    toastAgain = true;
+    return;
+  }
   clearTimeout(toastStackTimer);
   toastStackTimer = null;
   const at = toastStack.nextDeadline();
