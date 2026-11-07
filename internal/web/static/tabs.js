@@ -1201,9 +1201,13 @@ class Cell {
     this.el.classList.toggle("needs", !!model);
     // The page-local inputs the body reads beyond the session record (the same
     // list rowLocal feeds rowSig), so a flow moving on or the full text
-    // arriving repaints it. The active tab kind is deliberately absent.
+    // arriving repaints it. The active tab kind is deliberately absent. The
+    // replies switch is here as three states: stripKey reads it as on/not-on, but
+    // "not heard yet" (undefined) and "answered off" (false) draw differently (the
+    // replies-off line, F50), so a strip built before /api/meta answers must be
+    // drawn again when it says off.
     const local = model || done ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
-      pendingSends.has(s.id), ssoLocalSig(s.id), done].join("|") : "";
+      pendingSends.has(s.id), ssoLocalSig(s.id), done, globalThis.repliesEnabled === false].join("|") : "";
     const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local
       : done ? "n:" + s.id + "|" + local : "";
     if (key === this._needsKey) return;

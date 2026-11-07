@@ -6,7 +6,7 @@
 // keeps). app.js and tabs.js are classic scripts that cannot be required, so the
 // functions are cut out by name and run in vm against a small fake DOM (the repo
 // has no jsdom); the pure decisions are in attention.test.js.
-const test = require("node:test");
+const { test, afterEach } = require("node:test");
 const assert = require("node:assert");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -88,6 +88,12 @@ function clockFor() {
 
 const att = require("../static/attention.js");
 const peek = require("../static/peek.js");
+
+// page() sets the real global (attention.js and peek.js run in Node, not in the sandbox): put it back
+// after every test, so no test depends on the one before it.
+const HAD_REPLIES = Object.prototype.hasOwnProperty.call(globalThis, "repliesEnabled");
+const REPLIES_WAS = globalThis.repliesEnabled;
+afterEach(() => { if (HAD_REPLIES) globalThis.repliesEnabled = REPLIES_WAS; else delete globalThis.repliesEnabled; });
 
 // One page: the functions under test plus the page state and stand-ins they read.
 function page(over) {
@@ -536,4 +542,45 @@ test("syncStrip: with no need, the kept sign-in line is a strip of its own and g
   p.cell.syncStrip();
   assert.strictEqual(p.built.length, n + 1, "the line appearing moves the key");
   assert.ok(p.built[n].model, "and the need's strip carries it");
+});
+
+test("syncStrip: a strip built before /api/meta answers gains the replies-off line once it says off (F50)", () => {
+  const ASKING = { id: "s1", name: "s1", activity: "waiting", need: "ask", ask: "Bash(ls)", ask_full: "ls -la", claude: true, replyable: true };
+  const p = paneSync({ repliesEnabled: undefined });
+  p.box.lastSessions = [ASKING];
+  p.cell.syncStrip();
+  assert.strictEqual(p.built.length, 1, "built while the page has not heard from /api/meta");
+  p.cell.syncStrip();
+  assert.strictEqual(p.built.length, 1, "undefined, polled again: no rebuild");
+  // /api/meta answers "off": the strip must be drawn again so renderNeedsBody can add the line.
+  p.box.repliesEnabled = false;
+  p.cell.syncStrip();
+  assert.strictEqual(p.built.length, 2, "undefined -> false rebuilds the strip");
+  p.cell.syncStrip();
+  assert.strictEqual(p.built.length, 2, "and then it is stable");
+  // The other answer still rebuilds too (it did before).
+  p.box.repliesEnabled = true;
+  p.cell.syncStrip();
+  assert.strictEqual(p.built.length, 3);
+});
+
+test("syncStrip: a send in flight does not keep a strip whose need has cleared or whose session is gone", () => {
+  const p = paneSync();
+  p.box.lastSessions = [WAIT];
+  p.cell.syncStrip();
+  assert.ok(p.cell._strip);
+  // The send is out, and the agent starts working on it: no need, so nothing to hold.
+  p.box.pendingSends.add("s1");
+  p.box.lastSessions = [{ ...WAIT, activity: "working", need: "" }];
+  p.cell.syncStrip();
+  assert.strictEqual(p.cell._strip, null, "the need cleared: the strip goes even with the send unsettled");
+  // And a session that left the list takes it too.
+  p.box.pendingSends.delete("s1");
+  p.box.lastSessions = [WAIT];
+  p.cell.syncStrip();
+  assert.ok(p.cell._strip);
+  p.box.pendingSends.add("s1");
+  p.box.lastSessions = [];
+  p.cell.syncStrip();
+  assert.strictEqual(p.cell._strip, null, "the session is gone: the strip goes");
 });
