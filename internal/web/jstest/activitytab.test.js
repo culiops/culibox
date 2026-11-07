@@ -74,7 +74,7 @@ function page() {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["attribution.js", "activitymodel.js", "activitytab.js"]) {
+  for (const f of ["attribution.js", "duration.js", "activitymodel.js", "activitytab.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   return { box, doc, host: doc.createElement("div") };
