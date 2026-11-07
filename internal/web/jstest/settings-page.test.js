@@ -183,13 +183,13 @@ test("base app.css hides the Credentials drawer and its scrim; desktop.css shows
 });
 
 // Task 15 gate fix (R67/R68): the drawer's skin is the mockup's, scoped to #cred-drawer (the Credentials tab keeps its own rules).
-test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap, a two-column store card, a neutral region bar, the page's own primary text", () => {
+test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap, a two-column store card, a neutral region bar, the kit's primary", () => {
   const css = stripComments(DESK_CSS);
   const D = "#page-host > #settings-modal.as-page > #cred-drawer";
   const rule = (sel) => { const at = css.indexOf("\n  " + sel + " {"); assert.ok(at >= 0, "rule: " + sel); return css.slice(at, css.indexOf("}", at)); };
   assert.match(rule(D + " > #cred-drawer-head"), /padding: 18px 22px 16px; border-bottom: 1px solid var\(--line\)/);
   assert.match(rule(D + " > #cred-drawer-head:empty"), /display: none/);
-  assert.match(rule(D + " > #cred-drawer-head .crumb b"), /font-size: 15px; font-weight: 600; line-height: 22\.5px/);
+  assert.match(rule(D + " > #cred-drawer-head .crumb b"), /font-size: var\(--t-lg\); font-weight: 600; line-height: 22\.5px/);
   const body = rule(D + " > #cred-drawer-body");
   assert.match(body, /flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; padding: 20px 22px/);
   // The body's last section used to keep a 22px margin on top of the body's padding (a :last-child rule that lost to the one above it).
@@ -201,15 +201,18 @@ test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap,
   assert.doesNotMatch(seg, /--accent/);
   assert.match(rule(D + " > #cred-drawer-body .seg button.on"), /background: var\(--raise\); font-weight: 500; color: var\(--fg\)/);
   assert.match(rule(D + " > #cred-drawer-body .seg"), /display: flex;/);
-  // The primary button reads #0b1220 as the page's own block Save does.
-  assert.match(css, /#pfv \.pfv-btn-primary \{ background: var\(--accent\); color: #0b1220; \}/);
-  assert.match(rule(D + " > #cred-drawer-foot > .btn.pri"), /color: #0b1220/);
-  // Buttons and labels are 13px; the native boxes 14px.
-  assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: 13px/);
-  assert.match(rule(D + " > #cred-drawer-body .pf-check"), /font-size: 13px/);
+  // One primary look (F11, #171): the page's block Save is the kit's fill, text, 600 and hover, and the
+  // foot's Save is the kit's .btn.pri with no colour of its own.
+  // "Save as host…" (.pfv-btn-host) is excluded: it stays red on a clear button.
+  assert.match(css, /#pfv \.pfv-btn-primary:where\(:not\(\.pfv-btn-host\)\) \{ background: var\(--accent\); color: var\(--on-fill\); font-weight: 600; \}/);
+  assert.match(css, /#pfv \.pfv-btn-primary:where\(:not\(\.pfv-btn-host, :disabled\)\):hover \{ background: var\(--accent-hover\); \}/);
+  assert.ok(!css.includes("\n  " + D + " > #cred-drawer-foot > .btn.pri {"), "no foot rule restyles the primary");
+  // Buttons and labels are --t-md (13px); the native boxes 14px.
+  assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: var\(--t-md\)/);
+  assert.match(rule(D + " > #cred-drawer-body .pf-check"), /font-size: var\(--t-md\)/);
   assert.match(css, /#cred-drawer-body input\[type="checkbox"\], [^{]*input\[type="radio"\] \{ width: 14px; height: 14px;/);
-  // A refused Save is the foot's own line, 12px.
-  assert.match(rule(D + " > #cred-drawer-foot > .grow"), /font-size: 12px; line-height: 18px/);
+  // A refused Save is the foot's own line, --t-sm (12px).
+  assert.match(rule(D + " > #cred-drawer-foot > .grow"), /font-size: var\(--t-sm\); line-height: 18px/);
 });
 
 test("the page script is loaded after the read model and before app.js", () => {
@@ -238,10 +241,10 @@ test("the Settings nav is the mockup's: sentence-case muted 12px labels, 30px ro
   assert.match(nav, /background: var\(--bg\)/);
   assert.match(nav, /gap: 0/);
   const label = rule("#page-host > #settings-modal.as-page > #settings-tabs .pg-group");
-  assert.match(label, /font-size: 12px; font-weight: 600; color: var\(--muted\)/);
+  assert.match(label, /font-size: var\(--t-sm\); font-weight: 600; color: var\(--muted\)/);
   assert.ok(!/text-transform|letter-spacing/.test(label), "no uppercase, no tracking");
   assert.match(rule("#page-host > #settings-modal.as-page > #settings-tabs .t"), /height: 30px/);
-  assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /font-size: 15px/);
+  assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /font-size: var\(--t-lg\)/);
 });
 
 // Task 16: the old profile form is the phone's alone. Nothing in desktop.css may style it any more: the only rules that name

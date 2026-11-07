@@ -371,6 +371,20 @@ test("a narrow page paints cards, a wide page paints tables, from the same view"
   assert.strictEqual(wide.querySelectorAll(".cstrip").length, 1);
 });
 
+// F11 (#171): Close and secondary actions are never primary, and a primary is never restyled as a
+// secondary by CSS. In the tables the AWS section's add sits in the section header beside the
+// others' secondary adds, so the markup says secondary there; the cards keep it the primary.
+test("the AWS add is a secondary in the tables and the primary in the cards", () => {
+  const view = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
+  const add = (width) => {
+    const p = page({ width });
+    p.box.renderCredentials(view);
+    return p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Add AWS accounts");
+  };
+  assert.strictEqual(add(900).className, "btn", "tables");
+  assert.strictEqual(add(500).className, "btn pri", "cards");
+});
+
 test("a modal keeps its own amber strip", () => {
   const p = page({ asPage: false, width: 900 });
   p.box.renderCredentials({ store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [tok("sentry-prod")], values: [], legacy_secrets: [], invalid: [] });
@@ -1881,6 +1895,29 @@ test("framed token add: the crumb says Tokens, the intro is in the header, no tr
   assert.strictEqual(opts.host.textContent.includes("Paste the value to store."), false);
 });
 
+// F11 (#171): one primary per view. A host with its own foot (the profile page's drawer) has Save
+// there as the primary, so the store step's Create is a secondary in it; the tab (the phone's path
+// too) keeps Create primary.
+test("the store step's Create is a secondary beside a host's Save, the primary in the tab", async () => {
+  const noStore = { initialized: false, locked: false, platform: "linux", passphrase_mode: true };
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials" ? { ...base(path), store: noStore } : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.strictEqual(btnIn(opts.host, "Create the encrypted store").className, "btn", "token add in the drawer");
+  assert.strictEqual(btnIn(opts.foot, "Save").className, "btn pri", "the foot's Save is the view's primary");
+  const a = page({ tab: true });
+  const app = hostOpts();
+  a.box.reply = credReply({ store: { initialized: false, locked: false, platform: "darwin", passphrase_mode: false } });
+  await a.box.credAppForm(null, app.opts);
+  assert.strictEqual(btnIn(app.opts.host, "Create the encrypted store").className, "btn", "GitHub App add in a host");
+  const q = page({ tab: true });
+  q.box.reply = credReply({ store: noStore });
+  await q.box.credTokenAdd(null, "sentry");
+  assert.strictEqual(btnIn(q.byId["creds-body"], "Create the encrypted store").className, "btn pri", "the tab");
+});
+
 test("framed token add with no store: the card opens with the lead, and Save's refusal is the same sentence in the foot", async () => {
   const p = page({ tab: true });
   const { opts } = framedOpts();
@@ -1992,4 +2029,17 @@ test("the Credentials tab still renders the old DOM: ' / ' crumb, the error unde
   assert.deepStrictEqual(opts.host.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"]);
   assert.strictEqual(opts.host.lastChild.className, "ent-err");
   assert.ok(opts.host.querySelector("p.honest"));
+});
+
+// Fix wave (#171, VERIFY-A section 7): a host that does not fit its column broke inside a label
+// ("artifactory.acme.example.co" / "m"). The mono sub-line puts a <wbr> after each dot, so where it
+// must wrap it wraps after a dot; its text, what is read and copied, is unchanged.
+test("a host sub-line breaks after a dot, never inside a label", () => {
+  const p = page({ width: 900 });
+  const table = p.box.credTable(group([tok("artifactory", { hosts: ["artifactory.acme.example.com", "cdn.example.io"] })]));
+  const sub = table.querySelectorAll(".c-sub")[0];
+  assert.ok(sub.classList.contains("mono"));
+  assert.strictEqual(sub.textContent, "artifactory.acme.example.com, cdn.example.io");
+  const kinds = sub.children.map((c) => (c instanceof Node ? c.tag : JSON.stringify(c.textContent)));
+  assert.deepStrictEqual(kinds, ['"artifactory."', "wbr", '"acme."', "wbr", '"example."', "wbr", '"com, cdn."', "wbr", '"example."', "wbr", '"io"']);
 });

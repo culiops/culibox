@@ -85,3 +85,17 @@ func TestLogout_ClearsCookie(t *testing.T) {
 		t.Fatal("logout did not expire the cookie")
 	}
 }
+
+// Logging out is not an expiry: it lands on the plain login page, with no reason.
+func TestLogout_RedirectsToPlainLogin(t *testing.T) {
+	s := loginServer(t)
+	iw := httptest.NewRecorder()
+	s.Session.Issue(iw, false)
+	r := postForm("/logout", url.Values{})
+	r.AddCookie(iw.Result().Cookies()[0])
+	w := httptest.NewRecorder()
+	s.handleLogout(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+		t.Fatalf("code=%d loc=%q want 303 /login", w.Code, w.Header().Get("Location"))
+	}
+}

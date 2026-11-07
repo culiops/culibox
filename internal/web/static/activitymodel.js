@@ -47,12 +47,9 @@ function actDur(ms) {
   return Math.floor(s / 60) + "m " + (s % 60) + "s";
 }
 
-// actAge: how long something has been going, from whole seconds.
+// actAge: how long something has been going, from whole seconds (duration.js).
 function actAge(sec) {
-  const s = Math.max(0, Math.floor(sec));
-  if (s < 60) return s + "s";
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+  return (typeof fmtDuration === "function" ? fmtDuration : require("./duration.js").fmtDuration)(sec);
 }
 
 // actDelta: "+a −d". The minus is U+2212, as in the mockup.
@@ -317,6 +314,6 @@ function actLoadDone(prev, reply, nowMs) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     activityModel, ACTIVITY_FILTERS, filterKind, outcomeText, actTime, actReadReply, actLoadDone,
-    actSlide, actOldest, actContext, actDelta, actRowKey, actToolRows,
+    actSlide, actOldest, actContext, actDelta, actRowKey, actToolRows, actAge,
   };
 }

@@ -70,14 +70,10 @@ function startedText(created, nowMs) {
   const clock = String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
   // A clock a few seconds behind the daemon must read "just now", never
   // "-1m ago": the skew is ours, and the reader cannot act on it either way.
-  let s = Math.floor(((nowMs || 0) - t) / 1000);
+  const s = Math.floor(((nowMs || 0) - t) / 1000);
   if (s < 60) return clock + " · just now";
-  const d = Math.floor(s / 86400); s -= d * 86400;
-  const h = Math.floor(s / 3600); s -= h * 3600;
-  const m = Math.floor(s / 60);
-  if (d) return clock + " · " + d + "d " + h + "h ago";
-  if (h) return clock + " · " + h + "h " + m + "m ago";
-  return clock + " · " + m + "m ago";
+  const fmt = typeof fmtDuration === "function" ? fmtDuration : require("./duration.js").fmtDuration;
+  return clock + " · " + fmt(s) + " ago";
 }
 
 // railMeta: the header and the four-row block. cwdText is passed in already

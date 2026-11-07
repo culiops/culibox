@@ -23,6 +23,13 @@ import (
 // sliding re-issue, keeping an active user logged in indefinitely.
 const refreshAfter = 24 * time.Hour
 
+// expiredGrace is how long past its signed expiry the browser keeps the session
+// cookie. The dead cookie gains no authority (Verify rejects anything at or past
+// the signed exp); it only lets the server tell a login that expired from a first
+// visit, so the login page can say so. 30 days matches the session TTL set in
+// cmd/agent-box; nothing in the code asks for another value.
+const expiredGrace = 30 * 24 * time.Hour
+
 // Session issues and verifies the signed session cookie.
 type Session struct {
 	secret []byte
@@ -32,7 +39,14 @@ type Session struct {
 
 // NewSession returns a Session signing with secret and expiring after ttl.
 func NewSession(secret []byte, ttl time.Duration) *Session {
-	return &Session{secret: secret, ttl: ttl, now: time.Now}
+	return NewSessionWithClock(secret, ttl, time.Now)
+}
+
+// NewSessionWithClock is NewSession reading the time from now: for a test that has
+// to issue a cookie, let it expire and present it again (the web package's guard
+// tests cannot reach the unexported clock).
+func NewSessionWithClock(secret []byte, ttl time.Duration, now func() time.Time) *Session {
+	return &Session{secret: secret, ttl: ttl, now: now}
 }
 
 func (s *Session) sign(exp int64) string {
@@ -56,7 +70,9 @@ func (s *Session) Issue(w http.ResponseWriter, secure bool) {
 		// Lax still withholds the cookie from cross-site POST, and the same-origin
 		// CSRF guard is the real state-change defense regardless.
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(exp, 0),
+		// The browser keeps the cookie expiredGrace past the signed exp (see there):
+		// the signature, not this attribute, is what Verify trusts.
+		Expires: time.Unix(exp, 0).Add(expiredGrace),
 	})
 }
 

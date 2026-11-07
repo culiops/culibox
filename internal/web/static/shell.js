@@ -6,9 +6,11 @@
 // only DEFINES functions; boot wiring happens from app.js.
 
 // --- toast -------------------------------------------------------------------
-// One slot, one message. A second toast replaces the first rather than stacking:
-// the messages here are transient confirmations, and a stack of them over a
-// terminal is noise.
+// One call, showToast(msg, opts), and two homes, picked at each call by
+// toastStacked(). Above 700px the toasts are a stack (F60 F61), rendered from
+// toaststack.js's model further down. The phone keeps its one slot (#toast): a
+// second toast replaces the first, which on a small screen beats a pile of
+// them over the terminal. The slot code is today's, byte for byte, plus its role.
 let toastTimer = null;
 // Bumped by every showToast call. A delayed writer (pendingToast) records it
 // when it starts and stays silent if it moved: someone else owns the slot now.
@@ -41,16 +43,35 @@ function placeToast(box) {
   if (px !== null) box.style.bottom = px + "px";
 }
 
-// showToast(msg, {undo, ms, error, warn, sticky}): `sticky` skips the auto-hide
-// timer (a pending toast stays until its owner hides it). `undo` is a callback;
-// supplying it reveals the Undo button and clicking it dismisses the toast after
-// running the callback. `warn` tints the border (a milder `error`).
+// showToast(msg, opts) -> handle. opts:
+//   error, warn   the tint (error wins). An error is role=alert, the rest role=status (F62).
+//   undo          a callback: reveals Undo, which dismisses the toast, then runs it
+//   ms            the auto-hide delay (6000)
+//   sticky        no auto-hide: a pending toast, which its owner resolves or hides
+//   progress      a number 0..1 reveals the progress rail
+//   human         desktop only: the sentence shown instead of msg (F64)
+//   detail        desktop only: an error's raw text, behind "Copy details" (F64)
+//   replace       desktop only: a listed toast's handle to update in place
+//   desktopOnly   the phone shows nothing (returns null)
+// The handle is the stack entry's id above 700px and the slot's sequence number
+// on the phone; dismissToast and resolveToast take it.
 function showToast(msg, opts) {
-  toastSeq++;
   opts = opts || {};
+  if (toastStacked()) return stackToast(msg, opts);
+  if (opts.desktopOnly) return null;
+  toastSeq++;
   const box = document.getElementById("toast");
   const undoBtn = document.getElementById("toast-undo");
-  if (!box) return;
+  if (!box) return toastSeq;
+  // The slot is one element for every kind, so the role follows the message.
+  // index.html makes it polite-live from load (a region that turns live with its
+  // first content is often not announced); that explicit aria-live would override
+  // role=alert's implicit assertive, so it follows the message too.
+  // (Test fakes of the slot carry no setAttribute: pending.test.js, mobileshell.test.js.)
+  if (typeof box.setAttribute === "function") {
+    box.setAttribute("role", opts.error ? "alert" : "status");
+    box.setAttribute("aria-live", opts.error ? "assertive" : "polite");
+  }
   document.getElementById("toast-msg").textContent = msg;
   box.classList.toggle("err", !!opts.error);
   box.classList.toggle("warn", !!opts.warn && !opts.error);
@@ -76,12 +97,271 @@ function showToast(msg, opts) {
   box.classList.add("show");
   clearTimeout(toastTimer);
   if (!opts.sticky) toastTimer = setTimeout(hideToast, opts.ms || 6000);
+  return toastSeq;
 }
 
 function hideToast() {
   clearTimeout(toastTimer);
   const box = document.getElementById("toast");
   if (box) box.classList.remove("show");
+}
+
+// dismissToast(handle): takes one toast away. A stack entry by its id (on any
+// width: a pending entry shown before the window narrowed must not linger in the
+// hidden stack); the phone slot only while it still shows that toast.
+function dismissToast(handle) {
+  if (toastStack && toastStack.remove(handle)) toastChanged();
+  if (!toastStacked() && handle === toastSeq) hideToast();
+}
+
+// resolveToast(handle, msg, opts) -> handle: a toast (a pending one) becomes its
+// result. On the desktop in place, keeping its spot in the stack; when the entry
+// is gone (evicted) the result is pushed as a new toast. On the phone the result
+// takes the slot (and a stack entry from before the window narrowed is dropped).
+function resolveToast(handle, msg, opts) {
+  opts = opts || {};
+  if (toastStacked()) return showToast(msg, Object.assign({}, opts, { replace: handle }));
+  if (toastStack && toastStack.remove(handle)) toastChanged();
+  return showToast(msg, opts);
+}
+
+// toastStacked: whether toasts go to the desktop stack, read at each call so a
+// window dragged across 700px sends the next toast to the right home. A page
+// without the #toasts host keeps the slot at any width.
+function toastStacked() {
+  if (!document.getElementById("toasts")) return false;
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
+// --- toast stack (desktop: F60 F61 F62 F64) -----------------------------------
+// toaststack.js owns the rules (cap 3, what is evicted, dedupe, pause); this
+// renders its list() into #toasts and keeps ONE timer armed at nextDeadline(),
+// re-armed after every change. Hover, or keyboard focus, inside the stack
+// pauses every timer. Nodes are kept per entry id and patched, so a progress
+// tick or the "paused" label never rebuilds a toast under the pointer.
+let toastStack = null;
+let toastStackTimer = null;
+const toastUndos = new Map(); // entry id -> the caller's Undo callback
+const toastNodes = new Map(); // entry id -> { node, shape }
+let toastHover = false;
+let toastFocus = false;
+let toastBusy = false; // toastChanged is running
+let toastAgain = false; // ...and something changed meanwhile
+
+// toastView(entry): what one stack entry looks like. Pure. An error is the only
+// role=alert; a pending entry has the spinner (and no ×, as drawn in M8.5); the
+// one action is Undo, else "Copy details" on an error that has raw text.
+function toastView(entry) {
+  const kind = entry.kind;
+  const cls = ["toast"];
+  if (kind === "error") cls.push("is-error");
+  else if (kind === "warn") cls.push("is-warn");
+  return {
+    role: kind === "error" ? "alert" : "status",
+    cls: cls,
+    dot: kind === "error" ? "crashed" : kind === "warn" ? "needs" : null,
+    spin: kind === "pending",
+    action: entry.undo ? "undo" : kind === "error" && entry.detail ? "copy" : null,
+  };
+}
+
+// showToast's opts as a model spec. `sticky` is the pending kind: it stays until
+// its owner resolves it, which is exactly what a sticky toast was for.
+function toastSpec(msg, opts) {
+  return {
+    text: opts.human || msg,
+    kind: opts.error ? "error" : opts.sticky ? "pending" : opts.warn ? "warn" : "info",
+    ms: opts.ms,
+    undo: !!opts.undo,
+    detail: opts.detail,
+    progress: opts.progress,
+  };
+}
+
+function stackToast(msg, opts) {
+  if (!toastStack) toastStack = createToastStack({ max: 3, ms: 6000 });
+  const now = Date.now();
+  const spec = toastSpec(msg, opts);
+  const id = opts.replace != null && toastStack.update(opts.replace, spec, now) ? opts.replace : toastStack.push(spec, now);
+  if (opts.undo) toastUndos.set(id, opts.undo);
+  else toastUndos.delete(id);
+  toastChanged();
+  return id;
+}
+
+// toastChanged: after anything that changes the stack or the pause. Removing the
+// toast under the pointer (its ×, its Undo) fires no mouseleave, so an empty list
+// ends the hover, and focus counts only while it is still inside the stack.
+//
+// Removing a toast that holds focus makes the browser fire focusout from inside
+// node.remove(), before the node is detached; the handler lands back here. A
+// nested render would detach that same node and the outer remove() would throw
+// (NotFoundError), so a call made while one runs only asks for another pass.
+function toastChanged() {
+  if (!toastStack) return;
+  if (toastBusy) { toastAgain = true; return; }
+  toastBusy = true;
+  try {
+    do { toastAgain = false; toastSync(); } while (toastAgain);
+  } finally {
+    toastBusy = false;
+  }
+}
+
+function toastSync() {
+  const host = toastHost();
+  if (toastStack.list().length === 0) toastHover = false;
+  if (toastFocus && !(host && host.contains(document.activeElement))) toastFocus = false;
+  const now = Date.now();
+  if (toastHover || toastFocus) toastStack.pause(now);
+  else toastStack.resume(now);
+  renderToasts();
+  // The render may have removed the focused toast (its Undo or ×, by keyboard).
+  // Chrome fires focusout from inside remove(); Firefox and Safari fire nothing
+  // and just move focus to the body. So look again: focus that left with its
+  // toast ends the pause, and one more pass resumes and re-renders. That pass
+  // starts with toastFocus false, so it cannot come back here.
+  if (toastFocus && !(host && host.contains(document.activeElement))) {
+    toastFocus = false;
+    toastAgain = true;
+    return;
+  }
+  clearTimeout(toastStackTimer);
+  toastStackTimer = null;
+  const at = toastStack.nextDeadline();
+  if (at === null) return;
+  toastStackTimer = setTimeout(() => {
+    toastStackTimer = null;
+    toastStack.expire(Date.now());
+    toastChanged();
+  }, Math.max(0, at - now));
+}
+
+// toastHost: #toasts, with its pause listeners wired on first use. mouseenter and
+// mouseleave fire on the container for its toasts (the container itself takes no
+// pointer). The document's mouseover catches the pointer leaving after the toast
+// under it was removed, which fires no mouseleave. A click focuses a button
+// without :focus-visible; only keyboard focus pauses, or clicking "Copy details"
+// would hold every timer until focus moved elsewhere.
+function toastHost() {
+  const host = document.getElementById("toasts");
+  if (!host || host.__toastWired) return host;
+  host.__toastWired = true;
+  const hover = (on) => { if (toastHover !== on) { toastHover = on; toastChanged(); } };
+  host.addEventListener("mouseenter", () => hover(true));
+  host.addEventListener("mouseleave", () => hover(false));
+  document.addEventListener("mouseover", (e) => { if (toastHover && !host.contains(e.target)) hover(false); });
+  host.addEventListener("focusin", (e) => {
+    toastFocus = !!(e.target && e.target.matches && e.target.matches(":focus-visible"));
+    toastChanged();
+  });
+  host.addEventListener("focusout", (e) => {
+    if (host.contains(e.relatedTarget)) return;
+    toastFocus = false;
+    toastChanged();
+  });
+  return host;
+}
+
+// renderToasts: list() into #toasts, newest first, diffed by id. A node is rebuilt
+// only when its shape changes (pending -> result, a meter coming or going); the
+// text, the "paused" label and the meter width are patched in place.
+function renderToasts() {
+  const host = toastHost();
+  if (!host || !toastStack) return;
+  const list = toastStack.list();
+  const paused = toastStack.paused;
+  const live = new Set(list.map((e) => e.id));
+  for (const [id, rec] of toastNodes) {
+    if (live.has(id)) continue;
+    toastNodes.delete(id);
+    rec.node.remove();
+  }
+  for (const id of toastUndos.keys()) if (!live.has(id)) toastUndos.delete(id);
+  let prev = null;
+  for (const e of list) {
+    const v = toastView(e);
+    const shape = [v.cls.join(" "), v.role, v.dot, v.spin, v.action, e.kind, e.progress !== null].join("|");
+    let rec = toastNodes.get(e.id);
+    if (!rec || rec.shape !== shape) {
+      const node = toastBuild(e, v);
+      if (rec) rec.node.replaceWith(node);
+      rec = { node: node, shape: shape };
+      toastNodes.set(e.id, rec);
+    }
+    toastPatch(rec.node, e, paused);
+    const at = prev ? prev.nextSibling : host.firstChild;
+    if (at !== rec.node) host.insertBefore(rec.node, at);
+    prev = rec.node;
+  }
+}
+
+function toastEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// toastBuild: one entry's markup, in the kit's classes (M7.5, M8.5). Text only
+// ever goes in through textContent.
+function toastBuild(e, v) {
+  const node = toastEl("div", v.cls.join(" "));
+  node.setAttribute("role", v.role);
+  node.dataset.id = String(e.id);
+  const parts = {};
+  if (v.dot) node.appendChild(toastEl("span", "dot dot-" + v.dot)).setAttribute("aria-hidden", "true");
+  if (v.spin) node.appendChild(toastEl("span", "spin")).setAttribute("aria-hidden", "true");
+  parts.text = node.appendChild(toastEl("span", "toast-text"));
+  if (v.action) {
+    const b = toastEl("button", "btn btn-ghost btn-sm toast-act", v.action === "undo" ? "Undo" : "Copy details");
+    b.type = "button";
+    b.dataset.act = v.action;
+    b.onclick = v.action === "undo" ? () => toastUndoClick(e.id) : () => toastCopyClick(e.id, b);
+    node.appendChild(b);
+  }
+  if (e.kind !== "pending") {
+    const x = toastEl("button", "btn btn-ghost btn-icon btn-sm toast-x", "×");
+    x.type = "button";
+    x.title = "Dismiss";
+    x.setAttribute("aria-label", "Dismiss");
+    x.onclick = () => dismissToast(e.id);
+    node.appendChild(x);
+  }
+  // The meter takes its own full-width row under the text (desktop.css).
+  if (e.progress !== null) parts.bar = node.appendChild(toastEl("div", "meter")).appendChild(document.createElement("i"));
+  node._toast = parts;
+  return node;
+}
+
+// toastPatch: what changes without a rebuild. "paused" shows on the entries that
+// have a timer to pause (info, warn) while the stack is paused (M8.5).
+function toastPatch(node, e, paused) {
+  const parts = node._toast;
+  if (parts.text.textContent !== e.text) parts.text.textContent = e.text;
+  const want = paused && (e.kind === "info" || e.kind === "warn");
+  if (want && !parts.paused) parts.paused = node.insertBefore(toastEl("span", "toast-paused", "paused"), parts.text.nextSibling);
+  else if (!want && parts.paused) { parts.paused.remove(); parts.paused = null; }
+  if (parts.bar) parts.bar.style.width = e.progress * 100 + "%";
+}
+
+// Undo: the toast goes first, then the callback runs (the slot's order).
+function toastUndoClick(id) {
+  const fn = toastUndos.get(id);
+  dismissToast(id);
+  if (fn) fn();
+}
+
+// Copy details: the entry's raw text to the clipboard (app.js copyText), and the
+// label says how that went for 1.5 s.
+function toastCopyClick(id, btn) {
+  const e = toastStack && toastStack.list().find((x) => x.id === id);
+  if (!e || typeof copyText !== "function") return;
+  copyText(e.detail, (ok) => {
+    btn.textContent = ok ? "Copied" : "Copy failed";
+    clearTimeout(btn._toastReset);
+    btn._toastReset = setTimeout(() => { btn.textContent = "Copy details"; }, 1500);
+  });
 }
 
 // --- dialogs -----------------------------------------------------------------
@@ -621,6 +901,10 @@ if (typeof module !== "undefined" && module.exports) {
     showToast,
     hideToast,
     toastSeqNow,
+    dismissToast,
+    resolveToast,
+    toastStacked,
+    toastView,
     askOutcome,
     askAltVisible,
     matchesRequired,

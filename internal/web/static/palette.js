@@ -117,7 +117,10 @@ async function runItem(item) {
   if (!item) return;
   closePalette();
   try { await Promise.resolve(item.run()); }
-  catch (e) { showToast("Failed: " + e.message, { error: true }); }
+  catch (e) {
+    const f = toastFailText(item.label ? 'run "' + item.label + '"' : "run that command", e);
+    showToast("Failed: " + e.message, { error: true, human: f.text, detail: f.detail });
+  }
 }
 
 // palSessionRun: what picking a session row does. A shell nested under its

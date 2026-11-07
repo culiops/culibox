@@ -157,3 +157,39 @@ test("acctCanToken: claude only", () => {
   assert.equal(acctCanToken({ provider: "codex" }), false);
   assert.equal(acctCanToken(null), false);
 });
+
+// F11 (#171, review M2): one primary per view. "Save token" sits on every account row that has no
+// token yet, so as a primary it gave N+1 filled buttons beside the footer's Done on the desktop
+// Settings page. There it is a row action, a secondary; the modal (the phone) keeps the markup it had.
+// accounts.js runs in a vm against a minimal fake DOM (the repo has no jsdom).
+const vm = require("node:vm");
+const fs = require("node:fs");
+const path = require("node:path");
+function acctPage(asPage) {
+  class El {
+    constructor(tag) {
+      this.tag = tag; this.children = []; this.className = ""; this.attrs = {}; this.textContent = "";
+      const self = this;
+      this.classList = { contains: (c) => self.className.split(/\s+/).includes(c) };
+    }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    appendChild(c) { this.children.push(c); return c; }
+    append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  }
+  const modal = new El("dialog");
+  modal.className = asPage ? "as-page" : "";
+  const document = {
+    readyState: "loading", addEventListener() {},
+    createElement: (t) => new El(t),
+    getElementById: (id) => (id === "settings-modal" ? modal : null),
+  };
+  const ctx = vm.createContext({ document, storeState: { initialized: true, locked: false } });
+  new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "accounts.js"), "utf8"), { filename: "accounts.js" }).runInContext(ctx);
+  return ctx;
+}
+const saveBtn = (ctx) => ctx.acctTokenBox({ name: "work", provider: "claude" }, false).children.find((c) => c.textContent === "Save token");
+
+test("Save token is a secondary on the desktop Settings page and the primary in the modal", () => {
+  assert.strictEqual(saveBtn(acctPage(true)).className, "btn", "page: a row action");
+  assert.strictEqual(saveBtn(acctPage(false)).className, "btn pri", "modal (the phone): as before");
+});

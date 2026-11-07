@@ -189,14 +189,33 @@ const headerRule = (has) => containerRules().find((r) => has.test(r.body));
 
 test("the pane header's container thresholds are ordered and above the widths where each look fits", () => {
   const compact = headerRule(/\.ph-sep\s*\{/);
-  const icons = headerRule(/\.ph-lbl\s*\{/);
+  const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
   const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
   const floor = headerRule(/^\s*\.ph-shell\s*\{/);
   assert.ok(compact && icons && collapse && floor, "the compact, icon, collapse and + Shell floor rules each exist");
   assert.ok(floor.px < collapse.px && collapse.px < icons.px && icons.px < compact.px, "floor < collapse < icons < compact");
   assert.ok(collapse.px >= 310, "icons need 310 px of content box: never shown in less");
-  assert.ok(icons.px >= 420, "text tabs need 420 px of content box: never shown in less");
-  assert.ok(compact.px >= 548, "the hover icons clip the wide look up to a 568 px pane (548 content)");
+  // Measured with the 13px tabs (#171 F06; VERIFY-A section 4c, re-run in the fix wave): the compact text tabs
+  // clip Terminal below a 443 px pane (423 content); the wide look with the pointer on the header clips it up
+  // to a 575 px pane (555 content).
+  assert.ok(icons.px >= 423, "text tabs need 423 px of content box: never shown in less");
+  assert.ok(compact.px >= 556, "the hover icons clip the wide look up to a 575 px pane (555 content)");
+});
+
+// A maximized pane keeps ⛶ pinned in the flow beside ⋯ (26 px), so its compact text tabs need 26 px more
+// than a plain pane's: measured, Terminal clips up to a 468 px pane (448 content). Below its own floor a
+// maximized pane draws the icons; a plain pane keeps its words down to the icon rule.
+test("a maximized pane switches to icons at its own, wider floor", () => {
+  const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
+  const compact = headerRule(/\.ph-sep\s*\{/);
+  const maxed = headerRule(/\.cell-bar:has\(\.ph-max\.pin\) \.ph-lbl\s*\{/);
+  assert.ok(maxed, "a container rule for the maximized pane's labels");
+  assert.ok(maxed.px >= 449, "a maximized pane's text tabs need 449 px of content box");
+  assert.ok(icons.px < maxed.px && maxed.px < compact.px, "icons < maximized icons < compact");
+  assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-lbl \{ display: none; \}/);
+  assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-ico \{ display: block; \}/);
+  assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-tab \{ padding: 5px; \}/);
+  assert.ok(!/ph-shell/.test(maxed.body), "+ Shell stays: the icons leave it room down to the icon rule");
 });
 
 // The founder chose "dot, name, chip, + and ⋯" for a 250-338 px pane: only the
@@ -247,7 +266,7 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
 });
 
 test("below the icon threshold every tab shows its icon and hides its label", () => {
-  const icons = headerRule(/\.ph-lbl\s*\{/);
+  const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
   assert.ok(/\.ph-lbl\s*\{[^}]*display:\s*none/.test(icons.body), "label hidden");
   assert.ok(/\.ph-ico\s*\{[^}]*display:\s*block/.test(icons.body), "icon shown");
   assert.ok(/\.ph-tab\s*\{[^}]*padding:\s*5px\s*[;}]/.test(icons.body), "5 px all round: a 24 px square like the other header icons");
@@ -264,6 +283,25 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // its column open past the section's box (overflow: hidden): a 30-character name cut
 // Delete off at 1240 px, a 60-character one scrolled the whole page. The name wraps like
 // the GitHub and token tables' (hyphens first, mid-word only past the column).
+// The token and GitHub tables (table-layout: fixed, shares of the width). Measured on the seeded page (Task 10a, fix
+// wave): the tables are 922 px wide at a 1440 window and 762 px at 1280, a cell's padding is 32 px. The Env column's
+// 12px host (F06) needs 203 px for artifactory.acme.example.com (25% gave it 199 at 1440: "...example.co" / "m"); the
+// Status column keeps its longest word ("environment", 77 px) whole at 1280.
+test("the token tables give the 12px host one line at 1440 and keep Status's words whole at 1280", () => {
+  const share = (n) => {
+    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(' + n + ")").join(" ");
+    const m = /width:\s*([\d.]+)%/.exec(r);
+    assert.ok(m, "column " + n + " has a share");
+    return +m[1];
+  };
+  const [token, env, status, actions] = [share(1), share(2), share(3), share(5)];
+  assert.ok(env / 100 * 922 - 32 >= 203, "Env holds artifactory.acme.example.com at 1440: " + env + "%");
+  assert.ok(status / 100 * 762 - 32 >= 77, "Status holds \"environment\" at 1280: " + status + "%");
+  assert.strictEqual(token, 20, "Token keeps its share: less wraps the token names (measured: +54 px of rows at 1440)");
+  assert.strictEqual(actions, 16, "Actions keeps its share: Edit and Delete");
+  assert.ok(100 - token - env - status - actions >= 23, "Used by keeps its share within half a point");
+});
+
 test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {
   assert.ok(!/\[data-group="aws"\][^{}]*\.c-nm[^{}]*\{[^}]*white-space:\s*nowrap/.test(block), "no nowrap on the AWS name");
   assert.ok(rulesFor(CREDS + " .ctab .c-nm").some((b) => /display:\s*inline-block/.test(b) && /max-width:\s*100%/.test(b)), "the name still sizes to its box");
