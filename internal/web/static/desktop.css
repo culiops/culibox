@@ -517,7 +517,8 @@
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
   }
   .pbtn:hover { background: var(--accent-hover); }
-  /* New session is the kit's .btn at its default 28px (--h-ctl), the full width of the sidebar's 16px padding (m1-1). */
+  /* New session is the sidebar's own .pbtn, sized like the kit's .btn: 28px high (--h-ctl), the full width of
+     the sidebar's 16px padding (m1-1). */
   #side-new { height: var(--h-ctl); padding: 0 12px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
@@ -1136,7 +1137,9 @@
   .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; }
   /* A primary here (the SSO strip's Sign in) and Yes (the kit's amber .btn-yes, the one amber-filled button
      in the product: amber = needs-you only) are kit primitives: the strip's secondary fill, border and hover
-     skip them. :where(...) leaves each rule's weight as it was. Yes, No and Open terminal are all .btn-sm. */
+     skip them. :where(...) leaves each rule's weight as it was. Every button the strip builds (Yes, No, Open
+     terminal, Enable / Disallow replies, the sign-in's Sign in and Copy host command) is .btn-sm; the padding
+     and radius override is for a .btn that is not. */
   .needstrip .nacts .btn:where(:not(.btn-sm)) { padding: 3px 10px; border-radius: var(--r-ctl); }
   .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)) { background: var(--raise); border: 1px solid var(--line); }
   .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)):hover { background: var(--background3); }

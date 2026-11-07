@@ -154,11 +154,12 @@ function rowSubline(s, opts) {
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
     const text = deskDep("cardContent")(s, { plain: true }).text;
-    // An ask reads as the frames draw it: "Asks to run" and the tool call after it (the command alone for
-    // Bash), the call in mono (machine text). needLabel keeps its "asks" word, which the phone card shares.
-    if (why === "asks") {
+    // An ask that is a tool call reads as the frames draw it: "Asks to run" and the call after it (the
+    // command alone for Bash), the call in mono (machine text). needLabel keeps its "asks" word, which the
+    // phone card shares. An ask with no tool call (s.ask empty: the text is the agent's own words or the
+    // waiting line) keeps the plain "asks: <text>" below: it does not claim anything is about to run.
+    if (why === "asks" && s.ask) {
       const lead = "Asks to run ";
-      if (!s.ask) return { text: lead + text, amber: true };
       const mono = bashCommand(s.ask) || text;
       return { text: lead + mono, amber: true, lead, mono };
     }

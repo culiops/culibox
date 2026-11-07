@@ -2519,14 +2519,15 @@ function renderNeedsBody(s, opts) {
   // just read for the agent's message. Any other card shows the full message in
   // place of its one-line summary.
   const askStrip = inStrip && c.ask;
+  const bash = askStrip ? bashCommand(s.ask) : null;
   const cached = expanded ? cardPeekCache.get(s.id) : undefined;
   if (expanded && !askStrip) {
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
-  } else if (askStrip && bashCommand(s.ask) !== null) {
+  } else if (bash !== null) {
     // "Asks to run" is the label's, so a Bash call is its command alone (frame m1-1); every other tool
     // keeps Tool(args). The expanded strip keeps this line too (F51), and the full command is below it.
-    txt.textContent = bashCommand(s.ask);
+    txt.textContent = bash;
   } else {
     txt.textContent = c.text;
   }
@@ -3081,7 +3082,9 @@ function renderSSOBody(s, opts) {
   acts.className = "nacts";
   const signIn = document.createElement("button");
   signIn.type = "button";
-  signIn.className = "btn pri";
+  // In the strip every button is the kit's 24px .btn-sm, Open terminal's size (renderNeedsBody does the same).
+  const sm = inStrip ? " btn-sm" : "";
+  signIn.className = "btn pri" + sm;
   signIn.textContent = waiting ? "Waiting for sign-in…" : l && l.state === "failed" ? "Try again" : "Sign in";
   signIn.disabled = waiting || ssoStarting.has(s.id);
   signIn.classList.toggle("off", signIn.disabled);
@@ -3090,7 +3093,7 @@ function renderSSOBody(s, opts) {
 
   const copy = document.createElement("button");
   copy.type = "button";
-  copy.className = "btn";
+  copy.className = "btn" + sm;
   copy.textContent = "Copy host command";
   copy.disabled = !m.command;
   copy.classList.toggle("off", copy.disabled);

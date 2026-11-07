@@ -852,12 +852,14 @@ test("rowSubline: another tool reads Asks to run Tool(args), also mono; an empty
   assert.equal(d.rowSubline({ activity: "waiting", need: "ask", ask: "WebFetch" }).text, "Asks to run WebFetch");
 });
 
-test("rowSubline: an ask with no tool call text keeps the agent's words, not mono", () => {
+test("rowSubline: an ask with no tool call keeps the previous row text, 'asks: <text>', no claim that anything runs", () => {
   const r = d.rowSubline({ activity: "waiting", need: "ask", summary: "Needs a go-ahead **now**" });
-  assert.equal(r.amber, true);
-  assert.equal(r.text, "Asks to run Needs a go-ahead now");
-  assert.equal(r.mono, undefined, "only a tool call is machine text");
-  assert.equal(r.lead, undefined);
+  assert.deepEqual(r, { text: "asks: Needs a go-ahead now", amber: true });
+  // Nothing to say at all: the waiting line, as before.
+  assert.deepEqual(d.rowSubline({ activity: "waiting", need: "ask" }), { text: "asks: Waiting on a prompt in the terminal.", amber: true });
+  assert.deepEqual(d.rowSubline({ activity: "waiting", need: "ask", ask: "" }), { text: "asks: Waiting on a prompt in the terminal.", amber: true });
+  // A tool call (even a bare tool name) is what "Asks to run" is for.
+  assert.equal(d.rowSubline({ activity: "waiting", need: "ask", ask: "WebFetch" }).lead, "Asks to run ");
 });
 
 test("rowSubline: the other needs and every non-ask line keep their shape", () => {

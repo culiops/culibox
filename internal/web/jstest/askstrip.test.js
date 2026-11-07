@@ -232,6 +232,29 @@ test("task 9b: every button of the strip is the kit's 24px .btn-sm, Yes also the
   assert.ok(en.cls.has("btn-sm"), "Enable replies");
 });
 
+test("task 9b: the sign-in strip's buttons are .btn-sm too, Sign in still the primary", () => {
+  const app = read("app.js");
+  const sso = (opts) => {
+    const box = {
+      document: { createElement: (t) => new Node(t), createTextNode: (t) => Object.assign(new Node("#text"), { own: t }) },
+      ensureSSOStatus: () => {}, ssoModel: () => ({ text: "AWS sign-in expired", login: null, command: "aws sso login --profile x" }),
+      ssoNote: (t) => Object.assign(new Node("p"), { own: t }), ssoStarting: new Set(), ssoSignIn: () => {}, copyText: () => {}, showToast: () => {},
+      stripOpenButton: (s) => { const b = new Node("button"); b.className = "btn btn-sm"; b.textContent = "Open terminal"; return b; },
+      openTerminal: () => {}, buildCardComposer: () => ({ form: new Node("form"), why: new Node("span"), refresh() {} }),
+      mobileActive: () => false, window: { innerWidth: 1440 }, ssoExpiryText: () => "", ssoTimeLeft: () => "", ssoCodeEl: () => new Node("div"),
+    };
+    const ctx = vm.createContext(box);
+    new vm.Script(fnSrc(app, "renderSSOBody") + "\nglobalThis.renderSSOBody = renderSSOBody;").runInContext(ctx);
+    return box.renderSSOBody({ id: "s1", name: "s1" }, opts).byClass("nacts")[0].buttons();
+  };
+  const strip = sso({ strip: true });
+  assert.deepStrictEqual(strip.map((b) => b.textContent), ["Sign in", "Copy host command", "Open terminal"]);
+  assert.deepStrictEqual(strip.map((b) => b.className), ["btn pri btn-sm", "btn btn-sm", "btn btn-sm"]);
+  // The card outside the strip (the Access view's card, the phone's) keeps the plain buttons.
+  assert.deepStrictEqual(sso({ bare: true }).map((b) => b.className), ["btn pri", "btn"]);
+  assert.deepStrictEqual(sso({ mobile: true }).map((b) => b.className), ["btn pri", "btn"]);
+});
+
 test("task 9b: outside the strip (the needs-you card) Yes/No keep the plain .btn", () => {
   const p = page();
   p.box.lastSessions = [ASK];
