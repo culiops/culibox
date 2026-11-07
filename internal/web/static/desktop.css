@@ -1968,6 +1968,9 @@
   /* login.html brightens it on hover; the kit's primary hover is a colour (F11). */
   body > main.card button:where(:not(:disabled)):hover { background: var(--accent-hover); filter: none; }
   body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: var(--t-md); }
+  /* The two lines login.html's states add (F73 F74): the expired notice and the token-link
+     "Signing in...". Colour and spacing are in login.html; only the type step is desktop's. */
+  body > main.card .notice, body > main.card .signing { font-size: var(--t-md); }
 
   /* --- Profile overview (spec 5.1-5.4) --------------------------------------- */
   /* Settings > Profiles on the page: the profiles nested under Profiles in the nav,

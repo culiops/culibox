@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,96 @@ func TestAuthGuard_RedirectsBrowserNavToLogin(t *testing.T) {
 	s.authGuard(okHandler()).ServeHTTP(w, r)
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
 		t.Fatalf("code=%d loc=%q want 303 /login", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// A navigation that carried a session cookie the guard rejected (expired, or
+// signed with another secret) lands on /login?reason=expired, so the page can say
+// the login expired instead of looking like a first visit (F73).
+func TestAuthGuard_ExpiredCookieRedirectsWithReason(t *testing.T) {
+	s, _ := testServerWithAuth(t)
+	secret := []byte("0123456789abcdef0123456789abcdef") // testServerWithAuth's
+	for name, val := range map[string]string{
+		// Correctly signed, but past its expiry: the real "login expired" case.
+		"expired": agedSessionCookie(secret, time.Now().Add(-time.Hour).Unix()).Value,
+		"forged":  "not-a-session",
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		r.Header.Set("Accept", "text/html")
+		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: val})
+		w := httptest.NewRecorder()
+		s.authGuard(okHandler()).ServeHTTP(w, r)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?reason=expired" {
+			t.Fatalf("%s cookie: code=%d loc=%q want 303 /login?reason=expired", name, w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
+// A first visit, or a logout (the cleared cookie is not sent, or is sent empty),
+// is not an expiry: /login stays plain.
+func TestAuthGuard_NoCookieRedirectsPlain(t *testing.T) {
+	s, _ := testServerWithAuth(t)
+	for name, ck := range map[string]*http.Cookie{
+		"absent": nil,
+		"empty":  {Name: auth.CookieName, Value: ""},
+		"other":  {Name: "unrelated", Value: "x"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		r.Header.Set("Accept", "text/html")
+		if ck != nil {
+			r.AddCookie(ck)
+		}
+		w := httptest.NewRecorder()
+		s.authGuard(okHandler()).ServeHTTP(w, r)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+			t.Fatalf("%s cookie: code=%d loc=%q want 303 /login", name, w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
+// Fetch and WebSocket callers with a stale cookie still get a bare 401: the reason
+// is for a page navigation only, and a redirected upgrade is a confusing failure.
+func TestAuthGuard_ExpiredCookieAPIStill401(t *testing.T) {
+	s, _ := testServerWithAuth(t)
+	stale := agedSessionCookie([]byte("0123456789abcdef0123456789abcdef"), time.Now().Add(-time.Hour).Unix())
+	cases := map[string]func(*http.Request){
+		"fetch": func(r *http.Request) {
+			r.Header.Set("Sec-Fetch-Mode", "cors")
+			r.Header.Set("Accept", "application/json")
+		},
+		"xhr": func(r *http.Request) { r.Header.Set("Accept", "*/*") },
+		"ws":  func(r *http.Request) { r.Header.Set("Upgrade", "websocket"); r.Header.Set("Accept", "text/html") },
+	}
+	for name, mod := range cases {
+		r := httptest.NewRequest("GET", "/api/sessions", nil)
+		r.AddCookie(stale)
+		mod(r)
+		w := httptest.NewRecorder()
+		s.authGuard(okHandler()).ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized || w.Header().Get("Location") != "" {
+			t.Fatalf("%s: code=%d loc=%q want 401 with no Location", name, w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
+// GET /login is a static file: the reason parameter selects a fixed line in the
+// page's own script, and the server never echoes the query string back.
+func TestLoginPage_ReasonNotReflected(t *testing.T) {
+	s, _ := routedServer(t)
+	const payload = "<script>x</script>"
+	for _, q := range []string{"reason=" + payload, "e=" + payload, "reason=expired"} {
+		r := httptest.NewRequest("GET", "/login?"+q, nil)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /login?%s: code=%d want 200", q, w.Code)
+		}
+		body := w.Body.String()
+		if strings.Contains(body, payload) || strings.Contains(body, "x</script>") {
+			t.Fatalf("GET /login?%s reflected the parameter into the page", q)
+		}
 	}
 }
 

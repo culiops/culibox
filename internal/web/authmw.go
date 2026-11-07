@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/culiops/culibox/internal/auth"
 )
 
 type credKind int
@@ -88,11 +90,24 @@ func (s *Server) authGuard(next http.Handler) http.Handler {
 		// Unauthenticated. Send a browser navigation to the login page; answer
 		// API/fetch/WS callers with a plain 401. Never WWW-Authenticate.
 		if wantsLoginRedirect(r) {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			http.Redirect(w, r, loginRedirectTarget(r), http.StatusSeeOther)
 			return
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
+}
+
+// loginRedirectTarget is where an unauthenticated browser navigation lands. A
+// request that carried a session cookie the guard just refused (past its expiry,
+// or signed with another secret) gets ?reason=expired, so the page can say the
+// login expired rather than look like a first visit. No cookie, or the cleared
+// (empty) one a logout leaves behind, is a plain /login. The login page maps the
+// parameter to one fixed line and never shows its value.
+func loginRedirectTarget(r *http.Request) string {
+	if ck, err := r.Cookie(auth.CookieName); err == nil && ck.Value != "" {
+		return "/login?reason=expired"
+	}
+	return "/login"
 }
 
 func serveWithKind(next http.Handler, w http.ResponseWriter, r *http.Request, k credKind) {
