@@ -1515,6 +1515,16 @@ let replyFocused = false;
 // in flight. A flag that must survive a rebuild the poll can trigger has to
 // live somewhere the rebuild does not reach.
 let pendingSends = new Set();
+// replyFlash: the line a finished send leaves under the reply field, per session
+// ({ text, until } in ms): "Sent" for REPLY_SENT_MS, or why the send failed for
+// REPLY_ERROR_MS (long enough to read after looking away, short enough not to
+// outlive the state it described; the next try clears it). Module level for the
+// reason pendingSends is: the 3 s poll rebuilds the strip while a send just
+// landed, and a line kept in the closure would go with the old field.
+// buildReplyComposer's refresh() reads it, so a rebuilt field shows what is left.
+const REPLY_SENT_MS = 2000;
+const REPLY_ERROR_MS = 30000;
+let replyFlash = new Map();
 // cardExpanded: desktop needs-you cards currently showing their full message
 // instead of cardContent's one-line text. Page-local, keyed by session id —
 // unlike openPeekId this is NOT "one at a time": several waiting sessions can
@@ -1564,8 +1574,9 @@ function peekRowFor(li) {
 // the ONE place the 403/409/410/400 mapping lives — extracted out of
 // togglePeek's composer so the mobile reply sheet (openReplySheet) can share
 // it without a live `<li>` to close over. Returns true on success (204),
-// false otherwise; never throws.
-async function sendReplyFor(s, text, onFail) {
+// false otherwise; never throws. opts.quiet: no "Sent" toast, for the desktop
+// composer, which says it under its own field (F65); an error still toasts.
+async function sendReplyFor(s, text, onFail, opts) {
   try {
     const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
       method: "POST",
@@ -1573,7 +1584,7 @@ async function sendReplyFor(s, text, onFail) {
       body: JSON.stringify({ text: text }),
     });
     if (res.status === 204) {
-      showToast("Sent");
+      if (!(opts && opts.quiet)) showToast("Sent");
       return true;
     }
     // Distinct statuses carry distinct meanings — say which one happened.
@@ -1875,6 +1886,7 @@ function buildReplyComposer(s, opts) {
   // torn down and rebuilt by the 3s poll while a send is still outstanding.
   // refresh() writes the disabled flags from the gate every time it runs, so
   // anything set behind its back is undone by the next call.
+  let flashTimer = null;
   const refresh = () => {
     // The poll's live copy, not the one this composer was built with: it can
     // outlive several polls (an opt-in, reply_ready turning true).
@@ -1895,7 +1907,15 @@ function buildReplyComposer(s, opts) {
     input.disabled = closed;
     send.classList.toggle("off", closed);
     input.classList.toggle("off", closed);
-    why.textContent = st.reason;
+    // What the last send left (replyFlash) outranks the gate's reason until it
+    // runs out: a refresh that overwrote it would hide "Sent" at once, and the
+    // failure the operator most needs to read right after a refused send.
+    const flash = replyFlash.get(s.id);
+    const live = !!flash && flash.until > Date.now();
+    if (flash && !live) replyFlash.delete(s.id);
+    why.textContent = live ? flash.text : st.reason;
+    clearTimeout(flashTimer);
+    flashTimer = live ? setTimeout(refresh, flash.until - Date.now()) : null;
     if (o.onGate) o.onGate(closed);
     return st;
   };
@@ -1915,13 +1935,18 @@ function buildReplyComposer(s, opts) {
         : "That text contains control characters and was not sent.";
       return;
     }
+    replyFlash.delete(s.id);
     pendingSends.add(s.id);
     refresh();
     try {
-      const ok = await sendReplyFor(s, text, (msg) => { why.textContent = msg; });
+      // The button says "Sending…" if the request takes a moment (F65); the
+      // outcome is the line under the field (replyFlash), so no "Sent" toast.
+      const ok = await withPending(send, "Sending…", () =>
+        sendReplyFor(s, text, (msg) => { replyFlash.set(s.id, { text: msg, until: Date.now() + REPLY_ERROR_MS }); }, { quiet: true }));
       if (ok) {
         input.value = "";
         if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+        replyFlash.set(s.id, { text: "Sent", until: Date.now() + REPLY_SENT_MS });
       }
     } finally {
       // Runs whether the send succeeded, was rejected, or threw — including
@@ -2473,16 +2498,15 @@ function renderNeedsBody(s, opts) {
   const toggleLabel = expanded ? "Hide the full message" : "Show the full message";
   txt.title = toggleLabel;
   txt.setAttribute("aria-label", toggleLabel);
-  if (expanded) {
-    const cached = cardPeekCache.get(s.id);
+  // An ask in the strip keeps the command on line 1 whether or not it is
+  // expanded (F51): expanding wraps it and adds below it, it never swaps the line
+  // just read for the agent's message. Any other card shows the full message in
+  // place of its one-line summary.
+  const askStrip = inStrip && c.ask;
+  const cached = expanded ? cardPeekCache.get(s.id) : undefined;
+  if (expanded && !askStrip) {
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
-    // A pending tool call has no message to fetch, so the peek says "No message
-    // yet." The strip's job there is the whole command, wrapped, not that note.
-    if (inStrip && c.ask && cached && cached.muted) {
-      txt.textContent = c.text;
-      txt.classList.remove("muted");
-    }
   } else {
     txt.textContent = c.text;
   }
@@ -2491,6 +2515,16 @@ function renderNeedsBody(s, opts) {
   txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
   syncMaskHint(txt, txt.textContent);
+  // The message the agent said before the call, on its own line under the
+  // command. A pending tool call often has none ("No message yet.", muted): then
+  // there is no line, and nothing shows while it loads.
+  if (askStrip && cached && !cached.muted && cached.text) {
+    const msg = document.createElement("div");
+    msg.className = "askmsg";
+    msg.textContent = cached.text;
+    body.appendChild(msg);
+    syncMaskHint(msg, cached.text);
+  }
 
   // The full command, once expanded — what Yes/No will answer. textContent
   // only; wrapped, monospace (spec §2.5).
@@ -2578,10 +2612,13 @@ function renderNeedsBody(s, opts) {
     acts.appendChild(open);
   }
   body.appendChild(acts);
-  if (ans.note) {
+  // The one line that says why an ask has no live Yes/No (answerState): replies
+  // off (F50), not expanded yet (F51), or a prompt too long to show here.
+  const askWhy = ans.note || ans.reason;
+  if (askWhy) {
     const why = document.createElement("span");
     why.className = "peek-why";
-    why.textContent = ans.note;
+    why.textContent = askWhy;
     body.appendChild(why);
   }
   if (composer) body.appendChild(composer.why);
@@ -2768,6 +2805,54 @@ function ssoLocalSig(id) {
 
 const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.";
 
+// ssoDone: id -> the session's activity at the last look, for each session whose
+// AWS sign-in THIS tab finished (F63). The pane keeps SSO_DONE_TOAST as a line
+// with a ✕ (tabs.js buildSSODoneLine) after the toast is gone, because the retry
+// hint is the part an operator needs a minute later. The broker clears the need
+// at sign-in, so the sign-in card is gone before the line matters: this is its own
+// state, not the card's. pruneSSODone decides each poll whether it stays.
+const ssoDone = new Map();
+
+// markSSODone: this tab's sign-in for `id` just finished (next to the toast).
+function markSSODone(id) {
+  const s = lastSessions.find((x) => x.id === id);
+  ssoDone.set(id, s ? s.activity : "");
+  // The strip is drawn from the poll; do not wait for the next one.
+  if (!mobileActive(window.innerWidth)) cells.forEach((c) => c.repaintReply());
+}
+
+// ssoDoneShown: whether the pane draws the line for session `s`: kept, and not
+// while the record still shows an expired sign-in (that strip is the form).
+function ssoDoneShown(s) {
+  return !!s && ssoDone.has(s.id) && s.need !== "sso" && connSSOSources(s).length === 0;
+}
+
+// pruneSSODone: one look per poll. A line stays while the session has not gone
+// from not working to working (ssoDoneKeep); a session that left the list or
+// ended drops it. Runs in refreshSessions right after pruneSSO.
+function pruneSSODone() {
+  const byId = new Map(lastSessions.map((s) => [s.id, s]));
+  for (const [id, prev] of Array.from(ssoDone)) {
+    const s = byId.get(id);
+    if (s && ssoDoneKeep(prev, s.activity, !!s.exited)) ssoDone.set(id, s.activity);
+    else ssoDone.delete(id);
+  }
+}
+
+// dismissSSODone: the ✕.
+function dismissSSODone(id) {
+  ssoDone.delete(id);
+  cells.forEach((c) => c.repaintReply());
+}
+
+// pruneReplyFlash: the line a send left under a reply field (replyFlash) goes with
+// its session. Both lines time themselves out, but only when a field reads them,
+// so a session that left the list must not keep one.
+function pruneReplyFlash() {
+  const ids = new Set(lastSessions.map((s) => s.id));
+  for (const id of Array.from(replyFlash.keys())) if (!ids.has(id)) replyFlash.delete(id);
+}
+
 // ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
 function ssoAdopt(id, body) {
   ssoStatus.set(id, body || {});
@@ -2815,8 +2900,8 @@ function stopSSOPoll(id) {
 
 // ssoPollTick: one read of the flow. `last` is pruneSSO's final look after the
 // need cleared: a finished sign-in clears the need before the poller sees "ok",
-// so this is the only place the success toast can still come from. It never
-// writes the maps (the card is gone).
+// so this is the only place the success toast (and the pane's kept line,
+// markSSODone) can still come from. It never writes the card's maps (the card is gone).
 async function ssoPollTick(id, last) {
   if (ssoPolling.has(id)) return;
   ssoPolling.add(id);
@@ -2833,7 +2918,7 @@ async function ssoPollTick(id, last) {
   const login = ssoLoginOf(body.sso, ssoTarget(id));
   const state = login ? login.state : "";
   if (last) {
-    if (state === "ok") showToast(SSO_DONE_TOAST);
+    if (state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
     return;
   }
   if (!ssoPollers.has(id)) return; // stopped while the request was in flight
@@ -2841,7 +2926,7 @@ async function ssoPollTick(id, last) {
   ssoAdopt(id, body);
   if (state !== "waiting") {
     stopSSOPoll(id);
-    if (state === "ok") showToast(SSO_DONE_TOAST);
+    if (state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
   }
   if (ssoLocalSig(id) !== before || state !== "waiting") refreshSessions();
 }
@@ -2887,7 +2972,7 @@ async function ssoSignIn(s) {
   if (status === 200 && body && body.login) {
     ssoFlows.set(id, body.login);
     if (body.login.state === "waiting") startSSOPoll(id);
-    else if (body.login.state === "ok") showToast(SSO_DONE_TOAST);
+    else if (body.login.state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
   } else if (status === 502) {
     ssoFlows.set(id, { fallback: (body && body.command) || ssoCommand(id) });
   } else {
@@ -3302,6 +3387,8 @@ async function refreshSessions() {
     }
   }
   pruneSSO();
+  pruneSSODone();
+  pruneReplyFlash();
   signalAttention();
   notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis

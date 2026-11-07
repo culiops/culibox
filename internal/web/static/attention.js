@@ -354,16 +354,24 @@ function sha256Hex(str) {
 // replyable, registry-blocked claude with exactly one pending call. Live only
 // while the card is expanded AND the command on screen is the one that was
 // expanded (seenAskFull): a prompt that changed underneath must be read again.
+// reason is the line the strip shows whenever an ask has no live Yes/No for a
+// reason it can name (F50, F51): replies switched off, or the buttons waiting on
+// the expand. `title` stays as the tooltip on the disabled buttons. note is the
+// separate case of a prompt too long to show here.
 function answerState(s, expanded, seenAskFull) {
-  const off = { show: false, enabled: false, title: "", note: "" };
+  const off = { show: false, enabled: false, title: "", note: "", reason: "" };
   const v = s || {};
-  // Kill-switch: no Yes/No and no "answer in the terminal" note either.
-  if (globalThis.repliesEnabled !== true) return off;
+  // Kill-switch: no Yes/No, and an ask says why. Only a switch the server has
+  // answered "off" is named: before /api/meta answers (undefined) the paths are
+  // closed all the same, but nothing yet says the operator switched them off.
+  if (globalThis.repliesEnabled !== true) {
+    return v.need === "ask" && globalThis.repliesEnabled === false ? { ...off, reason: "Answer in the terminal · remote replies are off" } : off;
+  }
   if (v.need !== "ask" || !v.replyable) return off;
-  if (!v.ask_full) return { show: false, enabled: false, title: "", note: "Answer this one in the terminal — the full prompt can't be shown here." };
-  if (!expanded) return { show: true, enabled: false, title: "Expand to see the full command first", note: "" };
-  if (seenAskFull !== v.ask_full) return { show: true, enabled: false, title: "The prompt changed — collapse and expand to review it", note: "" };
-  return { show: true, enabled: true, title: "", note: "" };
+  if (!v.ask_full) return { show: false, enabled: false, title: "", note: "Answer this one in the terminal — the full prompt can't be shown here.", reason: "" };
+  if (!expanded) { const why = "Expand to see the full command first"; return { show: true, enabled: false, title: why, note: "", reason: why }; }
+  if (seenAskFull !== v.ask_full) { const why = "The prompt changed — collapse and expand to review it"; return { show: true, enabled: false, title: why, note: "", reason: why }; }
+  return { show: true, enabled: true, title: "", note: "", reason: "" };
 }
 
 // answerErrorText: the toast for a refused answer. The two 409s differ: the
@@ -394,8 +402,21 @@ function staleExpanded(s, seenAskFull) {
   return (s.ask_full || "") !== seenAskFull;
 }
 
+// ssoDoneKeep: whether the "Signed in" line a pane keeps after this tab finished
+// an AWS sign-in (F63) stays on this poll. prevActivity is the session's activity
+// at the last look (at sign-in for the first), activity the one now. The line
+// is the hint to tell a stopped agent to retry, so it stays while that is still
+// true: an agent already working at sign-in keeps it while it keeps working, and
+// it goes the moment the session goes from not working to working (it took the
+// retry up), or when the session ended. The ✕ and a session that left the list
+// are the caller's. Pure: the page keeps the last activity per session.
+function ssoDoneKeep(prevActivity, activity, exited) {
+  if (exited || activity === "done" || activity === "crashed") return false;
+  return !(activity === "working" && prevActivity !== "working");
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
-    sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
+    sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }

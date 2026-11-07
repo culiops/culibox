@@ -64,7 +64,7 @@ test("buildNeedStrip: a finished turn's strip is .is-done, a blocked one is not"
   const strip = (model) => {
     const ctx = vm.createContext({
       document: doc, cardContent: () => ({}), cardExpanded: new Set(), stripLabel: desk.stripLabel,
-      renderNeedsBody: () => el("div"), ResizeObserver: undefined,
+      renderNeedsBody: () => el("div"), ResizeObserver: undefined, ssoDoneShown: () => false,
     });
     new vm.Script(fnSrc(read("tabs.js"), "buildNeedStrip") + "\nglobalThis.buildNeedStrip = buildNeedStrip;").runInContext(ctx);
     return ctx.buildNeedStrip({ id: "s" }, model, null);

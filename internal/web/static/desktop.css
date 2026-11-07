@@ -1125,7 +1125,9 @@
   .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
   /* The one amber-filled button in the product: Yes (amber = needs-you only). */
   .needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri)) { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
-  .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  .needstrip .askfull, .needstrip .askmsg, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  /* An expanded ask: line 1 stays the command; what the agent said before it is the next line (F51). */
+  .needstrip .askmsg { color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
   .needstrip .askfull {
     min-width: 0; padding: 6px 8px; font: var(--t-sm)/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
     background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-chip);
@@ -1133,6 +1135,11 @@
   .needstrip .rep { display: flex; gap: 6px; }
   .needstrip .rep .fld { flex: 1; min-width: 0; }
   .needstrip .peek-why, .needstrip .maskhint { font-size: var(--t-sm); color: var(--muted); }
+  /* The sign-in line a pane keeps after this tab's sign-in (F63): muted text and the kit's ghost ✕. Alone it is
+     a .needstrip.is-done (the neutral look above); under a need it is the strip's last row. */
+  .needstrip .ssodone { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .needstrip .ssodone-txt { flex: 1; min-width: 0; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  .needstrip .ssodone .btn { flex: none; }
   /* An expired AWS sign-in or a locked store: the form is the content, so the
      body keeps its own layout beside the label. */
   .needstrip.rich { display: flex; align-items: flex-start; }
@@ -1996,8 +2003,15 @@
     box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
   }
   #ask-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
-  #ask-modal .dlg-x { padding: 2px 8px; border-radius: var(--r-ctl); }
-  #ask-modal .dlg-x:hover { background: var(--raise); color: var(--fg); }
+  /* The close cross is the kit's ghost icon button (.btn .btn-ghost .btn-icon .btn-sm: 24px square, muted, a
+     hover fill) on the page's type scale, not app.css's 19px glyph. The class list cannot go on the shared
+     markup (primitives.css's .btn reaches the phone), so the kit's values are stated here. */
+  #ask-modal .dlg-x {
+    display: inline-flex; align-items: center; justify-content: center; width: var(--h-sm); min-height: var(--h-sm); padding: 0;
+    border: 1px solid transparent; border-radius: var(--r-chip); background: transparent; color: var(--muted);
+    font-size: var(--t-lg); font-weight: var(--w-medium); line-height: 1;
+  }
+  #ask-modal .dlg-x:hover { background: var(--hover); color: var(--fg); }
   #ask-modal #ask-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #ask-modal .dlg-body { padding: 4px 20px 18px; }
   #ask-modal #ask-body { margin: 6px 0 10px; font-size: var(--t-md); color: var(--muted); }

@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -202,19 +202,65 @@ test("sha256Hex matches known vectors", () => {
 
 test("answerState: Yes/No unlock only once the full command on screen was expanded", () => {
   const ask = { need: "ask", replyable: true, claude: true, activity: "waiting", ask_full: "Bash(touch a)" };
+  // F51: the reason Yes/No are disabled is a visible line, and the tooltip keeps it too.
   assert.deepStrictEqual(answerState(ask, false, undefined),
-    { show: true, enabled: false, title: "Expand to see the full command first", note: "" });
-  assert.deepStrictEqual(answerState(ask, true, "Bash(touch a)"), { show: true, enabled: true, title: "", note: "" });
+    { show: true, enabled: false, title: "Expand to see the full command first", note: "", reason: "Expand to see the full command first" });
+  assert.deepStrictEqual(answerState(ask, true, "Bash(touch a)"), { show: true, enabled: true, title: "", note: "", reason: "" });
   // Changed underneath (the next prompt arrived while expanded): read it again.
   const changed = answerState(ask, true, "Bash(touch b)");
   assert.strictEqual(changed.enabled, false);
   assert.match(changed.title, /changed/);
+  assert.strictEqual(changed.reason, changed.title, "a disabled Yes/No always says why on screen");
   assert.strictEqual(answerState({ ...ask, replyable: false }, true, "Bash(touch a)").show, false);
   const tooLong = answerState({ ...ask, ask_full: undefined }, true, "");
   assert.strictEqual(tooLong.show, false);
   assert.match(tooLong.note, /terminal/);
-  assert.deepStrictEqual(answerState({ ...ask, need: "turn" }, true, "Bash(touch a)"), { show: false, enabled: false, title: "", note: "" });
+  assert.strictEqual(tooLong.reason, "", "the note is that case's visible line");
+  assert.deepStrictEqual(answerState({ ...ask, need: "turn" }, true, "Bash(touch a)"), { show: false, enabled: false, title: "", note: "", reason: "" });
   assert.strictEqual(answerState(null, true, "").show, false);
+});
+
+test("answerState: with remote replies off an ask says why it has no Yes/No (F50)", () => {
+  const ask = { need: "ask", replyable: true, claude: true, activity: "waiting", ask_full: "Bash(touch a)" };
+  const prev = globalThis.repliesEnabled;
+  try {
+    globalThis.repliesEnabled = false;
+    const want = { show: false, enabled: false, title: "", note: "", reason: "Answer in the terminal · remote replies are off" };
+    assert.deepStrictEqual(answerState(ask, false, undefined), want);
+    assert.deepStrictEqual(answerState(ask, true, "Bash(touch a)"), want, "expanded or not");
+    // The kill switch closes the path whatever the session's own opt-in says.
+    assert.deepStrictEqual(answerState({ ...ask, replyable: false }, false, undefined), want);
+    assert.deepStrictEqual(answerState({ ...ask, ask_full: undefined }, false, undefined), want);
+    // Only an ask has a Yes/No to explain: a turn or no session says nothing.
+    assert.strictEqual(answerState({ ...ask, need: "turn" }, false, undefined).reason, "");
+    assert.strictEqual(answerState(null, false, undefined).reason, "");
+    // The page has not heard from /api/meta yet (undefined): the paths are closed, but nobody
+    // knows the switch is off, so the strip must not claim it.
+    delete globalThis.repliesEnabled;
+    assert.deepStrictEqual(answerState(ask, false, undefined), { show: false, enabled: false, title: "", note: "", reason: "" });
+  } finally {
+    globalThis.repliesEnabled = prev;
+  }
+});
+
+test("ssoDoneKeep: the sign-in line stays until the session goes from not working to working (F63)", () => {
+  // An agent that was working at sign-in keeps the line while it keeps working.
+  assert.strictEqual(ssoDoneKeep("working", "working", false), true);
+  // Stopped (any not-working state) keeps it; the agent has not started again.
+  assert.strictEqual(ssoDoneKeep("working", "waiting", false), true);
+  assert.strictEqual(ssoDoneKeep("working", "idle", false), true);
+  assert.strictEqual(ssoDoneKeep("waiting", "waiting", false), true);
+  assert.strictEqual(ssoDoneKeep("idle", "idle", false), true);
+  // Not working -> working: the agent took it from here.
+  assert.strictEqual(ssoDoneKeep("idle", "working", false), false);
+  assert.strictEqual(ssoDoneKeep("waiting", "working", false), false);
+  assert.strictEqual(ssoDoneKeep("", "working", false), false);
+  assert.strictEqual(ssoDoneKeep(undefined, "working", false), false);
+  // The session ended: nothing left to retry.
+  assert.strictEqual(ssoDoneKeep("working", "working", true), false);
+  assert.strictEqual(ssoDoneKeep("waiting", "waiting", true), false);
+  assert.strictEqual(ssoDoneKeep("waiting", "done", false), false, "activity done is an exited session too");
+  assert.strictEqual(ssoDoneKeep("waiting", "crashed", false), false);
 });
 
 test("answerErrorText words each refusal", () => {

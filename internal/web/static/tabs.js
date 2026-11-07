@@ -1194,13 +1194,18 @@ class Cell {
     const term = cellTerminal(this);
     const s = term ? (lastSessions || []).find((x) => x.id === term.id) || null : null;
     const model = s ? needStripModel(s) : null;
+    // The sign-in line this tab's finished sign-in keeps (F63): under a need's
+    // strip, or alone as a neutral one when nothing needs you. It frames nothing
+    // (`needs` below is the need's amber frame only).
+    const done = !!s && ssoDoneShown(s);
     this.el.classList.toggle("needs", !!model);
     // The page-local inputs the body reads beyond the session record (the same
     // list rowLocal feeds rowSig), so a flow moving on or the full text
     // arriving repaints it. The active tab kind is deliberately absent.
-    const local = model ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
-      pendingSends.has(s.id), ssoLocalSig(s.id)].join("|") : "";
-    const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local : "";
+    const local = model || done ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
+      pendingSends.has(s.id), ssoLocalSig(s.id), done].join("|") : "";
+    const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local
+      : done ? "n:" + s.id + "|" + local : "";
     if (key === this._needsKey) return;
     // A half-typed reply outranks a repaint: while the reply FIELD has focus, a
     // poll that moved only something incidental (summary, AWS connections, SSO
@@ -1213,10 +1218,15 @@ class Cell {
     const holdSig = model ? stripHoldKey(s, repOn) : "";
     const ae = document.activeElement;
     if (this._strip && model && holdSig === this._holdSig && ae && ae.matches && ae.matches(".fld") && this._strip.contains(ae)) return;
+    // A send in flight keeps its strip too (F65): the Send button is saying
+    // "Sending…" and the line under the field waits for the outcome, and a
+    // rebuild mid-request would leave both on a node that is gone. The key is not
+    // stored, so the first sync after the send settles repaints if anything moved.
+    if (this._strip && model && holdSig === this._holdSig && pendingSends.has(s.id)) return;
     this._needsKey = key;
     this._holdSig = holdSig;
     this.dropStrip();
-    if (model) {
+    if (model || done) {
       this._strip = buildNeedStrip(s, model, () => positionDrawer());
       this.bar.after(this._strip);
     }
@@ -1368,6 +1378,28 @@ function dockHolding(id) {
   return cells.find((c) => c.dockTabs.has(id)) || null;
 }
 
+// buildSSODoneLine: the line a pane keeps after this tab finished an AWS sign-in
+// (F63): the toast's own words, which are the part to act on (tell the agent to
+// retry), and the kit's ghost ✕. role="status" so it is read once as it appears,
+// as the toast was.
+function buildSSODoneLine(s) {
+  const row = document.createElement("div");
+  row.className = "ssodone";
+  row.setAttribute("role", "status");
+  const txt = document.createElement("span");
+  txt.className = "ssodone-txt";
+  txt.textContent = SSO_DONE_TOAST;
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "btn btn-ghost btn-icon btn-sm";
+  x.setAttribute("aria-label", "Dismiss");
+  x.title = "Dismiss";
+  x.textContent = "\u2715";
+  x.onclick = (e) => { e.stopPropagation(); dismissSSODone(s.id); };
+  row.append(txt, x);
+  return row;
+}
+
 // buildNeedStrip: the desktop ask strip (spec 5.3). The amber label (muted, on
 // the panel, for a finished turn: .is-done), then
 // renderNeedsBody's blocks (app.js): the one-line mono text (click expands it to
@@ -1377,21 +1409,31 @@ function dockHolding(id) {
 // textContent (renderNeedsBody and the label here); nothing is parsed as HTML.
 // An SSO or store-locked session shows its own sign-in / unlock body instead of
 // the ask text (cardContent decides) and gets the .rich layout.
+// With `model` null the strip is only the sign-in line this tab's finished
+// sign-in keeps (ssoDoneShown): neutral, as a finished turn is. Otherwise the line,
+// when kept, is the strip's last row.
 // onSize runs when the strip's height changes, so the drawer under it follows.
 function buildNeedStrip(s, model, onSize) {
   const strip = document.createElement("div");
   strip.className = "needstrip";
   strip.dataset.sid = s.id;
-  const c = cardContent(s);
-  const rich = !!(c.sso || c.unlock);
-  if (rich) strip.classList.add("rich");
-  if (cardExpanded.has(s.id)) strip.classList.add("open");
-  // A finished turn is neutral (F21-B); only an agent blocked on you is amber.
-  if (model.tone === "done") strip.classList.add("is-done");
-  const label = document.createElement("span");
-  label.className = "ns-label";
-  label.textContent = stripLabel(model.label);
-  strip.append(label, renderNeedsBody(s, { strip: true }));
+  let rich = false;
+  if (model) {
+    const c = cardContent(s);
+    rich = !!(c.sso || c.unlock);
+    if (rich) strip.classList.add("rich");
+    if (cardExpanded.has(s.id)) strip.classList.add("open");
+    // A finished turn is neutral (F21-B); only an agent blocked on you is amber.
+    if (model.tone === "done") strip.classList.add("is-done");
+    const label = document.createElement("span");
+    label.className = "ns-label";
+    label.textContent = stripLabel(model.label);
+    strip.append(label, renderNeedsBody(s, { strip: true }));
+  } else {
+    strip.classList.add("is-done");
+  }
+  // Not in a sign-in or unlock form, which lays itself out as a row (.rich).
+  if (!rich && ssoDoneShown(s)) strip.append(buildSSODoneLine(s));
   let ro = null;
   if (typeof ResizeObserver === "function" && typeof onSize === "function") {
     ro = new ResizeObserver(() => onSize());
