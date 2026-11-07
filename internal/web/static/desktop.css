@@ -60,11 +60,15 @@
 
   /* Disabled reads as closed, not deleted (#169 F03). primitives.css strikes every
      disabled control through; here it is dimmed and re-cursored instead, the look
-     the .off primitive already has (.42, not-allowed). A control with a disabled
-     look of its own keeps it: those rules are more specific. .busy is a control at
-     work (cursor: progress), not one that is closed. */
+     the .off primitive already has (.42, not-allowed). The rule weighs (0,1,1), the
+     :not sitting in :where so it adds nothing: it beats .btn's pointer, and any
+     class-level disabled look (.ph-shell:disabled, .cell-sh:disabled) beats it.
+     Two disabled looks set only a muted colour, so they also say opacity: 1
+     (#ft-menu here, .pfv-opt with the profile page). A control at work (withPending:
+     aria-busy at once, .busy after 300 ms) is busy, not closed. */
   button:disabled, [disabled] { text-decoration: none; }
-  :is(button, input, select, textarea):disabled:not(.busy) { opacity: .42; cursor: not-allowed; }
+  :is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
+  #ft-menu button:disabled { opacity: 1; }
 
   /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
   /* The controls moved into the sidebar top and footer. #env-strip stays: it is
@@ -1776,7 +1780,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-opt:hover:not(:disabled) { background: var(--raise); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { background: var(--raise); outline: 2px solid var(--accent); outline-offset: -2px; }
   /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's). */
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { cursor: default; text-decoration: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { cursor: default; text-decoration: none; opacity: 1; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled .pfv-opt-t { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }

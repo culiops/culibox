@@ -2401,8 +2401,8 @@ function stripOpenButton(s) {
 // the open button also closes a drawer, as the pane header's Terminal tab does.
 function renderNeedsBody(s, opts) {
   const inStrip = !!(opts && opts.strip);
-  // The strip's one line is plain text (plainSummary); the mobile card keeps
-  // today's raw text, and the expanded view still shows the raw message.
+  // The strip's one line is plain text (plainSummary); the expanded view still
+  // shows the raw message. (The mobile needs-you card is renderNeedsCard.)
   const c = cardContent(s, { plain: inStrip });
   // An expired AWS sign-in outranks turn/ask for which card shows.
   if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
@@ -3009,33 +3009,48 @@ function startRename(li, span, s) {
   // wrapper) — swap it out of its real parent, not the row.
   const parent = span.parentNode;
   let finished = false;
-  const finish = async (commit) => {
+  const finish = async (commit, byKey) => {
     if (finished) return;
     finished = true;
     editing = false;
     const v = input.value.trim();
+    const save = commit && v && v !== cur;
     // Put the name back first, whatever happens next: the list's keyed reconcile
     // keeps a row whose signature has not changed, so refreshSessions() alone
     // never rebuilds it, and after Escape, an unchanged name or a failed save the
     // row kept the dead input and no name. Removing the focused input fires its
-    // blur, which `finished` turns away.
+    // blur, which `finished` turns away. A save shows the new name at once and
+    // takes it back if the save fails; a nested shell keeps its "shell N" label.
+    const was = span.textContent;
+    const nested = li.classList.contains("nested");
+    if (save && !nested) span.textContent = v;
     if (input.parentNode) input.parentNode.replaceChild(span, input);
-    if (commit && v && v !== cur) {
+    // Enter/Escape leave the keyboard on the row's name, not on <body>; a blur
+    // leaves focus wherever the click put it.
+    if (byKey) span.focus();
+    if (save) {
       try {
-        await api("/api/sessions/" + encodeURIComponent(s.id), {
+        const info = await api("/api/sessions/" + encodeURIComponent(s.id), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: v }),
         });
-        span.textContent = v;
-        retitleTerminal(s.id, v);
-      } catch (e) { showToast("Rename failed: " + e.message, { error: true }); }
+        // The server caps a name at 64 runes: show the one it stored. A cap that
+        // lands on the old name leaves the row's signature unchanged, so no
+        // refresh would correct the label.
+        const stored = (info && info.name) || v;
+        if (!nested) span.textContent = stored;
+        retitleTerminal(s.id, stored);
+      } catch (e) {
+        span.textContent = was;
+        showToast("Rename failed: " + e.message, { error: true });
+      }
     }
     refreshSessions();
   };
   input.onkeydown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    if (e.key === "Enter") { e.preventDefault(); finish(true, true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false, true); }
   };
   input.onblur = () => finish(true);
   parent.replaceChild(input, span);

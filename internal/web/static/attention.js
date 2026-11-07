@@ -69,20 +69,29 @@ function needLabel(s) {
 // plainSummary: the agent's last message without its markdown, for the desktop
 // lines that show it on one line (the row sub-line, the ask strip, the palette).
 // The server sends it raw, and a `**` drawn as text was the first thing read on
-// the most-watched line of the product. Code keeps its text and loses only its
-// backticks (nothing inside it is touched); a link or image keeps its label;
-// `**`, a paired `__…__` and a line-start `#` go; whitespace collapses to one
-// line. Display only, never sanitising: every caller writes it with textContent.
-// Never for an ask, which is a tool call, not markdown (see cardContent).
+// the most-watched line of the product. A link or image keeps its label (links go
+// first, so a code label, the way agents link a file, keeps its text); code keeps
+// its text and loses only its backticks, nothing inside it is touched; paired
+// `**…**` and `__…__` go, and so does a `**` left opening a word by a summary cut
+// off mid-bold, but not a glob's `**/` or an exponent; a line-start `#` goes;
+// whitespace collapses to one line. The display mask's `[masked:…]` is never a
+// link (the strip's mask note looks for it). Display only, never sanitising:
+// every caller writes it with textContent. Never for an ask, which is a tool
+// call, not markdown (see cardContent). Cut to 1000 characters first: the server
+// sends at most 120 runes, and this runs on every 3 s repaint.
 function plainSummary(text) {
+  const src = String(text == null ? "" : text).slice(0, 1000)
+    .replace(/!?\[(?!masked:)([^\]\n]*)\]\((?:[^()\s]|\([^()\s]*\))*\)/g, "$1");
+  // A pair matches only across text with no other pair in it, the nearest opener
+  // first, so a glob's `**` never pairs with the bold after it.
   const prose = (t) => t
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
-    .replace(/\*\*/g, "")
-    .replace(/(^|\W)__(?=\S)([\s\S]*?\S)__(?!\w)/g, "$1$2")
+    .replace(/(^|\W)\*\*(?=[^\s*])((?:(?!\*\*)[\s\S])*?[^\s*])\*\*(?!\w)/g, "$1$2")
+    .replace(/(^|\s)\*\*(?=[^\s*/])/g, "$1")
+    .replace(/(^|\W)__(?=[^\s_])((?:(?!__)[\s\S])*?[^\s_])__(?!\w)/g, "$1$2")
     .replace(/`/g, "");
   // split with the two groups gives [prose, ticks, code, prose, ticks, code, …, prose].
-  const parts = String(text == null ? "" : text).split(/(`+)([\s\S]*?)\1/);
+  const parts = src.split(/(`+)([\s\S]*?)\1/);
   let out = "";
   for (let i = 0; i < parts.length; i += 3) out += prose(parts[i]) + (i + 2 < parts.length ? parts[i + 2] : "");
   return out.replace(/\s+/g, " ").trim();

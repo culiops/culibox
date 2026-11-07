@@ -27,7 +27,7 @@ function fn(src, name) {
 
 // A parent node that swaps children the way the DOM does. Removing the focused
 // input fires its blur, as Chrome does, so the Escape-then-blur path runs too.
-function renameIn({ name = "old", patch = async () => ({}) } = {}) {
+function renameIn({ name = "old", label = name, nested = false, patch = async () => ({}) } = {}) {
   const calls = { patch: [], retitle: [], toast: [], refresh: 0 };
   const box = { focused: null };
   const parent = {
@@ -38,7 +38,7 @@ function renameIn({ name = "old", patch = async () => ({}) } = {}) {
       if (box.focused === prev) { box.focused = null; if (prev.onblur) prev.onblur(); }
     },
   };
-  const span = { textContent: name, parentNode: parent };
+  const span = { textContent: label, parentNode: parent, focused: 0, focus() { this.focused++; } };
   parent.child = span;
   const ctx = vm.createContext({
     document: {
@@ -50,7 +50,7 @@ function renameIn({ name = "old", patch = async () => ({}) } = {}) {
     refreshSessions: () => { calls.refresh++; },
   });
   new vm.Script("let editing = false;\n" + fn(APP, "startRename") + "\nglobalThis.startRename = startRename;").runInContext(ctx);
-  ctx.startRename({ isConnected: true }, span, { id: "s1", name });
+  ctx.startRename({ isConnected: true, classList: { contains: (c) => nested && c === "nested" } }, span, { id: "s1", name });
   const input = parent.child;
   assert.notStrictEqual(input, span, "the input replaced the name");
   const key = (k) => input.onkeydown({ key: k, preventDefault() {} });
@@ -69,6 +69,7 @@ test("rename then Escape puts the old name back and saves nothing", async () => 
   assert.deepStrictEqual(t.calls.patch, [], "the blur from removing the input did not commit");
   assert.strictEqual(t.editing(), false);
   assert.strictEqual(t.calls.refresh, 1);
+  assert.strictEqual(t.span.focused, 1, "the keyboard lands back on the name, not on <body>");
 });
 
 test("rename then Enter shows the new name", async () => {
@@ -81,6 +82,35 @@ test("rename then Enter shows the new name", async () => {
   assert.deepStrictEqual(t.calls.patch, [["/api/sessions/s1", { name: "audit-renamed" }]]);
   assert.deepStrictEqual(t.calls.retitle, [["s1", "audit-renamed"]]);
   assert.strictEqual(t.calls.refresh, 1);
+});
+
+test("the new name shows while the save is in flight", async () => {
+  let land;
+  const t = renameIn({ patch: () => new Promise((r) => { land = r; }) });
+  t.input.value = "audit-renamed";
+  t.key("Enter");
+  assert.strictEqual(t.parent.child, t.span);
+  assert.strictEqual(t.span.textContent, "audit-renamed", "no flash of the old name during the round trip");
+  land({ name: "audit-renamed" });
+  await t.settle();
+  assert.strictEqual(t.span.textContent, "audit-renamed");
+});
+
+test("the row shows the name the server stored (it caps names at 64 runes)", async () => {
+  const t = renameIn({ patch: async () => ({ name: "capped" }) });
+  t.input.value = "capped-plus-what-the-server-cut";
+  t.key("Enter");
+  await t.settle();
+  assert.strictEqual(t.span.textContent, "capped");
+});
+
+test("a nested shell row keeps its shell N label", async () => {
+  const t = renameIn({ name: "", label: "shell 1", nested: true });
+  t.input.value = "build-watch";
+  t.key("Enter");
+  await t.settle();
+  assert.strictEqual(t.span.textContent, "shell 1");
+  assert.strictEqual(t.calls.patch.length, 1, "the name is still saved");
 });
 
 test("a failed save keeps the old name, and says so", async () => {
@@ -106,7 +136,7 @@ test("Enter with the name unchanged, or blank, puts the name back without a save
   }
 });
 
-test("blur commits like Enter, once", async () => {
+test("blur commits like Enter, once, and leaves focus where the click put it", async () => {
   const t = renameIn();
   t.input.value = "by-blur";
   t.input.onblur();
@@ -114,4 +144,5 @@ test("blur commits like Enter, once", async () => {
   await t.settle();
   assert.strictEqual(t.span.textContent, "by-blur");
   assert.strictEqual(t.calls.patch.length, 1);
+  assert.strictEqual(t.span.focused, 0);
 });

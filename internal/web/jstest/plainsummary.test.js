@@ -23,6 +23,14 @@ test("plainSummary drops bold and strong-underscore markers", () => {
   assert.strictEqual(plainSummary("Fixed **the flaky"), "Fixed the flaky");
 });
 
+test("plainSummary keeps a ** that is not emphasis: globs, exponents, a lone pair", () => {
+  assert.strictEqual(plainSummary("Run tests on **/*.test.js"), "Run tests on **/*.test.js");
+  assert.strictEqual(plainSummary("2**10 = 1024"), "2**10 = 1024");
+  assert.strictEqual(plainSummary("a ** b"), "a ** b");
+  // The glob's ** does not pair with the bold that follows it.
+  assert.strictEqual(plainSummary("Run **/*.go and **bold**"), "Run **/*.go and bold");
+});
+
 test("plainSummary keeps code text but not its backticks, and leaves code untouched", () => {
   assert.strictEqual(plainSummary("Run `go test ./...` again"), "Run go test ./... again");
   assert.strictEqual(plainSummary("Edited `__init__.py` and `a**b`"), "Edited __init__.py and a**b");
@@ -35,11 +43,30 @@ test("plainSummary keeps a link's or image's text and drops the address", () => 
   assert.strictEqual(plainSummary("![diagram](a.png) attached"), "diagram attached");
   // Square brackets that are not a link stay (the display mask writes [masked:…]).
   assert.strictEqual(plainSummary("token [masked:aws-key] left"), "token [masked:aws-key] left");
+  // A mask token that happens to sit before "(" is not a link either: the strip's
+  // mask note looks for "[masked:".
+  assert.strictEqual(plainSummary("key [masked:aws-key-id](rotated)"), "key [masked:aws-key-id](rotated)");
+  // A code label (how agents link files), and one level of parentheses in the address.
+  assert.strictEqual(plainSummary("See [`config.go`](internal/config.go)"), "See config.go");
+  assert.strictEqual(plainSummary("[docs](https://x/a_(b)) ok"), "docs ok");
 });
 
 test("plainSummary drops heading markers and collapses whitespace", () => {
   assert.strictEqual(plainSummary("## Summary\n\nAll   green.\n# Next"), "Summary All green. Next");
   assert.strictEqual(plainSummary("Issue #169 is fixed"), "Issue #169 is fixed");
+});
+
+test("plainSummary stays fast on long agent text", () => {
+  // The server sends at most 120 runes, but nothing stops a later caller passing
+  // more, and this runs on every 3 s repaint. Worst cases for the patterns: brackets,
+  // backticks, unclosed openers.
+  for (const unit of ["[", "`", " __a", " **a", "[a](", "`a"]) {
+    const t0 = process.hrtime.bigint();
+    const out = plainSummary(unit.repeat(Math.ceil(100000 / unit.length)));
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(out.length <= 1000, unit + ": " + out.length);
+    assert.ok(ms < 250, unit + ": " + ms.toFixed(1) + " ms");
+  }
 });
 
 test("plainSummary leaves snake_case and globs alone and tolerates nothing", () => {
@@ -78,13 +105,22 @@ test("palSessionSub: plain on desktop, today's raw text on mobile", () => {
   assert.strictEqual(palSessionSub({}, true), "");
 });
 
-// renderNeedsBody (app.js) needs a DOM. The desktop ask strip and the mobile card share
-// it, so pin that only the strip asks for plain text, and that the expanded view still
-// writes the raw peek.
-test("the ask strip's collapsed line is plain, the mobile card's is not", () => {
+// app.js needs a DOM, so the two call sites are pinned at the source level: the desktop
+// ask strip (renderNeedsBody with strip) asks for plain text and its expanded view still
+// writes the raw peek; the mobile needs-you card (renderNeedsCard) writes the raw summary.
+function appFn(name) {
   const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
-  const start = app.indexOf("function renderNeedsBody(");
-  const body = app.slice(start, app.indexOf("\nfunction ", start + 1));
+  const start = app.indexOf("function " + name + "(");
+  assert.ok(start >= 0, name + " not found");
+  return app.slice(start, app.indexOf("\nfunction ", start + 1));
+}
+
+test("the ask strip's collapsed line is plain, its expanded view raw", () => {
+  const body = appFn("renderNeedsBody");
   assert.match(body, /const c = cardContent\(s, \{ plain: inStrip \}\);/);
   assert.match(body, /txt\.textContent = cached \? cached\.text : "Loading…";/);
+});
+
+test("the mobile needs-you card keeps the raw summary", () => {
+  assert.match(appFn("renderNeedsCard"), /msg\.textContent = s\.summary \|\| "No summary";/);
 });
