@@ -223,8 +223,23 @@ test("#token= and Back: the persisted page shows the form again, not 'Signing in
   const p = load({ hash: "#token=abc" });
   p.pageshow(false);
   assert.strictEqual(p.classes.has("token-mode"), true, "the load-time pageshow must not un-hide the form");
+  assert.strictEqual(p.el.password.value, "abc", "the load-time pageshow must not clear the token before it is submitted");
   p.pageshow(true);
   assert.strictEqual(p.classes.has("token-mode"), false);
+});
+
+test("Back to a persisted page clears the password field: a token must not come back in the masked box", () => {
+  const p = load({ hash: "#token=abc" });
+  assert.strictEqual(p.form.valueAtSubmit, "abc");
+  p.pageshow(true);
+  assert.strictEqual(p.el.password.value, "");
+  // The same for a typed password submitted and then navigated back to.
+  const q = load();
+  q.el.password.value = "hunter2";
+  q.form.dispatch("submit");
+  q.pageshow(true);
+  assert.strictEqual(q.el.password.value, "");
+  assert.strictEqual(q.el.password.readOnly, false);
 });
 
 test("no token fragment: no token-mode class, no submit", () => {

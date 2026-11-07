@@ -116,7 +116,8 @@
         pw.readOnly = true;
       });
       // Back after a submit can restore this page from the back/forward cache exactly as
-      // it was left: busy, or hidden behind "Signing in…". A normal load's own pageshow
+      // it was left: busy, or hidden behind "Signing in…", with the password (or the
+      // token a link filled in) still in the masked field. A normal load's own pageshow
       // has persisted=false and must change nothing.
       window.addEventListener("pageshow", function (ev) {
         if (!ev.persisted) return;
@@ -125,6 +126,7 @@
         btn.disabled = false;
         btn.removeAttribute("aria-busy");
         pw.readOnly = false;
+        pw.value = "";
         document.documentElement.classList.remove("token-mode");
       });
 

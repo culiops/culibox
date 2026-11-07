@@ -137,6 +137,79 @@ func TestAuthGuard_NoCookieRedirectsPlain(t *testing.T) {
 	}
 }
 
+// browserSends models the one browser rule this depends on: a cookie whose Expires
+// has passed is dropped, never sent.
+func browserSends(ck *http.Cookie, at time.Time) bool {
+	return ck.Expires.IsZero() || ck.Expires.After(at)
+}
+
+// The real path: a session that times out naturally. The browser keeps the cookie
+// past the signed expiry (Session.Issue), so the guard sees a refused cookie and says
+// "expired"; only once the browser has dropped it does the visit look like a first one.
+func TestAuthGuard_NaturalExpiryNamesItself(t *testing.T) {
+	const ttl = 30 * 24 * time.Hour
+	t0 := time.Unix(1_700_000_000, 0)
+	now := t0
+	ts, _ := auth.OpenTokenStore(t.TempDir() + "/tokens.json")
+	s := &Server{
+		Session: auth.NewSessionWithClock([]byte("0123456789abcdef0123456789abcdef"), ttl, func() time.Time { return now }),
+		Tokens:  ts,
+	}
+	iw := httptest.NewRecorder()
+	s.Session.Issue(iw, false)
+	ck := iw.Result().Cookies()[0]
+
+	nav := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		r.Header.Set("Accept", "text/html")
+		if browserSends(ck, now) {
+			r.AddCookie(ck)
+		}
+		w := httptest.NewRecorder()
+		s.authGuard(okHandler()).ServeHTTP(w, r)
+		return w
+	}
+	check := func(label string, wantCode int, wantLoc string) {
+		t.Helper()
+		if w := nav(); w.Code != wantCode || w.Header().Get("Location") != wantLoc {
+			t.Fatalf("%s: code=%d loc=%q want %d %q", label, w.Code, w.Header().Get("Location"), wantCode, wantLoc)
+		}
+	}
+	now = t0.Add(ttl - time.Hour)
+	check("still valid", http.StatusOK, "")
+	now = t0.Add(ttl + time.Hour)
+	if !browserSends(ck, now) {
+		t.Fatal("the browser dropped the cookie the instant it expired: the guard cannot tell expiry from a first visit")
+	}
+	check("just expired", http.StatusSeeOther, "/login?reason=expired")
+	now = t0.Add(ttl + 29*24*time.Hour)
+	check("expired a month ago", http.StatusSeeOther, "/login?reason=expired")
+	now = t0.Add(ttl + 31*24*time.Hour)
+	if browserSends(ck, now) {
+		t.Fatal("the cookie must not outlive its grace")
+	}
+	check("long gone", http.StatusSeeOther, "/login")
+}
+
+// A bearer token wins over a stale session cookie riding along with it.
+func TestAuthGuard_BearerWithStaleCookieStillAdmitted(t *testing.T) {
+	s, plain := testServerWithAuth(t)
+	r := httptest.NewRequest("GET", "/api/sessions", nil)
+	r.Header.Set("Authorization", "Bearer "+plain)
+	r.AddCookie(agedSessionCookie([]byte("0123456789abcdef0123456789abcdef"), time.Now().Add(-time.Hour).Unix()))
+	var seen credKind
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = credKindOf(r)
+		w.WriteHeader(200)
+	})
+	w := httptest.NewRecorder()
+	s.authGuard(h).ServeHTTP(w, r)
+	if w.Code != 200 || seen != credBearer {
+		t.Fatalf("code=%d kind=%d want 200,credBearer", w.Code, seen)
+	}
+}
+
 // Fetch and WebSocket callers with a stale cookie still get a bare 401: the reason
 // is for a page navigation only, and a redirected upgrade is a confusing failure.
 func TestAuthGuard_ExpiredCookieAPIStill401(t *testing.T) {
