@@ -928,6 +928,9 @@
   }
   #session-menu.open:has(> .menu-item) { display: flex; }
   #session-menu > .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The icons are inline SVG (menuIconSvg), 14px in the 16px slot, stroked in the slot's own colour:
+     muted, red on End session… (no font glyph: those are tofu where no installed font has them). */
+  #session-menu > .menu-item > .menu-icon svg { width: 14px; height: 14px; display: block; }
   #session-menu .mi { font-size: var(--t-md); }
 
   /* The tab switcher reuses #session-menu: a row is the tab plus its close. */

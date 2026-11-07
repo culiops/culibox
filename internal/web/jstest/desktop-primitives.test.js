@@ -492,6 +492,12 @@ test("the session row menu is the kit menu: the kit's surface, rows of --h-menu,
     assert.ok(p.includes(":has(> .menu-item)") || /^#session-menu (\.mi|> \.menu-item)/.test(p), "unexpected #session-menu rule: " + p);
   }
   assert.strictEqual(decl(ruleFor(page, ["#session-menu .mi"]), "font-size"), "var(--t-md)", "the tab switcher's rows are on the type scale (12.5px was off it)");
+  // The row icons are inline SVG (not a font glyph): 14px in the kit's 16px slot, drawn in the text colour.
+  const ico = ruleFor(page, ["#session-menu > .menu-item > .menu-icon svg"]);
+  assert.strictEqual(decl(ico, "width"), "14px");
+  assert.strictEqual(decl(ico, "height"), "14px");
+  assert.strictEqual(decl(ico, "display"), "block");
+  assert.deepStrictEqual(ico.decls.map(([p]) => p).filter((p) => /^(color|stroke|fill)/.test(p)), [], "the icon takes the slot's colour (muted, red on End session…)");
   // A long label never wraps out of its 30px row: it is clipped with an ellipsis.
   const text = ruleFor(page, ["#session-menu > .menu-item > .menu-text"]);
   assert.strictEqual(decl(text, "white-space"), "nowrap");

@@ -194,15 +194,20 @@ test("menuGroups: every item comes through once, in menuItems' own order", () =>
   assert.deepStrictEqual(gids(menuGroups(odd)), [["rename"], ["future"], ["end"]]);
 });
 
-test("menuIcon: the frame's glyphs, and an empty slot for the two the frame draws none for", () => {
+// The icon is a KIND the DOM code draws as inline SVG (a font glyph is tofu where no installed font has it).
+test("menuIcon: the kind of drawing each row has, and none for the two the frame draws no icon for", () => {
   assert.deepStrictEqual(
     ["rename", "files", "attribution", "copycwd", "newpane", "interrupt", "bringhome", "duplicate", "end"].map(menuIcon),
-    ["\u270E", "\u25A4", "\u25D4", "\u2398", "\u25EB", "\u2016", "\u21A7", "\u29C9", "\u2715"]);
+    ["pencil", "files", "pie", "copy", "split", "pause", "tray", "duplicate", "end"]);
   for (const id of ["replies-on", "replies-off", "restart", "nope", undefined]) assert.strictEqual(menuIcon(id), "", String(id));
   // Every id menuItems can produce has an answer (a string), so the builder never prints "undefined".
   const every = menuItems({ claude: true, cwd: "/x", status: "live", activity: "working", clone_of: "/r", runtime: "box" })
     .concat(menuItems({ status: "exited", exited: true }));
   for (const i of every) assert.strictEqual(typeof menuIcon(i.id), "string", i.id);
+  // No two rows share a drawing: Copy working directory and Duplicate in particular stay apart.
+  const kinds = new Map(every.map((i) => [i.id, menuIcon(i.id)]));
+  const drawn = [...kinds.values()].filter((k) => k !== "");
+  assert.strictEqual(new Set(drawn).size, drawn.length, "one kind per id");
 });
 
 // The number keys address the sidebar list the operator is looking at, 1-based.

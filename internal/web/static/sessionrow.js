@@ -133,15 +133,17 @@ function menuGroups(items) {
   return groups.filter((g) => g.length > 0);
 }
 
-// MENU_ICON: the glyph in each row's 16px icon slot (the frame's placeholders: the kit has no
-// icon set yet). Reply opt-in and Restart have none drawn, so they keep an empty slot and their
-// text lines up with the rest.
+// MENU_ICON: the drawing in each row's 16px icon slot, as a KIND the DOM code (menuIconSvg in
+// app.js) draws as inline SVG in the product's icon style. A font glyph is not used: the frame's
+// placeholder characters are tofu wherever no installed font has them. Reply opt-in and Restart
+// have none drawn, so they keep an empty slot and their text lines up with the rest. One kind per
+// id; Copy working directory and Duplicate are neighbours, so they differ (Duplicate adds a plus).
 const MENU_ICON = {
-  rename: "\u270E", files: "\u25A4", attribution: "\u25D4", copycwd: "\u2398", newpane: "\u25EB",
-  interrupt: "\u2016", bringhome: "\u21A7", duplicate: "\u29C9", end: "\u2715",
+  rename: "pencil", files: "files", attribution: "pie", copycwd: "copy", newpane: "split",
+  interrupt: "pause", bringhome: "tray", duplicate: "duplicate", end: "end",
 };
 
-// menuIcon: the glyph for a menuItems id, "" where there is none.
+// menuIcon: the icon kind for a menuItems id, "" where there is none.
 function menuIcon(id) {
   return Object.prototype.hasOwnProperty.call(MENU_ICON, id) ? MENU_ICON[id] : "";
 }

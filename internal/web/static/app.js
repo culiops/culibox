@@ -5886,10 +5886,61 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-// One row of the desktop (kit) session menu: .menu-item > .menu-icon + .menu-text, as frame M5.1
-// draws it. The icon is decoration (aria-hidden); an empty glyph still keeps its 16px slot, so
-// the text of a row with no icon lines up with the rest.
-function kitMenuButton(label, glyph, danger, run) {
+// menuIconSvg: the row icon for a menuIcon kind, as inline SVG in the product's icon style
+// (tabs.js tabIcon / dockIcon: 14x14, no fill, currentColor, 1.2 stroke, round caps and joins),
+// so the menu does not depend on any font having a glyph. Shapes the product already draws are
+// reused: Files is the pane header's folder, Copy and Duplicate are the dock's two windows (the
+// latter with a plus), End session is the dock's cross. The rest are drawn here. null for "".
+function menuIconSvg(kind) {
+  if (!kind) return null;
+  const NS = "http://www.w3.org/2000/svg";
+  const add = (svg, tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    svg.append(n);
+  };
+  let svg;
+  if (kind === "files") {
+    svg = tabIcon("files");
+  } else if (kind === "copy" || kind === "duplicate") {
+    svg = dockIcon("own");
+    if (kind === "duplicate") add(svg, "path", { d: "M5.5 7v3M4 8.5h3" });
+  } else if (kind === "end") {
+    svg = dockIcon("hide");
+  } else {
+    svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 14 14");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.2");
+    if (kind === "pencil") {
+      add(svg, "path", { d: "M2 12l.7-3L9.7 2a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7L5 11.3z" });
+      add(svg, "path", { d: "M8.4 3.3l2.3 2.3" });
+    } else if (kind === "pie") {
+      add(svg, "circle", { cx: "7", cy: "7", r: "5.5" });
+      add(svg, "path", { d: "M7 7V1.5A5.5 5.5 0 0 1 12.5 7z", fill: "currentColor", stroke: "none" });
+    } else if (kind === "split") {
+      add(svg, "rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" });
+      add(svg, "path", { d: "M7 2.5v9" });
+    } else if (kind === "pause") {
+      add(svg, "rect", { x: "3.5", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
+      add(svg, "rect", { x: "8", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
+    } else if (kind === "tray") {
+      add(svg, "path", { d: "M7 2v6.5M4.2 6l2.8 2.8L9.8 6" });
+      add(svg, "path", { d: "M2 9.5v2c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-2" });
+    }
+  }
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("data-icon", kind);
+  return svg;
+}
+
+// One row of the desktop (kit) session menu: .menu-item > .menu-icon + .menu-text, as frame
+// M5.1 draws it. `icon` is a menuIcon kind; the slot is decoration (aria-hidden) and, with no
+// icon, stays an empty 16px box so the text of every row lines up.
+function kitMenuButton(label, icon, danger, run) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = danger ? "menu-item is-danger" : "menu-item";
@@ -5897,7 +5948,8 @@ function kitMenuButton(label, glyph, danger, run) {
   const ic = document.createElement("span");
   ic.className = "menu-icon";
   ic.setAttribute("aria-hidden", "true");
-  ic.textContent = glyph;
+  const svg = menuIconSvg(icon);
+  if (svg) ic.append(svg);
   const tx = document.createElement("span");
   tx.className = "menu-text";
   tx.textContent = label;
