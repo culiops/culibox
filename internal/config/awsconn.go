@@ -123,21 +123,22 @@ func validateAWSConnBinding(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime != RuntimeBox {
-		return errors.New("aws_connections require runtime: box (set it explicitly); the host tier cannot contain credentials")
+		return WithField("aws_connections", errors.New("aws_connections require runtime: box (set it explicitly); the host tier cannot contain credentials"))
 	}
 	if len(a.AWSConnections) > maxBoundAWSConnections {
-		return fmt.Errorf("aws_connections: at most %d entries, got %d", maxBoundAWSConnections, len(a.AWSConnections))
+		return WithField("aws_connections", fmt.Errorf("aws_connections: at most %d entries, got %d", maxBoundAWSConnections, len(a.AWSConnections)))
 	}
 	for i, n := range a.AWSConnections {
+		field := fmt.Sprintf("aws_connections[%d]", i)
 		if !tokenNameRe.MatchString(n) {
-			return fmt.Errorf("aws_connections[%d] %q is not a connection name", i, n)
+			return WithField(field, fmt.Errorf("aws_connections[%d] %q is not a connection name", i, n))
 		}
 		if slices.Contains(a.AWSConnections[:i], n) {
-			return fmt.Errorf("aws_connections[%d] %q is listed twice", i, n)
+			return WithField(field, fmt.Errorf("aws_connections[%d] %q is listed twice", i, n))
 		}
 	}
 	if a.AWS != nil {
-		return errors.New("use either the inline aws binding or aws_connections, not both")
+		return WithField("aws_connections", errors.New("use either the inline aws binding or aws_connections, not both"))
 	}
 	return nil
 }
@@ -151,7 +152,8 @@ func ValidateAWSConnBinding(a AgentConfig) error { return validateAWSConnBinding
 func CheckAWSConnections(a AgentConfig, list []AWSConnection) error {
 	for i, n := range a.AWSConnections {
 		if !slices.ContainsFunc(list, func(c AWSConnection) bool { return c.Name == n }) {
-			return undefinedRef(RefAWS, n, "aws_connections[%d] %q is not defined in aws_connections", i, n)
+			return WithField(fmt.Sprintf("aws_connections[%d]", i),
+				undefinedRef(RefAWS, n, "aws_connections[%d] %q is not defined in aws_connections", i, n))
 		}
 	}
 	return nil

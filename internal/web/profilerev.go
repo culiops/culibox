@@ -165,6 +165,14 @@ func writeSaveErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrChangedOnDisk):
 		writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
 	default:
+		// A validation refusal: the sentence an older client matches on, plus the
+		// field it is about when the refusal names one. One that names no field
+		// has no "field" key; the editor shows it at the top of the open block.
+		var fe *config.FieldError
+		if errors.As(err, &fe) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error(), "field": fe.Path})
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 	}
 }

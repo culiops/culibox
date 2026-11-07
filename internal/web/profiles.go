@@ -59,6 +59,13 @@ type ProfileView struct {
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
 	Options    []ProfileOption `json:"options,omitempty"`
+	// RuntimeAsked is the tier a session of this profile asks for: its own
+	// runtime, else the instance's default_runtime as configured, else "" (it
+	// asks for nothing). Runtime above ends in box when nobody named a tier, so
+	// it cannot tell the two apart, and with no box layer they differ: a session
+	// that asks for box is refused, one that asks for nothing runs on this machine
+	// (session.runtimeFor, launcher.RequestedRuntime).
+	RuntimeAsked string `json:"runtime_asked,omitempty"`
 	// AcceptsPrompt: the spawn form may offer a first message (launcher.AcceptsPrompt).
 	AcceptsPrompt bool `json:"accepts_prompt,omitempty"`
 	// Claude: replies (and their default) apply to this profile at all.
@@ -96,6 +103,23 @@ type ProfileView struct {
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
 	NotHome    *session.NotHomeState `json:"not_home,omitempty"`
+	// What the read view lists beyond the touch line (names, repos, paths and
+	// hosts only, like the fields above). GitHubRepos is each owner's repo list;
+	// GitHubPermissions the EFFECTIVE permission set (the defaults when the
+	// profile sets none), present only with a GitHub binding. EgressAllow are
+	// the profile's extra domains and CloneShare the clone's read-only shared
+	// paths, relative to the repo it clones.
+	GitHubRepos       []ProfileGitHubRepos `json:"github_repos,omitempty"`
+	GitHubPermissions map[string]string    `json:"github_permissions,omitempty"`
+	EgressAllow       []string             `json:"egress_allow,omitempty"`
+	CloneShare        []string             `json:"clone_share,omitempty"`
+}
+
+// ProfileGitHubRepos is one owner of a profile's GitHub binding and the repos it
+// reaches there. Never the App or token entry that backs the owner.
+type ProfileGitHubRepos struct {
+	Owner string   `json:"owner"`
+	Repos []string `json:"repos"`
 }
 
 // ProfileAWSInline names a profile's legacy inline AWS binding for the spawn
@@ -455,6 +479,10 @@ func (m *ProfileManager) Views() []ProfileView {
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a)
+		asked := a.Runtime
+		if asked == "" {
+			asked = m.defaultRuntime
+		}
 		bound := a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0
 		source := ProfileSourceConfig
 		switch {
@@ -469,6 +497,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			Editable:      source == ProfileSourceRuntime,
 			Source:        source,
 			Runtime:       rt,
+			RuntimeAsked:  asked,
 			DefaultCwd:    a.DefaultCwd,
 			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
 			Claude:        launcher.IsClaudeBin(a.Bin),
@@ -483,6 +512,8 @@ func (m *ProfileManager) Views() []ProfileView {
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
 			ImportsOff:     a.ImportsOff,
+			EgressAllow:    slices.Clone(a.EgressAllow),
+			CloneShare:     slices.Clone(a.CloneShare),
 		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
@@ -503,7 +534,9 @@ func (m *ProfileManager) Views() []ProfileView {
 		if a.GitHub != nil {
 			for _, o := range a.GitHub.Owners {
 				pv.GitHubOwners = append(pv.GitHubOwners, o.Owner)
+				pv.GitHubRepos = append(pv.GitHubRepos, ProfileGitHubRepos{Owner: o.Owner, Repos: append([]string{}, o.Repos...)})
 			}
+			pv.GitHubPermissions = a.GitHub.EffectivePermissions()
 			pv.GitHubWrite = a.GitHub.PushRoute()
 			pv.GitHubPAT = a.GitHub.HasPAT()
 		}
@@ -640,7 +673,7 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
 		if rt == config.RuntimeBox {
 			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.protected); bad {
-				return fmt.Errorf("default working dir cannot be contained: %s", reason)
+				return config.WithField("default_cwd", fmt.Errorf("default working dir cannot be contained: %s", reason))
 			}
 		}
 	}
@@ -684,7 +717,7 @@ func (m *ProfileManager) checkClone(p config.AgentConfig) error {
 		return err
 	}
 	if rt := (config.Config{DefaultRuntime: m.defaultRuntime}).RuntimeFor(p); rt != config.RuntimeBox {
-		return errors.New(`clone mode needs runtime "box" (this instance defaults to host)`)
+		return config.WithField("clone_of", errors.New(`clone mode needs runtime "box" (this instance defaults to host)`))
 	}
 	m.mu.Lock()
 	check := m.cloneCheck
@@ -692,7 +725,7 @@ func (m *ProfileManager) checkClone(p config.AgentConfig) error {
 	if check == nil {
 		return nil
 	}
-	return check(*c)
+	return config.WithField("clone_of", check(*c))
 }
 
 // checkContextPaths is the save-time form of the context_paths checks: the
@@ -704,7 +737,7 @@ func (m *ProfileManager) checkContextPaths(p config.AgentConfig) error {
 		return nil
 	}
 	if rt := (config.Config{DefaultRuntime: m.defaultRuntime}).RuntimeFor(p); rt != config.RuntimeBox {
-		return config.ErrContextNeedsBox
+		return config.WithField("context_paths", config.ErrContextNeedsBox)
 	}
 	m.mu.Lock()
 	check := m.contextCheck
@@ -712,9 +745,9 @@ func (m *ProfileManager) checkContextPaths(p config.AgentConfig) error {
 	if check == nil {
 		return nil
 	}
-	for _, path := range p.ContextPaths {
+	for i, path := range p.ContextPaths {
 		if err := check(path); err != nil {
-			return err
+			return config.WithField(fmt.Sprintf("context_paths[%d]", i), err)
 		}
 	}
 	return nil
@@ -770,37 +803,37 @@ func (m *ProfileManager) checkAccount(p config.AgentConfig) error {
 	// The account owns the config dir whichever account the profile names.
 	for k := range p.Env {
 		if k == "CLAUDE_CONFIG_DIR" || k == "CODEX_HOME" {
-			return fmt.Errorf("profile %q: %s is set by the agent account, not the profile", p.Name, k)
+			return config.WithField("env", fmt.Errorf("profile %q: %s is set by the agent account, not the profile", p.Name, k))
 		}
 	}
 	if p.Account == "" || p.Account == account.Default {
 		return nil
 	}
 	if m.accounts == nil {
-		return fmt.Errorf("profile %q: agent accounts are not configured", p.Name)
+		return config.WithField("account", fmt.Errorf("profile %q: agent accounts are not configured", p.Name))
 	}
 	acct, err := m.accounts.Resolve(p.Account)
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return config.WithField("account", fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 	switch acct.Provider {
 	case account.ProviderClaude:
 		if !launcher.IsClaudeBin(p.Bin) {
-			return fmt.Errorf("profile %q: bin %s cannot use claude account %q", p.Name, p.Bin, p.Account)
+			return config.WithField("account", fmt.Errorf("profile %q: bin %s cannot use claude account %q", p.Name, p.Bin, p.Account))
 		}
 	case account.ProviderCodex:
 		if p.Bin == "" || filepath.Base(p.Bin) != "codex" {
-			return fmt.Errorf("profile %q: bin %s cannot use codex account %q", p.Name, p.Bin, p.Account)
+			return config.WithField("account", fmt.Errorf("profile %q: bin %s cannot use codex account %q", p.Name, p.Bin, p.Account))
 		}
 	}
-	for _, n := range p.Secrets {
+	for i, n := range p.Secrets {
 		if account.IsAuthEnv(n) {
-			return fmt.Errorf("profile %q: secret %s conflicts with account %q; set the token on the account", p.Name, n, p.Account)
+			return config.WithField(fmt.Sprintf("secrets[%d]", i), fmt.Errorf("profile %q: secret %s conflicts with account %q; set the token on the account", p.Name, n, p.Account))
 		}
 	}
 	for k := range p.Env {
 		if account.IsAuthEnv(k) {
-			return fmt.Errorf("profile %q: env %s conflicts with account %q", p.Name, k, p.Account)
+			return config.WithField("env", fmt.Errorf("profile %q: env %s conflicts with account %q", p.Name, k, p.Account))
 		}
 	}
 	return nil

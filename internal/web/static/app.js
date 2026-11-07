@@ -163,7 +163,8 @@ function drawerDesktop() {
 // that is what is already showing, or switches.
 function toggleDrawer(kind, sessionId) {
   if (!drawerDesktop()) return;
-  closePage(); // a drawer hangs over the panes, which a page hides
+  // A drawer hangs over the panes, which a page hides: close it first, or leave things as they are if it is kept.
+  if (closePageHolds(() => toggleDrawer(kind, sessionId))) return;
   applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
 }
 
@@ -173,7 +174,7 @@ function toggleDrawer(kind, sessionId) {
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
   if (!drawerDesktop()) return;
-  closePage();
+  if (closePageHolds(() => openDrawer(kind, sessionId, opts))) return;
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
@@ -3526,8 +3527,8 @@ $("agent").addEventListener("change", () => {
 function applyProfileCwd() {
   const p = currentProfile();
   if (!p || !p.default_cwd) return;
-  setSwsCwd(p.default_cwd);
-  onSwsCwdChanged();
+  setSpawnCwd(p.default_cwd);
+  onSpawnCwdChanged();
 }
 
 // renderPfWorkspaceOptions builds the profile-editor working-dir picker for the
@@ -3604,10 +3605,6 @@ function renderPfOptions(current) {
   $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
     row.className = "frow";
-    // The desktop Settings page places a row by its key (model and effort sit
-    // in the Agent block, the rest under Advanced) with CSS alone: the row has
-    // to stay inside #pf-options, which is what readForm scans.
-    row.dataset.opt = o.key;
     const col = document.createElement("div");
     col.className = "fcol";
     const lbl = document.createElement("label");
@@ -3733,7 +3730,8 @@ function applyCredLists(meta) {
   renderAwscPicker(ticksAfterRefresh(readAwscTicked(), oldAwsc, names(awscs)));
   renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
   syncEditorActions();
-  renderPfTouch();
+  // The profile page reads the same lists: a row it called missing may exist now.
+  if (typeof pfvMetaChanged === "function") pfvMetaChanged();
 }
 let credListsPainted = false;
 // refreshCredLists re-reads /api/meta and repaints the pickers: when the
@@ -3765,6 +3763,16 @@ let pfImportsAbsent = false;
 let pfImportsSeq = 0;
 async function refreshPfImports() {
   const seq = ++pfImportsSeq;
+  // Bundling is off: the route is not registered, so asking is a guaranteed 404
+  // (#151). That is the "absent" answer already; take it without the request.
+  // Before /api/meta has answered nothing is known, so the request still goes.
+  if (metaLoaded && !bundleImports) {
+    pfImportsSet = null;
+    pfImportsFailed = false;
+    pfImportsAbsent = true;
+    paintPfImports();
+    return;
+  }
   let set = null;
   let failed = false;
   let absent = false;
@@ -3812,11 +3820,11 @@ function paintPfImports() {
   $("pf-imports-refused").hidden = !st.refused;
 }
 
-// --- the profile form's "Can touch" line (desktop Settings page) ------------
+// --- the desktop profile page's reach view (profilepage.js) -----------------
 // pfCredsView: what GET /api/credentials said when the Profiles tab was last
 // shown (the store lock and the elevate windows), or null: never fetched, or
-// it failed, and the line then has no Store part and no window. Desktop only,
-// like the New session box that reads the same view (spawnpanel.js).
+// it failed, and the reach words then have no Store part and no window. Desktop
+// only, like the New session box that reads the same view (spawnpanel.js).
 let pfCredsView = null;
 let pfCredsSeq = 0;
 // `known` is a view the caller has just read: it is used as it is, with no second
@@ -3835,40 +3843,7 @@ async function refreshPfCreds(known) {
   }
   if (seq !== pfCredsSeq) return;
   pfCredsView = got;
-  renderPfTouch();
-}
-// renderPfTouch paints #pf-touch from what the form holds right now, with the
-// New session box's own rules (reachRows) and renderer (paintReachRows). Run
-// from fillForm, after the credential lists repaint, and (debounced) on every
-// edit inside the form. Base CSS hides the box on a phone, where it is skipped.
-// pfTouchKey: what #pf-touch shows now. The box is aria-live, so it is only
-// repainted when the text changes; a keystroke that changes nothing it says
-// must not make a screen reader read the whole line again.
-let pfTouchKey = "";
-function renderPfTouch() {
-  const box = $("pf-touch");
-  if (!box || !drawerDesktop()) return;
-  const form = readForm();
-  const view = profiles.find((x) => x.name === selectedProfileName()) || null;
-  // Without a box layer every session is host, whatever the seg shows.
-  const tier = (metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host" ? "host" : "box";
-  const rows = reachRows({
-    // "open" is only ever reported when egress is mandatory for every boxed spawn.
-    profile: pfTouchProfile(form, { view, claude: isClaudeBinName(form.bin), egressAll: profiles.some((x) => x.network === "open") }),
-    tier,
-    cwd: shortPath(pfMode() === "copy" ? $("pf-copy-dir").value.trim() : pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
-    meta: { aws_connections: awscEntries },
-    creds: pfCredsView,
-  });
-  const key = JSON.stringify(rows);
-  if (key === pfTouchKey && box.childNodes.length) return;
-  pfTouchKey = key;
-  paintReachRows(box, rows, { inline: true, title: "Can touch" });
-}
-let pfTouchTimer = 0;
-function schedulePfTouch() {
-  clearTimeout(pfTouchTimer);
-  pfTouchTimer = setTimeout(renderPfTouch, 150);
+  if (typeof pfvMetaChanged === "function") pfvMetaChanged();
 }
 
 // The stored binding as loaded: the editor has no field for its extra egress
@@ -4308,7 +4283,6 @@ function fillForm(p) {
   $("pf-awsc-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
-  renderPfTouch();
   refreshPfImports();
 }
 // syncEditorActions is the single place that decides what the editor may do,
@@ -4433,7 +4407,7 @@ function syncPfMode() {
   $("pf-mode-copy-card").classList.toggle("off", st.copyDisabled);
   folderRadio.closest(".pf-mode-card").classList.toggle("off", folderRadio.disabled);
   $("pf-mode-copy-why").textContent = st.copyReason;
-  // Same tier test as renderPfTouch: no box layer means every session is host.
+  // No box layer means every session is host, whatever the seg shows.
   const folderCopy = wmFolderCopy((metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host");
   $("pf-mode-folder-body").textContent = folderCopy.body;
   $("pf-mode-diff-commit").textContent = folderCopy.commitCell;
@@ -4516,12 +4490,6 @@ function readForm() {
   // Only when a connection is ticked: no key keeps a legacy profile's JSON as it was.
   const conns = awscToSend(readAwscTicked());
   if (conns) p.aws_connections = conns;
-  // The tier is always sent as shown (see runtimeToSend): a blank would let the
-  // instance default decide, and on a host-default instance that turns a profile
-  // the editor lit as "box" into a host one. The server's own message answers an
-  // AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
-  if (rt) p.runtime = rt;
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -4556,19 +4524,21 @@ function readForm() {
   // config, a locked profile) keeps the stored value rather than dropping it.
   const importsUsable = !$("pf-imports-row").hidden && !$("pf-imports").disabled;
   if (importsOffToSend(importsUsable, $("pf-imports").checked, pfLoaded && pfLoaded.imports_off)) p.imports_off = true;
+  // The tier is always sent as shown (see runtimeToSend): a blank would let the
+  // instance default decide, and on a host-default instance that turns a profile
+  // the editor lit as "box" into a host one. The server's own message answers an
+  // AWS binding saved on the host tier. It is read last, from the whole profile:
+  // with no box layer, whether a blank is kept depends on whether p holds a token,
+  // egress, a readable folder or a private copy, and those keys are set above.
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime, p);
+  if (rt) p.runtime = rt;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
 // dialog's own inline line. A toast is fixed-position and paints beneath a modal
 // backdrop, which would leave the failure invisible.
-// pfSaveError: a Save that did not happen. On the desktop page the line can be
-// about a field folded under Advanced (the allowlist's rows, or a server refusal
-// naming args, an option or the base environment), so any failed Save opens the
-// fold: a message pointing at a field nobody can see is a dead end.
-// The fold opens FIRST: the line scrolls itself into view, and opening the fold
-// afterwards adds the Advanced block above it and pushes it off screen.
+// pfSaveError: a Save that did not happen.
 function pfSaveError(msg) {
-  setPfAdvOpen(true);
   setDialogError("settings-modal", msg);
 }
 async function saveProfile() {
@@ -4653,7 +4623,6 @@ async function saveProfile() {
       // The profile now exists, so the editor is no longer a draft even if the
       // reload below fails (a second Save must PUT, not POST again).
       selectedProfile = p.name;
-      pfUserDraft = false;
       try {
         // No background retry: one that succeeds later would leave the "Saved, but
         // reloading it failed" line on screen next to a good list.
@@ -4678,11 +4647,8 @@ async function saveProfile() {
     syncEditorActions();
   }
 }
-// The banner for a save the server refused as stale. The fold opens FIRST, as in
-// pfSaveError: opening it after the scroll adds the Advanced block above the
-// banner and pushes it off screen.
+// The banner for a save the server refused as stale.
 function showPfStale(model) {
-  setPfAdvOpen(true);
   $("pf-stale-msg").textContent = model.message;
   $("pf-stale").hidden = false;
   $("pf-stale").scrollIntoView({ block: "nearest" });
@@ -4717,7 +4683,6 @@ function duplicateProfile() {
     else delete draft.default_cwd;
   }
   selectedProfile = "";
-  pfUserDraft = true;
   fillForm(draft);
   // fillForm took the saved mode and copy dir from an unsaved draft; nothing is
   // saved yet, so no "your private copy stays on disk" note may name a directory
@@ -4732,10 +4697,15 @@ function duplicateProfile() {
   $("pf-name").focus();
   $("pf-name").select();
 }
+// profilePageHolds: the desktop profile page holds unsaved block changes and is asking whether to leave them
+// (profilepage.js pfvHold). true = the caller stops; `again` runs when the answer is Discard. Always false on a
+// phone, where the page does not exist.
+function profilePageHolds(again) {
+  return typeof pfvHold === "function" && pfvHold(again);
+}
 async function editProfile(name) {
   setDialogError("settings-modal", "");
   selectedProfile = name;
-  pfUserDraft = false;
   // Same drill-down as newProfile(); inert above 700px, where both columns
   // are already on screen.
   $("settings-modal").classList.add("editing");
@@ -4765,44 +4735,6 @@ async function deleteProfile(name) {
 // marker is not inferred from the name.
 let selectedProfile = "";
 function selectedProfileName() { return selectedProfile; }
-// pfUserDraft: the editor holds a draft the user started (+ new profile,
-// Duplicate), which the page's preselect below must never replace.
-let pfUserDraft = false;
-let pfPreselecting = false;
-// pfMarkDraft: any edit to the editor while no profile is selected makes the
-// form a draft, so a preselect still in flight leaves it alone. A selected
-// profile needs no flag (the preselect bails on selectedProfile), and fillForm
-// is programmatic, so it fires none of these events. A click counts only on a
-// segmented control (tier, runtime), the one input that is a button.
-function pfMarkDraft(e) {
-  if (selectedProfile) return;
-  if (e.type === "click" && !(e.target.closest && e.target.closest(".seg button"))) return;
-  pfUserDraft = true;
-}
-// preselectPageProfile: the desktop Settings page opens Profiles on a profile
-// (pg-1b), the first one you own, else the first one, rather than on a blank
-// draft. Page only: a phone keeps its list-first view.
-async function preselectPageProfile() {
-  const page = () => $("settings-modal").classList.contains("as-page");
-  if (!page() || selectedProfile || pfUserDraft || pfPreselecting) return;
-  pfPreselecting = true;
-  try {
-    if (!profilesLoaded) await loadProfiles(false);
-    const p = profiles.find((x) => x.editable) || profiles[0];
-    if (!p || !page() || selectedProfile || pfUserDraft) return;
-    const full = await api("/api/profiles/" + encodeURIComponent(p.name));
-    if (!page() || selectedProfile || pfUserDraft) return;
-    selectedProfile = p.name;
-    fillForm(full);
-    setDialogError("settings-modal", "");
-    renderProfileList();
-    syncEditorActions();
-  } catch (_) {
-    // Nothing chosen: the blank form stays, as before.
-  } finally {
-    pfPreselecting = false;
-  }
-}
 function renderProfileList() {
   $("pf-list").replaceChildren(...profiles.map((p) => {
     const li = document.createElement("li");
@@ -4820,9 +4752,7 @@ function renderProfileList() {
       lk.textContent = labels.badge;
       b.appendChild(lk);
     }
-    // Outside .psub on purpose: the mobile list hides .psub, and work that has
-    // not come home must stay visible there. Before .psub so it sits on the
-    // name's line, not under the full-width second line.
+    // Work that has not come home sits on the name's line, at every width.
     const nhLabel = notHomeLabel(p.not_home);
     if (nhLabel) {
       const nh = document.createElement("span");
@@ -4831,16 +4761,12 @@ function renderProfileList() {
       nh.title = notHomeTitle(p.not_home);
       b.appendChild(nh);
     }
-    // The desktop page's second line (pg-1b): "claude · box", "config.json · host".
-    // Hidden at <= 700px, where the row stays one line.
-    const sub = document.createElement("span");
-    sub.className = "psub";
-    sub.textContent = labels.sub;
-    b.appendChild(sub);
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);
     return li;
   }));
+  // The desktop page lists the profiles in its nav instead (profilepage.js).
+  if (typeof pfvRenderNav === "function") pfvRenderNav();
 }
 $("pf-save").addEventListener("click", saveProfile);
 // newProfile() also runs once at boot (below) to seed the editor pane with a
@@ -4848,7 +4774,9 @@ $("pf-save").addEventListener("click", saveProfile);
 // mobile editor view, so the class is added here, at the actual button press,
 // rather than inside newProfile() itself.
 $("pf-new").addEventListener("click", () => {
-  pfUserDraft = true;
+  if (profilePageHolds(() => $("pf-new").click())) return;
+  // The desktop page has its own New profile page (pfv-new.js); the blank form below is the phone's.
+  if (typeof pfvOnPage === "function" && pfvOnPage() && typeof pfvNew === "function") { pfvNew(); return; }
   newProfile();
   $("settings-modal").classList.add("editing");
 });
@@ -4860,29 +4788,10 @@ $("pf-back").addEventListener("click", () => {
 });
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
-// Discard (desktop page footer): back to what the server holds for this
-// profile, or a blank form when the editor holds an unsaved draft.
-function discardProfileEdits() {
-  const name = selectedProfileName();
-  if (name) editProfile(name);
-  else newProfile();
-}
-$("pf-discard").addEventListener("click", discardProfileEdits);
 $("pf-stale-reload").addEventListener("click", reloadStaleProfile);
-// Advanced (desktop page): folds base environment, the other options, replies,
-// args and the allowlist. CSS only hides them; every field stays in the form.
-function setPfAdvOpen(open) {
-  $("pf-adv").closest(".ped").classList.toggle("adv-open", open);
-  $("pf-adv").setAttribute("aria-expanded", open ? "true" : "false");
-}
-$("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".ped").classList.contains("adv-open")));
-// Any edit in the form re-derives the Can touch line; a seg or a picker change
-// is a click, so clicks count too.
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
 // The GitHub hint follows the GitHub and Tokens blocks, so every edit re-derives
 // the work-mode display (syncPfMode is display only and cheap).
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, syncPfMode);
-for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, pfMarkDraft);
+for (const ev of ["input", "change", "click"]) $("manage").querySelector(".ped").addEventListener(ev, syncPfMode);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
 // that happens.
@@ -4918,7 +4827,6 @@ for (const r of document.querySelectorAll('input[name="pf-mode"]')) {
   r.addEventListener("change", () => {
     pfFillCopyDir();
     syncEditorActions();
-    renderPfTouch();
   });
 }
 $("pf-copy-gh-link").addEventListener("click", (e) => {
@@ -4937,351 +4845,56 @@ let workspacesCache = [];
 async function loadWorkspaces() {
   try {
     workspacesCache = (await api("/api/workspaces")) || [];
-    // Refresh whatever depends on it: the idle rows/caption — but only when
-    // nothing is actively being searched, so a fuzzy query in flight is never
-    // clobbered by a background workspaces refresh — and the unboxable-
-    // workspace warning, which looks workspacesCache up by path.
-    if (swsInput && classifyPickerQuery(swsInput.value).mode !== "fuzzy") {
-      const rows = swsIdleRows();
-      if (swsList && !swsList.hidden) swsRender(rows);
-      swsSetCaption(spawnWsIdleNote(rows.length));
-    }
+    // Refresh whatever depends on it: the picker's idle rows/caption (it skips
+    // them while a fuzzy query is being searched, so a search in flight is never
+    // clobbered by a background workspaces refresh) and the unboxable-workspace
+    // warning, which looks workspacesCache up by path.
+    if (spawnWsPicker) spawnWsPicker.refresh();
     updateRuntimeWarning();
   } catch (_) {}
 }
 
 // --- spawn workspace picker (D5) --------------------------------------------
-// A dialog-local mirror of dirpicker.js's dpX behaviour: same backend
-// (GET /api/fs/search?kind=dir, GET /api/workspaces — already cached above in
-// workspacesCache), same exported PURE functions (classifyPickerQuery,
-// pickerRows, pickerCollapseAt, pickerShouldSelectAll, pickerReopenMode,
-// pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote), same
-// debounce + AbortController + sequence-guard shape and the same "note row
-// appended LAST so index math holds" — but its OWN DOM (#spawn-ws-input/
-// #spawn-ws-list) and OWN local state (sws*), not a second caller of
-// initDirPicker.
-//
-// That control's dpInput/dpList/dpSeq/... are MODULE-GLOBAL and bound to
-// #ft-root-input, with a measured mousedown->focus->click ordering and a
-// documented boot-restore race (dirpicker.js). Routing this dialog through
-// that same state would mean the file tree and the spawn dialog fight over
-// one dpActive/dpRows/dpAbort — whichever opened last would silently steal
-// the other's search. A second, independent instance costs ~150 lines of
-// mirrored wiring; sharing costs a control that intermittently reroots the
-// file tree when a session is spawned, or vice versa.
-//
-// swsCwd is the actual, resolved candidate cwd — deliberately NOT read back
-// from swsInput.value, for the same reason ftRootPath isn't (filetree.js):
-// the input doubles as the picker's live search box, and only a successful
-// pick, an absolute-path resolve, or a literal typed "/..." path updates it.
-// Escape, an outside click, or a half-typed fuzzy query left sitting in
-// .value must never itself become the spawn cwd — this is a form that starts
-// real agent sessions, unlike the file tree's read-only re-root.
-const SWS_DEBOUNCE_MS = 120, SWS_FETCH_MS = 4000;
-let swsInput = null, swsList = null, swsRows = [], swsActive = -1;
-let swsSeq = 0, swsTimer = null, swsAbort = null, swsCwd = "";
-let swsPointerGesture = false;
+// The New session dialog's Workspace field is one createWsPicker (wspicker.js),
+// the same factory the profile page's Workspace block builds for itself. The
+// reasoning for why the picker's state is its own and not dirpicker.js's
+// module globals, and why value() is the resolved folder and never the raw
+// search text, lives with the factory.
+let spawnWsPicker = null;
 
 function initSpawnWsPicker() {
-  swsInput = $("spawn-ws-input");
-  swsList = $("spawn-ws-list");
-  if (!swsInput || !swsList) return;
-  swsInput.addEventListener("input", () => {
-    // A typed absolute path is a valid cwd candidate immediately — no pick or
-    // Enter required — exactly like the old #cwd-custom field it replaces.
-    // A fuzzy query is NOT: a live search string must never itself become the
-    // spawn cwd, so swsCwd is left at whatever was last resolved/picked.
-    const c = classifyPickerQuery(swsInput.value);
-    if (c.mode === "path") swsCwd = c.value;
-    else if (c.mode === "empty") swsCwd = "";
-    swsQuery(swsInput.value);
-    onSwsCwdChanged();
-  });
-  // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same
-  // pure functions, same measured ordering) so a click into an already-filled
-  // field selects the whole path instead of splicing into it — the exact bug
-  // that control spent five rounds closing.
-  swsInput.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    swsPointerGesture = true;
-    const at = pickerCollapseAt(swsInput.selectionStart, swsInput.selectionEnd);
-    if (at !== null) swsInput.setSelectionRange(at, at);
-  });
-  document.addEventListener("mouseup", () => { swsPointerGesture = false; });
-  swsInput.addEventListener("focus", () => {
-    const pointer = swsPointerGesture;
-    swsPointerGesture = false;
-    if (!pointer) swsInput.select();
-    swsReopen();
-  });
-  swsInput.addEventListener("click", () => {
-    if (pickerShouldSelectAll(swsInput.value, swsInput.selectionStart === swsInput.selectionEnd)) {
-      swsInput.select();
-    }
-    swsReopen();
-  });
-  swsInput.addEventListener("keydown", swsKeydown);
-  // Tabbing on from the field (or from the scrollable list) closes the list, so
-  // it never sits over the next field. A pointer press on a non-focusable row
-  // moves focus to an ANCESTOR of the list (Chrome: the <dialog>), never to a
-  // field, and closing then would empty the rows before the click picks one;
-  // the click handlers below own pointer dismissal. Tab never lands on a
-  // container, so skipping ancestors exempts only pointer presses.
-  const swsFocusOut = (e) => {
-    const to = e.relatedTarget;
-    if (to && to !== swsInput && !swsList.contains(to) && !to.contains(swsList)) swsClose();
-  };
-  swsInput.addEventListener("focusout", swsFocusOut);
-  swsList.addEventListener("focusout", swsFocusOut);
-  document.addEventListener("click", (e) => {
-    if (e.target !== swsInput && !swsList.contains(e.target)) swsClose();
-  });
-  window.addEventListener("resize", () => { if (!swsList.hidden) swsOpen(true); });
+  const input = $("spawn-ws-input");
+  const list = $("spawn-ws-list");
+  if (!input || !list) return;
+  spawnWsPicker = createWsPicker({ input, list, onPick: onSpawnCwdChanged, onNote: setSpawnWsNote });
 }
 
-// setSwsCwd is the ONE place that both the canonical cwd and the field's
-// displayed value are written together — a pick, a resolved path, a profile's
-// default_cwd, or the last-spawn fallback. Live typing (above) updates swsCwd
-// alone, since the input already shows what was typed.
-function setSwsCwd(path) {
-  swsCwd = path || "";
-  if (swsInput) swsInput.value = swsCwd;
+// setSpawnCwd writes the canonical cwd and the field's displayed value together
+// — a pick, a resolved path, a profile's default_cwd, or the last-spawn
+// fallback. It does not call onSpawnCwdChanged: its callers do.
+function setSpawnCwd(path) {
+  if (spawnWsPicker) spawnWsPicker.set(path);
 }
-function getCwd() { return swsCwd; }
+// getCwd is the picker's value: the resolved directory, never the half-typed query.
+function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // Called on every cwd change (typing an absolute path, a pick, a resolve, a
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
-function onSwsCwdChanged() {
+function onSpawnCwdChanged() {
   updateTierExplain();
   updateRuntimeWarning();
 }
 
-function swsSetCaption(text) {
+// The picker's caption under the field (its own idle line, or what a search found).
+function setSpawnWsNote(text) {
   const el = $("spawn-ws-note");
   if (el) el.textContent = text || "";
-}
-function swsIdleRows() {
-  return pickerRows({ mode: "empty", workspaces: workspacesCache });
-}
-
-function swsReopen() {
-  const mode = pickerReopenMode(swsInput.value, !swsList.hidden);
-  if (mode === "empty") {
-    const rows = swsIdleRows();
-    swsRender(rows);
-    swsSetCaption(spawnWsIdleNote(rows.length));
-  } else if (mode === "search") swsQuery(swsInput.value);
-  // "none": the open list already shows this search — see pickerReopenMode.
-}
-
-function swsQuery(raw) {
-  const c = classifyPickerQuery(raw);
-  const seq = ++swsSeq;
-  if (swsTimer) { clearTimeout(swsTimer); swsTimer = null; }
-  if (swsAbort) { swsAbort.abort(); swsAbort = null; }
-  if (c.mode === "path") {
-    // Only the server can say whether this is a real directory — Enter asks
-    // it (swsResolvePath) — but the caption still reads as steady-state, not
-    // as an active search, matching pickerReopenMode's own path/empty split.
-    swsClose();
-    swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
-    return;
-  }
-  if (c.mode === "empty") {
-    const rows = swsIdleRows();
-    swsRender(rows);
-    swsSetCaption(spawnWsIdleNote(rows.length));
-    return;
-  }
-  swsTimer = setTimeout(() => swsSearch(c.value, seq), SWS_DEBOUNCE_MS);
-}
-
-async function swsSearch(q, seq) {
-  const ac = new AbortController();
-  swsAbort = ac;
-  const timer = setTimeout(() => ac.abort(), SWS_FETCH_MS);
-  let data = null, failed = false;
-  try {
-    const res = await fetch("/api/fs/search?kind=dir&limit=40&q=" + encodeURIComponent(q), { signal: ac.signal });
-    if (res.ok) data = await res.json();
-    else failed = true;
-  } catch (_) {
-    // Offline, or the SWS_FETCH_MS timeout fired. An abort from swsQuery or
-    // swsClose also lands here, but both bump swsSeq first, so the guard
-    // below returns before this ever reaches the screen as a failure.
-    failed = true;
-  } finally { clearTimeout(timer); }
-  if (seq !== swsSeq) return; // a newer query already won
-  swsAbort = null;
-  const broke = failed || !data;
-  const rows = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
-  const note = dirPickerNote(rows.length, !!(data && data.truncated), broke);
-  swsRender(rows, note);
-  swsSetCaption(note);
-}
-
-// `note`, when non-empty, renders one extra row that is NOT in swsRows — so
-// swsMove cannot arrow onto it and swsChoose cannot pick it — appended LAST so
-// swsMove's dpList.children[swsActive] lookup isn't shifted by it.
-function swsRender(rows, note) {
-  swsRows = rows; swsActive = -1;
-  swsInput.removeAttribute("aria-activedescendant");
-  swsList.replaceChildren(...rows.map((r, i) => {
-    const el = document.createElement("div");
-    el.className = "ft-opt";
-    el.setAttribute("role", "option");
-    el.setAttribute("aria-selected", "false");
-    el.id = "sws-opt-" + i;
-    const lab = document.createElement("span");
-    lab.textContent = r.label;
-    const hint = document.createElement("span");
-    hint.className = "hint";
-    hint.textContent = r.hint;
-    el.append(lab, hint);
-    el.title = r.path;
-    el.onclick = () => swsChoose(i);
-    return el;
-  }));
-  if (note) {
-    const el = document.createElement("div");
-    el.className = "ft-note";
-    el.setAttribute("role", "option");
-    el.setAttribute("aria-disabled", "true");
-    el.textContent = note;
-    swsList.append(el);
-  }
-  swsOpen(rows.length > 0 || !!note);
-}
-
-function swsOpen(show) {
-  swsInput.setAttribute("aria-expanded", show ? "true" : "false");
-  if (show) {
-    // #spawn-ws-list is position: fixed, computed from swsInput's rect, not
-    // from an ancestor — .dlg-body clips overflow, and fixed positioning is
-    // how the dropdown escapes that (see #ft-root-list's identical comment).
-    const r = swsInput.getBoundingClientRect();
-    const below = window.innerHeight - r.bottom;
-    swsList.style.left = r.left + "px";
-    swsList.style.width = r.width + "px";
-    if (below < 120 && r.top > below) {
-      swsList.style.top = "";
-      swsList.style.bottom = (window.innerHeight - r.top) + "px";
-      swsList.style.maxHeight = Math.max(80, r.top - 8) + "px";
-    } else {
-      swsList.style.bottom = "";
-      swsList.style.top = r.bottom + "px";
-      swsList.style.maxHeight = Math.max(80, below - 8) + "px";
-    }
-  }
-  swsList.hidden = !show;
-}
-
-function swsClose() {
-  if (!swsInput || !swsList) return;
-  swsOpen(false);
-  if (swsTimer) { clearTimeout(swsTimer); swsTimer = null; }
-  if (swsAbort) { swsAbort.abort(); swsAbort = null; }
-  swsSeq++;
-  swsRows = []; swsActive = -1;
-  swsInput.removeAttribute("aria-activedescendant");
-}
-
-function swsMove(delta) {
-  if (!swsRows.length) return;
-  const prev = swsList.children[swsActive];
-  if (prev) prev.setAttribute("aria-selected", "false");
-  swsActive = pickerNextIndex(swsActive, delta, swsRows.length);
-  const el = swsList.children[swsActive];
-  if (el) {
-    el.setAttribute("aria-selected", "true");
-    el.scrollIntoView({ block: "nearest" });
-    swsInput.setAttribute("aria-activedescendant", el.id);
-  }
-}
-
-function swsChoose(i) {
-  const r = swsRows[i];
-  if (!r) return;
-  swsClose();
-  setSwsCwd(r.path);
-  swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
-  onSwsCwdChanged();
-}
-
-function swsKeydown(e) {
-  if (e.key === "ArrowDown") { e.preventDefault(); swsMove(1); return; }
-  if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
-  if (e.key === "Escape") { swsClose(); return; }
-  if (e.key !== "Enter") return;
-  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl); its submit
-  // handler asks spawnHotkeyAction and settles the field itself (swsSettle):
-  // handling it here too would act twice.
-  if (e.ctrlKey || e.metaKey) return;
-  // Prevented unconditionally: this field lives inside the #spawn form, and
-  // Enter's default action there is submitting it — the caption's own "↵ to
-  // pick" promise would be a lie if Enter here silently spawned the session
-  // instead of resolving the field.
-  e.preventDefault();
-  swsEnter();
-}
-// swsEnter: what Enter means in the workspace field: pick the highlighted row,
-// else resolve a typed path or take the first row.
-function swsEnter() {
-  if (swsActive >= 0) { swsChoose(swsActive); return; }
-  const c = classifyPickerQuery(swsInput.value);
-  const act = pickerEnterAction(c.mode, swsRows.length);
-  if (act === "resolve") swsResolvePath(c.value);
-  else if (act === "first") swsChoose(0);
-}
-// swsSettle: a submit found the field showing something other than the directory
-// in use (spawnHotkeyAction). Do what Enter does; when that settles nothing (a
-// Spawn click closed the list, so a fuzzy query has no rows to take), put the
-// user back in the field with its matches open instead of spawning anywhere.
-function swsSettle() {
-  swsEnter();
-  if (classifyPickerQuery(swsInput.value).mode === "path") return; // resolving
-  if (swsInput.value.trim() === swsCwd.trim()) return;
-  swsSetCaption("Pick a workspace first");
-  if (document.activeElement !== swsInput) swsInput.focus(); // its focus handler reopens the list
-  else swsReopen();
-}
-
-// A typed absolute path is resolved by /api/fs/list — see dpResolvePath's
-// identical five-outcome breakdown in dirpicker.js. The one difference: on a
-// non-directory (400) there is nothing to fall through to opening as a file
-// (dpOnOpenFile) — a spawn cwd is a directory or it's an error.
-async function swsResolvePath(path) {
-  let res;
-  try {
-    res = await fetch("/api/fs/list?path=" + encodeURIComponent(path));
-  } catch (_) {
-    showToast("Could not reach the server", { error: true });
-    return;
-  }
-  if (res.ok) {
-    let data = null;
-    try { data = await res.json(); } catch (_) {}
-    swsClose();
-    setSwsCwd((data && data.path) || path);
-    swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
-    onSwsCwdChanged();
-    return;
-  }
-  if (res.status === 400) {
-    showToast("Not a directory: " + path, { error: true });
-    return;
-  }
-  showToast(
-    res.status === 404 ? "No such file or directory: " + path :
-    res.status === 403 ? "That path is outside your home directory" :
-    "Could not read " + path,
-    { error: true });
 }
 // updateTierExplain names the ACTUAL working dir in the box/host copy line
 // (D5: "box — the agent sees only ~/culishop."), not a generic placeholder.
 // Called everywhere the cwd can change: typing an absolute path, a pick, a
 // resolve, a profile's default_cwd landing (applyProfileCwd), and a tier
-// switch (both via onSwsCwdChanged/updateRuntimeWarning).
+// switch (both via onSpawnCwdChanged/updateRuntimeWarning).
 function updateTierExplain() {
   const cwdEl = $("tier-explain-cwd");
   if (!cwdEl) return;
@@ -5293,6 +4906,14 @@ function updateTierExplain() {
 // or "" when containment is unavailable. Empty means every session is host tier,
 // and the tier chooser is hidden rather than offering a choice that does nothing.
 let boxRuntime = "";
+// boxUnavailableReason: why boxRuntime is "" when the containment layer failed
+// to build (/api/meta box_unavailable_reason, a plain sentence such as "Docker
+// is not installed"), "" otherwise. It only explains; the profile page reads it.
+let boxUnavailableReason = "";
+// bundleImports: /api/bundle/imports exists on this instance (/api/meta
+// bundle_imports). The route is only registered when the CLAUDE.md bundle is on,
+// so with this false the page does not ask (it would answer 404 on every load).
+let bundleImports = false;
 // cloneUnavailable: why this instance cannot run private copies (/api/meta
 // clone_unavailable), "" when it can. It only explains; a profile that is a
 // copy still opens, saves and shows as one (wmCardState).
@@ -5328,7 +4949,12 @@ function loadLastSpawn() {
 // what "+ New session" does.
 async function spawnSession(req, opts) {
   opts = opts || {};
-  closePage(); // the new session's pane must be on screen, not behind a page
+  // The new session's pane must be on screen, not behind a page. A page that asks about unsaved changes is answered
+  // BEFORE anything starts: Keep editing spawns nothing (null; onCreated does not run, so the spawn dialog stays open
+  // with its form) and the question is never asked a second time when openTerminal closes the page again. With nothing
+  // to ask closePage answers true and the POST goes out in this same tick.
+  const left = closePage();
+  if (left !== true && (left === false || !(await left))) return null;
   const s = await api("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5437,7 +5063,7 @@ function syncSpawnExtras(resetReplies) {
 // applySpawnPrefill fills the dialog from a session (Duplicate): cwd, tier and
 // this run's option values, over the profile defaults openSpawnDialog set.
 function applySpawnPrefill(pf) {
-  if (pf.cwd) setSwsCwd(pf.cwd);
+  if (pf.cwd) setSpawnCwd(pf.cwd);
   const seg = $("runtime-seg");
   if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
   for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
@@ -5540,13 +5166,13 @@ async function openSpawnDialog(preselectAgent, prefill) {
   // prefilled), then the first workspace usable on the tier. A last cwd that is
   // unusable on this tier is still restored; the warning below names why, so
   // choosing box vs. host stays the user's call, not a silent discard.
-  setSwsCwd(pickSpawnCwd({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) }));
+  setSpawnCwd(pickSpawnCwd({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) }));
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
   }
-  onSwsCwdChanged();
-  swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
+  onSpawnCwdChanged();
+  if (spawnWsPicker) spawnWsPicker.showIdleNote();
   hideSpawnUnlock();
   spawnPlistResetSearch(); // a fresh open starts with an empty profile filter
   spawnPanelOpen();
@@ -5755,11 +5381,11 @@ $("spawn").addEventListener("submit", async (ev) => {
   if (spawnBusy) return;
   // The workspace field may show text that is not the directory in use: settle
   // it first, never spawn in the previously resolved one (#20).
-  if (spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden, highlighted: swsActive >= 0 }) === "pick") {
-    swsSettle();
+  if (spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: spawnWsPicker.isOpen(), highlighted: spawnWsPicker.highlighted() }) === "pick") {
+    spawnWsPicker.settle();
     return;
   }
-  swsClose(); // the field shows the directory in use; an open list is just left over
+  spawnWsPicker.close(); // the field shows the directory in use; an open list is just left over
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   const goLabel = goBtn ? goBtn.textContent : "";
@@ -6420,7 +6046,7 @@ const shellSpawning = new WeakSet();
 // "+", the "+sh" chip) pass "…" so they do not grow into a sentence.
 async function spawnShellIn(cell, placement = "below", trigger, label = "Starting shell…") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
-  closePage();
+  if (closePageHolds(() => spawnShellIn(cell, placement, trigger, label))) return;
   if (trigger) return withPending(trigger, label, () => spawnShellRun(cell, placement, false));
   return spawnShellRun(cell, placement, true);
 }
@@ -6531,6 +6157,8 @@ async function currentShellProfile() {
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
+    boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
@@ -6682,6 +6310,8 @@ initMobileShell();
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
     cloneUnavailable = (meta && meta.clone_unavailable) || "";
+    boxUnavailableReason = (meta && meta.box_unavailable_reason) || "";
+    bundleImports = !!(meta && meta.bundle_imports);
     refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
@@ -6741,8 +6371,10 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
-    // A phone has no pages: the dialog goes home closed, the panes come back.
-    closePage();
+    // A phone has no pages: the dialog goes home closed, the panes come back. "force": the layout is leaving under
+    // the page, so its leave hook (unsaved profile changes) is not asked: it ends the edit and keeps what was typed
+    // in memory, for when that profile opens on the desktop page again.
+    closePage("force");
     // Mobile's Files screen expects #files-pane back in #sidebar.
     // The pane-collapse html classes follow the layout: the stored state on
     // mobile (as at a fresh load), none on desktop, where app.css's

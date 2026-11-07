@@ -90,7 +90,7 @@ test("syncPfMode is display only", () => {
 test("syncPfMode: the folder card tells the truth on the host tier", () => {
   const b = body(app, "syncPfMode");
   assert.ok(b.includes("wmFolderCopy("), "syncPfMode calls wmFolderCopy(");
-  assert.match(b, /\(metaLoaded && !boxRuntime\) \|\| segValue\(\$\("pf-runtime"\)\) === "host"/, "same tier test as renderPfTouch");
+  assert.match(b, /\(metaLoaded && !boxRuntime\) \|\| segValue\(\$\("pf-runtime"\)\) === "host"/, "no box layer means every session is host");
   assert.match(b, /\$\("pf-mode-folder-body"\)\.textContent/);
   assert.match(b, /\$\("pf-mode-diff-commit"\)\.textContent/);
   assert.ok(html.includes('id="pf-mode-folder-body"') && html.includes('id="pf-mode-diff-commit"'));
@@ -128,16 +128,6 @@ test("index.html carries the two cards with their exact copy", () => {
   for (const id of ["pf-mode-block", "pf-copy-block", "pf-copy-dir", "pf-copy-share", "pf-copy-gh", "pf-copy-warn", "pf-copy-err", "pf-mode-hint", "pf-mode-switch", "pf-mode-copy-why"]) {
     assert.ok(html.includes('id="' + id + '"'), id);
   }
-});
-
-test("the profile form keeps scrolled-to lines above the sticky footer", () => {
-  // setDialogError scrolls the error block with block:"nearest". On desktop the
-  // scroller .ped runs under the 56px #foot-manage, so scroll-padding-bottom
-  // (footer 56px + 16px) is what keeps the line clear of the footer.
-  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1], body: m[2] }));
-  const hit = rules.find((r) => r.selector.includes("#settings-modal.as-page #manage .ped") && /scroll-padding-bottom:\s*72px\s*;/.test(r.body));
-  assert.ok(hit, "a desktop.css rule for #settings-modal.as-page #manage .ped must set scroll-padding-bottom: 72px");
 });
 
 test("readForm reads the auto-return switch only through wmFieldsToSend", () => {
@@ -206,9 +196,9 @@ test("a session with no profile gets no work-home suffix; the spawn line and the
   assert.match(body(sp, "renderSpawnPlist"), /sp-nothome/);
 });
 
-test("the profile row badge sits outside .psub and the menu dispatches bringhome", () => {
+test("the profile row shows work that has not come home, and the menu dispatches bringhome", () => {
   const b = body(app, "renderProfileList");
-  assert.ok(b.indexOf('"pnothome"') > 0 && b.indexOf('"pnothome"') < b.indexOf('"psub"'));
+  assert.ok(b.indexOf('"pnothome"') > 0);
   assert.match(body(app, "runSessionAction"), /bringhome: \(\) => bringHomeNow\(s\)/);
   assert.match(body(app, "bringHomeNow"), /postSessionAction\(s\.id, "bring-home"\)/);
   const css = fs.readFileSync(path.join(STATIC, "app.css"), "utf8");

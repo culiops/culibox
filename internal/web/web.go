@@ -48,6 +48,12 @@ type Server struct {
 	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
 	// when containment is unavailable and every session runs on the host tier.
 	BoxRuntime string
+	// BoxUnavailableReason is a plain sentence for why BoxRuntime is empty
+	// because the containment layer failed to build ("Docker is not installed");
+	// empty when it did build. Published in /api/meta as
+	// "box_unavailable_reason", only while BoxRuntime is empty. Never raw error
+	// text: it reaches the browser.
+	BoxUnavailableReason string
 	// CloneUnavailable is why clone mode cannot run on this instance; empty when
 	// it can. Published in /api/meta as "clone_unavailable".
 	CloneUnavailable string
@@ -253,6 +259,14 @@ func (s *Server) Handler() http.Handler {
 			// from before an update cannot save over fields it does not show.
 			"profile_schema": profileSchema(),
 		}
+		// Why there are no boxes (the layer failed to build), so the profile page
+		// can say so; absent when boxes work or nothing said why.
+		if s.BoxRuntime == "" && s.BoxUnavailableReason != "" {
+			meta["box_unavailable_reason"] = s.BoxUnavailableReason
+		}
+		// Whether /api/bundle/imports exists on this instance, so the page does
+		// not request a route that answers 404 on every load.
+		meta["bundle_imports"] = s.Imports != nil
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}
 		if s.Profiles != nil {

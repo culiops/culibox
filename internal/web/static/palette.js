@@ -207,6 +207,13 @@ function palettePageCommands(desktop, flags, h) {
   return out;
 }
 
+// paletteOpenView: the Activity or Access view of the focused pane. A page hides the panes, so it is closed first, and
+// a page that is asking about unsaved changes holds the view until the answer is Discard (Keep editing opens nothing).
+function paletteOpenView(kind) {
+  const open = () => { if (focusedCell) focusedCell.toggleView(kind); };
+  if (!closePageHolds(open)) open();
+}
+
 function paletteCommands(mac) {
   const cmds = [];
   // Every spawn goes through the form: under containment the workspace choice
@@ -252,8 +259,8 @@ function paletteCommands(mac) {
     shortcuts: showShortcuts,
     filesDrawer: () => toggleDrawer("files", focusedId()), // toggleDrawer closes a page itself
     // A page hides the panes: the view must open where the user can see it.
-    activityView: () => { closePage(); if (focusedCell) focusedCell.toggleView("activity"); },
-    accessView: () => { closePage(); if (focusedCell) focusedCell.toggleView("access"); },
+    activityView: () => paletteOpenView("activity"),
+    accessView: () => paletteOpenView("access"),
     steerRail: toggleSteerRail,
     toggleFiles: () => togglePane("files"),
   });

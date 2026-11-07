@@ -28,13 +28,19 @@ class Node {
     this.classList = {
       contains: (c) => self.className.split(/\s+/).includes(c),
       add: (c) => { if (!self.className.split(/\s+/).includes(c)) self.className = (self.className + " " + c).trim(); },
+      remove: (c) => { self.className = self.className.split(/\s+/).filter((x) => x && x !== c).join(" "); },
+      toggle: (c, on) => { const has = self.className.split(/\s+/).includes(c); if (on === undefined ? !has : on) self.classList.add(c); else if (has) self.classList.remove(c); },
     };
   }
   get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
   get parentElement() { return this.parent; }
+  get firstChild() { return this.children[0] || null; }
+  get lastChild() { return this.children[this.children.length - 1] || null; }
   get firstElementChild() { return this.children.find((c) => c instanceof Node) || null; }
-  get rows() { return this.children.filter((c) => c.tag === "tr"); }
+  // A table's rows; a textarea's `rows` is a plain number the form sets.
+  get rows() { return this._rows !== undefined ? this._rows : this.children.filter((c) => c.tag === "tr"); }
+  set rows(v) { this._rows = v; }
   get cells() { return this.children.filter((c) => c.tag === "td" || c.tag === "th"); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   addEventListener() {}
@@ -52,17 +58,35 @@ class Node {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 
+// The Credentials tab's own footers and buttons, by id (index.html:584-598). Left out of a page unless
+// `tab` is set: most tests here never touch them, and a missing id is what the code treats as "no footer".
+const TAB_FOOT_IDS = ["foot-creds", "foot-creds-add", "foot-creds-form"];
+const TAB_BUTTON_IDS = ["aws-check-all", "aws-cancel", "aws-save", "cred-form-cancel", "cred-form-save"];
+
 // One page. `width` is what #creds-body measures; `asPage` is the desktop Settings page.
-function page({ asPage = true, width = 800 } = {}) {
+function page({ asPage = true, width = 800, tab = false } = {}) {
   const calls = [];
   const byId = {
     "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "" }),
     "creds-body": Object.assign(new Node("div"), { clientWidth: width }),
   };
+  if (tab) {
+    for (const id of TAB_FOOT_IDS) byId[id] = Object.assign(new Node("div"), { hidden: id !== "foot-creds" });
+    for (const id of TAB_BUTTON_IDS) byId[id] = new Node("button");
+    byId["aws-foot-note"] = new Node("span");
+    byId["creds-err"] = new Node("div");
+  }
   const doc = { createElement: (t) => new Node(t), createTextNode: (t) => new Text(t), getElementById: (id) => byId[id] || null };
   const box = {
     document: doc, console, Promise, JSON, Date, setTimeout, clearTimeout, reloaded: 0,
-    api: async (p, opt) => { calls.push({ path: p, method: (opt && opt.method) || "GET" }); if (box.apiFail) throw box.apiFail; return {}; },
+    // `reply(path, opt)` answers a call; the default is an empty object.
+    api: async (p, opt) => {
+      const call = { path: p, method: (opt && opt.method) || "GET" };
+      if (opt && opt.body) call.body = JSON.parse(opt.body);
+      calls.push(call);
+      if (box.apiFail) throw box.apiFail;
+      return box.reply ? box.reply(p, opt) : {};
+    },
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
@@ -70,6 +94,7 @@ function page({ asPage = true, width = 800 } = {}) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   // The reload every action ends in repaints the whole screen; here it only counts.
+  box.realLoadCredentials = box.loadCredentials;
   box.loadCredentials = () => { box.reloaded++; };
   return { box, doc, calls, byId };
 }
@@ -959,4 +984,1012 @@ test("painted while hidden (0 wide, unmeasured), then shown narrower than the ta
   p.resizeTo(720);
   assert.ok(p.shape().tables === 0 && p.shape().cards > 0, "shown at 720: the table does not fit");
   assert.strictEqual(p.needW(), 727);
+});
+
+// --- the add flows in any host (spec 5.7) ---------------------------------------------------
+//
+// credTokenAdd, credAppForm, credGitHubChoose and awsOpenAdd take `opts = { host, foot, onCreated,
+// onClose }`: they draw into opts.host and opts.foot, never touch the Credentials tab (its body, its
+// footers, loadCredentials), and report what they created once, on the way out.
+
+const vmEval = (p, expr) => require("node:vm").runInContext(expr, p.box);
+const btnIn = (root, label) => root.querySelectorAll("button").find((b) => b.textContent === label);
+const fieldIn = (root, id) => [...root.querySelectorAll("input"), ...root.querySelectorAll("textarea")].find((i) => i.id === id);
+
+// A host and a foot the flow was not born with, and what it reports through them.
+function hostOpts() {
+  const events = [];
+  const opts = {
+    host: new Node("div"), foot: new Node("div"),
+    onCreated: (names, kind) => events.push(["created", [...names], kind]),
+    onClose: () => events.push(["close"]),
+  };
+  return { opts, events };
+}
+
+// What the Credentials tab shows for the footers: unchanged by a flow that is not in the tab.
+const tabFooters = (p) => TAB_FOOT_IDS.map((id) => p.byId[id].hidden);
+
+const storeOK = { initialized: true, locked: false, platform: "linux" };
+const sentryTpl = { id: "sentry", provider: "sentry", label: "Sentry", group: "tokens", values: ["Auth token"], fields: [{ key: "region", label: "Region", kind: "select", options: [{ value: "us", label: "US" }, { value: "eu", label: "EU" }] }] };
+const ghPatTpl = { id: "github-pat", provider: "github", label: "GitHub personal access token", group: "github", values: ["Personal access token"], fields: [] };
+
+// The server as the token and App flows meet it.
+function credReply({ store = storeOK, names = ["sentry-eu-prod"], templates = [sentryTpl] } = {}) {
+  return (path) => {
+    if (path === "/api/credentials") return { store, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
+    if (path === "/api/credentials/templates") return { templates };
+    if (path === "/api/credentials/tokens/from-template") return { names };
+    return {};
+  };
+}
+
+test("token add calls onCreated with the server's names", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply({ names: ["sentry-eu-prod", "sentry-eu-prod-2"] });
+  const before = tabFooters(p);
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.deepStrictEqual(p.calls.map((c) => c.path), ["/api/credentials", "/api/credentials/templates"], "credView is primed first (the store state, the taken names), then the providers");
+  assert.ok(opts.host.textContent.includes("Add token"), "the flow drew itself into opts.host");
+  assert.strictEqual(p.byId["creds-body"].children.length, 0, "and left the Credentials tab's body alone");
+  assert.deepStrictEqual(opts.foot.querySelectorAll("button").map((b) => b.textContent), ["Cancel", "Save"], "its buttons are in opts.foot");
+  fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts.host, "ct-sentry-v0").value = "tok-123";
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  const post = p.calls.find((c) => c.method === "POST");
+  assert.strictEqual(post.path, "/api/credentials/tokens/from-template");
+  assert.strictEqual(post.body.name, "sentry-prod");
+  assert.deepStrictEqual(events, [["created", ["sentry-eu-prod", "sentry-eu-prod-2"], "token"], ["close"]], "the server's names, not the typed one, then close");
+  assert.strictEqual(p.box.reloaded, 0, "no loadCredentials from a flow outside the tab");
+  assert.deepStrictEqual(tabFooters(p), before, "the tab footers were not touched");
+  assert.strictEqual(p.box.credState().form, null, "the singleton is reset");
+});
+
+test("token add: Cancel closes without reporting, and the singleton is reset", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  btnIn(opts.foot, "Cancel").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["close"]]);
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.strictEqual(p.box.credState().form, null);
+  assert.deepStrictEqual(p.calls.filter((c) => c.method === "POST"), []);
+});
+
+test("token add: a refused save keeps the flow open and reports nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts.host, "ct-sentry-v0").value = "tok-123";
+  p.box.apiFail = Object.assign(new Error("that name is reserved"), { status: 400 });
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.deepStrictEqual(events, []);
+  assert.ok(opts.host.textContent.includes("that name is reserved"), "the refusal shows in the host");
+  assert.strictEqual(btnIn(opts.foot, "Save").disabled, false, "and Save can be pressed again");
+  assert.notStrictEqual(p.box.credState().form, null);
+});
+
+test("token add with no store: the host shows today's create-the-store step, and Save says why it cannot", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let made = false;
+  const store = () => ({ initialized: made, locked: false, platform: "darwin", passphrase_mode: false });
+  const base = credReply();
+  p.box.reply = (path) => {
+    if (path === "/api/store/init") { made = true; return {}; }
+    if (path === "/api/credentials") return { ...base(path), store: store() };
+    return base(path);
+  };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.ok(opts.host.querySelector(".storecreate"), "the inline store step is in opts.host");
+  assert.strictEqual(fieldIn(opts.host, "ct-sentry-v0"), undefined, "no value field before the store exists");
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.ok(opts.host.textContent.includes("Create the encrypted store first. The value is stored in it."));
+  assert.deepStrictEqual(events, []);
+  btnIn(opts.host, "Create the encrypted store").onclick();
+  await settle();
+  assert.ok(p.calls.some((c) => c.path === "/api/store/init" && c.method === "POST"));
+  assert.ok(fieldIn(opts.host, "ct-sentry-v0"), "once it exists the value field takes its place");
+  assert.strictEqual(opts.host.querySelector(".storecreate"), null);
+});
+
+test("token add with a locked store does not stop to unlock it", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = credReply({ store: { initialized: true, locked: true, platform: "linux" } });
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.ok(fieldIn(opts.host, "ct-sentry-v0"), "the value field is there while the store is locked");
+  assert.strictEqual(opts.host.querySelector(".storecreate"), null);
+});
+
+test("token add: providers that cannot load are said in the host, not in the tab's error line", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = (path) => { if (path === "/api/credentials/templates") throw new Error("boom"); return credReply()(path); };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.ok(opts.host.textContent.includes("Could not load the token providers"));
+  assert.strictEqual(p.byId["creds-err"].textContent, "");
+  assert.deepStrictEqual(events, []);
+  assert.strictEqual(p.box.credState().form, null);
+});
+
+test("GitHub App add calls onCreated with the typed name", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  const before = tabFooters(p);
+  await p.box.credAppForm(null, opts);
+  assert.ok(p.calls.some((c) => c.path === "/api/credentials"), "credView is primed before the form paints");
+  assert.ok(opts.host.textContent.includes("Add GitHub App"));
+  assert.strictEqual(p.byId["creds-body"].children.length, 0);
+  fieldIn(opts.host, "cga-name").value = "  my-bot ";
+  fieldIn(opts.host, "cga-cid").value = "Iv1.abc";
+  fieldIn(opts.host, "cga-key").value = "-----BEGIN PRIVATE KEY-----";
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  const post = p.calls.find((c) => c.method === "POST");
+  assert.strictEqual(post.path, "/api/credentials/github-apps");
+  assert.strictEqual(post.body.app.name, "my-bot");
+  assert.deepStrictEqual(events, [["created", ["my-bot"], "app"], ["close"]], "the trimmed typed name");
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.deepStrictEqual(tabFooters(p), before);
+  assert.strictEqual(p.box.credState().form, null);
+});
+
+test("GitHub App add with no store shows the store step in the host", async () => {
+  const p = page({ tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = credReply({ store: { initialized: false, locked: false, platform: "darwin", passphrase_mode: false } });
+  await p.box.credAppForm(null, opts);
+  assert.ok(opts.host.querySelector(".storecreate"));
+  assert.strictEqual(fieldIn(opts.host, "cga-key"), undefined);
+});
+
+test("GitHub choose passes opts to the route picked: a token reports the server's names, an App the typed name", async () => {
+  for (const route of ["token", "app"]) {
+    const p = page({ tab: true });
+    const { opts, events } = hostOpts();
+    p.box.reply = credReply({ names: ["gh-pat"], templates: [sentryTpl, ghPatTpl] });
+    p.box.credGitHubChoose(opts);
+    assert.ok(opts.host.textContent.includes("How should the agent reach GitHub?"), "the choice is drawn in opts.host");
+    assert.strictEqual(btnIn(opts.foot, "Save").disabled, true, "nothing to save until a route is chosen");
+    const tiles = opts.host.querySelectorAll("button.tile");
+    assert.strictEqual(tiles.length, 2);
+    const tile = tiles.find((t) => (route === "token" ? /token/i : /App/).test(t.textContent));
+    assert.ok(tile, "a tile for the " + route + " route");
+    tile.onclick();
+    await settle();
+    assert.strictEqual(btnIn(opts.foot, "Save").disabled, false, "the form's own Save is live again");
+    if (route === "token") {
+      fieldIn(opts.host, "ct-github-pat-name").value = "gh-pat";
+      fieldIn(opts.host, "ct-github-pat-v0").value = "ghp_abc";
+    } else {
+      fieldIn(opts.host, "cga-name").value = "my-bot";
+      fieldIn(opts.host, "cga-cid").value = "Iv1.abc";
+      fieldIn(opts.host, "cga-key").value = "-----BEGIN PRIVATE KEY-----";
+    }
+    btnIn(opts.foot, "Save").onclick();
+    await settle();
+    assert.deepStrictEqual(events, [["created", route === "token" ? ["gh-pat"] : ["my-bot"], route], ["close"]], route);
+    assert.strictEqual(p.box.reloaded, 0);
+  }
+});
+
+// AWS: two host profiles that carry their own role, so a row needs only a Check.
+const awsHostProfiles = [
+  { name: "acme-dev", kind: "assume-role", role_arn: "arn:aws:iam::111111111111:role/agentbox-dev", source_profile: "base", region: "eu-west-1", selectable: true },
+  { name: "acme-ops", kind: "assume-role", role_arn: "arn:aws:iam::222222222222:role/agentbox-ops", source_profile: "base", region: "eu-west-1", selectable: true },
+];
+function awsReply(post) {
+  return (path, opt) => {
+    if (path === "/api/credentials/aws/host-profiles") return { profiles: awsHostProfiles };
+    if (path === "/api/credentials/aws/check") return { assume: "ok", verdict: "read_only" };
+    if (path === "/api/credentials/aws" && post) return post(JSON.parse(opt.body).connection);
+    return {};
+  };
+}
+// Opens the add view in `opts` and ticks the named host profiles.
+async function awsTick(p, opts, ...names) {
+  p.box.awsOpenAdd(opts);
+  await settle();
+  const ticks = opts.host.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  awsHostProfiles.forEach((hp, i) => { if (names.includes(hp.name)) { ticks[i].checked = true; ticks[i].onchange(); } });
+}
+// ... and checks them all.
+async function awsReady(p, opts, ...names) {
+  await awsTick(p, opts, ...names);
+  btnIn(opts.foot, "Check all").onclick();
+  await settle();
+}
+
+test("AWS add in a custom host calls onCreated with every saved connection name", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply();
+  const before = tabFooters(p);
+  await awsReady(p, opts, "acme-dev", "acme-ops");
+  assert.ok(opts.host.textContent.includes("Add AWS accounts"), "the flow drew itself into opts.host");
+  assert.strictEqual(p.byId["creds-body"].children.length, 0, "and left the Credentials tab's body alone");
+  assert.deepStrictEqual(opts.foot.querySelectorAll("button").map((b) => b.textContent), ["Check all", "Cancel", "Save all"], "its buttons are in opts.foot");
+  assert.deepStrictEqual(tabFooters(p), before, "the tab footers are not shown for it");
+  assert.strictEqual(btnIn(opts.foot, "Save all").disabled, false, "both rows passed the check");
+  assert.ok(opts.foot.textContent.includes("2 of 2 ready to save."), "the footer note is in opts.foot");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(p.calls.filter((c) => c.path === "/api/credentials/aws").map((c) => c.body.connection.name), ["acme-dev", "acme-ops"]);
+  assert.deepStrictEqual(events, [["created", ["acme-dev", "acme-ops"], "aws"], ["close"]], "every saved name, once, then close");
+  assert.strictEqual(p.box.reloaded, 0, "no loadCredentials from a flow outside the tab");
+  assert.deepStrictEqual(tabFooters(p), before);
+  assert.strictEqual(vmEval(p, "awsFlow"), null, "the singleton is reset");
+});
+
+test("AWS add: Cancel or the crumb after a partial save reports what was saved, once", async () => {
+  for (const how of ["Cancel", "crumb"]) {
+    const p = page({ tab: true });
+    const { opts, events } = hostOpts();
+    p.box.reply = awsReply((conn) => { if (conn.name === "acme-ops") throw Object.assign(new Error("A connection with this name already exists."), { status: 409, code: "exists" }); return {}; });
+    await awsReady(p, opts, "acme-dev", "acme-ops");
+    btnIn(opts.foot, "Save all").onclick();
+    await settle();
+    assert.deepStrictEqual(events, [], how + ": still open while a row needs attention");
+    assert.ok(opts.host.textContent.includes("Saved 1 connection. The rest need attention."));
+    if (how === "Cancel") btnIn(opts.foot, "Cancel").onclick(); else opts.host.querySelector("a.lnk").onclick();
+    await settle();
+    assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], how);
+    assert.strictEqual(p.box.reloaded, 0);
+    assert.strictEqual(vmEval(p, "awsFlow"), null);
+  }
+});
+
+test("AWS add: Cancel with nothing saved only closes", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply();
+  await awsReady(p, opts, "acme-dev");
+  btnIn(opts.foot, "Cancel").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["close"]]);
+  assert.deepStrictEqual(p.calls.filter((c) => c.path === "/api/credentials/aws"), []);
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+});
+
+test("AWS add: leaving while a save is in flight waits for it, so the name is not lost", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let release;
+  p.box.reply = awsReply(() => new Promise((r) => { release = () => r({}); }));
+  await awsReady(p, opts, "acme-dev");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.strictEqual(btnIn(opts.foot, "Cancel").disabled, true, "Cancel is off while it saves");
+  opts.host.querySelector("a.lnk").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [], "the crumb does not leave mid-save");
+  release();
+  await settle();
+  assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]]);
+});
+
+test("token add in a host: leaving while the save is in flight waits for it, and the crumb and Cancel are held", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let release;
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials/tokens/from-template" ? new Promise((r) => { release = () => r({ names: ["sentry-prod"] }); }) : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts.host, "ct-sentry-v0").value = "tok-123";
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(btnIn(opts.foot, "Cancel").disabled, true, "Cancel is off while it saves");
+  btnIn(opts.foot, "Cancel").onclick();
+  opts.host.querySelector("a.lnk").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [], "neither way out leaves mid-save");
+  release();
+  await settle();
+  assert.deepStrictEqual(events, [["created", ["sentry-prod"], "token"], ["close"]]);
+});
+
+test("a host that goes away mid-save (credFlowDrop) hears nothing, and a newer flow is not closed by the late answer", async () => {
+  const p = page({ tab: true });
+  const first = hostOpts(), second = hostOpts();
+  let release;
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials/tokens/from-template" ? new Promise((r) => { release = () => r({ names: ["sentry-prod"] }); }) : base(path));
+  await p.box.credTokenAdd(null, "sentry", first.opts);
+  fieldIn(first.opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(first.opts.host, "ct-sentry-v0").value = "tok-123";
+  btnIn(first.opts.foot, "Save").onclick();
+  await settle();
+  p.box.credFlowDrop();
+  p.box.reply = base;
+  await p.box.credAppForm(null, second.opts);
+  release();
+  await settle();
+  assert.deepStrictEqual(first.events, []);
+  assert.deepStrictEqual(second.events, [], "the second flow was not told, or closed");
+  assert.notStrictEqual(p.box.credState().form, null, "the second flow is still open");
+  assert.ok(second.opts.host.textContent.includes("Add GitHub App"));
+});
+
+test("a flow that was still waiting for the server when its host went away opens nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let release;
+  p.box.reply = (path) => (path === "/api/credentials" ? new Promise((r) => { release = () => r({ store: storeOK }); }) : credReply()(path));
+  const started = p.box.credTokenAdd(null, "sentry", opts);
+  await settle();
+  p.box.credFlowDrop();
+  release();
+  await started;
+  assert.strictEqual(opts.host.children.length, 0, "nothing was drawn into the closed host");
+  assert.strictEqual(p.box.credState().form, null);
+  assert.deepStrictEqual(events, []);
+});
+
+test("loadCredentials re-shows the tab's Add / Edit footer for a view in the tab, and leaves a view in a host alone", async () => {
+  const view = { store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
+  const p = page({ tab: true });
+  p.box.reply = (path) => (path === "/api/credentials" ? view : awsReply()(path));
+  const { opts } = hostOpts();
+  await awsReady(p, opts, "acme-dev");
+  const before = tabFooters(p);
+  await p.box.realLoadCredentials();
+  assert.deepStrictEqual(tabFooters(p), before, "a drawer's view does not turn the tab's AWS footer on");
+  p.box.credFlowDrop();
+  p.box.awsOpenAdd();
+  await settle();
+  p.byId["foot-creds-add"].hidden = true; // selecting the tab hides every footer
+  p.byId["foot-creds"].hidden = false;
+  await p.box.realLoadCredentials();
+  assert.strictEqual(p.byId["foot-creds-add"].hidden, false, "a view in the tab gets its footer back");
+});
+
+test("a flow in a host drops a tab flow left open, so the two never share one set of footers", async () => {
+  const p = page({ tab: true });
+  p.box.reply = awsReply();
+  p.box.awsOpenAdd();
+  await settle();
+  assert.strictEqual(p.byId["foot-creds-add"].hidden, false, "the tab's AWS footer is up");
+  const { opts } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+  // Its Add footer is gone. The list footer is not put on show: this ran on another tab (the Profiles page), and
+  // selecting Credentials again shows it and reloads the list.
+  assert.deepStrictEqual(tabFooters(p), [true, true, true]);
+  assert.ok(opts.host.textContent.includes("Add token"), "and the flow went on in its host");
+});
+
+test("credFlowDrop forgets a flow in a host without reporting anything (the drawer closed itself)", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply();
+  await awsReady(p, opts, "acme-dev");
+  p.box.credFlowDrop();
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+  assert.deepStrictEqual(events, []);
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(p.calls.filter((c) => c.path === "/api/credentials/aws"), [], "a stale button does nothing");
+  p.box.reply = credReply();
+  await p.box.credAppForm(null, opts);
+  p.box.credFlowDrop();
+  assert.strictEqual(p.box.credState().form, null);
+  assert.deepStrictEqual(events, []);
+});
+
+test("a flow open in a host does not stop the Credentials tab painting its list", async () => {
+  const p = livePage(900, { tab: true });
+  const { opts } = hostOpts();
+  p.box.reply = awsReply();
+  await awsReady(p, opts, "acme-dev");
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0, "the tab painted its list beside the AWS view in the host");
+  p.box.credFlowDrop();
+  p.byId["creds-body"].replaceChildren();
+  p.box.reply = credReply();
+  await p.box.credAppForm(null, hostOpts().opts);
+  p.box.renderCredentials(liveView);
+  assert.ok(p.shape().tables > 0, "an App form in a host does not hold it either");
+  // A view open in the tab still does (the existing rule).
+  p.box.credFlowDrop();
+  p.byId["creds-body"].replaceChildren();
+  p.box.reply = credReply();
+  await p.box.credAppForm(null);
+  const form = p.byId["creds-body"].children.slice();
+  p.box.renderCredentials(liveView);
+  assert.deepStrictEqual(p.byId["creds-body"].children, form, "the tab's own form keeps the body");
+});
+
+// Without opts the flows are what they were: the tab's body, the tab's footers, loadCredentials on the way out.
+test("without opts the Credentials tab behaves as before: AWS add", async () => {
+  const p = page({ tab: true });
+  p.box.reply = awsReply();
+  p.box.awsOpenAdd();
+  await settle();
+  assert.ok(p.byId["creds-body"].textContent.includes("Add AWS accounts"));
+  assert.deepStrictEqual(tabFooters(p), [true, false, true], "the AWS footer replaces the list footer");
+  assert.strictEqual(p.byId["aws-save"].textContent, "Save all");
+  assert.strictEqual(p.byId["aws-save"].disabled, true);
+  assert.ok(p.byId["aws-foot-note"].textContent === "" || /ready to save/.test(p.byId["aws-foot-note"].textContent));
+  p.byId["aws-cancel"].onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 1, "leaving reloads the list");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+});
+
+test("without opts the Credentials tab behaves as before: token add", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply();
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] })); // what loadCredentials left behind
+  await p.box.credTokenAdd(null, "sentry");
+  assert.ok(p.byId["creds-body"].textContent.includes("Add token"));
+  assert.deepStrictEqual(tabFooters(p), [true, true, false], "the form footer replaces the list footer");
+  assert.strictEqual(p.byId["cred-form-save"].textContent, "Save");
+  fieldIn(p.byId["creds-body"], "ct-sentry-name").value = "sentry-prod";
+  fieldIn(p.byId["creds-body"], "ct-sentry-v0").value = "tok-123";
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  assert.strictEqual(p.calls.filter((c) => c.method === "POST").length, 1);
+  assert.strictEqual(p.box.reloaded, 1, "a saved token reloads the list");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+  assert.strictEqual(p.box.credState().form, null);
+});
+
+test("without opts the Credentials tab behaves as before: GitHub choose, then an App", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply();
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] })); // what loadCredentials left behind
+  p.box.credGitHubChoose();
+  assert.ok(p.byId["creds-body"].textContent.includes("How should the agent reach GitHub?"));
+  assert.strictEqual(p.byId["cred-form-save"].disabled, true);
+  p.byId["creds-body"].querySelectorAll("button.tile").find((t) => /App/.test(t.textContent)).onclick();
+  assert.strictEqual(p.byId["cred-form-save"].disabled, false);
+  fieldIn(p.byId["creds-body"], "cga-name").value = "my-bot";
+  fieldIn(p.byId["creds-body"], "cga-cid").value = "Iv1.abc";
+  fieldIn(p.byId["creds-body"], "cga-key").value = "-----BEGIN PRIVATE KEY-----";
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 1);
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+});
+
+test("without opts the Cancel button and the crumb leave a token form for the list", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry");
+  p.byId["cred-form-cancel"].onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 1);
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+});
+
+// --- fix round 1: the tab stays as it was, host controls end their own flow only ----------------
+
+// A token save that waits for the test to answer it: { p, opts, events, release, openForm() }.
+async function pendingTokenSave(p, opts) {
+  let release;
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials/tokens/from-template" ? new Promise((r) => { release = () => r({ names: ["sentry-prod"] }); }) : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts ? opts.host : p.byId["creds-body"], "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts ? opts.host : p.byId["creds-body"], "ct-sentry-v0").value = "tok-123";
+  return () => release();
+}
+
+test("tab: Cancel pressed while a token saves reloads, and the save finishing reloads again (the new item shows)", async () => {
+  const p = page({ tab: true });
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] }));
+  const release = await pendingTokenSave(p, null);
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  p.byId["cred-form-cancel"].onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 1, "Cancel left for the list");
+  release();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 2, "and the save finishing reloads the list once more, so it holds the new token");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+});
+
+test("a host's Cancel, Save and crumb left over after its flow was dropped do nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  fieldIn(opts.host, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(opts.host, "ct-sentry-v0").value = "tok-123";
+  const cancel = btnIn(opts.foot, "Cancel"), save = btnIn(opts.foot, "Save"), crumb = opts.host.querySelector("a.lnk");
+  p.box.credFlowDrop();
+  cancel.onclick(); save.onclick(); crumb.onclick();
+  await settle();
+  assert.strictEqual(p.box.reloaded, 0, "no tab exit, no loadCredentials");
+  assert.deepStrictEqual(events, []);
+  assert.deepStrictEqual(p.calls.filter((c) => c.method === "POST"), [], "and nothing is saved");
+  assert.deepStrictEqual(tabFooters(p), [false, true, true]);
+  // ... nor do they end a newer flow that is open by now
+  const second = hostOpts();
+  await p.box.credAppForm(null, second.opts);
+  cancel.onclick(); save.onclick(); crumb.onclick();
+  await settle();
+  assert.deepStrictEqual(second.events, []);
+  assert.notStrictEqual(p.box.credState().form, null, "the newer flow is still open");
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("a host's Cancel left over after a normal exit does nothing more", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const cancel = btnIn(opts.foot, "Cancel");
+  cancel.onclick();
+  await settle();
+  cancel.onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["close"]], "closed once");
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("an AWS host's Cancel, Check all, Save all and crumb left over after a drop do nothing, to it or to a newer flow", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply();
+  await awsReady(p, opts, "acme-dev");
+  const old = ["Cancel", "Check all", "Save all"].map((l) => btnIn(opts.foot, l)).concat(opts.host.querySelector("a.lnk"));
+  p.box.credFlowDrop();
+  const before = p.calls.length;
+  old.forEach((b) => b.onclick());
+  await settle();
+  assert.strictEqual(p.calls.length, before, "no request");
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.deepStrictEqual(events, []);
+  const second = hostOpts();
+  await awsTick(p, second.opts, "acme-ops"); // ticked, not yet checked: a stray Check all would show
+  const calls = p.calls.length;
+  old.forEach((b) => b.onclick());
+  await settle();
+  assert.strictEqual(p.calls.length, calls, "the newer flow was not checked, saved or closed by them");
+  assert.deepStrictEqual(second.events, []);
+  assert.notStrictEqual(vmEval(p, "awsFlow"), null);
+  assert.strictEqual(p.box.reloaded, 0);
+});
+
+test("the Cancel of a host's start error closes once, and a second click does nothing", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = (path) => { if (path === "/api/credentials/templates") throw new Error("boom"); return credReply()(path); };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const cancel = btnIn(opts.foot, "Cancel");
+  cancel.onclick();
+  cancel.onclick();
+  assert.deepStrictEqual(events, [["close"]]);
+});
+
+test("onClose runs even when onCreated throws, and the error still surfaces (token and AWS)", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  opts.onCreated = () => { throw new Error("consumer broke"); };
+  const release = await pendingTokenSave(p, opts);
+  const run = btnIn(opts.foot, "Save").onclick();
+  await settle();
+  release();
+  await assert.rejects(run, /consumer broke/);
+  assert.deepStrictEqual(events, [["close"]], "closed all the same");
+  assert.strictEqual(p.box.credState().form, null, "and the flow was reset");
+  assert.strictEqual(p.box.reloaded, 0);
+
+  const q = page({ tab: true });
+  const a = hostOpts();
+  a.opts.onCreated = () => { throw new Error("consumer broke"); };
+  q.box.reply = awsReply();
+  await awsReady(q, a.opts, "acme-dev");
+  const saved = btnIn(a.opts.foot, "Save all").onclick();
+  await assert.rejects(saved, /consumer broke/);
+  assert.deepStrictEqual(a.events, [["close"]]);
+  assert.strictEqual(vmEval(q, "awsFlow"), null);
+});
+
+test("a host flow whose credentials read failed says so, instead of offering to create a store that may exist", async () => {
+  for (const start of ["token", "app"]) {
+    const p = page({ tab: true });
+    const { opts, events } = hostOpts();
+    p.box.reply = (path) => { if (path === "/api/credentials") throw new Error("down"); return credReply()(path); };
+    if (start === "token") await p.box.credTokenAdd(null, "sentry", opts); else await p.box.credAppForm(null, opts);
+    assert.ok(opts.host.textContent.includes("Could not read the credentials"), start + ": the sentence is in the host");
+    assert.strictEqual(opts.host.querySelector(".storecreate"), null, start + ": no create-the-store step");
+    assert.strictEqual(p.box.credState().form, null, start + ": no form opened");
+    assert.deepStrictEqual(btnLabels(opts.foot), ["Cancel"]);
+    btnIn(opts.foot, "Cancel").onclick();
+    assert.deepStrictEqual(events, [["close"]], start);
+  }
+});
+
+const btnLabels = (root) => root.querySelectorAll("button").map((b) => b.textContent);
+
+test("credRefreshView answers whether the read worked, and keeps the last view when it did not", async () => {
+  const p = page();
+  p.box.reply = credReply();
+  assert.strictEqual(await p.box.credRefreshView(), true);
+  const view = p.box.credState().view;
+  assert.ok(view);
+  p.box.apiFail = new Error("down");
+  assert.strictEqual(await p.box.credRefreshView(), false);
+  assert.strictEqual(p.box.credState().view, view);
+});
+
+test("credFlowBusy is true while a flow in a host saves, and only then", async () => {
+  const p = page({ tab: true });
+  assert.strictEqual(p.box.credFlowBusy(), false, "nothing open");
+  // an AWS visit
+  const { opts } = hostOpts();
+  let release;
+  p.box.reply = awsReply(() => new Promise((r) => { release = () => r({}); }));
+  await awsReady(p, opts, "acme-dev");
+  assert.strictEqual(p.box.credFlowBusy(), false, "open, not saving");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), true, "saving");
+  release();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false, "closed");
+  // a form in a host
+  const second = hostOpts();
+  const answer = await pendingTokenSave(p, second.opts);
+  assert.strictEqual(p.box.credFlowBusy(), false);
+  btnIn(second.opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), true);
+  answer();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false);
+  // a form in the tab is not the host's business
+  p.box.credFlowDrop();
+  vmEval(p, "credView = " + JSON.stringify({ store: storeOK, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] }));
+  const tabAnswer = await pendingTokenSave(p, null);
+  p.byId["cred-form-save"].onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowBusy(), false, "a save in the tab does not count");
+  tabAnswer();
+  await settle();
+});
+
+// --- Task 15: what the drawer needs from the flows: a label for the primary button, and a way to end the open flow ---------
+
+test("opts.saveLabel names the primary button of a flow in a host; without it the labels are as before", async () => {
+  // AWS: the label survives every repaint of the footer (ticking a row repaints it).
+  const p = page({ tab: true });
+  const a = hostOpts();
+  a.opts.saveLabel = "Save all and add";
+  p.box.reply = awsReply();
+  await awsTick(p, a.opts, "acme-dev");
+  assert.deepStrictEqual(btnLabels(a.opts.foot), ["Check all", "Cancel", "Save all and add"]);
+  btnIn(a.opts.foot, "Check all").onclick();
+  await settle();
+  assert.deepStrictEqual(btnLabels(a.opts.foot), ["Check all", "Cancel", "Save all and add"], "still, after a check");
+  p.box.credFlowDrop();
+  const plain = hostOpts();
+  await awsTick(p, plain.opts, "acme-dev");
+  assert.deepStrictEqual(btnLabels(plain.opts.foot), ["Check all", "Cancel", "Save all"], "no label given: the tab's own");
+  p.box.credFlowDrop();
+  // A form: the token form, the GitHub choice and the App form.
+  const tokenHost = hostOpts();
+  tokenHost.opts.saveLabel = "Save and add";
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", tokenHost.opts);
+  assert.deepStrictEqual(btnLabels(tokenHost.opts.foot), ["Cancel", "Save and add"]);
+  p.box.credFlowDrop();
+  const gh = hostOpts();
+  gh.opts.saveLabel = "Save and add";
+  p.box.credGitHubChoose(gh.opts);
+  assert.deepStrictEqual(btnLabels(gh.opts.foot), ["Cancel", "Save and add"], "the choice");
+  gh.opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.ok(gh.opts.host.textContent.includes("Add GitHub App"));
+  assert.deepStrictEqual(btnLabels(gh.opts.foot), ["Cancel", "Save and add"], "the route it moved on to keeps the label");
+  p.box.credFlowDrop();
+  const none = hostOpts();
+  await p.box.credTokenAdd(null, "sentry", none.opts);
+  assert.deepStrictEqual(btnLabels(none.opts.foot), ["Cancel", "Save"], "no label given: today's");
+});
+
+test("credFlowCancel ends the open flow in a host the way its Cancel does: names saved so far are reported, then it closes", async () => {
+  const p = page({ tab: true });
+  assert.strictEqual(p.box.credFlowCancel({}), false, "nothing is open");
+  const { opts, events } = hostOpts();
+  p.box.reply = awsReply((conn) => { if (conn.name === "acme-ops") throw Object.assign(new Error("A connection with this name already exists."), { status: 409, code: "exists" }); return {}; });
+  await awsReady(p, opts, "acme-dev", "acme-ops");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [], "still open: one row needs attention");
+  const other = hostOpts();
+  assert.strictEqual(p.box.credFlowCancel(other.opts), false, "another host's flow is not ended by this one's close");
+  assert.deepStrictEqual(events, []);
+  await p.box.credFlowCancel(opts);
+  assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], "one visit, saved 1 of 2: reported, then closed");
+  assert.strictEqual(vmEval(p, "awsFlow"), null);
+  assert.strictEqual(p.box.reloaded, 0);
+  assert.strictEqual(p.box.credFlowCancel(opts), false, "and nothing is left to end");
+});
+
+test("credFlowCancel on a form: closes without reporting, and the GitHub choice and its route are one flow", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.ok(p.box.credFlowCancel(opts));
+  assert.deepStrictEqual(events, [["close"]]);
+  assert.strictEqual(p.box.credState().form, null);
+  const gh = hostOpts();
+  p.box.credGitHubChoose(gh.opts);
+  gh.opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.ok(p.box.credFlowCancel(gh.opts));
+  assert.deepStrictEqual(gh.events, [["close"]], "closed once, from the route it had moved on to");
+  assert.strictEqual(p.box.credState().form, null);
+});
+
+test("credFlowCancel refuses while a flow in a host saves, so the name being saved is reported when the answer is in", async () => {
+  const p = page({ tab: true });
+  const { opts, events } = hostOpts();
+  let release;
+  p.box.reply = awsReply(() => new Promise((r) => { release = () => r({}); }));
+  await awsReady(p, opts, "acme-dev");
+  btnIn(opts.foot, "Save all").onclick();
+  await settle();
+  assert.strictEqual(p.box.credFlowCancel(opts), false, "busy: it did not end the flow");
+  assert.deepStrictEqual(events, []);
+  release();
+  await settle();
+  assert.deepStrictEqual(events, [["created", ["acme-dev"], "aws"], ["close"]], "the save ended it by itself, and reported");
+});
+
+// --- Task 15 gate fix (R67): a framed host (opts.head) draws the drawer's header band, form, and foot the way the mockup does ----
+
+// A host with a header of its own as well: the crumb and the intro go in `head`, the form in `host`, and a refused Save is said in `foot`.
+function framedOpts() {
+  const events = [];
+  const opts = {
+    head: new Node("div"), host: new Node("div"), foot: new Node("div"),
+    onCreated: (names, kind) => events.push(["created", [...names], kind]),
+    onClose: () => events.push(["close"]),
+    onIdle: () => events.push(["idle"]),
+  };
+  return { opts, events };
+}
+const TOKEN_INTRO = "The agent can read this token. It is long-lived and is not revoked when the session ends.";
+const crumbParts = (head) => head.querySelector("div.crumb").children.map((c) => c.textContent);
+const checkReply = (path, opt) => (path === "/api/credentials/aws/check" ? { assume: "ok", verdict: "none_found", actions: [] } : awsReply()(path, opt));
+
+test("framed AWS add: the crumb and intro are the header, the form stays in the host, and the tick line says the rows join the profile", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = awsReply();
+  p.box.awsOpenAdd(opts);
+  await settle();
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › AWS", "Add AWS accounts"]);
+  assert.strictEqual(opts.head.querySelector("p.intro").textContent, "The agent never gets these profiles. It gets 15-minute credentials for the role you choose below.");
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null, "not in the body that scrolls");
+  assert.strictEqual(opts.host.querySelector("p.intro"), null);
+  const tick = opts.host.querySelectorAll("p.hint").find((h) => h.textContent.startsWith("Tick several"));
+  assert.ok(tick, "the mockup's line");
+  assert.strictEqual(tick.textContent, "Tick several to create several. Each one you save joins this profile as an unsaved row.");
+  assert.strictEqual(tick.hidden, true, "with no row there is the flow's own 'Tick a profile above' line instead");
+  const ticks = opts.host.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  ticks[0].checked = true; ticks[0].onchange();
+  assert.strictEqual(tick.hidden, false);
+  ticks[0].checked = false; ticks[0].onchange();
+  assert.strictEqual(tick.hidden, true, "and it goes again with the last row");
+});
+
+test("framed AWS add: a passed Check is one line, 'Assume worked. No broad write access found'; the tab keeps its two", async () => {
+  const framed = page({ tab: true });
+  const f = framedOpts();
+  framed.box.reply = checkReply;
+  await awsReady(framed, f.opts, "acme-dev");
+  const lines = f.opts.host.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent));
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].textContent, "✓Assume worked. No broad write access found");
+  assert.strictEqual(f.opts.host.querySelector("div.verdict"), null, "no second verdict line");
+  // The Credentials tab, same answers: the flow's own two lines.
+  const tab = page({ tab: true });
+  tab.box.reply = checkReply;
+  tab.box.awsOpenAdd();
+  await settle();
+  const body = tab.byId["creds-body"];
+  const tticks = body.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  tticks[0].checked = true; tticks[0].onchange();
+  btnIn(body, "Check").onclick();
+  await settle();
+  const tl = body.querySelectorAll("div.l").map((l) => l.textContent);
+  assert.ok(tl.includes("✓Assume worked."), "the tab: " + JSON.stringify(tl));
+  assert.ok(body.querySelector("div.verdict"), "and its verdict line");
+});
+
+test("framed AWS add: a row with an elevate role says the check covered the base role only; a row without one stays as it was", async () => {
+  const framed = page({ tab: true });
+  const f = framedOpts();
+  framed.box.reply = checkReply;
+  await awsTick(framed, f.opts, "acme-dev", "acme-ops");
+  const elev = f.opts.host.querySelectorAll("input").filter((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
+  assert.strictEqual(elev.length, 2, "one elevate role field per ticked row");
+  elev[0].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[0].oninput();
+  btnIn(f.opts.foot, "Check all").onclick();
+  await settle();
+  const lines = () => f.opts.host.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent)).map((l) => l.textContent);
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found base role only", "✓Assume worked. No broad write access found"]);
+  const when = f.opts.host.querySelectorAll("span.when");
+  assert.deepStrictEqual(when.map((w) => w.textContent), [" base role only"], "set apart from the verdict the way the tab sets it");
+  assert.strictEqual(f.opts.host.querySelector("div.verdict"), null, "still one line, no second verdict line");
+  // Typing the role after the check, or taking it away, moves the qualifier with it.
+  elev[1].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[1].oninput();
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found base role only", "✓Assume worked. No broad write access found base role only"]);
+  elev[0].value = "";
+  elev[0].oninput();
+  assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found", "✓Assume worked. No broad write access found base role only"]);
+});
+
+test("the Credentials tab's verdict line is the same with or without an elevate role in the row", async () => {
+  const tab = page({ tab: true });
+  tab.box.reply = checkReply;
+  tab.box.awsOpenAdd();
+  await settle();
+  const body = tab.byId["creds-body"];
+  const ticks = body.querySelectorAll("input").filter((i) => i.type === "checkbox");
+  ticks[0].checked = true; ticks[0].onchange();
+  const elev = body.querySelectorAll("input").find((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
+  elev.value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev.oninput();
+  btnIn(body, "Check").onclick();
+  await settle();
+  assert.deepStrictEqual(body.querySelectorAll("div.l").filter((l) => /Assume worked/.test(l.textContent)).map((l) => l.textContent), ["✓Assume worked."]);
+  assert.deepStrictEqual(body.querySelectorAll("div.verdict").map((v) => v.textContent), ["✓No broad write access found base role only"]);
+});
+
+test("framed token add: the crumb says Tokens, the intro is in the header, no trailing sentence, and a refused Save is said in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = credReply();
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", " › Tokens", "Add token"]);
+  assert.strictEqual(opts.head.querySelector("p.intro").textContent, TOKEN_INTRO);
+  assert.strictEqual(opts.host.querySelector("p.honest"), null, "the sentence moved to the header");
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null);
+  assert.strictEqual(opts.host.querySelector("div.ent-err"), null, "no error line under the form");
+  const msg = opts.foot.querySelector("span.ent-err");
+  assert.ok(msg, "the foot has the line, left of Cancel");
+  assert.strictEqual(msg.attrs.role, "alert");
+  assert.deepStrictEqual(opts.foot.children.map((c) => c.tag), ["span", "button", "button"]);
+  assert.strictEqual(opts.foot.children[0], msg);
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(msg.textContent, "Paste the value to store.", "the refusal is in the foot");
+  assert.strictEqual(opts.host.textContent.includes("Paste the value to store."), false);
+});
+
+test("framed token add with no store: the card opens with the lead, and Save's refusal is the same sentence in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  const base = credReply();
+  p.box.reply = (path) => (path === "/api/credentials" ? { ...base(path), store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } } : base(path));
+  await p.box.credTokenAdd(null, "sentry", opts);
+  const card = opts.host.querySelector("div.storecreate");
+  assert.ok(card);
+  assert.strictEqual(card.children[0].tag, "p");
+  assert.strictEqual(card.children[0].className, "lead");
+  assert.strictEqual(card.children[0].textContent, "Create the encrypted store first. The value is stored in it.");
+  assert.strictEqual(card.children[1].className, "hint", "then the hint");
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(opts.foot.querySelector("span.ent-err").textContent, "Create the encrypted store first. The value is stored in it.");
+});
+
+test("framed GitHub choice and App form: the crumb is the link and the title, the form is in the host, the refusal in the foot", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  p.box.reply = credReply();
+  p.box.credGitHubChoose(opts);
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", "Add GitHub"], "the mockup draws no GitHub crumb, so there is no tail");
+  assert.strictEqual(opts.head.querySelector("p.intro"), null);
+  opts.host.querySelectorAll("button").find((b) => /GitHub App/.test(b.textContent)).onclick();
+  await settle();
+  assert.deepStrictEqual(crumbParts(opts.head), ["Credentials", "Add GitHub App"]);
+  assert.strictEqual(opts.host.querySelector("div.crumb"), null);
+  fieldIn(opts.host, "cga-name").value = "not a name!";
+  fieldIn(opts.host, "cga-cid").value = "";
+  fieldIn(opts.host, "cga-key").value = "";
+  btnIn(opts.foot, "Save").onclick();
+  await settle();
+  assert.strictEqual(opts.foot.querySelector("span.ent-err").textContent, "The name may use letters, digits, . _ and -, up to 64 characters.");
+});
+
+test("framed: a start error empties the header, and the error is said in the host", async () => {
+  const p = page({ tab: true });
+  const { opts } = framedOpts();
+  opts.head.append(new Node("div"));
+  p.box.reply = (path) => { if (path === "/api/credentials/templates") throw new Error("boom"); return credReply()(path); };
+  await p.box.credTokenAdd(null, "sentry", opts);
+  assert.strictEqual(opts.head.children.length, 0);
+  assert.ok(opts.host.textContent.includes("Could not load the token providers"));
+});
+
+test("onIdle: a save that answered and left the flow open says so; one that ended the flow only closes", async () => {
+  // AWS: 1 of 2 saved, the other refused: the flow stays open and tells the host the save is over.
+  const p = page({ tab: true });
+  const { opts, events } = framedOpts();
+  p.box.reply = awsReply((conn) => { if (conn.name === "acme-ops") throw Object.assign(new Error("A connection with this name already exists."), { status: 409, code: "exists" }); return {}; });
+  await awsReady(p, opts, "acme-dev", "acme-ops");
+  btnIn(opts.foot, "Save all").onclick();
+  assert.deepStrictEqual(events, [], "not while it saves");
+  await settle();
+  assert.deepStrictEqual(events, [["idle"]], "once, when the answer is in");
+  btnIn(opts.foot, "Cancel").onclick();
+  await settle();
+  assert.deepStrictEqual(events, [["idle"], ["created", ["acme-dev"], "aws"], ["close"]]);
+  // AWS, everything saved: the flow closes, nothing to say.
+  const q = page({ tab: true });
+  const all = framedOpts();
+  q.box.reply = awsReply();
+  await awsReady(q, all.opts, "acme-dev");
+  btnIn(all.opts.foot, "Save all").onclick();
+  await settle();
+  assert.deepStrictEqual(all.events, [["created", ["acme-dev"], "aws"], ["close"]]);
+  // A form: a refused Save is idle, a made one closes.
+  const r = page({ tab: true });
+  const form = framedOpts();
+  r.box.reply = credReply();
+  await r.box.credTokenAdd(null, "sentry", form.opts);
+  btnIn(form.opts.foot, "Save").onclick();
+  await settle();
+  assert.deepStrictEqual(form.events, [["idle"]], "the refusal for a missing value");
+  fieldIn(form.opts.host, "ct-sentry-v0").value = "tok-1";
+  btnIn(form.opts.foot, "Save").onclick();
+  await settle();
+  assert.deepStrictEqual(form.events, [["idle"], ["created", ["sentry-eu-prod"], "token"], ["close"]], "idle after the first refusal only; the made token closes");
+});
+
+test("the Credentials tab still renders the old DOM: ' / ' crumb, the error under the form, the sentence at the foot of the form, no lead, two check lines", async () => {
+  const p = page({ tab: true });
+  p.box.reply = credReply({ store: { initialized: false, locked: false, platform: "linux", passphrase_mode: true } });
+  await p.box.credTokenAdd(null, "sentry");
+  const body = p.byId["creds-body"];
+  assert.deepStrictEqual(body.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"], "the crumb");
+  assert.ok(body.querySelector("p.honest"), "the sentence is the trailing one");
+  assert.strictEqual(body.querySelector("p.honest").textContent, TOKEN_INTRO);
+  assert.strictEqual(body.lastChild.className, "ent-err", "the error line is the last thing in the body");
+  assert.strictEqual(body.querySelector("p.intro"), null);
+  const card = body.querySelector("div.storecreate");
+  assert.ok(card);
+  assert.strictEqual(card.querySelector("p.lead"), null, "no lead in the tab's card");
+  assert.strictEqual(card.children[0].className, "hint");
+  // AWS in the tab: the crumb and the intro are in the body, with the flow's own empty-state line only.
+  const q = page({ tab: true });
+  q.box.reply = awsReply();
+  q.box.awsOpenAdd();
+  await settle();
+  const qb = q.byId["creds-body"];
+  assert.deepStrictEqual(qb.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add AWS accounts"]);
+  assert.strictEqual(qb.querySelectorAll("p.hint").some((h) => h.textContent.startsWith("Tick several")), false, "no tick line in the tab");
+  // A host with no header (Task 14's) keeps its crumb in the host and the error under the form.
+  const h = page({ tab: true });
+  const { opts } = hostOpts();
+  h.box.reply = credReply();
+  await h.box.credTokenAdd(null, "sentry", opts);
+  assert.deepStrictEqual(opts.host.firstElementChild.children.map((c) => c.textContent), ["Credentials", " / ", "Add token"]);
+  assert.strictEqual(opts.host.lastChild.className, "ent-err");
+  assert.ok(opts.host.querySelector("p.honest"));
 });

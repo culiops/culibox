@@ -367,17 +367,18 @@ func validateTokens(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime != RuntimeBox {
-		return errors.New("tokens require runtime: box (set it explicitly); the host tier cannot contain credentials")
+		return WithField("tokens", errors.New("tokens require runtime: box (set it explicitly); the host tier cannot contain credentials"))
 	}
 	if len(a.Tokens) > maxBoundTokens {
-		return fmt.Errorf("tokens: at most %d entries, got %d", maxBoundTokens, len(a.Tokens))
+		return WithField("tokens", fmt.Errorf("tokens: at most %d entries, got %d", maxBoundTokens, len(a.Tokens)))
 	}
 	for i, n := range a.Tokens {
+		field := fmt.Sprintf("tokens[%d]", i)
 		if !tokenNameRe.MatchString(n) {
-			return fmt.Errorf("tokens[%d] %q is not an entry name", i, n)
+			return WithField(field, fmt.Errorf("tokens[%d] %q is not an entry name", i, n))
 		}
 		if slices.Contains(a.Tokens[:i], n) {
-			return fmt.Errorf("tokens[%d] %q is listed twice", i, n)
+			return WithField(field, fmt.Errorf("tokens[%d] %q is listed twice", i, n))
 		}
 	}
 	return nil
@@ -390,12 +391,13 @@ func validateTokens(a AgentConfig) error {
 func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]OptionDef) error {
 	var bound []StaticToken
 	for i, n := range a.Tokens {
+		field := fmt.Sprintf("tokens[%d]", i)
 		e, ok := TokenByName(entries, n)
 		if !ok {
-			return undefinedRef(RefToken, n, "tokens[%d] %q is not defined in static_tokens", i, n)
+			return WithField(field, undefinedRef(RefToken, n, "tokens[%d] %q is not defined in static_tokens", i, n))
 		}
 		if len(e.Egress) == 0 {
-			return fmt.Errorf("tokens[%d] %q has no egress hosts; it can only be a GitHub owner's token", i, n)
+			return WithField(field, fmt.Errorf("tokens[%d] %q has no egress hosts; it can only be a GitHub owner's token", i, n))
 		}
 		bound = append(bound, e)
 	}
@@ -405,21 +407,24 @@ func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]Option
 				continue
 			}
 			if _, ok := TokenByName(entries, o.Token); !ok {
-				return undefinedRef(RefToken, o.Token, "github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
+				return WithField(fmt.Sprintf("github.owners[%d].token", i),
+					undefinedRef(RefToken, o.Token, "github.owners[%d].token %q is not defined in static_tokens", i, o.Token))
 			}
 		}
 	}
-	for _, e := range bound {
+	// bound[i] is a.Tokens[i]: the loop above appends every entry in order or returns.
+	for i, e := range bound {
+		field := fmt.Sprintf("tokens[%d]", i)
 		for _, n := range e.Names() {
 			if _, set := a.Env[n]; set {
-				return fmt.Errorf("token %q sets %s, which the profile also sets as an env entry", e.Name, n)
+				return WithField(field, fmt.Errorf("token %q sets %s, which the profile also sets as an env entry", e.Name, n))
 			}
 			if slices.Contains(a.Secrets, n) {
-				return fmt.Errorf("token %q sets %s, which the profile also sets as a secret", e.Name, n)
+				return WithField(field, fmt.Errorf("token %q sets %s, which the profile also sets as a secret", e.Name, n))
 			}
 			for _, k := range slices.Sorted(maps.Keys(optDefs)) {
 				if d := optDefs[k]; d.Env == n && d.AppliesTo(a.Bin) {
-					return fmt.Errorf("token %q sets %s, which the profile also sets as the env of option %q", e.Name, n, k)
+					return WithField(field, fmt.Errorf("token %q sets %s, which the profile also sets as the env of option %q", e.Name, n, k))
 				}
 			}
 		}

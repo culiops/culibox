@@ -55,7 +55,9 @@ function openPage(id) {
   if (pageNow && pageNow.dlg === dlg) return true;
   // Opened modally on a phone, then widened: it stays a modal (Review Focus 2).
   if (dlg.open) return false;
-  closePage();
+  // Another page is open: it may hold something its leave hook wants to ask about. The question is on screen then, and
+  // this page opens when it is answered (Discard); true says "handled", so the caller does not open it as a modal.
+  if (closePageHolds(() => openPage(id))) return true;
   const mark = document.createComment("page-home:" + id);
   dlg.before(mark);
   host.appendChild(dlg);
@@ -75,15 +77,61 @@ function openPage(id) {
   return true;
 }
 
-// closePage: close the open page, if any. The restore runs right here rather
-// than waiting for the dialog's `close` event (a queued task), so a caller that
-// goes on to open a session lays it out against a visible #grid; the event's
-// own pageClosed then finds nothing to do.
-function closePage() {
-  if (!pageNow) return;
+// pageLeaveHook: set by the page that has something to ask before it goes (profilepage.js: unsaved block
+// changes). closePage asks it with why: "esc" from the Esc key, "force" when the window crossed to a phone (told, not
+// asked), nothing from its other callers. It answers true (may go), false (stay) or a promise of either, and answers
+// true for a page that is not its own.
+// Unset, a page closes as it always did.
+let pageLeaveHook = null;
+
+// closePage: close the open page, if any, unless its leave hook says to stay. Resolves like the hook:
+//   true     the page is closed (or none was open); the restore ran right here, before this returned
+//   false    it stays
+//   promise  the hook is asking the user; the page closes when it answers true
+// The restore runs right here rather than waiting for the dialog's `close` event (a queued task), so a caller that
+// goes on to open a session lays it out against a visible #grid; the event's own pageClosed then finds nothing to
+// do. That is why the answer is not a promise unless the hook asked something: with nothing to ask the page is
+// shut by the time this returns. A caller that acts on the panes must read the answer (closePageHolds below does):
+// going on after "stay" would act behind a page the user chose to keep. why "force" closes whatever the hook would
+// say: the layout is leaving under the page (the window crossed to a phone). The hook is told, so it can end what it
+// holds (the profile page ends its edit, releases its pickers and keeps what was typed for when that profile opens
+// again), and is never asked.
+function closePage(why) {
+  if (!pageNow) return true;
   const dlg = pageNow.dlg;
+  let verdict = true;
+  if (typeof pageLeaveHook === "function") {
+    if (why === "force") {
+      try { pageLeaveHook(why); } catch (_) { /* a hook that fails must not keep a page up on a phone */ }
+    } else {
+      verdict = pageLeaveHook(why);
+    }
+  }
+  if (verdict === true) { closePageNow(dlg); return true; }
+  if (verdict === false) return false;
+  return Promise.resolve(verdict).then((ok) => {
+    if (ok === false) return false;
+    // It may have gone while the question was open (another route closed it).
+    if (pageNow && pageNow.dlg === dlg) closePageNow(dlg);
+    return true;
+  });
+}
+
+function closePageNow(dlg) {
   if (dlg.open) dlg.close();
   pageClosed(dlg);
+}
+
+// closePageHolds: the way for a caller that needs the panes on screen (it shows a session, opens a drawer, changes the
+// layout) to close the page. false means go on now, in this same tick: no page was open (always so on a phone), or it
+// had nothing to ask and is shut. true means the page is asking whether to drop unsaved changes, or has been told to
+// stay: the caller stops, and `again` runs only if the answer is Discard, after the page is shut. Keep editing runs
+// nothing, so nothing happens behind a page the user kept.
+function closePageHolds(again) {
+  const left = closePage();
+  if (left === true) return false;
+  if (left !== false) left.then((ok) => { if (ok) again(); });
+  return true;
 }
 
 // pageClosed: every dialog's `close` handler (shell.js initDialogs), so ✕, Esc
@@ -110,13 +158,15 @@ function pageClosed(dlg) {
 
 // Esc closes the page. Bubble phase, and only when nothing above it took the
 // key: a modal over the page (bug report, confirm, palette, spawn) closes
-// itself, and a field that handles its own Esc calls preventDefault.
+// itself, and a field that handles its own Esc calls preventDefault. The page's
+// leave hook is asked with why "esc", so a layer inside the page (an open picker)
+// can take the key before the page does.
 if (typeof document !== "undefined") {
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape" || ev.defaultPrevented || !currentPage()) return;
     if (typeof dialogsOpen === "function" && dialogsOpen() > 0) return;
     ev.preventDefault();
-    closePage();
+    closePage("esc");
   });
 }
 

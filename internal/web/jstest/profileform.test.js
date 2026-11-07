@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -116,6 +116,50 @@ test("with no box layer, an unset tier lit as box stays unset", () => {
   assert.strictEqual(runtimeToSend("box", "box", false), "box"); // explicit stays explicit
   assert.strictEqual(runtimeToSend("host", "", false), "host");
   assert.strictEqual(runtimeToSend("box", "", true), "box");
+});
+
+// What needs a box: the credentials and egress are refused without an explicit
+// runtime: box, and a readable folder or a private copy only works in a box.
+test("a profile needs a box when it holds anything that needs one", () => {
+  assert.strictEqual(profileNeedsBox({ name: "p", bin: "claude", runtime: "", default_cwd: "/w" }), false);
+  assert.strictEqual(profileNeedsBox({ aws: { source_profile: "old" } }), true, "the legacy inline AWS binding");
+  assert.strictEqual(profileNeedsBox({ aws_connections: ["prod-read"] }), true);
+  assert.strictEqual(profileNeedsBox({ tokens: ["gh-pat"] }), true);
+  assert.strictEqual(profileNeedsBox({ egress_allow: ["api.example.com"] }), true);
+  assert.strictEqual(profileNeedsBox({ context_paths: ["/home/you/docs"] }), true);
+  assert.strictEqual(profileNeedsBox({ github: { owners: [{ owner: "culiops", app: "bot", repos: [] }] } }), true);
+  assert.strictEqual(profileNeedsBox({ egress_open: true }), true);
+  assert.strictEqual(profileNeedsBox({ clone_of: "/home/you/work/repo" }), true, "a private copy");
+  // An object counts as held with nothing in it: the server checks that the binding is set, not what is in it.
+  assert.strictEqual(profileNeedsBox({ aws: {} }), true);
+  assert.strictEqual(profileNeedsBox({ github: {} }), true);
+});
+
+test("empty and missing shapes hold nothing that needs a box", () => {
+  assert.strictEqual(profileNeedsBox(undefined), false);
+  assert.strictEqual(profileNeedsBox(null), false);
+  assert.strictEqual(profileNeedsBox({}), false);
+  assert.strictEqual(profileNeedsBox({ aws: null, github: null }), false);
+  assert.strictEqual(profileNeedsBox({ aws_connections: [], tokens: [], egress_allow: [], context_paths: [] }), false);
+  assert.strictEqual(profileNeedsBox({ egress_open: false }), false);
+  assert.strictEqual(profileNeedsBox({ egress_open: "true" }), false, "only a real true counts");
+  assert.strictEqual(profileNeedsBox({ clone_of: "" }), false);
+  assert.strictEqual(profileNeedsBox({ clone_of: "   " }), false, "a blank folder is no copy");
+  assert.strictEqual(profileNeedsBox({ tokens: "gh-pat" }), false, "a list key that is not a list is not a grant");
+});
+
+test("with no box layer, an unset tier lit as box is sent as box once the profile holds something that needs one", () => {
+  const holds = { tokens: ["gh-pat"] };
+  assert.strictEqual(runtimeToSend("box", "", false, holds), "box", "a blank would be refused by the server");
+  assert.strictEqual(runtimeToSend("box", "", false, { name: "p" }), "", "nothing box-only: still left unset");
+  assert.strictEqual(runtimeToSend("box", "", false, undefined), "", "no profile given: as before");
+  // Every other branch ignores the profile.
+  assert.strictEqual(runtimeToSend("host", "", false, holds), "host");
+  assert.strictEqual(runtimeToSend("box", "box", false, holds), "box");
+  assert.strictEqual(runtimeToSend("box", "", true, holds), "box");
+  assert.strictEqual(runtimeToSend("box", "", true, { name: "p" }), "box");
+  assert.strictEqual(runtimeToSend("", "host", false, holds), "host");
+  assert.strictEqual(runtimeToSend("", "", false, holds), "", "the seg always has a value; with none and no stored tier nothing is sent");
 });
 
 // The retired per-profile box.image: the server refuses a save that carries it,
@@ -375,60 +419,6 @@ test("readable host paths: hidden on an empty host profile, flagged on a filled 
   assert.deepStrictEqual(contextRowState("host", "/a\n"), { hidden: false, hint: true });
 });
 
-// pfTouchProfile turns what the editor holds (readForm's request body) into the
-// ProfileView shape reachRows reads, so the Settings page's "Can touch" line and
-// the New session box are drawn by the same rules.
-const { pfTouchProfile } = require("../static/profileform.js");
-
-test("pfTouchProfile maps the form's bindings to the view fields reachRows reads", () => {
-  const form = {
-    name: "sre", bin: "claude", account: "work",
-    aws_connections: ["culipulse-prod"],
-    github: { owners: [{ owner: "culiops", app: "ci" }, { owner: "", app: "x" }], permissions: { contents: "read" } },
-    tokens: ["npm"],
-  };
-  assert.deepStrictEqual(pfTouchProfile(form, { claude: true }), {
-    bin: "claude", account: "work", claude: true,
-    aws_connections: ["culipulse-prod"], github_owners: ["culiops"], tokens: ["npm"],
-    network: "allowlist",
-  });
-});
-
-test("pfTouchProfile names the inline binding from the saved view, else from the form", () => {
-  const view = { aws_inline: { name: "legacy", prod: true, elevate_max_minutes: 30 } };
-  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: { role_arn: "r" } }, { view }).aws_inline, view.aws_inline);
-  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: { label: "ops", prod: true } }, {}).aws_inline, { name: "ops", prod: true });
-  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: {} }, {}).aws_inline, { name: "aws", prod: false });
-  // Remove pressed: readForm leaves `aws` out, and so does the touch line.
-  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { view }).aws_inline, undefined);
-});
-
-test("pfTouchProfile: unbound is open only when egress is mandatory, else no posture", () => {
-  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
-  assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
-  assert.strictEqual(pfTouchProfile({ bin: "claude", tokens: ["t"] }, {}).network, "allowlist");
-  assert.strictEqual(pfTouchProfile(null, null).claude, false);
-});
-
-test("pfTouchProfile carries clone_of only for a private copy", () => {
-  const { pfTouchProfile } = require("../static/profileform.js");
-  assert.strictEqual(pfTouchProfile({ clone_of: "/h/r", bin: "claude" }, {}).clone_of, "/h/r");
-  assert.ok(!("clone_of" in pfTouchProfile({ bin: "claude" }, {})));
-  assert.ok(!("clone_of" in pfTouchProfile({ clone_of: "", bin: "claude" }, {})));
-});
-
-test("pfTouchProfile carries github_write and github_pat from the form's binding", () => {
-  const owners = [{ owner: "acme", app: "main", repos: ["api"] }];
-  const plain = pfTouchProfile({ bin: "claude", github: { owners } }, {});
-  assert.ok(!("github_write" in plain) && !("github_pat" in plain));
-  const w = pfTouchProfile({ bin: "claude", github: { owners, permissions: { contents: "write" } } }, {});
-  assert.strictEqual(w.github_write, true);
-  assert.ok(!("github_pat" in w));
-  const pat = pfTouchProfile({ bin: "claude", github: { owners: [{ owner: "o", token: "gh-pat", repos: [] }] } }, {});
-  assert.strictEqual(pat.github_write, true);
-  assert.strictEqual(pat.github_pat, true);
-});
-
 test("autoReturnToSend: only an unticked switch is sent", () => {
   assert.deepStrictEqual(autoReturnToSend(true), {});
   assert.deepStrictEqual(autoReturnToSend(false), { clone_no_auto_return: true });
@@ -456,14 +446,6 @@ test("egressToSend: only a visible block sends, and only what is set", () => {
   // Round trip: load -> text -> save keeps both.
   const loaded = { egress_allow: ["a.example", "*.b.example"], egress_open: true };
   assert.deepStrictEqual(egressToSend(true, egressAllowToText(loaded.egress_allow), loaded.egress_open), loaded);
-});
-
-test("pfTouchProfile network mirrors EgressMode: bound+egress_open is open, bound alone is allowlist", () => {
-  const bound = { bin: "claude", tokens: ["t"] };
-  assert.strictEqual(pfTouchProfile({ ...bound, egress_open: true }, {}).network, "open");
-  assert.strictEqual(pfTouchProfile(bound, {}).network, "allowlist");
-  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
-  assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
 });
 
 test("withRev carries the revision the form was opened at", () => {
@@ -579,28 +561,19 @@ test("profileSourceLabel: built-in for a code seed, config.json for an agents en
   assert.strictEqual(profileSourceLabel("something-new"), "", "an unknown source is not claimed to be built-in");
 });
 
-test("profileListLabels: the badge and the second line follow the source", () => {
-  assert.deepStrictEqual(profileListLabels({ name: "claude", editable: false, source: "builtin", bin: "claude", runtime: "host" }),
-    { badge: "built-in", sub: "built-in · host" });
-  assert.deepStrictEqual(profileListLabels({ name: "bash", editable: false, source: "config", bin: "bash", runtime: "host" }),
-    { badge: "config.json", sub: "config.json · host" });
-  assert.deepStrictEqual(profileListLabels({ name: "mine", editable: true, source: "runtime", bin: "claude", runtime: "box" }),
-    { badge: "", sub: "claude · box" }, "a profile you own has no badge, and shows its binary");
-});
-
-test("profileListLabels: a missing runtime or binary leaves no stray separator", () => {
-  assert.deepStrictEqual(profileListLabels({ editable: false, source: "config" }), { badge: "config.json", sub: "config.json" });
-  assert.deepStrictEqual(profileListLabels({ editable: true, source: "runtime", runtime: "box" }), { badge: "", sub: "box" });
-  assert.deepStrictEqual(profileListLabels({ editable: true, source: "runtime" }), { badge: "", sub: "" });
+test("profileListLabels: the badge follows the source, and only a read-only profile has one", () => {
+  assert.deepStrictEqual(profileListLabels({ name: "claude", editable: false, source: "builtin", bin: "claude", runtime: "host" }), { badge: "built-in" });
+  assert.deepStrictEqual(profileListLabels({ name: "bash", editable: false, source: "config", bin: "bash", runtime: "host" }), { badge: "config.json" });
+  assert.deepStrictEqual(profileListLabels({ name: "mine", editable: true, source: "runtime", bin: "claude", runtime: "box" }), { badge: "" }, "a profile you own has no badge");
 });
 
 test("profileListLabels: an unknown source on a read-only profile has no badge (not a guess)", () => {
-  assert.deepStrictEqual(profileListLabels({ editable: false, source: "future", runtime: "host" }), { badge: "", sub: "host" });
-  assert.deepStrictEqual(profileListLabels({ editable: false, runtime: "host" }), { badge: "", sub: "host" });
+  assert.deepStrictEqual(profileListLabels({ editable: false, source: "future", runtime: "host" }), { badge: "" });
+  assert.deepStrictEqual(profileListLabels({ editable: false, runtime: "host" }), { badge: "" });
 });
 
 // app.js needs a DOM and cannot be require()d: pin the list's wiring at the source level.
-test("renderProfileList takes both labels from profileListLabels, not a literal", () => {
+test("renderProfileList takes the badge from profileListLabels, not a literal", () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");

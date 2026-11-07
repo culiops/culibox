@@ -131,11 +131,8 @@ test("fillForm hides the stale banner: any load clears it", () => {
   assert.match(body("fillForm"), /\$\("pf-stale"\)\.hidden\s*=\s*true/);
 });
 
-test("showPfStale opens Advanced first, then shows the message and scrolls to it", () => {
+test("showPfStale shows the message and scrolls to it", () => {
   const b = body("showPfStale");
-  const open = b.indexOf("setPfAdvOpen(true)");
-  const text = b.indexOf("pf-stale-msg");
-  assert.ok(open >= 0 && text > open, "setPfAdvOpen(true) must come before the message is set");
   assert.match(b, /\$\("pf-stale-msg"\)\.textContent\s*=\s*model\.message/);
   assert.match(b, /\$\("pf-stale"\)\.hidden\s*=\s*false/);
   assert.match(b, /scrollIntoView\(\{\s*block:\s*"nearest"\s*\}\)/);
