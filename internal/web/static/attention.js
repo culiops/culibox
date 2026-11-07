@@ -66,6 +66,28 @@ function needLabel(s) {
   return "";
 }
 
+// plainSummary: the agent's last message without its markdown, for the desktop
+// lines that show it on one line (the row sub-line, the ask strip, the palette).
+// The server sends it raw, and a `**` drawn as text was the first thing read on
+// the most-watched line of the product. Code keeps its text and loses only its
+// backticks (nothing inside it is touched); a link or image keeps its label;
+// `**`, a paired `__…__` and a line-start `#` go; whitespace collapses to one
+// line. Display only, never sanitising: every caller writes it with textContent.
+// Never for an ask, which is a tool call, not markdown (see cardContent).
+function plainSummary(text) {
+  const prose = (t) => t
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/\*\*/g, "")
+    .replace(/(^|\W)__(?=\S)([\s\S]*?\S)__(?!\w)/g, "$1$2")
+    .replace(/`/g, "");
+  // split with the two groups gives [prose, ticks, code, prose, ticks, code, …, prose].
+  const parts = String(text == null ? "" : text).split(/(`+)([\s\S]*?)\1/);
+  let out = "";
+  for (let i = 0; i < parts.length; i += 3) out += prose(parts[i]) + (i + 2 < parts.length ? parts[i + 2] : "");
+  return out.replace(/\s+/g, " ").trim();
+}
+
 // cardContent decides which blocks a desktop needs-you card renders.
 //  - ask: the tool call it wants to run. No reply field and no digit buttons —
 //    the server refuses any message to a pending/blocked session by design (a
@@ -83,8 +105,12 @@ function needLabel(s) {
 //    send to such a session (ErrNoTranscript) regardless of `replyable` — so
 //    a reply field here would be dead on arrival. Same shape as a
 //    non-claude session on purpose: neither has a real answer path from this card.
-function cardContent(s) {
+// opts.plain: the summary as plainSummary text, for the desktop's one-line
+// surfaces. The ask is never touched: it is the command Yes would answer, and a
+// stripped `__pycache__` would show one the agent is not going to run.
+function cardContent(s, opts) {
   const v = s || {};
+  const summary = opts && opts.plain ? plainSummary(v.summary) : v.summary;
   // Kill-switch: the text is the peek and stays; only the reply paths close.
   const on = globalThis.repliesEnabled === true;
   // An SSO need outranks turn/ask for WHICH card shows, but it must not take
@@ -98,12 +124,12 @@ function cardContent(s) {
     return { title: "Store locked", text: storeLockedText(), unlock: true, ask: false, reply: false, enableReplies: false };
   }
   if (v.need === "ask") {
-    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
+    return { text: v.ask || summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
   }
   if (!v.claude || !v.need) {
-    return { text: v.summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
+    return { text: summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
   }
-  return { text: v.summary || "No summary", ask: false, reply: on && !!v.replyable, enableReplies: on && !v.replyable };
+  return { text: summary || "No summary", ask: false, reply: on && !!v.replyable, enableReplies: on && !v.replyable };
 }
 
 // maskHint: the one-line note under text the server's display mask touched.
@@ -339,7 +365,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
+  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

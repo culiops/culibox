@@ -58,6 +58,14 @@
   /* Secrets and key material are machine text. */
   :is(#creds, #cred-drawer) textarea.fld, :is(#creds, #cred-drawer) .fld.secret-area { font-family: var(--font-mono); }
 
+  /* Disabled reads as closed, not deleted (#169 F03). primitives.css strikes every
+     disabled control through; here it is dimmed and re-cursored instead, the look
+     the .off primitive already has (.42, not-allowed). A control with a disabled
+     look of its own keeps it: those rules are more specific. .busy is a control at
+     work (cursor: progress), not one that is closed. */
+  button:disabled, [disabled] { text-decoration: none; }
+  :is(button, input, select, textarea):disabled:not(.busy) { opacity: .42; cursor: not-allowed; }
+
   /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
   /* The controls moved into the sidebar top and footer. #env-strip stays: it is
      the 3px whole-page environment signal (spec 7), and #side-env repeats the
@@ -1369,6 +1377,10 @@
   #page-host > #analytics-modal.as-page .an-hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
   #page-host > #analytics-modal.as-page .an-grid2 { gap: 12px; }
   #page-host > #analytics-modal.as-page .an-hbar .track { background: var(--raise); }
+  /* Each header sits over its own column (#169 F01): text columns left, number
+     columns (th.num / td.num, analytics.js anHead/anTd) right, both tabular. */
+  .an-table th, .an-table td { text-align: left; }
+  .an-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Compare: the diverging bars and their numbers share --an-up / --an-down;
      a cost rise is not "red" here, it is a palette hue. The amber note stripe is
      needs-you only, so the compare note goes neutral. */

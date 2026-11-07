@@ -2401,7 +2401,9 @@ function stripOpenButton(s) {
 // the open button also closes a drawer, as the pane header's Terminal tab does.
 function renderNeedsBody(s, opts) {
   const inStrip = !!(opts && opts.strip);
-  const c = cardContent(s);
+  // The strip's one line is plain text (plainSummary); the mobile card keeps
+  // today's raw text, and the expanded view still shows the raw message.
+  const c = cardContent(s, { plain: inStrip });
   // An expired AWS sign-in outranks turn/ask for which card shows.
   if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
   // A locked store: the card is the unlock form (store.js).
@@ -3012,6 +3014,12 @@ function startRename(li, span, s) {
     finished = true;
     editing = false;
     const v = input.value.trim();
+    // Put the name back first, whatever happens next: the list's keyed reconcile
+    // keeps a row whose signature has not changed, so refreshSessions() alone
+    // never rebuilds it, and after Escape, an unchanged name or a failed save the
+    // row kept the dead input and no name. Removing the focused input fires its
+    // blur, which `finished` turns away.
+    if (input.parentNode) input.parentNode.replaceChild(span, input);
     if (commit && v && v !== cur) {
       try {
         await api("/api/sessions/" + encodeURIComponent(s.id), {
@@ -3019,6 +3027,7 @@ function startRename(li, span, s) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: v }),
         });
+        span.textContent = v;
         retitleTerminal(s.id, v);
       } catch (e) { showToast("Rename failed: " + e.message, { error: true }); }
     }

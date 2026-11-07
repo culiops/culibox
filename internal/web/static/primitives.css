@@ -11,6 +11,8 @@
        #pal-input (app.css:634, paired with a :focus-visible border-bottom cue).
        Left as-is here; later slices reconcile them when those controls are rewritten. */
     :focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
+    /* Mobile only in effect: desktop.css replaces the strike with a dimmed,
+       not-allowed look (#169), so it no longer reads as "deleted" there. */
     button:disabled, [disabled] { text-decoration: line-through; }
     /* Activity dot. Round, and the one deliberate exemption to the zero-radius
        rule: this is a status LIGHT, not a surface, and every other status light

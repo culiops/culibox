@@ -72,6 +72,14 @@ function palSessionMatchText(s) {
   return [v.name || v.id || "", v.summary || ""].filter((x) => x !== "").join(" ");
 }
 
+// palSessionSub: the one-line summary beside a session's name. Plain text on
+// desktop (plainSummary: no `**` drawn as text); mobile keeps its raw text this round.
+function palSessionSub(s, mobile) {
+  const sum = (s && s.summary) || "";
+  if (mobile) return sum;
+  return (typeof plainSummary === "function" ? plainSummary : require("./attention.js").plainSummary)(sum);
+}
+
 // palReg: the registry's hint renderers. In the browser they are globals of
 // shortcuts.js (loaded first); under node --test they come from the module.
 function palReg() {
@@ -138,7 +146,7 @@ function paletteSessions(mac) {
     const act = activityClass(s.activity);
     return {
       kind: "session", label: name, hint: hintN || (s.cwd ? shortPath(s.cwd) : ""),
-      sub: s.summary || "", match: palSessionMatchText(s),
+      sub: palSessionSub(s, mobile), match: palSessionMatchText(s),
       dotCls: act.cls, dotTitle: act.title,
       run: palSessionRun(s, isNestedShell(s, lastSessions), { reveal: revealShell, open: openTerminal }),
       runNewPane: () => openTerminal(s.id, name, { newPane: true }),
@@ -579,5 +587,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
+  module.exports = { isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palSessionSub, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
 }
