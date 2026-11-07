@@ -9,7 +9,8 @@
 // epoch the caller keeps), so each rule is testable with a fake clock.
 //
 // Kinds
-//   info, warn   expire after `spec.ms || the stack's ms` (6000)
+//   info, warn   expire after `spec.ms`, or the stack's ms (6000) when spec.ms
+//                is not a number in (0, 2^31-1] (toastStackMs)
 //   error        stays until removed (the close button); no deadline
 //   pending      stays until its owner update()s it into the result; no deadline
 //   undo: true   a flag, not a kind. The entry keeps its kind's timer (an info
@@ -40,6 +41,15 @@
 
 const TOAST_STACK_KINDS = ["info", "warn", "error", "pending"];
 
+// TOAST_STACK_MAX_MS: the longest delay setTimeout holds (a signed 32-bit int).
+// Past it, or for Infinity/NaN, the timer fires at once while the deadline is
+// still ahead, so expire() removes nothing and the page re-arms the same timer
+// in a loop. toastStackMs keeps a length only when it is a number in (0, max].
+const TOAST_STACK_MAX_MS = 2147483647;
+function toastStackMs(ms) {
+  return typeof ms === "number" && ms > 0 && ms <= TOAST_STACK_MAX_MS;
+}
+
 // toastStackSpec: one spec as the plain fields an entry keeps. `ms` is the timer
 // length for the kinds that have one, null for the kinds that do not.
 function toastStackSpec(spec, defaultMs) {
@@ -53,7 +63,7 @@ function toastStackSpec(spec, defaultMs) {
     undo: !!spec.undo,
     detail: spec.detail == null ? "" : String(spec.detail),
     progress: typeof p === "number" && Number.isFinite(p) ? Math.max(0, Math.min(1, p)) : null,
-    ms: timed ? (typeof spec.ms === "number" && spec.ms > 0 ? spec.ms : defaultMs) : null,
+    ms: timed ? (toastStackMs(spec.ms) ? spec.ms : defaultMs) : null,
   };
 }
 
@@ -66,7 +76,7 @@ function toastStackTier(e) {
 function createToastStack(opts) {
   opts = opts || {};
   const max = typeof opts.max === "number" && opts.max >= 1 ? Math.floor(opts.max) : 3;
-  const defaultMs = typeof opts.ms === "number" && opts.ms > 0 ? opts.ms : 6000;
+  const defaultMs = toastStackMs(opts.ms) ? opts.ms : 6000;
   let entries = []; // newest first
   let nextId = 1; // never reused, not even after a remove
   let paused = false;

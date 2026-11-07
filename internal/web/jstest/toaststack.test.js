@@ -57,6 +57,27 @@ test("spec.ms and the stack ms set the timer length", () => {
   assert.strictEqual(byText(s, "own").deadline, 2500);
 });
 
+// setTimeout holds a signed 32-bit delay: Infinity, NaN or anything past 2^31-1 ms
+// fires at once, expire() removes nothing (the deadline is still ahead) and the page
+// re-arms the same timer, a loop for as long as the entry is listed. Such a length,
+// like 0 or a negative one, falls back to the default.
+test("a timer length setTimeout cannot hold falls back to the default", () => {
+  const s = createToastStack({ ms: 1000 });
+  for (const ms of [Infinity, -Infinity, NaN, 2 ** 31, 0, -5, "9000"]) s.push({ text: "t" + String(ms), kind: "info", ms }, 0);
+  for (const t of s.list()) assert.strictEqual(t.deadline, 1000, t.text);
+  const max = createToastStack();
+  max.push({ text: "max", kind: "warn", ms: 2 ** 31 - 1 }, 0);
+  assert.strictEqual(byText(max, "max").deadline, 2 ** 31 - 1, "the largest delay setTimeout holds is kept");
+  const id = max.push({ text: "u", kind: "info" }, 0);
+  max.update(id, { text: "u", kind: "info", ms: Infinity }, 10);
+  assert.strictEqual(byText(max, "u").deadline, 10 + 6000, "update clamps too");
+  for (const bad of [Infinity, 2 ** 31, NaN]) {
+    const d = createToastStack({ ms: bad });
+    d.push({ text: "d", kind: "info" }, 0);
+    assert.strictEqual(byText(d, "d").deadline, 6000, "the stack's own default: " + bad);
+  }
+});
+
 test("error and pending never expire", () => {
   const s = createToastStack();
   s.push({ text: "e", kind: "error" }, 0);
