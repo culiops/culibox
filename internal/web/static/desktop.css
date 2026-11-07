@@ -48,6 +48,54 @@
        hard-code ui-monospace in app.css), so remapping it makes all UI text
        Inter and leaves machine text mono. */
     --font-family: var(--font-ui);
+
+    /* The design kit's remaining tokens (ui-kit.css :root), the base for the type
+       scale and the primitives layer. Nothing here repeats a token above, and --raise
+       and --line stay as the founder locked them: selection is made visible by
+       components, not by these two greys. Tints are precomputed hex, not alpha, so
+       their contrast stays measurable. */
+    --hover: #181b1f;  /* half a step under --raise, so hover is always quieter than selected */
+    --scrim: rgba(5, 6, 8, .62);
+    --on-fill: #0d0f12;  /* text on accent and amber fills */
+    --accent-hover: #85b6ff; --amber-hover: #f8c76a;
+    --amber-tint: #26241f; --red-tint: #24181b; --accent-tint: #212b3b;
+
+    /* The six-step type scale, size / line height. Weights stop at 600 and --track-caps
+       is the one letter-spacing, for uppercase group labels only. */
+    --t-xs: 11px; --lh-xs: 16px;
+    --t-sm: 12px; --lh-sm: 18px;
+    --t-md: 13px; --lh-md: 20px;
+    --t-lg: 15px; --lh-lg: 22px;
+    --t-xl: 18px; --lh-xl: 24px;
+    --t-kpi: 22px; --lh-kpi: 28px;
+    --w-regular: 400; --w-medium: 500; --w-semibold: 600;
+    --track-caps: .06em;
+
+    /* Space on a 4px base, and the control heights. */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+    --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+    --h-sm: 24px; --h-ctl: 28px; --h-lg: 32px; --h-row: 32px; --h-menu: 30px; --h-ph: 36px;
+    --rail-w: 52px;
+
+    /* On a dark UI the border carries a popover's edge and the shadow carries its lift. */
+    --e-pop: 0 1px 2px rgba(0,0,0,.40), 0 8px 24px rgba(0,0,0,.50);
+    --e-dlg: 0 2px 6px rgba(0,0,0,.40), 0 24px 64px rgba(0,0,0,.60);
+
+    /* Keyboard focus: a 2px ring at offset 2 on desktop. --focus (tokens.css, 2px solid
+       --accent) is not redefined here; primitives.css reads it with --focus-off, so
+       this moves the global :focus-visible ring from offset 1 to 2 (audit F70), and
+       desktop-tokens.test.js keeps --focus-w equal to --focus's width. */
+    --focus-w: 2px; --focus-off: 2px;
+    --pane-ring: inset 0 0 0 1px var(--accent);  /* the focused pane, only with 2+ panes (D26) */
+
+    /* The xterm theme. Defined here only: terminal-tab.js still passes xterm its own
+       colours until a later change applies these. */
+    --term-bg: var(--bg); --term-fg: var(--fg); --term-cursor: var(--accent);
+    --term-sel: #283a54;
+    --ansi-0: #23282f; --ansi-1: #ec6a6e; --ansi-2: #5ccb8f; --ansi-3: #e2b65e;
+    --ansi-4: #6ea8fe; --ansi-5: #c391ea; --ansi-6: #55c3d8; --ansi-7: #c9ced4;
+    --ansi-8: #7a828e; --ansi-9: #ff8f8f; --ansi-10: #82e0ab; --ansi-11: #f2cd7e;
+    --ansi-12: #98c2ff; --ansi-13: #d8b2f6; --ansi-14: #86d9e8; --ansi-15: #f2f4f6;
   }
 
   body { font-family: var(--font-ui); font-size: 13px; background: var(--bg); }
