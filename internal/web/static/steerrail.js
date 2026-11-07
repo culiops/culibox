@@ -26,10 +26,18 @@ function railElevated(s, nowMs) {
   return (typeof sessionElevated === "function" ? sessionElevated : require("./deskshell.js").sessionElevated)(s, nowMs);
 }
 
+// railHint: a rail button's name with its chord from the registry (shortcuts.js).
+function railHint(label, id, mac) {
+  return (typeof hintTitle === "function" ? hintTitle : require("./shortcuts.js").hintTitle)(label, id, mac);
+}
+
+// The toggle is the frame's ghost "»" (the sidebar's "«" turned around), first in the
+// item list; the DOM puts it at the top of the rail, level with the sidebar's collapse.
+// ctx.mac picks the chord's spelling in its name.
 function railItems(sessions, ctx) {
   const c = ctx || {};
   const nowMs = typeof c.nowMs === "number" ? c.nowMs : Date.now();
-  const out = [{ kind: "toggle", label: "Show sidebar", glyph: "☰", on: false, alert: false, elevated: false }];
+  const out = [{ kind: "toggle", label: railHint("Show sidebar", "sidebar.toggle", !!c.mac), glyph: "\u00bb", on: false, alert: false, elevated: false }];
   for (const s of sessions || []) {
     // attentionClass, not activity alone: an expired AWS sign-in blocks on the
     // operator while the agent still reads "working".

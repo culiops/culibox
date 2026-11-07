@@ -154,6 +154,14 @@ function shortcutHint(id, mac) {
   return first ? renderChord(first, mac) : "";
 }
 
+// hintTitle: a button's tooltip and accessible name, "Command palette (Ctrl+Shift+K)":
+// its own label and, in brackets, the chord the registry binds to `id` on this
+// platform. A label alone when the id has no chord here.
+function hintTitle(label, id, mac) {
+  const chord = shortcutHint(id, mac);
+  return chord ? label + " (" + chord + ")" : label;
+}
+
 function jumpHint(n, mac) {
   return renderChord({ mod: true, code: "Digit" + n }, mac);
 }
@@ -259,7 +267,7 @@ function helpTextStacked(rows, runtimeLabel) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, jumpHint,
+    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, hintTitle, jumpHint,
     shortcutMatches, shortcutFor, bindShortcut, dispatchShortcut, _resetShortcutBindings, cmKeys, helpRows, helpText,
     helpTextStacked,
   };

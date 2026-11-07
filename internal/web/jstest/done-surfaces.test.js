@@ -85,11 +85,11 @@ function renderRail(sessions) {
     mobileActive: () => false, selectedSessionId: () => null, railLogo: () => el("span"), railMeters: () => el("div"),
     paintRailMeters: () => {}, activityClass: act.activityClass, deskDot: desk.deskDot, rail48Key: "",
     needsYou: att.needsYou, attentionClass: att.attentionClass, sessionDot: att.sessionDot,
-    openTerminal: () => {}, toggleSidebar: () => {}, openSpawnDialog: () => {},
+    openTerminal: () => {}, toggleSidebar: () => {}, openSpawnDialog: () => {}, IS_MAC: false,
   });
   new vm.Script(fnSrc(read("app.js"), "renderRail48") + "\nglobalThis.renderRail48 = renderRail48;").runInContext(ctx);
   ctx.renderRail48();
-  const mid = railEl.children[2]; // logo, +, the dots, meters, toggle
+  const mid = railEl.children[3]; // logo, », +, the dots, meters
   return mid.children.map((b) => ({ btn: b, dot: b.children[0] }));
 }
 

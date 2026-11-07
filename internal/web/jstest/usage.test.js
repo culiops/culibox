@@ -121,3 +121,46 @@ test("meterModel returns null for an absent or malformed window", () => {
   assert.equal(meterModel("5h", {}, now), null);
   assert.equal(meterModel("5h", { used_percentage: "80" }, now), null);
 });
+
+// F32: at 100% the sidebar says the limit is hit instead of a number that reads like 78%.
+// "pct" is the rounded label, so anything the label would draw as 100% or more is the limit.
+test("meterModel marks a window at 100 percent or more as the limit, with the reset in the words", () => {
+  const now = 1_700_000_000;
+  for (const p of [100, 120]) {
+    const m = meterModel("5h", { used_percentage: p, resets_at: now + 25 * 60 }, now);
+    assert.equal(m.limit, true, "pct " + p);
+    assert.equal(m.limitText, "limit reached · resets 25m", "pct " + p);
+  }
+  const long = meterModel("wk", { used_percentage: 100, resets_at: now + 2 * 3600 + 50 * 60 }, now);
+  assert.equal(long.limitText, "limit reached · resets 2h 50m");
+});
+
+test("meterModel: a limit with no known reset time says only that the limit is reached", () => {
+  const now = 1_700_000_000;
+  const m = meterModel("5h", { used_percentage: 100, resets_at: 0 }, now);
+  assert.equal(m.limit, true);
+  assert.equal(m.limitText, "limit reached");
+});
+
+test("meterModel: 99 is not the limit, 99.5 draws as 100% and is", () => {
+  const now = 1_700_000_000;
+  const at = (p) => meterModel("5h", { used_percentage: p, resets_at: now + 60 }, now);
+  assert.equal(at(99).limit, false);
+  assert.equal(at(99).limitText, "");
+  assert.equal(at(99.4).limit, false);
+  assert.equal(at(99.5).pct, 100);
+  assert.equal(at(99.5).limit, true);
+});
+
+test("meterModel: a window past its reset is not a limit, and the existing fields are untouched at the limit", () => {
+  const now = 1_700_000_000;
+  const rolled = meterModel("5h", { used_percentage: 100, resets_at: now - 5 }, now);
+  assert.equal(rolled.limit, false);
+  assert.equal(rolled.limitText, "");
+  assert.equal(rolled.unknown, true);
+  const m = meterModel("5h", { used_percentage: 100, resets_at: now + 25 * 60 }, now);
+  assert.equal(m.pct, 100);
+  assert.equal(m.width, "100%");
+  assert.equal(m.hot, true);
+  assert.equal(m.reset, "25m left"); // the header and the phone band keep this wording
+});

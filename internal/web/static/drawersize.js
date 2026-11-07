@@ -89,6 +89,20 @@ function stepSplit(r, key, kind, drawn) {
   return clampShare(cur, kind);
 }
 
+// stepWidth: the sidebar width splitter's keyboard move, in pixels. dir is +1
+// (wider) or -1 (narrower); the result stays inside min..max, and a width that is
+// not a number steps from min.
+function stepWidth(cur, dir, min, max, step) {
+  const from = Number.isFinite(cur) ? cur : min;
+  return Math.min(max, Math.max(min, from + dir * step));
+}
+
+// widthKeyDir: the direction a key moves the sidebar's right edge (ArrowRight
+// widens it), 0 for a key the splitter does not take.
+function widthKeyDir(key) {
+  return key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0;
+}
+
 // splitAria: the separator's aria-valuenow/min/max, in whole percents. now
 // stays inside min..max: an undragged drawer (960px) on a grid wider than
 // 3200px is drawn under the 30% floor, and the first key press snaps it there.
@@ -113,6 +127,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     DRAWER_SIZE_KEY, DRAWER_W_MIN, DRAWER_W_MAX, TREE_DEFAULT, TREE_MIN, TREE_MAX,
     normalizeDrawerSize, loadDrawerSize, saveDrawerSize,
-    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, splitAria, maxEscapeRestores,
+    drawerWidthFromPointer, treeRatioFromPointer, stepSplit, stepWidth, widthKeyDir, splitAria, maxEscapeRestores,
   };
 }

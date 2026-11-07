@@ -109,3 +109,24 @@ test("maxEscapeRestores: only a maximized drawer, focus on the page or in the dr
 test("maxEscapeRestores: a press another handler already used (closed a menu or a page) is left alone", () => {
   assert.equal(d.maxEscapeRestores({ max: true, where: "body", owned: false, menuOpen: false, prevented: true }), false);
 });
+
+// The sidebar width splitter (#split-v): a step in pixels, clamped to the sidebar's own bounds.
+test("stepWidth: one step of 16px either way, clamped to min and max", () => {
+  assert.equal(d.stepWidth(290, +1, 200, 560, 16), 306);
+  assert.equal(d.stepWidth(290, -1, 200, 560, 16), 274);
+  assert.equal(d.stepWidth(560, +1, 200, 560, 16), 560);
+  assert.equal(d.stepWidth(552, +1, 200, 560, 16), 560);
+  assert.equal(d.stepWidth(200, -1, 200, 560, 16), 200);
+  assert.equal(d.stepWidth(210, -1, 200, 560, 16), 200);
+});
+
+test("stepWidth: a width that is not a number steps from the minimum", () => {
+  assert.equal(d.stepWidth(NaN, +1, 200, 560, 16), 216);
+  assert.equal(d.stepWidth(undefined, -1, 200, 560, 16), 200);
+});
+
+test("widthKeyDir: ArrowRight widens the sidebar, ArrowLeft narrows it, nothing else is ours", () => {
+  assert.equal(d.widthKeyDir("ArrowRight"), 1);
+  assert.equal(d.widthKeyDir("ArrowLeft"), -1);
+  for (const k of ["ArrowUp", "ArrowDown", "Home", "End", "Enter", "Tab", " ", "a"]) assert.equal(d.widthKeyDir(k), 0, k);
+});

@@ -136,3 +136,13 @@ test("deskshell.js no longer owns a shortcut list", () => {
   assert.equal(d.shortcutText, undefined);
   assert.ok(!/function shortcut(Rows|Text)\b/.test(read("deskshell.js")));
 });
+
+// F33/F57/F71: a button that has a chord names it in its title, built from the registry.
+test("hintTitle: the label and its chord from the registry, the bare label when there is none", () => {
+  const { hintTitle } = require("../static/shortcuts.js");
+  assert.equal(hintTitle("Command palette", "palette.open", false), "Command palette (Ctrl+Shift+K)");
+  assert.equal(hintTitle("Command palette", "palette.open", true), "Command palette (\u21e7\u2318K)");
+  assert.equal(hintTitle("Hide sidebar", "sidebar.toggle", false), "Hide sidebar (Ctrl+Shift+B)");
+  assert.equal(hintTitle("Show sidebar", "sidebar.toggle", true), "Show sidebar (\u21e7\u2318B)");
+  assert.equal(hintTitle("No chord", "no.such.id", false), "No chord");
+});

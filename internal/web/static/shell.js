@@ -581,11 +581,15 @@ function persistSidebarSplit(pct) {
 // after indentation: truncation was structural, not incidental. Dragging is the
 // root-cause fix; the row tooltip covers whatever is still too long.
 const WIDTH_KEY = "agent-box:sidebarWidth";
-const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script
+const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script and #split-v's aria-valuemin/max
+const SIDEBAR_STEP = 16; // one arrow-key press on #split-v
 
 function setSidebarWidth(px) {
   px = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
   document.documentElement.style.setProperty("--sidebar-w", px + "px");
+  // The splitter's separator role reports the width it is at (its min/max are in index.html).
+  const sep = document.getElementById("split-v");
+  if (sep) sep.setAttribute("aria-valuenow", String(Math.round(px)));
   return px;
 }
 
@@ -703,6 +707,21 @@ function initWidthSplitter() {
   // hatch from a drag that went wrong. 290 mirrors desktop.css's --sidebar-w
   // default; the two must move together.
   handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(290)); fitAll(); });
+
+  // The keyboard way: ArrowRight widens, ArrowLeft narrows, 16px a press, kept like a drag
+  // (and the terminals refit, as after one). Not with a modifier: Ctrl+Arrow and the like
+  // belong to the browser and the page. The first press steps from the width it is drawn at.
+  handle.addEventListener("keydown", (e) => {
+    const dir = widthKeyDir(e.key);
+    if (!dir || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    const cur = sidebar.getBoundingClientRect().width;
+    persistSidebarWidth(setSidebarWidth(stepWidth(cur, dir, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_STEP)));
+    fitAll();
+  });
+  // aria-valuenow starts at the width the page was painted with (the stored one, applied pre-paint).
+  const drawn = Math.round(sidebar.getBoundingClientRect().width);
+  if (drawn > 0) handle.setAttribute("aria-valuenow", String(drawn));
 }
 
 // --- ask dialog --------------------------------------------------------------

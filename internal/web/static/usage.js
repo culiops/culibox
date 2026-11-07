@@ -72,7 +72,7 @@ function meterModel(label, win, nowSec) {
   // number and an empty bar, never the old % (and never a 0% that would claim
   // "plenty left"). resets_at 0/missing is "unknown reset time", not a reset.
   if (win.resets_at > 0 && win.resets_at <= nowSec) {
-    return { label: label, pct: null, width: "0%", hot: false, unknown: true, reset: "reset" };
+    return { label: label, pct: null, width: "0%", hot: false, unknown: true, reset: "reset", limit: false, limitText: "" };
   }
   const raw = win.used_percentage;
   const clamped = Math.min(100, Math.max(0, raw));
@@ -80,13 +80,21 @@ function meterModel(label, win, nowSec) {
   // missing — resets_at has no omitempty server-side. Appending " left" to that
   // word would read as the nonsensical "now left".
   const c = fmtCountdown(win.resets_at, nowSec);
+  const pct = Math.round(raw);
+  // limit: the window is used up. It follows the rounded label, so a number the
+  // label would draw as "100%" or more is never printed as a plain percentage that
+  // reads like 78%. limitText is the sidebar's wording for it: the reset in the
+  // words, or just "limit reached" when no reset time is known (c is "now" then).
+  const limit = pct >= 100;
   return {
     label: label,
-    pct: Math.round(raw),
+    pct: pct,
     width: clamped + "%",
     hot: raw > METER_HOT_PCT,
     unknown: false,
     reset: c === "now" ? "resets now" : c + " left",
+    limit: limit,
+    limitText: limit ? (c === "now" ? "limit reached" : "limit reached \u00b7 resets " + c) : "",
   };
 }
 

@@ -112,11 +112,11 @@ function toggleSidebar() {
   // No sidebar to toggle below the breakpoint (the bottom nav picks the
   // screen), and a value stored here would silently flip the next wide window.
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
-  // Each state shows exactly one toggle (header ☰ with the sidebar, the rail's
-  // ☰ without), so the one just pressed disappears: hand focus to the other.
+  // Each state shows exactly one toggle (the sidebar's «, the rail's » without), so
+  // the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const railToggle = rail && rail.querySelector(".ri.tog"); // not the first .ri: + comes before the dots and the ☰
+  const railToggle = rail && rail.querySelector(".ri.tog"); // by class: the » is not the only .ri
   const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
@@ -594,14 +594,14 @@ function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
   // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
-  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId() });
+  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId(), mac: IS_MAC });
   const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog btn btn-ghost btn-icon btn-sm" : "");
     b.setAttribute("aria-label", it.label);
     // A session's hover text is its bare name (the "waiting" suffix is in the
     // accessible name and the dot's colour); the toggle and add keep their label.
@@ -625,21 +625,40 @@ function renderRail48() {
   const mid = document.createElement("div");
   mid.className = "rin";
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
-  // Logo, the primary + under it, the session dots, then the quota bars and the
-  // ☰ at the foot (p2); renderRateLimits fills the bars. Re-parked on every
-  // rebuild because replaceChildren drops them.
-  rail.replaceChildren(railLogo(), mk(items[items.length - 1]), mid, railMeters(), mk(items[0]));
+  // Top to bottom (m1-2): the logo, the » that brings the sidebar back (level with the
+  // sidebar's «), the primary +, the session dots, then the quota bars at the foot;
+  // renderRateLimits fills the bars. Re-parked on every rebuild because
+  // replaceChildren drops them.
+  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), mid, railMeters());
   paintRailMeters();
 }
 
 // paintSideElevated: the sidebar footer's "N elevated", red while any session
-// has an AWS write window open. A lapsed window clears on the next poll.
+// has an AWS write window open. With none open it is not there at all: "0 elevated"
+// is a line that says nothing. A lapsed window clears on the next poll.
 function paintSideElevated() {
   const el = $("side-elevated");
   if (!el) return;
   const n = elevatedCount(lastSessions, Date.now());
-  el.textContent = n + " elevated";
+  el.hidden = n === 0;
+  el.textContent = n > 0 ? n + " elevated" : "";
   el.classList.toggle("hot", n > 0);
+}
+
+// paintSideHints: the sidebar top's palette and collapse buttons name their chord, from the
+// registry (so it is the Mac spelling on a Mac, and a rebound key cannot leave it stale). The
+// same text is the tooltip and the accessible name, as the frames draw it. The rail's » takes
+// its from railItems.
+function paintSideHints() {
+  const set = (id, label, shortcut) => {
+    const el = $(id);
+    if (!el) return;
+    const t = hintTitle(label, shortcut, IS_MAC);
+    el.title = t;
+    el.setAttribute("aria-label", t);
+  };
+  set("side-palette", "Command palette", "palette.open");
+  set("side-collapse", "Hide sidebar", "sidebar.toggle");
 }
 
 // paintSideCost: the footer's "$ today", the same sum the Analytics page shows
@@ -1350,7 +1369,12 @@ function updateStatusLine() {
 //
 // Built with createElement and textContent, never innerHTML — these values
 // come from a file on disk written by an external hook.
-function renderRateLimitsInto(host, rl) {
+//
+// limitLine is the desktop sidebar's alone (#limits-side): a window at 100% or more
+// swaps its percentage for "limit reached · resets 25m" instead of a number that
+// reads like 78%. The header meters and the phone's band keep the percentage and the
+// countdown; the line is no alert, so no amber and no notification ride on it.
+function renderRateLimitsInto(host, rl, limitLine) {
   host.replaceChildren();
   const now = Math.floor(Date.now() / 1000);
   const windows = [["5h", rl && rl.five_hour], ["wk", rl && rl.seven_day]];
@@ -1373,12 +1397,14 @@ function renderRateLimitsInto(host, rl) {
     const fill = document.createElement("i");
     fill.style.width = m.width;
     bar.appendChild(fill);
+    const atLimit = !!limitLine && m.limit;
     const pc = document.createElement("span");
     pc.className = "pc";
     pc.textContent = m.unknown ? "–" : m.pct + "%";
+    pc.hidden = atLimit;
     const rs = document.createElement("span");
-    rs.className = "rs";
-    rs.textContent = m.reset;
+    rs.className = atLimit ? "rs limit" : "rs";
+    rs.textContent = atLimit ? m.limitText : m.reset;
     el.append(name, bar, pc, rs);
     if (note) {
       const ag = document.createElement("span");
@@ -1388,7 +1414,7 @@ function renderRateLimitsInto(host, rl) {
     }
     // The bar carries no text, so the meter needs an accessible name of its own.
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", (m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + m.reset) + (note ? ", " + note : ""));
+    el.setAttribute("aria-label", (m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + (atLimit ? m.limitText : m.reset)) + (note ? ", " + note : ""));
     host.appendChild(el);
     count++;
   }
@@ -1417,7 +1443,7 @@ function renderRateLimits(rl) {
   for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
     if (!host) continue;
-    const count = renderRateLimitsInto(host, lims);
+    const count = renderRateLimitsInto(host, lims, id === "limits-side");
     if (count && name !== ACCT_DEFAULT) {
       const lab = document.createElement("span");
       lab.className = "acct-lab";
@@ -2311,7 +2337,8 @@ function paintCompactRow(li, sname, grow, s) {
   }
   const kb = document.createElement("button");
   kb.type = "button";
-  kb.className = "kbtn";
+  // The kit's ghost icon button, 24px (the frames' .row-menu); .kbtn keeps the reveal on hover.
+  kb.className = "kbtn btn btn-ghost btn-icon btn-sm";
   kb.textContent = "⋯"; // U+22EF, as on the mobile row
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
@@ -6345,6 +6372,7 @@ $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
 $("side-audit").addEventListener("click", () => openAudit());
 $("side-palette").addEventListener("click", openPalette);
+paintSideHints();
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
 {

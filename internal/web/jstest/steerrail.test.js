@@ -24,8 +24,15 @@ function hhmm(iso) {
 test("the toggle leads and the add trails, even with no sessions", () => {
   const items = railItems([], {});
   assert.deepStrictEqual(items.map((i) => i.kind), ["toggle", "new"]);
-  assert.strictEqual(items[0].label, "Show sidebar");
+  assert.strictEqual(items[0].label, "Show sidebar (Ctrl+Shift+B)");
   assert.strictEqual(items[1].label, "New session");
+});
+
+// F57: the way back to the sidebar is the frame's ghost "»", named with the real chord.
+test("the toggle is the » glyph and names the chord of this platform", () => {
+  assert.strictEqual(railItems([], {})[0].glyph, "\u00bb");
+  assert.strictEqual(railItems([], { mac: false })[0].label, "Show sidebar (Ctrl+Shift+B)");
+  assert.strictEqual(railItems([], { mac: true })[0].label, "Show sidebar (\u21e7\u2318B)");
 });
 
 test("one item per session, in the list's own order", () => {
