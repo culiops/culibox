@@ -295,7 +295,7 @@ test("the desktop row's ⋯ is a kit ghost icon button; the phone row's is not t
   assert.ok(phone.includes('kb.className = "kbtn";'), "the phone row keeps the bare kbtn");
 });
 
-// ---- task 9b: paintCompactRow against stand-ins --------------------------------------------------------
+// ---- task 9b: the ask on the row reads "Asks to run" + the call in mono -------------------------------
 // paintCompactRow is cut out and run against the stand-ins it reads; rowSubline is the real one.
 function paintRow(s, over) {
   const D = require("../static/deskshell.js");
@@ -312,6 +312,33 @@ function paintRow(s, over) {
   return { li, sname, grow, sub: grow.children[0] };
 }
 const ASKING = { id: "a", name: "a", activity: "waiting", need: "ask", ask: "Bash(terraform plan -out=tf.plan)" };
+
+test("an ask's sub-line is amber 'Asks to run ' and the command alone in a mono span", () => {
+  const { sub } = paintRow(ASKING);
+  assert.equal(sub.className, "sub amber");
+  assert.equal(sub.children.length, 2);
+  assert.equal(sub.children[0], "Asks to run ");
+  assert.equal(sub.children[1].className, "mono");
+  assert.equal(sub.children[1].textContent, "terraform plan -out=tf.plan");
+  assert.equal(sub.text, "", "no textContent beside the parts");
+});
+
+test("another tool's ask reads Asks to run Tool(args), the call mono; a plain sub-line is still one text", () => {
+  const rd = paintRow({ ...ASKING, ask: "Read(/etc/hosts)" }).sub;
+  assert.equal(rd.children[0], "Asks to run ");
+  assert.equal(rd.children[1].textContent, "Read(/etc/hosts)");
+  const plain = paintRow({ id: "w", name: "w", activity: "working", summary: "fixing tests" }).sub;
+  assert.equal(plain.className, "sub");
+  assert.equal(plain.textContent, "fixing tests");
+  assert.equal(plain.children.length, 0);
+});
+
+test("a sub-line click still opens the terminal (the span is inside the clickable line)", () => {
+  const opened = [];
+  const { sub } = paintRow(ASKING, { ctx: { openTerminal: (id, name) => opened.push([id, name]) } });
+  sub.onclick();
+  assert.deepEqual(opened, [["a", "a"]]);
+});
 
 test("the row's ⋯ is built collapsed, and expanded when it is the opener of the open menu (task 9b)", () => {
   const kbOf = (r) => r.sname.children.find((c) => c.className.includes("kbtn"));

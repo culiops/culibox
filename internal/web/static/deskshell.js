@@ -154,12 +154,34 @@ function rowSubline(s, opts) {
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
     const text = deskDep("cardContent")(s, { plain: true }).text;
+    // An ask reads as the frames draw it: "Asks to run" and the tool call after it (the command alone for
+    // Bash), the call in mono (machine text). needLabel keeps its "asks" word, which the phone card shares.
+    if (why === "asks") {
+      const lead = "Asks to run ";
+      if (!s.ask) return { text: lead + text, amber: true };
+      const mono = bashCommand(s.ask) || text;
+      return { text: lead + mono, amber: true, lead, mono };
+    }
     const out = { text: why ? why + ": " + text : text, amber: true };
     if (s.need === "sso") out.view = "access";
     return out;
   }
   const v = s || {};
   return { text: deskDep("plainSummary")(v.summary) || deskDot(v).title || "", amber: false };
+}
+
+// bashCommand: the command of a pending Bash call, from the ask text the server sends
+// ("Bash(<command>)", cut at askMax with a trailing "…" and no closing paren when long). The
+// ask strip and the row's sub-line show it after "Asks to run", where "Bash(" and ")" are
+// noise. Only the outer parenthesis goes, so $(…) and subshells stay whole. null for any
+// other tool (the caller keeps "Tool(args)") and for an empty command: "Bash()" says more
+// than a bare "Asks to run".
+function bashCommand(ask) {
+  const t = String(ask == null ? "" : ask);
+  if (!t.startsWith("Bash(")) return null;
+  let cmd = t.slice(5);
+  if (cmd.endsWith(")")) cmd = cmd.slice(0, -1);
+  return cmd.trim() === "" ? null : cmd;
 }
 
 // deskConnState: the connection state a row reads, as a connStateLabel key.
@@ -491,6 +513,6 @@ function paneTabsClass(defs) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, jumpOrder, nextNeedsYou, deskConnState, deskDot, headerDot, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline, bashCommand,
     paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, bootFlags, paneTitle, paneTabs, paneFilesToggle, paneTabsClass, modelLabel, metaUnitsOff };
 }

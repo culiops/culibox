@@ -88,6 +88,7 @@ function clockFor() {
 
 const att = require("../static/attention.js");
 const peek = require("../static/peek.js");
+const desk = require("../static/deskshell.js");
 
 // page() sets the real global (attention.js and peek.js run in Node, not in the sandbox): put it back
 // after every test, so no test depends on the one before it.
@@ -106,7 +107,7 @@ function page(over) {
     window: { innerWidth: 1440 }, console, Promise, JSON, Date: { now: () => clock.now }, Set, Map, String, Array, Number, Object,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     showToast: (m, o) => toasts.push({ m, o }),
-    cardContent: att.cardContent, answerState: att.answerState, maskHint: att.maskHint,
+    cardContent: att.cardContent, answerState: att.answerState, maskHint: att.maskHint, bashCommand: desk.bashCommand,
     sendState: peek.sendState, replyTextError: peek.replyTextError,
     lastSessions: [], pendingAnswers: new Set(), cardPeekCache: new Map(), cardAskSeen: new Map(), cardExpanded: new Set(),
     refreshSessions: () => Promise.resolve(),
@@ -149,7 +150,7 @@ test("F50: replies off, an ask strip has no Yes/No and says where to answer", ()
   const p = page({ repliesEnabled: false });
   const b = body(p, ASK, false);
   assert.strictEqual(yesNo(b).length, 0, "no Yes/No");
-  assert.deepStrictEqual(lines(b), ["Bash(git push origin main)", "[acts]", "Answer in the terminal · remote replies are off"]);
+  assert.deepStrictEqual(lines(b), ["git push origin main", "[acts]", "Answer in the terminal · remote replies are off"]);
   assert.ok(b.byClass("peek-why").length === 1, "the line is the strip's .peek-why");
   // Open terminal is still the way to answer.
   assert.deepStrictEqual(b.byClass("nacts")[0].buttons().map((x) => x.textContent), ["Open terminal"]);
@@ -169,7 +170,7 @@ test("F51: replies on and collapsed, the reason Yes/No are disabled is a line, n
   assert.ok(yes.disabled && no.disabled, "disabled until expanded");
   assert.ok(yes.cls.has("off") && no.cls.has("off"));
   assert.strictEqual(yes.title, "Expand to see the full command first", "the tooltip stays");
-  assert.deepStrictEqual(lines(b), ["Bash(git push origin main)", "[acts]", "Expand to see the full command first"]);
+  assert.deepStrictEqual(lines(b), ["git push origin main", "[acts]", "Expand to see the full command first"]);
   assert.strictEqual(b.byClass("peek-why")[0].textContent, "Expand to see the full command first");
 });
 
@@ -178,7 +179,7 @@ test("F51: expanded, line 1 is still the command and the peek message is on its 
   p.box.cardPeekCache.set("s1", { text: "I will push the branch so CI can run.", muted: false });
   const b = body(p, ASK, true);
   assert.deepStrictEqual(lines(b), [
-    "Bash(git push origin main)",
+    "git push origin main",
     "I will push the branch so CI can run.",
     "pre:Bash(git push origin main --force)",
     "[acts]",
@@ -191,12 +192,39 @@ test("F51: expanded, line 1 is still the command and the peek message is on its 
   assert.strictEqual(b.byClass("peek-why").length, 0, "nothing left to explain");
 });
 
+test("task 9b: the strip's command is what the frame draws, the command alone after the label 'Asks to run'", () => {
+  const p = page();
+  const first = (s, expanded) => body(p, s, expanded).children[0];
+  // Bash(<cmd>): the command, in the mono toggle line; nested parentheses stay.
+  assert.strictEqual(first({ ...ASK, ask: "Bash(echo $(date))" }, false).textContent, "echo $(date)");
+  assert.ok(first(ASK, false).cls.has("ask"), "still the mono .peektxt.ask");
+  // Any other tool keeps Tool(args) as the server wrote it.
+  assert.strictEqual(first({ ...ASK, ask: "Read(/etc/hosts)" }, false).textContent, "Read(/etc/hosts)");
+  assert.strictEqual(first({ ...ASK, ask: "WebFetch" }, false).textContent, "WebFetch");
+  assert.strictEqual(first({ ...ASK, ask: "Bash()" }, false).textContent, "Bash()");
+  // A call cut at the server's limit keeps its ellipsis and loses nothing else.
+  assert.strictEqual(first({ ...ASK, ask: "Bash(find / -name x…" }, false).textContent, "find / -name x…");
+  // No tool call text: the summary / waiting line, untouched.
+  assert.strictEqual(first({ ...ASK, ask: "", summary: "**ok**" }, false).textContent, "ok");
+  // Expanded: line 1 is still the command (F51), the toggle's title and role are unchanged.
+  const e = first(ASK, true);
+  assert.strictEqual(e.textContent, "git push origin main");
+  assert.strictEqual(e.getAttribute("aria-expanded"), "true");
+});
+
+test("task 9b: the strip's mask note follows the command it shows", () => {
+  const p = page();
+  const b = body(p, { ...ASK, ask: "Bash(echo [masked:aws-key-id])" }, false);
+  assert.strictEqual(b.children[0].textContent, "echo [masked:aws-key-id]");
+  assert.strictEqual(b.byClass("maskhint").length, 1);
+});
+
 test("F51: expanded with no message yet (a tool call has none) shows no message line; loading shows none either", () => {
   const p = page();
   p.box.cardPeekCache.set("s1", { text: "No message yet.", muted: true });
-  assert.deepStrictEqual(lines(body(p, ASK, true)), ["Bash(git push origin main)", "pre:Bash(git push origin main --force)", "[acts]"]);
+  assert.deepStrictEqual(lines(body(p, ASK, true)), ["git push origin main", "pre:Bash(git push origin main --force)", "[acts]"]);
   const q = page(); // nothing fetched yet
-  assert.deepStrictEqual(lines(body(q, ASK, true)), ["Bash(git push origin main)", "pre:Bash(git push origin main --force)", "[acts]"]);
+  assert.deepStrictEqual(lines(body(q, ASK, true)), ["git push origin main", "pre:Bash(git push origin main --force)", "[acts]"]);
 });
 
 test("F51: a message that carries a mask token gets the display-mask note under its own line", () => {

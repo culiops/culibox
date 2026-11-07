@@ -61,7 +61,7 @@ test("rowSubline: amber needs-you text, else summary or the activity word", () =
   const n = d.rowSubline({ activity: "waiting", need: "ask", ask: "aws logs tail" });
   assert.equal(n.amber, true);
   assert.ok(n.text.includes("aws logs tail"));
-  assert.ok(n.text.startsWith("asks: "));
+  assert.ok(n.text.startsWith("Asks to run "));
   assert.deepEqual(d.rowSubline({ activity: "working", summary: "fixing tests" }), { text: "fixing tests", amber: false });
   assert.deepEqual(d.rowSubline({ activity: "idle" }), { text: "idle", amber: false });
   assert.deepEqual(d.rowSubline({}), { text: "", amber: false });
@@ -78,7 +78,7 @@ test("rowSubline: a connection-level SSO expiry reads SSO expired, never a bare 
   // An agent that is itself asking keeps the ask text even with an expired
   // connection, and its line opens the terminal (no view).
   const ask = d.rowSubline({ activity: "waiting", need: "ask", ask: "ls", aws_connections: [conn] });
-  assert.ok(ask.text.startsWith("asks: "));
+  assert.ok(ask.text.startsWith("Asks to run "));
   assert.equal(ask.view, undefined);
 });
 
@@ -633,7 +633,7 @@ test("rowSubline: a finished turn reads its summary, muted, no amber and no 'you
 
 test("rowSubline: a blocked session is still amber", () => {
   assert.equal(d.rowSubline(A.ask).amber, true);
-  assert.ok(d.rowSubline(A.ask).text.startsWith("asks: "));
+  assert.ok(d.rowSubline(A.ask).text.startsWith("Asks to run "));
   assert.equal(d.rowSubline(A.sso).amber, true);
   assert.equal(d.rowSubline(A.store).amber, true);
 });
@@ -744,7 +744,7 @@ test("rowSubline: a session taken over by another tab reads 'open in another tab
 
 test("rowSubline: a blocked session keeps its amber ask whatever the connection says", () => {
   assert.equal(d.rowSubline(A.ask, { takenOver: true }).amber, true);
-  assert.ok(d.rowSubline(A.ask, { takenOver: true }).text.startsWith("asks: "));
+  assert.ok(d.rowSubline(A.ask, { takenOver: true }).text.startsWith("Asks to run "));
   assert.equal(d.rowSubline({ ...A.ask, activity: "detached" }).amber, true);
 });
 
@@ -806,4 +806,64 @@ test("nextNeedsYou reads the same list without the server's attention field", ()
   for (const cur of [null, "ask", "sso", "store", "turn"]) {
     assert.equal(ids(d.nextNeedsYou(list.map(noAttn), cur)), ids(d.nextNeedsYou(list, cur)), String(cur));
   }
+});
+
+// --- the Bash ask: the command alone after "Asks to run" (frame m1-1, task 9b) ---------------------------------------
+test("bashCommand: Bash(<cmd>) gives <cmd>, anything else gives null", () => {
+  assert.equal(d.bashCommand("Bash(git push origin main)"), "git push origin main");
+  assert.equal(d.bashCommand("Bash(terraform plan -out=tf.plan -var-file=prod.tfvars)"), "terraform plan -out=tf.plan -var-file=prod.tfvars");
+  // Not a Bash call: the Tool(args) text stays as the server wrote it.
+  assert.equal(d.bashCommand("Read(/etc/hosts)"), null);
+  assert.equal(d.bashCommand("WebFetch"), null);
+  assert.equal(d.bashCommand("Bash"), null, "the tool name alone has no command");
+  assert.equal(d.bashCommand("bash(ls)"), null, "the tool name is exact");
+  assert.equal(d.bashCommand("MyBash(ls)"), null, "and not a suffix of another tool's name");
+  assert.equal(d.bashCommand(""), null);
+  assert.equal(d.bashCommand(undefined), null);
+  assert.equal(d.bashCommand(null), null);
+});
+
+test("bashCommand: only the outer parenthesis goes, nested ones stay", () => {
+  assert.equal(d.bashCommand("Bash(echo $(date))"), "echo $(date)");
+  assert.equal(d.bashCommand("Bash(f() { g(1); })"), "f() { g(1); }");
+  assert.equal(d.bashCommand("Bash((cd a && make))"), "(cd a && make)");
+  assert.equal(d.bashCommand("Bash(echo ))"), "echo )", "a command's own closing paren is not the outer one");
+});
+
+test("bashCommand: an empty command has nothing to show; a cut-off one keeps its words and its ellipsis", () => {
+  assert.equal(d.bashCommand("Bash()"), null);
+  assert.equal(d.bashCommand("Bash(   )"), null);
+  // The server cuts a long call at askMax and ends it with an ellipsis, so the closing paren is gone.
+  assert.equal(d.bashCommand("Bash(find / -name '*.log' -exec rm {} \\;…"), "find / -name '*.log' -exec rm {} \\;…");
+  assert.equal(d.bashCommand("Bash(echo $(date"), "echo $(date", "no closing paren at all: nothing is taken off the end");
+});
+
+test("rowSubline: a Bash ask reads Asks to run + the command alone, the command is the mono part", () => {
+  const r = d.rowSubline({ activity: "waiting", need: "ask", ask: "Bash(terraform plan -out=tf.plan)" });
+  assert.deepEqual(r, { text: "Asks to run terraform plan -out=tf.plan", amber: true, lead: "Asks to run ", mono: "terraform plan -out=tf.plan" });
+  // A cut-off call keeps its ellipsis.
+  assert.equal(d.rowSubline({ activity: "waiting", need: "ask", ask: "Bash(sleep 1; echo a…" }).mono, "sleep 1; echo a…");
+});
+
+test("rowSubline: another tool reads Asks to run Tool(args), also mono; an empty Bash() stays as written", () => {
+  assert.deepEqual(d.rowSubline({ activity: "waiting", need: "ask", ask: "Read(/etc/hosts)" }),
+    { text: "Asks to run Read(/etc/hosts)", amber: true, lead: "Asks to run ", mono: "Read(/etc/hosts)" });
+  assert.equal(d.rowSubline({ activity: "waiting", need: "ask", ask: "Bash()" }).mono, "Bash()");
+  assert.equal(d.rowSubline({ activity: "waiting", need: "ask", ask: "WebFetch" }).text, "Asks to run WebFetch");
+});
+
+test("rowSubline: an ask with no tool call text keeps the agent's words, not mono", () => {
+  const r = d.rowSubline({ activity: "waiting", need: "ask", summary: "Needs a go-ahead **now**" });
+  assert.equal(r.amber, true);
+  assert.equal(r.text, "Asks to run Needs a go-ahead now");
+  assert.equal(r.mono, undefined, "only a tool call is machine text");
+  assert.equal(r.lead, undefined);
+});
+
+test("rowSubline: the other needs and every non-ask line keep their shape", () => {
+  const s = d.rowSubline(A.sso);
+  assert.ok(s.text.startsWith("AWS sign-in: "));
+  assert.equal(s.mono, undefined);
+  assert.equal(d.rowSubline(A.store).mono, undefined);
+  assert.deepEqual(Object.keys(d.rowSubline({ activity: "working", summary: "fixing tests" })), ["text", "amber"]);
 });

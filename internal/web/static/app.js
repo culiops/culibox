@@ -2388,7 +2388,13 @@ function paintCompactRow(li, sname, grow, s, conn) {
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
-    d.textContent = sub.text;
+    if (sub.mono) {
+      // An ask: "Asks to run" and the tool call after it, the call in mono (machine text, frame m1-1).
+      const m = document.createElement("span");
+      m.className = "mono";
+      m.textContent = sub.mono;
+      d.append(sub.lead, m);
+    } else d.textContent = sub.text;
     // The name button is the keyboard path; the sub-line is the same action for
     // a pointer (spec 7: it replaces the old summary-to-peek click). An SSO
     // sign-in line opens the session's Access view instead, where sign-in lives.
@@ -2517,6 +2523,10 @@ function renderNeedsBody(s, opts) {
   if (expanded && !askStrip) {
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
+  } else if (askStrip && bashCommand(s.ask) !== null) {
+    // "Asks to run" is the label's, so a Bash call is its command alone (frame m1-1); every other tool
+    // keeps Tool(args). The expanded strip keeps this line too (F51), and the full command is below it.
+    txt.textContent = bashCommand(s.ask);
   } else {
     txt.textContent = c.text;
   }
