@@ -202,6 +202,28 @@ test("boxes unavailable on a box profile is an error line with the reason", () =
   assert.strictEqual(none.lines[1], "Boxes are unavailable on this machine.");
 });
 
+// A profile that stores no tier only RESOLVES to box. With no box layer a session that names no tier runs on this machine, uncontained
+// (internal/session runtimeFor), so "can't start" would be false for it; the page says what really happens.
+test("boxes unavailable on a profile that names no tier says its sessions start on this machine", () => {
+  // The stored profile names no tier; the list row's runtime is the one it resolves to (box).
+  const unnamedDoc = { ...awsOpsDoc };
+  delete unnamedDoc.runtime;
+  const noTier = (reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, doc: unnamedDoc })), "runs");
+  const docker = noTier("Docker is not installed");
+  assert.deepStrictEqual(docker.lines, [
+    "In a box",
+    "Boxes are unavailable on this machine: Docker is not installed.",
+    "Until it is, sessions start on this machine, uncontained.",
+  ]);
+  assert.strictEqual(docker.tone, "error");
+  assert.strictEqual(docker.toneAt, 1, "the red line is still the one that names the problem");
+  assert.strictEqual(noTier("colima is not installed").lines[2], "Until it is, sessions start on this machine, uncontained.");
+  assert.strictEqual(noTier("run `agent-box doctor` for details").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
+  assert.strictEqual(noTier("").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
+  // A stored box tier is a named one: today's sentence stays.
+  assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" })), "runs").lines[2], "Sessions with this profile can't start until Docker is installed.");
+});
+
 // With no box layer the list view reports no network posture for a boxed profile; the
 // read view still shows the posture it will have once boxes exist (pfvPosture).
 test("no box layer: the network block reads the posture the profile will have", () => {

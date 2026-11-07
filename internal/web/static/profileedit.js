@@ -16,7 +16,8 @@
 // with an empty value (undefined, null, "", false, [] or {}) is removed. Per block:
 //
 //   runs       { tier: "box"|"host", boxAvailable }
-//                runtime, through runtimeToSend (always explicit)
+//                runtime, through runtimeToSend (always explicit). It reads the whole profile, so
+//                it is merged after every other block's keys are in.
 //   workspace  { mode: "folder"|"copy", folder, copyDir, shareText, autoReturn }
 //                default_cwd, clone_of, clone_share, clone_no_auto_return, through
 //                wmFieldsToSend; the four are replaced as a unit, and no mode writes nothing.
@@ -175,7 +176,9 @@ function pfeOptions(out, incoming, owns) {
 // preserving rules read).
 const PFE_MERGE = {
   runs(out, v, doc) {
-    pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(v.tier, doc.runtime, v.boxAvailable !== false));
+    // out is the profile as it will be sent: with no box layer the tier depends on what it holds, so this merge has to run
+    // after every other block's (pfvSaveBlock does).
+    pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(v.tier, doc.runtime, v.boxAvailable !== false, out));
   },
 
   workspace(out, v, doc) {
@@ -351,7 +354,7 @@ function pfvHostRefusal(doc) {
 function pfvNewDoc(v) {
   const x = v && typeof v === "object" ? v : {};
   const out = { name: pfeTrim(x.name), bin: "claude", base: "inherit" };
-  const rt = pfeDep("runtimeToSend", "./profileform.js")(x.tier === "host" ? "host" : "box", "", x.boxAvailable !== false);
+  const rt = pfeDep("runtimeToSend", "./profileform.js")(x.tier === "host" ? "host" : "box", "", x.boxAvailable !== false, out);
   if (rt) out.runtime = rt;
   Object.assign(out, pfeDep("wmFieldsToSend", "./workmode.js")("folder", { folder: x.cwd }));
   return out;
@@ -371,7 +374,7 @@ function pfvDuplicateDoc(src, name, o) {
   delete out.rev;
   delete out.schema;
   out.name = pfeTrim(name);
-  if (typeof x.tier === "string") pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(x.tier, out.runtime, x.boxAvailable !== false));
+  if (typeof x.tier === "string") pfeSet(out, "runtime", pfeDep("runtimeToSend", "./profileform.js")(x.tier, out.runtime, x.boxAvailable !== false, out));
   if (typeof x.folder === "string") pfeSet(out, wasCopy ? "clone_of" : "default_cwd", x.folder.trim());
   if (typeof out.clone_of === "string" && out.clone_of !== "") {
     const fresh = pfeDep("wmCopyDirSuggestion", "./workmode.js")(out.clone_of, x.home, x.taken);

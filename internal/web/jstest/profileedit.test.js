@@ -124,6 +124,27 @@ test("mergeBlock runs sends the tier explicitly, and stays blank only with no bo
   assert.strictEqual(pinned.runtime, "box", "a stored box stays");
 });
 
+// With no box layer a blank runtime is only kept for a profile that holds nothing the server accepts in a box alone: a token, a
+// connection, a GitHub binding, egress, a readable folder or a private copy is refused without an explicit box (#164).
+test("mergeBlock runs names box on a no-box-layer instance when the profile holds something only a box accepts", () => {
+  const noBox = { tier: "box", boxAvailable: false };
+  for (const held of [{ tokens: ["t"] }, { aws_connections: ["prod-read"] }, { context_paths: ["/srv/docs"] }, { egress_allow: ["a.example.com"] }, { egress_open: true }, { github: { owners: [{ owner: "culiops", app: "bot", repos: [] }] } }, { clone_of: "/src/repo" }]) {
+    const out = pfvMergeBlock(Object.assign({ name: "p", bin: "claude" }, held), "runs", noBox);
+    assert.strictEqual(out.runtime, "box", Object.keys(held)[0]);
+  }
+  assert.strictEqual("runtime" in pfvMergeBlock({ name: "p", bin: "claude", tokens: [] }, "runs", noBox), false, "an emptied list holds nothing");
+  // Host stays host, and a box layer was never the problem.
+  assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude", tokens: ["t"] }, "runs", { tier: "host", boxAvailable: false }).runtime, "host");
+  assert.strictEqual(pfvMergeBlock({ name: "p", bin: "claude" }, "runs", { tier: "box", boxAvailable: true }).runtime, "box");
+});
+
+test("mergeBlock runs sees what another block merged into the profile first", () => {
+  const bare = { name: "p", bin: "claude" };
+  const withToken = pfvMergeBlock(bare, "reachable", { egress_allow: ["a.example.com"] });
+  assert.strictEqual(pfvMergeBlock(withToken, "runs", { tier: "box", boxAvailable: false }).runtime, "box");
+  // Running runs first on the bare profile would leave it blank: the page merges it last (profilepage.test.js, "Runs in opened before Cloud").
+});
+
 test("mergeBlock workspace replaces the four workspace keys as a unit", () => {
   const copy = { name: "p", bin: "claude", runtime: "box", clone_of: "/src/repo", default_cwd: "/home/you/box-clones/repo", clone_share: [".env.example"], clone_no_auto_return: true, tokens: ["t"] };
   const folder = pfvMergeBlock(copy, "workspace", { mode: "folder", folder: "/home/you/work" });
@@ -640,6 +661,8 @@ test("new doc sends runtime explicitly", () => {
   assert.ok(!("default_cwd" in pfvNewDoc({ name: "x", tier: "box", cwd: "  " })));
   // Through runtimeToSend: on an instance with no box layer a box choice is left blank, as the old form does (a blank resolves to box).
   assert.ok(!("runtime" in pfvNewDoc({ name: "x", tier: "box", cwd: "", boxAvailable: false })));
+  // A new profile holds nothing box-only, so it stays blank there; host is named as always.
+  assert.strictEqual(pfvNewDoc({ name: "x", tier: "host", cwd: "", boxAvailable: false }).runtime, "host");
 });
 
 test("duplicate keeps every binding and resets the copy folder", () => {
@@ -673,6 +696,16 @@ test("duplicate keeps every binding and resets the copy folder", () => {
   const moved = pfvDuplicateDoc(copy, "n", { folder: "/home/you/work/other", home: "/home/you", taken: [] });
   assert.strictEqual(moved.clone_of, "/home/you/work/other");
   assert.strictEqual(moved.default_cwd, "/home/you/box-clones/other");
+});
+
+test("duplicate on an instance with no box layer names box only when the copy holds something only a box accepts", () => {
+  const bare = { name: "plain", bin: "claude", default_cwd: "/home/you/work", rev: "r1" };
+  assert.ok(!("runtime" in pfvDuplicateDoc(bare, "plain-2", { tier: "box", boxAvailable: false })), "nothing box-only: left unset");
+  const held = Object.assign({}, bare, { tokens: ["gh-pat"] });
+  assert.strictEqual(pfvDuplicateDoc(held, "held-2", { tier: "box", boxAvailable: false }).runtime, "box");
+  const copy = Object.assign({}, bare, { clone_of: "/home/you/work/repo", default_cwd: "/home/you/box-clones/repo" });
+  assert.strictEqual(pfvDuplicateDoc(copy, "copy-2", { tier: "box", boxAvailable: false, home: "/home/you", taken: [] }).runtime, "box");
+  assert.strictEqual(pfvDuplicateDoc(held, "held-3", { tier: "host", boxAvailable: false }).runtime, "host");
 });
 
 // The read model of aws-ops as the page builds it (profileview.test.js carries the same fixtures).

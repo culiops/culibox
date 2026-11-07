@@ -460,6 +460,19 @@ test("boxes unavailable on a box profile: the reason line is red, the consequenc
   assert.strictEqual(sub[1].textContent, "Sessions with this profile can't start until Docker is installed.");
 });
 
+test("boxes unavailable on a profile that names no tier: it says its sessions start on this machine, in the same two lines", async () => {
+  const t = page({ boxRuntime: "", boxUnavailableReason: "Docker is not installed" });
+  t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" }; // names no tier
+  await t.box.pfvShow("infra-terraform");
+  const runs = byCls(t.els["pfv-in"], "pfv-block")[0];
+  assert.deepStrictEqual(texts(runs, "pfv-main"), ["In a box"]);
+  assert.deepStrictEqual(texts(runs, "pfv-red"), ["Boxes are unavailable on this machine: Docker is not installed."]);
+  const sub = byCls(runs, "pfv-sub");
+  assert.strictEqual(sub.length, 2);
+  assert.ok(!sub[1].className.includes("pfv-red"));
+  assert.strictEqual(sub[1].textContent, "Until it is, sessions start on this machine, uncontained.");
+});
+
 test("Advanced is folded with its count, and opens by itself when something is set", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
@@ -2671,13 +2684,14 @@ test("a profile that stores no runtime and resolves to host saves host, without 
   assert.strictEqual(t.box.asked.length, 0, "the tier did not change, so nothing to confirm");
 });
 
-test("with no box layer a runtime-less profile that reads as box stays blank (runtimeToSend); one that reads as host saves host", async () => {
-  const box = noTier(cloudPage({ boxRuntime: "" }), "aws-ops");
-  await box.box.pfvShow("aws-ops");
+test("with no box layer a runtime-less profile that holds nothing box-only stays blank (runtimeToSend); one that reads as host saves host", async () => {
+  const box = page({ boxRuntime: "" });
+  box.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" }; // names no tier, holds nothing a box alone accepts
+  await box.box.pfvShow("infra-terraform");
   clickBtn(blockOf(box, "agent"), "Edit");
   pickModel(box, "claude-sonnet-5");
   await saveBlock(box, "agent");
-  assert.ok(!("runtime" in box.box.puts[0]), "the server refuses an explicit box with no box layer to run it");
+  assert.ok(!("runtime" in box.box.puts[0]), "an Agent-only edit does not pin a tier the profile never named");
   const host = page({ boxRuntime: "", profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p)) });
   host.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
   await host.box.pfvShow("infra-terraform");
@@ -2685,6 +2699,66 @@ test("with no box layer a runtime-less profile that reads as box stays blank (ru
   pickModel(host, "claude-sonnet-5");
   await saveBlock(host, "agent");
   assert.strictEqual(host.box.puts[0].runtime, "host");
+});
+
+// #164: with no box layer, a profile that stores no tier reads "In a box" only because a blank resolves to box. The server saves a
+// token, connection, GitHub binding, egress or readable folder only with an explicit box, so the save names it when the profile
+// being sent holds one of them, whichever block is saved.
+test("with no box layer a runtime-less profile that holds credentials saves an explicit box, whichever block is saved", async () => {
+  const save = {
+    cloud: (t) => { clickBtn(blockOf(t, "cloud"), "Edit"); t.box.pfvAddRow("cloud", { kind: "token", name: "gh-pat" }); },
+    agent: (t) => { clickBtn(blockOf(t, "agent"), "Edit"); pickModel(t, "claude-sonnet-5"); },
+  };
+  for (const id of Object.keys(save)) {
+    const t = noTier(cloudPage({ boxRuntime: "" }), "aws-ops");
+    await t.box.pfvShow("aws-ops");
+    save[id](t);
+    await saveBlock(t, id);
+    assert.strictEqual(t.box.puts[0].runtime, "box", id + " save: a blank would be refused");
+    assert.strictEqual(t.box.asked.length, 0, "no host confirm: the tier the page shows did not change");
+  }
+});
+
+test("with no box layer, adding a token to a runtime-less profile that held nothing names box in the same save", async () => {
+  const t = page({ boxRuntime: "" });
+  t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+  await t.box.pfvShow("infra-terraform");
+  clickBtn(blockOf(t, "cloud"), "Edit");
+  assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "token", name: "grafana-prod" }), true);
+  await saveBlock(t, "cloud");
+  assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod"]);
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+});
+
+// The Runs in merge reads the whole profile, so it has to run after every other block's merge. The blocks are merged in the order they
+// were opened, and a refused save opens a second block on top of the first (a repair block), so Runs in can be opened before Cloud.
+test("Runs in opened before Cloud, or after it, still sees the token Cloud adds in the same save", async () => {
+  for (const order of [["runs", "cloud"], ["cloud", "runs"]]) {
+    const t = page({ boxRuntime: "" });
+    t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
+    await t.box.pfvShow("infra-terraform");
+    clickBtn(blockOf(t, order[0]), "Edit");
+    t.box.pfvOpenRepair(order[1]);
+    t.box.pfvRender();
+    assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), order);
+    assert.strictEqual(t.box.pfvAddRow("cloud", { kind: "token", name: "grafana-prod" }), true);
+    await saveBlock(t, "runs");
+    const what = "opened " + order.join(" then ");
+    assert.strictEqual(t.box.puts.length, 1, what);
+    assert.deepStrictEqual(t.box.puts[0].tokens, ["grafana-prod"], what);
+    assert.strictEqual(t.box.puts[0].runtime, "box", what);
+  }
+});
+
+test("Runs in saved on its own, with Cloud open but unchanged, still names box for a profile that holds credentials", async () => {
+  const t = noTier(cloudPage({ boxRuntime: "" }), "aws-ops");
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  t.box.pfvOpenRepair("cloud");
+  t.box.pfvRender();
+  await saveBlock(t, "runs");
+  assert.strictEqual(t.box.puts[0].runtime, "box");
+  assert.strictEqual(t.box.asked.length, 0);
 });
 
 test("a stored tier is sent back as it is by every block's save", async () => {

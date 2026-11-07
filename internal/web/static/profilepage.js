@@ -1987,7 +1987,10 @@ async function pfvSaveBlock(id) {
   }
   let doc = pfvState.doc;
   let tierMerged = false;
-  for (const i of ids) {
+  // Runs in goes last: with no box layer the tier it writes depends on what the saved profile holds (runtimeToSend), and every
+  // other block's merge decides that. The blocks are listed in the order they were opened, which can put Runs in first.
+  const order = ids.filter((i) => i !== "runs").concat(ids.filter((i) => i === "runs"));
+  for (const i of order) {
     const r = pfvState.edits[i];
     if (r.values) {
       doc = pfvMergeBlock(doc, i, PFV_EDITORS[i].merge ? PFV_EDITORS[i].merge(r, c) : r.values);
@@ -1996,7 +1999,7 @@ async function pfvSaveBlock(id) {
   }
   // Whichever block it is, a save writes the tier the page shows (spec 9 rule 1): a profile that stores no runtime reads as the
   // instance's default, and the server wants an explicit box for credentials, egress and readable folders. The tier did not change,
-  // so there is nothing to confirm; runtimeToSend keeps the no-box-layer blank.
+  // so there is nothing to confirm. With no box layer runtimeToSend keeps a blank unless the profile holds something only a box accepts.
   if (!tierMerged) doc = pfvMergeBlock(doc, "runs", { tier: c.tier, boxAvailable: c.boxAvailable });
   // A box profile becoming host: say what that costs and what it removes, then save it without. Cancel saves nothing and
   // leaves the form as it is.

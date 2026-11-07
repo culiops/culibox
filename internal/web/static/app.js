@@ -4490,12 +4490,6 @@ function readForm() {
   // Only when a connection is ticked: no key keeps a legacy profile's JSON as it was.
   const conns = awscToSend(readAwscTicked());
   if (conns) p.aws_connections = conns;
-  // The tier is always sent as shown (see runtimeToSend): a blank would let the
-  // instance default decide, and on a host-default instance that turns a profile
-  // the editor lit as "box" into a host one. The server's own message answers an
-  // AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
-  if (rt) p.runtime = rt;
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -4530,6 +4524,14 @@ function readForm() {
   // config, a locked profile) keeps the stored value rather than dropping it.
   const importsUsable = !$("pf-imports-row").hidden && !$("pf-imports").disabled;
   if (importsOffToSend(importsUsable, $("pf-imports").checked, pfLoaded && pfLoaded.imports_off)) p.imports_off = true;
+  // The tier is always sent as shown (see runtimeToSend): a blank would let the
+  // instance default decide, and on a host-default instance that turns a profile
+  // the editor lit as "box" into a host one. The server's own message answers an
+  // AWS binding saved on the host tier. It is read last, from the whole profile:
+  // with no box layer, whether a blank is kept depends on whether p holds a token,
+  // egress, a readable folder or a private copy, and those keys are set above.
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime, p);
+  if (rt) p.runtime = rt;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the

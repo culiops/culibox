@@ -99,16 +99,36 @@ function segFromRuntime(stored, resolved) {
   return resolved === "host" ? "host" : "box";
 }
 
+// profileNeedsBox: whether the profile holds anything only a box accepts, or only
+// honours: an AWS binding or connection, a token, a GitHub binding, a network
+// allowlist or open egress, a readable host folder, a private copy. The server
+// saves every one of these only with an explicit runtime: box. p is the profile
+// as it will be sent. A list or object with nothing in it holds nothing.
+function profileNeedsBox(p) {
+  const x = p && typeof p === "object" ? p : {};
+  const listed = (k) => Array.isArray(x[k]) && x[k].length > 0;
+  const held = (k) => x[k] !== null && typeof x[k] === "object";
+  return held("aws") || held("github") || x.egress_open === true ||
+    listed("aws_connections") || listed("tokens") || listed("egress_allow") || listed("context_paths") ||
+    (typeof x.clone_of === "string" && x.clone_of.trim() !== "");
+}
+
 // What to send as runtime: the tier the seg shows, always. Sending it
 // explicitly is what keeps a profile on the tier the editor lit when the
 // instance default is host — a blank would hand the tier back to that default.
 // The stored value is a defensive fallback only; the seg always has a value.
 // One exception: with no box layer, a profile naming no tier is lit "box" only
-// because a blank resolves to box there. Pinning it would make the profile
-// unspawnable (the server refuses an explicit box), so it stays blank and goes
-// back to box once containment exists. The seg still offers host.
-function runtimeToSend(seg, stored, boxAvailable) {
-  if (!boxAvailable && !stored && seg === "box") return "";
+// because a blank resolves to box there. What that costs depends on what the
+// profile holds (profile is the whole profile as it will be sent):
+//  - nothing only a box accepts: it stays blank. An explicit box would leave a
+//    profile that could still run on this machine unable to start, and a blank
+//    goes back to box once containment exists.
+//  - something only a box accepts (profileNeedsBox): "box" is sent, because the
+//    server refuses a token, a connection, egress or a readable folder without
+//    it. The profile then waits for a box, as it would have to anyway.
+// The seg still offers host.
+function runtimeToSend(seg, stored, boxAvailable, profile) {
+  if (!boxAvailable && !stored && seg === "box") return profileNeedsBox(profile) ? "box" : "";
   if (seg === "box" || seg === "host") return seg;
   return stored === "box" || stored === "host" ? stored : "";
 }
@@ -496,5 +516,5 @@ function profileListLabels(p) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }

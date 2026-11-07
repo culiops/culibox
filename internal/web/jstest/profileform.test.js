@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, profileNeedsBox, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, autoReturnToSend, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -116,6 +116,47 @@ test("with no box layer, an unset tier lit as box stays unset", () => {
   assert.strictEqual(runtimeToSend("box", "box", false), "box"); // explicit stays explicit
   assert.strictEqual(runtimeToSend("host", "", false), "host");
   assert.strictEqual(runtimeToSend("box", "", true), "box");
+});
+
+// What only a box can hold: the server saves each of these only with an explicit
+// runtime: box (and a box is the only place that honours them).
+test("a profile needs a box when it holds anything only a box accepts", () => {
+  assert.strictEqual(profileNeedsBox({ name: "p", bin: "claude", runtime: "", default_cwd: "/w" }), false);
+  assert.strictEqual(profileNeedsBox({ aws: { source_profile: "old" } }), true, "the legacy inline AWS binding");
+  assert.strictEqual(profileNeedsBox({ aws_connections: ["prod-read"] }), true);
+  assert.strictEqual(profileNeedsBox({ tokens: ["gh-pat"] }), true);
+  assert.strictEqual(profileNeedsBox({ egress_allow: ["api.example.com"] }), true);
+  assert.strictEqual(profileNeedsBox({ context_paths: ["/home/you/docs"] }), true);
+  assert.strictEqual(profileNeedsBox({ github: { owners: [{ owner: "culiops", app: "bot", repos: [] }] } }), true);
+  assert.strictEqual(profileNeedsBox({ egress_open: true }), true);
+  assert.strictEqual(profileNeedsBox({ clone_of: "/home/you/work/repo" }), true, "a private copy");
+});
+
+test("empty and missing shapes hold nothing that needs a box", () => {
+  assert.strictEqual(profileNeedsBox(undefined), false);
+  assert.strictEqual(profileNeedsBox(null), false);
+  assert.strictEqual(profileNeedsBox({}), false);
+  assert.strictEqual(profileNeedsBox({ aws: null, github: null }), false);
+  assert.strictEqual(profileNeedsBox({ aws_connections: [], tokens: [], egress_allow: [], context_paths: [] }), false);
+  assert.strictEqual(profileNeedsBox({ egress_open: false }), false);
+  assert.strictEqual(profileNeedsBox({ egress_open: "true" }), false, "only a real true counts");
+  assert.strictEqual(profileNeedsBox({ clone_of: "" }), false);
+  assert.strictEqual(profileNeedsBox({ clone_of: "   " }), false, "a blank folder is no copy");
+  assert.strictEqual(profileNeedsBox({ tokens: "gh-pat" }), false, "a list key that is not a list is not a grant");
+});
+
+test("with no box layer, an unset tier lit as box is sent as box once the profile holds something only a box accepts", () => {
+  const holds = { tokens: ["gh-pat"] };
+  assert.strictEqual(runtimeToSend("box", "", false, holds), "box", "a blank would be refused by the server");
+  assert.strictEqual(runtimeToSend("box", "", false, { name: "p" }), "", "nothing box-only: still left unset");
+  assert.strictEqual(runtimeToSend("box", "", false, undefined), "", "no profile given: as before");
+  // Every other branch ignores the profile.
+  assert.strictEqual(runtimeToSend("host", "", false, holds), "host");
+  assert.strictEqual(runtimeToSend("box", "box", false, holds), "box");
+  assert.strictEqual(runtimeToSend("box", "", true, holds), "box");
+  assert.strictEqual(runtimeToSend("box", "", true, { name: "p" }), "box");
+  assert.strictEqual(runtimeToSend("", "host", false, holds), "host");
+  assert.strictEqual(runtimeToSend("", "", false, holds), "", "the seg always has a value; with none and no stored tier nothing is sent");
 });
 
 // The retired per-profile box.image: the server refuses a save that carries it,

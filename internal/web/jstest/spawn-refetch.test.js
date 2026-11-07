@@ -89,9 +89,15 @@ test("saveProfile's reload does not schedule a background retry", () => {
   assert.doesNotMatch(text, /loadProfiles\(\)/);
 });
 
-test("the editor passes whether a box layer exists to runtimeToSend", () => {
+test("the editor passes whether a box layer exists, and the whole profile it sends, to runtimeToSend", () => {
   const { text } = body("readForm");
-  assert.match(text, /runtimeToSend\(segValue\(\$\("pf-runtime"\)\), pfStoredRuntime, !metaLoaded \|\| !!boxRuntime\)/);
+  assert.match(text, /runtimeToSend\(segValue\(\$\("pf-runtime"\)\), pfStoredRuntime, !metaLoaded \|\| !!boxRuntime, p\)/);
+  // The tier is chosen from what the profile holds (a token, egress, a readable folder, a copy), so it is read after every one of
+  // those keys is on p.
+  const at = text.indexOf("runtimeToSend(");
+  for (const key of ["p.tokens = ", "p.aws_connections = ", "p.github = ", "p.aws = ", "p.context_paths = ", "egressToSend(", "wmFieldsToSend("]) {
+    assert.ok(text.indexOf(key) >= 0 && text.indexOf(key) < at, key + " must be set before runtimeToSend reads p");
+  }
 });
 
 test("no caller uses AbortSignal.timeout directly; both go through deadlineSignal", () => {

@@ -117,13 +117,20 @@ function pfvGithubLogins(doc) {
 
 // pfvUnavailable: the two lines a box tier profile shows when there is no box
 // layer. reason is /api/meta's box_unavailable_reason, already a clause
-// ("Docker is not installed", "run `agent-box doctor` for details").
-function pfvUnavailable(reason) {
+// ("Docker is not installed", "run `agent-box doctor` for details"). named says
+// the stored profile names runtime: box. Then a session cannot start without a
+// box, and the line says so. A profile that names no tier only RESOLVES to box:
+// with no box layer a session that names no tier runs on this machine, with no
+// container, so the line says that instead (internal/session runtimeFor).
+function pfvUnavailable(reason, named) {
   const r = pfvText(reason);
   const m = /^(Docker|colima) is not installed$/i.exec(r);
+  let consequence;
+  if (named) consequence = "Sessions with this profile can't start until " + (m ? m[1] + " is installed" : "boxes are available") + ".";
+  else consequence = (m ? "Until it is" : "Until boxes are available") + ", sessions start on this machine, uncontained.";
   return {
     line: "Boxes are unavailable on this machine" + (r ? ": " + r : "") + ".",
-    consequence: "Sessions with this profile can't start until " + (m ? m[1] + " is installed" : "boxes are available") + ".",
+    consequence,
   };
 }
 
@@ -190,9 +197,10 @@ function pfvWorkspaceBlock(view, doc, host, edit) {
   return { id: "workspace", label: "Workspace", lines: [], rows, edit, add: "", count: rows.length, note: "", notHome };
 }
 
-function pfvRunsBlock(host, copy, unavailable, reason, edit) {
+// named: the stored profile names runtime: box (see pfvUnavailable).
+function pfvRunsBlock(host, copy, unavailable, reason, edit, named) {
   const b = { id: "runs", label: "Runs in", lines: [], rows: [], edit, add: "", count: 0, note: "" };
-  const u = pfvUnavailable(reason);
+  const u = pfvUnavailable(reason, named);
   if (host) {
     // The spec's sentence, verbatim, on one line (spec 5.4). The muted line under it
     // carries only the boxes-unavailable reason when there is one, quietly: not an
@@ -254,7 +262,7 @@ function pfvReadView(o) {
   const a = pfvAgentParts(view, doc);
 
   const blocks = [
-    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit),
+    pfvRunsBlock(host, copy, unavailable, x.boxUnavailableReason, edit, doc.runtime === "box"),
     pfvWorkspaceBlock(view, doc, host, edit),
     pfvAgentBlock(view, doc, a, edit),
   ];
