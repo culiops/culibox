@@ -6374,11 +6374,14 @@ initMobileShell();
       // The chip's text colour follows its background (F79): operator config can be
       // any CSS colour, and the stylesheet's white text is unreadable on a pale one.
       // backgroundColor, not the shorthand, so no image or gradient can paint here.
-      // An unparseable colour leaves the chip on its stylesheet colours.
+      // The colour is applied only with a text colour picked for it: one the page
+      // cannot read back as rgb (oklch(), lab() and color() come back unconverted)
+      // is taken off again, so the chip keeps its stylesheet background and text.
       if (meta.env_color && CSS.supports("color", meta.env_color)) {
         sideEnv.style.backgroundColor = meta.env_color;
         const rgb = parseRgb(getComputedStyle(sideEnv).backgroundColor);
         if (rgb) sideEnv.style.color = envTextColor(rgb);
+        else sideEnv.style.backgroundColor = "";
       }
       sideEnv.hidden = false;
     }

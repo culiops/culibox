@@ -106,3 +106,32 @@ test("F79: the desktop chip takes its text colour from the badge colour; the pho
   // the phone: exactly as before
   assert.match(app, /badge\.style\.background = meta\.env_color; strip\.style\.background = meta\.env_color;/);
 });
+
+// The chip block run as written, against a fake chip: getComputedStyle hands back what
+// the browser would. oklch()/lab()/color() values pass CSS.supports but come back
+// unconverted, so parseRgb returns null: the chip must then keep its stylesheet colours,
+// background AND text, and carry no inline background of its own (F79, review T9).
+function runSideEnv(envColor, computed) {
+  const app = read("app.js");
+  const i = app.indexOf("if (sideEnv) {", app.indexOf("const sideEnv = $(\"side-env\")"));
+  const j = app.indexOf("strip.hidden = false", i);
+  assert.ok(i > 0 && j > i, "side-env block not found");
+  const block = app.slice(i, j);
+  const chip = { textContent: "", hidden: true, style: { backgroundColor: "", color: "" } };
+  const run = new Function("sideEnv", "meta", "CSS", "getComputedStyle", "parseRgb", "envTextColor", block);
+  run(chip, { env_label: "PROD", env_color: envColor }, { supports: () => true },
+    (el) => ({ backgroundColor: el.style.backgroundColor ? computed : "rgb(35, 40, 47)" }), parseRgb, envTextColor);
+  return chip;
+}
+
+test("F79: a badge colour the page cannot read back leaves the chip on its stylesheet colours", () => {
+  const ok = runSideEnv("#f5f5f5", "rgb(245, 245, 245)");
+  assert.strictEqual(ok.style.backgroundColor, "#f5f5f5");
+  assert.strictEqual(ok.style.color, envTextColor([245, 245, 245]), "a pale badge gets dark text");
+  assert.strictEqual(ok.hidden, false);
+  const odd = runSideEnv("oklch(0.7 0.1 200)", "oklch(0.7 0.1 200)");
+  assert.strictEqual(odd.style.backgroundColor, "", "no half-applied inline background");
+  assert.strictEqual(odd.style.color, "", "no inline text colour either");
+  assert.strictEqual(odd.textContent, "PROD");
+  assert.strictEqual(odd.hidden, false);
+});
