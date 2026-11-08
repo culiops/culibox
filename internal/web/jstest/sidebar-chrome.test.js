@@ -373,6 +373,17 @@ function paintRow(s, over) {
 }
 const ASKING = { id: "a", name: "a", activity: "waiting", need: "ask", ask: "Bash(terraform plan -out=tf.plan)" };
 
+// The desktop row draws no per-session cost, as the M1 frames draw it (founder 2026-11-08); the
+// cost stays in the pane header's meta and in Analytics.
+test("the desktop row shows no session cost, even when the server sends one", () => {
+  const { sname } = paintRow({ id: "c", name: "c", activity: "working", cost_usd: 3.12 }, { ctx: { fmtSessionCost: () => "$3.12" } });
+  const all = [];
+  const walk = (n) => { if (n && typeof n === "object") { all.push(n); (n.children || []).forEach(walk); } };
+  walk(sname);
+  assert.ok(!all.some((n) => /\bdcost\b/.test(n.className || "")), "no .dcost element");
+  assert.ok(!all.some((n) => /\$/.test(n.textContent || "")), "no $ text in the row name line");
+});
+
 test("an ask's sub-line is amber 'Asks to run ' and the command alone in a mono span", () => {
   const { sub } = paintRow(ASKING);
   assert.equal(sub.className, "sub amber");

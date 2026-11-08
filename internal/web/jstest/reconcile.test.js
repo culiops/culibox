@@ -150,12 +150,12 @@ test("rowSig changes on every field a row or card renders, and only those", () =
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");
 });
 
-test("rowSig moves with cost_usd, and an absent cost differs from a zero cost", () => {
+test("rowSig ignores cost_usd: the row no longer shows a cost (the pane header does)", () => {
   const base = { id: "a", name: "n", activity: "working" };
   const s0 = rowSig(base, {});
-  assert.notStrictEqual(rowSig(Object.assign({}, base, { cost_usd: 1.5 }), {}), s0, "a cost appearing repaints");
-  assert.notStrictEqual(rowSig(Object.assign({}, base, { cost_usd: 0 }), {}), s0, "0 is shown as $0.00, absent is not");
-  assert.notStrictEqual(rowSig(Object.assign({}, base, { cost_usd: 1.5 }), {}), rowSig(Object.assign({}, base, { cost_usd: 1.6 }), {}));
+  assert.strictEqual(rowSig(Object.assign({}, base, { cost_usd: 1.5 }), {}), s0, "a cost appearing does not repaint the row");
+  assert.strictEqual(rowSig(Object.assign({}, base, { cost_usd: 0 }), {}), s0);
+  assert.strictEqual(rowSig(Object.assign({}, base, { cost_usd: 1.5 }), {}), rowSig(Object.assign({}, base, { cost_usd: 1.6 }), {}));
 });
 
 test("rowSig moves with the AWS binding and with the SSO card's local state", () => {
