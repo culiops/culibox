@@ -870,7 +870,11 @@ function askDialog(opts) {
   alt.textContent = opts.altLabel || "";
   // The desktop End session footer is one row in a 480px card, so a long name's button ends in an ellipsis: the dialog that
   // can do that passes the whole label as altTitle. Reset on every ask, like the label.
+  // The whole label is also the button's name: a title only describes it, and the shortened text is what a screen reader
+  // would otherwise read. Removed on an ask with none, so the visible text is the name again.
   alt.title = opts.altTitle || "";
+  if (opts.altTitle) alt.setAttribute("aria-label", opts.altTitle);
+  else alt.removeAttribute("aria-label");
   d.classList.toggle("danger", !!opts.danger);
   d.classList.toggle("info", !!opts.info); // read-only: desktop.css hides Cancel
 

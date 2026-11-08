@@ -27,6 +27,11 @@ function spawnAWS(p) {
   return out;
 }
 const spawnBase = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
+// spawnIsShellProfile: the profile runs a plain shell (its bin is one of SPAWN_SHELL_BINS), so a session of it has no agent.
+// A capability test on what the profile runs, the one profileTouchLine uses for "host · bash", never "is it Claude".
+function spawnIsShellProfile(p) {
+  return !!p && SPAWN_SHELL_BINS.has(spawnBase(p.bin));
+}
 
 // spawnTierOf: the tier a profile runs under. boxRuntime, when given, is the
 // answer of /api/meta: without a box layer every session is host tier whatever
@@ -41,6 +46,8 @@ function spawnTierOf(profile, boxRuntime) {
 // A private copy's source is written with the home prefix as ~ (frame M4.1, "private copy of ~/culiops-agent-box"), the way
 // every other path on the page is: shortPath (fsops.js) reads the page's HOME_DIR and leaves a path outside home whole.
 // Its callers are the New session list and the empty state, both desktop-only.
+// boxRuntime is passed only once /api/meta has answered (`metaLoaded ? boxRuntime : undefined`): its "" before that reads as
+// "no box layer" and would call every box profile "host · not contained"; undefined falls back to the profile's own runtime.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
   if (spawnTierOf(prof, boxRuntime) === "host") {
@@ -437,5 +444,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
+  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
 }

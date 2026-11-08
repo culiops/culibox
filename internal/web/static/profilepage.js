@@ -258,7 +258,8 @@ function pfvMenuClose(refocus) {
 
 // pfvMoreMenu: the ⋯ button and its menu (frame M5.4): the kit menu, Duplicate…, a separator and Delete… (red). Opening
 // puts focus on Duplicate… and the arrow keys walk the rows (kitmenu.js). It closes on a second press, a click elsewhere
-// and Esc (which gives focus back to the ⋯ and must not also close the page).
+// and Esc (which gives focus back to the ⋯ and must not also close the page). Duplicate… and Delete… close it the same
+// way, focus on the ⋯ first, so a cancelled confirm hands focus back to the ⋯ and not to the body.
 function pfvMoreMenu(name) {
   const wrap = pfvMk("div", "pfv-more");
   const btn = pfvBtn("", "secondary pfv-btn-icon");
@@ -271,8 +272,8 @@ function pfvMoreMenu(name) {
   pop.setAttribute("role", "menu");
   pop.setAttribute("aria-label", name + " profile actions");
   pop.hidden = true;
-  const dup = kitMenuButton("Duplicate…", "duplicate", false, () => { pfvMenuClose(false); return pfvDuplicate(); });
-  pop.append(dup, kitMenuSep(), kitMenuButton("Delete…", "delete", true, () => { pfvMenuClose(false); return pfvDelete(); }));
+  const dup = kitMenuButton("Duplicate…", "duplicate", false, () => { pfvMenuClose(true); return pfvDuplicate(); });
+  pop.append(dup, kitMenuSep(), kitMenuButton("Delete…", "delete", true, () => { pfvMenuClose(true); return pfvDelete(); }));
   btn.onclick = () => {
     if (pfvMenu && pfvMenu.wrap === wrap) { pfvMenuClose(false); return; }
     pfvMenuClose(false);

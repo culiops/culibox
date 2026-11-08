@@ -280,6 +280,14 @@ function ftRoveEnsure(tree) {
   const first = tree.querySelector(".ft-node");
   if (first) ftRoveTo(first);
 }
+// ftRoveRestore: rows were drawn again under an open folder (a drop's refresh), without the root render's bookkeeping,
+// and the stop may have been inside it. Give it back to the row for the remembered path if that is still here, else to
+// the first row, so exactly one row is the Tab stop.
+function ftRoveRestore(tree) {
+  const row = ftRovePath ? ftRowFor(ftRovePath) : null;
+  if (row) ftRoveTo(row);
+  else ftRoveEnsure(tree);
+}
 // ftRowModel: a row as ftKeyAction sees it, read back from its ARIA (a folder is the row that has
 // aria-expanded), so the keys and the screen reader agree on what the tree is.
 function ftRowModel(row) {
@@ -370,6 +378,9 @@ async function ftRenderDir(path, container, prefix, st) {
     // without this the control announces as nothing at all.
     more.setAttribute("aria-label", moreLabel);
     more.setAttribute("tabindex", "-1"); // the row's menu key opens this menu; one Tab stop per tree, not two per row
+    // A menu button: ftShowMenu sets aria-expanded while its menu is open, closeRowMenu puts it back.
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", "false");
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir, ro); };
     row.append(more);
     ftRowPaths.set(row, full);
@@ -427,7 +438,8 @@ async function ftRenderDir(path, container, prefix, st) {
           onDone: () => {
             if (!open || !childBox) return;
             childBox.replaceChildren();
-            ftRenderDir(full, childBox, b.childPrefix);
+            // The tree's Tab stop may have been one of the rows just replaced: give it back once they are drawn.
+            ftRenderDir(full, childBox, b.childPrefix).finally(() => ftRoveRestore(row.closest ? row.closest('[role="tree"]') : null));
             if (typeof gitStatusRefreshSoon === "function") gitStatusRefreshSoon();
           },
         });
@@ -594,9 +606,18 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
 // ftMenuFrom is where the open menu hangs from, the tree row holding `anchor` (null for a menu that hangs
 // from none, the viewer's), for closeRowMenu(true) to give focus back to.
 let ftMenuFrom = null;
+// ftMenuMore is the row ⋯ whose menu is open (null for a menu that hangs from none, the viewer's): its aria-expanded
+// says so, and closeRowMenu, or a newer menu, puts it back.
+let ftMenuMore = null;
+function ftMoreExpanded(more, on) {
+  if (more) more.setAttribute("aria-expanded", on ? "true" : "false");
+}
 function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
+  ftMoreExpanded(ftMenuMore, false);
+  ftMenuMore = anchor.classList && anchor.classList.contains("ft-more") ? anchor : null;
+  ftMoreExpanded(ftMenuMore, true);
   menu.replaceChildren(...nodes);
   const kit = typeof kitLabel === "string";
   menu.classList[kit ? "add" : "remove"]("menu");
@@ -694,6 +715,8 @@ function closeRowMenu(restoreFocus) {
   if (menu) menu.classList.remove("open");
   const from = ftMenuFrom;
   ftMenuFrom = null;
+  ftMoreExpanded(ftMenuMore, false);
+  ftMenuMore = null;
   if (!restoreFocus || !was || !from) return;
   const row = from.row.isConnected ? from.row : from.path ? ftRowFor(from.path) : null;
   if (row) row.focus();
@@ -958,6 +981,7 @@ function ftTreeSetup(el) {
   el.setAttribute("role", "tree");
   el.setAttribute("aria-label", "File tree");
   el.addEventListener("keydown", ftTreeKeydown);
+  el.addEventListener("contextmenu", ftTreeContextMenu);
   el.addEventListener("focusin", (e) => {
     const row = e.target && e.target.closest ? e.target.closest(".ft-node") : null;
     if (row) ftRoveTo(row);
@@ -982,9 +1006,35 @@ function ftTreeKeydown(e) {
   } else if (r.action === "open") {
     row.click();
   } else if (r.action === "menu") {
-    const more = row.querySelector(":scope > .ft-more");
-    if (more) more.click();
+    ftRowMenuOpen(row);
   }
+}
+
+// ftRowMenuOpen presses the row's ⋯, which opens its menu (the Shift+F10 / ContextMenu key's action).
+function ftRowMenuOpen(row) {
+  const more = row.querySelector(":scope > .ft-more");
+  if (!more) return false;
+  more.click();
+  return true;
+}
+
+// ftTreeContextMenu: a contextmenu event whose target is a tree row itself is the keyboard's (the Menu key on a
+// platform that sends it to the focused element) or an assistive technology's (VoiceOver's VO+Shift+M): it opens the
+// row's menu as Shift+F10 does, and the browser's own is not also shown. A mouse right-click keeps the browser's menu
+// (button 2, and it lands on a part of the row more often than on the row), and the phone keeps what it had: desktop only.
+function ftTreeContextMenu(e) {
+  if (mobileActive(window.innerWidth)) return;
+  const row = e.target;
+  if (!row || !row.classList || !row.classList.contains("ft-node") || e.button === 2) return;
+  if (ftRowMenuOpen(row)) e.preventDefault();
+}
+
+// ftMenuContextMenu: the kit menu is on screen and the browser's own must not stack over it. Chromium and Firefox send
+// contextmenu on the Menu key's keyup, when focus is already inside the menu the keydown opened. Only a menu that holds
+// kit rows (desktop): the viewer's line menu and the phone's buttons keep what they had.
+function ftMenuContextMenu(e) {
+  const menu = document.getElementById("ft-menu");
+  if (menu && menu.classList.contains("menu") && menu.contains(e.target)) e.preventDefault();
 }
 
 // ftMenuKeydown: the open row menu's keys, on the document. Escape closes it (a press that closes a menu is
@@ -1044,6 +1094,7 @@ async function initFileTree() {
     if (menu && menu.classList.contains("open") && !menu.contains(e.target)) closeRowMenu();
   });
   document.addEventListener("keydown", ftMenuKeydown);
+  document.addEventListener("contextmenu", ftMenuContextMenu);
 
   // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
   // writes, which is most of what changes in this app, is invisible until the

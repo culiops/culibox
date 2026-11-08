@@ -253,7 +253,7 @@ test("killDialogDeskOpts: a long path stays one mono part (the CSS wraps it), an
 // --- confirmKill (app.js): the desktop gets the M5.2 copy, the phone keeps today's -------------
 // app.js is the page itself and exports nothing, so the real function is cut out of it and run
 // against the real shellnest.js / fsops.js helpers with the page's globals faked.
-function confirmKillEnv(width, sessions, answer) {
+function confirmKillEnv(width, sessions, answer, profiles) {
   const fs = require("node:fs");
   const path = require("node:path");
   const vm = require("node:vm");
@@ -266,13 +266,14 @@ function confirmKillEnv(width, sessions, answer) {
   const box = {
     window: { innerWidth: width, HOME_DIR: "/home/u" },
     lastSessions: sessions,
+    profiles: profiles || [],
     mobileActive: (w) => Number(w) <= 700,
     askChoice: async (o) => { asked.push(o); return answer; },
     killSession: async (id) => { killed.push(id); },
     Promise, Array,
   };
   const ctx = vm.createContext(box);
-  for (const f of ["fsops.js", "shellnest.js"]) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8"), { filename: f }).runInContext(ctx);
+  for (const f of ["fsops.js", "shellnest.js", "spawnpreview.js"]) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8"), { filename: f }).runInContext(ctx);
   new vm.Script(code, { filename: "app.js:confirmKill" }).runInContext(ctx);
   return { run: (id, name) => ctx.confirmKill(id, name), asked, killed };
 }
@@ -333,6 +334,77 @@ test("confirmKill on the desktop for a nested shell asks today's plain End quest
   const agent = confirmKillEnv(1280, KILL_SESSIONS, "alt");
   await agent.run("p", "agent-box");
   assert.deepStrictEqual(plain(agent.asked), [n.killDialogDeskOpts("agent-box", "p", ["shell 1"], "~/box-clones/culiops-agent-box")]);
+});
+
+// Review M7: a session started from a shell profile (bash, zsh, ...) is top-level, so it was not "nested", yet it has no agent
+// either: "The agent stops now" is as false for it as for a companion shell. The test is what the profile runs (the same
+// bin test the New session list uses for "host · bash"), not which agent it is, so a Claude or any other agent profile keeps
+// the M5.2 copy.
+const SHELL_PROFILES = [
+  { name: "bash", runtime: "host", bin: "bash" },
+  { name: "zshell", runtime: "box", bin: "/usr/bin/zsh" },
+  { name: "claude", runtime: "box", bin: "claude", claude: true },
+  { name: "codex", runtime: "host", bin: "/opt/codex/bin/codex" },
+];
+const SHELL_SESSIONS = [
+  { id: "b1", name: "bash-1", agent: "bash", cwd: "/home/u/w", created: "2026-10-27T09:00:00Z", status: "live" },
+  { id: "z1", name: "zsh-1", agent: "zshell", cwd: "/home/u/w", created: "2026-10-27T09:01:00Z", status: "live" },
+  { id: "c1", name: "claude-1", agent: "claude", cwd: "/home/u/w", created: "2026-10-27T09:02:00Z", status: "live" },
+  { id: "x1", name: "codex-1", agent: "codex", cwd: "/home/u/w", created: "2026-10-27T09:03:00Z", status: "live" },
+  { id: "g1", name: "ghost-1", agent: "deleted-profile", cwd: "/home/u/w", created: "2026-10-27T09:04:00Z", status: "live" },
+  { id: "n1", name: "none-1", cwd: "/home/u/w", created: "2026-10-27T09:05:00Z", status: "live" },
+  { id: "bs", name: "sh-under-bash", parent_id: "b1", created: "2026-10-27T09:10:00Z", status: "live" },
+];
+
+test("confirmKill on the desktop for a top-level shell session asks today's plain End question, not the agent copy", async () => {
+  for (const [id, name] of [["b1", "bash-1"], ["z1", "zsh-1"]]) {
+    const t = confirmKillEnv(1280, SHELL_SESSIONS.filter((s) => s.id !== "bs"), "confirm", SHELL_PROFILES);
+    await t.run(id, name);
+    assert.deepStrictEqual(plain(t.asked), [n.killDialogOpts(name, id, 0)], name);
+    assert.ok(!("notes" in t.asked[0]) && !("cls" in t.asked[0]), "no M5.2 notes or card class");
+    assert.doesNotMatch(JSON.stringify(plain(t.asked)), /agent stops/);
+    assert.deepStrictEqual(t.killed, [id], "confirm ends the shell session alone");
+  }
+});
+
+test("confirmKill on the desktop: a shell session that has companion shells keeps the plain End all / End session only pair", async () => {
+  const t = confirmKillEnv(1280, SHELL_SESSIONS, "alt", SHELL_PROFILES);
+  await t.run("b1", "bash-1");
+  assert.deepStrictEqual(plain(t.asked), [n.killDialogOpts("bash-1", "b1", 1)]);
+  assert.deepStrictEqual(t.killed, ["b1"], "alt ends the parent alone");
+  const all = confirmKillEnv(1280, SHELL_SESSIONS, "confirm", SHELL_PROFILES);
+  await all.run("b1", "bash-1");
+  assert.deepStrictEqual(all.killed, ["b1", "bs"]);
+});
+
+test("confirmKill on the desktop: an agent session, a session whose profile is gone and one with no agent keep the M5.2 copy", async () => {
+  for (const [id, name] of [["c1", "claude-1"], ["x1", "codex-1"], ["g1", "ghost-1"], ["n1", "none-1"]]) {
+    const t = confirmKillEnv(1280, SHELL_SESSIONS, "cancel", SHELL_PROFILES);
+    await t.run(id, name);
+    assert.deepStrictEqual(plain(t.asked), [n.killDialogDeskOpts(name, id, [], "~/w")], name);
+    assert.deepStrictEqual(t.killed, []);
+  }
+  // No profiles loaded yet: nothing is guessed, the desktop copy stands.
+  const none = confirmKillEnv(1280, SHELL_SESSIONS, "cancel");
+  await none.run("b1", "bash-1");
+  assert.strictEqual(none.asked[0].cls, "end");
+});
+
+test("confirmKill on the phone: a shell session and an agent session both keep today's dialog", async () => {
+  for (const [id, name] of [["b1", "bash-1"], ["c1", "claude-1"]]) {
+    const t = confirmKillEnv(390, SHELL_SESSIONS.filter((s) => s.id !== "bs"), "confirm", SHELL_PROFILES);
+    await t.run(id, name);
+    assert.deepStrictEqual(plain(t.asked), [n.killDialogOpts(name, id, 0)], name);
+  }
+});
+
+test("confirmKill reads the shell test from the session's profile bin (SPAWN_SHELL_BINS), not from its name", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "app.js"), "utf8");
+  const at = src.indexOf("async function confirmKill(");
+  const body = src.slice(at, src.indexOf("\n}\n", at));
+  assert.match(body, /profiles\.find\(\(p\) => p\.name === session\.agent\)/);
+  assert.match(body, /spawnIsShellProfile\(/);
+  assert.match(require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "spawnpreview.js"), "utf8"), /function spawnIsShellProfile\(p\) \{\s*return !!p && SPAWN_SHELL_BINS\.has\(spawnBase\(p\.bin\)\);/);
 });
 
 test("confirmKill on the phone keeps today's dialog byte for byte", async () => {

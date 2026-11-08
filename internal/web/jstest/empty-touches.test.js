@@ -56,7 +56,7 @@ const FIXTURES = [
 ];
 
 // One page: the real helpers, the profiles, and the two functions that draw a profile's touches.
-function page(boxRuntime) {
+function page(boxRuntime, metaLoaded = true) {
   const doc = { createElement: (t) => new N(t) };
   const els = { "spawn-plist": new N("div"), agent: Object.assign(new N("select"), { value: "bash" }) };
   const ctx = vm.createContext({
@@ -64,7 +64,7 @@ function page(boxRuntime) {
     // shortened with (fsops.js shortPath), so the touches line reads "~/…" in both places (frame M4.1).
     document: doc, console, profiles: FIXTURES, boxRuntime, window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
-    metaLoaded: true,
+    metaLoaded,
   });
   for (const f of ["fsops.js", "spawnpreview.js", "spawnpanel.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The panel's own helpers that need more DOM than this fake has; the rows themselves are the real ones.
@@ -106,6 +106,46 @@ for (const [label, runtime] of [["with a box layer", "sysbox-runc"], ["without o
     }
   });
 }
+
+// Review M1: boxRuntime is "" until /api/meta answers, and "" reads as "no box layer here", so before meta every box
+// profile was called "host · not contained" on the landing screen: a false containment claim. Before meta the
+// profile's own runtime speaks (spawnTierOf with no boxRuntime); once meta answers, the daemon's word wins.
+test("before /api/meta answers a box profile is not called 'host · not contained', in the empty state and the dialog alike", () => {
+  const pg = page("", false);
+  const names = FIXTURES.map((p) => p.name);
+  const rows = emptyRows(pg, names);
+  const dialog = dialogTouches(pg);
+  for (const r of rows) {
+    const p = FIXTURES.find((x) => x.name === r.name);
+    const line = pg.ctx.profileTouchLine(p); // no runtime given: the profile's own
+    assert.strictEqual(r.touch, line, r.name + ": empty state");
+    assert.strictEqual(dialog[r.name], line, r.name + ": New session list");
+    assert.strictEqual(r.touch, dialog[r.name], r.name + ": the same words in both");
+  }
+  const by = Object.fromEntries(rows.map((r) => [r.name, r.touch]));
+  assert.strictEqual(by["aws-ops"], "box · aws culipulse-prod, sandbox · gh culiops");
+  assert.strictEqual(by["bash"], "box · no credentials");
+  assert.strictEqual(by["agent-box"], "box · private copy of ~/culiops-agent-box");
+  // A profile that is host by its own setting is still host before meta.
+  assert.strictEqual(by["claude"], "host · not contained");
+  assert.strictEqual(by["hostbash"], "host · zsh");
+  for (const n of ["aws-ops", "bash", "agent-box", "elsewhere", "tokens"]) assert.notStrictEqual(by[n], "host · not contained", n);
+});
+
+test("after /api/meta answers, the same page reads as before the fix: a host-only machine reads every profile as host, a boxed one keeps box", () => {
+  const hostOnly = emptyRows(page("", true), ["aws-ops", "bash", "claude"]);
+  assert.deepStrictEqual(hostOnly.map((r) => r.touch), ["host · not contained", "host · bash", "host · not contained"]);
+  const boxed = emptyRows(page("sysbox-runc", true), ["aws-ops", "bash", "claude"]);
+  assert.deepStrictEqual(boxed.map((r) => r.touch), ["box · aws culipulse-prod, sandbox · gh culiops", "box · no credentials", "host · not contained"]);
+});
+
+test("the empty state repaints when meta answers on a host-only machine (the key reads metaLoaded and the touch line)", () => {
+  const m = { kind: "none", profiles: ["aws-ops"] };
+  const pre = page("", false), post = page("", true);
+  assert.notStrictEqual(pre.ctx.emptyStateKey(m), post.ctx.emptyStateKey(m));
+  assert.match(pre.ctx.emptyStateKey(m), /box · aws/);
+  assert.match(post.ctx.emptyStateKey(m), /host · not contained/);
+});
 
 test("the touches line is the dialog's, not the old 'binary · tier · workspace' one", () => {
   const pg = page("sysbox-runc");
@@ -153,9 +193,9 @@ test("a recent profile that no longer exists is left out of the empty state", ()
 test("the old profileTouches is gone and both empty-state callers use profileTouchLine(p, boxRuntime)", () => {
   assert.doesNotMatch(APP, /function profileTouches\b/);
   assert.doesNotMatch(APP, /\bprofileTouches\(/);
-  assert.match(fnSource(APP, "emptyNoneEl"), /profileTouchLine\(p, boxRuntime\)/);
-  assert.match(fnSource(APP, "emptyStateKey"), /profileTouchLine\(p, boxRuntime\)/);
-  assert.match(read("spawnpanel.js"), /spawnPanelEl\("span", "sp-touch", profileTouchLine\(p, boxRuntime\)\)/);
+  assert.match(fnSource(APP, "emptyNoneEl"), /profileTouchLine\(p, metaLoaded \? boxRuntime : undefined\)/);
+  assert.match(fnSource(APP, "emptyStateKey"), /profileTouchLine\(p, metaLoaded \? boxRuntime : undefined\)/);
+  assert.match(read("spawnpanel.js"), /spawnPanelEl\("span", "sp-touch", profileTouchLine\(p, metaLoaded \? boxRuntime : undefined\)\)/);
   assert.doesNotMatch(fnSource(APP, "emptyNoneEl"), /"Start"/);
 });
 

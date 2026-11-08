@@ -70,8 +70,10 @@ function world() {
   });
   for (const f of ["svgicon.js", "kitmenu.js", "profilepage.js", "pfv-cloud.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
   // The two things a menu row hands over to (profilepage.js's own, replaced so the click is what is measured).
-  ctx.pfvDuplicate = () => { calls.push("duplicate"); };
-  ctx.pfvDelete = () => { calls.push("delete"); };
+  // Where focus is at the moment each runs: Delete… opens a confirm that hands focus back to whatever had it when it opened.
+  const focusAt = [];
+  ctx.pfvDuplicate = () => { calls.push("duplicate"); focusAt.push(activeNow()); };
+  ctx.pfvDelete = () => { calls.push("delete"); focusAt.push(activeNow()); };
   const docClick = (target) => { for (const f of listeners.click || []) f({ target }); };
   const key = (node, k) => {
     // A keydown bubbles: the wrapper's listener hears it from the row or the ⋯ that has focus.
@@ -79,7 +81,14 @@ function world() {
     for (let n = node; n; n = n.parent) for (const f of (n.handlers.keydown || [])) f(ev);
     return ev;
   };
-  return { ctx, calls, docClick, key };
+  return { ctx, calls, focusAt, docClick, key };
+}
+
+// document.activeElement as a browser has it: a focused control that is hidden (its menu closed under it) gives focus
+// up to the body (null here), which is how a keyboard user loses their place.
+function activeNow() {
+  for (let x = Node.focused; x; x = x.parent) if (x.hidden) return null;
+  return Node.focused;
 }
 
 // The ⋯ wrapper, as the header draws it: [trigger, menu].
@@ -197,6 +206,25 @@ test("Duplicate… and Delete… close the menu and run what they ran before", (
   w.items[1].click();
   assert.deepStrictEqual(w.calls, ["duplicate", "delete"]);
   assert.strictEqual(w.pop.hidden, true);
+});
+
+// Review M3: the menu used to close with focus still on the row it was hiding, so focus fell to the body and a cancelled
+// Delete… confirm had nothing to hand focus back to. It now closes with focus on the ⋯ first, then acts.
+test("Duplicate… and Delete…, activated from the keyboard, leave focus on the ⋯ (not the body) before they run", () => {
+  const w = more();
+  w.btn.click();
+  assert.strictEqual(activeNow(), w.items[0]);
+  w.items[0].click(); // Enter on Duplicate…
+  assert.deepStrictEqual(w.focusAt, [w.btn], "focus was on the ⋯ when Duplicate… ran");
+  assert.strictEqual(activeNow(), w.btn);
+  w.btn.click();
+  w.key(w.items[0], "ArrowDown");
+  assert.strictEqual(activeNow(), w.items[1], "Delete…");
+  w.items[1].click(); // Enter on Delete…
+  assert.deepStrictEqual(w.focusAt, [w.btn, w.btn], "and on the ⋯ when Delete… ran, so a cancelled confirm lands on the ⋯");
+  assert.strictEqual(activeNow(), w.btn);
+  assert.strictEqual(w.pop.hidden, true);
+  assert.strictEqual(w.btn.getAttribute("aria-expanded"), "false");
 });
 
 // ---- the "+ Add" picker ------------------------------------------------------------------------------------------------------

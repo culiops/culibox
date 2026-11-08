@@ -111,7 +111,13 @@ function askEnv(env) {
   const fs = require("node:fs");
   const path = require("node:path");
   const vm = require("node:vm");
-  const mk = (extra) => Object.assign({ textContent: "", hidden: false, disabled: false, value: "", placeholder: "", focus() { askEnvFocus.at = this; } }, extra);
+  const mk = (extra) => Object.assign({
+    textContent: "", hidden: false, disabled: false, value: "", placeholder: "", focus() { askEnvFocus.at = this; },
+    // Attributes, as an element keeps them (null when absent).
+    setAttribute(k, v) { (this.attrs = this.attrs || {})[k] = String(v); },
+    removeAttribute(k) { if (this.attrs) delete this.attrs[k]; },
+    getAttribute(k) { return this.attrs && k in this.attrs ? this.attrs[k] : null; },
+  }, extra);
   let askEnvFocus = { at: null };
   const closeFns = [];
   const cls = new Set();
@@ -448,6 +454,37 @@ test("askDialog puts the full alt label in the alt button's title when the dialo
   assert.strictEqual(t.els["ask-alt"].title, "");
   t.els["ask-modal"].close("cancel");
   await c;
+});
+
+// Review M8: with a middle-truncated label the button's accessible name was the shortened text; the whole label was only a
+// title, which a screen reader reads as a description. The whole label is now the name too, and goes with the title on the
+// next ask.
+test("askDialog names the alt button by the whole label when the dialog gives altTitle (aria-label), and removes it on every ask without one", async () => {
+  const t = askEnv();
+  const alt = t.els["ask-alt"];
+  assert.strictEqual(alt.getAttribute("aria-label"), null, "nothing before the first ask");
+  const a = t.ctx.askChoice({ title: "t", body: "b", altLabel: "End payments-pl\u2026oduction only", altTitle: "End payments-platform-production only" });
+  assert.strictEqual(alt.textContent, "End payments-pl\u2026oduction only", "the button still shows the short text");
+  assert.strictEqual(alt.getAttribute("aria-label"), "End payments-platform-production only", "the whole label is its name");
+  assert.strictEqual(alt.title, "End payments-platform-production only");
+  t.els["ask-modal"].close("cancel");
+  await a;
+  // The next ask: an alt with no altTitle (the phone's, or any other dialog) has no aria-label left over.
+  const b = t.ctx.askChoice({ title: "t", body: "b", altLabel: "End session only" });
+  assert.strictEqual(alt.getAttribute("aria-label"), null, "removed, so the visible text is the name again");
+  assert.strictEqual(alt.title, "");
+  t.els["ask-modal"].close("cancel");
+  await b;
+  // And one with no alt at all.
+  const c = t.ctx.askConfirm({ title: "t", body: "b", altLabel: "End x only", altTitle: "End x only" });
+  assert.strictEqual(alt.getAttribute("aria-label"), "End x only");
+  t.els["ask-modal"].close("cancel");
+  await c;
+  const d = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(alt.getAttribute("aria-label"), null);
+  assert.strictEqual(alt.hidden, true);
+  t.els["ask-modal"].close("cancel");
+  await d;
 });
 
 test("shell.js builds notes with createElement (no innerHTML): a path in a note is text", () => {

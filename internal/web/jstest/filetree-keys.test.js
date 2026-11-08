@@ -195,6 +195,7 @@ const ENTRIES = {
 // the keys and the focus travel through the same listeners.
 function world(width, listings) {
   const calls = [];
+  const zones = []; // every drop zone filetree.js wires (upload.js's makeDropZone is not loaded here)
   const root = new Node("body");
   Node.root = root; Node.focused = null; Node.log = [];
   const menu = new Node("div"); menu.attrs.id = "ft-menu";
@@ -220,6 +221,7 @@ function world(width, listings) {
     askPrompt: async (o) => { calls.push("askPrompt:" + o.title); return null; },
     askConfirm: async () => false, showToast: () => {},
     focusTerminal: () => calls.push("focusTerminal"),
+    makeDropZone: (el, dest, opts) => zones.push({ el, dest, opts }),
   });
   const run = (src, f) => new vm.Script(src, { filename: f || "t.js" }).runInContext(ctx);
   for (const f of ["svgicon.js", "kitmenu.js", "copyfile.js", "fsops.js", "treestate.js", "filetree.js"]) run(read(f), f);
@@ -238,8 +240,20 @@ function world(width, listings) {
     ctx.ftMenuKeydown(ev);
     return ev;
   };
+  // A contextmenu bubbles from its target to the tree's listener; the document-level one (ftMenuContextMenu,
+  // registered by initFileTree) is called directly, as docKey does for the keys.
+  const ctxMenu = (target, mods) => {
+    const ev = Object.assign({ type: "contextmenu", target, prevented: 0, preventDefault() { this.prevented++; } }, mods || {});
+    for (let n = target; n; n = n.parent) for (const f of (n.handlers.contextmenu || [])) f(Object.assign(ev, { currentTarget: n }));
+    return ev;
+  };
+  const docCtxMenu = (target, mods) => {
+    const ev = Object.assign({ type: "contextmenu", target, prevented: 0, preventDefault() { this.prevented++; } }, mods || {});
+    ctx.ftMenuContextMenu(ev);
+    return ev;
+  };
   const render = async (into) => { const c = into || new Node("div"); if (!into) tree.append(c); await ctx.ftRenderDir("/h/w", c, ""); return c; };
-  return { ctx, run, calls, root, tree, menu, key, docKey, render };
+  return { ctx, run, calls, root, tree, menu, zones, key, docKey, ctxMenu, docCtxMenu, render };
 }
 const hasCls = (cls) => (n) => n.className.split(/\s+/).includes(cls);
 const byCls = (root, cls) => root.all(hasCls(cls));
@@ -328,6 +342,56 @@ test("collapsing the folder that holds the Tab stop hands the stop to the first 
   await w.run("ftRowOpeners").get(rows[0]).setOpen(false); // its folder closes: the focused row is gone
   assert.deepStrictEqual(rowsOf(c).map(nameOf), ["dir1", "dir2", "a.txt", "b.png"]);
   assert.deepStrictEqual(stops(c), ["dir1"]);
+});
+
+// Review M4: a drop onto an open folder empties its box and draws it again without the root render's bookkeeping, so a
+// Tab stop that was inside the folder was lost with the old rows and Tab skipped the whole tree until a click.
+const tick = () => new Promise((r) => setImmediate(r));
+const dropOn = async (w, row) => {
+  const z = w.zones.find((x) => x.el === row);
+  assert.ok(z, "the folder row is a drop zone");
+  z.opts.onDone();
+  await tick();
+};
+const deepCopy = (x) => JSON.parse(JSON.stringify(x));
+
+test("a drop onto an open folder re-draws it and the Tab stop that was inside it goes back to the same path (one stop, never none)", async () => {
+  const w = world(1280);
+  w.run("addExpanded(ftExpanded, '/h/w/dir1');");
+  const c = await w.render();
+  const names = rowsOf(c).map(nameOf);
+  assert.deepStrictEqual(names, ["dir1", "inner.txt", "sub", "dir2", "a.txt", "b.png"]);
+  rowsOf(c)[1].focus(); // a click on inner.txt: it is the stop
+  assert.deepStrictEqual(stops(c), ["inner.txt"]);
+  await dropOn(w, rowsOf(c)[0]);
+  assert.deepStrictEqual(rowsOf(c).map(nameOf), names, "the folder was drawn again, same rows");
+  assert.deepStrictEqual(stops(c), ["inner.txt"], "the same path is the stop in the fresh row");
+  assert.deepStrictEqual(rowsOf(c).map((r) => r.attrs.tabindex), ["-1", "0", "-1", "-1", "-1", "-1"]);
+});
+
+test("a drop onto an open folder: when the stop's path is gone from the new listing, the first row takes it", async () => {
+  const lists = deepCopy(ENTRIES);
+  const w = world(1280, lists);
+  w.run("addExpanded(ftExpanded, '/h/w/dir1');");
+  const c = await w.render();
+  rowsOf(c)[1].focus(); // inner.txt
+  lists["/h/w/dir1"] = { entries: [{ name: "sub", is_dir: true }] }; // the upload's tool removed it meanwhile
+  await dropOn(w, rowsOf(c)[0]);
+  assert.deepStrictEqual(rowsOf(c).map(nameOf), ["dir1", "sub", "dir2", "a.txt", "b.png"]);
+  assert.deepStrictEqual(stops(c), ["dir1"], "never zero stops");
+});
+
+test("a drop onto an open folder leaves a Tab stop outside it alone, and a drop on a closed folder does nothing to the tree", async () => {
+  const w = world(1280);
+  w.run("addExpanded(ftExpanded, '/h/w/dir1');");
+  const c = await w.render();
+  rowsOf(c)[4].focus(); // a.txt
+  await dropOn(w, rowsOf(c)[0]);
+  assert.deepStrictEqual(stops(c), ["a.txt"]);
+  const before = rowsOf(c).length;
+  await dropOn(w, rowsOf(c)[3]); // dir2, closed
+  assert.strictEqual(rowsOf(c).length, before);
+  assert.deepStrictEqual(stops(c), ["a.txt"]);
 });
 
 // ---- the keys, through the tree's own listener -----------------------------------------------------------------------
@@ -538,6 +602,144 @@ test("the arrow keys of an open menu are not taken while focus is outside it", a
   w.key(row, "ContextMenu");
   row.focus(); // the user tabbed back to the tree; the menu is still open
   assert.strictEqual(w.docKey("ArrowDown").prevented, 0);
+});
+
+// ---- contextmenu (review M5): the native menu must not stack on the kit's, and a keyboard or AT contextmenu opens it ----------
+test("a contextmenu inside the open kit menu is prevented (Windows fires it on the Menu key's keyup, with focus already in the menu)", async () => {
+  const w = world(1280);
+  const { row } = await focused(w, "dir1");
+  w.key(row, "ContextMenu");
+  const first = items(w.menu)[0];
+  assert.strictEqual(Node.focused, first);
+  assert.strictEqual(w.docCtxMenu(first).prevented, 1, "on the row the key landed on");
+  assert.strictEqual(w.docCtxMenu(w.menu.children[0]).prevented, 1, "and on the path header, anywhere inside the menu");
+  assert.strictEqual(w.docCtxMenu(w.root).prevented, 0, "outside the menu the page's own menu is left alone");
+  assert.strictEqual(w.docCtxMenu(row).prevented, 0, "a row of the tree is not the menu");
+});
+
+test("a contextmenu inside #ft-menu is left alone when it does not hold kit rows (the viewer's line menu, the phone's buttons)", async () => {
+  const w = world(1280);
+  const head = new Node("div"); head.className = "ft-menu-path";
+  const gutter = new Node("span");
+  w.root.append(gutter);
+  w.ctx.ftShowMenu(gutter, [head], true);
+  assert.strictEqual(w.docCtxMenu(head).prevented, 0, "the plain popover keeps what it had");
+  const p = world(390);
+  const c = await p.render();
+  byCls(rowsOf(c)[2], "ft-more")[0].click();
+  assert.ok(p.menu.className.split(" ").includes("open"));
+  assert.strictEqual(p.docCtxMenu(p.menu.children[1]).prevented, 0, "the phone's menu is untouched");
+});
+
+test("a contextmenu on a focused tree row (the keyboard's, or an assistive technology's) opens its menu like Shift+F10, and is prevented", async () => {
+  const w = world(1280);
+  const { row } = await focused(w, "dir1");
+  const ev = w.ctxMenu(row, { button: 0 });
+  assert.strictEqual(ev.prevented, 1, "the browser's own menu is not also shown");
+  assert.ok(w.menu.className.split(" ").includes("open"));
+  assert.strictEqual(w.menu.attrs["aria-label"], "Folder actions");
+  assert.strictEqual(Node.focused, items(w.menu)[0], "focus lands on the first row, as the key does");
+  // The same menu the key opens, row for row.
+  const viaKey = world(1280);
+  const f2 = await focused(viaKey, "dir1");
+  viaKey.key(f2.row, "F10", { shiftKey: true });
+  assert.deepStrictEqual(shape(w.menu), shape(viaKey.menu));
+  // A file's own menu, and a contextmenu with no button at all (an AT's synthetic event).
+  const fw = world(1280);
+  const file = await focused(fw, "a.txt");
+  assert.strictEqual(fw.ctxMenu(file.row, {}).prevented, 1);
+  assert.strictEqual(fw.menu.attrs["aria-label"], "File actions");
+});
+
+test("a mouse right-click keeps the browser's menu: only the row itself, with a non-mouse contextmenu, opens ours (and not on the phone)", async () => {
+  const w = world(1280);
+  const { row } = await focused(w, "dir1");
+  assert.strictEqual(w.ctxMenu(row, { button: 2 }).prevented, 0, "the right button is the pointer's");
+  assert.strictEqual(w.menu.className.split(" ").includes("open"), false);
+  const name = byCls(row, "ft-name")[0];
+  assert.strictEqual(w.ctxMenu(name, { button: 0 }).prevented, 0, "a click on a part of the row is not the focused row's key");
+  assert.strictEqual(w.menu.className.split(" ").includes("open"), false);
+  const p = world(390);
+  const f = await focused(p, "dir1");
+  assert.strictEqual(p.ctxMenu(f.row, { button: 0 }).prevented, 0, "desktop behaviour only: the phone keeps what it had");
+  assert.strictEqual(p.menu.className.split(" ").includes("open"), false);
+});
+
+test("initFileTree registers the contextmenu guard on the document, beside the click closer and the key handler", () => {
+  const src = read("filetree.js");
+  const init = src.slice(src.indexOf("async function initFileTree"));
+  assert.match(init, /document\.addEventListener\("contextmenu", ftMenuContextMenu\)/);
+  assert.match(src, /el\.addEventListener\("contextmenu", ftTreeContextMenu\)/);
+});
+
+// ---- the row ⋯ is a menu button (review M9) --------------------------------------------------------------------------------
+const moreOf = (row) => byCls(row, "ft-more")[0];
+for (const [label, width] of [["desktop", 1280], ["phone", 390]]) {
+  test("every row's ⋯ is a menu button that is closed at rest (" + label + "): aria-haspopup=menu, aria-expanded=false", async () => {
+    const w = world(width);
+    w.run("addExpanded(ftExpanded, '/h/w/dir1');");
+    const c = await w.render();
+    assert.ok(rowsOf(c).length > 4);
+    for (const r of rowsOf(c)) {
+      assert.strictEqual(moreOf(r).attrs["aria-haspopup"], "menu", nameOf(r));
+      assert.strictEqual(moreOf(r).attrs["aria-expanded"], "false", nameOf(r));
+    }
+  });
+}
+
+test("the ⋯ says expanded while its menu is open, and collapsed again on Escape, a chosen row, a click elsewhere or a newer menu (desktop)", async () => {
+  const w = world(1280);
+  const c = await w.render();
+  const [r0, r1] = rowsOf(c);
+  moreOf(r0).click();
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "true");
+  assert.strictEqual(moreOf(r1).attrs["aria-expanded"], "false", "only the one that opened it");
+  w.docKey("Escape");
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "false", "Escape");
+  moreOf(r0).click();
+  items(w.menu).find((b) => text(b) === "Rename…").click();
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "false", "a chosen row");
+  moreOf(r0).click();
+  w.ctx.closeRowMenu(); // initFileTree's document click closer, for a click elsewhere
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "false", "a click elsewhere");
+  moreOf(r0).click();
+  moreOf(r1).click(); // the ⋯ stops its click: the document closer never runs, the newer menu just replaces the first
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "false", "replaced by a newer menu");
+  assert.strictEqual(moreOf(r1).attrs["aria-expanded"], "true");
+  w.docKey("Escape");
+  assert.deepStrictEqual(rowsOf(c).map((r) => moreOf(r).attrs["aria-expanded"]), ["false", "false", "false", "false"]);
+});
+
+test("the ⋯ expanded state follows the menu the same way on the phone, and the Shift+F10 route sets it too", async () => {
+  const p = world(390);
+  const c = await p.render();
+  const row = rowsOf(c)[2];
+  moreOf(row).click();
+  assert.strictEqual(moreOf(row).attrs["aria-expanded"], "true");
+  p.ctx.closeRowMenu();
+  assert.strictEqual(moreOf(row).attrs["aria-expanded"], "false");
+  const w = world(1280);
+  const { row: r } = await focused(w, "dir2");
+  w.key(r, "F10", { shiftKey: true });
+  assert.strictEqual(moreOf(r).attrs["aria-expanded"], "true", "the key presses the ⋯, so it is the opener");
+  w.docKey("Escape");
+  assert.strictEqual(moreOf(r).attrs["aria-expanded"], "false");
+});
+
+test("the viewer's line menu (anchored to a gutter, not a ⋯) closes the ⋯ that was open and marks no one expanded", async () => {
+  const w = world(1280);
+  const c = await w.render();
+  const r0 = rowsOf(c)[0];
+  moreOf(r0).click();
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "true");
+  const head = new Node("div"); head.className = "ft-menu-path";
+  const gutter = new Node("span");
+  w.root.append(gutter);
+  w.ctx.ftShowMenu(gutter, [head], true);
+  assert.strictEqual(moreOf(r0).attrs["aria-expanded"], "false");
+  assert.ok(!("aria-expanded" in gutter.attrs), "the gutter is not a menu button");
+  w.ctx.closeRowMenu();
+  assert.deepStrictEqual(rowsOf(c).map((r) => moreOf(r).attrs["aria-expanded"]), ["false", "false", "false", "false"]);
 });
 
 // ---- the phone keeps today's menu ---------------------------------------------------------------------------------------

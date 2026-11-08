@@ -234,7 +234,7 @@ test("ftApplyReadOnly hides #ft-newdir and #ft-upload, and only those", () => {
 function fakeRow() {
   const el = {
     tag: "div", className: "", textContent: "", title: "", children: [], attrs: {}, style: { setProperty() {} },
-    classList: { add() {}, remove() {} },
+    classList: { add() {}, remove() {}, contains(c) { return el.className.split(/\s+/).includes(c); } },
     append(...n) { this.children.push(...n); }, after() {}, remove() {},
     setAttribute(k, v) { this.attrs[k] = v; }, querySelector: () => null,
     getBoundingClientRect: () => ({ left: 0, right: 100, top: 10, bottom: 30 }),

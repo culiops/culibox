@@ -5497,7 +5497,7 @@ function emptyNoneEl(m) {
       start.type = "button";
       start.onclick = () => openSpawnDialog(name);
       // What the profile reaches, in the words of the New session list (one function draws both).
-      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouchLine(p, boxRuntime)));
+      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouchLine(p, metaLoaded ? boxRuntime : undefined)));
       rows.append(row);
     }
     root.append(rows);
@@ -5550,7 +5550,7 @@ function desktopEmptyState() {
 function emptyStateKey(m) {
   return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
-    return [n, p ? profileTouchLine(p, boxRuntime) : ""];
+    return [n, p ? profileTouchLine(p, metaLoaded ? boxRuntime : undefined) : ""];
   })]);
 }
 
@@ -6360,10 +6360,13 @@ async function confirmKill(id, name) {
   const shells = liveShellsOf(id, lastSessions);
   // The desktop dialog names what ends and what is left (frame M5.2); the phone keeps its short question.
   // A nested companion shell keeps the short question on desktop too: its copy says "the agent stops",
-  // and a shell has no agent. shortPath reads the same window.HOME_DIR every other path on the page
-  // does; a session with no cwd (or one the list no longer holds) gives no Files note.
+  // and a shell has no agent. So does a top-level session whose profile runs a plain shell (bash, zsh, ...; the
+  // profile is looked up by the session's agent, none found means the agent copy). shortPath reads the same
+  // window.HOME_DIR every other path on the page does; a session with no cwd (or one the list no longer holds)
+  // gives no Files note.
   const session = lastSessions.find((s) => s.id === id);
-  const outcome = await askChoice(mobileActive(window.innerWidth) || isNestedShell(session, lastSessions)
+  const shellSession = !!session && spawnIsShellProfile(profiles.find((p) => p.name === session.agent));
+  const outcome = await askChoice(mobileActive(window.innerWidth) || shellSession || isNestedShell(session, lastSessions)
     ? killDialogOpts(name, id, shells.length)
     : killDialogDeskOpts(name, id, shells.map((s) => shellLabel(s, lastSessions)), session && session.cwd ? shortPath(session.cwd) : ""));
   // "End session only" leaves the shells running as top-level rows (the parent

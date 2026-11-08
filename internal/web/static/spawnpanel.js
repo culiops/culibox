@@ -146,7 +146,7 @@ function renderSpawnPlist() {
     b.dataset.name = p.name;
     b.setAttribute("aria-pressed", p.name === cur ? "true" : "false");
     if (p.name === cur) b.classList.add("sel");
-    const touch = spawnPanelEl("span", "sp-touch", profileTouchLine(p, boxRuntime));
+    const touch = spawnPanelEl("span", "sp-touch", profileTouchLine(p, metaLoaded ? boxRuntime : undefined));
     const nhLabel = notHomeLabel(p.not_home);
     if (nhLabel) {
       const nh = spawnPanelEl("span", "sp-nothome", nhLabel);
