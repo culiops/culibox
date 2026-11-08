@@ -5,13 +5,14 @@ globalThis.repliesEnabled = true;
 // icon slot, a .menu-sep only between groups, End session… red and last. The phone keeps today's
 // .mi / .mi.dgr buttons. openSessionMenu and its builders live in app.js, a classic script that cannot
 // be required, so they are cut out of the source by name and run against a stand-in DOM. The row icons
-// are inline SVG (never a font glyph, which is tofu where no installed font has it).
+// are inline SVG (never a font glyph, which is tofu where no installed font has it). The shared builders
+// (kitMenuButton, kitMenuSep, menuIconSvg) are kitmenu.js's and svgIcon is svgicon.js's: both run whole.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { menuItems, menuGroups, menuIcon, menuNavIndex, menuPlace, MENU_GAP, ROW_MENU_GAP } = require("../static/sessionrow.js");
+const { menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP } = require("../static/sessionrow.js");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 function fnSrc(src, name) {
@@ -56,7 +57,7 @@ function shape(n) {
   return n.tag + "." + n.className.split(" ").join(".") + a + (n.textContent ? " '" + n.textContent + "'" : "") + kids;
 }
 
-const NAMES = ["menuIconSvg", "kitMenuButton", "kitMenuNodes", "openSessionMenu"];
+const NAMES = ["kitMenuNodes", "openSessionMenu"];
 function setup(width, nestedFn) {
   const menu = el("div");
   const calls = { placed: [], closed: [], ran: [], reused: [] };
@@ -75,6 +76,8 @@ function setup(width, nestedFn) {
     placeSessionMenu: (m, a) => calls.placed.push(a),
     sessionMenuSid: null,
   });
+  new vm.Script(read("svgicon.js")).runInContext(ctx);
+  new vm.Script(read("kitmenu.js")).runInContext(ctx);
   const src = NAMES.map((n) => fnSrc(read("app.js"), n)).join("\n") + "\nglobalThis.openSessionMenu = openSessionMenu;";
   new vm.Script(src).runInContext(ctx);
   return { menu, calls, ctx, open: (anchor, s, extra) => ctx.openSessionMenu(anchor, s, extra) };
@@ -212,29 +215,18 @@ test("phone: a shell under its parent keeps the full menu (the short one is desk
   assert.ok(t.menu.children.some((n) => n.textContent === "Duplicate…"));
 });
 
-test("Arrow Up and Down wrap, Home and End jump, and nothing else is handled", () => {
-  assert.strictEqual(menuNavIndex(5, -1, "ArrowDown"), 0, "from outside the items, Down lands on the first");
-  assert.strictEqual(menuNavIndex(5, -1, "ArrowUp"), 4, "and Up on the last");
-  assert.strictEqual(menuNavIndex(5, 4, "ArrowDown"), 0, "Down wraps");
-  assert.strictEqual(menuNavIndex(5, 0, "ArrowUp"), 4, "Up wraps");
-  assert.strictEqual(menuNavIndex(5, 2, "ArrowDown"), 3);
-  assert.strictEqual(menuNavIndex(5, 2, "ArrowUp"), 1);
-  assert.strictEqual(menuNavIndex(5, 2, "Home"), 0);
-  assert.strictEqual(menuNavIndex(5, 2, "End"), 4);
-  assert.strictEqual(menuNavIndex(5, -1, "End"), 4);
-  for (const k of ["Tab", "Enter", "a", "PageDown", "Escape"]) assert.strictEqual(menuNavIndex(5, 2, k), null, k);
-  assert.strictEqual(menuNavIndex(0, -1, "ArrowDown"), null, "an empty menu has nowhere to go");
-});
-
-test("the menu's keyboard handler walks the .menu-item rows (separators are not items) and the first row takes focus", () => {
+test("the menu's keyboard handler steps the menu's rows through kitMenuKeys (separators are not items) and the first row takes focus", () => {
   const app = read("app.js");
   const place = fnSrc(app, "placeSessionMenu");
   assert.match(place, /querySelector\("\.menu-item, \.mi"\)/, "focus lands on the first row, kit or legacy");
   const keydown = app.slice(app.indexOf('document.addEventListener("keydown", (e) => {\n  const menu = $("session-menu");'));
   const handler = keydown.slice(0, keydown.indexOf("\n});") + 4);
-  assert.match(handler, /querySelectorAll\("\.menu-item, \.mi"\)/);
-  assert.match(handler, /menuNavIndex\(/);
+  assert.match(handler, /kitMenuKeys\(menu, e\)/);
   assert.match(handler, /Escape/);
+  // The rows it steps are the kit's (an aria-disabled one is skipped) and the phone's legacy .mi: separators are neither.
+  const keys = fnSrc(read("kitmenu.js"), "kitMenuKeys");
+  assert.match(keys, /querySelectorAll\('\.menu-item:not\(\[aria-disabled="true"\]\), \.mi'\)/);
+  assert.match(keys, /menuNavIndex\(/);
 });
 
 // ---- task 9b: where the menu hangs, and the ⋯ that stays pressed while it is open ----------------------------------------

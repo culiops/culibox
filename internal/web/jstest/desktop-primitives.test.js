@@ -361,7 +361,8 @@ test("Close and Cancel are never primary: the Keyboard shortcuts dialog's Close 
 
 test("collision guards: kit containers that share a legacy name are matched by their kit child", () => {
   const rules = parseRules(sections().kit);
-  const guard = { seg: ":has(> .seg-item)", menu: ":has(> .menu-item)", field: ":has(> .field-label)" };
+  // The kit menu's container is matched by its kit child: a .menu-item, or a .menu-row (an item with its own action, the tab switcher's).
+  const guard = { seg: ":has(> .seg-item)", menu: ":has(> .menu-item", field: ":has(> .field-label)" };
   const loose = [];
   for (const p of allParts(rules)) {
     const last = compounds(p).pop();
@@ -451,20 +452,20 @@ test("collision guards: a kit part resets the legacy rule it meets (dialog head,
   const hint = ruleFor(rules, [".dlg > .dlg-foot .hint"]);
   assert.strictEqual(decl(hint, "margin"), "0", "the foot hint sits on the button baseline");
   assert.strictEqual(decl(hint, "line-height"), "var(--lh-sm)", "at the kit's line height, not .hint's 1.65");
-  const menu = ruleFor(rules, [".menu:has(> .menu-item)"]);
+  const menu = ruleFor(rules, [".menu:has(> .menu-item, > .menu-row)"]);
   assert.strictEqual(decl(menu, "position"), "static", "the primitive renders in flow, as drawn (a JS-placed popover adds its own placement)");
   assert.strictEqual(decl(menu, "z-index"), "auto");
   assert.strictEqual(decl(menu, "display"), "flex");
   // The legacy popover (children without .menu-item) is not reached: every kit rule that names .menu carries the guard.
-  assert.deepStrictEqual(allParts(rules).filter((p) => hasClass(compounds(p).pop(), "menu") && !p.includes(":has(> .menu-item)")), []);
+  assert.deepStrictEqual(allParts(rules).filter((p) => hasClass(compounds(p).pop(), "menu") && !p.includes(":has(> .menu-item")), []);
 });
 
 // The row's ⋯ menu (F12, M5.1) is the kit menu placed by script. Its look is the kit's alone (a second
 // copy of the surface would drift); the page rule only puts back what a script-placed popover needs,
-// which the kit's in-flow `.menu:has(> .menu-item)` resets (fixed, above the panes, closed until .open).
+// which the kit's in-flow `.menu:has(> .menu-item, > .menu-row)` resets (fixed, above the panes, closed until .open).
 test("the session row menu is the kit menu: the kit's surface, rows of --h-menu, a page rule for placement only", () => {
   const kit = parseRules(sections().kit);
-  const menu = ruleFor(kit, [".menu:has(> .menu-item)"]);
+  const menu = ruleFor(kit, [".menu:has(> .menu-item, > .menu-row)"]);
   assert.strictEqual(decl(menu, "background"), "var(--panel)");
   assert.strictEqual(decl(menu, "border"), "1px solid var(--line)", "a hairline, not the legacy accent border");
   assert.strictEqual(decl(menu, "border-radius"), "var(--r-card)");
@@ -478,30 +479,59 @@ test("the session row menu is the kit menu: the kit's surface, rows of --h-menu,
   assert.strictEqual(decl(ruleFor(kit, [".menu-item.is-danger", ".menu-item.is-danger .menu-icon"]), "color"), "var(--red)");
 
   const page = parseRules(sections().rest);
-  const placed = ruleFor(page, ["#session-menu:has(> .menu-item)"]);
+  const placed = ruleFor(page, ["#session-menu:has(> .menu-item, > .menu-row)"]);
   assert.ok(placed, "a page rule places the kit menu");
   assert.strictEqual(decl(placed, "position"), "fixed", "script-placed (placeSessionMenu sets left and top)");
   assert.strictEqual(decl(placed, "z-index"), "40", "above the panes, as the legacy popover was");
   assert.strictEqual(decl(placed, "display"), "none", "closed until .open: the kit rule's display: flex would show it at once");
-  assert.strictEqual(decl(ruleFor(page, ["#session-menu.open:has(> .menu-item)"]), "display"), "flex");
+  assert.strictEqual(decl(ruleFor(page, ["#session-menu.open:has(> .menu-item, > .menu-row)"]), "display"), "flex");
   assert.deepStrictEqual(placed.decls.map(([p]) => p).filter((p) => /^(background|border|box-shadow|padding|color|font)/.test(p)), [],
     "the surface is the kit's: the placement rule paints nothing");
-  // Only the kit-menu children are reached: the tab switcher's .mi rows keep the legacy popover (Plan 3).
+  // Only the kit-menu children are reached, and no rule on the legacy rows: the phone's .mi / .mi-row / .mi-x are
+  // never drawn in this block (the tab switcher builds kit rows on desktop), so nothing styles them here.
   const inSession = page.filter((r) => parts(r.selector).some((p) => p.includes("#session-menu")));
   for (const r of inSession) for (const p of parts(r.selector)) {
-    assert.ok(p.includes(":has(> .menu-item)") || /^#session-menu (\.mi|> \.menu-item)/.test(p), "unexpected #session-menu rule: " + p);
+    assert.ok(p.includes(":has(> .menu-item") || /^#session-menu (> \.menu-row|\.menu-item|\.menu-check)/.test(p), "unexpected #session-menu rule: " + p);
   }
-  assert.strictEqual(decl(ruleFor(page, ["#session-menu .mi"]), "font-size"), "var(--t-md)", "the tab switcher's rows are on the type scale (12.5px was off it)");
+  assert.deepStrictEqual(page.flatMap((r) => parts(r.selector)).filter((p) => /\.mi(-row|-x)?(?![\w-])/.test(p)), [],
+    "no desktop rule on the legacy .mi rows (a .mi- class that is NOT a legacy row, such as .mi-off, is another component's)");
   // The row icons are inline SVG (not a font glyph): 14px in the kit's 16px slot, drawn in the text colour.
-  const ico = ruleFor(page, ["#session-menu > .menu-item > .menu-icon svg"]);
+  const ico = ruleFor(page, ["#session-menu .menu-item > .menu-icon svg", "#session-menu .menu-check svg"]);
   assert.strictEqual(decl(ico, "width"), "14px");
   assert.strictEqual(decl(ico, "height"), "14px");
   assert.strictEqual(decl(ico, "display"), "block");
   assert.deepStrictEqual(ico.decls.map(([p]) => p).filter((p) => /^(color|stroke|fill)/.test(p)), [], "the icon takes the slot's colour (muted, red on End session…)");
   // A long label never wraps out of its 30px row: it is clipped with an ellipsis.
-  const text = ruleFor(page, ["#session-menu > .menu-item > .menu-text"]);
+  const text = ruleFor(page, ["#session-menu .menu-item > .menu-text"]);
   assert.strictEqual(decl(text, "white-space"), "nowrap");
   assert.strictEqual(decl(text, "text-overflow"), "ellipsis");
+});
+
+// The pane header's tab switcher (#173) is the kit menu too: a row is the tab (a kit .menu-item, taking the
+// width) beside its close. The close is the kit's ghost icon button at the small size, so its 24px, --muted and
+// --hover are the kit's, not a page rule's; the shown tab is bold and carries a check.
+test("the tab switcher's rows: a flex row, the item takes the width, the close is a kit ghost icon button, the shown tab is semibold", () => {
+  const page = parseRules(sections().rest);
+  const kit = parseRules(sections().kit);
+  const row = ruleFor(page, ["#session-menu > .menu-row"]);
+  assert.strictEqual(decl(row, "display"), "flex");
+  assert.strictEqual(decl(row, "align-items"), "center");
+  const item = ruleFor(page, ["#session-menu > .menu-row > .menu-item"]);
+  assert.strictEqual(decl(item, "flex"), "1 1 auto");
+  assert.strictEqual(decl(item, "width"), "auto", "the kit's width: 100% would push the close out of the row");
+  assert.strictEqual(decl(item, "min-width"), "0", "so a long title is clipped (.menu-text) rather than widening the row");
+  assert.strictEqual(decl(ruleFor(page, ['#session-menu .menu-item[aria-current="true"]']), "font-weight"), "var(--w-semibold)");
+  const check = ruleFor(page, ["#session-menu .menu-check"]);
+  assert.strictEqual(decl(check, "width"), "16px", "the kit's icon slot");
+  assert.strictEqual(decl(check, "color"), "var(--muted)");
+  const x = ruleFor(page, ["#session-menu > .menu-row > .menu-x"]);
+  assert.strictEqual(decl(x, "flex"), "none");
+  assert.deepStrictEqual(x.decls.map(([p]) => p).filter((p) => /^(color|background|border|width|height|min-)/.test(p)), [],
+    "size, colour and hover come from the kit's .btn-ghost.btn-icon.btn-sm");
+  assert.match(fs.readFileSync(path.join(STATIC, "app.js"), "utf8"), /x\.className = "menu-x btn btn-ghost btn-icon btn-sm";/);
+  assert.strictEqual(decl(ruleFor(kit, [".btn-icon.btn-sm"]), "width"), "var(--h-sm)", "24px");
+  assert.strictEqual(decl(ruleFor(kit, [".btn-ghost", ".btn.gh"]), "color"), "var(--muted)");
+  assert.strictEqual(decl(ruleFor(kit, [".btn-ghost:hover", ".btn.gh:hover"]), "background"), "var(--hover)");
 });
 
 test("collision guards: the legacy modifiers are aliases of the kit's", () => {

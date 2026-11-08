@@ -376,7 +376,7 @@
   /* --- popover menu, tooltip ------------------------------------------------ */
   /* position and z-index reset app.css's `.menu` popover box (fixed, z 40): the primitive renders in
      flow, as drawn. A popover placed by script (Plans 2-6) adds its own placement rule. */
-  .menu:has(> .menu-item) {
+  .menu:has(> .menu-item, > .menu-row) {
     position: static; z-index: auto;
     display: flex; flex-direction: column; min-width: 220px; padding: 4px; background: var(--panel);
     border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop);
@@ -478,7 +478,7 @@
      legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
     .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin)[hidden],
-  .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item)[hidden], .field:has(> .field-label)[hidden],
+  .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item, > .menu-row)[hidden], .field:has(> .field-label)[hidden],
   .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
   /* === end kit primitives === */
 
@@ -939,35 +939,31 @@
      carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
   .cell.needs::after { content: none; }
 
-  /* The row's ⋯ menu (F12, M5.1) is the kit menu, placed by script. Its look is the kit's
-     `.menu:has(> .menu-item)` (panel, hairline, card radius, popover shadow, 30px rows, a separator
-     between groups only); the kit rule renders in flow, so this puts back what a script-placed
-     popover needs: fixed (placeSessionMenu sets left and top), above the panes, closed until .open.
-     240px is the frame's width, wider only for a label that needs it (the narrow pane header's
-     "Close pane (the session keeps running)"). A row is one 30px line, so a long label is clipped
-     rather than wrapped. The tab switcher below has no .menu-item children and keeps the legacy
-     popover until Plan 3; its text goes on the type scale (12.5px was off it). */
-  #session-menu:has(> .menu-item) {
+  /* The row's ⋯ menu (F12, M5.1) and the pane header's tab switcher are the kit menu, placed by script.
+     Their look is the kit's `.menu:has(> .menu-item, > .menu-row)` (panel, hairline, card radius, popover
+     shadow, 30px rows, a separator between groups only); the kit rule renders in flow, so this puts back
+     what a script-placed popover needs: fixed (placeSessionMenu sets left and top), above the panes,
+     closed until .open. 240px is the frame's width, wider only for a label that needs it (the narrow pane
+     header's "Close pane (the session keeps running)"). A row is one 30px line, so a long label is clipped
+     rather than wrapped. */
+  #session-menu:has(> .menu-item, > .menu-row) {
     position: fixed; z-index: 40; display: none;
     width: max-content; min-width: 240px; max-width: calc(100vw - 16px);
   }
-  #session-menu.open:has(> .menu-item) { display: flex; }
-  #session-menu > .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* The icons are inline SVG (menuIconSvg), 14px in the 16px slot, stroked in the slot's own colour:
+  #session-menu.open:has(> .menu-item, > .menu-row) { display: flex; }
+  #session-menu .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The icons are inline SVG (menuIconSvg, tabIcon), 14px in the 16px slot, stroked in the slot's own colour:
      muted, red on End session… (no font glyph: those are tofu where no installed font has them). */
-  #session-menu > .menu-item > .menu-icon svg { width: 14px; height: 14px; display: block; }
-  #session-menu .mi { font-size: var(--t-md); }
+  #session-menu .menu-item > .menu-icon svg, #session-menu .menu-check svg { width: 14px; height: 14px; display: block; }
 
-  /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
-  .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
-  .mi-row:last-child { border-bottom: 0; }
-  .mi-row .mi { flex: 1; min-width: 0; border-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mi.cur { color: var(--accent); }
-  .mi-x {
-    flex: none; width: 34px; font: var(--t-lg) var(--font-ui); color: var(--muted); cursor: pointer;
-    background: transparent; border: 0;
-  }
-  .mi-x:hover { color: var(--red); background: var(--raise); }
+  /* The tab switcher: a row is the tab (a kit .menu-item, taking the width) beside its close, a kit ghost
+     icon button at the small size (24px, --muted, --hover under the pointer: .btn-ghost.btn-icon.btn-sm).
+     The shown tab is bold with a check after its title (aria-current). */
+  #session-menu > .menu-row { display: flex; align-items: center; gap: 2px; }
+  #session-menu > .menu-row > .menu-item { flex: 1 1 auto; width: auto; min-width: 0; }
+  #session-menu .menu-item[aria-current="true"] { font-weight: var(--w-semibold); }
+  #session-menu .menu-check { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--muted); }
+  #session-menu > .menu-row > .menu-x { flex: none; font-size: var(--t-lg); line-height: 1; }
 
   /* --- the pane drawer: Files (spec 5.4) ---------------------------------- */
   /* Over the right of the grid, below the focused pane's header (JS sets top

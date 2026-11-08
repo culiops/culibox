@@ -6066,78 +6066,6 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-// menuIconSvg: the row icon for a menuIcon kind, as inline SVG in the product's icon style
-// (tabs.js tabIcon / dockIcon: 14x14, no fill, currentColor, 1.2 stroke, round caps and joins),
-// so the menu does not depend on any font having a glyph. Shapes the product already draws are
-// reused: Files is the pane header's folder, Copy and Duplicate are the dock's two windows (the
-// latter with a plus), End session is the dock's cross. The rest are drawn here. null for "".
-function menuIconSvg(kind) {
-  if (!kind) return null;
-  const NS = "http://www.w3.org/2000/svg";
-  const add = (svg, tag, attrs) => {
-    const n = document.createElementNS(NS, tag);
-    for (const k in attrs) n.setAttribute(k, attrs[k]);
-    svg.append(n);
-  };
-  let svg;
-  if (kind === "files") {
-    svg = tabIcon("files");
-  } else if (kind === "copy" || kind === "duplicate") {
-    svg = dockIcon("own");
-    if (kind === "duplicate") add(svg, "path", { d: "M5.5 7v3M4 8.5h3" });
-  } else if (kind === "end") {
-    svg = dockIcon("hide");
-  } else {
-    svg = document.createElementNS(NS, "svg");
-    svg.setAttribute("viewBox", "0 0 14 14");
-    svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("fill", "none");
-    svg.setAttribute("stroke", "currentColor");
-    svg.setAttribute("stroke-width", "1.2");
-    if (kind === "pencil") {
-      add(svg, "path", { d: "M2 12l.7-3L9.7 2a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7L5 11.3z" });
-      add(svg, "path", { d: "M8.4 3.3l2.3 2.3" });
-    } else if (kind === "pie") {
-      add(svg, "circle", { cx: "7", cy: "7", r: "5.5" });
-      add(svg, "path", { d: "M7 7V1.5A5.5 5.5 0 0 1 12.5 7z", fill: "currentColor", stroke: "none" });
-    } else if (kind === "split") {
-      add(svg, "rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" });
-      add(svg, "path", { d: "M7 2.5v9" });
-    } else if (kind === "pause") {
-      add(svg, "rect", { x: "3.5", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
-      add(svg, "rect", { x: "8", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
-    } else if (kind === "tray") {
-      add(svg, "path", { d: "M7 2v6.5M4.2 6l2.8 2.8L9.8 6" });
-      add(svg, "path", { d: "M2 9.5v2c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-2" });
-    }
-  }
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("data-icon", kind);
-  return svg;
-}
-
-// One row of the desktop (kit) session menu: .menu-item > .menu-icon + .menu-text, as frame
-// M5.1 draws it. `icon` is a menuIcon kind; the slot is decoration (aria-hidden) and, with no
-// icon, stays an empty 16px box so the text of every row lines up.
-function kitMenuButton(label, icon, danger, run) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = danger ? "menu-item is-danger" : "menu-item";
-  b.setAttribute("role", "menuitem");
-  const ic = document.createElement("span");
-  ic.className = "menu-icon";
-  ic.setAttribute("aria-hidden", "true");
-  const svg = menuIconSvg(icon);
-  if (svg) ic.append(svg);
-  const tx = document.createElement("span");
-  tx.className = "menu-text";
-  tx.textContent = label;
-  b.append(ic, tx);
-  b.onclick = run;
-  return b;
-}
-
 // kitMenuNodes: the kit menu's children. `own` are the pane's own rows ({label, run}), a group
 // of their own when there are any; `items` are menuItems' for the session. A .menu-sep goes
 // between groups and nowhere else (menuGroups drops the empty ones).
@@ -6151,12 +6079,7 @@ function kitMenuNodes(own, items, s) {
   }
   const nodes = [];
   groups.forEach((g, i) => {
-    if (i > 0) {
-      const sep = document.createElement("div");
-      sep.className = "menu-sep";
-      sep.setAttribute("role", "separator");
-      nodes.push(sep);
-    }
+    if (i > 0) nodes.push(kitMenuSep());
     nodes.push(...g);
   });
   return nodes;
@@ -6236,14 +6159,45 @@ function toggleSessionMenuAt(anchor, s, extra) {
   openSessionMenu(anchor, s, extra);
 }
 
+// kitTabRow: one row of the desktop tab switcher, a .menu-row of the tab as a kit row (its glyph in the
+// icon slot, its title, a check and aria-current on the shown one) and its own close. A viewer tab is a
+// file, so it wears the pane header's folder glyph.
+function kitTabRow(cell, t) {
+  const row = document.createElement("div");
+  row.className = "menu-row";
+  const b = kitMenuButton(t.title(), "", false, () => { closeSessionMenu(false); setFocusedCell(cell); cell.activate(t); });
+  b.children[0].append(tabIcon(t.kind === "terminal" ? "terminal" : "files"));
+  b.title = t.kind === "viewer" ? t.path || t.title() : t.title();
+  if (t === cell.activeTab) {
+    b.setAttribute("aria-current", "true");
+    const ck = document.createElement("span");
+    ck.className = "menu-check";
+    ck.setAttribute("aria-hidden", "true");
+    ck.append(menuIconSvg("check"));
+    b.append(ck);
+  }
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "menu-x btn btn-ghost btn-icon btn-sm";
+  x.textContent = "\u00D7";
+  x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
+  x.setAttribute("aria-label", "Close " + t.title());
+  x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
+  row.append(b, x);
+  return row;
+}
+
 // openTabSwitcher: the pane header's `name ▾ · N` menu. One row per tab in the
 // pane (the shown one marked), each with its own close. Same element and the
-// same outside-click / Escape / arrow rules as the session menu.
+// same outside-click / Escape / arrow rules as the session menu. Desktop draws
+// the kit menu; the header that opens it exists on desktop only, so the phone's
+// flat .mi rows below are only a fallback for a window narrowed under it.
 function openTabSwitcher(anchor, cell) {
   const menu = $("session-menu");
   if (!menu) return;
   if (menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
-  const rows = cell.tabs.map((t) => {
+  const desktop = !mobileActive(window.innerWidth);
+  const rows = desktop ? cell.tabs.map((t) => kitTabRow(cell, t)) : cell.tabs.map((t) => {
     const row = document.createElement("div");
     row.className = "mi-row";
     const b = document.createElement("button");
@@ -6295,12 +6249,8 @@ document.addEventListener("keydown", (e) => {
   // Arrow navigation, which the app's other popover does not have. Same reason
   // as the focus move above: reaching a destructive item must not depend on
   // tabbing blindly through the document. Rows only: a kit menu's .menu-sep
-  // separators are not items, so the keys step over them.
-  const items = Array.from(menu.querySelectorAll(".menu-item, .mi"));
-  const next = menuNavIndex(items.length, items.indexOf(document.activeElement), e.key);
-  if (next === null) return;
-  e.preventDefault();
-  items[next].focus();
+  // separators are not items, so the keys step over them (kitmenu.js).
+  kitMenuKeys(menu, e);
 });
 
 // confirmKill is the guarded entry point (the tab strip's kill button, the
