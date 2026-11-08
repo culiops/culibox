@@ -1014,6 +1014,75 @@ test("Edit sits beside the value, on its first line, and a row does not light up
   assert.strictEqual(bdecls(PV + " .pfv-block").get("background"), undefined, "a row is the card's --panel");
 });
 
+// ---- Plan 4 gate fix wave: Profiles (DIFF.md §3 P1-P6, digest-design §B2 `.m2-rows` / `.m2-add` / §C6 `.check-box`) ------------------------------------
+
+test("a grant row is the frame's .m2-rows grid: 52px, the value, a 196px status column, 16px between, 10px between rows (P1)", () => {
+  assert.strictEqual(bdecls(PV + " .pfv-rows").get("gap"), "10px", "§B2 `.m2-rows` row-gap 10px (it was 12px)");
+  const row = bdecls(PV + " .pfv-row");
+  assert.strictEqual(row.get("display"), "grid");
+  assert.strictEqual(row.get("grid-template-columns"), "52px minmax(0, 1fr) 196px", "three tracks: an empty fourth one would still cost a 16px gap in every read row");
+  assert.strictEqual(row.get("column-gap"), "16px");
+  assert.strictEqual(row.get("align-items"), "start");
+  // Remove / Undo and the "Set in ..." note of a row in edit take a trailing auto track of their own (column 4, the implicit one), as they did.
+  for (const sel of [PV + " .pfv-row > .pfv-rmbtn", PV + " .pfv-row > .pfv-inote"]) {
+    assert.deepStrictEqual([bdecls(sel).get("grid-column"), bdecls(sel).get("grid-row")], ["4", "1"], sel);
+  }
+  // The narrow steps still put them in column 3 (863) or under the content (440): they come after the base and are not touched.
+  const steps = parseRules(DESK_CSS).filter((r) => r.selector.startsWith(PV + " .pfv-row"));
+  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr) auto"), "863px: 52px, content, auto");
+  assert.ok(steps.some((r) => r.decls.get("grid-template-columns") === "52px minmax(0, 1fr)"), "440px: 52px, content");
+});
+
+test("a row's kind word, status and mono part are 12/18, as the frame's t-sm lines (P2)", () => {
+  for (const sel of [PV + " .pfv-k", PV + " .pfv-scope", PV + " .pfv-nm .pfv-mono"]) {
+    const d = bdecls(sel);
+    assert.strictEqual(d.get("line-height"), "var(--lh-sm)", sel);
+    assert.strictEqual(d.get("font-size") || bdecls(PV + " .pfv-mono").get("font-size"), "var(--t-sm)", sel);
+  }
+  assert.strictEqual(bdecls(":root").get("--lh-sm"), "18px");
+  // The value line around the mono part stays the 20px a value is.
+  assert.strictEqual(bdecls(PV + " .pfv-nm").get("line-height"), "20px");
+});
+
+test("+ Add access / + Add folder or domain is the kit's .link-add.t-sm: 400 12px/18px, no padding, no radius (P3)", () => {
+  const add = bdecls(PV + " .pfv-add");
+  assert.strictEqual(add.get("font"), "400 var(--t-sm)/var(--lh-sm) var(--font-ui)");
+  assert.strictEqual(add.get("padding"), "0");
+  assert.strictEqual(add.get("border-radius"), "0");
+  assert.strictEqual(add.get("color"), undefined, "the accent colour is .pfv-link's");
+  assert.strictEqual(bdecls(PV + " .pfv-link").get("color"), "var(--accent)");
+  // After the helper line of an empty block it sits 10px under it: `.m2-bc` gap 2 + `.m2-add` margin-top 8 (the frame's 97px block).
+  assert.strictEqual(bdecls(PV + " .pfv-sub + .pfv-add").get("margin-top"), "10px");
+  assert.ok(!bhas(PV + " .pfv-empty + .pfv-add"), "the one-sentence empty line is not drawn in the read view any more");
+});
+
+test("an option card does not stretch its rows: the title row stays 20px beside a neighbour with a second line (P5 / G3-D2)", () => {
+  assert.strictEqual(bdecls(PV + " .pfv-card").get("align-content"), "start");
+});
+
+test("the native checkboxes of the page are the kit's .check-box look: 14px, --bg with a --muted inset ring, accent and a tick when checked (P6)", () => {
+  const cb = bdecls(PV + " .pfv-check input");
+  assert.deepStrictEqual([cb.get("appearance"), cb.get("-webkit-appearance")], ["none", "none"]);
+  assert.deepStrictEqual([cb.get("width"), cb.get("height"), cb.get("margin")], ["14px", "14px", "3px 0 0"]);
+  assert.deepStrictEqual([cb.get("border-radius"), cb.get("background"), cb.get("box-shadow")], ["var(--r-chip)", "var(--bg)", "inset 0 0 0 1px var(--muted)"]);
+  assert.deepStrictEqual([cb.get("flex"), cb.get("position"), cb.get("cursor")], ["none", "relative", "pointer"]);
+  // The same values as the kit's own, so the two cannot drift.
+  const kit = bdecls(".check-box");
+  for (const k of ["border-radius", "background", "box-shadow", "width", "height"]) assert.strictEqual(cb.get(k), kit.get(k), k);
+  const on = bdecls(PV + " .pfv-check input:checked");
+  assert.deepStrictEqual([on.get("background"), on.get("box-shadow")], ["var(--accent)", "none"]);
+  const tick = bdecls(PV + " .pfv-check input:checked::after");
+  assert.deepStrictEqual([tick.get("left"), tick.get("top"), tick.get("width"), tick.get("height"), tick.get("border-width"), tick.get("transform")], ["4px", "1px", "4px", "8px", "0 2px 2px 0", "rotate(45deg)"]);
+  assert.match(tick.get("border"), /^solid var\(--on-fill\)$/);
+  // Label: the words 8px from the box, the default cursor (the frame's `.check`), the box keeps the global 2px ring.
+  const lab = bdecls(PV + " .pfv-check");
+  assert.deepStrictEqual([lab.get("display"), lab.get("align-items"), lab.get("gap"), lab.get("cursor")], ["flex", "flex-start", "8px", "default"]);
+  assert.ok(!bhas(PV + " .pfv-check input:focus-visible"), "nothing here touches the outline: the global :focus-visible 2px ring shows");
+  assert.strictEqual(cb.get("outline"), undefined);
+  // It is still the real control: nothing in the page's JS swaps the input for a drawn box.
+  for (const f of ["pfv-workspace.js", "pfv-advanced.js", "pfv-cloud.js"]) assert.match(read(f), /cb\.type = "checkbox"|type = "checkbox"/, f + " keeps a native checkbox");
+});
+
 test("Advanced is a normal block: its count under the label (12/18 --muted 400), no fold, no chevron, no .fold of the page's", () => {
   const n = bdecls(PV + " .pfv-advst");
   assert.deepStrictEqual([n.get("font-size"), n.get("line-height"), n.get("font-weight"), n.get("color")], ["var(--t-sm)", "var(--lh-sm)", "400", "var(--muted)"]);

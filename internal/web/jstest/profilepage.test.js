@@ -273,6 +273,34 @@ test("a nav item shows its profile", async () => {
   assert.deepStrictEqual(titles(t.els["pfv-in"]), ["runbook-host"]);
 });
 
+// P4 / G3-D6 (frame M2.1, digest-design §A2): an empty Cloud and tokens block reads "Nothing yet" as its value (13/20 500 --fg, the .pfv-main every value
+// is) with the explanation as the muted 12/18 line under it (.pfv-sub); it was one muted sentence. The block in edit (no frame draws it) keeps today's
+// one sentence. The words are the read model's (profileview.js), which only the desktop page and its copy list read: the phone never loads them.
+test("an empty Cloud and tokens block: 'Nothing yet' is its value and the explanation its helper line, two lines and no sentence of its own", async () => {
+  const t = page();
+  await t.box.pfvShow("infra-terraform");
+  const cloud = blockOf(t, "cloud");
+  assert.strictEqual(byCls(cloud, "pfv-row").length, 0, "the profile binds nothing");
+  assert.deepStrictEqual(texts(cloud, "pfv-main"), ["Nothing yet"]);
+  assert.deepStrictEqual(texts(cloud, "pfv-sub"), ["It cannot use AWS, GitHub or any token."]);
+  assert.strictEqual(byCls(cloud, "pfv-empty").length, 0, "the old one-sentence line is not drawn");
+  const body = byCls(cloud, "pfv-body")[0];
+  assert.deepStrictEqual(body.children.filter((n) => n instanceof Node).map((n) => n.className.split(/\s+/).slice(0, 2).join(" ")), ["pfv-main", "pfv-sub", "pfv-link pfv-add"], "value, helper, then + Add access");
+  // Block in edit: today's sentence, whole.
+  clickBtn(cloud, "Edit");
+  assert.deepStrictEqual(texts(blockOf(t, "cloud"), "pfv-empty"), ["Nothing yet. It cannot use AWS, GitHub or any token."]);
+});
+
+test("an empty Also reachable block says 'Nothing yet' as its value, with its own explanation under it", async () => {
+  const t = page({ bundleImports: false });
+  await t.box.pfvShow("infra-terraform");
+  const reach = blockOf(t, "reachable");
+  assert.strictEqual(byCls(reach, "pfv-row").length, 0);
+  assert.deepStrictEqual(texts(reach, "pfv-main"), ["Nothing yet"]);
+  assert.deepStrictEqual(texts(reach, "pfv-sub"), ["It cannot read other folders or reach other domains."]);
+  assert.strictEqual(byCls(reach, "pfv-empty").length, 0);
+});
+
 test("pfvShow fetches the stored profile and draws the seven blocks from the read model", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");

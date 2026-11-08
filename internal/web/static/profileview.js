@@ -304,11 +304,12 @@ function pfvReadView(o) {
     const cloud = m.cloud.map(item), reachable = m.reachable.map(item);
     blocks.push({
       id: "cloud", label: "Cloud and tokens", edit, add: edit ? "+ Add access" : "", rows: cloud, count: cloud.length, note: m.tokenNote,
-      lines: cloud.length ? [] : ["Nothing yet. It cannot use AWS, GitHub or any token."],
+      // The value, then its helper line (frame M2.1): the page draws them as a value and a muted line, the block in edit as one sentence.
+      lines: cloud.length ? [] : ["Nothing yet", "It cannot use AWS, GitHub or any token."],
     });
     blocks.push({
       id: "reachable", label: "Also reachable", edit, add: edit ? "+ Add folder or domain" : "", rows: reachable, count: reachable.length, note: "",
-      lines: reachable.length ? [] : ["Nothing yet. It cannot read other folders or reach other domains."],
+      lines: reachable.length ? [] : ["Nothing yet", "It cannot read other folders or reach other domains."],
     });
     blocks.push({ id: "network", label: "Network", edit, add: "", rows: [], count: 0, note: "", lines: m.network ? [m.network.line, m.network.sub] : [] });
   }

@@ -98,7 +98,7 @@ test("a profile with nothing bound still lists Cloud and Also reachable, empty, 
   assert.deepStrictEqual(ids(v), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
   assert.deepStrictEqual(byId(v, "cloud").rows, []);
   assert.strictEqual(byId(v, "cloud").add, "+ Add access");
-  assert.deepStrictEqual(byId(v, "cloud").lines, ["Nothing yet. It cannot use AWS, GitHub or any token."]);
+  assert.deepStrictEqual(byId(v, "cloud").lines, ["Nothing yet", "It cannot use AWS, GitHub or any token."], "the value, then the helper (frame M2.1): two lines");
   assert.strictEqual(byId(v, "cloud").note, "");
   // Nothing bound: the words b-created-1440.png shows, not the allowlist sentence.
   assert.deepStrictEqual(byId(v, "network").lines, [
@@ -113,7 +113,7 @@ test("a profile with nothing bound still lists Cloud and Also reachable, empty, 
   const bare = pfvReadView({ view, doc: {}, meta, creds, boxRuntime: "runc", bundleImports: false });
   assert.deepStrictEqual(byId(bare, "reachable").rows, []);
   assert.strictEqual(byId(bare, "reachable").add, "+ Add folder or domain");
-  assert.strictEqual(byId(bare, "reachable").lines.length, 1);
+  assert.deepStrictEqual(byId(bare, "reachable").lines, ["Nothing yet", "It cannot read other folders or reach other domains."], "the value, then the helper");
 });
 
 test("runbook-host read view has runs, workspace, agent, canreach, advanced and no cloud", () => {

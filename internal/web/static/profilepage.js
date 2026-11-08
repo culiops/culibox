@@ -437,10 +437,10 @@ function pfvDrawBranches(notHome, rows) {
 // user here): the refusals that name one of its rows are drawn under that row.
 function pfvDrawBody(b, known, rec) {
   const body = pfvMk("div", "pfv-body");
-  const empty = b.rows.length === 0 && (b.id === "cloud" || b.id === "reachable");
   b.lines.forEach((line, i) => {
     if (line === "") return;
-    const cls = empty ? "pfv-empty" : i === 0 ? "pfv-main" : "pfv-sub";
+    // An empty Cloud and tokens / Also reachable block is a value and a helper like every other ("Nothing yet", then why: frame M2.1).
+    const cls = i === 0 ? "pfv-main" : "pfv-sub";
     const p = pfvMk("p", cls + (b.tone === "error" && i === b.toneAt ? " pfv-red" : ""));
     p.append(...pfvMonoNodes(line, known));
     body.append(p);

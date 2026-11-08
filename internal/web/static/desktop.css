@@ -2708,20 +2708,28 @@
   #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
 
-  /* A grant is a row: kind, name (and its tag), scope in words. */
-  #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: 14px; align-items: start; }
-  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: 20px; color: var(--muted); }
+  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: 52px, the value, a 196px status column, 16px between columns and
+     10px between rows). Three tracks only: an empty fourth one would still cost a 16px gap in every read row. Remove / Undo and the "Set in ..."
+     note of a row in edit sit in column 4, the implicit auto track, which exists only on those rows. The narrow steps below put them back in
+     column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
+     line around the mono part stays 20px). */
+  #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 10px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 4; grid-row: 1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: var(--t-sm); line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nm .pfv-mono { line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-add { margin-top: 8px; }
+  /* + Add access / + Add folder or domain is the kit's .link-add.t-sm (§C2): 400 12/18, no padding, no radius (the .pfv-link look above is the
+     accent button it is not). Under the helper line of an empty block it is 10px down: `.m2-bc` gap 2 + `.m2-add` margin-top 8 (§B2). */
+  #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; padding: 0; border-radius: 0; font: 400 var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-add { margin-top: 10px; }
 
   /* Branches that did not come home: today's amber chip and rows (the old list and form). */
   #page-host > #settings-modal.as-page #pfv .pfv-nhome { grid-column: 2 / -1; display: grid; gap: 6px; justify-items: start; }
@@ -2789,7 +2797,8 @@
   /* Anything in the fieldset that is not a card takes the whole row under the cards, not a cell beside one: New profile's hint ("A private copy needs a
      box." under the one Box card of a copy's Duplicate, "On this machine a profile cannot hold ..." under the two). The legend is no grid item. */
   #page-host > #settings-modal.as-page #pfv .pfv-choice > :not(.pfv-card) { grid-column: 1 / -1; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; }
+  /* align-content: start keeps the title row 20px when the card has a second line (the grid would stretch the auto rows to fill the card). */
+  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; align-content: start; }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
@@ -2801,8 +2810,13 @@
   #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: var(--t-sm); color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: var(--t-sm); }
   /* Network: one switch, its consequence under it. */
-  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-check input { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  /* The page's checkboxes (Bring work home automatically, the Network switch, a GitHub permission, an Advanced option) stay real inputs and take
+     the kit's .check-box look (§C6, restated as the spawn form's do above): 14px, a --muted ring on --bg, accent and a tick when checked, the words
+     8px away on the default cursor (the frame's `.check`). The keyboard ring is the global 2px one; nothing here touches the outline. */
+  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 14px; height: 14px; margin: 3px 0 0; padding: 0; border-radius: var(--r-chip); background: var(--bg); box-shadow: inset 0 0 0 1px var(--muted); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input:checked { background: var(--accent); box-shadow: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--on-fill); border-width: 0 2px 2px 0; transform: rotate(45deg); }
   #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
   #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: var(--t-md); }
