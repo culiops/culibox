@@ -1204,6 +1204,7 @@ test("credential form labels are sentence case on the page and in the drawer", (
     assert.strictEqual(l.get("color"), "var(--fg)", who);
     assert.strictEqual(l.get("font-size"), kit.get("font-size"), who + ": the kit's .field-label size");
     assert.strictEqual(l.get("color"), kit.get("color"), who + ": the kit's .field-label colour");
+    assert.strictEqual(l.get("line-height"), "var(--lh-sm)", who + ": §C6 `.field-label` is 12/18, set on the rule itself");
   }
   const page = decls(CRED + " .flab");
   assert.strictEqual(page.get("line-height"), "var(--lh-sm)", "§C6 `.field-label` is 12/18, not the 20px a label inherits");
@@ -1257,4 +1258,41 @@ test("the tab breadcrumb has room: --t-sm, at least 12px under it, and nothing a
   assert.strictEqual(c.get("line-height"), "var(--lh-sm)");
   assert.ok(!has(CRED + " .crumb"), "not a rule for every .crumb: the drawer's header band has its own");
   assert.strictEqual(decls(P + " > #cred-drawer > #cred-drawer-head .crumb").get("margin-bottom"), undefined);
+});
+
+test("the drawer's foot is the kit footer: the page footer's 28px buttons, 8px apart, a --line rule on top, kept in line with the drawer's 22px gutters", () => {
+  // The task is "the kit save footer": #foot-creds-add / #foot-creds-form (Task 2) are one, and the drawer's foot (#cred-drawer-foot,
+  // built by awsBuildFoot / credFormBuildFoot into the same buttons) was left at 32px with no border. Its buttons are now named in
+  // the page footer's own button rules, so the two cannot drift; the padding stays the drawer's 14px 22px (head, body and status
+  // all have 22px gutters, so the page footer's 20px would misalign it; no frame draws the drawer).
+  const FOOT = P + " > #cred-drawer > #cred-drawer-foot";
+  const page = P + " > .dft .btn";
+  const drawer = FOOT + " > .btn";
+  const keys = ["min-height", "padding", "border", "border-radius", "font-family", "font-size"];
+  for (const k of keys) assert.strictEqual(decls(drawer).get(k), decls(page).get(k), k + " is the page footer's button value");
+  assert.deepStrictEqual(keys.map((k) => decls(drawer).get(k)), ["var(--h-ctl)", "0 12px", "1px solid transparent", "var(--r-ctl)", "var(--font-ui)", "var(--t-md)"]);
+  assert.strictEqual(decls(":root").get("--h-ctl"), "28px");
+  assert.strictEqual(decls(".btn").get("font-weight"), "var(--w-medium)", "the kit .btn is 500; nothing in the foot lowers it");
+  assert.ok(!decls(drawer).has("height") && !decls(drawer).has("font-weight"), "no height or weight of the drawer's own");
+  assert.ok(!decls(drawer + ".pri").has("font-weight") && !has(drawer + ".pri"), "the primary keeps the kit's 600 and fill");
+  // The secondary fill, its hover and the primary come from the Credentials `.btn` rules (3 ids, so no foot rule has to restate them);
+  // they are the page footer's own values: raise, fg, --line on hover (skipping aria-disabled), no weight of their own.
+  const sec = CRED + " .btn:where(:not(.pri))";
+  for (const k of ["background", "color"]) assert.strictEqual(decls(sec).get(k), decls(page + ":where(:not(.pri))").get(k), "the secondary " + k + " is the page footer's");
+  assert.deepStrictEqual([decls(sec).get("background"), decls(sec).get("color")], ["var(--raise)", "var(--fg)"]);
+  const hov = ":where(:not([aria-disabled=\"true\"])):hover";
+  assert.strictEqual(decls(sec + hov).get("background"), decls(page + ":where(:not(.pri))" + hov).get("background"));
+  assert.strictEqual(decls(sec + hov).get("background"), "var(--line)");
+  assert.ok(!has(drawer + ":where(:not(.pri))") && !has(drawer + ":where(:not(.pri))" + hov), "no 4-id fill rule in the foot to outrank that hover");
+  const f = decls(FOOT);
+  assert.strictEqual(f.get("gap"), "8px");
+  assert.strictEqual(f.get("border-top"), "1px solid var(--line)");
+  assert.strictEqual(f.get("padding"), "14px 22px", "the drawer's gutters, not the page footer's 20px");
+  assert.strictEqual(decls(P + " > #cred-drawer > #cred-drawer-head").get("padding"), "18px 22px 16px");
+  assert.strictEqual(decls(P + " > #cred-drawer > #cred-drawer-status").get("padding"), "8px 22px");
+  // Cancel stays the drawer's quiet button: no fill until hovered.
+  assert.strictEqual(decls(drawer + ":nth-last-child(2):where(:not(.pri))").get("background"), "transparent");
+  // Plan 3's reasons live in credentials.js and are not touched by a stylesheet.
+  const src = read("credentials.js");
+  for (const fn of ["setDisabledReason", "awsFootReasons", "awsFootNote"]) assert.ok(src.includes("function " + fn) || src.includes(fn + "("), fn + " is still there");
 });

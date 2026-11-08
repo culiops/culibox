@@ -207,8 +207,18 @@ test("the drawer's skin: a fixed header band, a body that scrolls on a flex gap,
   assert.doesNotMatch(css, /pfv-btn-primary/);
   assert.match(css, /#pfv \.pfv-btn-host \{ background: none; color: var\(--red\); font-weight: var\(--w-medium\); border-color: rgba\(240, 106, 106, \.6\); \}/);
   assert.ok(!css.includes("\n  " + D + " > #cred-drawer-foot > .btn.pri {"), "no foot rule restyles the primary");
-  // Buttons and labels are --t-md (13px); the native boxes 14px.
-  assert.match(rule(D + " > #cred-drawer-foot > .btn"), /font-size: var\(--t-md\)/);
+  // Buttons and labels are --t-md (13px); the native boxes 14px. The foot's buttons are the kit footer's (UI plan 4 Task 6): the
+  // Settings page footers' own button rule names them, so they are 28px (--h-ctl), 0 12px and --t-md by construction, and the
+  // drawer has no 32px / border: 0 button rule of its own any more.
+  const kitAt = css.indexOf("\n  #page-host > #settings-modal.as-page > .dft .btn,\n");
+  assert.ok(kitAt >= 0, "the page footer's button rule is a selector list");
+  const kitRule = css.slice(kitAt, css.indexOf("}", kitAt));
+  assert.ok(kitRule.slice(0, kitRule.indexOf("{")).includes(D + " > #cred-drawer-foot > .btn"), "and it names the drawer foot's buttons");
+  assert.match(kitRule, /min-height: var\(--h-ctl\); padding: 0 12px; border: 1px solid transparent; border-radius: var\(--r-ctl\);\s+font-family: var\(--font-ui\); font-size: var\(--t-md\);/);
+  const footBtnSel = D + " > #cred-drawer-foot > .btn";
+  assert.strictEqual(css.split("\n  " + footBtnSel + " {").length - 1, 1, "the only rule that ends in the foot's bare .btn is the kit footer's list");
+  assert.ok(kitRule.slice(0, kitRule.indexOf("{")).trim().endsWith(footBtnSel), "and the foot's .btn is the last entry of that list, not a rule of its own");
+  assert.doesNotMatch(css, /#cred-drawer-foot > \.btn \{[^}]*height: 32px/);
   assert.match(rule(D + " > #cred-drawer-body .pf-check"), /font-size: var\(--t-md\)/);
   assert.match(css, /#cred-drawer-body input\[type="checkbox"\], [^{]*input\[type="radio"\] \{ width: 14px; height: 14px;/);
   // A refused Save is the foot's own line, --t-sm (12px).

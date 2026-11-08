@@ -304,8 +304,9 @@
   }
   .input::placeholder { color: var(--muted); }
   .input:hover { border-color: var(--muted); }
-  /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that
-     sets its own border still wins until its plan adopts .input. */
+  /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that sets its own border still
+     wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`,
+     `.ac-pcol .fld`, #au-session and .an-date keep --line until their plans adopt the kit .input. */
   .fld { border-color: var(--faint); }
   .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
@@ -1890,7 +1891,13 @@
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about,
   #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings { display: none; }
-  #page-host > #settings-modal.as-page > .dft .btn {
+  /* The Credentials drawer's foot (#cred-drawer-foot, over the profile page) is the same kit footer: its buttons are named in
+     this rule, so the drawer's Check all / Cancel / Save are the page footer's 28px buttons by construction. The secondary fill,
+     its hover (which skips an aria-disabled button) and the primary come from the Credentials `.btn` rules, which are the same
+     raise / --line values. The foot's padding stays the drawer's own 14px 22px (the foot's rule, below), which lines it up with
+     the head's, the body's and the status line's 22px gutters; the page footer's 20px would not. */
+  #page-host > #settings-modal.as-page > .dft .btn,
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn {
     min-height: var(--h-ctl); padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
     font-family: var(--font-ui); font-size: var(--t-md);
   }
@@ -2935,7 +2942,7 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--faint); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
@@ -2967,8 +2974,8 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; }
   /* Create the encrypted store is a secondary here: the foot's Save is the view's primary. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn:where(:not(.pri)) { background: var(--line); color: var(--fg); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:where(:not(.pri)) { font-weight: 500; }
+  /* The foot's buttons are the kit footer's (named in the .dft .btn rule above: 28px, 0 12px, --t-md, 500). What stays here is the
+     drawer's own look for Cancel: no fill until hovered. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)):hover { background: var(--line); }
 }
