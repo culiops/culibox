@@ -561,22 +561,25 @@
   /* The quota columns are the frames': M1 (.m1-q) and M2 (.m2-q) draw them alike, a var(--sp-3) gap with
      the label 20px, the percent 34px right and the reset 70px right, and the bar (flex 1, the kit .meter)
      between. Widths, alignment and gap only: the markup order and the colours are today's. The label and the
-     percent never shrink (they are the numbers). Below a 257px sidebar the row would run into the 16px padding
-     (D5): the bar may shrink to nothing (no 24px floor) and then the reset and a stale reading's age note
-     ("7h old") shrink and ellipsize, so the row stays inside the sidebar from its 200px minimum up; at the
-     default 290px (a 97px bar) nothing moves. */
+     percent never shrink (they are the numbers). The reset column is 74px, not the frame's 70: a measured
+     defect (final review): the longest text fmtCountdown prints, "23h 59m left", is 73.05px at 12px in the
+     product's Inter, and the frame's 70px clipped it at every sidebar width. In a narrow sidebar the row would
+     run into the 16px padding (D5): the bar may shrink to nothing (no 24px floor) and then the reset and a
+     stale reading's age note ("7h old") shrink and ellipsize, so the row stays inside the sidebar from its
+     200px minimum up; the reset is cut only when the row is short of room (the narrowest sidebars), never at the default 290px (a 93px
+     bar). */
   #limits-side .mtr { gap: var(--sp-3); font-size: var(--t-sm); color: var(--muted); }
   #limits-side .mtr > span:first-child { width: 20px; flex: none; }
   #limits-side .mtr .bar { flex: 1; width: auto; min-width: 0; height: 4px; border-radius: 2px; background: var(--line); }
   #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
-  #limits-side .mtr .rs { width: 70px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  #limits-side .mtr .rs { width: 74px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
   #limits-side .mtr .acct-age { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #limits-side .mtr .pc { width: 34px; flex: none; text-align: right; }
   #limits-side .mtr.hot .bar i { background: var(--fg); }
   #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
   /* A window at 100% or more (renderRateLimitsInto, F32): "limit reached · resets 25m" replaces the
      percentage. Plain --fg at 600: not amber (that is an agent blocked on you) and not red (a fact,
-     not a write). It is wider than "2h 14m left", so it is no 70px column: it keeps its own width, and may
+     not a write). It is wider than "2h 14m left", so it is no 74px column: it keeps its own width, and may
      shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
   #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }

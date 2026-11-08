@@ -679,7 +679,11 @@ test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New sessio
 // Task 9 of UI plan 4 (#174). M1 (canvas lines 22-23) and M2 (lines 22-23) draw the same quota columns:
 // .m1-q / .m2-q gap var(--sp-3); .qk 20px (label), .qp 34px right (percent), .ql 70px right (reset),
 // every one flex:none, with the kit .meter between them (flex 1 1 auto).
-test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent, 70px reset, 12px apart", () => {
+// The reset column is 74px, not the frame's 70: a MEASURED-DEFECT deviation (pre-merge review, final fix wave item 2). The longest
+// text fmtCountdown prints on the weekly row, "23h 59m left" (usage.js meterModel: hours and minutes, then " left"), is 73.05px at
+// 12px in the product's own Inter, so the frame's 70px clipped it with an ellipsis at every sidebar width. The 70px frame is the
+// design's; the 74px (73.05 + 1, rounded up) is the measurement, and the handoff records it.
+test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent, 74px reset (the frame's 70 + 4, measured), 12px apart", () => {
   assert.match(decl("#limits-side .mtr"), /gap:\s*var\(--sp-3\)/);
   const lab = decl("#limits-side .mtr > span:first-child");
   assert.match(lab, /width:\s*20px/);
@@ -689,7 +693,8 @@ test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent,
   assert.match(pc, /flex:\s*none/);
   assert.match(pc, /text-align:\s*right/);
   const rs = decl("#limits-side .mtr .rs");
-  assert.match(rs, /width:\s*70px/, "70px at the default sidebar (D5: it may shrink below that, see the next test)");
+  assert.match(rs, /width:\s*74px/, "74px at the default sidebar: \"23h 59m left\" is 73.05px in Inter 12px (D5: it may shrink below that, see the next test)");
+  assert.ok(!/width:\s*70px/.test(rs), "not the frame's 70px, which clipped the longest reset text");
   assert.match(rs, /text-align:\s*right/);
   assert.ok(!/em\b|\dch\b/.test(lab + pc + rs), "the em/ch widths of the old columns are gone");
   assert.match(decl("#limits-side .mtr .bar"), /flex:\s*1\b/, "the bar still takes what the columns leave");
@@ -701,7 +706,7 @@ test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent,
   assert.match(lim, /min-width:\s*0/);
 });
 
-// D5 (gate 3, B10): the row is 20 + 34 + 70 and three 12px gaps = 160px of columns, so it needs a 193px sidebar (160 + 32 padding + 1 border) before the bar
+// D5 (gate 3, B10): the row was 20 + 34 + 70 and three 12px gaps = 160px of columns (now 74px: 164px), so it needed a 193px sidebar (160 + 32 padding + 1 border) before the bar
 // gets a pixel, and the bar's 24px floor made it overrun below 257px (17px into the padding at the 200px minimum; a stale reading's "7h old" note, 31.8px and a
 // fourth gap, overran 10.8px at 250px and was cut off at 217 and 200). The bar may shrink to nothing and the reset and the age ellipsize, so the row stays inside
 // the sidebar's padding at 200 to 257px; at 290px (97px of bar) and up nothing moves.
@@ -711,7 +716,7 @@ test("the sidebar quota row never runs into the padding: the bar shrinks to 0 an
   assert.ok(!/min-width:\s*24px/.test(bar));
   assert.match(bar, /flex:\s*1\b/);
   const rs = decl("#limits-side .mtr .rs");
-  assert.match(rs, /flex:\s*0 1 auto/, "70px wide while there is room, shrinking after the bar is gone");
+  assert.match(rs, /flex:\s*0 1 auto/, "74px wide while there is room, shrinking after the bar is gone (only the 200-217px sidebar is ever short of room)");
   assert.match(rs, /min-width:\s*0/);
   assert.match(rs, /overflow:\s*hidden/);
   assert.match(rs, /text-overflow:\s*ellipsis/);
@@ -725,8 +730,8 @@ test("the sidebar quota row never runs into the padding: the bar shrinks to 0 an
   // The label and the percent never shrink: they are the numbers (20 + 34), and the frame widths of the default sidebar are the same as before.
   assert.match(decl("#limits-side .mtr > span:first-child"), /flex:\s*none/);
   assert.match(decl("#limits-side .mtr .pc"), /flex:\s*none/);
-  // The arithmetic of the claim: fresh reading, 200px sidebar: 200 - 32 - 1 = 167px of row, 160px of columns, 7px for the bar.
-  const cols = 20 + 34 + 70 + 3 * 12;
+  // The arithmetic of the claim: fresh reading, 200px sidebar: 200 - 32 - 1 = 167px of row, 164px of columns, 3px for the bar.
+  const cols = 20 + 34 + 74 + 3 * 12;
   assert.ok(200 - 32 - 1 - cols >= 0, "a fresh reading fits at the 200px minimum with a bar of " + (200 - 33 - cols) + "px");
 });
 
