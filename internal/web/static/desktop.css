@@ -1681,12 +1681,47 @@
   }
   #spawn input[type="checkbox"] { accent-color: var(--accent); }
 
-  /* The reach box: what this session will be able to touch, from the profile. */
-  #spawn-reach { display: block; box-sizing: border-box; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
-  .sr-title { margin-bottom: 8px; font-size: var(--t-md); font-weight: 600; color: var(--fg); }
-  .sr-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; padding: 3px 0; font-size: var(--t-md); line-height: 1.45; }
-  .sr-k { color: var(--muted); }
-  .sr-v { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+  /* Workspace (frames M4.1-M4.3). The field is the positioning box of its list: the list is absolute inside it (inline
+     placement, see createWsPicker's `inline`), so it scrolls with the form instead of floating over the window, and
+     the form's own scroll box clips nothing of it (it sits 72px down a 640px column and is 248px tall at most). The
+     list is the kit menu's look: panel, hairline, card radius, popover shadow, 4px around 30px rows, 8 rows then it
+     scrolls; the kit's `.menu:has(> .menu-item)` is `position: static` and 220px wide, so the list states its own
+     placement and width. top = the 18px label + the 6px gap + the 32px input + 2px. */
+  #spawn-ws-row { position: relative; }
+  #spawn-ws-list {
+    position: absolute; top: 58px; left: 0; right: 0; z-index: 3; box-sizing: border-box; display: flex; flex-direction: column;
+    min-width: 0; max-height: calc(8 * var(--h-menu) + 8px); overflow-y: auto; padding: var(--sp-1);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop);
+  }
+  #spawn-ws-list[hidden] { display: none; }
+  /* A row is a kit .menu-item (30px, 10px around, 10px between its cells): it must not shrink in a column that scrolls, and
+     it is not a button (default cursor). The keyboard's row (aria-selected, arrows) is raised like the pointer's. */
+  #spawn-ws-list .menu-item { flex: none; height: var(--h-menu); cursor: default; }
+  #spawn-ws-list .menu-item[aria-selected="true"] { background: var(--raise); }
+  /* The folder name is machine text --t-sm; a long one ends in an ellipsis, never wraps. The parent folder of a search hit and
+     "Last used" trail it, muted, and keep their own width. */
+  #spawn-ws-list .menu-text { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #spawn-ws-list .wsp-hint { flex: 0 1 auto; max-width: 50%; }
+  #spawn-ws-list .wsp-last { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: nowrap; }
+  /* The list's one line of words (nothing found, folder search unavailable). */
+  #spawn-ws-list .ft-note { flex: none; display: flex; align-items: center; min-height: var(--h-menu); padding: 0 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  /* The two help lines under the field read as the frame draws them: "Private copy of ..." first, then where the folder came
+     from. The markup keeps its order (the phone's), so flex order does it; the 2px under the first line is the second one's,
+     whichever that is. */
+  #spawn #spawn-ws-row #spawn-copy-line { order: 1; margin-top: 0; }
+  #spawn #spawn-ws-row #spawn-ws-note { order: 2; }
+  #spawn #spawn-ws-row:has(> #spawn-copy-line:not([hidden])) #spawn-ws-note { margin-top: -4px; }
+
+  /* The reach box (frame M4.1): what this session will be able to touch, from the profile. A --bg card with no border,
+     the title, then ONE label/value grid (72px | the rest, 16px and 2px apart, baselines aligned) so every value starts
+     on the same line. A row is only the grid's two cells (display: contents). A path in a value is machine text --t-sm. */
+  #spawn-reach { display: flex; flex-direction: column; gap: var(--sp-2); box-sizing: border-box; padding: var(--sp-3) var(--sp-4); background: var(--bg); border-radius: var(--r-card); }
+  .sr-title { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold); color: var(--fg); }
+  .sr-grid { display: grid; grid-template-columns: 72px minmax(0, 1fr); column-gap: var(--sp-4); row-gap: 2px; align-items: baseline; }
+  .sr-row { display: contents; }
+  .sr-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  .sr-v { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  .sr-path { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); }
   .sr-row.tone-warn .sr-v { color: var(--amber); }
   .sr-prod {
     margin: 0 6px; padding: 0 5px; border: 1px solid var(--red); border-radius: var(--r-chip);

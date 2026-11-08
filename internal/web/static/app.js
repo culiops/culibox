@@ -3759,11 +3759,21 @@ $("agent").addEventListener("change", () => {
 // is nothing to overwrite with), preserving the keep-previous behavior. Unlike
 // the old <select>-backed version, there is no tier-aware matching to do here
 // any more: the field is free text, so the profile's path is simply the value.
+// On the desktop the line under the field then says "From the profile" (the source).
 function applyProfileCwd() {
   const p = currentProfile();
-  if (!p || !p.default_cwd) return;
-  setSpawnCwd(p.default_cwd);
+  if (!p) return;
+  if (!p.default_cwd) {
+    // The folder in the field stays, but it is no longer the new profile's own: the desktop's help line must not say so.
+    if (spawnWsSource === "profile") {
+      spawnWsSource = "";
+      if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
+    }
+    return;
+  }
+  setSpawnCwd(p.default_cwd, "profile");
   onSpawnCwdChanged();
+  if (spawnWsPicker && drawerDesktop()) spawnWsPicker.showIdleNote();
 }
 
 // renderPfWorkspaceOptions builds the profile-editor working-dir picker for the
@@ -5092,17 +5102,39 @@ async function loadWorkspaces() {
 // search text, lives with the factory.
 let spawnWsPicker = null;
 
+// Where the field's prefilled value came from (spawnCwdChoice's source: "profile", "last", "default") and what that value
+// was. On the desktop the help line under the field names the source for as long as the field still holds that value
+// (frames M4.1 and M4.2); a pick or typing something else drops it. "" is no claim (a Duplicate's folder, a carried-over one).
+let spawnWsSource = "", spawnWsPrefill = "";
+
+// On the desktop (frame M4.3) the list sits inside the dialog under the field, "Last used" first; on the phone it is
+// the fixed-position list it always was.
 function initSpawnWsPicker() {
   const input = $("spawn-ws-input");
   const list = $("spawn-ws-list");
   if (!input || !list) return;
-  spawnWsPicker = createWsPicker({ input, list, onPick: onSpawnCwdChanged, onNote: setSpawnWsNote });
+  spawnWsPicker = createWsPicker({
+    input, list, onPick: onSpawnCwdChanged, onNote: setSpawnWsNote,
+    inline: drawerDesktop,
+    lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
+    idleText: spawnWsCaption,
+  });
+}
+
+// spawnWsCaption: the steady-state line under the field: the plain "N project roots · type to filter · ↵ to pick", with
+// where the value came from in front of it while the field holds that value, on the desktop only.
+function spawnWsCaption(count) {
+  const named = drawerDesktop() && spawnWsSource !== "" && spawnWsPicker && spawnWsPicker.value() === spawnWsPrefill;
+  return spawnWsNoteFor(named ? spawnWsSource : "", count);
 }
 
 // setSpawnCwd writes the canonical cwd and the field's displayed value together
 // — a pick, a resolved path, a profile's default_cwd, or the last-spawn
-// fallback. It does not call onSpawnCwdChanged: its callers do.
-function setSpawnCwd(path) {
+// fallback. It does not call onSpawnCwdChanged: its callers do. `source` is
+// where a prefilled value came from (spawnCwdChoice); no source claims nothing.
+function setSpawnCwd(path, source) {
+  spawnWsSource = source || "";
+  spawnWsPrefill = path || "";
   if (spawnWsPicker) spawnWsPicker.set(path);
 }
 // getCwd is the picker's value: the resolved directory, never the half-typed query.
@@ -5391,12 +5423,14 @@ async function openSpawnDialog(preselectAgent, prefill) {
   spawnPromptDraft = "";
   syncSpawnExtras(true);
   // Fresh open: don't carry a stale pick across dialog sessions. In priority
-  // order (pickSpawnCwd): the profile's default_cwd, the last spawn's directory
+  // order (spawnCwdChoice): the profile's default_cwd, the last spawn's directory
   // only when that spawn was of THIS profile (another profile's leftover is never
-  // prefilled), then the first workspace usable on the tier. A last cwd that is
-  // unusable on this tier is still restored; the warning below names why, so
-  // choosing box vs. host stays the user's call, not a silent discard.
-  setSpawnCwd(pickSpawnCwd({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) }));
+  // prefilled) and not a scratch folder under /tmp, then the first workspace usable
+  // on the tier. A last cwd that is unusable on this tier is still restored; the
+  // warning below names why, so choosing box vs. host stays the user's call, not a
+  // silent discard. The source rides along: the help line under the field names it.
+  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) });
+  setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
@@ -5424,13 +5458,6 @@ function emptyStateInput() {
     profiles: profilesLoaded ? profiles : null,
     recent: readRecent(deskStorage()),
   };
-}
-
-// The "touches" line of a recent profile in S1: binary · tier · default
-// workspace. /api/profiles carries no binary today, only `claude`.
-function profileTouches(p) {
-  const bin = p.bin || (p.claude ? "claude" : "");
-  return [bin, p.runtime, p.default_cwd ? shortPath(p.default_cwd) : ""].filter(Boolean).join(" \u00b7 ");
 }
 
 function emptyEl(tag, cls, text) {
@@ -5465,10 +5492,11 @@ function emptyNoneEl(m) {
       const p = profiles.find((x) => x.name === name);
       if (!p) continue;
       const row = emptyEl("div", "empst-row");
-      const start = emptyEl("button", "btn", "Start");
+      const start = emptyEl("button", "btn", "Start session");
       start.type = "button";
       start.onclick = () => openSpawnDialog(name);
-      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouches(p)));
+      // What the profile reaches, in the words of the New session list (one function draws both).
+      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouchLine(p, boxRuntime)));
       rows.append(row);
     }
     root.append(rows);
@@ -5521,7 +5549,7 @@ function desktopEmptyState() {
 function emptyStateKey(m) {
   return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
-    return [n, p ? profileTouches(p) : ""];
+    return [n, p ? profileTouchLine(p, boxRuntime) : ""];
   })]);
 }
 

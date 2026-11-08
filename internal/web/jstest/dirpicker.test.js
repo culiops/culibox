@@ -4,7 +4,7 @@ const assert = require("node:assert");
 const {
   classifyPickerQuery, pickerRows,
   pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
-  pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote,
+  pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote, pinLastUsed,
 } = require("../static/dirpicker.js");
 
 // The picker has three input classes and they decide everything downstream:
@@ -297,4 +297,63 @@ test("spawnWsIdleNote pluralizes on the count", () => {
 
 test("spawnWsIdleNote treats a missing count as zero rather than throwing", () => {
   assert.strictEqual(spawnWsIdleNote(undefined), "0 project roots · type to filter · ↵ to pick");
+});
+
+// --- "Last used" first in the New session list (F38, frame M4.3): a reorder of rows the
+// server returned, never a row the server did not list ------------------------------------
+
+const lastRows = (n) => Array.from({ length: n }, (_, i) => ({ label: "p" + i, hint: "", path: "/home/u/p" + i, kind: "workspace" }));
+
+test("pinLastUsed moves the last-used row from index 9 to index 0, marked, the others keep their order", () => {
+  const rows = lastRows(12);
+  const out = pinLastUsed(rows, "/home/u/p9");
+  assert.strictEqual(out.length, 12);
+  assert.deepStrictEqual(out[0], { label: "p9", hint: "", path: "/home/u/p9", kind: "workspace", lastUsed: true });
+  assert.deepStrictEqual(out.slice(1).map((r) => r.label), ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p10", "p11"]);
+  assert.ok(out.slice(1).every((r) => r.lastUsed === undefined), "only the pinned row is marked");
+});
+
+test("pinLastUsed returns a new array and copies the row: the input is never mutated", () => {
+  const rows = lastRows(4);
+  const snapshot = JSON.stringify(rows);
+  const out = pinLastUsed(rows, "/home/u/p2");
+  assert.notStrictEqual(out, rows);
+  assert.notStrictEqual(out[0], rows[2], "the matched row is a copy");
+  assert.strictEqual(JSON.stringify(rows), snapshot);
+});
+
+test("pinLastUsed with the row already first still marks it", () => {
+  const out = pinLastUsed(lastRows(3), "/home/u/p0");
+  assert.deepStrictEqual(out.map((r) => r.label), ["p0", "p1", "p2"]);
+  assert.strictEqual(out[0].lastUsed, true);
+});
+
+test("pinLastUsed never invents a row: a last cwd the list does not hold changes nothing", () => {
+  const rows = lastRows(5);
+  assert.deepStrictEqual(pinLastUsed(rows, "/home/u/gone"), rows);
+  assert.deepStrictEqual(pinLastUsed(rows, "/tmp/claude-1001/x"), rows);
+  assert.deepStrictEqual(pinLastUsed([], "/home/u/p1"), []);
+});
+
+test("pinLastUsed: an empty, missing or non-string last cwd changes nothing", () => {
+  const rows = lastRows(5);
+  for (const v of ["", undefined, null, 0, {}]) assert.deepStrictEqual(pinLastUsed(rows, v), rows, String(v));
+  assert.deepStrictEqual(pinLastUsed(undefined, "/home/u/p1"), []);
+});
+
+test("pinLastUsed matches a path with or without a trailing slash, on either side", () => {
+  const rows = lastRows(5);
+  assert.strictEqual(pinLastUsed(rows, "/home/u/p3/")[0].label, "p3");
+  const slashed = [{ label: "a", hint: "", path: "/home/u/a/", kind: "hit" }, { label: "b", hint: "", path: "/home/u/b", kind: "hit" }];
+  assert.strictEqual(pinLastUsed(slashed, "/home/u/b/")[0].label, "b");
+  assert.strictEqual(pinLastUsed(slashed, "/home/u/a")[0].label, "a");
+  // Whole paths only: "/home/u/p1" is not "/home/u/p10", and the root alone stays itself.
+  assert.deepStrictEqual(pinLastUsed(lastRows(12), "/home/u/p1").map((r) => r.label).slice(0, 2), ["p1", "p0"]);
+  assert.strictEqual(pinLastUsed([{ label: "/", hint: "", path: "/", kind: "hit" }, { label: "x", hint: "", path: "/x", kind: "hit" }], "/")[0].label, "/");
+});
+
+test("pinLastUsed pins fuzzy hits the same way as workspace rows", () => {
+  const hits = pickerRows({ mode: "fuzzy", hits: [{ rel: "a/one", path: "/home/u/a/one" }, { rel: "b/two", path: "/home/u/b/two" }] });
+  const out = pinLastUsed(hits, "/home/u/b/two");
+  assert.deepStrictEqual(out.map((r) => [r.label, r.hint, !!r.lastUsed]), [["two", "b", true], ["one", "a", false]]);
 });

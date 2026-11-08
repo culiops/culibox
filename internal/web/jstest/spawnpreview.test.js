@@ -2,7 +2,8 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
+const { spawnWsIdleNote } = require("../static/dirpicker.js");
 
 const sre = {
   name: "culipulse-sre", runtime: "box", bin: "claude", claude: true,
@@ -289,7 +290,7 @@ test("reach rows: an inline sso_direct binding ends with the mode label", () => 
 
 test("reach rows: a private copy names the read-only original right after Files", () => {
   const rows = reachRows({ profile: { clone_of: "/h/r" }, tier: "box", cwd: "~/box-clones/r" });
-  assert.deepStrictEqual(rows[1], { k: "Original", v: "/h/r/.git read-only · the box cannot change your history" });
+  assert.deepStrictEqual(rows[1], { k: "Original", v: "/h/r/.git read-only · the box cannot change your history", path: "/h/r/.git" });
   assert.strictEqual(rows[0].k, "Files");
 });
 
@@ -528,7 +529,7 @@ test("reachRows keeps today's rows and appends Reads, Imports, Domains", () => {
   assert.strictEqual(byK(rows, "AWS")[1].v, "staging-read · read only");
   assert.strictEqual(byK(rows, "GitHub")[0].v, "culiops/* · read, 1-hour tokens");
   assert.strictEqual(byK(rows, "Tokens")[0].v, "grafana-prod, sentry-staging");
-  assert.deepStrictEqual(byK(rows, "Reads")[0], { k: "Reads", v: "/home/you/other-repo/docs" });
+  assert.deepStrictEqual(byK(rows, "Reads")[0], { k: "Reads", v: "/home/you/other-repo/docs", path: "/home/you/other-repo/docs" });
   assert.deepStrictEqual(byK(rows, "Imports")[0], { k: "Imports", v: "CLAUDE.md imports, read-only copies" });
   assert.deepStrictEqual(byK(rows, "Domains")[0], { k: "Domains", v: "api.example.com, *.example.org" });
   assert.strictEqual(byK(rows, "Network")[0].v, "allowlist only");
@@ -578,4 +579,402 @@ test("reachRows keeps PROD from credentials when meta lacks the connection", () 
   // Not prod anywhere: no flag.
   const plain = byK(reachRows({ profile: p, tier: "box", meta: { aws_connections: [] }, creds: creds({ aws: [{ name: "culipulse-prod" }] }) }), "AWS")[0];
   assert.ok(!plain.prod);
+});
+
+// --- Task 7 (#173): where the workspace came from, and the help line that says so (F38, M4.1, M4.2) ------
+
+test("spawnCwdChoice: the profile's own default wins and says so", () => {
+  const last = { agent: "claude", cwd: "/home/u/other" };
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude", default_cwd: "/home/u/d" }, last, workspaces: WS, tier: "box" }), { cwd: "/home/u/d", source: "profile" });
+});
+
+test("spawnCwdChoice: the same profile's last directory is the 'last' source", () => {
+  const last = { agent: "claude", cwd: "/home/u/p" };
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude" }, last, workspaces: WS, tier: "box" }), { cwd: "/home/u/p", source: "last" });
+});
+
+test("spawnCwdChoice: a last directory under /tmp is not prefilled; the default workspace is", () => {
+  const last = { agent: "claude", cwd: "/tmp/claude-1001/x" };
+  const got = spawnCwdChoice({ profile: { name: "claude" }, last, workspaces: WS, tier: "box" });
+  assert.deepStrictEqual(got, { cwd: "/home/u/proj", source: "default" });
+  // /tmp itself, a nested path and a trailing slash are all under /tmp; /tmpfoo and /var/tmp are not.
+  for (const c of ["/tmp", "/tmp/", "/tmp/a/b"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box" }).source, "default", c);
+  for (const c of ["/tmpfoo/x", "/var/tmp/x", "/home/u/tmp"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box" }).source, "last", c);
+});
+
+test("spawnCwdChoice: the profile default still beats a /tmp last directory", () => {
+  const last = { agent: "claude", cwd: "/tmp/claude-1001/x" };
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude", default_cwd: "/home/u/d" }, last, workspaces: WS, tier: "box" }), { cwd: "/home/u/d", source: "profile" });
+});
+
+test("spawnCwdChoice: another profile's last directory, or none, falls to the default workspace", () => {
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "bash", cwd: "/home/u/p" }, workspaces: WS, tier: "box" }), { cwd: "/home/u/proj", source: "default" });
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: null, workspaces: WS, tier: "box" }), { cwd: "/home/u/proj", source: "default" });
+  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: null, workspaces: [], tier: "box" }), { cwd: "", source: "default" });
+  assert.deepStrictEqual(spawnCwdChoice({}), { cwd: "", source: "default" });
+});
+
+test("pickSpawnCwd is spawnCwdChoice's cwd, for every case above", () => {
+  const cases = [
+    { profile: { name: "claude", default_cwd: "/home/u/d" }, last: { agent: "claude", cwd: "/home/u/other" }, workspaces: WS, tier: "box" },
+    { profile: { name: "claude" }, last: { agent: "claude", cwd: "/home/u/p" }, workspaces: WS, tier: "box" },
+    { profile: { name: "claude" }, last: { agent: "claude", cwd: "/tmp/claude-1001/x" }, workspaces: WS, tier: "box" },
+    { profile: { name: "claude" }, last: { agent: "bash", cwd: "/home/u/p" }, workspaces: WS, tier: "box" },
+    { profile: { name: "claude" }, last: null, workspaces: [], tier: "box" },
+    {},
+  ];
+  for (const c of cases) assert.strictEqual(pickSpawnCwd(c), spawnCwdChoice(c).cwd, JSON.stringify(c));
+});
+
+test("spawnWsNoteFor: the frames' help lines (M4.1 'From the profile', M4.2 'Last used'), the plain caption otherwise", () => {
+  assert.strictEqual(spawnWsNoteFor("last", 48), "Last used · 48 project roots · type to filter · ↵ to pick");
+  assert.strictEqual(spawnWsNoteFor("last", 1), "Last used · 1 project root · type to filter · ↵ to pick");
+  assert.strictEqual(spawnWsNoteFor("profile", 48), "From the profile · type to filter · ↵ to pick", "no count in the profile line");
+  assert.strictEqual(spawnWsNoteFor("default", 1), spawnWsIdleNote(1));
+  assert.strictEqual(spawnWsNoteFor("default", 48), spawnWsIdleNote(48));
+  assert.strictEqual(spawnWsNoteFor("", 3), spawnWsIdleNote(3));
+  assert.strictEqual(spawnWsNoteFor(undefined, 3), spawnWsIdleNote(3));
+});
+
+// --- the reach rows keep the full text for the tooltip and mark the paths (G7, M4.1) --------------------
+
+test("reach rows: Files and Original carry the un-abbreviated text and the path that is drawn mono", () => {
+  const rows = reachRows({
+    profile: { name: "agent-box", runtime: "box", clone_of: "/h/r" }, tier: "box",
+    cwd: "~/box-clones/r", cwdFull: "/home/me/box-clones/r",
+  });
+  const files = byK(rows, "Files")[0];
+  assert.strictEqual(files.v, "~/box-clones/r read/write · nothing else on this machine");
+  assert.strictEqual(files.full, "/home/me/box-clones/r read/write · nothing else on this machine");
+  assert.strictEqual(files.path, "~/box-clones/r");
+  const orig = byK(rows, "Original")[0];
+  assert.strictEqual(orig.v, "/h/r/.git read-only · the box cannot change your history");
+  assert.strictEqual(orig.path, "/h/r/.git");
+  assert.ok(orig.v.startsWith(orig.path));
+});
+
+test("reach rows: a workspace not yet chosen, and the host's whole account, name no path", () => {
+  const none = byK(reachRows({ profile: { runtime: "box" }, tier: "box", cwd: "", cwdFull: "" }), "Files")[0];
+  assert.strictEqual(none.v, "the workspace read/write · nothing else on this machine");
+  assert.ok(!none.path && !none.full);
+  const host = byK(reachRows({ profile: { runtime: "host" }, tier: "host", cwd: "~/x", cwdFull: "/home/me/x" }), "Files")[0];
+  assert.deepStrictEqual(host, { k: "Files", v: "your whole user account" });
+});
+
+test("reach rows: without cwdFull the text is its own full text (nothing is invented)", () => {
+  const f = byK(reachRows({ profile: { runtime: "box" }, tier: "box", cwd: "~/x" }), "Files")[0];
+  assert.strictEqual(f.v, "~/x read/write · nothing else on this machine");
+  assert.ok(f.full === undefined || f.full === f.v);
+});
+
+test("reach rows: Reads is all machine text, and only the default account's ~/.claude is a path", () => {
+  const reads = byK(reachRows({ profile: { runtime: "box", context_paths: ["CLAUDE.md", "docs/superpowers"] }, tier: "box", cwd: "~/x" }), "Reads")[0];
+  assert.strictEqual(reads.v, "CLAUDE.md, docs/superpowers");
+  assert.strictEqual(reads.path, reads.v);
+  const dflt = byK(reachRows({ profile: { claude: true, runtime: "box" }, tier: "box", cwd: "~/x" }), "Account")[0];
+  assert.strictEqual(dflt.v, "default (~/.claude)");
+  assert.strictEqual(dflt.path, "~/.claude");
+  const named = byK(reachRows({ profile: { claude: true, runtime: "box", account: "work" }, tier: "box", cwd: "~/x" }), "Account")[0];
+  assert.deepStrictEqual(named, { k: "Account", v: "work" });
+});
+
+// paintReachRows: the DOM half, run against a tiny fake DOM with the real spawnpanel.js.
+class RNode {
+  constructor(tag) { this.tag = tag; this.children = []; this.className = ""; this.attrs = {}; this.title = ""; this._text = ""; }
+  get textContent() { return this._text + this.children.map((c) => c.textContent).join(""); }
+  set textContent(t) { this.children = []; this._text = String(t); }
+  append(...cs) { for (const c of cs) this.children.push(typeof c === "string" ? Object.assign(new RNode("#text"), { _text: c }) : c); }
+  replaceChildren(...cs) { this.children = []; this._text = ""; this.append(...cs); }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  get classList() { const n = this; return { add: (c) => { n.className = (n.className + " " + c).trim(); } }; }
+  has(cls) { return this.className.split(/\s+/).includes(cls); }
+  find(cls, out = []) { if (this.has(cls)) out.push(this); for (const c of this.children) c.find(cls, out); return out; }
+}
+function reachPanel() {
+  const vm = require("node:vm");
+  const ctx = vm.createContext({ document: { createElement: (t) => new RNode(t) }, console });
+  new vm.Script(read("spawnpanel.js"), { filename: "spawnpanel.js" }).runInContext(ctx);
+  return ctx;
+}
+
+test("paintReachRows: a title, one grid, a row per fact, and every value says its full text in a tooltip", () => {
+  const ctx = reachPanel();
+  const box = new RNode("div");
+  const rows = [
+    { k: "Files", v: "~/w read/write · nothing else on this machine", full: "/home/me/w read/write · nothing else on this machine", path: "~/w" },
+    { k: "AWS", v: "culipulse-prod · read only", name: "culipulse-prod", prod: true },
+    { k: "Reads", v: "CLAUDE.md, docs", path: "CLAUDE.md, docs" },
+    { k: "Account", v: "default (~/.claude)", path: "~/.claude" },
+    { k: "Network", v: "open" },
+    { k: "Store", v: "credential store locked — unlock before spawn", tone: "warn" },
+  ];
+  ctx.paintReachRows(box, rows, { title: "This agent will be able to" });
+  assert.strictEqual(box.children.length, 2, "the title, then one grid");
+  assert.ok(box.children[0].has("sr-title") && box.children[0].textContent === "This agent will be able to");
+  const grid = box.children[1];
+  assert.ok(grid.has("sr-grid"));
+  const vals = grid.find("sr-v");
+  assert.strictEqual(vals.length, rows.length, "every row has a value element");
+  assert.deepStrictEqual(grid.find("sr-k").map((n) => n.textContent), rows.map((r) => r.k));
+  vals.forEach((v, i) => assert.strictEqual(v.title, rows[i].full || rows[i].v, rows[i].k + " title"));
+  assert.strictEqual(vals[0].title, "/home/me/w read/write · nothing else on this machine", "the tooltip is the un-abbreviated path");
+  assert.strictEqual(vals[0].textContent, rows[0].v, "the text on screen is the short form");
+  assert.ok(vals.every((v) => v.title !== ""));
+});
+
+test("paintReachRows: a path is its own mono span inside the value, the text around it plain", () => {
+  const ctx = reachPanel();
+  const box = new RNode("div");
+  ctx.paintReachRows(box, [
+    { k: "Files", v: "~/w read/write · nothing else", path: "~/w" },
+    { k: "Account", v: "default (~/.claude)", path: "~/.claude" },
+    { k: "Reads", v: "CLAUDE.md", path: "CLAUDE.md" },
+    { k: "Network", v: "open" },
+    { k: "Files", v: "no such path here", path: "~/zzz" },
+  ], {});
+  const vals = box.find("sr-v");
+  const paths = (v) => v.find("sr-path").map((n) => n.textContent);
+  assert.deepStrictEqual(paths(vals[0]), ["~/w"]);
+  assert.strictEqual(vals[0].textContent, "~/w read/write · nothing else");
+  assert.deepStrictEqual(paths(vals[1]), ["~/.claude"]);
+  assert.strictEqual(vals[1].textContent, "default (~/.claude)");
+  assert.deepStrictEqual(paths(vals[2]), ["CLAUDE.md"]);
+  assert.deepStrictEqual(paths(vals[3]), []);
+  assert.deepStrictEqual(paths(vals[4]), [], "a path the text does not hold draws nothing extra");
+  assert.strictEqual(vals[4].textContent, "no such path here");
+});
+
+test("paintReachRows: the PROD flag stays red text after the connection's name, and the row keeps its tone", () => {
+  const ctx = reachPanel();
+  const box = new RNode("div");
+  ctx.paintReachRows(box, [
+    { k: "AWS", v: "culipulse-prod · read only", name: "culipulse-prod", prod: true },
+    { k: "Store", v: "locked", tone: "warn" },
+  ], {});
+  const [aws, store] = box.find("sr-row");
+  assert.deepStrictEqual(aws.find("sr-prod").map((n) => n.textContent), ["PROD"]);
+  assert.ok(store.has("tone-warn"));
+  assert.strictEqual(box.find("sr-title").length, 0, "no title unless one is asked for");
+});
+
+// The reach box and the workspace list as CSS (frames M4.1, M4.3); read as text like spawn-frame.test.js.
+const stripC = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "");
+const deskBlock = (() => { const c = stripC(read("desktop.css")); return c.slice(c.indexOf("@media (min-width: 701px) {")); })();
+function splitSel(list) {
+  const out = [];
+  let depth = 0, from = 0;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "," && depth === 0) { out.push(list.slice(from, i)); from = i + 1; }
+  }
+  out.push(list.slice(from));
+  return out.map((x) => x.trim().replace(/\s+/g, " "));
+}
+function ruleOf(sel) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(deskBlock))) if (splitSel(m[1]).includes(sel)) out.push(m[2].replace(/\s+/g, " ").trim());
+  return out.join(" ");
+}
+
+test("desktop.css: the reach box is the frame's .m4-reach: --bg, 12px 16px, card radius, 8px gap, no border", () => {
+  const r = ruleOf("#spawn-reach");
+  assert.match(r, /display:\s*flex/);
+  assert.match(r, /flex-direction:\s*column/);
+  assert.match(r, /gap:\s*var\(--sp-2\)/);
+  assert.match(r, /padding:\s*var\(--sp-3\) var\(--sp-4\)/);
+  assert.match(r, /background:\s*var\(--bg\)/);
+  assert.match(r, /border-radius:\s*var\(--r-card\)/);
+  assert.doesNotMatch(r, /border:\s*1px/, "the frame's .s-bg box has no border");
+  const t = ruleOf(".sr-title");
+  assert.match(t, /font-size:\s*var\(--t-sm\)/);
+  assert.match(t, /line-height:\s*var\(--lh-sm\)/);
+  assert.match(t, /font-weight:\s*(600|var\(--w-semibold\))/);
+});
+
+test("desktop.css: the reach grid is 72px | 1fr, 16px between the columns, 2px between rows, baseline aligned", () => {
+  const g = ruleOf(".sr-grid");
+  assert.match(g, /display:\s*grid/);
+  assert.match(g, /grid-template-columns:\s*72px minmax\(0, 1fr\)/);
+  assert.match(g, /column-gap:\s*var\(--sp-4\)/);
+  assert.match(g, /row-gap:\s*2px/);
+  assert.match(g, /align-items:\s*baseline/);
+  assert.match(ruleOf(".sr-row"), /display:\s*contents/, "a row's two cells are cells of the one grid");
+  const k = ruleOf(".sr-k");
+  assert.match(k, /color:\s*var\(--muted\)/);
+  assert.match(k, /font-size:\s*var\(--t-sm\)/);
+  const v = ruleOf(".sr-v");
+  assert.match(v, /min-width:\s*0/);
+  assert.match(v, /overflow-wrap:\s*anywhere/);
+  assert.match(v, /font-size:\s*var\(--t-md\)/);
+  const path = ruleOf(".sr-path");
+  assert.match(path, /font-family:\s*var\(--font-mono\)/);
+  assert.match(path, /font-size:\s*var\(--t-sm\)/);
+  assert.match(ruleOf(".sr-prod"), /color:\s*var\(--red\)/, "PROD stays red");
+});
+
+test("the reach box is painted on the desktop only (the phone hides it and never draws it)", () => {
+  assert.match(read("app.css"), /#spawn-plist,\s*#spawn-reach,\s*#spawn-foot-hint,\s*\.spawn-lbl-model\s*\{\s*display:\s*none;\s*\}/);
+  const sync = read("spawnpanel.js");
+  const at = sync.indexOf("function syncSpawnPreview");
+  const fn = sync.slice(at, sync.indexOf("\n}\n", at));
+  assert.ok(fn.indexOf("if (!spawnPanelOn())") < fn.indexOf("renderSpawnReach()"), "renderSpawnReach is behind the desktop gate");
+  assert.match(sync.slice(sync.indexOf("function renderSpawnReach"), sync.indexOf("function paintReachRows")), /cwdFull:\s*getCwd\(\)/);
+});
+
+test("desktop.css: the Workspace list is a kit menu under the field, capped at 8 rows (frame M4.3)", () => {
+  assert.match(ruleOf("#spawn-ws-row"), /position:\s*relative/);
+  const l = ruleOf("#spawn-ws-list");
+  assert.match(l, /position:\s*absolute/);
+  assert.match(l, /left:\s*0/);
+  assert.match(l, /right:\s*0/);
+  assert.match(l, /top:\s*58px/, "the frame's .m4-pop: 18px label + 6px + 32px input + 2px");
+  assert.match(l, /z-index:\s*3/);
+  assert.match(l, /max-height:\s*calc\(8 \* var\(--h-menu\) \+ 8px\)/);
+  assert.match(l, /overflow-y:\s*auto/);
+  assert.match(l, /padding:\s*var\(--sp-1\)/);
+  assert.match(l, /background:\s*var\(--panel\)/);
+  assert.match(l, /border:\s*1px solid var\(--line\)/);
+  assert.match(l, /border-radius:\s*var\(--r-card\)/);
+  assert.match(l, /box-shadow:\s*var\(--e-pop\)/);
+  assert.match(l, /min-width:\s*0/, "the kit's 220px minimum would overflow a narrow field");
+  assert.match(l, /display:\s*flex/);
+  assert.match(l, /flex-direction:\s*column/);
+  assert.match(ruleOf("#spawn-ws-list[hidden]"), /display:\s*none/);
+});
+
+test("desktop.css: a Workspace option is a 30px kit row, mono --t-sm, raised under the keyboard and the pointer", () => {
+  const o = ruleOf("#spawn-ws-list .menu-item");
+  assert.match(o, /height:\s*var\(--h-menu\)/);
+  assert.match(o, /flex:\s*none/, "a row of a capped, scrolling list must not shrink");
+  assert.match(o, /cursor:\s*default/);
+  assert.match(ruleOf("#spawn-ws-list .menu-item[aria-selected=\"true\"]"), /background:\s*var\(--raise\)/);
+  const t = ruleOf("#spawn-ws-list .menu-text");
+  assert.match(t, /font-family:\s*var\(--font-mono\)/);
+  assert.match(t, /font-size:\s*var\(--t-sm\)/);
+  assert.match(t, /text-overflow:\s*ellipsis/);
+  assert.match(ruleOf("#spawn-ws-list .wsp-hint"), /flex:\s*0 1 auto/, "the parent folder gives way before the name does");
+  const last = ruleOf("#spawn-ws-list .wsp-last");
+  assert.match(last, /flex:\s*none/);
+  assert.match(last, /font-size:\s*var\(--t-sm\)/);
+  assert.match(last, /color:\s*var\(--muted\)/);
+});
+
+test("desktop.css: the workspace help lines read 'Private copy of…' first, then the source line, as the frame draws them", () => {
+  assert.match(ruleOf("#spawn #spawn-ws-row #spawn-copy-line"), /order:\s*1/);
+  assert.match(ruleOf("#spawn #spawn-ws-row #spawn-ws-note"), /order:\s*2/);
+  // The 2px under the first line belongs to the second one, whichever it is.
+  assert.match(ruleOf("#spawn #spawn-ws-row #spawn-copy-line"), /margin-top:\s*0/);
+  assert.match(ruleOf("#spawn #spawn-ws-row:has(> #spawn-copy-line:not([hidden])) #spawn-ws-note"), /margin-top:\s*-4px/);
+  // No markup change: the phone keeps its DOM order and its pixels.
+  const html = read("index.html");
+  assert.ok(html.indexOf('id="spawn-ws-note"') < html.indexOf('id="spawn-copy-line"'));
+});
+
+// --- app.js wiring: the source of the prefill and the caption under the field -------------------------------
+
+function appFn(name) {
+  const src = read("app.js");
+  const m = new RegExp("function " + name + "\\s*\\(").exec(src);
+  assert.ok(m, name + " not found in app.js");
+  const open = src.indexOf("{", src.indexOf(")", m.index));
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(m.index, i + 1);
+  }
+  throw new Error("unbalanced braces in " + name);
+}
+
+// The three functions that carry the source, run with a stand-in picker and the real caption words.
+function captionPage(over) {
+  const vm = require("node:vm");
+  const picker = { v: "", sets: [], idleNotes: 0, value() { return this.v; }, set(x) { this.v = x; this.sets.push(x); }, showIdleNote() { this.idleNotes++; } };
+  const ctx = vm.createContext(Object.assign({
+    console, spawnWsPicker: picker, desktop: true, drawerDesktop: () => ctx.desktop, currentProfile: () => ctx.profile, profile: null,
+    onSpawnCwdChanged: () => { ctx.changed = (ctx.changed || 0) + 1; }, spawnWsNoteFor, spawnWsIdleNote,
+  }, over));
+  vm.runInContext("let spawnWsSource = '', spawnWsPrefill = '';\n" + ["setSpawnCwd", "spawnWsCaption", "applyProfileCwd"].map(appFn).join("\n"), ctx);
+  return { ctx, picker, state: () => Array.from(vm.runInContext("[spawnWsSource, spawnWsPrefill]", ctx)) };
+}
+
+test("the caption names the source while the field still holds the prefilled value, on the desktop only", () => {
+  const pg = captionPage();
+  pg.ctx.setSpawnCwd("/home/u/p", "last");
+  assert.deepStrictEqual(pg.state(), ["last", "/home/u/p"]);
+  assert.deepStrictEqual(pg.picker.sets, ["/home/u/p"]);
+  assert.strictEqual(pg.ctx.spawnWsCaption(48), "Last used · 48 project roots · type to filter · ↵ to pick");
+  pg.picker.v = "/home/u/other"; // a pick, a typed path
+  assert.strictEqual(pg.ctx.spawnWsCaption(48), "48 project roots · type to filter · ↵ to pick", "any other value drops the prefix");
+  pg.picker.v = "/home/u/p";
+  assert.strictEqual(pg.ctx.spawnWsCaption(48), "Last used · 48 project roots · type to filter · ↵ to pick", "picking the same folder again keeps it true");
+  pg.ctx.desktop = false;
+  assert.strictEqual(pg.ctx.spawnWsCaption(48), "48 project roots · type to filter · ↵ to pick", "the phone keeps its caption");
+  pg.ctx.desktop = true;
+  pg.ctx.setSpawnCwd("/home/u/d", "profile");
+  pg.picker.v = "/home/u/d";
+  assert.strictEqual(pg.ctx.spawnWsCaption(48), "From the profile · type to filter · ↵ to pick");
+  pg.ctx.setSpawnCwd("/home/u/x");
+  pg.picker.v = "/home/u/x";
+  assert.deepStrictEqual(pg.state(), ["", "/home/u/x"], "no source: a Duplicate's folder claims nothing");
+  assert.strictEqual(pg.ctx.spawnWsCaption(2), "2 project roots · type to filter · ↵ to pick");
+});
+
+test("picking a profile with a default folder says 'From the profile'; one without leaves the folder and takes back a claim that is no longer true", () => {
+  const pg = captionPage();
+  pg.ctx.desktop = true;
+  pg.ctx.profile = { name: "agent-box", default_cwd: "/home/u/ab" };
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["profile", "/home/u/ab"]);
+  assert.strictEqual(pg.picker.idleNotes, 1, "the line is redrawn at once");
+  assert.strictEqual(pg.ctx.changed, 1);
+  // A profile with no default: the folder stays, but it is not 'from the profile' any more.
+  pg.ctx.profile = { name: "bash" };
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["", "/home/u/ab"]);
+  assert.strictEqual(pg.picker.idleNotes, 2);
+  assert.deepStrictEqual(pg.picker.sets, ["/home/u/ab"], "the field is not touched");
+  // A 'last used' folder is still the last used one after the profile changed.
+  pg.ctx.setSpawnCwd("/home/u/l", "last");
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["last", "/home/u/l"]);
+  assert.strictEqual(pg.picker.idleNotes, 2, "nothing to redraw");
+  // No profile at all: nothing happens.
+  pg.ctx.profile = null;
+  pg.ctx.applyProfileCwd();
+  assert.deepStrictEqual(pg.state(), ["last", "/home/u/l"]);
+});
+
+test("the phone's profile switch does not redraw the caption (its logic is as it was)", () => {
+  const pg = captionPage();
+  pg.ctx.desktop = false;
+  pg.ctx.profile = { name: "agent-box", default_cwd: "/home/u/ab" };
+  pg.ctx.applyProfileCwd();
+  assert.strictEqual(pg.picker.sets[0], "/home/u/ab");
+  assert.strictEqual(pg.picker.idleNotes, 0);
+});
+
+test("New session builds its picker inline, with the last used folder and the source-aware caption, and opens on spawnCwdChoice", () => {
+  const init = appFn("initSpawnWsPicker");
+  assert.match(init, /inline:\s*drawerDesktop\b/);
+  assert.match(init, /lastUsed:\s*\(\) =>[^}]*loadLastSpawn\(\)/);
+  assert.match(init, /idleText:\s*spawnWsCaption\b/);
+  const open = appFn("openSpawnDialog");
+  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: segValue\(\$\("runtime-seg"\)\) \}\);/);
+  assert.match(open, /setSpawnCwd\(choice\.cwd, choice\.source\);/);
+  assert.match(open, /spawnWsPicker\.showIdleNote\(\)/);
+  assert.ok(open.indexOf("setSpawnCwd(choice.cwd") < open.indexOf("spawnWsPicker.showIdleNote()"));
+  assert.match(appFn("applyProfileCwd"), /setSpawnCwd\(p\.default_cwd, "profile"\)/);
+  // The profile page's picker passes none of these: its list stays fixed and its rows stay as the server sent them.
+  assert.doesNotMatch(read("pfv-workspace.js"), /inline:|lastUsed:|idleText:/);
+});
+
+test("scripts: the picker's helpers load before the picker, the pure choice after both of its inputs", () => {
+  const html = read("index.html");
+  const at = (f) => html.indexOf('<script src="/' + f + '"></script>');
+  assert.ok(at("dirpicker.js") > 0 && at("dirpicker.js") < at("wspicker.js"));
+  assert.ok(at("spawnpreview.js") > 0 && at("spawnpreview.js") < at("app.js"));
 });
