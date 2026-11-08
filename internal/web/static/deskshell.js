@@ -233,7 +233,7 @@ function deskBaseName(p) {
   return String(p || "").split("/").filter(Boolean).pop() || String(p || "");
 }
 
-// fmtSessionCost: a session's cost as the row and header show it. Non-numbers
+// fmtSessionCost: a session's cost as the pane header shows it. Non-numbers
 // (the server omits cost_usd unless the whole conversation history is known)
 // give null. Sub-cent but non-zero is "<$0.01", exactly 0 is "$0.00", under $100
 // two decimals, from $100 whole dollars. The boundary is decided on the value
