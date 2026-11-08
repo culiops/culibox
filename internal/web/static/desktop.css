@@ -1872,7 +1872,8 @@
   /* A long title is cut short (§B1.4); a long description wraps instead of overflowing, wherever it breaks: About's version line, and the
      profile's model id (a user-set string: an inference-profile ARN is ~100 characters in one mono word). */
   #page-host > #settings-modal.as-page > .dbd > .set-head .page-title,
-  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title,
+  #page-host > #settings-modal.as-page #pfv .pfv-title .pfv-title-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #page-host > #settings-modal.as-page > .dbd > .set-head .page-desc,
   #page-host > #settings-modal.as-page #pfv .pfv-head .page-desc { overflow-wrap: anywhere; }
   /* The divider before Esc ✕ (§B1.4 `.m2-vsep`): 1x16, --line, 4px either side of the actions' own 8px gap. */
@@ -2498,16 +2499,9 @@
      same element with the title and the line alone, then the divider and Esc ✕. */
   /* The title row (§B1.4 `.m2-titlerow`): the name, then the chip, 8px apart. */
   #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 8px; }
-  /* New profile's and Duplicate's title (an h2 at --t-lg: they have no frame). */
-  #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-lg); font-weight: 600; }
+  /* New profile's and Duplicate's title (an h2 at --t-lg: they have no frame); it is cut short on one line like every head's (the rule above). */
+  #page-host > #settings-modal.as-page #pfv .pfv-title-name { font-size: var(--t-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: var(--h-ctl); padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
-  /* The kit's primary (F11), except "Save as host…" (.pfv-btn-host, below): red text on a clear
-     button, never a fill, and no accent hover. :where keeps the weights. */
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host)) { background: var(--accent); color: var(--on-fill); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host, :disabled)):hover { background: var(--accent-hover); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
   /* The ⋯ menu (frame M5.4) is the kit menu (kitMenuButton rows): the kit's `.menu:has(> .menu-item)` draws the surface and the 30px
@@ -2516,7 +2510,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-more > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; width: 200px; }
   /* The ⋯ (the kit's .btn .btn-icon: 28x28) shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
   #page-host > #settings-modal.as-page #pfv .pfv-more .btn-icon[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -4px 0 24px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: var(--t-sm); color: var(--red); }
@@ -2524,9 +2518,11 @@
 
   /* The sheet (§B2): one card of seven blocks (the kit's .card: --panel, --r-card; Advanced is the seventh), each a row of three columns: the label
      (132px), the plain-words value and, beside it, Edit. It does not clip (overflow stays visible): the "+ Add" picker of a block in edit hangs out
-     of the card. */
+     of the card. A block in edit is a card of its own (§B3), between the blocks before it and the blocks after it, 12px from each ("Gap between
+     the three cards = body gap"). */
   #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 132px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; position: relative; padding: 14px 16px 14px 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
   /* No hover tint on a row (§B2: "No hover tint on blocks (none defined)"): the frame's rows do not light up; Edit's own hover is the kit's. */
@@ -2582,52 +2578,58 @@
   #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
 
   /* --- Editing one block (spec 5.5, 5.6) ------------------------------------------ */
-  /* The open block is raised (--raise), its Edit link is gone, and its body spans to the right edge. Look source:
-     profile-mockups/option-b/index.html (.block.editing, .fields, .opt-card, .b-foot) and the b-err / b-err2 shots. */
-  #page-host > #settings-modal.as-page #pfv .pfv-editing { background: var(--raise); }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:only-child { border-radius: var(--r-card); }
+  /* The open block is a card of its own (§B3 `section.card.m2-card.m2-editing`): the kit's --panel like the cards around it, not a raised row; its
+     Edit link is gone, so its grid is the label's column and the form's (§D `.m2-editing .m2-blk`), and the form spans to the right edge. The block
+     keeps no bottom padding: the form carries the 18px above the foot's rule (`padding-bottom: 18px`), and the foot is the block's last row. The
+     radius is the card's, so the 1px ring of a nudged block follows its corners. Look source: digest-design §B3; the b-err / b-err2 shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-editing { grid-template-columns: 132px minmax(0, 1fr); padding-bottom: 0; border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-nudge { box-shadow: inset 0 0 0 1px var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; padding-bottom: 18px; }
   #page-host > #settings-modal.as-page #pfv .pfv-top:empty { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: var(--t-sm); color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-form { min-width: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: var(--t-sm); font-weight: 500; }
-  /* A fieldset's legend is not a grid item, so the field's 5px gap does not reach it: it carries the gap itself (the mockup's Effort legend). */
-  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: var(--t-sm); color: var(--muted); }
+  /* The form (§B3 `.m2-form`): 560px at most, 16px between fields; a field (§C6 `.field`) is its label, the control and the help 6px apart. */
+  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 560px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  /* The label is the kit's field label (§C6 `.field-label`: 12/18, 500, --fg), sentence case: nothing here uppercases it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; color: var(--fg); }
+  /* A fieldset's legend is not a grid item, so the field's 6px gap does not reach it: it carries the gap itself (§D `.m2-legend`). */
+  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: var(--t-sm); color: var(--red); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 var(--t-md) var(--font-ui); }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--faint); }
+  /* The control is the kit's .input (§C6): 32px, a --faint border at rest (G12), --muted under the pointer, the accent on focus. */
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 560px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--faint); border-radius: var(--r-ctl); color: var(--fg); font: 400 var(--t-md) var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
   #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
   /* The mockup's .in::placeholder (muted, not the browser's grey) and its invalid-and-focused field: the red border stays (.pfv-bad is later than
      .pfv-ctl:focus-visible), so a refused field still reads as one, and its 2px of accent is a 2px shadow outside the red. */
   #page-host > #settings-modal.as-page #pfv .pfv-ctl::placeholder { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl.pfv-bad:focus-visible { border-color: var(--red); box-shadow: 0 0 0 2px var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
+  /* A segmented control (Agent's Effort, a permission's Read/Write) is the kit's .seg (§C4), restated here as #spawn's is (its buttons are
+     buildSeg's plain ones: .on, no .seg-item): 2px in a --bg bar with a --line ring, 24px items at --t-sm 500, so the bar is 28px, a .btn's. It
+     is as wide as its choices, not its field (a grid item would stretch the bar across the form). */
+  #page-host > #settings-modal.as-page #pfv .pfv-seg { display: inline-flex; justify-self: start; gap: 2px; max-width: 100%; padding: 2px; border: 0; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button { height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button:hover { color: var(--fg); background: var(--hover); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: var(--t-sm); line-height: 18px; }
-  /* Where it runs: two cards, the lit one outlined. */
-  #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-choice > legend.pfv-flabel { margin-bottom: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; margin: 3px 0 0; accent-color: var(--accent); }
+  /* A choice (Workspace's mode, Runs in's tier): two option cards side by side (§D `.m2-two`: two equal columns, 8px). A card is the kit's
+     .opt-card (§D `.m2-opt`: 10px 12px, --r-ctl, a 1px --line ring, the chosen one filled --raise with no accent ring), which draws the box; this lays
+     out what is in it: a 14px radio (§C6 `.check input`), 8px, then the words (§D `.m2-optt`: the title 13/20 500, the lines 12/18 --muted, 2px apart). */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-on { border-color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }
   #page-host > #settings-modal.as-page #pfv .pfv-okdot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
   #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: var(--t-sm); color: var(--red); }
@@ -2645,7 +2647,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
+  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); resize: vertical; }
   /* Advanced (editing): the variables and secrets are rows of the page's own grammar (the kind column, the content, Remove or Undo at the right;
      the .pfv-row, .pfv-k, .pfv-rmbtn and .pfv-removed rules of the Cloud rows), the content being the mockup's .kv: a name, and a value or
      where a secret is read from. The rows' inputs are 32px tall, and the kind word and Remove sit at their top (the mockup's .row aligns to start). Look source: option-b/index.html (.kv, tpl-env, tpl-secret). */
@@ -2672,8 +2674,6 @@
   #page-host > #settings-modal.as-page #pfv .pfv-cust[aria-expanded="true"] { margin-bottom: 10px; }
   /* A permission and its Read/Write control: side by side while they fit, the control under it (at the left) when they do not. */
   #page-host > #settings-modal.as-page #pfv .pfv-perm { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 12px; justify-self: stretch; min-height: 30px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: var(--t-sm); color: var(--red); }
   /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
      than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it.
@@ -2708,19 +2708,20 @@
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }
-  /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
-  #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: var(--t-sm); }
+  /* The foot (§B3, §C7 `.dlg-foot`): the block's last row, across the card's whole width: 12px 20px, 8px between, a --line rule on top. The block's
+     padding is 14px 16px 14px 20px, so the foot bleeds out by the right and left of it (the narrow steps say theirs). Its children are the status
+     (what is unsaved, what is wrong, what else Save takes along, what saving costs: the kit's `.hint`, which fills the row), then Cancel (or Discard)
+     and Save, both kit .btn: Save is the one .btn-primary of the view. */
+  #page-host > #settings-modal.as-page #pfv .pfv-foot { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--sp-2); margin: 0 -16px 0 -20px; padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-dirty { display: inline-flex; align-items: center; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-st-invalid { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-nudge { color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-fbtns { display: flex; flex: none; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost:hover { background: var(--line); }
-  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). */
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .6); }
+  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). It is the same Save (.btn
+     .btn-primary): this rule outranks the kit's fill, weight and hover, weighs 500 like a secondary, and rings the button's own 1px border (the
+     kit's .btn-danger way) where the old page button, which had no border, drew an inset shadow. */
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); font-weight: var(--w-medium); border-color: rgba(240, 106, 106, .6); }
   #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
   /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
   #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: var(--t-sm); }
@@ -2774,6 +2775,8 @@
     #page-host > #settings-modal.as-page #pfv .pfv-label { grid-column: 1; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-act { grid-column: 2; grid-row: 1; flex-direction: row; align-items: center; gap: 8px; }
     #page-host > #settings-modal.as-page #pfv .pfv-body, #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 1 / -1; grid-row: 2; }
+    /* A block in edit: the foot follows the form straight (the form's own 18px is the space; the grid's 8px row gap is not added to it). */
+    #page-host > #settings-modal.as-page #pfv .pfv-editing > .pfv-foot { margin-top: -8px; }
     /* A row's track may be narrower than its longest word, and a path or an id breaks anywhere rather than run out of the page. */
     #page-host > #settings-modal.as-page #pfv .pfv-rows { grid-template-columns: minmax(0, 1fr); }
     #page-host > #settings-modal.as-page #pfv :is(.pfv-nm, .pfv-mono) { overflow-wrap: anywhere; }
@@ -2785,8 +2788,11 @@
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-choice { grid-template-columns: minmax(0, 1fr); }
     #page-host > #settings-modal.as-page #pfv .pfv-foot { flex-wrap: wrap; }
-    #page-host > #settings-modal.as-page #pfv .pfv-fbtns { margin-left: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status { flex: 1 0 100%; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status:empty { display: none; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status + .btn { margin-left: auto; }
   }
   /* Every permission stacks the same way (the permission, then its Read/Write control under it) once the longest one no longer fits beside
      its control, so the list reads as one column instead of one row dropping its control and its neighbours not. "pull requests" and its
@@ -2797,8 +2803,8 @@
        "low medium high xhigh max" needs 284px and the body has the page less 104px (less 52px from 240px down), so it is 388px that runs out;
        390px keeps a margin. Without it the control's own width held its grid track open past the block. A choice stays one button, and one
        that is long (a stored value the list no longer has) wraps its text; every line is 26px tall, as the single line is. */
-    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; height: auto; }
-    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; }
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; }
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; height: auto; min-height: var(--h-sm); padding: 4px 10px; white-space: normal; overflow-wrap: anywhere; }
   }
   /* The kind word above its content, which then has the whole width. */
   @container (max-width: 300px) {
@@ -2815,6 +2821,8 @@
   @container (max-width: 240px) {
     #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 0 12px 32px; }
     #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 14px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-editing { padding-bottom: 0; }
+    #page-host > #settings-modal.as-page #pfv .pfv-editing > .pfv-foot { margin: -8px -14px 0; padding: 12px 14px; }
   }
   /* --- the Credentials drawer over the profile page (spec 5.7; the mockup's `drawer` and `drawer-tok` states) ----------- */
   /* A scrim and a drawer, both fixed and so out of the page's grid; neither is a .dbd or a .dft (selectSettingsTab hides those). They

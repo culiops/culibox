@@ -458,7 +458,7 @@ test("an editable profile: Start session is the primary, then ⋯, a divider and
   esc.click();
   assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("close:")), ["close:settings-modal"]);
   // One primary in the whole view.
-  assert.strictEqual(root.all((n) => classesOf(n).includes("btn-primary") || classesOf(n).includes("pfv-btn-primary")).length, 1);
+  assert.strictEqual(root.all((n) => classesOf(n).includes("btn-primary")).length, 1);
 });
 
 test("a read-only profile: Start session is the primary and Duplicate… is a secondary", async () => {
@@ -3887,6 +3887,7 @@ test("switching to host lists what will be removed and saves without it", async 
   ]);
   assert.strictEqual(byText(blockOf(t, "runs"), "button", "Save as host…").length, 1);
   assert.ok(byText(blockOf(t, "runs"), "button", "Save as host…")[0].className.includes("pfv-btn-host"));
+  assert.ok(byText(blockOf(t, "runs"), "button", "Save as host…")[0].className.includes("btn-primary"), "still the one primary of the view, restyled red on clear");
   assert.strictEqual(t.box.puts.length, 0, "nothing is sent by choosing it");
 
   await clickBtn(blockOf(t, "runs"), "Save as host…");
@@ -3999,7 +4000,7 @@ test("a private copy cannot choose host: refused in place, Save hidden, nothing 
   const sentence = "A private copy needs a box. Set Workspace to 'Work in this folder' first.";
   assert.strictEqual(texts(blockOf(t, "runs"), "pfv-refuse")[0], sentence + " Open Workspace");
   assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-consq").length, 0, "no host consequence line under a refusal");
-  const save = byCls(blockOf(t, "runs"), "pfv-btn-primary")[0];
+  const save = byCls(blockOf(t, "runs"), "btn-primary")[0];
   assert.strictEqual(save.hidden, true, "Save is not offered");
   assert.strictEqual(await t.box.pfvSaveBlock("runs"), false);
   assert.strictEqual(asked.length, 0);
@@ -4007,7 +4008,7 @@ test("a private copy cannot choose host: refused in place, Save hidden, nothing 
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-ferr"), [sentence]);
   // Choosing the box again brings Save back, with its own name.
   const box = field(t, "tier-box"); box.checked = true; box.onchange();
-  assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-btn-primary")[0].hidden, false);
+  assert.strictEqual(byCls(blockOf(t, "runs"), "btn-primary")[0].hidden, false);
   assert.strictEqual(byCls(blockOf(t, "runs"), "pfv-refuse").length, 0);
 });
 
@@ -4885,8 +4886,9 @@ const boundPage = () => {
 };
 
 // Task 1 removed the Settings top bar, so a page head is where the page's "Esc ✕" is. The New profile and Duplicate pages draw the same head
-// as the overview (a title and a line, no action of their own), so they end it the same way: the divider, then Esc ✕.
-test("the New profile and Duplicate heads end like every Settings head: the divider, then Esc ✕", async () => {
+// as the overview but with no action of their own (their Create is in the card's foot), and a head draws its divider only when there is an
+// action before it (settingshead.js does the same): so these two end with Esc ✕ alone, and the overview keeps divider then Esc ✕.
+test("the New profile and Duplicate heads have no action, so they end with Esc ✕ alone and no divider", async () => {
   const closes = (t) => t.calls.filter((c) => c.startsWith("close:"));
   const tail = (t) => {
     const acts = byCls(byCls(rootOf(t), "pfv-head")[0], "page-actions");
@@ -4895,31 +4897,34 @@ test("the New profile and Duplicate heads end like every Settings head: the divi
   };
   const n = await newPage();
   assert.strictEqual(n.run("pfvState").page, "new");
-  const [sep, esc, ...rest] = tail(n);
-  assert.deepStrictEqual(rest, []);
-  assert.deepStrictEqual(classesOf(sep), ["set-sep"]);
-  assert.strictEqual(sep.getAttribute("aria-hidden"), "true");
+  const [esc, ...rest] = tail(n);
+  assert.deepStrictEqual(rest, [], "Esc ✕ alone: a divider with nothing before it divides nothing");
+  assert.strictEqual(byCls(rootOf(n), "set-sep").length, 0);
   assert.deepStrictEqual(classesOf(esc), ["btn", "btn-ghost", "btn-sm", "set-esc"], "settingsEscButton");
   assert.strictEqual(esc.getAttribute("aria-label"), "Close (Esc)");
   esc.click();
   assert.deepStrictEqual(closes(n), ["close:settings-modal"]);
-  assert.strictEqual(byCls(rootOf(n), "btn-primary").length + byCls(rootOf(n), "pfv-btn-primary").length, 1, "Create profile is still the one primary");
+  assert.strictEqual(byCls(rootOf(n), "btn-primary").length, 1, "Create profile is still the one primary");
   // The first-run page (no profile at all) is the New profile page too.
   const lone = page({ profiles: [] });
   await lone.box.pfvShow();
   assert.strictEqual(lone.run("pfvState").page, "new");
   assert.strictEqual(byCls(rootOf(lone), "set-esc").length, 1, "the first-run New profile page can be closed from the page");
+  assert.strictEqual(byCls(rootOf(lone), "set-sep").length, 0);
   // Duplicate: the same tail.
   const d = page();
   await d.box.pfvShow("aws-ops");
   await dupFromMenu(d);
   assert.strictEqual(d.run("pfvState").page, "dup");
-  const [dsep, desc] = tail(d);
-  assert.deepStrictEqual([classesOf(dsep), classesOf(desc).includes("set-esc")], [["set-sep"], true]);
-  // The overview keeps its own: one Esc ✕, last.
+  const [desc, ...drest] = tail(d);
+  assert.deepStrictEqual([classesOf(desc).includes("set-esc"), drest.length], [true, 0]);
+  // The overview has actions before it, so it keeps the divider: Start session, ⋯, divider, Esc ✕.
   const o = page();
   await o.box.pfvShow("aws-ops");
   assert.strictEqual(byCls(rootOf(o), "set-esc").length, 1);
+  assert.strictEqual(byCls(rootOf(o), "set-sep").length, 1);
+  assert.deepStrictEqual([...o.box.pfvHeadTail(true)].map((n) => classesOf(n)[0]), ["set-sep", "btn"]);
+  assert.deepStrictEqual([...o.box.pfvHeadTail(false)].map((n) => classesOf(n)[0]), ["btn"]);
 });
 
 test("New profile asks for three things and the page says nothing else", async () => {
@@ -4940,8 +4945,8 @@ test("New profile asks for three things and the page says nothing else", async (
   assert.deepStrictEqual(texts(root, "pfv-card-t"), ["In a boxRecommended", "On this machine"]);
   assert.deepStrictEqual(texts(root, "pfv-card-d"), ["A container. It writes only to its workspace, and CuliBox scopes AWS, GitHub and tokens.", "Docker found", "Runs as you, with your files, your network and your credentials."]);
   assert.strictEqual(field(t, "folder").getAttribute("placeholder"), "~/work/payments-api");
-  assert.strictEqual(btn(t, "Create profile").className.includes("pfv-btn-primary"), true);
-  assert.strictEqual(btn(t, "Cancel").className.includes("pfv-btn-ghost"), true);
+  assert.deepStrictEqual(classesOf(btn(t, "Create profile")), ["btn", "btn-primary"], "the kit's primary");
+  assert.deepStrictEqual(classesOf(btn(t, "Cancel")), ["btn"], "Cancel is a secondary: never ghost, never primary");
   assert.deepStrictEqual(texts(root, "pfv-newafter"), ["It starts as Claude Code with its default model. You can change that, and add cloud access, on the next page."]);
   // The nav: "+ New profile" is the current row, no profile is.
   const nav = t.els["pf-navlist"].children;
@@ -5298,7 +5303,7 @@ test("Duplicate opens the New profile page filled in, with what the copy will al
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-main"), ["Claude Code with claude-opus-5-5, high effort"]);
   assert.deepStrictEqual(texts(blockOf(t, "advanced"), "pfv-main"), ["None set"]);
   assert.strictEqual(byText(root, "button", "Remove").length, 0, "a list, not a form: nothing to remove here");
-  assert.strictEqual(btn(t, "Create copy").className.includes("pfv-btn-primary"), true);
+  assert.deepStrictEqual(classesOf(btn(t, "Create copy")), ["btn", "btn-primary"], "the kit's primary");
   assert.strictEqual(byText(root, "button", "Create profile").length, 0);
   assert.deepStrictEqual(texts(root, "pfv-dup-note"), ["Nothing is saved until you click Create copy."]);
   assert.deepStrictEqual(t.calls.filter((c) => /^(POST|PUT)/.test(c)), []);
@@ -6150,4 +6155,136 @@ test("the first control the drawer focuses is in the body, never the header's cr
   await openDrawerFrom(d, "New token…");
   assert.ok(d.body.contains(Node.focused), "in the body");
   assert.ok(!d.head.contains(Node.focused));
+});
+
+// --- A block in edit is its own card (UI plan 4 Task 4; frame M2.2, digest-design §A3, §B3) ----------------------------------------
+// settings-shell.test.js pins the values; these pin the markup: which element holds which, in which order, with which kit classes.
+
+test("while a block is open, Save is the only primary and Start session is secondary", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const root = t.els["pfv-in"];
+  const primaries = () => root.all((n) => classesOf(n).includes("btn-primary")).map((n) => n.textContent);
+  assert.deepStrictEqual(primaries(), ["Start session"], "the overview: Start session");
+  clickBtn(blockOf(t, "workspace"), "Edit");
+  assert.deepStrictEqual(primaries(), ["Save"], "a block in edit: Save, and nothing else");
+  assert.deepStrictEqual(classesOf(byText(root, "button", "Start session")[0]), ["btn"], "Start session steps down to a secondary");
+  assert.strictEqual(root.all((n) => classesOf(n).includes("pfv-btn-primary")).length, 0, "no second button system");
+  clickBtn(blockOf(t, "workspace"), "Cancel");
+  assert.deepStrictEqual(primaries(), ["Start session"], "closed: Start session is the primary again");
+  assert.strictEqual(t.box.pfvHeaderPrimary({ readOnly: false, editing: true }), "none");
+  assert.strictEqual(t.box.pfvHeaderPrimary({ readOnly: false, editing: false }), "start");
+});
+
+test("the block foot: a top-bordered row with the status line, then Cancel (secondary) and Save (primary)", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  const runs = blockOf(t, "runs");
+  const foot = byCls(runs, "pfv-foot");
+  assert.strictEqual(foot.length, 1);
+  assert.strictEqual(foot[0].parent, runs, "the foot is the block's own last row, so the card's whole width is its");
+  assert.strictEqual(runs.children[runs.children.length - 1], foot[0]);
+  const kids = foot[0].children.filter((c) => c instanceof Node);
+  assert.deepStrictEqual(kids.map((c) => [c.tag, c.textContent]), [["div", "Saving gives the next session a new box. Running sessions keep theirs."], ["button", "Cancel"], ["button", "Save"]], "status, Cancel, Save: Save is last");
+  assert.deepStrictEqual(classesOf(kids[0]), ["pfv-status"]);
+  assert.strictEqual(kids[0].getAttribute("role"), "status");
+  assert.deepStrictEqual(texts(foot[0], "pfv-fnote"), ["Saving gives the next session a new box. Running sessions keep theirs."], "§A3: a box profile says what saving costs");
+  assert.deepStrictEqual(classesOf(kids[1]), ["btn"], "Cancel is a secondary: never ghost, never primary");
+  assert.deepStrictEqual(classesOf(kids[2]), ["btn", "btn-primary"], "Save is the primary");
+  assert.strictEqual(byCls(foot[0], "pfv-fbtns").length, 0, "no wrapper: the foot is the kit's flat row");
+  // Cancel is Discard once something changed, and still a plain .btn.
+  const host = field(t, "tier-host");
+  host.checked = true;
+  host.onchange();
+  const dis = byText(runs, "button", "Discard")[0];
+  assert.deepStrictEqual(classesOf(dis), ["btn"]);
+  assert.strictEqual(byText(runs, "button", "Cancel").length, 0);
+  assert.deepStrictEqual(texts(foot[0], "pfv-fnote"), [], "choosing host: the next session is not a box");
+  // Save as host…: the same button, red on clear (.pfv-btn-host), still the one .btn-primary of the view.
+  const asHost = byText(runs, "button", "Save as host…")[0];
+  assert.deepStrictEqual(classesOf(asHost).sort(), ["btn", "btn-primary", "pfv-btn-host"]);
+  assert.strictEqual(byCls(t.els["pfv-in"], "btn-primary").length, 1);
+});
+
+test("the edited block renders as its own card: the blocks before, the editing one, the blocks after", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const root = t.els["pfv-in"];
+  const ids = (sheet) => sheet.children.map((b) => b.dataset.block);
+  assert.strictEqual(byCls(root, "pfv-sheet").length, 1, "read view: one card");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const sheets = byCls(root, "pfv-sheet");
+  assert.deepStrictEqual(sheets.map(ids), [["runs", "workspace"], ["agent"], ["cloud", "reachable", "network", "advanced"]]);
+  assert.strictEqual(blockOf(t, "agent").parent, sheets[1], "the editing section sits alone in its card");
+  assert.strictEqual(byCls(sheets[1], "pfv-foot").length, 1, "its foot is inside that card");
+  assert.deepStrictEqual(sheets.map((s) => s.parent), [root, root, root], "the three cards are siblings, in order, under the heading");
+  const order = root.children.filter((c) => c instanceof Node && (hasCls("pfv-sheet")(c) || hasCls("pfv-sheet-h")(c)));
+  assert.deepStrictEqual(order.map((c) => classesOf(c)[0]), ["pfv-sheet-h", "pfv-sheet", "pfv-sheet", "pfv-sheet"]);
+  // The first block and the last block: two cards, the editing one at the end it is at.
+  clickBtn(blockOf(t, "agent"), "Cancel");
+  clickBtn(blockOf(t, "runs"), "Edit");
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs"], ["workspace", "agent", "cloud", "reachable", "network", "advanced"]]);
+  clickBtn(blockOf(t, "runs"), "Cancel");
+  clickBtn(blockOf(t, "advanced"), "Edit");
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network"], ["advanced"]]);
+  assert.strictEqual(blockOf(t, "advanced").parent, byCls(root, "pfv-sheet")[1]);
+  clickBtn(blockOf(t, "advanced"), "Cancel");
+  assert.deepStrictEqual(byCls(root, "pfv-sheet").map(ids), [["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]], "closed: one card again");
+});
+
+test("two blocks open at once are two cards: a refusal opens a second form under the first", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  t.run("pfvOpenRepair('cloud')");
+  t.run("pfvRender()");
+  const sheets = byCls(t.els["pfv-in"], "pfv-sheet");
+  assert.deepStrictEqual(sheets.map((s) => s.children.map((b) => b.dataset.block)), [["runs", "workspace"], ["agent"], ["cloud"], ["reachable", "network", "advanced"]]);
+});
+
+test("the foot of a block in a narrow card is still the last child of its section, whichever block it is", async () => {
+  for (const id of ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]) {
+    const t = page();
+    await t.box.pfvShow("aws-ops");
+    clickBtn(blockOf(t, id), "Edit");
+    const sec = blockOf(t, id);
+    const parts = sec.children.filter((c) => c instanceof Node).map((c) => classesOf(c)[0]);
+    assert.deepStrictEqual(parts.slice(-2), ["pfv-body", "pfv-foot"], id + ": the body, then the foot");
+    assert.strictEqual(parts[0], "pfv-label", id + ": the label first");
+  }
+});
+
+test("Switch to box is a kit secondary too: the page has no button system of its own left", async () => {
+  const t = page();
+  await t.box.pfvShow("runbook-host");
+  const sw = byText(t.els["pfv-in"], "button", "Switch to box")[0];
+  assert.ok(sw, "the host profile offers it");
+  assert.deepStrictEqual(classesOf(sw), ["btn"]);
+  assert.strictEqual(t.els["pfv-in"].all((n) => classesOf(n).some((c) => /^pfv-btn(-|$)/.test(c) && c !== "pfv-btn-host")).length, 0);
+});
+
+test("profile field labels and controls are the kit's look under the page's own classes: the segmented control is the kit .seg", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  clickBtn(blockOf(t, "agent"), "Edit");
+  const effort = field(t, "options.effort");
+  assert.deepStrictEqual(classesOf(effort), ["seg", "pfv-seg"], "Effort is a .seg of buttons, one per level");
+  assert.deepStrictEqual(effort.children.filter((c) => c instanceof Node).map((b) => b.textContent), ["low", "medium", "high", "xhigh", "max"]);
+  assert.strictEqual(effort.parent.tag, "fieldset");
+  assert.deepStrictEqual(classesOf(effort.parent), ["pfv-field"]);
+});
+
+test("workspace mode choices are two option cards in one fieldset: the kit's .opt-card, the chosen one is-on", async () => {
+  const t = page();
+  const pk = await openWs(t);
+  assert.ok(pk);
+  const ws = blockOf(t, "workspace");
+  const cards = byCls(ws, "pfv-card");
+  assert.strictEqual(cards.length, 2);
+  assert.strictEqual(cards[0].parent, cards[1].parent, "one fieldset holds both, so one grid puts them side by side");
+  assert.deepStrictEqual(classesOf(cards[0].parent), ["pfv-field", "pfv-choice"]);
+  assert.deepStrictEqual(cards.map((c) => classesOf(c)), [["opt-card", "pfv-card", "is-on"], ["opt-card", "pfv-card"]], "folder is chosen on a profile that works in its folder");
+  pickMode(t, "copy");
+  assert.deepStrictEqual(byCls(blockOf(t, "workspace"), "pfv-card").map((c) => classesOf(c).includes("is-on")), [false, true]);
 });

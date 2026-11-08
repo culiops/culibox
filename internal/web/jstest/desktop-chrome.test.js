@@ -361,15 +361,24 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);
   assert.match(at(300), /\.pfv-row \{ display: flex; flex-direction: column;/);
   assert.match(at(240), /\.pfv-in \{ padding: 0 12px 32px;/);
+  // The two option cards of a choice (Workspace's mode, Runs in's tier) go one under the other once a card is under ~190px; the block's foot
+  // puts its status on a line of its own and Cancel and Save, side by side, at the right; at 240 the foot bleeds out by the block's 14px.
+  assert.match(at(440), /\.pfv-choice \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(at(440), /\.pfv-foot \{ flex-wrap: wrap; \}/);
+  assert.match(at(440), /\.pfv-status \{ flex: 1 0 100%; \}/);
+  assert.match(at(440), /\.pfv-status:empty \{ display: none; \}/, "an empty status takes no row (and no gap) of its own");
+  assert.match(at(440), /\.pfv-status \+ \.btn \{ margin-left: auto; \}/);
+  assert.match(at(624), /\.pfv-editing > \.pfv-foot \{ margin-top: -8px; \}/, "the grid's 8px row gap is not added to the form's own 18px");
+  assert.match(at(240), /\.pfv-editing > \.pfv-foot \{ margin: -8px -14px 0; padding: 12px 14px; \}/);
   // A permission and its control share a line while they fit (and wrap on their own if one ever does not); at 390 all of them stack.
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
   assert.match(at(390), /\.pfv-perm \{ flex-direction: column; flex-wrap: nowrap; align-items: flex-start;/);
-  // An option's segmented control (the fieldset's own, not a permission's 26px one) wraps its choices once they no longer fit in a row, every line
-  // 26px as the one line is; a long stored value wraps its text instead of widening the control. Without it the control's min-content (284 px for
-  // Effort) held its grid track open and #pfv scrolled sideways at 701 to 800 px (gap N4).
-  assert.match(at(390), /\.pfv-field > \.pfv-seg \{ flex-wrap: wrap; align-content: flex-start; height: auto; \}/);
-  assert.match(at(390), /\.pfv-field > \.pfv-seg button \{ min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; \}/);
-  assert.ok(!/\.pfv-perm \.pfv-seg/.test(at(390)), "a permission's Read/Write control keeps its one 26px line");
+  // An option's segmented control (the fieldset's own, not a permission's) wraps its choices once they no longer fit in a row, every line 24px
+  // (the kit's .seg item) as the one line is; a long stored value wraps its text instead of widening the control. Without it the control's
+  // min-content (284 px for Effort) held its grid track open and #pfv scrolled sideways at 701 to 800 px (gap N4).
+  assert.match(at(390), /\.pfv-field > \.pfv-seg \{ flex-wrap: wrap; align-content: flex-start; \}/);
+  assert.match(at(390), /\.pfv-field > \.pfv-seg button \{ min-width: 0; max-width: 100%; height: auto; min-height: var\(--h-sm\); padding: 4px 10px; white-space: normal; overflow-wrap: anywhere; \}/);
+  assert.ok(!/\.pfv-perm \.pfv-seg/.test(at(390)), "a permission's Read/Write control keeps its one line");
   assert.ok(at(390).length < 1100, "the 390 step is the permissions' and the option controls' alone");
   // The chip after "In a box" wraps under the title on every tier card, so Runs in's (a 4px overflow at 701) leaves no card either.
   assert.match(at(300), /\.pfv-card \.pfv-card-t \{ flex-wrap: wrap; gap: 2px 8px; \}/);

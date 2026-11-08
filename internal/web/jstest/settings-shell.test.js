@@ -955,12 +955,13 @@ test("the profile head is the page head the other five pages draw: flex, top-ali
   assert.ok(!bhas(PV + " .pfv-acts"), "pfv-acts is the kit's .page-actions now");
 });
 
-test("the buttons are the kit's: .btn is 28px, the ⋯ is .btn-icon (28x28) and the page's own .pfv-btn is 28px too", () => {
+test("the buttons are the kit's: .btn is 28px, the ⋯ is .btn-icon (28x28) and the page has no button rules of its own", () => {
   assert.strictEqual(bdecls(":root").get("--h-ctl"), "28px");
   assert.strictEqual(bdecls(".btn").get("min-height"), "var(--h-ctl)");
   assert.strictEqual(bdecls(".btn-icon").get("width"), "var(--h-ctl)");
-  assert.strictEqual(bdecls(PV + " .pfv-btn").get("height"), "var(--h-ctl)", "Save, Cancel, Create profile and Switch to box: 28px, not 32px");
-  assert.ok(!bhas(PV + " .pfv-btn-icon"), "the ⋯ trigger is .btn.btn-icon: no 32px page rule of its own");
+  // Save, Cancel, Create profile and Switch to box are .btn too (Task 4): no .pfv-btn height, fill or hover to drift from the kit's.
+  for (const sel of [" .pfv-btn", " .pfv-btn-primary", " .pfv-btn-secondary", " .pfv-btn-ghost", " .pfv-btn-icon"]) assert.ok(!bhas(PV + sel), sel.trim() + ": a second button system");
+  assert.ok(!/\.pfv-btn(?!-host)/.test(DESK_CSS.slice(DESK_CSS.indexOf(PV + " .pfv-in"))), "no .pfv-btn rule anywhere in the page's block");
   // Pressed while its menu is open (kit .btn.is-pressed: a menu button is expanded, not pressed).
   const open = bdecls(PV + ' .pfv-more .btn-icon[aria-expanded="true"]');
   assert.strictEqual(open.get("background"), "var(--raise)");
@@ -991,13 +992,13 @@ test("a block is the frame's row: label 132px, the value, then Edit; 24px betwee
   // The section title, 15/22 600, 10px above the card.
   const sh = bdecls(PV + " .pfv-sheet-h");
   assert.deepStrictEqual([sh.get("font-size"), sh.get("line-height"), sh.get("font-weight"), sh.get("margin-bottom")], ["var(--t-lg)", "var(--lh-lg)", "600", "10px"]);
-  // The card: --panel, --r-card (it does not clip: the "+ Add" picker hangs out of an edited block). One card: Advanced is its seventh block,
-  // so no rule spaces a second card under the first (the Edit block's own card is Task 4's).
+  // The card: --panel, --r-card (it does not clip: the "+ Add" picker hangs out of an edited block). Advanced is the seventh block of the one
+  // card; a second card exists only around a block in edit (Task 4), and the cards are 12px apart (§B3: "Gap between the three cards = body gap").
   const card = bdecls(PV + " .pfv-sheet");
   assert.strictEqual(card.get("background"), "var(--panel)");
   assert.strictEqual(card.get("border-radius"), "var(--r-card)");
   assert.strictEqual(card.get("overflow"), undefined);
-  assert.ok(!bhas(PV + " .pfv-sheet + .pfv-sheet"), "Advanced has no card of its own to space");
+  assert.strictEqual(bdecls(PV + " .pfv-sheet + .pfv-sheet").get("margin-top"), "12px");
 });
 
 test("Edit sits beside the value, on its first line, and a row does not light up under the pointer", () => {
@@ -1006,7 +1007,7 @@ test("Edit sits beside the value, on its first line, and a row does not light up
   // §B2: "No hover tint on blocks (none defined)". No rule paints a block under the pointer, none steps Edit's hover up, and the first, last
   // and only block carry no corner rules (they existed to clip a tint; the card's own radius rounds a transparent row).
   const hovered = BASE_RULES.flatMap((r) => parts(r.selector)).filter((sel) => sel.startsWith(PV + " .pfv-block") && /:hover|:first-child|:last-child|:only-child/.test(sel));
-  assert.deepStrictEqual(hovered.filter((sel) => !/\.pfv-editing/.test(sel)), [], "no hover tint and no clip radii on .pfv-block");
+  assert.deepStrictEqual(hovered, [], "no hover tint and no clip radii on .pfv-block, the block in edit's included (its own card rounds it)");
   assert.ok(!BASE_RULES.some((r) => parts(r.selector).some((sel) => /\.pfv-block:hover/.test(sel))));
   assert.strictEqual(bdecls(PV + " .pfv-block").get("background"), undefined, "a row is the card's --panel");
 });
@@ -1050,4 +1051,128 @@ test("the six pages' heads share one set of rules: a rule that carries both sele
   assert.strictEqual(bdecls(PV + " .pfv-head .page-desc").get("overflow-wrap"), "anywhere");
   assert.strictEqual(bdecls(PV + " .pfv-head-main").get("min-width"), "0", "the column may shrink below its longest word");
   assert.strictEqual(bdecls(".mono").get("white-space"), undefined, ".mono does not forbid the wrap");
+});
+
+// ---- Task 4: a block in edit (frame M2.2, digest-design §B3, §C3, §C4, §C6, §C7, §D) ----------------------------------------------
+// profilepage.test.js pins the markup (the card split, the foot's order and classes); these pin the values.
+const px = (v) => parseFloat(String(v));
+
+test("the block in edit is its own card: the kit's --panel (no --raise), no Edit column, 18px under the form, then the foot", () => {
+  // §B3: `section.card.m2-card.m2-editing` is a .card like the others; `.m2-editing .m2-blk` has two columns and padding-bottom 18px.
+  const ed = bdecls(PV + " .pfv-editing");
+  assert.strictEqual(ed.get("background"), undefined, "the card is --panel, as the cards around it: not the old --raise block");
+  assert.strictEqual(ed.get("grid-template-columns"), "132px minmax(0, 1fr)", "§D `.m2-editing .m2-blk`: the label, the form, no Edit column");
+  assert.strictEqual(ed.get("padding-bottom"), "0", "the foot is the block's last row, flush with the card's bottom");
+  assert.strictEqual(ed.get("border-radius"), "var(--r-card)", "the 1px ring of a nudged block follows the card's corners");
+  assert.strictEqual(bdecls(PV + " .pfv-edit-body").get("padding-bottom"), "18px", "§D `.m2-editing .m2-blk { padding-bottom: 18px }`: the form's own 18px above the foot's rule");
+  // The row clip radii existed for a raised block in a card of rows: gone with it.
+  const clips = BASE_RULES.flatMap((r) => parts(r.selector)).filter((sel) => /\.pfv-editing:(first|last|only)-child/.test(sel));
+  assert.deepStrictEqual(clips, [], "no first/last/only-child corner rule on the block in edit");
+  assert.strictEqual(bdecls(PV + " .pfv-sheet + .pfv-sheet").get("margin-top"), "12px", "§B3: the cards are 12px apart");
+});
+
+test("the block foot is the kit's .dlg-foot row across the card: 12px 20px, 8px between, a --line rule on top, the status filling it", () => {
+  // §C7 `.dlg-foot` and `.dlg-foot .hint`; §B3: the foot spans the card's full width (the block's padding is 14px 16px 14px 20px, so it bleeds out).
+  const f = bdecls(PV + " .pfv-foot");
+  assert.deepStrictEqual([f.get("display"), f.get("align-items"), f.get("gap")], ["flex", "center", "var(--sp-2)"]);
+  assert.strictEqual(f.get("padding"), "var(--sp-3) var(--sp-5)");
+  assert.strictEqual(f.get("border-top"), "1px solid var(--line)");
+  assert.strictEqual(f.get("grid-column"), "1 / -1", "across both columns of the block's grid");
+  assert.strictEqual(f.get("margin"), "0 -16px 0 -20px", "out to the card's edges: the block's right and left padding");
+  assert.strictEqual(f.get("margin-top"), undefined, "the form's 18px is the form's, not a margin of the foot");
+  assert.strictEqual(f.get("padding-top"), undefined);
+  const st = bdecls(PV + " .pfv-status");
+  assert.strictEqual(st.get("flex"), "1 1 auto", "§C7 `.hint { flex: 1 1 auto }`: Cancel and Save are pushed to the right");
+  assert.strictEqual(st.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(st.get("line-height"), "var(--lh-sm)");
+  assert.ok(!bhas(PV + " .pfv-fbtns"), "no wrapper of the buttons: they are the foot's own children");
+  assert.ok(!bhas(PV + " .pfv-btn-ghost"), "Cancel is a secondary .btn: no page ghost");
+  // "Save as host…": red on clear, never a fill, still weighing 500 like a secondary (the kit's primary would make it 600).
+  const host = bdecls(PV + " .pfv-btn-host");
+  assert.deepStrictEqual([host.get("background"), host.get("color"), host.get("font-weight")], ["none", "var(--red)", "var(--w-medium)"]);
+  assert.strictEqual(host.get("border-color"), "rgba(240, 106, 106, .6)", "the ring is the button's own 1px border, as the kit's .btn-danger");
+  assert.strictEqual(host.get("box-shadow"), undefined);
+});
+
+test("workspace mode choices sit side by side: .pfv-choice is a two-column grid of option cards (§D `.m2-two`, `.m2-opt`)", () => {
+  const two = bdecls(PV + " .pfv-choice");
+  assert.strictEqual(two.get("grid-template-columns"), "repeat(2, minmax(0, 1fr))", "§D `.m2-two`");
+  assert.strictEqual(two.get("gap"), "8px");
+  assert.strictEqual(two.get("max-width"), undefined, "the form's own 560px bounds it, not a 440px of its own");
+  assert.strictEqual(bdecls(PV + " .pfv-field > legend.pfv-flabel").get("margin-bottom"), "6px", "§D `.m2-legend { margin-bottom: 6px }`: the choice's legend is a field's");
+  assert.ok(!bhas(PV + " .pfv-choice > legend.pfv-flabel"), "no 8px legend of the choice's own");
+  // The card is the kit's .opt-card (Plan 1: §D `.m2-opt`: 10px 12px, --r-ctl, a 1px --line ring, the chosen one filled --raise): the page rule adds layout only.
+  const kit = bdecls(".opt-card");
+  assert.deepStrictEqual([kit.get("padding"), kit.get("border-radius"), kit.get("box-shadow")], ["10px 12px", "var(--r-ctl)", "inset 0 0 0 1px var(--line)"]);
+  assert.strictEqual(bdecls(".opt-card.is-on").get("background"), "var(--raise)");
+  const card = bdecls(PV + " .pfv-card");
+  for (const k of ["padding", "border", "border-radius", "background", "box-shadow"]) assert.strictEqual(card.get(k), undefined, k + " is the kit's");
+  assert.strictEqual(card.get("grid-template-columns"), "14px minmax(0, 1fr)", "§C6 `.check input`: a 14px radio");
+  assert.strictEqual(card.get("column-gap"), "8px", "§C6 `.check { gap: 8px }`");
+  const radio = bdecls(PV + " .pfv-card > input");
+  assert.deepStrictEqual([radio.get("width"), radio.get("height"), radio.get("margin")], ["14px", "14px", "3px 0 0"]);
+  assert.ok(!bhas(PV + " .pfv-on"), "the chosen card is .is-on (the kit's), not an outline of the page's");
+  const title = bdecls(PV + " .pfv-card-t");
+  assert.deepStrictEqual([title.get("font-weight"), title.get("line-height")], ["500", "var(--lh-md)"]);
+  const desc = bdecls(PV + " .pfv-card-d");
+  assert.deepStrictEqual([desc.get("font-size"), desc.get("line-height"), desc.get("color")], ["var(--t-sm)", "var(--lh-sm)", "var(--muted)"]);
+});
+
+test("the form is §B3's: 560px at most, 16px between fields, 6px inside one, the label above its control", () => {
+  assert.deepStrictEqual([bdecls(PV + " .pfv-fields").get("gap"), bdecls(PV + " .pfv-fields").get("max-width")], ["16px", "560px"]);
+  const field = bdecls(PV + " .pfv-field");
+  assert.strictEqual(field.get("gap"), "6px", "§C6 `.field { gap: 6px }`");
+  assert.strictEqual(bdecls(PV + " .pfv-field > legend.pfv-flabel").get("margin-bottom"), "6px");
+  assert.strictEqual(bdecls(PV + " .pfv-ctl").get("max-width"), "560px", "a control is as wide as the form, not 440px of it");
+  const help = bdecls(PV + " .pfv-hint");
+  assert.deepStrictEqual([help.get("font-size"), help.get("line-height"), help.get("color")], ["var(--t-sm)", "var(--lh-sm)", "var(--muted)"], "§C6 `.field-help`");
+});
+
+test("profile field labels are sentence-case field labels (§C6 `.field-label`): 12/18, 500, --fg, no transform; controls rest on --faint", () => {
+  const kit = bdecls(".field-label");
+  const l = bdecls(PV + " .pfv-flabel");
+  for (const k of ["font-size", "line-height", "font-weight", "color"]) assert.strictEqual(l.get(k), k === "font-weight" ? "500" : kit.get(k).replace("var(--w-medium)", "500"), k + " is the kit label's");
+  assert.deepStrictEqual([l.get("font-size"), l.get("line-height"), l.get("font-weight"), l.get("color")], ["var(--t-sm)", "var(--lh-sm)", "500", "var(--fg)"]);
+  assert.strictEqual(l.get("text-transform"), undefined, "sentence case: nothing uppercases it");
+  assert.strictEqual(l.get("letter-spacing"), undefined);
+  // §C6 `.input`: a --faint rest border (G12), --muted on hover, the accent on focus; mono is 12px; a textarea is 72px at least.
+  const c = bdecls(PV + " .pfv-ctl");
+  assert.strictEqual(c.get("border"), "1px solid var(--faint)");
+  assert.strictEqual(c.get("height"), "32px");
+  assert.strictEqual(bdecls(PV + " .pfv-ctl:hover").get("border-color"), "var(--muted)");
+  assert.deepStrictEqual([bdecls(PV + " .pfv-ctl:focus-visible").get("border-color"), bdecls(PV + " .pfv-ctl:focus-visible").get("box-shadow")], ["var(--accent)", "0 0 0 1px var(--accent)"]);
+  assert.strictEqual(bdecls(PV + " .pfv-ctl-mono").get("font-size"), "var(--t-sm)", "§C6 `.input.mono`");
+  const area = bdecls(PV + " .pfv-area");
+  assert.deepStrictEqual([area.get("min-height"), area.get("padding"), area.get("line-height")], ["72px", "8px 10px", "var(--lh-md)"], "§B3: the textarea is 72px, not the dead 56px");
+});
+
+test("the effort control is the kit's .seg look at 28px: 2px in a --bg bar with a --line ring, 24px items, --t-sm 500", () => {
+  const seg = bdecls(PV + " .pfv-seg");
+  assert.deepStrictEqual([seg.get("display"), seg.get("gap"), seg.get("padding"), seg.get("border"), seg.get("border-radius")], ["inline-flex", "2px", "2px", "0", "var(--r-ctl)"]);
+  assert.deepStrictEqual([seg.get("background"), seg.get("box-shadow")], ["var(--bg)", "inset 0 0 0 1px var(--line)"]);
+  assert.strictEqual(seg.get("height"), undefined, "its height is its items' and its padding's");
+  assert.strictEqual(seg.get("justify-self"), "start", "as wide as its choices: a grid item would stretch the bar across the whole form");
+  const item = bdecls(PV + " .pfv-seg button");
+  assert.strictEqual(item.get("height"), "var(--h-sm)");
+  assert.deepStrictEqual([item.get("padding"), item.get("border"), item.get("border-radius")], ["0 10px", "0", "var(--r-chip)"]);
+  assert.deepStrictEqual([item.get("font-size"), item.get("font-weight"), item.get("color"), item.get("background")], ["var(--t-sm)", "var(--w-medium)", "var(--muted)", "transparent"]);
+  const root = bdecls(":root");
+  assert.strictEqual(px(root.get("--h-sm")) + 2 * px(seg.get("padding")), px(root.get("--h-ctl")), "24px items + 2 x 2px = the 28px a .btn is");
+  assert.deepStrictEqual([bdecls(PV + " .pfv-seg button:hover").get("color"), bdecls(PV + " .pfv-seg button:hover").get("background")], ["var(--fg)", "var(--hover)"]);
+  assert.deepStrictEqual([bdecls(PV + " .pfv-seg button.on").get("color"), bdecls(PV + " .pfv-seg button.on").get("background")], ["var(--fg)", "var(--raise)"]);
+  // A permission's Read/Write is the same control: no 26px variant of its own.
+  assert.ok(!bhas(PV + " .pfv-perm .pfv-seg") && !bhas(PV + " .pfv-perm .pfv-seg button"));
+});
+
+test("New profile's and Duplicate's title is cut short with an ellipsis on one line, like every head's (not wrapped anywhere)", () => {
+  const sel = PV + " .pfv-title .pfv-title-name";
+  const rule = BASE_RULES.find((r) => parts(r.selector).includes(sel));
+  assert.ok(rule, "a title rule for the h2 the two pages draw");
+  const d = rule.decls;
+  assert.deepStrictEqual([d.get("min-width"), d.get("overflow"), d.get("text-overflow"), d.get("white-space")], ["0", "hidden", "ellipsis", "nowrap"]);
+  assert.ok(parts(rule.selector).includes(PV + " .pfv-title .page-title"), "the one rule every head's title takes: it cannot drift");
+  assert.ok(!rule.decls.has("overflow-wrap"), "no overflow-wrap: anywhere on a one-line title");
+  const own = bdecls(PV + " .pfv-title-name");
+  assert.strictEqual(own.get("overflow-wrap"), undefined);
+  assert.deepStrictEqual([own.get("font-size"), own.get("font-weight")], ["var(--t-lg)", "600"]);
 });
