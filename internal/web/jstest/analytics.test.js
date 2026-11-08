@@ -8,6 +8,7 @@ const {
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
   daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
   anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+  anYTicks, AN_PAGE_CHART, anLegendItems,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -347,4 +348,50 @@ test("anSessionRow: one session's cells as text; mixed is flagged, a single mode
   const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
   assert.equal(single.model, "opus-5-5");
   assert.equal(single.mixed, false);
+});
+
+// ---- the cost chart's y labels and the legend (UI plan 5 Task 6; digest-design §A2, §B6) ----
+
+test("anYTicks: the page's three labels at the peak and its thirds, no zero label", () => {
+  const t = anYTicks(421, false);
+  assert.deepStrictEqual(t.map((x) => x.text), ["$421", "$281", "$140"], "§A2: peak, 2/3 and 1/3 of it, formatted by usd()");
+  assert.deepStrictEqual(t.map((x) => x.frac), [1, 2 / 3, 1 / 3]);
+  assert.ok(!t.some((x) => x.text === "$0.00" || x.frac === 0), "the baseline is not labelled");
+  assert.deepStrictEqual(anYTicks(12.5, false).map((x) => x.text), ["$12.50", "$8.33", "$4.17"]);
+});
+
+test("anYTicks: no scale (0, NaN, negative, missing) means no labels, never $0.00 or NaN", () => {
+  for (const bad of [0, NaN, -1, undefined, null, "x"]) {
+    assert.deepStrictEqual(anYTicks(bad, false), [], String(bad));
+    assert.deepStrictEqual(anYTicks(bad, true), [], String(bad) + " (with the zero)");
+  }
+});
+
+test("anYTicks(max, true): the phone's four labels, text for text what 'usd(max * (1 - i / 3))' printed", () => {
+  const t = anYTicks(421, true);
+  assert.deepStrictEqual(t.map((x) => x.text), ["$421", "$281", "$140", "$0.00"]);
+  assert.deepStrictEqual(t.map((x) => x.frac), [1, 2 / 3, 1 / 3, 0]);
+  // The phone drew usd(max * (1 - i / 3)) for i = 0..3 (anStackedTime on main, c47442b). 1 - 1/3 is not 2/3 to the last bit, so the
+  // thirds must not be computed any other way: the same expression, for any max, prints the same text.
+  // 1725 and 2175 are values where 'max * 2 / 3' or 'max * (2 / 3)' prints $1.1k / $1.4k and the phone printed $1.2k / $1.5k.
+  assert.deepStrictEqual(anYTicks(1725, true).map((x) => x.text), ["$1.7k", "$1.2k", "$575", "$0.00"]);
+  assert.deepStrictEqual(anYTicks(2175, false).map((x) => x.text), ["$2.2k", "$1.5k", "$725"]);
+  for (const max of [1, 1.5, 12.5, 33.33, 99.99, 100, 150, 421, 999.99, 1000, 1234.5, 1725, 2175, 9583.37, 123456.789, 0.7, 2.25, 299.97, 300.03]) {
+    assert.deepStrictEqual(anYTicks(max, true).map((x) => x.text), [0, 1, 2, 3].map((i) => usd(max * (1 - i / 3))), String(max));
+    assert.deepStrictEqual(anYTicks(max, false).map((x) => x.text), [0, 1, 2].map((i) => usd(max * (1 - i / 3))), String(max) + " (page)");
+  }
+});
+
+test("AN_PAGE_CHART is the frame's chart: 150px plot, 44px gutter with a 38px label box, 16px bars, labels 6px below", () => {
+  assert.deepStrictEqual({ ...AN_PAGE_CHART }, { plotH: 150, gutter: 44, labelBox: 38, bar: 16, xLabelGap: 6 });
+});
+
+test("anLegendItems: a name and a colour per model, coloured by its place in the canonical list", () => {
+  const all = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+  assert.deepStrictEqual(anLegendItems(all), [
+    { name: "opus-5-5", color: "var(--an-1)" }, { name: "sonnet-5-5", color: "var(--an-2)" }, { name: "haiku-5-5", color: "var(--an-3)" },
+  ]);
+  // A priced-only legend keeps the colours the bars have.
+  assert.deepStrictEqual(anLegendItems(["claude-haiku-5-5"], all), [{ name: "haiku-5-5", color: "var(--an-3)" }]);
+  assert.deepStrictEqual(anLegendItems([]), []);
 });

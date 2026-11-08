@@ -275,6 +275,12 @@ function anSessionKpis(d) {
 // from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
 
 const AN_COPY = {
+  overview: {
+    chart: "Cost over time", chartHint: "Stacked by model · daily", byModel: "Cost by model",
+    // The page only (digest-design §A2): the phone's own heading is "Cost by project (top)" and its note is anNote's boxed one.
+    byProject: "Cost by project", byProjectHint: "top 10 · bar split = model mix",
+    note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.",
+  },
   models: {
     title: "Per-model breakdown", hint: "Cost, volume & efficiency · window",
     shareTitle: "Why $ ≠ token count", shareHint: "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree",
@@ -352,6 +358,32 @@ function anSessionRow(s) {
   };
 }
 
+// ---- the cost chart's scale, geometry and legend ------------------------------------------------------------------------
+
+// anYTicks: the y labels of the daily cost chart, top to bottom: `frac` is the label's height as a share of the peak (`max`) and
+// `text` the dollars there. The page labels the peak and its two thirds and never the baseline (`withZero` false, digest-design
+// §B6): $421, $281, $140. The phone also labels the zero line, "$0.00" (`withZero` true). With no scale (`max` 0, NaN, negative)
+// there is nothing to label: [] (`!(max > 0)` is also true for NaN). The text is `usd(max * (1 - i / 3))`, written exactly as the
+// phone's chart always wrote it: 1 - 1/3 is not 2/3 to the last bit, and a different expression could round a boundary value to
+// another cent.
+function anYTicks(max, withZero) {
+  if (!(max > 0)) return [];
+  const ticks = [];
+  for (let i = 0; i <= (withZero ? 3 : 2); i++) ticks.push({ frac: (3 - i) / 3, text: usd(max * (1 - i / 3)) });
+  return ticks;
+}
+
+// The desktop page's chart, in px (digest-design §B6, §D1): a 150px plot with the date labels 6px under it, a 44px gutter to its
+// left whose 38px label box right-aligns the y labels, 16px bars. Used only when anIsPage(); the phone's chart keeps its own.
+const AN_PAGE_CHART = { plotH: 150, gutter: 44, labelBox: 38, bar: 16, xLabelGap: 6 };
+
+// anLegendItems: a legend's entries, a name and a colour per model, coloured by its place in `colorModels` (the canonical list;
+// `models` itself when none is given) so a legend of only some models wears the colours the bars have.
+function anLegendItems(models, colorModels) {
+  const key = colorModels || models;
+  return models.map((m) => ({ name: shortModel(m), color: modelColor(key, m) }));
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
@@ -360,6 +392,7 @@ if (typeof module !== "undefined" && module.exports) {
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
     anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+    anYTicks, AN_PAGE_CHART, anLegendItems,
   };
 }
 
@@ -703,30 +736,20 @@ function anWirePage() {
 
 // ---- Overview ---------------------------------------------------------------
 function anOverview(root) {
+  if (anIsPage()) return anOverviewPage(root);
   const d = AN.data, t = d.costByDay.totals;
-  if (anIsPage()) {
-    // The page's tiles: the kit's KPI row, the frame's labels (M3.1, §A2) and thousands separators on the counts.
-    root.appendChild(anKpiRow([
-      { value: usd(t.cost), label: "Total cost" },
-      { value: fmtCompact(t.tokens), label: "Tokens" },
-      { value: anCountText(d.sessionCount), label: "Sessions" },
-      { value: anCountText(t.prompts), label: "Prompts" },
-      { value: usd(d.sessionCount ? t.cost / d.sessionCount : 0), label: "Avg per session" },
-    ]));
-  } else {
-    const kpis = el("div", "an-kpis");
-    const tiles = [
-      ["cost", usd(t.cost), "total cost"],
-      ["", fmtCompact(t.tokens), "tokens"],
-      ["", String(d.sessionCount), "sessions"],
-      ["", String(t.prompts), "prompts"],
-      ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
-    ];
-    for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
-    root.appendChild(kpis);
-  }
+  const kpis = el("div", "an-kpis");
+  const tiles = [
+    ["cost", usd(t.cost), "total cost"],
+    ["", fmtCompact(t.tokens), "tokens"],
+    ["", String(d.sessionCount), "sessions"],
+    ["", String(t.prompts), "prompts"],
+    ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
+  ];
+  for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
+  root.appendChild(kpis);
 
-  const sec = anSection("Cost over time", "Stacked by model · daily");
+  const sec = anSection(AN_COPY.overview.chart, AN_COPY.overview.chartHint);
   const box = el("div", "an-box");
   box.appendChild(anStackedTime(d.costByDay, d.from, d.to));
   anLegend(box, d.pricedModels, d.models);
@@ -734,16 +757,12 @@ function anOverview(root) {
   root.appendChild(sec);
 
   const g = el("div", "an-grid2");
-  const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, "Cost by model"));
-  const modelsC = collapseZeroCost(d.byModel);
-  const maxM = Math.max(1, ...modelsC.map((x) => x.cost));
-  for (const x of modelsC) anHbar(b1, shortModel(x.model), x.cost, maxM, anModelColor(d.models, x.model), usd);
+  const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, AN_COPY.overview.byModel));
+  const fold = anModelFold(d.byModel);
+  for (const x of fold.rows) anHbar(b1, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), usd);
   const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, "Cost by project (top)"));
-  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
-  for (const p of d.byProject.slice(0, 10)) {
-    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
-    anHbarSegs(b2, projShort(p.project), p.cost, maxP, segs, usd);
-  }
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars.slice(0, 10)) anHbarSegs(b2, b.name, b.cost, pb.max, b.segs, usd);
   g.append(b1, b2);
   const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
   root.appendChild(sec2);
@@ -751,6 +770,53 @@ function anOverview(root) {
   if (d.cmp) root.appendChild(anCompareBlock());
 
   root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
+}
+
+// anOverviewPage: M3.1 (digest-design §A2, §B5-§B7): the KPI row; the cost chart's card, its head holding the title, its caption and
+// the legend, with the footnote a plain line under it; then cost by model and cost by project as two cards. The phone's anOverview
+// above is its own code; both read the same figures (anModelFold, anProjectBars, anLegendItems).
+function anOverviewPage(root) {
+  const d = AN.data, t = d.costByDay.totals;
+  // The page's tiles: the kit's KPI row, the frame's labels and thousands separators on the counts.
+  root.appendChild(anKpiRow([
+    { value: usd(t.cost), label: "Total cost" },
+    { value: fmtCompact(t.tokens), label: "Tokens" },
+    { value: anCountText(d.sessionCount), label: "Sessions" },
+    { value: anCountText(t.prompts), label: "Prompts" },
+    { value: usd(d.sessionCount ? t.cost / d.sessionCount : 0), label: "Avg per session" },
+  ]));
+
+  const sec = el("div", "an-psec");
+  const card = el("div", "an-card");
+  const head = el("div", "card-head");
+  head.append(el("h2", "t-md w-600", AN_COPY.overview.chart), el("span", "t-sm muted", AN_COPY.overview.chartHint), el("span", "grow"), anPLegend(d.pricedModels, d.models));
+  card.appendChild(head);
+  const body = anCardBody(card);
+  body.classList.add("an-chartbody");
+  body.appendChild(anStackedTime(d.costByDay, d.from, d.to));
+  sec.append(card, anFootnote(AN_COPY.overview.note));
+  root.appendChild(sec);
+
+  const grid = el("div", "an-pgrid");
+  const fold = anModelFold(d.byModel);
+  const mc = anCard(AN_COPY.overview.byModel, null, "h2");
+  const mrows = el("div", "an-hrows");
+  for (const x of fold.rows) {
+    // The "other (unpriced)" row is a label, not a model id: sans and muted, with an empty track ($0 draws no fill).
+    const unpriced = x.model === "other (unpriced)";
+    anHrow(mrows, shortModel(x.model), !unpriced, x.cost, fold.maxCost, [{ v: x.cost, c: anModelColor(d.models, x.model) }], false);
+  }
+  anCardBody(mc).appendChild(mrows);
+
+  const pb = anProjectBars(d.byProject, d.models);
+  const pc = anCard(AN_COPY.overview.byProject, AN_COPY.overview.byProjectHint, "h2");
+  const prows = el("div", "an-hrows");
+  for (const b of pb.bars.slice(0, 10)) anHrow(prows, b.name, true, b.cost, pb.max, b.segs, true);
+  anCardBody(pc).appendChild(prows);
+  grid.append(mc, pc);
+  root.appendChild(grid);
+
+  if (d.cmp) root.appendChild(anCompareBlock());
 }
 
 // ---- Models -----------------------------------------------------------------
@@ -1008,20 +1074,36 @@ function anDelta(cur, prev, costLike) {
 function anCompareBlock() {
   const C = AN.data.cmp;
   const sec = anSection("Change · this window vs previous", `${C.curFrom} → ${C.curTo}  vs  ${C.prevFrom} → ${C.prevTo}`);
-  const kpis = el("div", "an-kpis");
-  const tiles = [
-    ["cost", usd(C.cur.cost), "cost", anDelta(C.cur.cost, C.prev.cost, true)],
-    ["", fmtCompact(C.cur.tokens), "tokens", anDelta(C.cur.tokens, C.prev.tokens, true)],
-    ["", String(C.cur.prompts), "prompts", anDelta(C.cur.prompts, C.prev.prompts, false)],
-    ["", String(C.cur.sessions), "sessions", anDelta(C.cur.sessions, C.prev.sessions, false)],
-  ];
-  for (const [cls, v, l, d] of tiles) {
-    const c = anKpi(cls, v, l);
-    const dd = el("div", "an-kdelta " + d.cls, d.txt);
-    c.appendChild(dd);
-    kpis.appendChild(c);
+  const dl = {
+    cost: anDelta(C.cur.cost, C.prev.cost, true),
+    tokens: anDelta(C.cur.tokens, C.prev.tokens, true),
+    prompts: anDelta(C.cur.prompts, C.prev.prompts, false),
+    sessions: anDelta(C.cur.sessions, C.prev.sessions, false),
+  };
+  if (anIsPage()) {
+    // The page's tiles are the Overview's kit KPI row, each with its delta line inside (no frame draws this state: kit parts only).
+    sec.appendChild(anKpiRow([
+      { value: usd(C.cur.cost), label: "Cost", delta: dl.cost },
+      { value: fmtCompact(C.cur.tokens), label: "Tokens", delta: dl.tokens },
+      { value: anCountText(C.cur.prompts), label: "Prompts", delta: dl.prompts },
+      { value: anCountText(C.cur.sessions), label: "Sessions", delta: dl.sessions },
+    ]));
+  } else {
+    const kpis = el("div", "an-kpis");
+    const tiles = [
+      ["cost", usd(C.cur.cost), "cost", dl.cost],
+      ["", fmtCompact(C.cur.tokens), "tokens", dl.tokens],
+      ["", String(C.cur.prompts), "prompts", dl.prompts],
+      ["", String(C.cur.sessions), "sessions", dl.sessions],
+    ];
+    for (const [cls, v, l, d] of tiles) {
+      const c = anKpi(cls, v, l);
+      const dd = el("div", "an-kdelta " + d.cls, d.txt);
+      c.appendChild(dd);
+      kpis.appendChild(c);
+    }
+    sec.appendChild(kpis);
   }
-  sec.appendChild(kpis);
 
   const g = el("div", "an-grid2");
   g.append(
@@ -1034,7 +1116,9 @@ function anCompareBlock() {
   g2.append(anMixShift(), anDowOverlay());
   sec.appendChild(g2);
 
-  sec.appendChild(anNote("Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week)."));
+  // A static literal, set as HTML on the phone (its boxed note); the page's footnote is the same words as plain text.
+  const note = "Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week).";
+  sec.appendChild(anIsPage() ? anFootnote(note.replace(/<[^>]+>/g, "")) : anNote(note));
   return sec;
 }
 
@@ -1088,14 +1172,17 @@ function anDowOverlay() {
   const C = AN.data.cmp, d = C.dow, box = el("div", "an-box");
   box.appendChild(el("h4", null, "Cost by day-of-week (this vs prev)"));
   const W = 380, H = 150, pad = 26;
+  // On the page the axis text is 11px, and a label like "$12.50" no longer fits left of the plot's 26px pad: the plot starts at the
+  // cost chart's 44px gutter, the labels right-align in its 38px box and the date labels sit 6px under the plot (anPageChart's rules).
+  const page = anIsPage(), left = page ? AN_PAGE_CHART.gutter : pad;
   const max = Math.max(1, ...d.map((x) => Math.max(x.cur, x.prev)));
   const svg = anSvg(W, H);
   for (let i = 0; i <= 2; i++) {
     const y = pad + (H - 2 * pad) * i / 2;
-    svg.appendChild(anLine(pad, y, W - 6, y, "var(--rule)", 0.5));
-    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+    svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
+    svg.appendChild(page ? anText(AN_PAGE_CHART.labelBox, y + 4, usd(max * (1 - i / 2)), "end") : anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
   }
-  const xs = (i) => pad + i * ((W - 2 * pad) / 6);
+  const xs = (i) => left + i * ((W - left - pad) / 6);
   const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
   const line = (key, color, dash) => {
     let dd = "";
@@ -1109,7 +1196,7 @@ function anDowOverlay() {
   };
   line("prev", "var(--muted)", true);
   line("cur", "var(--accent)", false);
-  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + 11, x.day, "middle")));
+  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + (page ? AN_PAGE_CHART.xLabelGap + 12 : 11), x.day, "middle")));
   box.appendChild(anWrapSvg(svg));
   const lg = el("div", "an-legend");
   const mk = (c, t, dash) => { const s = el("span"); const i = el("i"); i.style.background = c; if (dash) i.style.opacity = ".6"; s.append(i, el("span", null, t)); return s; };
@@ -1139,6 +1226,8 @@ function anKpiRow(tiles) {
     const label = el("span", "kpi-label", t.label);
     label.setAttribute("title", t.title || t.label);
     tile.append(el("span", "kpi-value", t.value), label);
+    // A tile may carry a delta line ({txt, cls} from anDelta): the Compare block's, under the label.
+    if (t.delta) tile.appendChild(el("div", "an-kdelta " + t.delta.cls, t.delta.txt));
     row.appendChild(tile);
   }
   return row;
@@ -1153,12 +1242,13 @@ function anPSection(title, caption) {
   return sec;
 }
 // anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
-// it is a bare panel, as a table's card is. Content goes in anCardBody (padded) or, for a table, straight in.
-function anCard(title, caption) {
+// it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the Overview's cards are the frame's
+// h2). Content goes in anCardBody (padded) or, for a table, straight in.
+function anCard(title, caption, level) {
   const card = el("div", "an-card");
   if (title || caption) {
     const head = el("div", "card-head");
-    if (title) head.appendChild(el("h3", "t-md w-600", title));
+    if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
     if (caption) head.appendChild(el("span", "t-sm muted", caption));
     card.appendChild(head);
   }
@@ -1166,6 +1256,8 @@ function anCard(title, caption) {
 }
 function anCardBody(card) { const b = el("div", "an-card-body"); card.appendChild(b); return b; }
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
+// anFootnote (the page): the note under a card as one plain muted line (§A2: no box, no border, no italics). Plain text only.
+function anFootnote(text) { return el("p", "an-foot t-sm muted", text); }
 // anHead: the header row. Columns from firstNum on hold numbers: their header gets
 // "num" like their cells (anTd(text, "num")), so desktop.css can right-align both.
 // The page writes the labels in sentence case (§A3: Session, Day, …); the phone's stay as given.
@@ -1185,10 +1277,21 @@ function anIdTd(text, cls) { const td = el("td", cls); td.appendChild(el("span",
 // canonical list) so legend swatches match chart/bar colours even when the
 // legend displays only a subset (e.g. priced models).
 function anLegend(parent, models, colorModels) {
-  const key = colorModels || models;
   const lg = el("div", "an-legend");
-  for (const m of models) { const s = el("span"); const i = el("i"); i.style.background = modelColor(key, m); s.append(i, el("span", null, shortModel(m))); lg.appendChild(s); }
+  for (const it of anLegendItems(models, colorModels)) { const s = el("span"); const i = el("i"); i.style.background = it.color; s.append(i, el("span", null, it.name)); lg.appendChild(s); }
   parent.appendChild(lg);
+}
+// anPLegend (the page): the cost chart's legend for a card head (§A2, §D1): an 8px square swatch and the model id in mono, per
+// model. The same entries as anLegend's.
+function anPLegend(models, colorModels) {
+  const lg = el("div", "an-plegend");
+  for (const it of anLegendItems(models, colorModels)) {
+    const s = el("span"), sw = el("i", "an-sw");
+    sw.style.background = it.color;
+    s.append(sw, el("span", "mono t-xs fg", it.name));
+    lg.appendChild(s);
+  }
+  return lg;
 }
 // anModelColor colours a model bar, with a neutral grey for the collapsed
 // "other (unpriced)" row.
@@ -1201,6 +1304,27 @@ function anHbar(parent, name, v, max, color, fmtVal) {
   const track = el("div", "track"); const fill = el("div", "fill");
   fill.style.width = (v / max * 100) + "%"; fill.style.background = color; track.appendChild(fill);
   row.appendChild(track); row.appendChild(el("div", "val", fmtVal(v)));
+  parent.appendChild(row);
+}
+// anHrow (the page): a row of the Overview's cost cards (§B7): the label, the track (the kit's .meter) holding one fill per segment,
+// and the total as dollars. A segment is {v, c, t?}: its cost, its colour, its tooltip; a fill's width and offset are shares of
+// `max`, so the second segment starts where the first ends, and a segment with no cost draws no fill. `mono` is a machine id (a
+// model or a project); the other label is words, so sans and muted along with its value. `wide` is the project card's 184px label.
+function anHrow(parent, name, mono, total, max, segs, wide) {
+  const row = el("div", wide ? "an-hrow an-wide" : "an-hrow");
+  const nm = el("span", (mono ? "mono t-sm" : "t-sm muted") + " ellipsis", name);
+  nm.title = name;
+  const meter = el("span", "meter");
+  let from = 0;
+  for (const s of segs) {
+    if (!(s.v > 0)) continue;
+    const f = el("i");
+    f.style.left = (from / max * 100) + "%"; f.style.width = (s.v / max * 100) + "%"; f.style.background = s.c;
+    if (s.t) f.title = s.t;
+    meter.appendChild(f);
+    from += s.v;
+  }
+  row.append(nm, meter, el("span", "t-sm tnum an-hv" + (mono ? "" : " muted"), usd(total)));
   parent.appendChild(row);
 }
 function anHbarSegs(parent, name, total, max, segs, fmtVal) {
@@ -1225,18 +1349,21 @@ function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textCon
 // (empty days show as gaps) unless the span is very wide, where stackedLayout
 // falls back to sequential positioning. `fitW` (the desktop page) draws it at
 // that width, with a narrower floor per day; without it the width is fixed.
+// The page's chart has its own geometry (anPageChart); the phone's is below.
 function anStackedTime(agg, from, to, fitW) {
   const lay = stackedLayout(agg.days, from, to);
   const slots = Math.max(1, lay.slots);
+  if (anIsPage()) return anPageChart(agg, lay, slots, from, to, fitW);
   const H = 170, pad = 24, W = fitW ? Math.max(slots * 8, fitW) : Math.max(slots * 22, 720);
   const max = Math.max(1, agg.maxCost);
   const slotW = (W - 2 * pad) / slots;
   const bw = Math.min(16, Math.max(2, slotW - 3));
   const svg = anSvg(W, H);
+  const ticks = anYTicks(max, true);
   for (let i = 0; i <= 3; i++) {
     const y = pad + (H - 2 * pad) * i / 3;
     svg.appendChild(anLine(pad, y, W - 4, y, "var(--rule)", 0.5));
-    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 3)), "start"));
+    svg.appendChild(anText(2, y + 3, ticks[i].text, "start"));
   }
   const labelEvery = Math.max(1, Math.round(slots / 12)); // ~12 date labels max
   for (const b of lay.bars) {
@@ -1250,6 +1377,62 @@ function anStackedTime(agg, from, to, fitW) {
       svg.appendChild(r);
     }
     if (b.slot % labelEvery === 0) svg.appendChild(anText(x + bw / 2, H - pad + 11, b.day.slice(5), "middle"));
+  }
+  const wrap = anWrapSvg(svg);
+  wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day
+  return wrap;
+}
+
+// anChartLabel: the page chart's accessible name (§A2): the window and, when any day cost anything, the peak and its day.
+function anChartLabel(agg, from, to) {
+  let label = "Daily cost stacked by model, " + from + " to " + to;
+  const peak = agg.maxCost > 0 ? agg.days.find((d) => d.cost === agg.maxCost) : null;
+  if (peak) label += ", peak " + usd(agg.maxCost) + " on " + peak.day.slice(5);
+  return label;
+}
+
+// anPageChart: the cost chart of the desktop page (§B6, AN_PAGE_CHART). The plot is `plotH` high and starts `gutter` from the left;
+// the y labels, the peak and its thirds, right-align at the gutter's `labelBox` edge, centred on their gridline, with no label on the
+// baseline; a bar is `bar` wide (narrower in a crowded window) centred in its slot, its segments stacked cost-ascending with 1px
+// between them, 1px at least (a day's cost is never drawn as nothing, and a segment with no cost is not drawn); the date labels sit
+// `xLabelGap` under the plot, every round(slots/12) slots and never so close that two touch. The scale is the raw peak: a window with
+// no cost has no labels, not a "$0.00" (the phone floors it at 1). The svg overflows visibly and keeps TOP px above the plot for the
+// top label, which is centred on the plot's first line.
+function anPageChart(agg, lay, slots, from, to, fitW) {
+  const C = AN_PAGE_CHART;
+  const TOP = 8, GAP = 1, LABEL_H = 16, DATE_W = 44;
+  const W = fitW ? Math.max(slots * 8 + C.gutter, fitW) : Math.max(slots * 22, 720);
+  const H = TOP + C.plotH + C.xLabelGap + LABEL_H;
+  const slotW = (W - C.gutter) / slots;
+  const bw = Math.min(C.bar, Math.max(2, slotW - 3));
+  const max = agg.maxCost;
+  const bottom = TOP + C.plotH;
+  const svg = anSvg(W, H);
+  svg.setAttribute("overflow", "visible");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", anChartLabel(agg, from, to));
+  // A 1px line fills the pixel row from y, so it is drawn through y + 0.5; a label's baseline is 4px under its centre (an 11px digit
+  // is 8px tall).
+  const grid = (y) => svg.appendChild(anLine(C.gutter, y + 0.5, W, y + 0.5, "var(--line)", 1));
+  for (const t of anYTicks(max, false)) {
+    const y = TOP + Math.round(C.plotH * (1 - t.frac));
+    grid(y);
+    svg.appendChild(anText(C.labelBox, y + 4, t.text, "end"));
+  }
+  grid(bottom);
+  const labelEvery = Math.max(1, Math.round(slots / 12), Math.ceil(DATE_W / slotW));
+  for (const b of lay.bars) {
+    const x = C.gutter + b.slot * slotW + (slotW - bw) / 2;
+    let yb = bottom;
+    const segs = Object.entries(b.segs).filter(([, c]) => c > 0).sort((a, c) => a[1] - c[1]);
+    segs.forEach(([m, c], k) => {
+      const h = Math.max(1, Math.round(c / max * C.plotH));
+      yb -= (k ? GAP : 0) + h;
+      const r = anRect(x, yb, bw, h, modelColor(agg.models, m));
+      r.appendChild(anTitle(b.day + " · " + shortModel(m) + " " + usd(c)));
+      svg.appendChild(r);
+    });
+    if (b.slot % labelEvery === 0) svg.appendChild(anText(C.gutter + (b.slot + 0.5) * slotW, bottom + C.xLabelGap + 12, b.day.slice(5), "middle"));
   }
   const wrap = anWrapSvg(svg);
   wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day

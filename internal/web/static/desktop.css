@@ -26,13 +26,15 @@
        /error only. */
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
-    /* Analytics chart palette (S4 Task 8): categorical, no green/amber/red
-       (those are status colours). Hues are >= 25 degrees of HSL hue from --ok,
-       --amber and --red (desktop-scope.test.js). Order validated with the
-       dataviz validator, dark mode, surface #14171b. */
-    --an-1: #3d86ea; --an-2: #d462b1; --an-3: #3a6fd0; --an-4: #af6af2;
-    --an-5: #07a2c6; --an-6: #994c96; --an-7: #7b84e8;
-    --an-up: #d462b1; --an-down: #3d86ea;
+    /* Analytics chart palette (S4 Task 8; UI plan 5 Task 6, call 8): categorical, no green/amber/red (those are status colours)
+       and no magenta. Slots 1-5 are the frame's colours (digest-design §E1); 6 and 7 are the added light grey and olive (hue 68,
+       29 degrees from --amber). A hue is >= 25 degrees from --ok, --amber and --red, or the colour is grey. Series that can touch
+       in a stack (slots one or two apart: a model missing that day, the 8th model wrapping to slot 1) are >= 1.5:1 apart, and
+       every slot is >= 3:1 on --panel (desktop-scope.test.js). Compare: --an-up, a cost that rose, is the salient blue and
+       --an-down the grey, 1.61:1 apart. */
+    --an-1: #6ea8fe; --an-2: #86d9e8; --an-3: #7a828e; --an-4: #5d6570;
+    --an-5: #c391ea; --an-6: #c9ced4; --an-7: #7b853d;
+    --an-up: #6ea8fe; --an-down: #7a828e;
     --border: #23282f; --rule: #23282f;
     --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
     --background3: #2a3038;
@@ -2411,11 +2413,6 @@
   .an-date:focus { box-shadow: 0 0 0 1px var(--accent); }
 
   /* Cards: --panel, --r-card, 1px --line. */
-  #page-host > #analytics-modal.as-page .an-kpis { gap: 12px; margin-bottom: 16px; }
-  #page-host > #analytics-modal.as-page .an-kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
-  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: var(--t-kpi); font-weight: 600; color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-kpi .v.cost { color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: var(--t-md); letter-spacing: 0; text-transform: none; }
   #page-host > #analytics-modal.as-page .an-box { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
   #page-host > #analytics-modal.as-page .an-box h4 { font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #analytics-modal.as-page .an-section { margin: 0 0 16px; }
@@ -2428,14 +2425,13 @@
   .an-table th, .an-table td { text-align: left; }
   .an-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Compare: the diverging bars and their numbers share --an-up / --an-down;
-     a cost rise is not "red" here, it is a palette hue. The amber note stripe is
-     needs-you only, so the compare note goes neutral. */
+     a cost rise is not "red" here, it is a palette hue. Its note is the Overview's plain footnote (no amber stripe). */
   #page-host > #analytics-modal.as-page .an-divrow .val.an-up { color: var(--an-up); }
   #page-host > #analytics-modal.as-page .an-divrow .val.an-down { color: var(--an-down); }
   /* KPI deltas: neutral text, the up/down arrow carries the direction. The
-     base red/green (and good/bad) pairs are status colours (D23). */
-  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); }
-  #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
+     base red/green (and good/bad) pairs are status colours (D23). The line sits in a kit .kpi (its 2px gap is the spacing) at the
+     kit's smallest step. */
+  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); font-size: var(--t-xs); margin-top: 0; }
 
   /* --- Analytics bodies: KPI row, cards, kit tables, Sessions (UI plan 5 Task 5; frame M3.2, digest-design §B5, §B8, §C8, §C9) --- */
   /* The body is a container, so the Sessions split can answer the room it has (call 10): 1440 gives it 1086px (the sidebar's 290px
@@ -2443,6 +2439,8 @@
   #page-host > #analytics-modal.as-page #analytics-body { container-name: an-body; container-type: inline-size; }
   /* The KPI row is the kit's (.kpi-row, .kpi, .kpi-value, .kpi-label); 16px to what follows (§B0 .m3-body's gap). */
   #page-host > #analytics-modal.as-page #analytics-body > .kpi-row { margin-bottom: var(--sp-4); }
+  /* The Compare block's tiles are the same row, 16px above its two boxes. */
+  #page-host > #analytics-modal.as-page .an-section > .kpi-row { margin-bottom: var(--sp-4); }
 
   /* A section: the title and its caption on one baseline, then the card (§B8 .m3-sec, .m3-row). */
   #page-host > #analytics-modal.as-page .an-psec { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0 0 var(--sp-4); }
@@ -2505,10 +2503,38 @@
     #page-host > #analytics-modal.as-page .an-pgrid { grid-template-columns: minmax(0, 1fr); }
   }
 
+  /* --- Analytics Overview (UI plan 5 Task 6; frame M3.1, digest-design §A2, §B6, §B7, §D1) --- */
+  /* Axis text is the kit's smallest step (11px); app.css's 9px is the phone's. The cost chart and the Compare block's day-of-week
+     chart both wear it, each drawn with room for it (analytics.js anPageChart, anDowOverlay). */
+  #page-host > #analytics-modal.as-page .an-axis text { font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+  /* An inline svg sits on a text baseline and the wrapper would grow by its descender gap: the chart is a block, as the frame's is. */
+  #page-host > #analytics-modal.as-page .an-timewrap > svg { display: block; }
+  /* The chart's card body is §D1's .m3-cardbody (12px 16px 16px) less the 8px its svg carries above the plot for the top label. */
+  #page-host > #analytics-modal.as-page .an-chartbody { padding-top: var(--sp-1); }
+  /* The legend in the card head: items 16px apart, each a swatch and its label 6px apart; the swatch is an 8px square with no radius
+     (§D1 .m3-legend, .m3-sw). A narrow head wraps it rather than squeezing the title. */
+  #page-host > #analytics-modal.as-page .an-plegend { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); min-width: 0; }
+  #page-host > #analytics-modal.as-page .an-plegend > span { display: inline-flex; align-items: center; gap: 6px; }
+  #page-host > #analytics-modal.as-page .an-sw { display: inline-block; width: 8px; height: 8px; flex: none; }
+  /* The footnote is a plain line: the section's 8px gap sets it off the card; in the Compare block it follows the boxes by 8px. */
+  #page-host > #analytics-modal.as-page .an-foot { margin: 0; }
+  #page-host > #analytics-modal.as-page .an-section > .an-foot { margin-top: var(--sp-2); }
+  /* Cost by model and by project (§B7): label, track, value; 22px rows with no separators. The track is the kit's .meter (4px, radius
+     2, on --line), the fills are placed by the script. The project card's label column is 184px. */
+  #page-host > #analytics-modal.as-page #analytics-body > .an-pgrid { margin-bottom: var(--sp-4); }
+  #page-host > #analytics-modal.as-page .an-hrows { display: flex; flex-direction: column; }
+  #page-host > #analytics-modal.as-page .an-hrow { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; align-items: center; column-gap: var(--sp-3); height: 22px; }
+  #page-host > #analytics-modal.as-page .an-hrow.an-wide { grid-template-columns: 184px minmax(0, 1fr) 64px; }
+  #page-host > #analytics-modal.as-page .an-hv { text-align: right; }
+
   /* Text app.css sets in raw px for the phone gets a kit step here (Plan 1 follow-up 1). */
   #page-host > #analytics-modal.as-page .an-empty { font-size: var(--t-md); line-height: var(--lh-md); }
   #page-host > #analytics-modal.as-page .an-badge { font-size: var(--t-xs); }
   #page-host > #analytics-modal.as-page .an-bar .cap { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-hbar { font-size: var(--t-sm); }
+  #page-host > #analytics-modal.as-page .an-legend { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-divrow { font-size: var(--t-sm); }
+  #page-host > #analytics-modal.as-page .an-mixlabel { font-size: var(--t-xs); }
 
   /* --- chrome for the remaining modals, palette, toast, store banner, login (S4, spec 5.13) --- */
   /* No behaviour change: only the tokens and type move. Generic dialog chrome is

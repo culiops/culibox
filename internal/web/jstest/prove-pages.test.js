@@ -1457,6 +1457,26 @@ const FIXTURE = {
   ],
 };
 
+// A comparison with the window before it (the shape anLoadCompare builds): a model and a project that fell, one that rose, a
+// previous-only model, and a previous window with no sessions (so its tile says "new").
+const CMP = {
+  curFrom: "2026-10-09", curTo: "2026-11-07", prevFrom: "2026-09-09", prevTo: "2026-10-08",
+  models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
+  cur: { cost: 4300, tokens: 10400000000, prompts: 3994, sessions: 4 },
+  prev: { cost: 5100, tokens: 9000000000, prompts: 4100, sessions: 0 },
+  byModel: [
+    { model: "claude-opus-5-5", curCost: 4300, prevCost: 3000, curTok: 10000, prevTok: 6000 },
+    { model: "claude-sonnet-5-5", curCost: 0, prevCost: 1500, curTok: 400, prevTok: 2000 },
+    { model: "claude-haiku-4-5", curCost: 0, prevCost: 600, curTok: 0, prevTok: 1000 },
+  ],
+  byProject: [
+    { project: "-home-dev-acme-api", curCost: 1800, prevCost: 2500 },
+    { project: "-home-dev-acme-docs", curCost: 640, prevCost: 90 },
+    { project: "-home-dev-acme-flat", curCost: 5, prevCost: 5 },
+  ],
+  dow: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, i) => ({ day, cur: i * 30 + 1, prev: i * 20 + 12.5 })),
+};
+
 // load: AN.data as anLoad folds it from FIXTURE (the page's views read it), with the session count overridable.
 function loadWindow(env, over = {}) {
   env.ctx.FX = { ...FIXTURE, ...over };
@@ -1812,7 +1832,7 @@ test("no off-scale analytics text on desktop", () => {
   const app = parseRules(APP_CSS);
   const raw = (sel) => app.filter((r) => parts(r.selector).includes(sel)).map((r) => r.decls.get("font-size")).filter(Boolean).pop();
   const STEP = /^var\(--t-(?:xs|sm|md|lg|xl|kpi)\)$/;
-  for (const sel of [".an-empty", ".an-hint", ".an-badge", ".an-bar .cap"]) {
+  for (const sel of [".an-empty", ".an-hint", ".an-badge", ".an-bar .cap", ".an-hbar", ".an-legend", ".an-kdelta", ".an-divrow", ".an-mixlabel"]) {
     assert.match(raw(sel) || "", /px$/, sel + " is a px size on the phone (so the page must answer it)");
     const size = decls(ANP + " " + sel).get("font-size");
     assert.match(size || "", STEP, sel + " has a kit size under the page");
@@ -1833,6 +1853,7 @@ const digest = (root) => crypto.createHash("sha256").update(JSON.stringify(fullS
 const PHONE_VIEWS = {
   anOverview: "3d597d4de7c0eae7", anModels: "96d856c5596543ea", anProjects: "0fff16c5db41cc5d",
   anSessions: "99fd16067d3a4557", anTools: "0ab70056be45b675", anToolsEmpty: "8891756e9267971f",
+  anCompare: "1666c41c49f57a07", anOverviewCmp: "7c15da01ef252161", // these two measured on main's analytics.js (c47442b) and on the branch before Task 6: equal
 };
 
 test("the phone's five views draw what main drew, byte for byte", () => {
@@ -1844,6 +1865,11 @@ test("the phone's five views draw what main drew, byte for byte", () => {
   loadWindow(env);
   env.run("AN.data.sessionCount = 1420;");
   for (const fn of ["anOverview", "anModels", "anProjects", "anSessions", "anTools"]) got[fn] = digest(view(env, fn));
+  // The comparison block alone, and the Overview that ends with it (its note, its KPI grid, the day-of-week chart's axis).
+  env.ctx.CMP = CMP;
+  env.run("AN.data.cmp = CMP;");
+  got.anCompare = digest(view(env, "(function (r) { r.appendChild(anCompareBlock()); })"));
+  got.anOverviewCmp = digest(view(env, "anOverview"));
   assert.deepStrictEqual(got, PHONE_VIEWS);
 });
 
@@ -1930,4 +1956,505 @@ test("the page and the phone say the same thing: figures, colours, caps and word
   const once = (lit) => assert.strictEqual(src.split(lit).length - 1, 1, lit + " is written once");
   for (const lit of ["What the agents actually invoked", "No skill/plugin/MCP attribution", "Per-model breakdown", "Cost, volume & efficiency", "cache-read dominates tokens", "Share of tokens", "Share of cost",
     "Bar split shows the model mix", "mcp_server: \"var(--an-3)\"", "plugin: \"var(--an-4)\"", "\"model\", \"cost\", \"% cost\"", "\"project\", \"cost\", \"tokens\", \"prompts\"", "\"session\", \"day\", \"project\", \"model\""]) once(lit);
+});
+
+// =====================================================================================================================
+// Analytics Overview: the cost chart, its legend and footnote, the two cost cards, the Compare block's parts and the CSS of
+// the palette (Task 6; frame M3.1, digest-design §A2, §B6, §B7, §D1, §E, §F2)
+// =====================================================================================================================
+
+// A 30-day window as the frame draws it (§B6): two models, 10-19 the peak at $421 (opus 281 on sonnet 140), 10-09 opus 45 on
+// sonnet 95, two opus-only days and 10-29 a gap with no cost.
+function chartRows() {
+  const rows = [];
+  for (let i = 0; i < 30; i++) {
+    const day = new Date(Date.UTC(2026, 9, 9 + i)).toISOString().slice(0, 10);
+    if (day === "2026-10-29") continue;
+    const opus = day === "2026-10-09" ? 45 : day === "2026-10-19" ? 281 : 150 + ((i * 7) % 40);
+    const sonnet = day === "2026-10-12" || day === "2026-10-22" ? 0 : day === "2026-10-09" ? 95 : day === "2026-10-19" ? 140 : 40 + ((i * 11) % 30);
+    rows.push(ROW({ day, model: "claude-opus-5-5", costUsd: opus }));
+    if (sonnet) rows.push(ROW({ day, model: "claude-sonnet-5-5", costUsd: sonnet }));
+  }
+  return rows;
+}
+// drawChart: anStackedTime for `rows` in `env` (the page or the phone), as the wrapper it returns.
+function drawChart(env, rows, from, to, fitW) {
+  env.ctx.ROWS = rows;
+  return env.run(`anStackedTime(foldCostByDay(ROWS), ${JSON.stringify(from)}, ${JSON.stringify(to)}${fitW ? ", " + fitW : ""})`);
+}
+const nodesOf = (root, tag) => {
+  const out = [];
+  const walk = (n) => n.elements.forEach((c) => { if (c.tag === tag) out.push(c); walk(c); });
+  walk(root);
+  return out;
+};
+const num = (v) => Number(v);
+// An upper estimate of a glyph at 11px (a digit is about 6.1px in Inter, tabular), to box a label without a browser.
+const GLYPH = 6.6;
+const textBox = (t) => {
+  const x = num(t.attrs.x), y = num(t.attrs.y), w = t.textContent.length * GLYPH, a = t.attrs["text-anchor"];
+  const l = a === "end" ? x - w : a === "middle" ? x - w / 2 : x;
+  return { l, r: l + w, t: y - 8, b: y + 3, what: "“" + t.textContent + "”" };
+};
+const rectBox = (r) => ({ l: num(r.attrs.x), r: num(r.attrs.x) + num(r.attrs.width), t: num(r.attrs.y), b: num(r.attrs.y) + num(r.attrs.height), what: "bar" });
+const overlaps = (a, c) => a.l < c.r && c.l < a.r && a.t < c.b && c.t < a.b;
+// collisions: every pair of boxes (labels and bars) that overlap, as text.
+function collisions(svg) {
+  const boxes = [...nodesOf(svg, "text").map(textBox), ...nodesOf(svg, "rect").map(rectBox)];
+  const out = [];
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+    if (boxes[i].what === "bar" && boxes[j].what === "bar") continue;
+    if (overlaps(boxes[i], boxes[j])) out.push(boxes[i].what + " / " + boxes[j].what);
+  }
+  return out;
+}
+// No attribute of any node says NaN or Infinity.
+function badNumbers(root) {
+  const out = [];
+  const walk = (n) => { for (const [k, v] of Object.entries(n.attrs)) if (/NaN|Infinity/.test(v)) out.push(n.tag + " " + k + "=" + v); n.elements.forEach(walk); };
+  walk(root);
+  return out;
+}
+
+test("the page chart has no zero label and its labels clear the bars", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const C = { ...env.run("AN_PAGE_CHART") };
+  const wrap = drawChart(env, chartRows(), "2026-10-09", "2026-11-07", 1054);
+  assert.ok(wrap.cls.includes("an-timewrap"), "still the wrapper anRender scrolls and anFitTimeChart replaces");
+  const svg = wrap.elements[0];
+  assert.strictEqual(svg.tag, "svg");
+  assert.strictEqual(svg.attrs.overflow, "visible", "the top label may poke above the plot");
+  assert.strictEqual(svg.attrs.width, "1054", "the fit width is the svg's width: the plot is that less the 44px gutter, 1010px");
+  assert.strictEqual(svg.attrs.role, "img");
+  assert.strictEqual(svg.attrs["aria-label"], "Daily cost stacked by model, 2026-10-09 to 2026-11-07, peak $421 on 10-19", "§A2");
+  const texts = nodesOf(svg, "text");
+  const yl = texts.filter((t) => t.attrs["text-anchor"] === "end");
+  const xl = texts.filter((t) => t.attrs["text-anchor"] === "middle");
+  assert.strictEqual(texts.length, yl.length + xl.length, "no other anchor");
+
+  // Y labels: three, the peak and its thirds, no $0.00; right-aligned at the label box's edge (38) with the plot at 44.
+  assert.deepStrictEqual(yl.map((t) => t.textContent), ["$421", "$281", "$140"]);
+  assert.ok(!texts.some((t) => /\$0\.00|NaN/.test(t.textContent)));
+  const lines = nodesOf(svg, "line");
+  assert.strictEqual(lines.length, 4, "gridlines at the peak, 2/3, 1/3 and the baseline");
+  assert.deepStrictEqual(lines.map((l) => l.attrs.x1), Array(4).fill(String(C.gutter)), "the plot starts at x = 44");
+  assert.deepStrictEqual(lines.map((l) => l.attrs.x2), Array(4).fill("1054"));
+  assert.ok(lines.every((l) => l.style.stroke === "var(--line)" && l.attrs["stroke-width"] === "1"), "1px --line, as §B6");
+  const gy = lines.map((l) => num(l.attrs.y1));
+  const plotTop = gy[0] - 0.5, plotBottom = gy[3] - 0.5;
+  assert.strictEqual(plotBottom - plotTop, C.plotH, "150px plot");
+  assert.deepStrictEqual(gy.map((y) => y - gy[0]), [0, 50, 100, 150], "§B6: 0, 50, 100, 150");
+  yl.forEach((t, k) => {
+    assert.strictEqual(t.attrs.x, String(C.labelBox), "text-anchor end at x = 38");
+    assert.ok(Math.abs(num(t.attrs.y) - 4 - gy[k]) <= 0.5, "label " + t.textContent + " is centred on its gridline (an 11px digit is 8px tall: its baseline is 4px under the centre)");
+  });
+  assert.ok(num(lines[0].attrs.x1) - num(yl[0].attrs.x) >= 6, "6px between the label box and the plot");
+
+  // X labels: every 3rd of 30 slots (§A2's list), centred under their slot, their baseline well under the plot.
+  assert.deepStrictEqual(xl.map((t) => t.textContent), ["10-09", "10-12", "10-15", "10-18", "10-21", "10-24", "10-27", "10-30", "11-02", "11-05"]);
+  const slotW = (1054 - C.gutter) / 30;
+  xl.forEach((t, k) => assert.ok(Math.abs(num(t.attrs.x) - (C.gutter + k * 3 * slotW + slotW / 2)) < 0.01, t.textContent + " is centred on its slot"));
+  for (const t of xl) {
+    assert.ok(num(t.attrs.y) >= C.plotH + C.xLabelGap, "the baseline is at least plotH + 6 down");
+    assert.ok(num(t.attrs.y) - 8 >= plotBottom + C.xLabelGap, "and the glyph tops clear the plot's bottom by 6px");
+  }
+
+  // Bars: 16px, centred in their slot, stacked cost-ascending with a 1px gap; the frame's pixel numbers (§B6).
+  const rects = nodesOf(svg, "rect");
+  const day = (d) => rects.filter((r) => r.elements[0].textContent.startsWith(d + " · "));
+  const [o9a, o9b] = day("2026-10-09");
+  assert.deepStrictEqual([o9a, o9b].map((r) => r.elements[0].textContent), ["2026-10-09 · opus-5-5 $45.00", "2026-10-09 · sonnet-5-5 $95.00"], "the smaller segment (opus, $45) is at the bottom: the stack is cost-ascending");
+  assert.deepStrictEqual([o9a, o9b].map((r) => num(r.attrs.height)), [16, 34], "10-09: opus 16px, sonnet 34px");
+  assert.strictEqual(num(o9a.attrs.y) + num(o9a.attrs.height), plotBottom, "the first segment sits on the plot's bottom");
+  assert.strictEqual(num(o9b.attrs.y) + num(o9b.attrs.height), num(o9a.attrs.y) - 1, "a 1px gap between the segments");
+  assert.strictEqual(num(o9a.attrs.width), C.bar);
+  assert.ok(Math.abs(num(o9a.attrs.x) - (C.gutter + (slotW - C.bar) / 2)) < 0.01, "centred in the first slot");
+  assert.deepStrictEqual([o9a, o9b].map((r) => r.style.fill), ["var(--an-1)", "var(--an-2)"], "opus is slot 1, sonnet slot 2");
+  const [p1, p2] = day("2026-10-19");
+  assert.deepStrictEqual([p1, p2].map((r) => num(r.attrs.height)), [50, 100], "10-19, the peak: sonnet 50px under opus 100px");
+  assert.strictEqual(num(p2.attrs.y), plotTop - 1, "151px with the gap: one px over the plot, as the frame draws it");
+  assert.strictEqual(day("2026-10-12").length, 1, "an opus-only day is one segment");
+  assert.strictEqual(day("2026-10-29").length, 0, "no cost, no bar: the gap");
+  assert.ok(rects.every((r) => num(r.attrs.width) <= C.bar && num(r.attrs.x) >= C.gutter && num(r.attrs.height) >= 1));
+  // The 4th gridline is drawn first and the bars over it; the labels clear every bar.
+  assert.deepStrictEqual(collisions(svg), []);
+  assert.deepStrictEqual(badNumbers(svg), []);
+});
+
+test("the page chart's data shapes: none, one day, one model, unpriced only, a narrow card, a very wide window", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const C = { ...env.run("AN_PAGE_CHART") };
+  const shape = (rows, from, to, fitW) => {
+    const svg = drawChart(env, rows, from, to, fitW).elements[0];
+    assert.deepStrictEqual(badNumbers(svg), [], "no NaN or Infinity");
+    assert.deepStrictEqual(collisions(svg), [], "no overlap");
+    const texts = nodesOf(svg, "text");
+    assert.ok(!texts.some((t) => /NaN|\$0\.00/.test(t.textContent)), "no NaN or $0.00 label");
+    return { svg, texts, yl: texts.filter((t) => t.attrs["text-anchor"] === "end"), rects: nodesOf(svg, "rect"), lines: nodesOf(svg, "line") };
+  };
+  // An empty window draws the plot's baseline and nothing else: no scale, no label.
+  let s = shape([], "2026-10-09", "2026-11-07", 1054);
+  assert.deepStrictEqual([s.texts.length, s.rects.length, s.lines.length], [0, 0, 1]);
+  // Only unpriced models: max is 0, so no y labels and no bars, however many days.
+  s = shape([ROW({ day: "2026-10-10", model: "<synthetic>", prompts: 3 }), ROW({ day: "2026-10-11", model: "", prompts: 2 })], "2026-10-09", "2026-11-07", 1054);
+  assert.deepStrictEqual([s.yl.length, s.rects.length, s.lines.length], [0, 0, 1], "an all-unpriced page window draws no y labels");
+  // A one-day window: one slot, the bar in the middle of the plot, its date under it.
+  s = shape([ROW({ day: "2026-10-09", model: "claude-opus-5-5", costUsd: 12.5 })], "2026-10-09", "2026-10-09", 1054);
+  assert.deepStrictEqual(s.yl.map((t) => t.textContent), ["$12.50", "$8.33", "$4.17"]);
+  assert.strictEqual(s.rects.length, 1);
+  assert.strictEqual(num(s.rects[0].attrs.height), C.plotH, "the peak day fills the plot");
+  assert.ok(Math.abs(num(s.rects[0].attrs.x) + C.bar / 2 - (C.gutter + (1054 - C.gutter) / 2)) < 0.01, "centred");
+  assert.deepStrictEqual(s.texts.filter((t) => t.attrs["text-anchor"] === "middle").map((t) => t.textContent), ["10-09"]);
+  // A day that cost cents beside a $421 peak is still a bar, 1px (§B6: min 1px); a segment that cost nothing is not drawn at all.
+  s = shape([ROW({ day: "2026-10-09", model: "claude-opus-5-5", costUsd: 421 }), ROW({ day: "2026-10-10", model: "claude-opus-5-5", costUsd: 0.05 }), ROW({ day: "2026-10-10", model: "claude-sonnet-5-5", costUsd: 0 })], "2026-10-09", "2026-10-11", 1054);
+  assert.deepStrictEqual(s.rects.map((r) => num(r.attrs.height)), [C.plotH, 1], "the peak fills the plot, the cents are one px, the $0 segment has no rect");
+  // One model, then eight (the 8th wraps to slot 1): every segment is a var(--an-N) of the seven.
+  const eight = [];
+  for (let m = 0; m < 8; m++) eight.push(ROW({ day: "2026-10-10", model: "claude-model-" + m, costUsd: 100 - m }));
+  s = shape(eight, "2026-10-09", "2026-10-15", 1054);
+  assert.deepStrictEqual(s.rects.map((r) => r.style.fill), ["an-1", "an-7", "an-6", "an-5", "an-4", "an-3", "an-2", "an-1"].map((n) => "var(--" + n + ")"), "cost-ascending: the cheapest model (the 8th, wrapped to slot 1) is at the bottom and the dearest (slot 1) on top");
+  // A narrow card: slots of 8px, the bars thin and the labels thinned out until none touches its neighbour.
+  s = shape(chartRows(), "2026-10-09", "2026-11-07", 300);
+  assert.strictEqual(s.svg.attrs.width, "300");
+  assert.ok(s.rects.every((r) => num(r.attrs.width) < C.bar && num(r.attrs.width) >= 2));
+  assert.ok(s.texts.filter((t) => t.attrs["text-anchor"] === "middle").length < 10, "fewer date labels than at full width, never touching");
+  // Below the per-day floor the chart scrolls (a 200-day span is index mode: 8px a slot) instead of squeezing.
+  const wide = [];
+  for (let i = 0; i < 200; i++) wide.push(ROW({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), model: "claude-opus-5-5", costUsd: 1 + (i % 9) }));
+  s = shape(wide, "2026-01-01", "2026-07-19", 1054);
+  assert.strictEqual(num(s.svg.attrs.width), Math.max(200 * 8 + C.gutter, 1054), "8px a slot plus the gutter, wider than the card: the wrapper scrolls");
+});
+
+test("the phone's chart keeps its geometry: 170px, a 24px pad, four y labels with $0.00 at x = 2, 9px axis text", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  const wrap = drawChart(env, chartRows(), "2026-10-09", "2026-11-07");
+  const svg = wrap.elements[0];
+  assert.strictEqual(svg.attrs.viewBox, "0 0 720 170");
+  assert.strictEqual(svg.attrs.overflow, undefined);
+  assert.strictEqual(svg.attrs.role, undefined);
+  const y = nodesOf(svg, "text").filter((t) => t.attrs["text-anchor"] === "start");
+  assert.deepStrictEqual(y.map((t) => [t.textContent, t.attrs.x]), [["$421", "2"], ["$281", "2"], ["$140", "2"], ["$0.00", "2"]]);
+  assert.deepStrictEqual(nodesOf(svg, "line").map((l) => [l.attrs.x1, l.style.stroke, l.attrs["stroke-width"]]), Array(4).fill(["24", "var(--rule)", "0.5"]));
+  assert.strictEqual(digest(wrap), "3b92301a50afd6aa", "the whole chart, hashed: measured on main's analytics.js (c47442b) and on the branch before Task 6");
+  // An all-unpriced phone window still shows its four ticks (max is floored at 1, exactly as before).
+  const flat = drawChart(env, [ROW({ day: "2026-10-10", model: "<synthetic>", prompts: 3 })], "2026-10-09", "2026-11-07").elements[0];
+  assert.deepStrictEqual(nodesOf(flat, "text").filter((t) => t.attrs["text-anchor"] === "start").map((t) => t.textContent), ["$1.00", "$0.67", "$0.33", "$0.00"]);
+  // app.css keeps the phone's 9px; desktop.css's 11px is the page's alone.
+  assert.strictEqual(decls(".an-axis text", parseRules(APP_CSS)).get("font-size"), "9px");
+});
+
+test("axis text is --t-xs on the page", () => {
+  assert.strictEqual(decls(ANP + " .an-axis text").get("font-size"), "var(--t-xs)");
+  assert.strictEqual(decls(ANP + " .an-axis text").get("font-variant-numeric"), "tabular-nums", "§B6: the labels are tabular, like the frame's .tnum");
+  assert.strictEqual(decls(ANP + " .an-timewrap > svg").get("display"), "block", "no descender gap under the chart: the card body is 12 + 150 + 22 + 16 as drawn");
+  assert.deepStrictEqual(RULES.filter((r) => parts(r.selector).some((s) => /\.an-axis/.test(s) && !s.startsWith(ANP))).map((r) => r.selector), [], "no rule outside the page names the axis");
+});
+
+test("the fit width still redraws the chart at the card's width, with the new geometry", () => {
+  // The fake DOM has no layout: a node measures 0 wide until a test says otherwise (a browser says the same of a detached one).
+  Object.defineProperty(El.prototype, "clientWidth", { value: 0, writable: true, configurable: true });
+  try {
+    fitWidthTest();
+  } finally {
+    delete El.prototype.clientWidth;
+  }
+});
+function fitWidthTest() {
+  const env = analyticsEnv();
+  env.page(true);
+  const C = { ...env.run("AN_PAGE_CHART") };
+  loadWindow(env, { summary: chartRows() });
+  env.run("anRender();");
+  const body = env.el("analytics-body");
+  const old = body.querySelector(".an-timewrap");
+  assert.ok(old, "the Overview draws the chart");
+  const swaps = [];
+  old.clientWidth = 900.4;
+  old.replaceWith = (n) => { swaps.push(n); n.parent = old.parent; old.parent.children[old.parent.children.indexOf(old)] = n; };
+  env.run("anFitTimeChart();");
+  assert.strictEqual(swaps.length, 1);
+  assert.strictEqual(swaps[0].dataset.fitw, "900");
+  assert.strictEqual(swaps[0].elements[0].attrs.width, "900", "the svg is the card's width: the plot 900 - 44");
+  assert.ok(swaps[0].cls.includes("an-timewrap"), "the redrawn chart is still the wrapper the next fit finds");
+  assert.deepStrictEqual(nodesOf(swaps[0], "line").map((l) => l.attrs.x1), Array(4).fill(String(C.gutter)));
+  swaps[0].clientWidth = 900;
+  env.run("anFitTimeChart();");
+  assert.strictEqual(swaps.length, 1, "the same width again redraws nothing");
+  swaps[0].clientWidth = 640;
+  swaps[0].replaceWith = (n) => swaps.push(n);
+  env.run("anFitTimeChart();");
+  assert.strictEqual(swaps.length, 2, "a new width redraws");
+  assert.strictEqual(swaps[1].dataset.fitw, "640");
+  // The phone never fits: its chart is the fixed 720px floor.
+  const phone = analyticsEnv();
+  phone.page(false);
+  loadWindow(phone, { summary: chartRows() });
+  phone.run("anRender();");
+  const pw = phone.el("analytics-body").querySelector(".an-timewrap");
+  pw.clientWidth = 900;
+  pw.replaceWith = () => assert.fail("the phone's chart is never redrawn at a fit width");
+  phone.run("anFitTimeChart();");
+}
+
+// A made-up window for the Overview: three priced models (one only on two days), an unpriced one, twelve projects, one of them
+// split over two models.
+function overviewWindow(env) {
+  const rows = chartRows();
+  rows.push(ROW({ day: "2026-10-10", model: "claude-haiku-5-5", costUsd: 1.2 }), ROW({ day: "2026-10-11", model: "claude-haiku-5-5", costUsd: 0.85 }));
+  const projects = [
+    ROW({ project: "-home-dev-acme-api", model: "claude-opus-5-5", costUsd: 120.5 }),
+    ROW({ project: "-home-dev-acme-api", model: "claude-sonnet-5-5", costUsd: 40 }),
+    ROW({ project: "-home-dev-acme-terraform-course-eu-west", model: "claude-opus-5-5", costUsd: 380 }),
+    ROW({ project: "-home-dev-acme-docs", model: "claude-haiku-5-5", costUsd: 2.05 }),
+  ];
+  for (let i = 0; i < 9; i++) projects.push(ROW({ project: "-home-dev-proj-" + String.fromCharCode(97 + i), model: "claude-opus-5-5", costUsd: 100 - i * 5 }));
+  loadWindow(env, {
+    summary: rows,
+    models: [
+      ROW({ model: "claude-haiku-5-5", prompts: 9, costUsd: 2.05 }), ROW({ model: "claude-opus-5-5", prompts: 3994, costUsd: 3000 }),
+      ROW({ model: "claude-sonnet-5-5", prompts: 80, costUsd: 1300 }), ROW({ model: "<synthetic>", prompts: 41 }),
+    ],
+    projects,
+  });
+  env.run("AN.data.sessionCount = 1420;");
+}
+const sigOf = (n) => n.tag + "." + n.className;
+
+test("the legend sits in the card head; the footnote is a plain muted line under the card", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  overviewWindow(env);
+  const root = view(env, "anOverview");
+  assert.deepStrictEqual(root.elements.map(sigOf), ["div.kpi-row", "div.an-psec", "div.an-pgrid"], "the KPI row, the chart with its footnote, the two cost cards");
+  const sec = root.elements[1];
+  assert.deepStrictEqual(sec.elements.map(sigOf), ["div.an-card", "p.an-foot t-sm muted"], "the footnote follows the card directly");
+  const [card, foot] = sec.elements;
+  assert.strictEqual(foot.textContent, "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.", "§A2, final copy");
+  assert.strictEqual(foot.children.length, 1, "plain text: no <b>, no <i>");
+  assert.ok(!foot.innerHTML, "and nothing set as HTML");
+  // The head: title, caption, a spacer, the legend.
+  assert.deepStrictEqual(card.elements.map(sigOf), ["div.card-head", "div.an-card-body an-chartbody"]);
+  const head = card.elements[0];
+  assert.deepStrictEqual(head.elements.map(sigOf), ["h2.t-md w-600", "span.t-sm muted", "span.grow", "div.an-plegend"]);
+  assert.deepStrictEqual(head.elements.slice(0, 2).map((n) => n.textContent), ["Cost over time", "Stacked by model · daily"]);
+  const legend = head.elements[3];
+  // Three priced models, in cost order, each its colour on the chart; the unpriced ones are not in it.
+  assert.deepStrictEqual(legend.elements.map((s) => s.elements.map(sigOf)), Array(3).fill(["i.an-sw", "span.mono t-xs fg"]));
+  assert.deepStrictEqual(legend.elements.map((s) => s.elements[1].textContent), ["opus-5-5", "sonnet-5-5", "haiku-5-5"]);
+  assert.deepStrictEqual(legend.elements.map((s) => s.elements[0].style.background), ["var(--an-1)", "var(--an-2)", "var(--an-3)"], "the colours the bars wear");
+  // The chart is in the body, and the page has no boxed disclaimer, no old section heading, no legacy box.
+  assert.deepStrictEqual(card.elements[1].elements.map((n) => n.cls.includes("an-timewrap")), [true]);
+  const all = [];
+  const walk = (n) => { all.push(n); n.elements.forEach(walk); };
+  walk(root);
+  assert.ok(!all.some((n) => /an-cmpnote|an-box|an-section|an-grid2|an-legend\b/.test(n.className)), "none of the phone's nodes");
+  assert.ok(!/Where the money goes|Cost by project \(top\)/.test(root.textContent));
+  // An unpriced-only window has an empty legend item list, not a head with empty swatches.
+  loadWindow(env, { summary: [ROW({ day: "2026-10-10", model: "<synthetic>", prompts: 3 })], models: [ROW({ model: "<synthetic>", prompts: 3 })], projects: [] });
+  const bare = view(env, "anOverview");
+  assert.strictEqual(bare.elements[1].elements[0].elements[0].elements[3].elements.length, 0, "no legend items when no model is priced");
+});
+
+test("the phone keeps its boxed disclaimer, its legend under the chart and its section headings", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  overviewWindow(env);
+  const root = view(env, "anOverview");
+  const all = [];
+  const walk = (n) => { all.push(n); n.elements.forEach(walk); };
+  walk(root);
+  assert.strictEqual(all.filter((n) => n.cls.includes("an-cmpnote")).length, 1);
+  assert.match(all.find((n) => n.cls.includes("an-cmpnote")).innerHTML, /^Descriptive only\. Cross-model differences reflect the <b>task<\/b>/);
+  assert.ok(root.textContent.includes("Where the money goes") && root.textContent.includes("Cost by project (top)"));
+  assert.ok(all.some((n) => n.cls.includes("an-legend")) && !all.some((n) => /an-plegend|an-foot|an-hrow|an-pgrid|an-card/.test(n.className)), "none of the page's nodes");
+});
+
+test("cost by model / by project are two cards (§B7)", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  overviewWindow(env);
+  const root = view(env, "anOverview");
+  const grid = root.elements[2];
+  assert.strictEqual(grid.className, "an-pgrid");
+  const [mc, pc] = grid.elements;
+  assert.deepStrictEqual(grid.elements.map(sigOf), ["div.an-card", "div.an-card"]);
+  const heads = (c) => c.elements[0].elements.map((n) => [sigOf(n), n.textContent]);
+  assert.deepStrictEqual(heads(mc), [["h2.t-md w-600", "Cost by model"]], "the head holds only the title");
+  assert.deepStrictEqual(heads(pc), [["h2.t-md w-600", "Cost by project"], ["span.t-sm muted", "top 10 · bar split = model mix"]]);
+  assert.deepStrictEqual([mc, pc].map((c) => c.elements[1].className), ["an-card-body", "an-card-body"]);
+  const rowsOf = (c) => c.elements[1].elements[0];
+  assert.deepStrictEqual([mc, pc].map((c) => rowsOf(c).className), ["an-hrows", "an-hrows"]);
+
+  // Model rows: a mono label, the track (the kit's .meter) and a right-aligned tabular value; the unpriced row is sans, muted, with an empty track.
+  const mrows = rowsOf(mc).elements;
+  assert.deepStrictEqual(mrows.map((r) => r.className), Array(4).fill("an-hrow"));
+  assert.deepStrictEqual(mrows.map((r) => r.elements.map(sigOf)), [
+    ["span.mono t-sm ellipsis", "span.meter", "span.t-sm tnum an-hv"], ["span.mono t-sm ellipsis", "span.meter", "span.t-sm tnum an-hv"], ["span.mono t-sm ellipsis", "span.meter", "span.t-sm tnum an-hv"],
+    ["span.t-sm muted ellipsis", "span.meter", "span.t-sm tnum an-hv muted"],
+  ]);
+  assert.deepStrictEqual(mrows.map((r) => [r.elements[0].textContent, r.elements[2].textContent]), [["opus-5-5", "$3.0k"], ["sonnet-5-5", "$1.3k"], ["haiku-5-5", "$2.05"], ["other (unpriced)", "$0.00"]]);
+  assert.deepStrictEqual(mrows.map((r) => r.elements[0].title), ["opus-5-5", "sonnet-5-5", "haiku-5-5", "other (unpriced)"], "a long id ellipsizes, so its title keeps it whole");
+  const fills = (row) => row.elements[1].elements.map((i) => ({ left: i.style.left, width: i.style.width, background: i.style.background, title: i.title }));
+  assert.deepStrictEqual(mrows.map(fills).map((f) => f.map((x) => [x.left, x.background])), [[["0%", "var(--an-1)"]], [["0%", "var(--an-2)"]], [["0%", "var(--an-3)"]], []], "the unpriced row has an empty track");
+  assert.strictEqual(fills(mrows[0])[0].width, "100%", "the dearest model is the full track");
+  assert.strictEqual(fills(mrows[1])[0].width, 1300 / 3000 * 100 + "%");
+
+  // Project rows: the top ten of the window's costliest, each bar split by model mix, scaled to the costliest project.
+  const prows = rowsOf(pc).elements;
+  assert.strictEqual(prows.length, 10, "top 10 of the 12");
+  assert.deepStrictEqual(prows.map((r) => r.className), Array(10).fill("an-hrow an-wide"));
+  assert.deepStrictEqual(prows[0].elements.map(sigOf), ["span.mono t-sm ellipsis", "span.meter", "span.t-sm tnum an-hv"]);
+  assert.deepStrictEqual(prows.slice(0, 3).map((r) => [r.elements[0].textContent, r.elements[2].textContent]), [["acme-terraform-course-eu-west", "$380"], ["acme-api", "$161"], ["proj-a", "$100"]]);
+  const api = fills(prows[1]);
+  assert.deepStrictEqual(api.map((f) => f.background), ["var(--an-1)", "var(--an-2)"], "opus first (dearest), then sonnet");
+  assert.deepStrictEqual(api.map((f) => f.title), ["opus-5-5 $121", "sonnet-5-5 $40.00"]);
+  assert.strictEqual(api[0].left, "0%");
+  assert.strictEqual(api[0].width, 120.5 / 380 * 100 + "%", "a share of the costliest project, not of its own cost");
+  assert.ok(Math.abs(parseFloat(api[1].left) - parseFloat(api[0].width)) < 1e-9, "the second segment starts where the first ends");
+  assert.strictEqual(fills(prows[0])[0].width, "100%");
+
+  // The page and the phone draw the same bars: the same names, values, widths and colours.
+  const phone = analyticsEnv();
+  phone.page(false);
+  overviewWindow(phone);
+  const hbars = [];
+  const walk = (n) => { if (n.cls.includes("an-hbar")) hbars.push(n); n.elements.forEach(walk); };
+  walk(view(phone, "anOverview"));
+  assert.strictEqual(hbars.length, 4 + 10);
+  const pr = [...mrows, ...prows];
+  hbars.forEach((h, k) => {
+    assert.strictEqual(pr[k].elements[0].textContent, h.elements[0].textContent, "name " + k);
+    assert.strictEqual(pr[k].elements[2].textContent, h.elements[2].textContent, "value " + k);
+    assert.deepStrictEqual(fills(pr[k]).map((f) => [f.width, f.background, f.title]), h.elements[1].elements.filter((f) => parseFloat(f.style.width) > 0 || k >= 4).map((f) => [f.style.width, f.style.background, f.title]), "bars " + k);
+  });
+});
+
+test("the Overview's rows, legend and footnote are drawn by the CSS the brief gives (§B7, §D1)", () => {
+  // §B7: 150 | 1fr | 64 and 184 | 1fr | 64, 22px rows 12px apart, no row separators; the project card is the wide one.
+  const row = decls(ANP + " .an-hrow");
+  assert.strictEqual(row.get("display"), "grid");
+  assert.strictEqual(row.get("grid-template-columns"), "150px minmax(0, 1fr) 64px");
+  assert.strictEqual(row.get("column-gap"), "var(--sp-3)");
+  assert.strictEqual(row.get("height"), "22px");
+  assert.strictEqual(row.get("align-items"), "center");
+  assert.strictEqual(decls(ANP + " .an-hrow.an-wide").get("grid-template-columns"), "184px minmax(0, 1fr) 64px");
+  assert.strictEqual(decls(ANP + " .an-hrows").get("display"), "flex");
+  assert.strictEqual(decls(ANP + " .an-hrows").get("flex-direction"), "column");
+  assert.strictEqual(decls(ANP + " .an-hv").get("text-align"), "right", "values right-aligned (tabular comes from .tnum)");
+  assert.strictEqual(decls(".tnum").get("font-variant-numeric"), "tabular-nums");
+  // The track is the kit's .meter: 4px, radius 2, on --line; nothing on the page changes it.
+  const meter = decls(".meter");
+  assert.strictEqual(meter.get("height"), "4px");
+  assert.strictEqual(meter.get("border-radius"), "2px");
+  assert.strictEqual(meter.get("background"), "var(--line)");
+  assert.ok(!RULES.some((r) => parts(r.selector).some((s) => s.startsWith(ANP) && /\.meter/.test(s) && /\.an-hrow/.test(s))), "no page rule re-colours or re-sizes the track");
+  // §D1: the legend is 16px apart, an item a swatch and a label 6px apart; the swatch is an 8px square with no radius.
+  const lg = decls(ANP + " .an-plegend");
+  assert.strictEqual(lg.get("display"), "flex");
+  assert.strictEqual(lg.get("align-items"), "center");
+  assert.strictEqual(lg.get("flex-wrap"), "wrap", "a narrow head wraps the legend instead of squeezing the title");
+  assert.strictEqual(lg.get("gap"), "var(--sp-1) var(--sp-4)");
+  const item = decls(ANP + " .an-plegend > span");
+  assert.strictEqual(item.get("display"), "inline-flex");
+  assert.strictEqual(item.get("gap"), "6px");
+  const sw = decls(ANP + " .an-sw");
+  assert.strictEqual(sw.get("width"), "8px");
+  assert.strictEqual(sw.get("height"), "8px");
+  assert.strictEqual(sw.get("border-radius"), undefined, "no radius: the frame's swatches are square");
+  assert.strictEqual(sw.get("flex"), "none");
+  // The card body under the head is §D1's .m3-cardbody (12px 16px 16px): the svg carries 8px of its own above the plot for the top
+  // label, so the body gives 4px.
+  assert.strictEqual(decls(ANP + " .an-chartbody").get("padding-top"), "var(--sp-1)");
+  // The footnote is flat: no box, no border, no padding; the section's 8px gap sets it off.
+  const foot = decls(ANP + " .an-foot");
+  assert.strictEqual(foot.get("margin"), "0");
+  for (const k of ["border", "border-left", "padding", "background"]) assert.strictEqual(foot.get(k), undefined, k);
+  // Every size a rule of this task sets is a token (the page's px-sized text is answered in "no off-scale analytics text on desktop"),
+  // and none of them uses color-mix, nesting or @layer.
+  const STEP = /^var\(--t-(?:xs|sm|md|lg|xl|kpi)\)$/;
+  for (const r of RULES) {
+    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:hrow|hrows|hv|plegend|sw|foot|chartbody|axis|hbar|legend|kdelta|divrow|mixlabel)/.test(s))) continue;
+    for (const [k, v] of r.decls) {
+      if (k === "font-size") assert.match(v, STEP, r.selector);
+      assert.ok(!/color-mix/.test(v), r.selector + " uses color-mix");
+    }
+  }
+});
+
+// --- the Compare block's parts on the page ---------------------------------------------------------------------------
+
+function withCompare(env) {
+  overviewWindow(env);
+  env.ctx.CMP = CMP;
+  env.run("AN.data.cmp = CMP;");
+}
+const COMPARE_NOTE = "Read mix-shift and day-of-week with the deltas: a jump in absolute tokens can just mean you worked more — the share shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week).";
+
+test("the Compare block on the page: kit KPI tiles with their delta lines, the same footnote, no boxed note", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  withCompare(env);
+  const root = view(env, "anOverview");
+  assert.deepStrictEqual(root.elements.map(sigOf), ["div.kpi-row", "div.an-psec", "div.an-pgrid", "div.an-section"], "the comparison follows the two cards");
+  const sec = root.elements[3];
+  assert.deepStrictEqual(sec.elements.map(sigOf), ["h3.", "p.an-hint", "div.kpi-row", "div.an-grid2", "div.an-grid2", "p.an-foot t-sm muted"]);
+  const row = sec.elements[2];
+  const tiles = row.elements;
+  assert.deepStrictEqual(tiles.map((t) => t.elements.map(sigOf)), [
+    ["span.kpi-value", "span.kpi-label", "div.an-kdelta an-down"],
+    ["span.kpi-value", "span.kpi-label", "div.an-kdelta an-up"],
+    ["span.kpi-value", "span.kpi-label", "div.an-kdelta an-down bad"],
+    ["span.kpi-value", "span.kpi-label", "div.an-kdelta an-up good"],
+  ], "the existing delta line and its classes stay inside each .kpi");
+  assert.deepStrictEqual(tiles.map((t) => t.elements.map((n) => n.textContent)), [
+    ["$4.3k", "Cost", "▼16% vs prev"], ["10.4B", "Tokens", "▲16% vs prev"], ["3,994", "Prompts", "▼3% vs prev"], ["4", "Sessions", "new"],
+  ], "sentence-case labels and thousands separators, as the Overview's tiles; the deltas are today's");
+  assert.deepStrictEqual(tiles.map((t) => t.elements[1].attrs.title), ["Cost", "Tokens", "Prompts", "Sessions"], "kit labels carry a title");
+  // The footnote is the Overview's: plain, muted, last; today's sentence without its <b> and <i>.
+  const foot = sec.elements[5];
+  assert.strictEqual(foot.textContent, COMPARE_NOTE);
+  assert.strictEqual(foot.children.length, 1);
+  const all = [];
+  const walk = (n) => { all.push(n); n.elements.forEach(walk); };
+  walk(root);
+  assert.ok(!all.some((n) => /an-cmpnote|an-kpis|an-kpi\b/.test(n.className)), "no boxed note, no legacy KPI grid on the page");
+  assert.strictEqual(all.filter((n) => n.cls.includes("an-foot")).length, 2, "the Overview's and the comparison's, both the same line");
+  // Its bars are --an-up / --an-down (the palette's two), never the status red and green.
+  const fillsOf = all.filter((n) => n.cls.includes("an-divtrack")).flatMap((t) => t.elements.filter((f) => f.cls.includes("fill")).map((f) => f.style.background));
+  assert.ok(fillsOf.length >= 3 && fillsOf.every((c) => c === "var(--an-up)" || c === "var(--an-down)"), fillsOf.join());
+  // Every class it builds has a rule.
+  const css = DESK_CSS + APP_CSS + stripComments(read("primitives.css"));
+  const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+  const used = new Set(all.flatMap((n) => n.cls));
+  for (const c of ["an-foot", "an-plegend", "an-sw", "an-hrows", "an-hrow", "an-wide", "an-hv", "an-chartbody", "an-kdelta", "an-up", "an-down", "good", "bad", "t-xs", "fg", "grow", "mono", "ellipsis", "tnum", "meter", "w-600"]) assert.ok(used.has(c), c + " is built");
+  assert.deepStrictEqual([...used].filter((c) => !defined.has(c) && c !== "an-timewrap"), [], "classes with no rule (an-timewrap is a named hook)");
+  // The day-of-week chart's axis clears its labels at the page's 11px.
+  const dow = all.find((n) => n.tag === "svg" && n.attrs.viewBox === "0 0 380 150");
+  assert.ok(dow, "the day-of-week chart is drawn");
+  assert.deepStrictEqual(collisions(dow), []);
+  assert.deepStrictEqual(nodesOf(dow, "text").filter((t) => t.attrs["text-anchor"] === "end").map((t) => t.attrs.x), ["38", "38", "38"], "y labels end in the same 38px box");
+  assert.deepStrictEqual(nodesOf(dow, "line").map((l) => l.attrs.x1), ["44", "44", "44"], "the plot starts at the gutter, not under the labels");
+  assert.ok(nodesOf(dow, "circle").every((c) => num(c.attrs.cx) >= 44), "and so does the first point");
+  assert.deepStrictEqual(badNumbers(dow), []);
+});
+
+test("the Compare block on the phone is unchanged: its KPI grid, boxed note and 9px axis", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  withCompare(env);
+  const sec = view(env, "(function (r) { r.appendChild(anCompareBlock()); })").elements[0];
+  assert.deepStrictEqual(sec.elements.map(sigOf), ["h3.", "p.an-hint", "div.an-kpis", "div.an-grid2", "div.an-grid2", "div.an-cmpnote"]);
+  assert.deepStrictEqual(sec.elements[2].elements.map((t) => t.elements.map((n) => [n.className, n.textContent])), [
+    [["v cost", "$4.3k"], ["l", "cost"], ["an-kdelta an-down", "▼16% vs prev"]],
+    [["v", "10.4B"], ["l", "tokens"], ["an-kdelta an-up", "▲16% vs prev"]],
+    [["v", "3994"], ["l", "prompts"], ["an-kdelta an-down bad", "▼3% vs prev"]],
+    [["v", "4"], ["l", "sessions"], ["an-kdelta an-up good", "new"]],
+  ]);
+  assert.match(sec.elements[5].innerHTML, /^Read <b>mix-shift<\/b> and <b>day-of-week<\/b> with the deltas/);
+  assert.strictEqual(sec.elements[5].textContent, "", "the phone's note is set as HTML, not as a text child");
+  const dow = nodesOf(sec, "svg").find((n) => n.attrs.viewBox === "0 0 380 150");
+  assert.deepStrictEqual(nodesOf(dow, "text").filter((t) => t.attrs["text-anchor"] === "start").map((t) => t.attrs.x), ["2", "2", "2"], "the phone's y labels still start at x = 2");
 });
