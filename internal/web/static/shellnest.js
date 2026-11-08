@@ -95,6 +95,19 @@ function shellList(names) {
   return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 }
 
+// shellMidTrunc: `s` cut to `max` characters with ONE ellipsis in the middle (the first half, "…", the last half: 12 and 11 for
+// 24), so both ends of a name stay readable; a string of `max` or fewer is returned whole. Counts characters, not UTF-16 units.
+function shellMidTrunc(s, max) {
+  const text = s == null ? "" : String(s);
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  const keep = Math.max(max - 1, 0), head = Math.ceil(keep / 2), tail = keep - head;
+  return chars.slice(0, head).join("") + "\u2026" + chars.slice(chars.length - tail).join("");
+}
+
+// The longest session name the alt button spells out; a longer one is middle-truncated (see killDialogDeskOpts).
+const KILL_ALT_NAME_MAX = 24;
+
 // killDialogDeskOpts: the desktop End session dialog (frame M5.2): what ends, what
 // is left alone, and the second way out named for what it keeps. shellNames are
 // the live shells' labels ("shell 1"); cwd is the workspace as the page shows it
@@ -122,9 +135,12 @@ function killDialogDeskOpts(name, id, shellNames, cwd) {
   notes.push(["It has " + n + (n === 1 ? " shell" : " shells") + " open, " + shellList(names) + ". " + only +
     " keeps " + (n === 1 ? "that shell running as its own row." : "those shells running as their own rows.")]);
   opts.confirmLabel = n === 1 ? "End both" : "End all";
-  opts.altLabel = "End " + label + " only";
-  // The desktop footer keeps one row and ellipsizes this button before it wraps: the whole label is its tooltip.
-  opts.altTitle = opts.altLabel;
+  // The footer is one row in a 480px card: a long name must not push " only" off the button (the CSS ellipsis would end it at
+  // "End payments-platform-sre-produc…", which next to "End both" no longer says it ends the session alone). The NAME is
+  // middle-truncated so the button always ends in " only"; its tooltip is the whole label, and the title, body and notes above
+  // keep the full name. The CSS ellipsis stays as the last resort for a narrower card.
+  opts.altLabel = "End " + shellMidTrunc(label, KILL_ALT_NAME_MAX) + " only";
+  opts.altTitle = "End " + label + " only";
   return opts;
 }
 
@@ -136,5 +152,5 @@ function killIdsFor(outcome, parentId, shells) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shellChildren, isNestedShell, shellLabel, liveShellsOf, killDialogOpts, killDialogDeskOpts, killIdsFor };
+  module.exports = { shellChildren, isNestedShell, shellLabel, liveShellsOf, killDialogOpts, killDialogDeskOpts, killIdsFor, shellMidTrunc };
 }

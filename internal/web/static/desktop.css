@@ -1530,8 +1530,10 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg);
     box-shadow: var(--e-dlg); overflow: hidden;
   }
-  /* New session is box-framed, so the box-less dialogs' backdrop rule below never reaches it: the kit's scrim, not app.css's #000a. */
-  #spawn-modal::backdrop { background: var(--scrim); }
+  /* New session is box-framed, so the box-less dialogs' backdrop rule below never reaches it: the kit's scrim, not app.css's #000a.
+     The value of --scrim as a literal: ::backdrop inherits custom properties from :root only in Chrome 122+, Firefox 120+ and
+     Safari 17.4+, and the floor is Safari 16, where var(--scrim) here would be invalid and the dialog would lose its scrim. */
+  #spawn-modal::backdrop { background: rgba(5, 6, 8, .62); }
   #spawn-modal::before { display: none; }
   /* The head is 16px above and 12px below the 28px close (the frame's .dlg-head), the title centred on it; its
      divider is the body's border-top. The right padding keeps a long title clear of the close. */
@@ -2139,7 +2141,8 @@
      not box-framed (the spawn dialog keeps its frame; the ask dialog is restyled
      below) and not the mobile sheet. */
   /* Not the box-framed spawn and analytics dialogs: they keep their S3 look. */
-  dialog:not([box-])::backdrop, #ask-modal::backdrop { background: var(--scrim); }
+  /* --scrim's value as a literal, for Safari 16 (see #spawn-modal::backdrop above): no var() inside ::backdrop. */
+  dialog:not([box-])::backdrop, #ask-modal::backdrop { background: rgba(5, 6, 8, .62); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) {
     background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r-dlg);
     box-shadow: var(--e-dlg); font: var(--t-md)/1.45 var(--font-ui); overflow: hidden;

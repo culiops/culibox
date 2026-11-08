@@ -125,13 +125,25 @@ test("every desktop dialog card has the kit's --e-dlg shadow (G1)", () => {
   }
 });
 
-test("the dialog backdrop is the kit's --scrim, on the box-less dialogs, the ask dialog and New session (G3)", () => {
+// Safari 16 (the product's floor) does not resolve a custom property inside ::backdrop: it inherits from :root only in Chrome
+// 122+, Firefox 120+ and Safari 17.4+, so `background: var(--scrim)` would be invalid there and the dialog would lose its
+// scrim. The two rules state --scrim's value as a literal; this keeps the literal and the token the same colour.
+test("the dialog backdrop is the kit's scrim as a literal (no var() inside ::backdrop), on the box-less dialogs, the ask dialog and New session (G3)", () => {
+  const token = /--scrim:\s*(rgba?\([^)]*\))/.exec(css);
+  assert.ok(token, "the --scrim token");
+  const norm = (c) => c.replace(/\s+/g, "").replace(/(\D)0?\.(\d)/g, "$10.$2");
   for (const sel of ["dialog:not([box-])::backdrop", "#ask-modal::backdrop", "#spawn-modal::backdrop"]) {
     const rs = rulesFor(sel);
     assert.ok(rs.length > 0, sel + " has a rule");
-    assert.ok(rs.some((b) => /background:\s*var\(--scrim\)/.test(b)), sel);
+    for (const b of rs) {
+      assert.doesNotMatch(b, /var\(/, sel + " reads no custom property");
+      const m = /background:\s*(rgba?\([^)]*\))/.exec(b);
+      assert.ok(m, sel + " has a literal background");
+      assert.strictEqual(norm(m[1]), norm(token[1]), sel + " is the --scrim colour");
+    }
     assert.ok(!rs.some((b) => /rgba\(5, ?7, ?9/.test(b)), sel + " keeps no private scrim colour");
   }
+  assert.ok(/::backdrop[^{}]*\{[^{}]*rgba\(5, 6, 8, \.62\)/.test(css), "written as the token is");
 });
 
 test("the ask title is not tracked out: it carries letter-spacing 0 like New session's (G2)", () => {

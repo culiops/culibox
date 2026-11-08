@@ -192,6 +192,52 @@ test("killDialogDeskOpts: no cwd drops the Files note (no empty paragraph), no n
   assert.match(o.notes[1][0], /“End s-42 only” keeps that shell/);
 });
 
+// Gate fix round 1 (#173): the desktop footer is one row, so a long name's alt button ends in the CSS ellipsis, which drops
+// " only" and leaves "End payments-platform-sre-produc…" next to the red "End both": it no longer says it ends the session
+// alone. The NAME is middle-truncated instead (first 12, "…", last 11: 24 characters) so " only" always shows; the tooltip and
+// the title, body and notes keep the full name.
+test("shellMidTrunc keeps the first 12 and the last 11 characters around one ellipsis, and leaves a name of 24 or fewer whole", () => {
+  assert.strictEqual(n.shellMidTrunc("", 24), "");
+  assert.strictEqual(n.shellMidTrunc(undefined, 24), "");
+  assert.strictEqual(n.shellMidTrunc("a".repeat(24), 24), "a".repeat(24), "exactly 24 is whole");
+  assert.strictEqual(n.shellMidTrunc("a".repeat(25), 24), "a".repeat(12) + "\u2026" + "a".repeat(11), "25 is cut to 24 characters");
+  assert.strictEqual(n.shellMidTrunc("payments-platform-sre-production-eu-west-1", 24), "payments-pla\u2026n-eu-west-1");
+  const cut = n.shellMidTrunc("x".repeat(500), 24);
+  assert.strictEqual(Array.from(cut).length, 24);
+  assert.strictEqual(cut.split("\u2026").length, 2, "one ellipsis");
+  // Whole characters, never half of a surrogate pair.
+  assert.strictEqual(Array.from(n.shellMidTrunc("\u{1F600}".repeat(30), 24)).length, 24);
+  assert.ok(Array.from(n.shellMidTrunc("\u{1F600}".repeat(30), 24)).every((c) => c === "\u2026" || c === "\u{1F600}"));
+});
+
+test("killDialogDeskOpts: a name of 24 characters keeps its alt label whole; a longer one is middle-truncated so ' only' always shows, the tooltip full", () => {
+  const same = "a".repeat(24);
+  for (const shells of [["shell 1"], ["shell 1", "shell 2"]]) {
+    const o = n.killDialogDeskOpts(same, "x", shells, "~/w");
+    assert.strictEqual(o.altLabel, "End " + same + " only");
+    assert.strictEqual(o.altTitle, "End " + same + " only");
+  }
+  const full = "payments-platform-sre-production-eu-west-1";
+  assert.strictEqual(full.length, 42);
+  for (const shells of [["shell 1"], ["shell 1", "shell 2"], ["shell 1", "shell 2", "shell 3"]]) {
+    const o = n.killDialogDeskOpts(full, "x", shells, "~/w");
+    assert.ok(o.altLabel.startsWith("End ") && o.altLabel.endsWith(" only"), o.altLabel);
+    assert.ok(o.altLabel.includes("\u2026"), "the name is cut with an ellipsis");
+    assert.ok(o.altLabel.length <= "End ".length + 24 + " only".length, "no longer than End + 24 + only");
+    assert.strictEqual(o.altLabel, "End payments-pla\u2026n-eu-west-1 only");
+    assert.strictEqual(o.altTitle, "End " + full + " only", "the tooltip is the whole label");
+    // The title, the body and the notes keep the full name: only the button is shortened.
+    assert.strictEqual(o.title, "End session " + full + "?");
+    assert.match(o.body, new RegExp("^The agent stops now and " + full + " leaves the sidebar\\."));
+    assert.match(o.notes[o.notes.length - 1][0], new RegExp("\u201cEnd " + full + " only\u201d keeps "));
+    assert.ok(!o.notes.some((p) => p.some((x) => typeof x === "string" && x.includes("\u2026"))), "no ellipsis in the notes");
+  }
+  // No alt without a shell, so nothing to shorten.
+  assert.ok(!("altLabel" in n.killDialogDeskOpts(full, "x", [], "~/w")));
+  // The label falls back to the id first, then is cut the same way.
+  assert.strictEqual(n.killDialogDeskOpts("", "s".repeat(30), ["shell 1"], "").altLabel, "End " + "s".repeat(12) + "\u2026" + "s".repeat(11) + " only");
+});
+
 test("killDialogDeskOpts: a long path stays one mono part (the CSS wraps it), and the phone's killDialogOpts is untouched", () => {
   const long = "~/" + "a".repeat(118);
   const o = n.killDialogDeskOpts("agent-box", "x", [], long);
