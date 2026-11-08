@@ -819,6 +819,18 @@ function askNoteNodes(notes) {
 // The class the last ask put on the dialog (opts.cls), taken off before the next one's goes on.
 let askAppliedCls = "";
 
+// askFitHint: an ellipsized "E…" is worse than no hint. The desktop footer's "Esc to cancel" is the elastic part of the row
+// (desktop.css gives way to the buttons down to nothing, and the alt button only ellipsizes once it has nothing left), so once
+// the dialog is open and laid out a hint whose text is wider than its box is hidden (.is-clipped: visibility, the row does not
+// move). scrollWidth is rounded, hence the pixel of slack. Reset on every ask. The phone never shows the hint (display:none in
+// app.css) and is not measured.
+function askFitHint(hint) {
+  if (!hint) return;
+  hint.classList.toggle("is-clipped", false);
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
+  if (hint.scrollWidth > hint.clientWidth + 1) hint.classList.toggle("is-clipped", true);
+}
+
 // askDialog is the single code path both public helpers use. Every close route
 // (OK, Cancel, ×, Esc, backdrop) resolves the promise exactly once: a caller
 // awaiting a dialog that never settles is stuck forever with no error to show.
@@ -901,6 +913,7 @@ function askDialog(opts) {
     document.getElementById("ask-x").onclick = () => d.close("cancel");
     d.returnValue = "";               // clear the previous answer before showing
     d.showModal();
+    askFitHint(hint);                 // laid out now: does "Esc to cancel" fit beside the buttons?
     // Focus explicitly: showModal() otherwise lands on the first focusable
     // descendant, which is the ×, making Enter and Space a cancel. focusCancel
     // puts it on Cancel instead, for a question whose "yes" must never be one

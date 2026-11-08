@@ -107,7 +107,7 @@ test("index.html ships #ask-alt hidden, after Cancel", () => {
 // --- askDialog opts.extra and opts.focusCancel (the profile page's "Save as host" lists what it removes) ----------------------
 
 // shell.js on a fake DOM with the ask dialog's parts, enough to run askDialog and answer it.
-function askEnv() {
+function askEnv(env) {
   const fs = require("node:fs");
   const path = require("node:path");
   const vm = require("node:vm");
@@ -115,18 +115,21 @@ function askEnv() {
   let askEnvFocus = { at: null };
   const closeFns = [];
   const cls = new Set();
+  const hintCls = new Set();
   const d = mk({
     open: false, returnValue: "",
     classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); }, contains: (c) => cls.has(c) },
     addEventListener: (ev, fn) => { if (ev === "close") closeFns.push(fn); },
     removeEventListener: (ev, fn) => { const i = closeFns.indexOf(fn); if (ev === "close" && i >= 0) closeFns.splice(i, 1); },
-    showModal() { this.open = true; },
+    showModal() { this.open = true; if (env && env.onShow) env.onShow(); },
     close(v) { this.returnValue = v || ""; this.open = false; for (const f of closeFns.slice()) f(); },
   });
   const extra = mk({ children: [], replaceChildren(...k) { this.children = k; } });
   const els = {
     "ask-modal": d, "ask-input": mk(), "ask-ok": mk(), "ask-title": mk(), "ask-body": mk(), "ask-cancel": mk(), "ask-alt": mk(),
-    "ask-label": mk(), "ask-x": mk(), "ask-extra": extra, "ask-hint": mk(),
+    "ask-label": mk(), "ask-x": mk(), "ask-extra": extra,
+    // The hint's laid-out width and its text's width, settable (a real element has them only once the dialog is open).
+    "ask-hint": mk({ scrollWidth: 0, clientWidth: 0, classList: { toggle: (c, on) => { if (on) hintCls.add(c); else hintCls.delete(c); }, contains: (c) => hintCls.has(c) } }),
   };
   // Just enough DOM to build a note: an element has a tag, a class, text and children; a text node has text.
   const doc = {
@@ -134,9 +137,9 @@ function askEnv() {
     createElement: (tag) => ({ tag, className: "", textContent: "", children: [], appendChild(c) { this.children.push(c); return c; } }),
     createTextNode: (text) => ({ text: String(text) }),
   };
-  const ctx = vm.createContext({ document: doc, Promise, Array, Object });
+  const ctx = vm.createContext(Object.assign({ document: doc, Promise, Array, Object }, env && env.ctx));
   new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "shell.js"), "utf8"), { filename: "shell.js" }).runInContext(ctx);
-  return { ctx, els, cls, focus: () => askEnvFocus.at };
+  return { ctx, els, cls, hintCls, focus: () => askEnvFocus.at };
 }
 
 test("askDialog puts opts.extra under the body, widens the card, and the next ask without it clears both", async () => {
@@ -370,6 +373,64 @@ test("the End session footer does not wrap on the desktop: Cancel and the red bu
   assert.match(alt, /min-width:\s*0/);
   assert.match(rule("#ask-modal .ask-actions button"), /text-overflow:\s*ellipsis/);
   assert.match(rule("#ask-modal .ask-actions button"), /overflow:\s*hidden/);
+});
+
+// An ellipsized "E…" is worse than no hint: on the desktop, once the dialog is open and laid out, a hint whose text does not
+// fit its box is hidden (visibility, so the footer's layout does not move). The class is reset on every ask.
+test("askDialog hides the footer hint when its text does not fit, measured once the dialog is open, and resets it on every ask", async () => {
+  const set = (t, scroll, client) => { t.els["ask-hint"].scrollWidth = scroll; t.els["ask-hint"].clientWidth = client; };
+  const measured = { scroll: 80, client: 12 };
+  // The sizes exist only after showModal(): a measure taken before it would see 0 and 0 and never hide anything.
+  const t = askEnv({ onShow: () => set(t, measured.scroll, measured.client) });
+  const a = t.ctx.askConfirm({ title: "End session x?", body: "b", altLabel: "End x only", altTitle: "End x only" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), true, "80px of text in 12px: hidden");
+  t.els["ask-modal"].close("cancel");
+  await a;
+  // The next ask fits: the class of the last one is gone.
+  Object.assign(measured, { scroll: 80, client: 80 });
+  const b = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), false, "reset by the next ask, and a fitting hint is shown");
+  t.els["ask-modal"].close("cancel");
+  await b;
+  // One pixel of slack: scrollWidth is rounded, so 81 in 80 is whole and 82 in 80 is not.
+  Object.assign(measured, { scroll: 81, client: 80 });
+  const c = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), false);
+  t.els["ask-modal"].close("cancel");
+  await c;
+  Object.assign(measured, { scroll: 82, client: 80 });
+  const d = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), true);
+  t.els["ask-modal"].close("cancel");
+  await d;
+  // A dialog with no hint text has nothing to clip: nothing is left over from the clipped one.
+  Object.assign(measured, { scroll: 0, client: 0 });
+  const e = t.ctx.askChoice({ title: "Keyboard shortcuts", body: "b", info: true, confirmLabel: "Close" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), false);
+  t.els["ask-modal"].close("cancel");
+  await e;
+});
+
+test("askDialog leaves the hint alone on the phone (it is display:none there): no measure, no class", async () => {
+  const t = askEnv({ ctx: { mobileActive: (w) => w <= 700, window: { innerWidth: 390 } }, onShow: () => { t.els["ask-hint"].scrollWidth = 80; t.els["ask-hint"].clientWidth = 0; } });
+  const a = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.hintCls.has("is-clipped"), false);
+  t.els["ask-modal"].close("cancel");
+  await a;
+  // The same page at desktop width does clip it.
+  const u = askEnv({ ctx: { mobileActive: (w) => w <= 700, window: { innerWidth: 1280 } }, onShow: () => { u.els["ask-hint"].scrollWidth = 80; u.els["ask-hint"].clientWidth = 0; } });
+  const b = u.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(u.hintCls.has("is-clipped"), true);
+  u.els["ask-modal"].close("cancel");
+  await b;
+});
+
+test("desktop.css hides a clipped hint with visibility (the footer does not move) and only under #ask-modal", () => {
+  const desk = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const i = desk.indexOf("#ask-modal #ask-hint.is-clipped {");
+  assert.ok(i >= 0, "the rule");
+  assert.match(desk.slice(i, desk.indexOf("}", i)), /visibility:\s*hidden/);
+  assert.ok(!/is-clipped/.test(readStatic("app.css")), "the phone's stylesheet never learns the class");
 });
 
 test("askDialog puts the full alt label in the alt button's title when the dialog gives one (the desktop End session), and clears it on the next ask", async () => {

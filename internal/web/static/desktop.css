@@ -2170,7 +2170,7 @@
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh { padding: 2px 8px; font-size: var(--t-xl); line-height: 1; }
   /* The .fld border above is 0,4,1: out-ranks the kit's field focus (0,3,2), so the field takes it again here. */
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld { border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld { border-color: var(--faint); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
 
   /* Report a problem. */
   #bug-modal { width: 760px; }
@@ -2220,7 +2220,12 @@
   #ask-modal #ask-body { margin: 0 0 10px; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   #ask-modal #ask-label { display: block; margin: 0 0 6px; font-size: var(--t-sm); color: var(--muted); }
   #ask-modal #ask-label[hidden] { display: none; }
-  #ask-modal #ask-input { padding: 7px 10px; background: var(--bg); border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
+  /* The prompt field (New folder, Rename, a protected folder's name) is the kit's .input: 32px, 0 10px, --faint at rest (G12),
+     --r-ctl, --bg, --t-md in the UI face (app.css's 12.5px mono is the phone's); its focus is the rule above. */
+  #ask-modal #ask-input {
+    height: var(--h-lg); padding: 0 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--faint);
+    border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md);
+  }
   #ask-modal .ask-actions {
     align-items: center; gap: var(--sp-2); margin: var(--sp-5) calc(-1 * var(--sp-5)) 0; padding: var(--sp-3) var(--sp-5);
     border-top: 1px solid var(--line);
@@ -2236,6 +2241,7 @@
   /* One row: app.css wraps a footer that has an alt button (the phone keeps that; its selector weighs (1,2,0), so this one
      repeats it). Cancel and the red button hold their width; only the alt may shrink, once the hint has nothing left, and
      its label ends in an ellipsis (the whole label is its title). */
+  #ask-modal #ask-hint.is-clipped { visibility: hidden; }  /* askFitHint (shell.js): visibility keeps the row's layout as it is */
   #ask-modal .ask-actions:has(#ask-alt:not([hidden])) { flex-wrap: nowrap; }
   #ask-modal #ask-alt { flex: 0 1 auto; min-width: 0; }
   /* The kit's secondary .btn: Cancel, and the alt ("End agent-box only"). A long label ends in an ellipsis, not off the card. */

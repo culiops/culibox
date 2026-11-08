@@ -139,6 +139,27 @@ test("the ask title is not tracked out: it carries letter-spacing 0 like New ses
   assert.match(rulesFor("#spawn-modal .dlg-title").join(" "), /letter-spacing:\s*0\b/);
 });
 
+// G12 (#171 follow-up 8, #173): a dialog's fields rest on the kit's --faint border, not --line: Report a problem's textarea
+// (the generic dialog .fld) and the ask dialog's prompt field (New folder, Rename, the protected-folder name), which is the
+// kit's .input: 32px, 0 10px, --r-ctl, --bg, --t-md. Their keyboard focus stays the accent border + 1px accent shadow.
+test("a plain dialog's .fld rests on --faint and its focus rule still out-weighs it (G12)", () => {
+  const SEL = "dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld";
+  const rest = rulesFor(SEL).join(" ");
+  assert.match(rest, /border-color:\s*var\(--faint\)/);
+  assert.doesNotMatch(rest, /var\(--line\)/);
+  assert.match(rulesFor(SEL + ":focus-visible").join(" "), /border-color:\s*var\(--accent\)[^}]*box-shadow:\s*0 0 0 1px var\(--accent\)/);
+  // Report a problem's own rule leaves the border alone, so the field takes that colour.
+  assert.doesNotMatch(rulesFor("#bug-modal #bug-what").join(" "), /(^|[ ;])border(-color)?:/);
+});
+
+test("the ask dialog's prompt field is the kit's .input, resting on --faint, with the accent focus (G12)", () => {
+  const r = rulesFor("#ask-modal #ask-input").join(" ");
+  for (const re of [/height:\s*var\(--h-lg\)/, /padding:\s*0 10px/, /border:\s*1px solid var\(--faint\)/, /border-radius:\s*var\(--r-ctl\)/,
+    /background:\s*var\(--bg\)/, /color:\s*var\(--fg\)/, /font-size:\s*var\(--t-md\)/, /font-family:\s*var\(--font-ui\)/]) assert.match(r, re, String(re));
+  assert.doesNotMatch(r, /var\(--line\)/, "no --line at rest");
+  assert.match(rulesFor("#ask-modal #ask-input:focus-visible").join(" "), /outline:\s*none;\s*border-color:\s*var\(--accent\);\s*box-shadow:\s*0 0 0 1px var\(--accent\)/);
+});
+
 // F28 (#173): the three plain dialogs (ask, New session, Report a problem) close with the same X: the kit's ghost
 // icon button, a --h-ctl square, muted, a --hover fill on hover, the × glyph on the page's type scale.
 test("the ask, New session and Report a problem closes are one ghost icon button", () => {
