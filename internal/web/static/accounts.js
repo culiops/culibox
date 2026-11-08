@@ -368,6 +368,27 @@ function acctPageMode() {
   return !!m && m.classList.contains("as-page");
 }
 
+// acctDeskNote(text): on the desktop page the paragraph at the top of Agent accounts is split. Its first sentence is
+// the page head's description (settingshead.js accountsLead) and the rest, `text`, stays here as a note of its own.
+// index.html's paragraph is shared with the phone, which shows all four sentences as written, so the note is a
+// sibling built after it and the paragraph is never rewritten; the note is hidden outside the page (app.css) and
+// the paragraph is hidden on it (desktop.css). settingshead.js paints it with the head.
+function acctDeskNote(text) {
+  const panel = document.getElementById("accounts");
+  const src = panel ? panel.querySelector(".hint") : null;
+  if (!src) return;
+  let note = document.getElementById("acct-desk-note");
+  if (!note) {
+    if (!text) return;
+    note = document.createElement("p");
+    note.id = "acct-desk-note";
+    note.className = "hint";
+    src.after(note);
+  }
+  note.textContent = text || "";
+  note.hidden = !text;
+}
+
 function acctBtn(text, cls, onclick) {
   const b = document.createElement("button");
   b.type = "button";

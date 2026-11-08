@@ -491,6 +491,7 @@
       <div id="cred-drawer-foot"></div>
     </aside>
     <div class="dbd pad" id="settings" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <div class="fsrow"><span class="lbl">Terminal</span>
         <div class="stepper">
           <button type="button" class="fs-dec" data-fs="terminal" aria-label="Smaller terminal text">&minus;</button>
@@ -533,6 +534,7 @@
       <p><button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts</button></p>
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p class="hint">An access token lets a client app or CLI connect to this box
         with <code>Authorization: Bearer&nbsp;…</code>, with no password prompt.
         One per device; revoke any at any time.</p>
@@ -546,6 +548,7 @@
       <div class="dlg-err" id="tok-err"></div>
     </div>
     <div class="dbd pad" id="accounts" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p class="hint">Each agent account is a separate Claude login with its own history and quota.
         You choose the account when you start a session. CuliBox never switches accounts for you.
         On the host tier this keeps config apart but is not a security boundary; use a boxed
@@ -556,6 +559,7 @@
     </div>
 
     <div class="dbd pad" id="about" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p id="about-version">CuliBox</p>
       <p id="about-runtime"></p>
       <p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts</button></p>
@@ -564,6 +568,7 @@
     </div>
 
     <div class="dbd pad" id="creds" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <div id="creds-body"></div>
       <div class="dlg-err" id="creds-err"></div>
     </div>
@@ -810,6 +815,7 @@
   <script src="/pagehost.js"></script>
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
+  <script src="/settingshead.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

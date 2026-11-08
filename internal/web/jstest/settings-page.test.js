@@ -80,7 +80,7 @@ test("About names the box runtime", () => {
 
 test("base CSS hides every desktop-only Settings node", () => {
   const css = stripComments(BASE_CSS);
-  const m = /\.pg-group, \.pf-touch, \.pf-sec, \.pf-adv, #pf-discard, #about-runtime, #set-signout \{ display: none; \}/.exec(css);
+  const m = /\.pg-group, \.pf-touch, \.pf-sec, \.pf-adv, #pf-discard, #about-runtime, #set-signout, \.set-head, #acct-desk-note \{ display: none; \}/.exec(css);
   assert.ok(m, "the base hide rule is missing");
 });
 

@@ -1845,24 +1845,43 @@
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
 
-  /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
-     and ✕ close the page, so every Done goes, and the two footers that held
-     nothing else go with them. */
+  /* Panels and their footers sit right of the nav. Done is modal chrome: the page head's Esc ✕ (settingshead.js)
+     and the Esc key close the page, so every Done goes. So do the footers that held nothing else, and the three
+     "add" footers: Appearance, API tokens and Agent accounts keep their one action in the page head (Reset to
+     defaults, New token, Add account), and Sign out… is the nav's. A phone's modal keeps them all. */
   #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
   /* The content column (§B1.1, §B1.5): it starts 32px right of the nav and is at most 820px wide,
-     left-aligned (the frame's 884px `.m2-col` less its 32px sides). The page head (a later
-     task) carries the 24px above it. */
+     left-aligned (the frame's 884px `.m2-col` less its 32px sides). */
   #page-host > #settings-modal.as-page > .dbd.pad { padding: 0 32px 32px; }
   #page-host > #settings-modal.as-page > .dbd.pad > * { max-width: 820px; }
-  /* A footer wraps rather than overflowing the page: its buttons are one
-     unbreakable row 280-380px wide, more than the panel has below ~1080px (the
-     panel is the window minus the 290px sidebar and the 212px nav), and the
-     overflow pushed Save past the window edge. A one-line footer is unchanged: 56px, centred. */
-  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 10px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--panel); }
+
+  /* The page head (§B1.4, the kit's .page-head §C7): the empty .set-head slot each panel opens with, drawn by
+     settingshead.js. Top-aligned, gap 16, 24px above and 20px below inside the column (the column's own 32px
+     sides are the panel's, so none here). The kit's .page-head-text / .page-title / .page-desc / .page-actions
+     inside it carry the type (18/24 600, 13/20 muted) and the actions' gap 8. It scrolls with the body (Plan 4
+     call 9), nothing pins it. Not in the frame (it is drawn at 1440px): the head wraps when its text cannot keep
+     240px beside the actions, so a narrow window (the panel is the window less 290 + 212 + 64px) puts them on a
+     line of their own under the title instead of pushing Esc ✕ out of reach to the right. */
+  #page-host > #settings-modal.as-page > .dbd > .set-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-4); padding: var(--sp-6) 0 var(--sp-5); }
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-head-text { flex: 1 1 240px; }
+  /* A long title is cut short (§B1.4); a long description (About's version line) wraps instead of overflowing. */
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-desc { overflow-wrap: anywhere; }
+  /* The divider before Esc ✕ (§B1.4 `.m2-vsep`): 1x16, --line, 4px either side of the actions' own 8px gap. */
+  #page-host > #settings-modal.as-page > .dbd > .set-head .set-sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
+
+  /* The footers still drawn are the two Credentials save footers (Add AWS accounts, the credential forms): the
+     kit's .dlg-foot (§C7), padding 12px 20px, gap 8px, a --line rule on top, 28px buttons, under the frame's
+     884px column and left-aligned with it, on the page's own surface. It wraps rather than overflowing the page:
+     its buttons are one unbreakable row 280-380px wide, more than the panel has below ~1080px (the panel is the
+     window minus the 290px sidebar and the 212px nav), and the overflow pushed Save past the window edge. A
+     one-line footer is 52px (12 + 28 + 12), centred. */
+  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; max-width: 884px; height: auto; min-height: 0; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
-  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
+  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about,
+  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings { display: none; }
   #page-host > #settings-modal.as-page > .dft .btn {
-    padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
+    min-height: var(--h-ctl); padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
     font-family: var(--font-ui); font-size: var(--t-md);
   }
   /* Save / Done are the kit primary (F11): the footer's secondary fill skips them. */
@@ -1888,19 +1907,21 @@
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #manage .hint { font-size: var(--t-sm); line-height: 1.6; }
 
-  /* Agent accounts, API tokens, Appearance, About: the same content, on the
-     page's tokens. */
+  /* Agent accounts, API tokens, Appearance, About: the same content, on the page's tokens. The button rules
+     start one step in from the panel (`> :not(.set-head)`): the page head is a child of each panel and its
+     buttons are the kit's own (28px action, 24px ghost Esc ✕), which a panel-wide `.btn` rule would repaint
+     raise-filled at 30px. The body's buttons are the kit's 28px too (min-height --h-ctl, padding 0 12px). */
   #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: var(--t-sm); line-height: 1.6; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
-    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn {
+    padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
     font-family: var(--font-ui); font-size: var(--t-md);
   }
   /* Agent accounts' Save token is the kit primary (F11): the secondary fill skips it. */
-  #page-host > #settings-modal.as-page > #tokens .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #accounts .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #settings .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #about .btn:where(:not(.pri)) {
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn:where(:not(.pri)) {
     background: var(--raise); color: var(--fg);
   }
-  #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > #tokens > :not(.set-head) .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts) > :not(.set-head) .btn.dgr { background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
@@ -1910,8 +1931,32 @@
   #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
   #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
   #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #about-version { font-size: var(--t-md); color: var(--fg); }
-  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: var(--t-sm); color: var(--muted); }
+
+  /* What the page head already says is not said twice (the phone keeps every one of these strings, so each is
+     hidden here and nothing is edited in index.html): the API tokens hint (its description), the Appearance hint
+     that still spoke of "the panes behind this dialog" (F35), the Agent accounts paragraph (its first sentence is
+     the description, the rest is the note below), About's version line (its description) and its Report a
+     problem button (its action). */
+  #page-host > #settings-modal.as-page > #tokens > .set-head + .hint,
+  #page-host > #settings-modal.as-page > #settings > .hint:not(#notify-why),
+  #page-host > #settings-modal.as-page > #accounts > .set-head + .hint,
+  #page-host > #settings-modal.as-page > #about > #about-version { display: none; }
+  /* Its own rule: a browser without :has() drops the one rule that names it, not the list above. */
+  #page-host > #settings-modal.as-page > #about > p:has(> #bug-open) { display: none; }
+  /* The accounts note: sentences 2-4 of that paragraph, built by accounts.js, base-hidden for the phone. */
+  #page-host > #settings-modal.as-page > #accounts > #acct-desk-note { display: block; margin: 0 0 16px; }
+  #page-host > #settings-modal.as-page > #accounts > #acct-desk-note[hidden] { display: none; }
+
+  /* Agent accounts and About have no frame in the pack, so their body is one kit card (§C7 `.card`: --panel,
+     --r-card; rows divided by a 1px --line, `.card-row + .card-row`). Accounts: the list is the card and each
+     account a row. About: Box runtime, Keyboard shortcuts and the report paragraph are its rows (the version line
+     and the Report a problem button went to the head). */
+  #page-host > #settings-modal.as-page > #accounts > #acct-list { overflow: hidden; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row { padding: 14px 16px; border-bottom: 0; }
+  #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row + .acct-row { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #about > #about-runtime { display: block; margin: 0; padding: 12px 16px; border-radius: var(--r-card) var(--r-card) 0 0; background: var(--panel); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #about > p:has(> #kbd-open-about) { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  #page-host > #settings-modal.as-page > #about > .hint { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-card) var(--r-card); background: var(--panel); }
 
   /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
      bordered table per provider. Colour roles (D23): amber = needs you (missing,
@@ -1943,6 +1988,14 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
+  /* The Credentials page head's buttons are the kit's own (§C3: the 28px secondary action, the 24px ghost Esc ✕), but
+     the rules above paint every `.btn` under #creds (and its drawer twin, which credentials.test.js keeps in step)
+     with 5px 11px, a --line border and the page's raise fill. The head takes its kit values back: one class
+     heavier than those rules (its own), written after them, and only for what they changed. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn:where(:not(.pri)) { padding: 0 12px; border-color: transparent; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)) { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)):hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
 
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
