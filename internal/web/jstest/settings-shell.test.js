@@ -234,23 +234,33 @@ test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   assert.ok(parts(RULES.find((r) => parts(r.selector).includes(ROW + ":hover")).selector).includes(NAV + " > #set-signout:hover"), "and so does its hover");
 });
 
-test("tokens.js wires #set-signout to logout, which asks first", async () => {
+// signOutCtx: tokens.js in a context with a fake DOM, a counting fetch and a scripted askConfirm. `leaving` stands in for
+// profilepage.js's pfvLeaving (undefined = the Profiles page is not loaded, as on a phone-only boot).
+function signOutCtx({ leaving, confirm = async () => false } = {}) {
   const els = {};
-  const calls = { fetch: 0 };
+  const calls = { fetch: 0, leaving: 0 };
   const asked = [];
   const ctx = {
     document: { readyState: "complete", addEventListener() {}, getElementById: (id) => (els[id] = els[id] || { id }) },
     window: { location: { href: "/" } },
     fetch: async () => { calls.fetch++; return {}; },
-    askConfirm: async (o) => { asked.push(o); return false; },
+    askConfirm: async (o) => { asked.push(o); return confirm(o); },
     console,
   };
+  if (leaving) ctx.pfvLeaving = () => { calls.leaving++; return leaving(); };
   vm.createContext(ctx);
   new vm.Script(TOKENS, { filename: "tokens.js" }).runInContext(ctx);
+  return { ctx, els, calls, asked };
+}
+
+test("tokens.js wires #set-signout to the page's leave guard, then to logout, which asks first", async () => {
+  // Nothing unsaved (pfvLeaving answers true, itself and not a promise): straight to the existing confirm.
+  const { ctx, els, calls, asked } = signOutCtx({ leaving: () => true });
   assert.strictEqual(typeof els["set-signout"].onclick, "function", "the click handler is set");
-  assert.strictEqual(els["set-signout"].onclick, ctx.logout, "it is logout itself: one sign-out path, not a copy");
-  assert.strictEqual(els["tok-logout"].onclick, ctx.logout, "the phone's footer button keeps working");
+  assert.notStrictEqual(els["set-signout"].onclick, ctx.logout, "the nav item asks the leave guard first: it is not logout itself");
+  assert.strictEqual(els["tok-logout"].onclick, ctx.logout, "the phone's footer button keeps working: logout itself");
   await els["set-signout"].onclick();
+  assert.strictEqual(calls.leaving, 1, "the page's guard was consulted");
   assert.strictEqual(asked.length, 1, "the existing confirm is asked, no new one");
   assert.strictEqual(asked[0].title, "Sign out of this box");
   assert.strictEqual(calls.fetch, 0, "a cancelled confirm signs nobody out");
@@ -259,6 +269,55 @@ test("tokens.js wires #set-signout to logout, which asks first", async () => {
   await els["set-signout"].onclick();
   assert.strictEqual(calls.fetch, 1, "confirmed: POST /logout");
   assert.strictEqual(ctx.window.location.href, "/login");
+});
+
+test("Sign out… with unsaved changes asks the unsaved question first, and a Keep editing answer never reaches logout (final review I1)", async () => {
+  const order = [];
+  let answer = false;
+  const { ctx, els, calls, asked } = signOutCtx({
+    leaving: () => { order.push("guard"); return Promise.resolve(answer); },
+    confirm: async () => { order.push("confirm"); return true; },
+  });
+  await els["set-signout"].onclick();
+  assert.deepStrictEqual(order, ["guard"], "stay: the guard answered false, so neither the confirm nor the sign-out ran");
+  assert.strictEqual(asked.length, 0);
+  assert.strictEqual(calls.fetch, 0);
+  assert.strictEqual(ctx.window.location.href, "/");
+  answer = true;
+  await els["set-signout"].onclick();
+  assert.deepStrictEqual(order, ["guard", "guard", "confirm"], "go (Discard): the guard first, then the sign-out confirm");
+  assert.strictEqual(asked[0].title, "Sign out of this box");
+  assert.strictEqual(calls.fetch, 1);
+});
+
+test("the leave guard Sign out… asks is the one the nav tabs ask: settingsLeave -> pfvTabLeave -> pfvLeaving (final review I1)", () => {
+  assert.match(read("shell.js"), /function settingsLeave\(tab\) \{\s*return typeof pfvTabLeave === "function" \? pfvTabLeave\(tab \|\| "manage"\) : true;/);
+  assert.match(read("profilepage.js"), /function pfvTabLeave\(tab\) \{\s*return tab === "manage" \? true : pfvLeaving\(\);/);
+  const src = TOKENS;
+  assert.match(src, /typeof pfvLeaving === "function" \? pfvLeaving\(\) : true/, "the nav item asks pfvLeaving, guarded for a page that never loaded");
+});
+
+test("without the Profiles page loaded Sign out… goes straight to the confirm (final review I1)", async () => {
+  const { els, asked } = signOutCtx({});
+  await els["set-signout"].onclick();
+  assert.strictEqual(asked.length, 1);
+  assert.strictEqual(asked[0].title, "Sign out of this box");
+});
+
+test("the sign-out confirm opens on Cancel when it comes from the desktop nav, and the phone's footer path is unchanged (final review M9)", async () => {
+  const nav = signOutCtx({ leaving: () => true });
+  await nav.els["set-signout"].onclick();
+  assert.strictEqual(nav.asked[0].focusCancel, true, "Sign out… from the nav: Cancel is the safe default, as pfvLeaveGuard's question is");
+  assert.strictEqual(nav.asked[0].danger, true, "still the destructive-styled confirm");
+  assert.strictEqual(nav.asked[0].confirmLabel, "Sign out");
+  // The phone: its footer button is logout itself, handed the click event. Its question carries no focusCancel key at all.
+  const phone = signOutCtx({});
+  await phone.els["tok-logout"].onclick({ type: "click" });
+  assert.strictEqual(phone.asked.length, 1);
+  assert.ok(!("focusCancel" in phone.asked[0]), "the phone's confirm is byte-for-byte what it was");
+  assert.deepStrictEqual(Object.keys(phone.asked[0]).sort(), ["body", "confirmLabel", "danger", "title"]);
+  await phone.ctx.logout();
+  assert.ok(!("focusCancel" in phone.asked[1]), "and a bare logout() call is the same");
 });
 
 test("the nav's tab loop leaves #set-signout alone", () => {
@@ -330,6 +389,7 @@ class FNode {
   after(n) { const i = this.parent.children.indexOf(this); n.parent = this.parent; this.parent.children.splice(i + 1, 0, n); }
   before(n) { const i = this.parent.children.indexOf(this); n.parent = this.parent; this.parent.children.splice(i, 0, n); }
   focus() { FNode.focused = this; }
+  contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
   all(pred, out = []) { for (const c of this.children) { if (c.nodeType !== 1) continue; if (pred(c)) out.push(c); c.all(pred, out); } return out; }
   // Only ".class" selectors: all the page scripts ask for here.
   querySelector(sel) { const cls = sel.replace(/^\./, ""); return this.all((n) => n.className.split(/\s+/).includes(cls))[0] || null; }
@@ -495,6 +555,56 @@ test("paintSettingsHead draws title, description, the one action, a divider and 
   ctx.paintSettingsHead("tokens");
   assert.strictEqual(kids(slot("tokens")).length, 2, "one text block, one actions block");
   assert.strictEqual(withCls(slot("tokens"), "page-title").length, 1);
+});
+
+test("every page head's H1 carries its full text as a title: it ellipsizes when the window is narrow (final review M6)", () => {
+  const { ctx, slot } = makeDom();
+  for (const tab of HEAD_TABS) {
+    ctx.paintSettingsHead(tab);
+    const h1 = withCls(slot(tab), "page-title")[0];
+    assert.strictEqual(h1.getAttribute("title"), require("../static/settingshead.js").settingsHeadSpec(tab, INFO).title, tab);
+    assert.strictEqual(h1.getAttribute("title"), h1.textContent, tab + ": the title says what the line says, in full");
+  }
+});
+
+test("a repaint of the head puts focus back on the equivalent control, when focus was inside the head (final review M7)", () => {
+  const { ctx, doc, slot } = makeDom();
+  FNode.focused = null;
+  ctx.paintSettingsHead("about");
+  const find = (cls) => withCls(slot("about"), cls)[0];
+  const byId = (id) => slot("about").all((n) => n.id === id)[0];
+  // loadAboutInfo repaints the head when /api/meta answers: the focused "Report a problem" is replaced by an equal one.
+  const old = byId("set-act-about");
+  doc.activeElement = old;
+  ctx.paintSettingsHead("about");
+  assert.notStrictEqual(byId("set-act-about"), old, "fixture: the repaint replaced the button");
+  assert.strictEqual(FNode.focused, byId("set-act-about"), "focus is on the new Report a problem, by id");
+  // Esc ✕ has no id: the class is its identity.
+  const oldEsc = find("set-esc");
+  doc.activeElement = oldEsc;
+  FNode.focused = null;
+  ctx.paintSettingsHead("about");
+  assert.notStrictEqual(find("set-esc"), oldEsc);
+  assert.strictEqual(FNode.focused, find("set-esc"), "and on the new Esc ✕");
+  // Focus anywhere else (the body, a control outside the head) is left alone: a repaint never takes it.
+  FNode.focused = null;
+  doc.activeElement = null;
+  ctx.paintSettingsHead("about");
+  assert.strictEqual(FNode.focused, null, "nothing was focused in the head, so nothing is focused after");
+  const outside = withCls(slot("about"), "nope")[0] || slot("about").parent.children.find((c) => c.id === "fs-reset");
+  doc.activeElement = outside;
+  ctx.paintSettingsHead("about");
+  assert.strictEqual(FNode.focused, null, "focus outside the head is not stolen");
+  // The menu trigger (Credentials) is found again by its id, after the menu code has taken it over.
+  const attached = [];
+  const c = makeDom({ attach: (t) => attached.push(t) });
+  c.ctx.paintSettingsHead("creds");
+  c.doc.activeElement = c.slot("creds").all((n) => n.id === "set-act-creds")[0];
+  FNode.focused = null;
+  c.ctx.paintSettingsHead("creds");
+  const fresh = c.slot("creds").all((n) => n.id === "set-act-creds")[0];
+  assert.strictEqual(FNode.focused, fresh, "the Add credential trigger keeps focus through a repaint");
+  assert.strictEqual(attached[attached.length - 1], fresh, "and the menu is attached to that same trigger");
 });
 
 test("paintSettingsHead is a no-op unless the dialog is the page (a phone's modal draws nothing new)", () => {

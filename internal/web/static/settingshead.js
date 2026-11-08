@@ -149,12 +149,17 @@ function paintSettingsHead(tab) {
     rest = sentences.rest;
   }
   const spec = settingsHeadSpec(tab, info);
+  // The repaint replaces every control of the head, so a focused one (About repaints when /api/meta answers) would drop focus
+  // to <body>: note which one it was, and put it back on its equal once the new head is in.
+  const refocus = settingsHeadFocusKey(slot);
   if (!spec) { slot.replaceChildren(); return; }
   const text = document.createElement("div");
   text.className = "page-head-text";
   const title = document.createElement("h1");
   title.className = "page-title";
   title.textContent = spec.title;
+  // The H1 is one line that ellipsizes in a narrow window (desktop.css); the full text is one hover away.
+  title.setAttribute("title", spec.title);
   text.append(title, settingsHeadDesc(spec));
   const actions = document.createElement("div");
   actions.className = "page-actions";
@@ -173,6 +178,22 @@ function paintSettingsHead(tab) {
   // the menu code exists, and a disable comment would turn into an unused-directive warning once it does. So that
   // function must be a top-level function declaration (which is what makes it a property of the global).
   if (spec.action && spec.action.menu && typeof globalThis.credAddMenuAttach === "function") globalThis.credAddMenuAttach(trigger);
+  if (refocus) refocus();
+}
+
+// settingsHeadFocusKey(slot): when keyboard focus is on a control inside the head `slot`, a function that puts focus on the
+// control that replaces it after a repaint: found by id (the action) or, for the id-less Esc ✕, by its class. null when focus is
+// elsewhere (or nowhere), so a repaint never takes focus from the rest of the page.
+function settingsHeadFocusKey(slot) {
+  const a = document.activeElement;
+  if (!a || a === slot || typeof slot.contains !== "function" || !slot.contains(a)) return null;
+  const id = a.id || "";
+  const esc = !id && a.classList && a.classList.contains("set-esc");
+  if (!id && !esc) return null;
+  return () => {
+    const next = id ? document.getElementById(id) : slot.querySelector(".set-esc");
+    if (next && typeof next.focus === "function") next.focus();
+  };
 }
 
 if (typeof module !== "undefined" && module.exports) {

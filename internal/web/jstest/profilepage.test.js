@@ -523,6 +523,19 @@ test("a read-only profile: Start session is the primary and Duplicate… is a se
   assert.strictEqual(t.run("pfvState").page, "dup", "it opens the Duplicate page");
 });
 
+test("the profile page's H1s carry their full text as a title: a long name ellipsizes in a narrow window (final review M6)", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const [h1] = byCls(headOf(t.els["pfv-in"]), "page-title");
+  assert.strictEqual(h1.getAttribute("title"), "aws-ops", "the overview's head: the profile's name, whole");
+  const n = await newPage();
+  assert.strictEqual(byCls(rootOf(n), "page-title")[0].getAttribute("title"), "New profile", "New profile");
+  const d = page();
+  await d.box.pfvShow("aws-ops");
+  await dupFromMenu(d);
+  assert.strictEqual(byCls(rootOf(d), "page-title")[0].getAttribute("title"), "Copy of aws-ops", "Duplicate");
+});
+
 test("the head: the title is an h1, the model in the description is span.mono, and the section title reads This agent will be able to", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");

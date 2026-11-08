@@ -278,19 +278,35 @@ async function revokeToken(id) {
   }
 }
 
-async function logout() {
-  const ok = await askConfirm({
+// logout: the sign-out question, then the sign-out. `opts.focusCancel` (only when it is exactly true) opens the question on
+// Cancel instead of the destructive button: the desktop nav's Sign out… passes it (below); the phone's footer button is
+// this function itself, handed its click event, so its question carries no such key and is what it always was.
+async function logout(opts) {
+  const ask = {
     title: "Sign out of this box",
     body: "This browser will need the password again. Your running agents keep " +
           "running, and any access tokens you have created keep working — revoke " +
           "those individually if you want them gone.",
     confirmLabel: "Sign out",
     danger: true,
-  });
+  };
+  if (opts && opts.focusCancel === true) ask.focusCancel = true;
+  const ok = await askConfirm(ask);
   if (!ok) return;
   // fetch (not api): the handler 303s to /login, which we do explicitly anyway.
   try { await fetch("/logout", { method: "POST" }); } catch (_) {}
   window.location.href = "/login";
+}
+
+// navSignOut: the desktop Settings nav's Sign out… (final review I1). It leaves the Profiles page like every other way off it
+// (a nav tab, another profile, Esc): through profilepage.js's pfvLeaving (shell.js settingsLeave -> pfvTabLeave -> pfvLeaving),
+// which asks about unsaved changes first. Only a "go" (nothing changed, or Discard) reaches the sign-out confirm; Keep editing
+// stays on the page and signs nobody out. The sign-out question opens on Cancel (a destructive default is the wrong one for a
+// question Esc and Enter can both reach). Not wired on a phone: the item is hidden there and the footer button is logout.
+async function navSignOut() {
+  const go = typeof pfvLeaving === "function" ? pfvLeaving() : true;
+  if (go !== true && !(await go)) return;
+  return logout({ focusCancel: true });
 }
 
 function initTokens() {
@@ -313,9 +329,9 @@ function initTokens() {
 
   const logoutBtn = document.getElementById("tok-logout");
   if (logoutBtn) logoutBtn.onclick = logout;
-  // The desktop Settings nav's foot item (hidden on a phone): the same sign-out, the same confirm.
+  // The desktop Settings nav's foot item (hidden on a phone): the same sign-out and confirm, behind the page's leave guard.
   const navLogout = document.getElementById("set-signout");
-  if (navLogout) navLogout.onclick = logout;
+  if (navLogout) navLogout.onclick = navSignOut;
 
   const done = document.getElementById("tok-done");
   if (done) done.onclick = () => {

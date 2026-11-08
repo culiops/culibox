@@ -325,7 +325,10 @@ function pfvDrawHeader(rv, known) {
   const head = pfvMk("div", "pfv-head");
   const left = pfvMk("div", "page-head-text pfv-head-main");
   const title = pfvMk("div", "pfv-title");
-  title.append(pfvMk("h1", "page-title", h.name), pfvMk("span", "chip " + (h.tier === "host" ? "chip-host" : "chip-box"), h.tier));
+  const h1 = pfvMk("h1", "page-title", h.name);
+  // A long name ellipsizes in a narrow window (desktop.css): the whole of it is one hover away.
+  h1.setAttribute("title", h.name);
+  title.append(h1, pfvMk("span", "chip " + (h.tier === "host" ? "chip-host" : "chip-box"), h.tier));
   const sub = pfvMk("p", "page-desc");
   sub.append(...pfvMonoNodes(h.agentLine, known, "mono t-sm"));
   left.append(title, sub);
