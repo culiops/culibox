@@ -2210,8 +2210,16 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .btn:where(:not(.pri))[aria-expanded="true"] { background: var(--raise); box-shadow: inset 0 0 0 1px var(--faint); }
 
-  /* One kit card per provider (§B4 `section.card.m2-sec`: the .card class draws --panel and --r-card), its table clipped to the corners. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; overflow: hidden; }
+  /* One kit card per provider (§B4 `section.card.m2-sec`: the kit's .card is --panel and --r-card), its table clipped to the corners.
+     The fill and radius are written here and the node does not carry `.card` (final review): app.css's `.card` is the phone's amber
+     session card, which would style a page node left behind when the window crosses to a phone. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; overflow: hidden; background: var(--panel); border-radius: var(--r-card); }
+  /* The captions of the page's credential flows ("Provider", "Profiles on this host", a token's details) and a narrow page's card
+     headers: app.css draws every .sec-h as 10.5px UPPERCASE with .09em tracking, and only the table headers (below) and the drawer
+     reset that, so these still shouted (final review). Sentence case at the label size and weight the drawer's rule uses; the
+     table headers' own, heavier rule below wins where it names the same property. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h { font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h .count { font-weight: 400; color: var(--muted); }
   /* Its head (§B4 `.card-head`): the title (13/20 600) and the count chip 12px beside it, 12px 16px, a hairline under it. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }

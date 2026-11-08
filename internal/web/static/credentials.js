@@ -1274,7 +1274,10 @@ function credSecHead(title, count) {
 function credSection(g) {
   const tables = credTableMode();
   if (tables && g.key === "values") return credValuesFold(g);
-  const sec = credEl("section", tables ? "sec ctab-sec card" : "sec");
+  // The page's card is `ctab-sec` alone: desktop.css gives it the kit's panel fill and radius. Not the kit's `.card` class: that name is
+  // also the phone's amber session card (app.css), which would style these nodes if the window crossed to a phone and Settings were
+  // reopened before the next fetch replaced them.
+  const sec = credEl("section", tables ? "sec ctab-sec" : "sec");
   sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
   if (tables) {
@@ -1285,7 +1288,10 @@ function credSection(g) {
     title.appendChild(credEl("span", "count", String(g.entries.length)));
     h.appendChild(title);
     const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
-    const add = kind && credActionHandlers[kind] && credActionHandlers[kind].add;
+    // On the desktop page a narrow window draws cards, and the head's "Add credential ▾" already offers all three adds (My call 6): the
+    // cards carry no add of their own, so the page shows no primary ("Add AWS accounts" is `btn pri` on the phone). "Set a value" stays
+    // (an add inside a block). The phone's card mode is unchanged.
+    const add = kind && !(credPageMode() && kind !== "value") && credActionHandlers[kind] && credActionHandlers[kind].add;
     if (typeof add === "function") {
       const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
       b.type = "button";
@@ -1331,7 +1337,8 @@ function credStrip(view) {
   const locked = !unavail && st.initialized && st.locked && st.platform !== "darwin";
   // On the desktop page the strip is quiet (amber only when it needs you), in cards as in tables.
   const page = credPageMode();
-  const strip = credEl("div", page ? "strip cstrip card" + (locked || unavail || !st.initialized ? " need" : "") : "strip");
+  // `cstrip` alone, not `.card` (the phone's amber card, app.css): desktop.css's .cstrip rules draw its fill and radius.
+  const strip = credEl("div", page ? "strip cstrip" + (locked || unavail || !st.initialized ? " need" : "") : "strip");
   if (unavail) {
     strip.appendChild(credEl("span", "st locked", "Keychain"));
     const txt = credEl("div", "txt");
@@ -1405,19 +1412,48 @@ function credAddItems() {
 
 // credAddRun: run a row's add with the group it sat in before: AWS's, GitHub's, or the first token provider's (the add
 // starts on that provider); with no token yet there is no group, so it starts from { key: "token:" } (the first template).
-function credAddRun(kind) {
+// It is async because the AWS and token adds are (the AWS one reads the host's profiles, the token one the providers): focus moves
+// into the flow when it has drawn, if one opened (credFlowFocus).
+async function credAddRun(kind) {
   const h = credActionHandlers[kind];
   if (!h || typeof h.add !== "function") return;
   const groups = credGroups(credView || {});
   const group = kind === "token"
     ? groups.find((g) => g.key.startsWith("token:")) || { key: "token:" }
     : groups.find((g) => g.key === kind);
-  h.add(group, loadCredentials);
+  await h.add(group, loadCredentials);
+  credFlowFocus();
+}
+
+// credFlowFocus: a flow opened in the Credentials tab from the head menu has drawn: focus goes to its first control (the provider
+// tiles, the GitHub routes, AWS's first profile tick box), not the crumb, which is a way out. A flow with no control yet (AWS with no
+// profile to tick) takes the crumb, so focus is never left on <body> when the trigger it came from went away. Nothing when no flow
+// opened (the add failed to start): focus is still on the trigger, which is still shown.
+function credFlowFocus() {
+  if (!credTabFlowOpen()) return;
+  const host = document.getElementById("creds-body");
+  if (!host) return;
+  // Focus the user has put elsewhere while an async flow was drawing (AWS reads the host's profiles first) is theirs: only focus that
+  // is lost (<body>) or still on the trigger moves.
+  const at = document.activeElement;
+  const btn = credAddWrap ? credAddWrap.querySelector("button") : null;
+  if (at && at !== document.body && at !== document.documentElement && at !== btn) return;
+  const usable = (n) => {
+    if (n.disabled || n.type === "hidden") return false;
+    for (let x = n; x && x !== host; x = x.parentElement) if (x.hidden) return false;
+    return true;
+  };
+  const first = Array.from(host.querySelectorAll("input, select, textarea, button")).find(usable) || host.querySelector("a.lnk");
+  if (first && typeof first.focus === "function") first.focus();
 }
 
 // The open menu ({ wrap, btn, pop }) or null, and the wrapper of the trigger the head last drew.
 let credAddMenu = null;
 let credAddWrap = null;
+// A tab flow was open at the last credAddMenuSync, and it has just closed: once the list is drawn again the trigger takes focus
+// back if focus was lost (credAddMenuRefocus).
+let credAddFlowWas = false;
+let credAddRefocus = false;
 let credAddMenuWired = false;
 
 function credAddMenuClose(refocus) {
@@ -1441,6 +1477,23 @@ function credAddMenuSync() {
   const sep = head ? head.querySelector(".set-sep") : null;
   if (sep) sep.hidden = open;
   if (open) credAddMenuClose(false);
+  // A flow that has just closed: its nodes stay on screen until the list repaints, so focus is given back then, not now.
+  if (credAddFlowWas && !open) credAddRefocus = true;
+  else if (open) credAddRefocus = false;
+  credAddFlowWas = open;
+}
+
+// credAddMenuRefocus: the list has been drawn again (renderCredentials) after a flow opened from the head closed. The flow's
+// controls are gone, and with them keyboard focus (it is on <body>): the trigger, shown again, takes it. Focus the user has put
+// anywhere else in the meantime stays where it is.
+function credAddMenuRefocus() {
+  if (!credAddRefocus || credTabFlowOpen()) return;
+  credAddRefocus = false;
+  const wrap = credAddWrap;
+  const btn = wrap && !wrap.hidden ? wrap.querySelector("button") : null;
+  if (!btn || typeof btn.focus !== "function") return;
+  const at = document.activeElement;
+  if (!at || at === document.body || at === document.documentElement) btn.focus();
 }
 
 // credAddMenuAttach(btn): give the head's trigger its menu. Safe on every head repaint: each paint draws a new trigger,
@@ -1458,7 +1511,10 @@ function credAddMenuAttach(btn) {
   pop.hidden = true;
   for (const it of credAddItems()) {
     pop.appendChild(kitMenuButton(it.label, "", false, () => {
-      // Focus goes back to the trigger first: the add draws over the list, and a cancelled one hands focus to the page.
+      // Focus goes to the trigger first, so an add that does not open (its error is in the tab's error line) leaves it there and
+      // not on the menu row that has just closed. An add that does open draws over the list and hides the trigger
+      // (credAddMenuSync): credAddRun then moves focus into the flow once it has drawn (credFlowFocus), and credAddMenuRefocus gives
+      // it back to the trigger when the flow is closed (Cancel, Save, the crumb) and the list is drawn again.
       credAddMenuClose(true);
       credAddRun(it.kind);
     }));
@@ -1539,6 +1595,7 @@ function renderCredentials(view) {
   // the second paint is cards (a body this wide is below the need).
   if (credPaintedTables && credGrowNeed(host)) credPaint(host, view);
   credScrollPending();
+  credAddMenuRefocus();
 }
 
 // credPaint: one paint of the whole body. The mode this paint draws in (credSection
@@ -1775,7 +1832,9 @@ function awsOpenAdd(opts) {
   credFlowStart(opts);
   awsFlow = { mode: "add", rows: [], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "", opts: opts || null, created: [] };
   awsPaintFlow();
-  awsLoadProfiles(awsFlow);
+  // The view is drawn at once; its profile list, once the host's profiles are read. The caller may wait for that (the head menu
+  // moves focus to the first tick box); the drawer's starter ignores it.
+  return awsLoadProfiles(awsFlow);
 }
 
 // awsOpenEdit: the same row for one existing web connection. The read model
@@ -3168,14 +3227,15 @@ async function credSend(method, path, body) {
 
 function credTokensEmpty() {
   const tables = credTableMode();
-  const sec = credEl("section", tables ? "sec ctab-sec card" : "sec");
+  const sec = credEl("section", tables ? "sec ctab-sec" : "sec"); // page-only class, never the phone's .card (see credSection)
   sec.dataset.group = "tokens";
   sec.setAttribute("aria-label", "Tokens");
   const h = tables ? credSecHead("Tokens", 0) : credEl("div", "sec-h");
   if (!tables) {
     h.appendChild(credEl("span", "grow", "Tokens "));
     h.firstChild.appendChild(credEl("span", "count", "0"));
-    const add = credActionHandlers.token && credActionHandlers.token.add;
+    // No add of its own on the desktop page's cards: the head's "Add credential ▾" adds a token (see credSection).
+    const add = !credPageMode() && credActionHandlers.token && credActionHandlers.token.add;
     if (typeof add === "function") {
       const b = credEl("button", "btn", "Add token");
       b.type = "button";

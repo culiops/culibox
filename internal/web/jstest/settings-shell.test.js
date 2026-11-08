@@ -1406,6 +1406,24 @@ test("credential form labels are sentence case on the page and in the drawer", (
   for (const t of lits) assert.ok(t !== t.toUpperCase(), "sentence case in the source: " + t);
 });
 
+test("section captions of the page's credential flows and of the narrow page's cards are sentence case, like the drawer's (final review M8)", () => {
+  // app.css draws every `:is(#creds, #cred-drawer) .sec-h` as 10.5px UPPERCASE, .09em tracked; the table headers (.ctab-sec > .sec-h) and
+  // the drawer reset it, so "PROVIDER", "PROFILES ON THIS HOST" and a narrow page's "AWS 1" still shouted on the page.
+  assert.match(BASE_CSS, /:is\(#creds, #cred-drawer\) \.sec-h \{[^}]*text-transform: uppercase/, "fixture: the base rule is the uppercase one");
+  const drawer = decls(DRW + " .sec-h");
+  const page = decls(CRED + " .sec-h");
+  for (const [k, want] of [["text-transform", "none"], ["letter-spacing", "0"], ["font-size", "var(--t-md)"], ["font-weight", "600"], ["color", "var(--fg)"]]) {
+    assert.strictEqual(page.get(k), want, "the page's section caption: " + k);
+    assert.strictEqual(page.get(k), drawer.get(k), k + " is the drawer's label value");
+  }
+  assert.strictEqual(decls(CRED + " .sec-h .count").get("color"), "var(--muted)", "the count stays the quiet part");
+  assert.strictEqual(decls(CRED + " .sec-h .count").get("font-weight"), "400");
+  // The table headers keep their own (heavier) rule, so nothing about the tables moves.
+  assert.strictEqual(decls(CRED + " .ctab-sec > .sec-h").get("text-transform"), "none");
+  // Desktop only: the phone's rule is the base one and is untouched.
+  assert.ok(!has("#creds .sec-h"), "no bare #creds rule (credentials.test.js: every #creds rule names its drawer twin)");
+});
+
 test("credential fields rest on --faint like the kit's .input (§C6), on the page and in the drawer", () => {
   const kit = decls(".input");
   const f = decls(CRED + " .fld");

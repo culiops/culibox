@@ -12,11 +12,15 @@ const vm = require("node:vm");
 
 const STATIC = path.join(__dirname, "..", "static");
 
-// "tag", ".cls" or "tag.cls": every selector credentials.js asks this DOM for.
+// "tag", ".cls" or "tag.cls", or a comma list of them (matched in document order): every selector credentials.js asks this DOM for.
 function matcher(sel) {
-  const m = /^([a-z0-9]*)(?:\.([\w-]+))?$/i.exec(sel);
-  assert.ok(m, "the fake DOM does not support the selector " + sel);
-  return (n) => (!m[1] || n.tag === m[1]) && (!m[2] || n.className.split(/\s+/).includes(m[2]));
+  const one = (part) => {
+    const m = /^([a-z0-9]*)(?:\.([\w-]+))?$/i.exec(part.trim());
+    assert.ok(m, "the fake DOM does not support the selector " + sel);
+    return (n) => (!m[1] || n.tag === m[1]) && (!m[2] || n.className.split(/\s+/).includes(m[2]));
+  };
+  const alts = sel.split(",").map(one);
+  return (n) => alts.some((f) => f(n));
 }
 
 class Text { constructor(t) { this.text = t; this.parent = null; } get textContent() { return this.text; } }
@@ -59,8 +63,13 @@ class Node {
   }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
-  remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
+  // A browser drops focus to <body> when the focused element leaves the document, and when it stops being rendered (hidden): here,
+  // activeElement becomes null.
+  get hidden() { return !!this._hidden; }
+  set hidden(v) { this._hidden = v; if (v) this.dropFocusIn(this); }
+  dropFocusIn(n) { if (Node.active && n instanceof Node && n.contains(Node.active)) Node.active = null; }
+  replaceChildren(...cs) { this.children.forEach((c) => { this.dropFocusIn(c); c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
+  remove() { if (this.parent) { this.dropFocusIn(this); this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
   closest(sel) { const hit = matcher(sel); for (let n = this; n; n = n.parent) if (n instanceof Node && hit(n)) return n; return null; }
   querySelectorAll(sel) {
     const hit = matcher(sel), out = [];
@@ -396,15 +405,18 @@ test("a narrow page paints cards, a wide page paints tables, from the same view"
 // F11 (#171): Close and secondary actions are never primary, and a primary is never restyled as a
 // secondary by CSS. The tables have no add button at all (UI plan 4: the page head's "Add credential"
 // menu is the one add, frame M2.3); the cards keep the AWS add as the primary.
-test("the AWS add is the primary in the cards and absent from the tables", () => {
+test("the AWS add is the primary in the phone's cards and absent from the page, in tables and in cards", () => {
   const view = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
-  const add = (width) => {
-    const p = page({ width });
+  const add = (width, asPage = true) => {
+    const p = page({ width, asPage });
     p.box.renderCredentials(view);
     return p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Add AWS accounts");
   };
   assert.strictEqual(add(900), undefined, "tables: the header menu adds");
-  assert.strictEqual(add(500).className, "btn pri", "cards");
+  // Final review I4: a narrow desktop window draws cards, and its head already has "Add credential ▾": no second add, no primary.
+  assert.strictEqual(add(500), undefined, "the page's cards: the header menu adds here too");
+  assert.strictEqual(add(500, false).className, "btn pri", "the phone's cards keep the primary");
+  assert.strictEqual(add(900, false).className, "btn pri", "and the phone's modal at any width");
 });
 
 test("a modal keeps its own amber strip", () => {
@@ -2114,7 +2126,7 @@ test("table mode: section headers carry a count chip and no add button", () => {
   }
   const labels = body.querySelectorAll("button").map((b) => b.textContent);
   for (const l of ["Add AWS accounts", "Add GitHub", "Add token"]) assert.ok(!labels.includes(l), l + " is the header menu's now");
-  assert.ok(classesOf(sectionOf(body, "aws")).includes("card"), "a section is the kit's .card");
+  assert.ok(classesOf(sectionOf(body, "aws")).includes("ctab-sec"), "a section is the page's card (.ctab-sec: the kit's panel fill and radius are desktop.css's, not the phone's .card)");
 });
 
 test("table mode: the empty Tokens section keeps its line, a 0 chip and no add button", () => {
@@ -2126,16 +2138,53 @@ test("table mode: the empty Tokens section keeps its line, a 0 chip and no add b
   assert.match(sec.textContent, /No tokens yet\./);
 });
 
-test("card mode (phone) keeps its add buttons and count spans", () => {
-  for (const [name, opts] of [["the phone's modal", { asPage: false, width: 900 }], ["a narrow desktop page", { width: 500 }]]) {
+test("card mode: the phone keeps its add buttons and count spans; a narrow desktop page keeps the counts and Set a value only (final review I4)", () => {
+  for (const [name, opts, adds] of [
+    ["the phone's modal", { asPage: false, width: 900 }, [["Add AWS accounts"], ["Add GitHub"], ["Add token"], ["Set a value"], []]],
+    // The page's head menu offers all three adds (My call 6), so its cards draw none of their own, and no primary: only "Set a value"
+    // (an add inside a block, F10) stays.
+    ["a narrow desktop page", { width: 500 }, [[], [], [], ["Set a value"], []]],
+  ]) {
     const { body } = paintPage(m23View(), opts);
     const heads = body.querySelectorAll("div.sec-h");
     assert.deepStrictEqual(heads.map((h) => h.querySelector("span.grow").textContent), ["AWS 1", "GitHub Apps 1", "Sentry 1", "Stored values 2", "Legacy secrets 2"], name);
-    assert.deepStrictEqual(heads.map((h) => h.querySelectorAll("button").map((b) => b.textContent)), [["Add AWS accounts"], ["Add GitHub"], ["Add token"], ["Set a value"], []], name);
+    assert.deepStrictEqual(heads.map((h) => h.querySelectorAll("button").map((b) => b.textContent)), adds, name);
     assert.strictEqual(body.querySelectorAll("span.chip").length, 0, name + ": no chip");
     assert.strictEqual(body.querySelectorAll("h2").length, 0, name + ": the header is the span it always was");
     assert.strictEqual(body.querySelectorAll("div.leg").length, 2, name + ": legacy secrets are rows, not a table");
   }
+});
+
+test("a narrow desktop page has no primary on Credentials; the phone's card mode keeps its one (final review I4)", () => {
+  const primaries = (body) => body.querySelectorAll("button").filter((b) => classesOf(b).includes("pri") || classesOf(b).includes("btn-primary"));
+  for (const [name, view] of [["with entries", m23View()], ["empty", m23View({ aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [] })]]) {
+    const narrow = paintPage(view, { width: 500 }).body;
+    assert.deepStrictEqual(primaries(narrow).map((b) => b.textContent), [], name + ": the page's card mode draws no primary beside the head's Add credential ▾");
+    assert.deepStrictEqual(narrow.querySelectorAll("section").map((s) => s.querySelectorAll("button").map((b) => b.textContent).filter((t) => /^Add /.test(t))), narrow.querySelectorAll("section").map(() => []), name + ": and no section add button at all");
+    const phone = paintPage(view, { asPage: false, width: 500 }).body;
+    assert.deepStrictEqual(primaries(phone).map((b) => b.textContent), ["Add AWS accounts"], name + ": the phone's modal is unchanged: its AWS add is the primary");
+    const adds = phone.querySelectorAll("button").map((b) => b.textContent).filter((t) => /^Add /.test(t));
+    assert.deepStrictEqual(adds, ["Add AWS accounts", "Add GitHub", "Add token"], name + ": and keeps all its adds");
+  }
+  // The empty Tokens section on the page's cards: its line, no "Add token".
+  const empty = paintPage(m23View({ tokens: [] }), { width: 500 }).body;
+  assert.strictEqual(sectionOf(empty, "tokens").querySelectorAll("button").length, 0);
+  assert.match(sectionOf(empty, "tokens").textContent, /No tokens yet\./);
+});
+
+// ---- the phone's flash after crossing 700px (final review M5): `.card` is the phone's amber session card (app.css) ----
+test("nothing the page builds carries the phone's .card class: a reopened phone modal cannot paint stale page nodes amber (final review M5)", () => {
+  for (const [name, opts] of [["tables", { width: 900 }], ["cards", { width: 500 }]]) {
+    const { body } = paintPage(m23View({ tokens: [] }), opts);
+    assert.deepStrictEqual(body.querySelectorAll(".card").map((n) => n.tag + "." + n.className), [], name + ": no element of the page is .card");
+    assert.ok(body.querySelectorAll(".cstrip").length === 1, name + ": the strip is still the page's own class");
+  }
+  const { body } = paintPage(m23View({ tokens: [] }));
+  assert.ok(classesOf(sectionOf(body, "aws")).includes("ctab-sec"), "a table section keeps its page-only class");
+  assert.ok(classesOf(sectionOf(body, "tokens")).includes("ctab-sec"), "the empty Tokens section too");
+  const locked = paintPage(m23View({ store: { initialized: true, locked: true, platform: "linux" } })).body;
+  assert.ok(classesOf(locked.querySelectorAll(".cstrip")[0]).includes("need"), "the amber strip is still told apart");
+  assert.deepStrictEqual(locked.querySelectorAll(".card").length, 0);
 });
 
 // A page head the way settingshead.js paints it: the trigger, a divider, then Esc ✕ (all in `.page-actions`).
@@ -2264,6 +2313,141 @@ test("an Add / Edit view open in the tab hides the trigger; closing it brings it
   p.box.credAddMenuSync();
   assert.strictEqual(wrap.hidden, false);
   assert.strictEqual(sep.hidden, false);
+});
+
+// ---- keyboard focus around the head menu's adds (final review I3) -----------------------------------------------------------
+// Choosing an item closes the menu (its focused row goes with it) and the chosen flow draws over the list, which hides the trigger
+// (credAddMenuSync): without more, focus is on <body> the moment the flow opens, and again when it closes. The flow's first control
+// takes focus once the flow has drawn; the trigger takes it back when the flow is gone and the list is drawn again.
+
+// The Credentials page with a head menu, the list painted and loadCredentials real (so a closed flow repaints the list, as it does).
+async function menuPageForFocus({ reply, view } = {}) {
+  const p = page({ tab: true, width: 900 });
+  p.box.reply = reply || credReply({ templates: [sentryTpl, ghPatTpl] });
+  p.box.loadCredentials = p.box.realLoadCredentials;
+  const v = view || m23View({ tokens: [], aws: [], github_apps: [] });
+  const base = p.box.reply;
+  p.box.reply = (path, opt) => (path === "/api/credentials" ? v : base(path, opt));
+  p.box.renderCredentials(v);
+  const head = headWithTrigger(p);
+  return { p, ...head, rows: menuRows(head.pop), body: p.byId["creds-body"] };
+}
+const opens = (m, i) => { m.btn.onclick(); m.rows[i].onclick(); };
+const insideBody = (m, n) => !!n && m.body.contains(n);
+
+test("Add token: focus moves into the flow once it has drawn, its first control after the crumb, not <body> (final review I3)", async () => {
+  const m = await menuPageForFocus();
+  opens(m, 2);
+  await settle();
+  assert.strictEqual(m.wrap.hidden, true, "the trigger is hidden while the flow is open");
+  const at = m.p.doc.activeElement;
+  assert.ok(insideBody(m, at), "focus is inside #creds-body, not on the hidden trigger and not nowhere");
+  assert.strictEqual(at.tag, "button", "the first control of the flow: the provider tiles come first");
+  assert.ok(classesOf(at).includes("tile"));
+  assert.strictEqual(at.querySelector("span.n").textContent, "Sentry");
+  assert.strictEqual(m.body.querySelector("a.lnk").tag, "a", "fixture: the crumb link is there, and is not what took focus");
+  assert.notStrictEqual(at, m.body.querySelector("a.lnk"));
+});
+
+test("Add GitHub: focus is on the first route tile once the choice has drawn (final review I3)", async () => {
+  const m = await menuPageForFocus();
+  opens(m, 1);
+  await settle();
+  const at = m.p.doc.activeElement;
+  assert.ok(insideBody(m, at));
+  assert.ok(classesOf(at).includes("tile"));
+  assert.strictEqual(at, m.body.querySelectorAll("button.tile")[0]);
+});
+
+test("Add AWS accounts: the add is async, so focus follows its profile list: the first profile's tick box (final review I3)", async () => {
+  const m = await menuPageForFocus({ reply: awsReply() });
+  opens(m, 0);
+  await settle();
+  const at = m.p.doc.activeElement;
+  assert.ok(insideBody(m, at), "focus is in the flow, once its profiles are drawn");
+  assert.strictEqual(at.tag, "input");
+  assert.strictEqual(at.type, "checkbox");
+  assert.strictEqual(at, m.body.querySelectorAll("input").find((i) => i.type === "checkbox"), "the first tick box");
+  // A host with no profile to tick: the crumb is the flow's only control, and takes focus.
+  const none = await menuPageForFocus({ reply: (path) => (path === "/api/credentials/aws/host-profiles" ? { profiles: [] } : {}) });
+  opens(none, 0);
+  await settle();
+  assert.strictEqual(none.p.doc.activeElement, none.body.querySelector("a.lnk"), "never <body>");
+});
+
+test("an add that does not open leaves focus on the trigger, which is still shown (final review I3)", async () => {
+  const m = await menuPageForFocus();
+  m.p.box.apiFail = Object.assign(new Error("no route"), { status: 500 });
+  opens(m, 2);
+  await settle();
+  assert.strictEqual(m.wrap.hidden, false, "no flow opened, so the trigger stays");
+  assert.strictEqual(m.p.doc.activeElement, m.btn, "and focus is on it, not on the menu row that closed");
+});
+
+test("Cancel returns focus to the trigger once the list is drawn again, from a tab flow of every kind (final review I3)", async () => {
+  for (const [name, row, reply, cancel] of [
+    ["token", 2, undefined, (m) => m.p.byId["cred-form-cancel"].onclick()],
+    ["GitHub", 1, undefined, (m) => m.p.byId["cred-form-cancel"].onclick()],
+    ["AWS", 0, awsReply(), (m) => m.p.byId["aws-cancel"].onclick()],
+    ["the crumb", 2, undefined, (m) => m.body.querySelector("a.lnk").onclick()],
+  ]) {
+    const m = await menuPageForFocus({ reply });
+    opens(m, row);
+    await settle();
+    assert.ok(insideBody(m, m.p.doc.activeElement), name + ": fixture: focus is in the flow");
+    cancel(m);
+    await settle();
+    await settle();
+    assert.strictEqual(m.wrap.hidden, false, name + ": the trigger is back");
+    assert.strictEqual(m.body.querySelectorAll("a.lnk").length, 0, name + ": the flow is gone, the list is drawn");
+    assert.strictEqual(m.p.doc.activeElement, m.btn, name + ": focus is on the trigger, not on <body>");
+  }
+});
+
+test("Save returns focus to the trigger too (final review I3)", async () => {
+  const m = await menuPageForFocus();
+  opens(m, 2);
+  await settle();
+  fieldIn(m.body, "ct-sentry-name").value = "sentry-prod";
+  fieldIn(m.body, "ct-sentry-v0").value = "tok-123";
+  m.p.byId["cred-form-save"].onclick();
+  await settle();
+  await settle();
+  assert.strictEqual(m.wrap.hidden, false);
+  assert.strictEqual(m.body.querySelectorAll("a.lnk").length, 0, "the list is drawn again");
+  assert.strictEqual(m.p.doc.activeElement, m.btn, "focus is on the trigger after a save");
+});
+
+test("an async flow does not take focus the user moved while it was drawing (final review I3)", async () => {
+  const m = await menuPageForFocus({ reply: awsReply() });
+  opens(m, 0);
+  const elsewhere = new Node("button");
+  elsewhere.focus();
+  await settle();
+  assert.strictEqual(m.p.doc.activeElement, elsewhere, "the profiles arrived, the flow drew, and focus stayed where the user put it");
+});
+
+test("closing a flow does not take focus the user has already put somewhere else (final review I3)", async () => {
+  const m = await menuPageForFocus();
+  opens(m, 2);
+  await settle();
+  const elsewhere = new Node("button");
+  elsewhere.focus();
+  m.p.byId["cred-form-cancel"].onclick();
+  await settle();
+  await settle();
+  assert.strictEqual(m.p.doc.activeElement, elsewhere, "focus was not on <body>, so it is not moved");
+  // And a repaint with no flow behind it never moves focus to the trigger on its own account.
+  Node.active = null;
+  m.p.box.renderCredentials(m23View());
+  assert.strictEqual(m.p.doc.activeElement, null);
+});
+
+test("the menu item's comment says what the code does now: focus into the flow, back to the trigger on close", () => {
+  const src = fs.readFileSync(path.join(STATIC, "credentials.js"), "utf8");
+  assert.doesNotMatch(src, /a cancelled one hands focus to the page/, "the old comment claimed Cancel hands focus to the page");
+  assert.match(src, /credFlowFocus\(\)/, "the flow's first control takes focus once drawn");
+  assert.match(src, /credAddMenuRefocus\(\)/, "the trigger takes it back when the flow is gone");
 });
 
 test("the strip says it once on the page: dot, Encrypted store, muted unlocked · locks in …, Lock now, then the honest note once", () => {
