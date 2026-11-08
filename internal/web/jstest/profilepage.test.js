@@ -6288,3 +6288,31 @@ test("workspace mode choices are two option cards in one fieldset: the kit's .op
   pickMode(t, "copy");
   assert.deepStrictEqual(byCls(blockOf(t, "workspace"), "pfv-card").map((c) => classesOf(c).includes("is-on")), [false, true]);
 });
+
+// Fix round 1 (Task 4 review): .pfv-choice is a two-column grid of option cards, so a hint put in the fieldset beside the cards would be a grid cell
+// of its own. settings-shell.test.js pins the rule that spans anything that is not a card across the row; this pins that the hints ARE direct
+// children of the fieldset, the thing that rule matches, and that nothing but cards and hints is in there.
+test("a hint in the New profile's 'Where it runs' fieldset is a direct child of the choice grid, beside no card", async () => {
+  const isCard = (n) => classesOf(n).includes("pfv-card");
+  const fieldsetOf = (t) => byCls(rootOf(t), "pfv-choice")[0];
+  const cells = (fs) => fs.children.filter((c) => c instanceof Node && c.tag !== "legend");
+  // Duplicate of a private copy: one Box card (no host card) and the sentence that says why, which must not sit in the second column.
+  const t = clonePage();
+  await t.box.pfvShow("gitops-clone");
+  await dupFromMenu(t);
+  const fs = fieldsetOf(t);
+  assert.strictEqual(fs.tag, "fieldset");
+  assert.deepStrictEqual(cells(fs).map((c) => [isCard(c), c.tag, classesOf(c)[0]]), [[true, "label", "opt-card"], [false, "p", "pfv-hint"]], "one card, then the hint, as direct children");
+  assert.strictEqual(cells(fs)[1].textContent, "A private copy needs a box.");
+  assert.strictEqual(cells(fs)[1].parent, fs, "a direct child: `.pfv-choice > :not(.pfv-card)` matches it");
+  // New profile with host chosen: the two cards, then the "host holds" sentence.
+  const n = await newPage();
+  pickTier(n, "host");
+  const nfs = fieldsetOf(n);
+  assert.deepStrictEqual(cells(nfs).map((c) => [isCard(c), c.tag]), [[true, "label"], [true, "label"], [false, "p"]]);
+  assert.strictEqual(cells(nfs)[2].textContent, "On this machine a profile cannot hold AWS, GitHub or tokens.");
+  // Every fieldset the page draws as a choice holds only cards, hints and (not a grid item) its legend: nothing else can need the row.
+  for (const root of [rootOf(t), rootOf(n)]) for (const c of byCls(root, "pfv-choice")) {
+    assert.deepStrictEqual(c.children.filter((x) => x instanceof Node && !isCard(x) && x.tag !== "legend").map((x) => classesOf(x)[0]), c.children.filter((x) => x instanceof Node && classesOf(x)[0] === "pfv-hint").map(() => "pfv-hint"));
+  }
+});

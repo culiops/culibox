@@ -2623,6 +2623,9 @@
      .opt-card (§D `.m2-opt`: 10px 12px, --r-ctl, a 1px --line ring, the chosen one filled --raise with no accent ring), which draws the box; this lays
      out what is in it: a 14px radio (§C6 `.check input`), 8px, then the words (§D `.m2-optt`: the title 13/20 500, the lines 12/18 --muted, 2px apart). */
   #page-host > #settings-modal.as-page #pfv .pfv-choice { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  /* Anything in the fieldset that is not a card takes the whole row under the cards, not a cell beside one: New profile's hint ("A private copy needs a
+     box." under the one Box card of a copy's Duplicate, "On this machine a profile cannot hold ..." under the two). The legend is no grid item. */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice > :not(.pfv-card) { grid-column: 1 / -1; }
   #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2802,7 +2805,7 @@
     /* An option's segmented control (Agent's Effort, and Advanced's choices) wraps onto a second line when its choices no longer fit in one:
        "low medium high xhigh max" needs 284px and the body has the page less 104px (less 52px from 240px down), so it is 388px that runs out;
        390px keeps a margin. Without it the control's own width held its grid track open past the block. A choice stays one button, and one
-       that is long (a stored value the list no longer has) wraps its text; every line is 26px tall, as the single line is. */
+       that is long (a stored value the list no longer has) wraps its text; every line is 24px tall (the kit seg item), as the single line is. */
     #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; }
     #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; height: auto; min-height: var(--h-sm); padding: 4px 10px; white-space: normal; overflow-wrap: anywhere; }
   }

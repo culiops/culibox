@@ -1099,6 +1099,12 @@ test("workspace mode choices sit side by side: .pfv-choice is a two-column grid 
   assert.strictEqual(two.get("grid-template-columns"), "repeat(2, minmax(0, 1fr))", "§D `.m2-two`");
   assert.strictEqual(two.get("gap"), "8px");
   assert.strictEqual(two.get("max-width"), undefined, "the form's own 560px bounds it, not a 440px of its own");
+  // Anything in the fieldset that is not a card (New profile's hint under its tier cards: "A private copy needs a box.", "On this machine a
+  // profile cannot hold ...") takes the whole row, under the cards, not a cell of its own beside one. The legend is no grid item: the rule is harmless there.
+  const row = bdecls(PV + " .pfv-choice > :not(.pfv-card)");
+  assert.strictEqual(row.get("grid-column"), "1 / -1", "a hint spans both columns");
+  const spanning = BASE_RULES.filter((r) => parts(r.selector).includes(PV + " .pfv-choice > :not(.pfv-card)"));
+  assert.strictEqual(spanning.length, 1, "one rule says it");
   assert.strictEqual(bdecls(PV + " .pfv-field > legend.pfv-flabel").get("margin-bottom"), "6px", "§D `.m2-legend { margin-bottom: 6px }`: the choice's legend is a field's");
   assert.ok(!bhas(PV + " .pfv-choice > legend.pfv-flabel"), "no 8px legend of the choice's own");
   // The card is the kit's .opt-card (Plan 1: §D `.m2-opt`: 10px 12px, --r-ctl, a 1px --line ring, the chosen one filled --raise): the page rule adds layout only.
