@@ -60,6 +60,10 @@ class Node {
   set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  // The element that has keyboard focus: a real one loses it when it leaves the document, which is what the
+  // list's repaint does to the button that was pressed, so a test reads Node.focused only after the repaint.
+  focus() { Node.focused = this; }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
   has(cls) { return this.className.split(/\s+/).includes(cls); }
@@ -73,9 +77,11 @@ const settle = () => new Promise((r) => setImmediate(r));
 
 // page({ items, asPage }): tokens.js in a context whose document is the Settings dialog, the page (as-page) or a
 // phone's modal. `calls` records the requests the code makes.
-function page({ items, asPage = true, armed = false } = {}) {
+function page({ items, asPage = true, api } = {}) {
   const calls = [];
+  Node.focused = null;
   const els = {
+    "set-act-tokens": Object.assign(new Node("button"), { id: "set-act-tokens" }),
     "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "" }),
     "tok-list": new Node("ul"),
     "tok-err": new Node("div"),
@@ -87,7 +93,8 @@ function page({ items, asPage = true, armed = false } = {}) {
       getElementById: (id) => els[id] || null,
       createElement: (tag) => new Node(tag),
     },
-    api: async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return items; },
+    api: api ? async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return api(url, (opts && opts.method) || "GET"); }
+      : async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return items; },
     console,
   };
   vm.createContext(ctx);
@@ -389,4 +396,164 @@ test("every new rule is the page's and every kit value is a token: nothing for t
     if (k === "font-weight") assert.ok(Number(v) <= 600 || /var\(--w-/.test(v), s + " weight " + v);
     if (k === "font-size") assert.match(v, /^var\(--t-/, s + " takes a kit size");
   }
+});
+
+// --- keyboard focus -----------------------------------------------------------------------------------------
+
+// loadTokens rebuilds every row, so the button that was pressed leaves the document and focus would fall to <body>:
+// a keyboard or screen-reader user pressing Enter on "Revoke macbook" would see and hear nothing. The page puts it
+// back: Cancel when a row is armed (the safe default), Revoke… after Cancel, the next row's Revoke… after a revoke.
+const rowsOf = (list) => list.children[0].byTag("tbody")[0].byTag("tr");
+const rowFor = (list, name) => rowsOf(list).find((tr) => tr.children[0].textContent === name);
+const THREE = () => [
+  { id: "a1", name: "macbook", created_at: CREATED, last_used_at: USED },
+  { id: "b2", name: "gate-test-token", created_at: CREATED + 86400 },
+  { id: "c3", name: "ci", created_at: CREATED + 86400 * 2 },
+];
+// A server that remembers: DELETE /api/tokens/<id> takes the token out of what the next GET returns.
+function server(items, { order = (l) => l } = {}) {
+  let live = items.slice();
+  return (url, method) => {
+    if (method === "DELETE") { live = live.filter((t) => t.id !== decodeURIComponent(url.split("/").pop())); return undefined; }
+    return order(live.slice());
+  };
+}
+
+test("arming a row puts focus on that row's Cancel, which names the token", async () => {
+  const { ctx, list } = page({ items: THREE() });
+  await ctx.loadTokens();
+  assert.strictEqual(Node.focused, null, "drawing the page takes nobody's focus");
+  rowFor(list, "gate-test-token").byTag("button")[0].onclick();
+  await settle();
+  const row = rowFor(list, "gate-test-token");
+  assert.ok(row.has("arm"));
+  const [cancel, go] = row.byTag("button");
+  assert.strictEqual(Node.focused, cancel, "Cancel, not the destructive Revoke");
+  assert.strictEqual(cancel.textContent, "Cancel");
+  assert.strictEqual(cancel.getAttribute("aria-label"), "Cancel revoking gate-test-token");
+  assert.strictEqual(go.getAttribute("aria-label"), "Revoke gate-test-token");
+  assert.ok(row.byTag("button").every((b) => b.parent), "and it is in the new DOM, not the one the repaint threw away");
+});
+
+test("Cancel puts focus back on that row's Revoke…", async () => {
+  const { ctx, list } = page({ items: THREE() });
+  await ctx.loadTokens();
+  rowFor(list, "gate-test-token").byTag("button")[0].onclick();
+  await settle();
+  rowFor(list, "gate-test-token").byTag("button")[0].onclick();
+  await settle();
+  const row = rowFor(list, "gate-test-token");
+  assert.ok(!row.has("arm"));
+  assert.strictEqual(Node.focused, row.byTag("button")[0]);
+  assert.strictEqual(Node.focused.textContent, "Revoke…");
+  assert.strictEqual(Node.focused.getAttribute("aria-label"), "Revoke gate-test-token");
+});
+
+test("after a revoke focus goes to the next row's Revoke…, else the previous row's, else New token", async () => {
+  const { ctx, list, els, calls } = page({ items: THREE(), api: server(THREE()) });
+  await ctx.loadTokens();
+  const revoke = async (name) => {
+    rowFor(list, name).byTag("button")[0].onclick();            // Revoke…
+    await settle();
+    rowFor(list, name).byTag("button")[1].onclick();            // Revoke, in the row
+    await settle();
+  };
+  // The middle one: the next row (ci).
+  await revoke("gate-test-token");
+  assert.deepStrictEqual(rowsOf(list).map((tr) => tr.children[0].textContent), ["macbook", "ci"]);
+  assert.strictEqual(Node.focused, rowFor(list, "ci").byTag("button")[0], "the next row");
+  assert.strictEqual(Node.focused.getAttribute("aria-label"), "Revoke ci");
+  // The last one: no next row, so the previous (macbook).
+  await revoke("ci");
+  assert.deepStrictEqual(rowsOf(list).map((tr) => tr.children[0].textContent), ["macbook"]);
+  assert.strictEqual(Node.focused, rowFor(list, "macbook").byTag("button")[0], "the previous row");
+  // The only one: nothing left, so the head's New token.
+  await revoke("macbook");
+  assert.strictEqual(list.children[0].textContent, "No tokens yet.");
+  assert.strictEqual(Node.focused, els["set-act-tokens"], "New token");
+  assert.deepStrictEqual(calls.filter(([, m]) => m === "DELETE").map(([u]) => u), ["/api/tokens/b2", "/api/tokens/c3", "/api/tokens/a1"]);
+});
+
+test("focus finds its row by token id, not by position: the list is fetched anew", async () => {
+  // The server answers newest first once something has been revoked, so "the next row" by index would be another token.
+  const { ctx, list } = page({ items: THREE(), api: server(THREE(), { order: (l) => (l.length < 3 ? l.reverse() : l) }) });
+  await ctx.loadTokens();
+  rowFor(list, "macbook").byTag("button")[0].onclick();
+  await settle();
+  rowFor(list, "macbook").byTag("button")[1].onclick();
+  await settle();
+  assert.deepStrictEqual(rowsOf(list).map((tr) => tr.children[0].textContent), ["ci", "gate-test-token"], "the repaint put the rows in another order");
+  assert.strictEqual(Node.focused, rowFor(list, "gate-test-token").byTag("button")[0], "macbook's next row was gate-test-token, wherever it is now");
+});
+
+test("a row that has gone elsewhere hands focus to New token instead of dropping it", async () => {
+  const gone = server(THREE());
+  let drop = false;
+  const { ctx, list, els } = page({ items: THREE(), api: (url, m) => { const l = gone(url, m); return drop ? l.filter((t) => t.id !== "b2") : l; } });
+  await ctx.loadTokens();
+  rowFor(list, "gate-test-token").byTag("button")[0].onclick();
+  await settle();
+  drop = true;                       // revoked in another tab meanwhile
+  rowFor(list, "gate-test-token").byTag("button")[0].onclick();   // Cancel
+  await settle();
+  assert.strictEqual(rowFor(list, "gate-test-token"), undefined);
+  assert.strictEqual(Node.focused, els["set-act-tokens"]);
+});
+
+test("a failed revoke leaves focus where it is and says so", async () => {
+  const items = THREE();
+  const { ctx, list, els } = page({ items, api: (url, m) => { if (m === "DELETE") throw new Error("boom"); return items; } });
+  await ctx.loadTokens();
+  rowFor(list, "macbook").byTag("button")[0].onclick();
+  await settle();
+  const before = Node.focused;
+  rowFor(list, "macbook").byTag("button")[1].onclick();
+  await settle();
+  assert.match(els["tok-err"].textContent, /Revoke failed: boom/);
+  assert.strictEqual(Node.focused, before, "no repaint, so nothing to move");
+});
+
+test("the phone moves no focus and gives its buttons no labels it did not have", async () => {
+  const { ctx, list } = page({ items: THREE(), asPage: false, api: server(THREE()) });
+  await ctx.loadTokens();
+  list.children[0].children[2].onclick();                       // Revoke…
+  await settle();
+  const [cancel, go] = list.children[0].children.slice(2);
+  assert.strictEqual(Node.focused, null, "arming focuses nothing on a phone");
+  assert.strictEqual(cancel.getAttribute("aria-label"), null);
+  assert.strictEqual(go.getAttribute("aria-label"), null);
+  cancel.onclick();
+  await settle();
+  assert.strictEqual(Node.focused, null);
+  list.children[0].children[2].onclick();
+  await settle();
+  list.children[0].children[3].onclick();                       // Revoke
+  await settle();
+  assert.strictEqual(list.children.length, 2, "revoked");
+  assert.strictEqual(Node.focused, null, "and still nothing focused: the phone's rows are as they were");
+});
+
+// --- list semantics -----------------------------------------------------------------------------------------
+
+test("on the page the list is a card and a note, not 'a list of 2 items': role none on the list and its items", async () => {
+  const { ctx, list } = page({ items: THREE() });
+  await ctx.loadTokens();
+  assert.strictEqual(list.getAttribute("role"), "none");
+  assert.deepStrictEqual(list.children.map((li) => [li.tag, li.getAttribute("role")]), [["li", "none"], ["li", "none"]]);
+  assert.strictEqual(list.children[0].byTag("table")[0].getAttribute("role"), null, "the table is still a table");
+  const none = page({ items: [] });
+  await none.ctx.loadTokens();
+  assert.strictEqual(none.list.getAttribute("role"), "none", "also with no token");
+  assert.deepStrictEqual(none.list.children.map((li) => li.getAttribute("role")), ["none", "none"]);
+});
+
+test("the phone's list has no role, even after the page drew it (the mode can flip)", async () => {
+  const { ctx, list, els } = page({ items: THREE() });
+  await ctx.loadTokens();
+  assert.strictEqual(list.getAttribute("role"), "none");
+  els["settings-modal"].className = "";                         // the window narrowed to a phone's
+  await ctx.loadTokens();
+  assert.strictEqual(list.getAttribute("role"), null);
+  assert.strictEqual(list.children.length, 3, "the phone's three rows");
+  assert.ok(list.children.every((li) => li.getAttribute("role") === null && li.className === "tokrow"));
 });

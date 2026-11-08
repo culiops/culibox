@@ -56,9 +56,31 @@ function tokBtn(label, cls, onclick) {
   return b;
 }
 
+// Where keyboard focus lands once the page's list is repainted. loadTokens rebuilds every row, so the button that was
+// pressed is gone and focus would fall to <body>: { id, which } names a token's "cancel" or "revoke" button, found again
+// by the token's id (never by position: the list is fetched anew). An id that is not in the list (the last token was just
+// revoked, or it went away in another tab) falls back to the head's New token. Set only on the page, never on a phone.
+let tokFocus = null;
+// The ids of the tokens the page last drew, in order: after a revoke, the neighbour to land on.
+let tokIds = [];
+
+function tokFocusTo(btns, want) {
+  const row = btns.get(want.id);
+  const el = (row && row[want.which]) || document.getElementById("set-act-tokens");
+  if (el && typeof el.focus === "function") el.focus();
+}
+
+// tokNextFocus(id): after token `id` is revoked, its next row's Revoke…, else the previous row's, else (no id) New token.
+function tokNextFocus(id) {
+  const i = tokIds.indexOf(id);
+  return { id: i < 0 ? "" : (tokIds[i + 1] || tokIds[i - 1] || ""), which: "revoke" };
+}
+
 // tokPageRow: one token's row of the page's table. Name, Created and Last used (a muted "Never used"), then Revoke…, or,
 // armed, the confirm inside the row: the question across the other three columns with Cancel and Revoke beside it.
-function tokPageRow(t) {
+// `btns` collects the row's buttons by token id, for tokFocusTo. Arming focuses Cancel (the safe default, not the
+// destructive one); Cancel focuses the row's Revoke… again.
+function tokPageRow(t, btns) {
   const armed = t.id === armedToken;
   const tr = tokEl("tr", armed ? "arm" : "");
   tr.appendChild(tokEl("td", "tok-nm", t.name));
@@ -68,11 +90,13 @@ function tokPageRow(t) {
     const box = tokEl("div", "tok-confirm");
     box.appendChild(tokEl("span", "tok-ask", TOK_ARM_COPY));
     const acts = tokEl("div", "tok-acts");
+    const cancel = tokBtn("Cancel", "btn btn-sm", () => { armedToken = ""; tokFocus = { id: t.id, which: "revoke" }; loadTokens(); });
+    cancel.setAttribute("aria-label", "Cancel revoking " + t.name);
     // No ellipsis on Revoke: this IS the question, not the promise of one.
-    acts.append(
-      tokBtn("Cancel", "btn btn-sm", () => { armedToken = ""; loadTokens(); }),
-      tokBtn("Revoke", "btn btn-danger btn-sm", () => revokeToken(t.id)),
-    );
+    const go = tokBtn("Revoke", "btn btn-danger btn-sm", () => revokeToken(t.id));
+    go.setAttribute("aria-label", "Revoke " + t.name);
+    btns.set(t.id, { cancel, revoke: go });
+    acts.append(cancel, go);
     box.appendChild(acts);
     td.appendChild(box);
     tr.appendChild(td);
@@ -81,15 +105,16 @@ function tokPageRow(t) {
   tr.appendChild(tokEl("td", "tnum", tokCreated(t)));
   tr.appendChild(tokEl("td", "tnum" + (t.last_used_at ? "" : " muted"), tokLastUsed(t)));
   const act = tokEl("td", "num");
-  const arm = tokBtn("Revoke…", "btn btn-danger btn-sm", () => { armedToken = t.id; loadTokens(); });
+  const arm = tokBtn("Revoke…", "btn btn-danger btn-sm", () => { armedToken = t.id; tokFocus = { id: t.id, which: "cancel" }; loadTokens(); });
   arm.setAttribute("aria-label", "Revoke " + t.name);
+  btns.set(t.id, { revoke: arm });
   act.appendChild(arm);
   tr.appendChild(act);
   return tr;
 }
 
 // tokPageTable: the kit's .tbl, one colgroup (the shares are desktop.css's), the actions column named for a screen reader.
-function tokPageTable(items) {
+function tokPageTable(items, btns) {
   const table = tokEl("table", "tbl tok-tbl");
   table.setAttribute("aria-label", "API tokens");
   const cols = tokEl("colgroup");
@@ -103,24 +128,37 @@ function tokPageTable(items) {
   }
   table.appendChild(tokEl("thead")).appendChild(head);
   const body = tokEl("tbody");
-  for (const t of items) body.appendChild(tokPageRow(t));
+  for (const t of items) body.appendChild(tokPageRow(t, btns));
   table.appendChild(body);
   return table;
 }
 
 // tokPaintPage: the desktop page's list: one card holding the table (or the line "No tokens yet."), the approved
-// footnote under it. Both are items of #tok-list, so a repaint clears them with the rows.
-function tokPaintPage(list, items) {
+// footnote under it. Both are items of #tok-list, so a repaint clears them with the rows. They are a card and a note, not
+// a list of two things, so the list and its items carry role="none" (the phone's branch takes it off again: the mode can
+// flip). `focus` is where keyboard focus goes after the repaint (see tokFocus).
+function tokPaintPage(list, items, focus) {
+  const btns = new Map();
+  list.setAttribute("role", "none");
   const card = tokEl("li", "tok-card card");
+  card.setAttribute("role", "none");
   if (!items || items.length === 0) card.appendChild(tokEl("p", "tokempty", "No tokens yet."));
-  else card.appendChild(tokPageTable(items));
-  list.append(card, tokEl("li", "tok-under t-sm muted", TOK_FOOTNOTE));
+  else card.appendChild(tokPageTable(items, btns));
+  const note = tokEl("li", "tok-under t-sm muted", TOK_FOOTNOTE);
+  note.setAttribute("role", "none");
+  list.append(card, note);
+  tokIds = (items || []).map((t) => t.id);
+  if (focus) tokFocusTo(btns, focus);
 }
 
 // Which token's row, if any, is showing its in-row revoke confirm.
 let armedToken = "";
 
 async function loadTokens() {
+  // Where focus goes after this repaint, if the caller asked (the page's arm, Cancel and Revoke); taken now so a
+  // later load does not inherit it.
+  const focus = tokFocus;
+  tokFocus = null;
   const list = document.getElementById("tok-list");
   if (!list) return;
   setTokErr("");
@@ -140,7 +178,8 @@ async function loadTokens() {
   if (armedToken && !(items || []).some((t) => t.id === armedToken)) armedToken = "";
   list.textContent = "";
   // Checked now, after the request: the first open of Settings selects this tab before the dialog becomes the page.
-  if (tokPageMode()) { tokPaintPage(list, items); return; }
+  if (tokPageMode()) { tokPaintPage(list, items, focus); return; }
+  list.removeAttribute("role");
   if (!items || items.length === 0) {
     const li = document.createElement("li");
     li.className = "tokempty";
@@ -228,8 +267,11 @@ async function createToken() {
 async function revokeToken(id) {
   setTokErr("");
   armedToken = "";
+  // On the page, focus moves to the next row's Revoke… (the previous one's, or New token) once the row is gone.
+  const next = tokPageMode() ? tokNextFocus(id) : null;
   try {
     await api("/api/tokens/" + encodeURIComponent(id), { method: "DELETE" });
+    if (next) tokFocus = next;
     await loadTokens();
   } catch (e) {
     setTokErr("Revoke failed: " + e.message);

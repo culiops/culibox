@@ -1951,8 +1951,8 @@
   #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn.gh:hover { background: var(--hover); color: var(--fg); }
 
   /* API tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
-     the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (`p.t-sm.muted.m2-under`: 8px below the card,
-     2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
+     the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an
+     item of #tok-list: 8px below the card, 2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
      last 12px, 24px buttons in 5px cells. Dates are `.tnum` (the kit's tabular figures), "Never used" is `.muted`. */
   #page-host > #settings-modal.as-page #tok-list > .tok-card { overflow: hidden; }
   #page-host > #settings-modal.as-page #tok-list > .tok-card > .tokempty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); }
@@ -1968,7 +1968,7 @@
   #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { padding-top: 5px; padding-bottom: 5px; }
   /* A name is user text of any length: it wraps inside its column instead of running under Created. */
   #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-nm { white-space: normal; overflow-wrap: anywhere; }
-  /* Armed (the confirm stays in the row, as it did): the kit's red row (§C7 `tr.is-elevated`) with the 2px red edge Credentials' danger rows
+  /* Armed (the confirm stays in the row, as it did): `tr.arm` wears the tint of the kit's red row (§C7 `tr.is-elevated`) and the 2px red edge Credentials' danger rows
      wear; the question runs across the other three columns in red, Cancel and Revoke beside it, and wraps before it pushes them off. */
   #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm { background: var(--red-tint); }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm > td:first-child { box-shadow: inset 2px 0 0 var(--red); }

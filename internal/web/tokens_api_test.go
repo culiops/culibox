@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/culibox/internal/auth"
 )
@@ -100,9 +101,17 @@ func TestTokensListCarriesCreatedAndLastUsed(t *testing.T) {
 		return rows
 	}
 
+	// Seconds, not milliseconds: the page hands the value to new Date(unix * 1000), so a value in ms would draw the year 56000.
+	// A window around now tells the two apart (ms is a thousand times larger).
+	inWindow := func(v any) bool {
+		f, ok := v.(float64)
+		diff := int64(f) - time.Now().Unix()
+		return ok && diff > -300 && diff < 300
+	}
+
 	fresh := list()[0]
-	if created, ok := fresh["created_at"].(float64); !ok || created <= 0 {
-		t.Fatalf("a new token's created_at=%v, want unix seconds > 0", fresh["created_at"])
+	if !inWindow(fresh["created_at"]) {
+		t.Fatalf("a new token's created_at=%v, want unix seconds within 300 s of now (%d)", fresh["created_at"], time.Now().Unix())
 	}
 	if v, present := fresh["last_used_at"]; present {
 		t.Fatalf("a token that never connected carries last_used_at=%v, want the key omitted", v)
@@ -112,8 +121,8 @@ func TestTokensListCarriesCreatedAndLastUsed(t *testing.T) {
 		t.Fatal("the token does not verify")
 	}
 	used := list()[0]
-	if last, ok := used["last_used_at"].(float64); !ok || last <= 0 {
-		t.Fatalf("after Verify, last_used_at=%v, want unix seconds > 0", used["last_used_at"])
+	if !inWindow(used["last_used_at"]) {
+		t.Fatalf("after Verify, last_used_at=%v, want unix seconds within 300 s of now (%d)", used["last_used_at"], time.Now().Unix())
 	}
 	if used["created_at"] != fresh["created_at"] {
 		t.Fatalf("created_at moved from %v to %v when the token was used", fresh["created_at"], used["created_at"])
