@@ -1182,3 +1182,79 @@ test("New profile's and Duplicate's title is cut short with an ellipsis on one l
   assert.strictEqual(own.get("overflow-wrap"), undefined);
   assert.deepStrictEqual([own.get("font-size"), own.get("font-weight")], ["var(--t-lg)", "600"]);
 });
+
+// ---- Credential forms (UI plan 4, Task 6; digest-design §C6 `.field-label` / `.input`, G19) ---------------------------
+// The add flows (Add token, Add AWS accounts, Add GitHub, Set a value) draw label.flab + input.fld into #creds-body on the
+// page and into #cred-drawer-body in the drawer over the profile page. credentials.test.js requires every desktop rule that
+// names #creds to name its drawer twin too, so the page's rules are written for `:is(#creds, #cred-drawer)` and the drawer's
+// own, heavier rules keep what the drawer's mockup drew (a 5px label gap, a 60px textarea).
+const CRED = P + " :is(#creds, #cred-drawer)";
+const DRW = P + " > #cred-drawer > #cred-drawer-body";
+
+test("credential form labels are sentence case on the page and in the drawer", () => {
+  // app.css draws `:is(#creds, #cred-drawer) .flab` as 10.5px UPPERCASE with .08em tracking (the old label system, F17); only
+  // the drawer reset it, so the tab's own add flows still shouted. §C6: 12/18, 500, --fg, sentence case.
+  const kit = decls(".field-label");
+  for (const [who, sel] of [["the page", CRED + " .flab"], ["the drawer", DRW + " .flab"]]) {
+    const l = decls(sel);
+    assert.strictEqual(l.get("text-transform"), "none", who + ": nothing uppercases it");
+    assert.strictEqual(l.get("letter-spacing"), "0", who + ": no tracking");
+    assert.strictEqual(l.get("font-size"), "var(--t-sm)", who);
+    assert.strictEqual(l.get("font-weight"), "500", who);
+    assert.strictEqual(l.get("color"), "var(--fg)", who);
+    assert.strictEqual(l.get("font-size"), kit.get("font-size"), who + ": the kit's .field-label size");
+    assert.strictEqual(l.get("color"), kit.get("color"), who + ": the kit's .field-label colour");
+  }
+  const page = decls(CRED + " .flab");
+  assert.strictEqual(page.get("line-height"), "var(--lh-sm)", "§C6 `.field-label` is 12/18, not the 20px a label inherits");
+  assert.strictEqual(page.get("margin-bottom"), "6px", "§C6 `.field { gap: 6px }`: the label sits 6px above its control");
+  // The page rule is not a bare #creds one (credentials.test.js) and the base rule it overrides is still the uppercase one.
+  assert.ok(!has(P + " #creds .flab"));
+  assert.match(BASE_CSS, /:is\(#creds, #cred-drawer\) \.flab \{[^}]*text-transform: uppercase/);
+  // CSS cannot make a label sentence case that the source wrote in capitals: no label literal is all-caps.
+  const src = read("credentials.js");
+  const lits = [...src.matchAll(/awsField\([^,]+,\s*"[^"]+",\s*"([^"]+)"/g), ...src.matchAll(/cred(?:Secret)?Field\([^,]+,\s*"([^"]+)"/g), ...src.matchAll(/(?:awsEl|credEl)\("(?:label|span)", "flab", "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(lits.length >= 12, "found the form labels: " + lits.length);
+  for (const t of lits) assert.ok(t !== t.toUpperCase(), "sentence case in the source: " + t);
+});
+
+test("credential fields rest on --faint like the kit's .input (§C6), on the page and in the drawer", () => {
+  const kit = decls(".input");
+  const f = decls(CRED + " .fld");
+  assert.strictEqual(f.get("border"), "1px solid var(--faint)", "3.05:1 on the panel (G12), not the old --line");
+  for (const k of ["border", "height", "padding", "border-radius", "font-size"]) assert.strictEqual(f.get(k), kit.get(k), k + " is the kit's .input value");
+  assert.deepStrictEqual([f.get("height"), f.get("padding"), f.get("border-radius")], ["var(--h-lg)", "0 10px", "var(--r-ctl)"]);
+  // No fill, colour or font of its own: `.fld.ro` keeps its panel fill and muted text (app.css), and a secret or key
+  // textarea keeps its mono (desktop.css `textarea.fld, .fld.secret-area`), both lighter than this rule's id weight.
+  for (const k of ["background", "color", "font", "font-family"]) assert.ok(!f.has(k), "the page's field rule leaves " + k + " to the rules that own it");
+  // An id-weighted border out-ranks the global field focus, so the rule has a focus of its own (desktop-focus.test.js lists it).
+  const focus = decls(CRED + " .fld:focus-visible");
+  assert.deepStrictEqual([focus.get("outline"), focus.get("border-color"), focus.get("box-shadow")], ["none", "var(--accent)", "0 0 0 1px var(--accent)"]);
+  // §C6 `textarea.input`: grows with its rows, 72px at least, 8px 10px, 20px lines.
+  const ta = decls(CRED + " textarea.fld");
+  assert.deepStrictEqual([ta.get("height"), ta.get("min-height"), ta.get("padding"), ta.get("line-height")], ["auto", "72px", "8px 10px", "var(--lh-md)"]);
+  // The drawer's own field rule (heavier, so it wins there) rests on the same border; its geometry is the mockup's and stays.
+  const d = decls(DRW + " .fld");
+  assert.strictEqual(d.get("border"), "1px solid var(--faint)");
+  assert.deepStrictEqual([d.get("height"), d.get("padding"), d.get("border-radius")], ["32px", "0 10px", "var(--r-ctl)"]);
+  assert.strictEqual(decls(DRW + " .fld:focus-visible").get("border-color"), "var(--accent)");
+  // No Credentials field rule rests on --line any more.
+  const onLine = [];
+  for (const r of RULES) {
+    const b = (r.decls.get("border") || "") + " " + (r.decls.get("border-color") || "");
+    if (!/var\(--line\)/.test(b)) continue;
+    for (const s of parts(r.selector)) if (/#creds|#cred-drawer/.test(s) && /\.fld(?![-\w])/.test(s.split(/[\s>+~]+/).pop()) && !/:(hover|focus)/.test(s)) onLine.push(s);
+  }
+  assert.deepStrictEqual(onLine, []);
+});
+
+test("the tab breadcrumb has room: --t-sm, at least 12px under it, and nothing added to the drawer's header band", () => {
+  // G19 "breadcrumb 'Credentials / Add token' cramped": the tab drew it at the base 12px with no space under it, straight
+  // onto the form. It is the first child of #creds-body (the drawer's lives in #cred-drawer-head, whose padding is pinned).
+  const c = decls(P + " :is(#creds-body, #cred-drawer-body) .crumb");
+  assert.ok(px(c.get("margin-bottom")) >= 12, "margin-bottom " + c.get("margin-bottom"));
+  assert.strictEqual(c.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(c.get("line-height"), "var(--lh-sm)");
+  assert.ok(!has(CRED + " .crumb"), "not a rule for every .crumb: the drawer's header band has its own");
+  assert.strictEqual(decls(P + " > #cred-drawer > #cred-drawer-head .crumb").get("margin-bottom"), undefined);
+});

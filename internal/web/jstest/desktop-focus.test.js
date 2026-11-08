@@ -276,6 +276,7 @@ const PAGE_FIELDS = [
   ["#page-host > #audit-page.as-page #au-session:focus-visible", "the audit page's session select"],
   ["#page-host > #settings-modal.as-page > .dft .fld:focus-visible", "the settings dialogs' footer fields"],
   ["#page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible", "the credential drawer's fields"],
+  ["#page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible", "the Credentials page's add-flow fields (the drawer's own, heavier rule above wins there)"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible", "the profile page's fields"],
 ];
 

@@ -2026,6 +2026,21 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)) { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)):hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
+  /* The credential forms (UI plan 4 Task 6; digest-design §C6 `.field-label` and `.input`, §B3's label gap, G19). The add flows draw
+     label.flab + input.fld into #creds-body on the page and into #cred-drawer-body in the drawer; app.css still draws that label as
+     10.5px UPPERCASE with .08em tracking, and only the drawer used to reset it. The label is the kit's field label: 12/18, 500,
+     --fg, sentence case, 6px above its control. The field rests on the kit's --faint border (G12) at the kit's 32px, 0 10px, 6px
+     radius, 13px. It sets no fill, colour or font, so `.fld.ro` keeps its panel fill and muted text and a secret or key textarea
+     its mono (rules with fewer ids, which still win where they name those properties). The border is id-weighted, so the global
+     field focus cannot beat it and the rule has a focus of its own (desktop-focus.test.js lists it). The drawer's own rules
+     below are heavier and win there: its 5px label gap, its 60px textarea, its --faint border. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .flab { margin-bottom: 6px; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld { height: var(--h-lg); padding: 0 10px; border: 1px solid var(--faint); border-radius: var(--r-ctl); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) textarea.fld { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  /* The tab's breadcrumb ("Credentials / Add token", the first child of #creds-body) had no room under it: the kit's 12px, on top of
+     the body's 10px gap. The drawer's crumb is in its header band (#cred-drawer-head), whose padding is pinned, so it is not named. */
+  #page-host > #settings-modal.as-page :is(#creds-body, #cred-drawer-body) .crumb { margin-bottom: 12px; font-size: var(--t-sm); line-height: var(--lh-sm); }
   /* The head's "Add credential ▾" (credAddMenuAttach): the trigger's wrapper anchors the kit menu, which opens under the
      trigger, right-aligned and above the page like the profile page's ⋯ (#pfv .pfv-more); the trigger shows pressed
      while it is open (a menu button is expanded, not pressed: aria-expanded). */
@@ -2921,7 +2936,7 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--faint); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
