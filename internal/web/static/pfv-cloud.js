@@ -305,7 +305,8 @@ function pfvAddRow(blockId, what) {
 // for. pick() is the picker's spec, asked for only while it is open.
 function pfcFoot(rec, list, pick) {
   const out = [list];
-  if (list.children.length === 0) out.push(pfvMk("p", "pfv-empty", rec.block.lines[0] || ""));
+  // The empty block in edit keeps its one sentence (no frame draws it): the read model's value and helper, as the words they were.
+  if (list.children.length === 0) out.push(pfvMk("p", "pfv-empty", rec.block.lines.filter((l) => l !== "").join(". ")));
   const wrap = pfvMk("div", "pfv-addwrap");
   const add = pfvDrawLink(rec.block.add || "+ Add", "pfv-add");
   add.setAttribute("aria-expanded", rec.ui.picker === true ? "true" : "false");

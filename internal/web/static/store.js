@@ -53,6 +53,21 @@ function storeExpiryText(st, nowMs) {
   return "unlocked · locks in " + span;
 }
 
+// storeLocksSoonText: F77, the sidebar footer's neutral "Store locks in 42 m". Shown only in the
+// store's last hour, so the lock does not arrive as a surprise (store-backed agents start failing
+// once it does); "" at every other moment: a store that is locked, was never created, has no TTL
+// (the macOS Keychain, expires_at null), is unavailable or absent, and an expiry that is
+// unparseable, already past, or more than an hour away. expires_at is an RFC 3339 string, parsed
+// as storeExpiryText parses it, and the minutes use its floor, so the footer and the Credentials
+// strip never disagree. Exactly 60:00 is inside the hour; 60:01 is not.
+function storeLocksSoonText(st, nowMs) {
+  if (!st || !st.initialized || st.unavailable || st.platform === "darwin" || st.locked || !st.expires_at) return "";
+  const left = Date.parse(st.expires_at) - nowMs;
+  if (!(left > 0) || left > 60 * 60000) return "";
+  const mins = Math.floor(left / 60000);
+  return mins < 1 ? "Store locks in under a minute" : "Store locks in " + mins + " m";
+}
+
 // storePlaintextText: the Settings line naming values that exist both in the
 // store and as a plaintext variable in the daemon's environment. "" for none.
 function storePlaintextText(names) {
@@ -82,7 +97,7 @@ function storeUnlockOutcome(status, text, retryAfter) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storeUnavailableLabel, storePlaintextText, storeUnlockOutcome };
+  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storeLocksSoonText, paintSideStore, storeUnavailableLabel, storePlaintextText, storeUnlockOutcome };
 }
 
 // --- DOM wiring (browser only) -------------------------------------------------
@@ -246,6 +261,18 @@ function paintStoreBanner() {
   el.hidden = !show;
 }
 
+// paintSideStore: the sidebar footer's "Store locks in N m" (F77), hidden and empty outside the
+// store's last hour. Painted by refreshStore, so it rides the existing 30 s store poll: the minute
+// count is at most one poll stale and no timer of its own runs. The footer is desktop-only
+// (#side-foot is display:none on the phone), so there is nothing to gate on the viewport here.
+function paintSideStore(st, nowMs) {
+  const el = document.getElementById("side-store");
+  if (!el) return;
+  const text = storeLocksSoonText(st, nowMs);
+  el.textContent = text;
+  el.hidden = text === "";
+}
+
 // --- Settings "Credentials" tab ------------------------------------------------
 // The store's status, unlock and lock live at the top of the Credentials tab
 // (credentials.js credStrip); there is no longer a Store tab of its own.
@@ -289,6 +316,7 @@ async function refreshStore() {
     return;
   }
   paintStoreBanner();
+  paintSideStore(storeState, Date.now());
 }
 
 function initStore() {

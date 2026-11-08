@@ -231,22 +231,30 @@ function pfnDraw(rec, c) {
   rec.ui.errNode = errors[0] || null;
   const kids = [...errors];
   const head = pfvMk("div", "pfv-head");
-  const main = pfvMk("div", "pfv-head-main");
+  // The kit's page head, as every other head draws it (the profile page's own, settingshead.js): h1.page-title over p.page-desc.
+  const main = pfvMk("div", "page-head-text pfv-head-main");
   const title = pfvMk("div", "pfv-title");
-  title.append(pfvMk("h2", "pfv-title-name", dup ? "Copy of " + src.name : "New profile"));
-  main.append(title, pfvMk("p", "pfv-hsub", dup ? "A new profile with the same settings as " + src.name + ". Give it a name and check the rest." : PFN_NEW_SUB));
-  head.append(main);
+  const headline = dup ? "Copy of " + src.name : "New profile";
+  const h1 = pfvMk("h1", "page-title", headline);
+  h1.setAttribute("title", headline); // ellipsizes in a narrow window: the whole of it is one hover away
+  title.append(h1);
+  main.append(title, pfvMk("p", "page-desc", dup ? "A new profile with the same settings as " + src.name + ". Give it a name and check the rest." : PFN_NEW_SUB));
+  // The head ends as every Settings head does, Esc ✕ (the page has no other way to close, and the first-run New profile page is the only page
+  // there is); it has no action of its own (Create is in the card's foot), so there is no divider before it.
+  const acts = pfvMk("div", "page-actions");
+  acts.append(...pfvHeadTail(false));
+  head.append(main, acts);
   kids.push(head);
 
   const card = pfvMk("div", "pfv-newcard");
   const fields = pfvMk("div", "pfv-fields");
   fields.append(pfnNameField(rec, src), pfnTierField(rec, c, copy), pfnFolderField(rec, src, copy));
   card.append(fields);
-  const create = pfvBtn(dup ? "Create copy" : "Create profile", "primary", () => pfnCreate(rec));
+  const create = pfvKitBtn(dup ? "Create copy" : "Create profile", "btn-primary", () => pfnCreate(rec));
   rec.ui.createBtn = create;
   const foot = pfvMk("div", "pfv-newfoot" + (dup ? " pfv-dupfoot" : ""));
   foot.append(create);
-  if (pfnHasBack()) foot.append(pfvBtn("Cancel", "ghost", pfnCancel));
+  if (pfnHasBack()) foot.append(pfvKitBtn("Cancel", "", pfnCancel));
 
   if (!dup) {
     card.append(foot);
@@ -373,7 +381,7 @@ function pfnOpen(kind, src, back) {
   pfvSeq++;
   pfvDropEdits();
   pfvClearSaved();
-  Object.assign(pfvState, { page: kind, src, back, name: "", doc: null, view: null, errors: [], warnings: [], created: "", advOpen: null });
+  Object.assign(pfvState, { page: kind, src, back, name: "", doc: null, view: null, errors: [], warnings: [], created: "" });
   pfvState.edits.draft = pfvNewEdit("draft", false);
   pfvSyncOpen();
   pfvRenderNav();

@@ -1,7 +1,9 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { storeBannerVisible, storeExpiryText, storeUnlockOutcome, STORE_HONEST_STATEMENT, storePlaintextText } = require("../static/store.js");
+const fs = require("node:fs");
+const path = require("node:path");
+const { storeBannerVisible, storeExpiryText, storeUnlockOutcome, STORE_HONEST_STATEMENT, storePlaintextText, storeLocksSoonText, paintSideStore } = require("../static/store.js");
 
 const base = { initialized: true, locked: true, in_use: true, platform: "linux", expires_at: null, values: 2, plaintext_copies: [] };
 
@@ -235,4 +237,107 @@ test("lockStore returns false and keeps the reason on failure, true on 204", asy
     global.document = saved.document;
     global.fetch = saved.fetch;
   }
+});
+
+// --- F77: "Store locks in N m" in the sidebar footer, the store's last hour only (#174, Task 9) ---
+
+const LOCKS_NOW = Date.parse("2026-11-08T12:00:00Z");
+// An unlocked Linux store that expires `ms` after LOCKS_NOW.
+const locksIn = (ms, over) => ({ ...base, locked: false, expires_at: iso(LOCKS_NOW + ms), ...over });
+const MIN = 60000;
+
+test("locks-soon text: 42 min 30 s left reads 'Store locks in 42 m' (the minutes are floored)", () => {
+  assert.strictEqual(storeLocksSoonText(locksIn(42 * MIN + 30000), LOCKS_NOW), "Store locks in 42 m");
+  assert.strictEqual(storeLocksSoonText(locksIn(1 * MIN), LOCKS_NOW), "Store locks in 1 m");
+  assert.strictEqual(storeLocksSoonText(locksIn(59 * MIN + 59000), LOCKS_NOW), "Store locks in 59 m");
+});
+
+test("locks-soon text: the line starts when 60 minutes remain: 60:00 shows, 60:01 does not", () => {
+  assert.strictEqual(storeLocksSoonText(locksIn(60 * MIN), LOCKS_NOW), "Store locks in 60 m", "60:00 is inside the last hour");
+  assert.strictEqual(storeLocksSoonText(locksIn(60 * MIN + 1000), LOCKS_NOW), "", "60:01 is not");
+  assert.strictEqual(storeLocksSoonText(locksIn(2 * 3600 * 1000), LOCKS_NOW), "");
+  assert.strictEqual(storeLocksSoonText(locksIn(6 * 24 * 3600 * 1000), LOCKS_NOW), "");
+});
+
+test("locks-soon text: under a minute says so, and nothing is shown at zero or once expired", () => {
+  assert.strictEqual(storeLocksSoonText(locksIn(59000), LOCKS_NOW), "Store locks in under a minute");
+  assert.strictEqual(storeLocksSoonText(locksIn(1), LOCKS_NOW), "Store locks in under a minute");
+  assert.strictEqual(storeLocksSoonText(locksIn(0), LOCKS_NOW), "");
+  assert.strictEqual(storeLocksSoonText(locksIn(-1000), LOCKS_NOW), "");
+  assert.strictEqual(storeLocksSoonText(locksIn(-3600 * 1000), LOCKS_NOW), "");
+});
+
+test("locks-soon text: nothing for a locked, never-created, TTL-less, macOS, unavailable or missing store", () => {
+  const soon = 30 * MIN;
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { locked: true }), LOCKS_NOW), "", "locked");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { initialized: false }), LOCKS_NOW), "", "not set up");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { expires_at: null }), LOCKS_NOW), "", "no expiry");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { expires_at: undefined }), LOCKS_NOW), "", "expiry absent");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { platform: "darwin" }), LOCKS_NOW), "", "macOS has no TTL");
+  assert.strictEqual(storeLocksSoonText({ ...base, platform: "darwin", locked: false, expires_at: null }, LOCKS_NOW), "", "macOS, expires_at null");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { unavailable: { kind: "access", reason: "r", fix: "f" } }), LOCKS_NOW), "", "unavailable");
+  assert.strictEqual(storeLocksSoonText(locksIn(soon, { expires_at: "not a date" }), LOCKS_NOW), "", "an unparseable expiry");
+  assert.strictEqual(storeLocksSoonText(null, LOCKS_NOW), "", "no store (404)");
+  assert.strictEqual(storeLocksSoonText(undefined, LOCKS_NOW), "", "no answer yet");
+});
+
+test("locks-soon text floors the minutes exactly as the Credentials strip does", () => {
+  for (const ms of [MIN, MIN + 1, 9 * MIN + 59999, 10 * MIN, 42 * MIN + 30000, 59 * MIN, 59 * MIN + 59999]) {
+    const st = locksIn(ms);
+    const strip = /locks in (\d+) m$/.exec(storeExpiryText(st, LOCKS_NOW));
+    assert.ok(strip, "the strip shows plain minutes below an hour: " + ms);
+    assert.strictEqual(storeLocksSoonText(st, LOCKS_NOW), "Store locks in " + strip[1] + " m", String(ms));
+  }
+});
+
+// A stand-in for #side-store: paintSideStore only touches hidden and textContent.
+function sideStoreDoc(el) {
+  return { getElementById: (id) => (id === "side-store" ? el : null) };
+}
+
+test("paintSideStore shows the line inside the last hour and hides it, empty, otherwise", () => {
+  const el = { hidden: true, textContent: "" };
+  const saved = global.document;
+  global.document = sideStoreDoc(el);
+  try {
+    paintSideStore(locksIn(42 * MIN + 30000), LOCKS_NOW);
+    assert.strictEqual(el.hidden, false);
+    assert.strictEqual(el.textContent, "Store locks in 42 m");
+    paintSideStore(locksIn(3 * 3600 * 1000), LOCKS_NOW); // a poll later the store was re-unlocked: a fresh 10 h
+    assert.strictEqual(el.hidden, true);
+    assert.strictEqual(el.textContent, "");
+    paintSideStore(locksIn(20000), LOCKS_NOW);
+    assert.strictEqual(el.textContent, "Store locks in under a minute");
+    assert.strictEqual(el.hidden, false);
+    paintSideStore(null, LOCKS_NOW); // 404: no store here
+    assert.strictEqual(el.hidden, true);
+    assert.strictEqual(el.textContent, "");
+    paintSideStore(locksIn(10 * MIN), LOCKS_NOW);
+    paintSideStore(locksIn(10 * MIN, { locked: true }), LOCKS_NOW); // it locked: the line goes
+    assert.strictEqual(el.hidden, true);
+    // A page without the node (the phone's markup never paints it, and a test page has none) is not an error.
+    global.document = sideStoreDoc(null);
+    assert.doesNotThrow(() => paintSideStore(locksIn(10 * MIN), LOCKS_NOW));
+  } finally {
+    global.document = saved;
+  }
+});
+
+test("refreshStore repaints the sidebar line from the state it just read, on the existing poll (no new timer)", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "static", "store.js"), "utf8");
+  const start = src.indexOf("async function refreshStore(");
+  assert.ok(start >= 0, "refreshStore not found");
+  const body = src.slice(start, src.indexOf("\n}\n", start) + 3);
+  assert.match(body, /paintStoreBanner\(\);/);
+  assert.match(body, /paintSideStore\(storeState, Date\.now\(\)\);/);
+  assert.ok(!/set(Interval|Timeout)\(/.test(src.slice(src.indexOf("function paintSideStore("))), "the line rides the 30 s store poll: store.js adds no timer for it");
+});
+
+test("the sidebar footer has div#side-store[hidden] on its own row, between the stats and the links", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  const foot = html.slice(html.indexOf('<div id="side-foot">'));
+  const foot2 = foot.slice(0, foot.indexOf("</aside>"));
+  assert.match(foot2, /<div id="side-store" hidden><\/div>/);
+  assert.ok(foot2.indexOf('id="side-store"') > foot2.indexOf('class="side-stats"'), "below the cost / elevated row");
+  assert.ok(foot2.indexOf('id="side-store"') < foot2.indexOf('class="side-links"'), "above the links");
 });

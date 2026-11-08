@@ -168,6 +168,9 @@ async function loadAboutInfo() {
     el.textContent = "CuliBox (build unknown)";
     if (rt) rt.textContent = "";
   }
+  // On the desktop page the version line is the About head's description (settingshead.js reads it from here), so
+  // the head is drawn again now that it has arrived.
+  if (typeof paintSettingsHead === "function") paintSettingsHead("about");
 }
 
 function initBugReport() {

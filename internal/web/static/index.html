@@ -109,6 +109,7 @@
           <span id="side-cost" hidden></span>
           <span id="side-elevated" hidden></span>
         </div>
+        <div id="side-store" hidden></div>
         <div class="side-links">
           <button id="side-audit" type="button" hidden>Audit</button>
           <button id="side-analytics" type="button" hidden>Analytics</button>
@@ -294,6 +295,7 @@
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
       <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
+      <button type="button" id="set-signout">Sign out…</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -490,48 +492,52 @@
       <div id="cred-drawer-foot"></div>
     </aside>
     <div class="dbd pad" id="settings" role="tabpanel" hidden>
-      <div class="fsrow"><span class="lbl">Terminal</span>
-        <div class="stepper">
-          <button type="button" class="fs-dec" data-fs="terminal" aria-label="Smaller terminal text">&minus;</button>
-          <input class="val fs-val" data-fs="terminal" type="number" min="8" max="32" step="1" aria-label="Terminal text size">
-          <button type="button" class="fs-inc" data-fs="terminal" aria-label="Larger terminal text">+</button>
-        </div>
-        <div class="sample" data-fs-sample="terminal">$ claude --model opus-5
+      <div class="set-head"></div>
+      <div class="fs-card">
+        <div class="fsrow card-row"><span class="lbl">Terminal</span>
+          <div class="stepper">
+            <button type="button" class="fs-dec" data-fs="terminal" aria-label="Smaller terminal text">&minus;</button>
+            <input class="val fs-val" data-fs="terminal" type="number" min="8" max="32" step="1" aria-label="Terminal text size">
+            <button type="button" class="fs-inc" data-fs="terminal" aria-label="Larger terminal text">+</button>
+          </div>
+          <div class="sample" data-fs-sample="terminal">$ claude --model opus-5
 ● Running the suite…</div>
-      </div>
-      <div class="fsrow"><span class="lbl">Code</span>
-        <div class="stepper">
-          <button type="button" class="fs-dec" data-fs="code" aria-label="Smaller code text">&minus;</button>
-          <input class="val fs-val" data-fs="code" type="number" min="8" max="32" step="1" aria-label="Code text size">
-          <button type="button" class="fs-inc" data-fs="code" aria-label="Larger code text">+</button>
         </div>
-        <div class="sample" data-fs-sample="code">func main() { log.Println("ok") }</div>
-      </div>
-      <div class="fsrow"><span class="lbl">Markdown</span>
-        <div class="stepper">
-          <button type="button" class="fs-dec" data-fs="markdown" aria-label="Smaller markdown text">&minus;</button>
-          <input class="val fs-val" data-fs="markdown" type="number" min="8" max="32" step="1" aria-label="Markdown text size">
-          <button type="button" class="fs-inc" data-fs="markdown" aria-label="Larger markdown text">+</button>
+        <div class="fsrow card-row"><span class="lbl">Code</span>
+          <div class="stepper">
+            <button type="button" class="fs-dec" data-fs="code" aria-label="Smaller code text">&minus;</button>
+            <input class="val fs-val" data-fs="code" type="number" min="8" max="32" step="1" aria-label="Code text size">
+            <button type="button" class="fs-inc" data-fs="code" aria-label="Larger code text">+</button>
+          </div>
+          <div class="sample" data-fs-sample="code">func main() { log.Println("ok") }</div>
         </div>
-        <div class="sample" data-fs-sample="markdown">## Heading, then a line of body text.</div>
-      </div>
-      <div class="fsrow" id="fsrow-filetree"><span class="lbl">File tree</span>
-        <div class="stepper">
-          <button type="button" class="fs-dec" data-fs="filetree" aria-label="Smaller file tree text">&minus;</button>
-          <input class="val fs-val" data-fs="filetree" type="number" min="8" max="32" step="1" aria-label="File tree text size">
-          <button type="button" class="fs-inc" data-fs="filetree" aria-label="Larger file tree text">+</button>
+        <div class="fsrow card-row"><span class="lbl">Markdown</span>
+          <div class="stepper">
+            <button type="button" class="fs-dec" data-fs="markdown" aria-label="Smaller markdown text">&minus;</button>
+            <input class="val fs-val" data-fs="markdown" type="number" min="8" max="32" step="1" aria-label="Markdown text size">
+            <button type="button" class="fs-inc" data-fs="markdown" aria-label="Larger markdown text">+</button>
+          </div>
+          <div class="sample" data-fs-sample="markdown">## Heading, then a line of body text.</div>
         </div>
-        <div class="sample" data-fs-sample="filetree">internal/web/static/app.css</div>
+        <div class="fsrow card-row" id="fsrow-filetree"><span class="lbl">File tree</span>
+          <div class="stepper">
+            <button type="button" class="fs-dec" data-fs="filetree" aria-label="Smaller file tree text">&minus;</button>
+            <input class="val fs-val" data-fs="filetree" type="number" min="8" max="32" step="1" aria-label="File tree text size">
+            <button type="button" class="fs-inc" data-fs="filetree" aria-label="Larger file tree text">+</button>
+          </div>
+          <div class="sample" data-fs-sample="filetree">internal/web/static/app.css</div>
+        </div>
+        <div class="fsrow card-row" id="fsrow-alerts"><span class="lbl">Alerts</span>
+          <label class="check notify-opt"><input type="checkbox" class="check-box" id="notify-toggle" aria-describedby="notify-why"> Desktop notifications</label>
+          <div class="hint" id="notify-why"></div>
+        </div>
+        <p class="hint">Sizes apply as you change them — the panes behind this
+          dialog are already using them. A stored size wins over the default.</p>
+        <p class="card-row"><button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts</button></p>
       </div>
-      <div class="fsrow" id="fsrow-alerts"><span class="lbl">Alerts</span>
-        <label class="notify-opt"><input type="checkbox" id="notify-toggle"> Desktop notifications</label>
-      </div>
-      <p class="hint" id="notify-why"></p>
-      <p class="hint">Sizes apply as you change them — the panes behind this
-        dialog are already using them. A stored size wins over the default.</p>
-      <p><button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts</button></p>
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p class="hint">An access token lets a client app or CLI connect to this box
         with <code>Authorization: Bearer&nbsp;…</code>, with no password prompt.
         One per device; revoke any at any time.</p>
@@ -545,6 +551,7 @@
       <div class="dlg-err" id="tok-err"></div>
     </div>
     <div class="dbd pad" id="accounts" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p class="hint">Each agent account is a separate Claude login with its own history and quota.
         You choose the account when you start a session. CuliBox never switches accounts for you.
         On the host tier this keeps config apart but is not a security boundary; use a boxed
@@ -555,6 +562,7 @@
     </div>
 
     <div class="dbd pad" id="about" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <p id="about-version">CuliBox</p>
       <p id="about-runtime"></p>
       <p><button type="button" class="btn" id="kbd-open-about">Keyboard shortcuts</button></p>
@@ -563,6 +571,7 @@
     </div>
 
     <div class="dbd pad" id="creds" role="tabpanel" hidden>
+      <div class="set-head"></div>
       <div id="creds-body"></div>
       <div class="dlg-err" id="creds-err"></div>
     </div>
@@ -809,6 +818,7 @@
   <script src="/pagehost.js"></script>
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
+  <script src="/settingshead.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

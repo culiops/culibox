@@ -231,14 +231,15 @@ function credElevateText(el) {
   return "elevate: " + credRoleName(el.role_arn) + (el.max_minutes ? " · max " + el.max_minutes + "m" : "");
 }
 
+// credTableRow: the cells of one row. A name is machine text (mono, frame M2.3 §A6) and "nothing" under Used by is muted.
 function credTableRow(key, e) {
-  const used = { text: usedByText(e.used_by) };
+  const used = { text: usedByText(e.used_by), muted: !(Array.isArray(e.used_by) && e.used_by.some(Boolean)) };
   const st = { text: statusText(e.status), cls: statusClass(e.status), kind: "st" };
   if (key === "aws") {
     const probe = credProbeCell(e);
     return {
       cells: [
-        { text: e.name, tag: e.prod ? "PROD" : "", seed: isSeed(e), sub: credElevateText(e.elevate) },
+        { text: e.name, mono: true, tag: e.prod ? "PROD" : "", seed: isSeed(e), sub: credElevateText(e.elevate) },
         { text: e.account_id || "", sub: e.mode === "sso_direct" ? CRED_SSO_DIRECT_LABEL : credRoleName(e.role_arn), mono: true, subMono: e.mode !== "sso_direct" },
         st, probe, used,
       ],
@@ -249,7 +250,7 @@ function credTableRow(key, e) {
   if (key === "github") {
     return {
       cells: [
-        { text: e.name, seed: isSeed(e) },
+        { text: e.name, mono: true, seed: isSeed(e) },
         { text: e.client_id || "", sub: e.key_ref_kind || "", mono: true },
         st, used,
       ],
@@ -259,7 +260,7 @@ function credTableRow(key, e) {
   }
   return {
     cells: [
-      { text: e.name, sub: e.label || "", title: e.description || "", tag: e.prod ? "PROD" : "", seed: isSeed(e) },
+      { text: e.name, mono: true, sub: e.label || "", title: e.description || "", tag: e.prod ? "PROD" : "", seed: isSeed(e) },
       { text: (e.env || []).join(", "), sub: (e.hosts || []).join(", "), mono: true, subMono: true },
       st, used,
     ],
@@ -874,6 +875,14 @@ function credBadge(cls, text) {
   return credEl("span", "bdg " + cls, text);
 }
 
+// credStatusNode: a status on the page's tables (frame M2.3, F27). "Missing" is a neutral chip: it is a state of the
+// config, not a request (the legacy secret nobody uses), so it is not amber and not red. Ready stays green text
+// (.st.ready) and every other status keeps its class; "Not set in the daemon's environment" stays text (a chip is one
+// line and that sentence is not). A store that is locked is the one amber (.st.locked: it blocks spawns).
+function credStatusNode(status) {
+  return statusClass(status) === "missing" ? credEl("span", "chip", statusText(status)) : credChip(status);
+}
+
 // credMeta: a <dl> of label/value pairs; pairs with an empty value are left out.
 function credMeta(pairs) {
   const dl = credEl("dl", "meta");
@@ -886,13 +895,19 @@ function credMeta(pairs) {
   return dl;
 }
 
-function credActions(entry, reload) {
+// credActions: an entry's Edit and Delete. `kit` is the page's table row (frame M2.3): a ghost Edit and a danger
+// Delete at the kit's small size, each named for its row. The cards (the phone's, and a narrow page's) keep `btn` and
+// `btn dgr`.
+function credActions(entry, reload, kit) {
   const wrap = credEl("div", "ent-act");
   const h = credActionHandlers[entry.kind] || {};
   for (const act of entryActions(entry)) {
     if (typeof h[act] !== "function") continue;
-    const b = credEl("button", act === "delete" ? "btn dgr" : "btn", act === "delete" ? "Delete" : "Edit");
+    const label = act === "delete" ? "Delete" : "Edit";
+    const cls = kit ? (act === "delete" ? "btn btn-danger btn-sm" : "btn btn-ghost btn-sm") : (act === "delete" ? "btn dgr" : "btn");
+    const b = credEl("button", cls, label);
     b.type = "button";
+    if (kit) b.setAttribute("aria-label", label + " " + entry.name);
     b.onclick = () => h[act](entry, reload, b);
     wrap.appendChild(b);
   }
@@ -974,7 +989,8 @@ function credTokenCard(e) {
   return credCard(e, e.name, e.label, body, null);
 }
 
-function credValueRow(v) {
+// credValueRow: `kit` is the page's Stored values panel: ghost Replace, danger Delete (as the table rows').
+function credValueRow(v, kit) {
   const row = credEl("div", "sv");
   const id = credEl("span", "id", v.id);
   const upd = credEl("span");
@@ -984,13 +1000,13 @@ function credValueRow(v) {
   const acts = credEl("span", "acts");
   const h = credActionHandlers.value || {};
   if (typeof h.edit === "function") {
-    const b = credEl("button", "btn", "Replace");
+    const b = credEl("button", kit ? "btn btn-ghost btn-sm" : "btn", "Replace");
     b.type = "button";
     b.onclick = () => h.edit(v, loadCredentials, b);
     acts.appendChild(b);
   }
   if (typeof h.delete === "function") {
-    const b = credEl("button", "btn dgr", "Delete");
+    const b = credEl("button", kit ? "btn btn-danger btn-sm" : "btn dgr", "Delete");
     b.type = "button";
     // A value something still reads cannot be deleted; the row says who reads it.
     if (v.referenced_by && v.referenced_by.length) {
@@ -1008,25 +1024,49 @@ function credValueRow(v) {
 
 const CRED_VALUES_HINT = "Values are write-only: they go in encrypted and are never shown again. A value that something still references cannot be deleted.";
 
-function credValuesBody(entries) {
+function credValuesBody(entries, kit) {
   const wrap = credEl("div");
   const head = credEl("div", "sv head");
   for (const t of ["Id", "Updated", "Referenced by", ""]) head.appendChild(credEl("span", null, t));
   wrap.appendChild(head);
-  for (const v of entries) wrap.appendChild(credValueRow(v));
+  for (const v of entries) wrap.appendChild(credValueRow(v, kit));
   wrap.appendChild(credEl("p", "hint", CRED_VALUES_HINT));
   return wrap;
 }
 
 function credLegacyBody(entries) {
   const wrap = credEl("div");
-  wrap.appendChild(credEl("p", "hint", "Defined in config.json. Edit the file to change them, or move the value into the store."));
+  wrap.appendChild(credEl("p", "hint", CRED_LEGACY_NOTE));
   for (const l of entries) {
     const row = credEl("div", "leg");
     row.append(credEl("b", null, l.name), credChip(l.status));
     wrap.appendChild(row);
   }
   return wrap;
+}
+
+const CRED_LEGACY_NOTE = "Defined in config.json. Edit the file to change them, or move the value into the store.";
+
+// credLegacyTable: Legacy secrets on the page (frame M2.3): the note above, then a two-column table with no header row,
+// each ENV name in mono beside its status. The cards (the phone's, a narrow page's) keep credLegacyBody's rows.
+function credLegacyTable(entries) {
+  const note = credEl("p", "hint ctab-note-top", CRED_LEGACY_NOTE);
+  const table = credEl("table", "ctab tbl");
+  const cols = credEl("colgroup");
+  cols.append(credEl("col"), credEl("col"));
+  table.appendChild(cols);
+  const body = credEl("tbody");
+  for (const l of entries) {
+    const tr = credEl("tr");
+    const name = credEl("td");
+    name.appendChild(credEl("span", "mono t-sm", l.name));
+    const st = credEl("td");
+    st.appendChild(credStatusNode(l.status));
+    tr.append(name, st);
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  return [note, table];
 }
 
 const CRED_EMPTY = {
@@ -1096,19 +1136,23 @@ function credEntryExtra(tb) {
   return x;
 }
 
+// credCellNode: one cell of a table row (only the page's tables are drawn from it). PROD is the kit's red chip, "from
+// config.json" a neutral one, and a Missing status a neutral chip (credStatusNode); "nothing" under Used by is muted.
 function credCellNode(c) {
-  const td = credEl("td");
+  const td = credEl("td", c.muted ? "muted" : "");
   if (c.title) td.title = c.title;
   const main = credEl("div", "c-main" + (c.mono ? " mono" : ""));
-  if (c.kind === "st" || c.kind === "pv") {
+  if (c.kind === "st" && c.cls === "missing") {
+    main.appendChild(credEl("span", "chip", c.text));
+  } else if (c.kind === "st" || c.kind === "pv") {
     main.appendChild(credEl("span", c.kind + (c.cls ? " " + c.cls : ""), c.text));
   } else {
-    // One unit, so a badge after it drops to the next line rather than the
+    // One unit, so a chip after it drops to the next line rather than the
     // name breaking at its hyphen ("legacy-/aws").
     main.appendChild(credEl("span", "c-nm", c.text));
   }
-  if (c.tag) main.appendChild(credBadge("prod", c.tag));
-  if (c.seed) main.appendChild(credBadge("seed", "from config.json"));
+  if (c.tag) main.appendChild(credEl("span", "chip chip-prod", c.tag));
+  if (c.seed) main.appendChild(credEl("span", "chip", "from config.json"));
   td.appendChild(main);
   if (c.sub) td.appendChild(c.subMono ? credMonoSub(c.sub) : credEl("div", "c-sub", c.sub));
   return td;
@@ -1132,9 +1176,14 @@ function credMonoSub(text) {
 // under it (full width) the write warning, a broken entry's error, or a delete
 // confirmation.
 function credTable(g) {
-  const table = credEl("table", "ctab");
+  const table = credEl("table", "ctab tbl");
+  const heads = credTableHead(g.key);
+  // One colgroup for the head cells and every row (G16): the column shares are written once, in desktop.css, on these.
+  const cols = credEl("colgroup");
+  for (let i = 0; i < heads.length; i++) cols.appendChild(credEl("col"));
+  table.appendChild(cols);
   const tr = credEl("tr");
-  for (const h of credTableHead(g.key)) {
+  for (const h of heads) {
     const th = credEl("th", null, h);
     // The actions column has no heading to see; a screen reader still needs a name.
     if (!h) th.appendChild(credEl("span", "sr-only", "Actions"));
@@ -1146,7 +1195,7 @@ function credTable(g) {
     const row = credEl("tr", r.danger ? "danger" : "");
     for (const c of r.cells) row.appendChild(credCellNode(c));
     const act = credEl("td", "ctab-act");
-    act.appendChild(credActions(r.entry, loadCredentials));
+    act.appendChild(credActions(r.entry, loadCredentials, true));
     row.appendChild(act);
     tb.appendChild(row);
     if (r.entry.error) {
@@ -1167,60 +1216,101 @@ function credTable(g) {
   return table;
 }
 
-// Stored values are folded on the page: write-only, so there is little to look
-// at. The fold keeps its state through a repaint (Replace and Delete reload).
+// Stored values are folded on the page: write-only, so there is little to look at. The fold keeps its state through a
+// repaint (Replace and Delete reload).
 let credValuesOpen = false;
 
+// credChevron: the disclosure's chevron, the glyph the frame draws (§B4 `span[aria-hidden] ›`, U+203A): hidden from the
+// accessible name, 12px and muted. desktop.css gives it its own box (a transform does not apply to an inline one) and
+// turns it a quarter when the row is open.
+function credChevron() {
+  const c = credEl("span", "vfold-chev", "\u203a");
+  c.setAttribute("aria-hidden", "true");
+  return c;
+}
+
+// credValuesFold: Stored values on the page (frame M2.3): a ghost button with aria-expanded (the chevron, the name), a
+// count chip and the muted line, drawn closed; its body is the "+ Set a value" link and the list.
 function credValuesFold(g) {
   const sec = credEl("section", "sec ctab-fold");
   sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
-  const d = credEl("details", "vfold");
-  d.open = credValuesOpen;
-  d.addEventListener("toggle", () => { credValuesOpen = d.open; });
-  d.appendChild(credEl("summary", null, g.title + " (" + g.entries.length + ") · write-only, Replace or Delete"));
+  const row = credEl("div", "vfold-h");
+  const toggle = credEl("button", "btn btn-ghost btn-sm vfold-t");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", credValuesOpen ? "true" : "false");
+  toggle.append(credChevron(), document.createTextNode(g.title));
+  row.append(toggle, credEl("span", "chip tnum", String(g.entries.length)), credEl("span", "t-sm muted", "Write-only: Replace or Delete"));
   const body = credEl("div", "vfold-b");
+  body.id = "cred-values-body";
+  toggle.setAttribute("aria-controls", body.id);
+  body.hidden = !credValuesOpen;
+  toggle.onclick = () => {
+    credValuesOpen = !credValuesOpen;
+    toggle.setAttribute("aria-expanded", credValuesOpen ? "true" : "false");
+    body.hidden = !credValuesOpen;
+  };
   const add = credActionHandlers.value && credActionHandlers.value.add;
   if (typeof add === "function") {
-    const b = credEl("button", "btn", "Set a value");
+    // An add inside a block is the accent + link (F10), not a button.
+    const b = credEl("button", "link link-add", "Set a value");
     b.type = "button";
     b.onclick = () => add(g, loadCredentials);
     body.appendChild(b);
   }
-  body.appendChild(g.entries.length ? credValuesBody(g.entries) : credEl("p", "hint", CRED_EMPTY.values));
-  d.appendChild(body);
-  sec.appendChild(d);
+  body.appendChild(g.entries.length ? credValuesBody(g.entries, true) : credEl("p", "hint", CRED_EMPTY.values));
+  sec.append(row, body);
   return sec;
+}
+
+// credSecHead: a section's head on the page's tables (frame M2.3): the kit's .card-head with the title and the count as a
+// chip beside it. No add button: the page head's "Add credential" menu is the one add.
+function credSecHead(title, count) {
+  const h = credEl("div", "sec-h card-head");
+  h.append(credEl("h2", "t-md w-600", title), credEl("span", "chip tnum", String(count)));
+  return h;
 }
 
 function credSection(g) {
   const tables = credTableMode();
   if (tables && g.key === "values") return credValuesFold(g);
+  // The page's card is `ctab-sec` alone: desktop.css gives it the kit's panel fill and radius. Not the kit's `.card` class: that name is
+  // also the phone's amber session card (app.css), which would style these nodes if the window crossed to a phone and Settings were
+  // reopened before the next fetch replaced them.
   const sec = credEl("section", tables ? "sec ctab-sec" : "sec");
   sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
-  const h = credEl("div", "sec-h");
-  const title = credEl("span", "grow", g.title + " ");
-  title.appendChild(credEl("span", "count", String(g.entries.length)));
-  h.appendChild(title);
-  const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
-  const add = kind && credActionHandlers[kind] && credActionHandlers[kind].add;
-  if (typeof add === "function") {
-    // In the tables AWS's add is a secondary like the other sections' adds: desktop.css used to
-    // restyle the primary as one, now the markup says so (F11, #171). The cards keep it primary.
-    const b = credEl("button", "btn" + (g.key === "aws" && !tables ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
-    b.type = "button";
-    b.onclick = () => add(g, loadCredentials);
-    h.appendChild(b);
+  if (tables) {
+    sec.appendChild(credSecHead(g.title, g.entries.length));
+  } else {
+    const h = credEl("div", "sec-h");
+    const title = credEl("span", "grow", g.title + " ");
+    title.appendChild(credEl("span", "count", String(g.entries.length)));
+    h.appendChild(title);
+    const kind = g.key === "aws" ? "aws" : g.key === "github" ? "github" : g.key === "values" ? "value" : g.key.startsWith("token:") ? "token" : "";
+    // On the desktop page a narrow window draws cards, and the head's "Add credential ▾" already offers all three adds (My call 6): the
+    // cards carry no add of their own, so the page shows no primary ("Add AWS accounts" is `btn pri` on the phone). "Set a value" stays
+    // (an add inside a block). The phone's card mode is unchanged.
+    const add = kind && !(credPageMode() && kind !== "value") && credActionHandlers[kind] && credActionHandlers[kind].add;
+    if (typeof add === "function") {
+      const b = credEl("button", "btn" + (g.key === "aws" ? " pri" : ""), g.key === "aws" ? "Add AWS accounts" : g.key === "values" ? "Set a value" : g.key === "github" ? "Add GitHub" : "Add token");
+      b.type = "button";
+      b.onclick = () => add(g, loadCredentials);
+      h.appendChild(b);
+    }
+    sec.appendChild(h);
   }
-  sec.appendChild(h);
 
   if (!g.entries.length) {
     sec.appendChild(credEl("p", "hint", CRED_EMPTY[g.key] || ""));
     return sec;
   }
   if (g.key === "values") { sec.appendChild(credValuesBody(g.entries)); return sec; }
-  if (g.key === "legacy") { sec.appendChild(credLegacyBody(g.entries)); return sec; }
+  if (g.key === "legacy") {
+    if (tables) sec.append(...credLegacyTable(g.entries));
+    else sec.appendChild(credLegacyBody(g.entries));
+    return sec;
+  }
   if (tables) {
     sec.appendChild(credTable(g));
     if (g.key.startsWith("token:")) sec.appendChild(credEl("p", "honest", CRED_N3));
@@ -1235,7 +1325,9 @@ function credSection(g) {
 }
 
 // credStrip: the encrypted store's status, unlock and lock, folded into the top
-// of the tab (it used to be a tab of its own).
+// of the tab (it used to be a tab of its own). On the desktop page (frame M2.3) the store is said once: a dot, "Encrypted
+// store", the muted state beside it (storeExpiryText), Lock now at the right, and the honest statement once as the note
+// under it. A store that needs the user (locked, unavailable, not set up) keeps its amber strip and its words.
 function credStrip(view) {
   const st = view.store || {};
   // A macOS Keychain failure: the server's reason and fix, nothing to type or lock.
@@ -1244,7 +1336,9 @@ function credStrip(view) {
   const unavail = st.unavailable || null;
   const locked = !unavail && st.initialized && st.locked && st.platform !== "darwin";
   // On the desktop page the strip is quiet (amber only when it needs you), in cards as in tables.
-  const strip = credEl("div", credPageMode() ? "strip cstrip" + (locked || unavail || !st.initialized ? " need" : "") : "strip");
+  const page = credPageMode();
+  // `cstrip` alone, not `.card` (the phone's amber card, app.css): desktop.css's .cstrip rules draw its fill and radius.
+  const strip = credEl("div", page ? "strip cstrip" + (locked || unavail || !st.initialized ? " need" : "") : "strip");
   if (unavail) {
     strip.appendChild(credEl("span", "st locked", "Keychain"));
     const txt = credEl("div", "txt");
@@ -1261,6 +1355,10 @@ function credStrip(view) {
     mk.onclick = () => { slot.replaceChildren(credStoreCreateNode(() => loadCredentials(), true)); };
     slot.appendChild(mk);
     strip.appendChild(slot);
+  } else if (page && !locked) {
+    const dot = credEl("span", "dot dot-run");
+    dot.setAttribute("aria-hidden", "true");
+    strip.append(dot, credEl("b", null, "Encrypted store"), credEl("span", "muted", storeExpiryText(st, Date.now())));
   } else {
     strip.appendChild(credEl("span", "st " + (locked ? "locked" : "ready"), locked ? "Locked" : st.platform === "darwin" ? "Keychain" : "Unlocked"));
     const txt = credEl("div", "txt");
@@ -1276,7 +1374,7 @@ function credStrip(view) {
     renderUnlockForm(slot, () => loadCredentials());
     strip.appendChild(slot);
   } else if (!unavail && st.initialized && st.platform !== "darwin") {
-    const b = credEl("button", "btn", "Lock now");
+    const b = credEl("button", page ? "btn btn-sm" : "btn", "Lock now");
     b.type = "button";
     b.id = "store-lock";
     // Reload only after a lock that worked: a repaint rebuilds #store-err
@@ -1284,7 +1382,7 @@ function credStrip(view) {
     b.onclick = async () => { if (await lockStore()) loadCredentials(); };
     strip.appendChild(b);
   }
-  const wrap = credEl("div", "stack");
+  const wrap = credEl("div", page ? "stack cstrip-wrap" : "stack");
   wrap.appendChild(strip);
   const pt = typeof storePlaintextText === "function" && storeState ? storePlaintextText(storeState.plaintext_copies) : "";
   if (pt) wrap.appendChild(credEl("p", "hint warnline", pt));
@@ -1293,6 +1391,161 @@ function credStrip(view) {
   err.id = "store-err";
   wrap.appendChild(err);
   return wrap;
+}
+
+// --- the page head's "Add credential ▾" menu (frame M2.3) ----------------------------------------------------------------
+//
+// The tables have no add button of their own: the head's one action opens a kit menu with today's three adds, each the
+// handler its section button used to run. settingshead.js paints the trigger (#set-act-creds, a plain secondary .btn with
+// aria-haspopup) and hands it to credAddMenuAttach by name on the global object, so that one is a top-level function
+// declaration. The pattern is the profile page's ⋯ menu (profilepage.js pfvMoreMenu): kitMenuButton rows, kitMenuKeys for
+// the arrows, Esc closes and gives focus back to the trigger without also closing the page, a click elsewhere closes.
+
+// credAddItems: the menu's rows, in order. `kind` names the credActionHandlers entry whose `add` the row runs.
+function credAddItems() {
+  return [
+    { label: "Add AWS accounts", kind: "aws" },
+    { label: "Add GitHub", kind: "github" },
+    { label: "Add token", kind: "token" },
+  ];
+}
+
+// credAddRun: run a row's add with the group it sat in before: AWS's, GitHub's, or the first token provider's (the add
+// starts on that provider); with no token yet there is no group, so it starts from { key: "token:" } (the first template).
+// It is async because the AWS and token adds are (the AWS one reads the host's profiles, the token one the providers): focus moves
+// into the flow when it has drawn, if one opened (credFlowFocus).
+async function credAddRun(kind) {
+  const h = credActionHandlers[kind];
+  if (!h || typeof h.add !== "function") return;
+  const groups = credGroups(credView || {});
+  const group = kind === "token"
+    ? groups.find((g) => g.key.startsWith("token:")) || { key: "token:" }
+    : groups.find((g) => g.key === kind);
+  await h.add(group, loadCredentials);
+  credFlowFocus();
+}
+
+// credFlowFocus: a flow opened in the Credentials tab from the head menu has drawn: focus goes to its first control (the provider
+// tiles, the GitHub routes, AWS's first profile tick box), not the crumb, which is a way out. A flow with no control yet (AWS with no
+// profile to tick) takes the crumb, so focus is never left on <body> when the trigger it came from went away. Nothing when no flow
+// opened (the add failed to start): focus is still on the trigger, which is still shown.
+function credFlowFocus() {
+  if (!credTabFlowOpen()) return;
+  const host = document.getElementById("creds-body");
+  if (!host) return;
+  // Focus the user has put elsewhere while an async flow was drawing (AWS reads the host's profiles first) is theirs: only focus that
+  // is lost (<body>) or still on the trigger moves.
+  const at = document.activeElement;
+  const btn = credAddWrap ? credAddWrap.querySelector("button") : null;
+  if (at && at !== document.body && at !== document.documentElement && at !== btn) return;
+  const usable = (n) => {
+    if (n.disabled || n.type === "hidden") return false;
+    for (let x = n; x && x !== host; x = x.parentElement) if (x.hidden) return false;
+    return true;
+  };
+  const first = Array.from(host.querySelectorAll("input, select, textarea, button")).find(usable) || host.querySelector("a.lnk");
+  if (first && typeof first.focus === "function") first.focus();
+}
+
+// The open menu ({ wrap, btn, pop }) or null, and the wrapper of the trigger the head last drew.
+let credAddMenu = null;
+let credAddWrap = null;
+// A tab flow was open at the last credAddMenuSync, and it has just closed: once the list is drawn again the trigger takes focus
+// back if focus was lost (credAddMenuRefocus).
+let credAddFlowWas = false;
+let credAddRefocus = false;
+let credAddMenuWired = false;
+
+function credAddMenuClose(refocus) {
+  if (!credAddMenu) return;
+  const m = credAddMenu;
+  credAddMenu = null;
+  m.pop.hidden = true;
+  m.btn.setAttribute("aria-expanded", "false");
+  if (refocus) m.btn.focus();
+}
+
+// credAddMenuSync: an Add / Edit view open in the tab owns the page (its own footer is the way out), so the head's add is
+// not offered on top of it: the trigger and the divider after it go, and come back when the list does. Called wherever
+// that changes (the views' footers, the list's repaint).
+function credAddMenuSync() {
+  const wrap = credAddWrap;
+  if (!wrap) return;
+  const open = credTabFlowOpen();
+  wrap.hidden = open;
+  const head = wrap.parentElement;
+  const sep = head ? head.querySelector(".set-sep") : null;
+  if (sep) sep.hidden = open;
+  if (open) credAddMenuClose(false);
+  // A flow that has just closed: its nodes stay on screen until the list repaints, so focus is given back then, not now.
+  if (credAddFlowWas && !open) credAddRefocus = true;
+  else if (open) credAddRefocus = false;
+  credAddFlowWas = open;
+}
+
+// credAddMenuRefocus: the list has been drawn again (renderCredentials) after a flow opened from the head closed. The flow's
+// controls are gone, and with them keyboard focus (it is on <body>): the trigger, shown again, takes it. Focus the user has put
+// anywhere else in the meantime stays where it is.
+function credAddMenuRefocus() {
+  if (!credAddRefocus || credTabFlowOpen()) return;
+  credAddRefocus = false;
+  const wrap = credAddWrap;
+  const btn = wrap && !wrap.hidden ? wrap.querySelector("button") : null;
+  if (!btn || typeof btn.focus !== "function") return;
+  const at = document.activeElement;
+  if (!at || at === document.body || at === document.documentElement) btn.focus();
+}
+
+// credAddMenuAttach(btn): give the head's trigger its menu. Safe on every head repaint: each paint draws a new trigger,
+// so a menu left open by the last one is dropped with its button, one trigger is wrapped once, and the document's
+// click-away listener is added once.
+function credAddMenuAttach(btn) {
+  if (!btn || !btn.parentElement) return;
+  credAddMenuClose(false);
+  if (btn.parentElement.classList.contains("cred-add")) return;
+  const wrap = credEl("div", "cred-add");
+  btn.parentElement.insertBefore(wrap, btn);
+  const pop = credEl("div", "menu");
+  pop.setAttribute("role", "menu");
+  pop.setAttribute("aria-label", "Add credential");
+  pop.hidden = true;
+  for (const it of credAddItems()) {
+    pop.appendChild(kitMenuButton(it.label, "", false, () => {
+      // Focus goes to the trigger first, so an add that does not open (its error is in the tab's error line) leaves it there and
+      // not on the menu row that has just closed. An add that does open draws over the list and hides the trigger
+      // (credAddMenuSync): credAddRun then moves focus into the flow once it has drawn (credFlowFocus), and credAddMenuRefocus gives
+      // it back to the trigger when the flow is closed (Cancel, Save, the crumb) and the list is drawn again.
+      credAddMenuClose(true);
+      credAddRun(it.kind);
+    }));
+  }
+  wrap.append(btn, pop);
+  btn.onclick = () => {
+    if (credAddMenu && credAddMenu.wrap === wrap) { credAddMenuClose(false); return; }
+    credAddMenuClose(false);
+    credAddMenu = { wrap, btn, pop };
+    pop.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    const first = pop.querySelector(".menu-item");
+    if (first) first.focus();
+  };
+  wrap.addEventListener("keydown", (ev) => {
+    if (!credAddMenu || credAddMenu.wrap !== wrap) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      credAddMenuClose(true);
+      return;
+    }
+    kitMenuKeys(pop, ev);
+  });
+  credAddWrap = wrap;
+  if (!credAddMenuWired && typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    credAddMenuWired = true;
+    document.addEventListener("click", (ev) => {
+      if (credAddMenu && !credAddMenu.wrap.contains(ev.target)) credAddMenuClose(false);
+    });
+  }
+  credAddMenuSync();
 }
 
 function credBanners(view) {
@@ -1324,6 +1577,7 @@ function renderCredentials(view) {
   // gone. The cached view repainted for a new width is the same object and keeps it.
   if (view !== credView) credNeedW = 0;
   credView = view;
+  credAddMenuSync();
   // The Add / Edit view owns the body until it is left; it reads credView when it needs it. A view in
   // a host (the drawer) does not own the tab's body.
   if (credTabFlowOpen()) return;
@@ -1341,6 +1595,7 @@ function renderCredentials(view) {
   // the second paint is cards (a body this wide is below the need).
   if (credPaintedTables && credGrowNeed(host)) credPaint(host, view);
   credScrollPending();
+  credAddMenuRefocus();
 }
 
 // credPaint: one paint of the whole body. The mode this paint draws in (credSection
@@ -1565,6 +1820,7 @@ function awsShowFoot(on) {
   const base = document.getElementById("foot-creds");
   if (add) add.hidden = !on;
   if (base) base.hidden = on;
+  credAddMenuSync();
 }
 
 // awsOpenAdd(opts): the add view in the Credentials tab, or, given opts = { host, foot, onCreated(names,
@@ -1576,7 +1832,9 @@ function awsOpenAdd(opts) {
   credFlowStart(opts);
   awsFlow = { mode: "add", rows: [], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "", opts: opts || null, created: [] };
   awsPaintFlow();
-  awsLoadProfiles(awsFlow);
+  // The view is drawn at once; its profile list, once the host's profiles are read. The caller may wait for that (the head menu
+  // moves focus to the first tick box); the drawer's starter ignores it.
+  return awsLoadProfiles(awsFlow);
 }
 
 // awsOpenEdit: the same row for one existing web connection. The read model
@@ -2739,6 +2997,7 @@ function credFormFoot(on) {
   if (form) form.hidden = !on;
   if (base) base.hidden = on;
   if (add) add.hidden = true;
+  credAddMenuSync();
 }
 
 function credFormErr(msg) {
@@ -2967,18 +3226,22 @@ async function credSend(method, path, body) {
 // --- token add / edit ----------------------------------------------------------
 
 function credTokensEmpty() {
-  const sec = credEl("section", credTableMode() ? "sec ctab-sec" : "sec");
+  const tables = credTableMode();
+  const sec = credEl("section", tables ? "sec ctab-sec" : "sec"); // page-only class, never the phone's .card (see credSection)
   sec.dataset.group = "tokens";
   sec.setAttribute("aria-label", "Tokens");
-  const h = credEl("div", "sec-h");
-  h.appendChild(credEl("span", "grow", "Tokens "));
-  h.firstChild.appendChild(credEl("span", "count", "0"));
-  const add = credActionHandlers.token && credActionHandlers.token.add;
-  if (typeof add === "function") {
-    const b = credEl("button", "btn", "Add token");
-    b.type = "button";
-    b.onclick = () => add(null, loadCredentials);
-    h.appendChild(b);
+  const h = tables ? credSecHead("Tokens", 0) : credEl("div", "sec-h");
+  if (!tables) {
+    h.appendChild(credEl("span", "grow", "Tokens "));
+    h.firstChild.appendChild(credEl("span", "count", "0"));
+    // No add of its own on the desktop page's cards: the head's "Add credential ▾" adds a token (see credSection).
+    const add = !credPageMode() && credActionHandlers.token && credActionHandlers.token.add;
+    if (typeof add === "function") {
+      const b = credEl("button", "btn", "Add token");
+      b.type = "button";
+      b.onclick = () => add(null, loadCredentials);
+      h.appendChild(b);
+    }
   }
   sec.append(h, credEl("p", "hint", "No tokens yet. Add a Sentry, Grafana, Datadog, PagerDuty or GitHub token, or your own, and the box gets it as an environment variable."));
   return sec;
