@@ -1437,6 +1437,9 @@
        empty .set-head slot settingshead.js fills on the page) and the Agent accounts note
        that carries the paragraph's later sentences once its first is the head's line. */
     .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime, #set-signout, .set-head, #acct-desk-note { display: none; }
+    /* The Appearance page's "Shortcuts" row label (app.js fsShortcutsLabel builds it; desktop.css
+       shows it on the page above 700px). Its own rule: the list above is pinned. */
+    #fs-kbd-lbl { display: none; }
     /* The desktop page's profile overview and its nav list (desktop.css shows them
        on the page above 700px); a phone keeps the form. */
     #pfv, #pf-navlist { display: none; }

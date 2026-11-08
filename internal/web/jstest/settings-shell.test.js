@@ -328,6 +328,8 @@ class FNode {
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
   after(n) { const i = this.parent.children.indexOf(this); n.parent = this.parent; this.parent.children.splice(i + 1, 0, n); }
+  before(n) { const i = this.parent.children.indexOf(this); n.parent = this.parent; this.parent.children.splice(i, 0, n); }
+  focus() { FNode.focused = this; }
   all(pred, out = []) { for (const c of this.children) { if (c.nodeType !== 1) continue; if (pred(c)) out.push(c); c.all(pred, out); } return out; }
   // Only ".class" selectors: all the page scripts ask for here.
   querySelector(sel) { const cls = sel.replace(/^\./, ""); return this.all((n) => n.className.split(/\s+/).includes(cls))[0] || null; }
@@ -825,7 +827,7 @@ test("on the page the stale or repeated copy is hidden: the old hints, the versi
   // Desktop copy comes from JS; the static strings stay for the phone, so each is hidden by a page rule.
   const hidden = [
     [P + " > #tokens > .set-head + .hint", "the tokens hint (the head's description says it)"],
-    [P + " > #settings > .hint:not(#notify-why)", "the stale 'panes behind this dialog' hint (F35)"],
+    [P + " > #settings > .fs-card > .hint", "the stale 'panes behind this dialog' hint (F35)"],
     [P + " > #accounts > .set-head + .hint", "the accounts paragraph (lead -> head, rest -> the note)"],
     [P + " > #about > #about-version", "the version line (it is the head's description)"],
     [P + " > #about > p:has(> #bug-open)", "the Report a problem button (it is the head's action)"],
@@ -833,7 +835,7 @@ test("on the page the stale or repeated copy is hidden: the old hints, the versi
   for (const [sel, why] of hidden) assert.strictEqual(decls(sel).get("display"), "none", why);
   // The static markup those selectors rest on.
   assert.match(HTML, /id="tokens"[^>]*>\s*<div class="set-head"><\/div>\s*<p class="hint">An access token/);
-  assert.match(HTML, /<p class="hint" id="notify-why"><\/p>\s*<p class="hint">Sizes apply as you change them/);
+  assert.match(HTML, /<\/div>\s*<p class="hint">Sizes apply as you change them/);
   assert.match(HTML, /id="accounts"[^>]*>\s*<div class="set-head"><\/div>\s*<p class="hint">Each agent account/);
   assert.match(HTML, /<p><button type="button" class="btn" id="bug-open">Report a problem<\/button><\/p>/);
   // The note shows on the page (base-hidden); [hidden] still wins for an empty one.
@@ -1295,4 +1297,404 @@ test("the drawer's foot is the kit footer: the page footer's 28px buttons, 8px a
   // Plan 3's reasons live in credentials.js and are not touched by a stylesheet.
   const src = read("credentials.js");
   for (const fn of ["setDisabledReason", "awsFootReasons", "awsFootNote"]) assert.ok(src.includes("function " + fn) || src.includes(fn + "("), fn + " is still there");
+});
+
+// ---- Task 8 (#174): Appearance, frame M2.5 (digest-design §A8, §B6, §C3, §C7, §D) and its Alerts row (§E3, the Settings half of F39/F47) ----
+const CARD = P + " .fs-card";
+const PRIM_CSS = stripComments(read("primitives.css")) + stripComments(read("tokens.css"));
+const APPEARANCE = /<div class="dbd pad" id="settings"[\s\S]*?(?=<div class="dbd pad" id="tokens")/.exec(HTML)[0];
+
+test("Appearance is one card of six rows: four sizes, Alerts, Shortcuts (the stale hint stays for the phone, hidden on the page)", () => {
+  // §B6: one card, six rows. The label of the sixth is drawn by initSettings (desktop copy comes from JS), so five labels are static.
+  assert.match(APPEARANCE, /<div class="set-head"><\/div>\s*<div class="fs-card">/, "the card follows the head slot and nothing else sits beside it");
+  assert.deepStrictEqual([...APPEARANCE.matchAll(/<span class="lbl">([^<]*)<\/span>/g)].map((m) => m[1]), ["Terminal", "Code", "Markdown", "File tree", "Alerts"]);
+  assert.strictEqual((APPEARANCE.match(/<div class="fsrow card-row">/g) || []).length, 3, "Terminal, Code, Markdown");
+  assert.match(APPEARANCE, /<div class="fsrow card-row" id="fsrow-filetree">/);
+  assert.match(APPEARANCE, /<div class="fsrow card-row" id="fsrow-alerts">/);
+  assert.match(APPEARANCE, /<p class="card-row"><button type="button" class="btn" id="kbd-open-settings">Keyboard shortcuts<\/button><\/p>\s*<\/div>\s*<\/div>\s*$/, "Shortcuts is the card's last row, and the card closes the panel");
+  // The text the phone shows is as it was: the stale hint (still the phone's), the sample lines and every stepper label.
+  assert.match(APPEARANCE, /<p class="hint">Sizes apply as you change them — the panes behind this\s+dialog are already using them\. A stored size wins over the default\.<\/p>\s*<p class="card-row">/);
+  for (const t of ["terminal", "code", "markdown", "filetree"]) {
+    assert.match(APPEARANCE, new RegExp('<input class="val fs-val" data-fs="' + t + '" type="number" min="8" max="32" step="1" aria-label="[^"]+">'), t);
+  }
+  assert.match(APPEARANCE, /\$ claude --model opus-5\n● Running the suite…<\/div>/);
+  // The kit's own `.card` is the session card on a phone (app.css: an amber 2px border), so the wrapper must not carry it.
+  assert.ok(!/class="(?:[^"]*\s)?card(?:\s[^"]*)?"/.test(APPEARANCE), "no bare .card in the panel");
+});
+
+test("what the Appearance panel gained is styled only on the desktop page, so the phone's pixels cannot move", () => {
+  // The rows may carry classes the phone has no rule for; app.css, primitives.css and tokens.css define none of them
+  // (the phone also hides #fsrow-alerts and #notify-why outright, which index.html keeps).
+  for (const c of ["fs-card", "card-row", "check", "check-box", "notify-block", "notify-how", "notify-steps"]) {
+    assert.ok(!new RegExp("\\." + c + "(?![\\w-])").test(BASE_CSS + PRIM_CSS), c + " is not a phone class");
+  }
+  assert.ok(/#fsrow-alerts, #notify-why \{ display: none; \}/.test(BASE_CSS), "the phone still hides the Alerts row and its reason");
+  assert.match(APPEARANCE, /<div class="fsrow card-row" id="fsrow-alerts"><span class="lbl">Alerts<\/span>\s*<label class="check notify-opt"><input type="checkbox" class="check-box" id="notify-toggle" aria-describedby="notify-why"> Desktop notifications<\/label>\s*<div class="hint" id="notify-why"><\/div>\s*<\/div>/);
+  // The Shortcuts label is built by JS, base-hidden for the phone (its own rule: the pinned list of desktop-only nodes is untouched).
+  const hide = parseRules(BASE_CSS).find((r) => parts(r.selector).includes("#fs-kbd-lbl"));
+  assert.ok(hide && hide.decls.get("display") === "none", "app.css hides #fs-kbd-lbl");
+  assert.strictEqual(parts(hide.selector).length, 1);
+  assert.strictEqual(decls(CARD + " > p.card-row > #fs-kbd-lbl").get("display"), "block", "and the page shows it");
+});
+
+test("the card is the frame's: --panel, --r-card, 4px 20px; its rows are one grid, 120px 132px then the sample, 24px apart, 12px 0, hairlines between", () => {
+  // §B6 `.card.m2-acard` / `.m2-arow`, §C7 `.card`, `.card-row + .card-row`. The wrapper restates the card's two tokens: it cannot take the class.
+  const card = decls(CARD);
+  assert.strictEqual(card.get("background"), "var(--panel)");
+  assert.strictEqual(card.get("border-radius"), "var(--r-card)");
+  assert.strictEqual(card.get("padding"), "4px 20px");
+  assert.strictEqual(decls(".card").get("background"), "var(--panel)");
+  assert.strictEqual(decls(".card").get("border-radius"), "var(--r-card)");
+  const row = decls(CARD + " > :is(.fsrow, p.card-row)");
+  assert.strictEqual(row.get("display"), "grid");
+  assert.strictEqual(row.get("grid-template-columns"), "120px 132px minmax(0, 1fr)");
+  assert.strictEqual(row.get("column-gap"), "24px");
+  assert.strictEqual(row.get("row-gap"), "0", "app.css's `.fsrow { gap: 20px }` must not open 20px between the switch and its reason (Alerts has two grid rows)");
+  assert.strictEqual(row.get("align-items"), "center");
+  assert.strictEqual(row.get("padding"), "12px 0");
+  assert.strictEqual(row.get("margin"), "0");
+  assert.strictEqual(row.get("border-bottom"), "0", "the legacy bottom rule (app.css .fsrow) is gone: the divider is the next row's top");
+  // The divider is the kit's. Behind the hidden stale hint the adjacent-sibling rule cannot reach Shortcuts, so that one row restates it.
+  assert.strictEqual(decls(".card-row + .card-row").get("border-top"), "1px solid var(--line)");
+  assert.strictEqual(decls(CARD + " > .hint + .card-row").get("border-top"), "1px solid var(--line)");
+  // The label: 13/20 500 --fg, the frame's `.t-md.w-500`, in a 120px column of its own (the legacy 152px is not here).
+  const lbl = decls(CARD + " .lbl");
+  assert.strictEqual(lbl.get("width"), "auto");
+  assert.strictEqual(lbl.get("font-size"), "var(--t-md)");
+  assert.strictEqual(lbl.get("font-weight"), "var(--w-medium)");
+  assert.strictEqual(lbl.get("color"), "var(--fg)");
+  // Shortcuts: the button spans the two columns after the label and is not stretched.
+  const btn = decls(CARD + " > p.card-row > .btn");
+  assert.strictEqual(btn.get("grid-column"), "2 / 4");
+  assert.strictEqual(btn.get("justify-self"), "start");
+  // The old rules these replace are gone.
+  assert.ok(!has(P + " .fsrow") && !has(P + " .fsrow .lbl") && !has(P + " .sample"), "no rule for the legacy .fsrow / .lbl / .sample left");
+});
+
+test("the steppers are the frame's: 28px square buttons, 4px, a 60 x 28 value box on --bg with a --faint rim", () => {
+  // §B6: `.btn.btn-icon` = 28 x 28 (--h-ctl) and `.input.tnum.m2-stepv` = 60 x 28, 4px between: 28 + 4 + 60 + 4 + 28 = 124px in the 132px column.
+  // MEASURED on frames/m2-6 (a pixel scan of the PNG): the "−" button is x 698-725, y 121-148 (28 x 28), the value box x 730-789 (60) y 121-148 (28).
+  // The task brief's "24 px squares" (the kit's .btn-sm) is not what the approved frame draws, so the frame's 28 is pinned.
+  assert.strictEqual(decls(":root").get("--h-ctl"), "28px");
+  const S = CARD + " .stepper";
+  const st = decls(S);
+  assert.deepStrictEqual([st.get("display"), st.get("align-items"), st.get("gap"), st.get("border"), st.get("width")], ["flex", "center", "var(--sp-1)", "0", "auto"]);
+  assert.strictEqual(decls(":root").get("--sp-1"), "4px");
+  const b = decls(S + " button");
+  assert.strictEqual(b.get("width"), "var(--h-ctl)");
+  assert.strictEqual(b.get("height"), "var(--h-ctl)");
+  assert.strictEqual(b.get("padding"), "0");
+  assert.strictEqual(b.get("border-radius"), "var(--r-ctl)");
+  assert.strictEqual(b.get("background"), "var(--raise)");
+  assert.strictEqual(b.get("color"), "var(--fg)");
+  assert.strictEqual(b.get("font-size"), "var(--t-md)");
+  assert.strictEqual(b.get("font-weight"), "var(--w-medium)");
+  assert.strictEqual(decls(S + " button:hover").get("background"), "var(--line)", "the kit's .btn:hover");
+  const v = decls(S + " .val");
+  assert.strictEqual(v.get("width"), "60px");
+  assert.strictEqual(v.get("height"), "var(--h-ctl)");
+  assert.strictEqual(v.get("padding"), "0 4px");
+  assert.strictEqual(v.get("border"), "1px solid var(--faint)", "the kit's .input rests on --faint (G12)");
+  assert.strictEqual(v.get("border-radius"), "var(--r-ctl)");
+  assert.strictEqual(v.get("background"), "var(--bg)");
+  assert.strictEqual(v.get("color"), "var(--fg)");
+  assert.strictEqual(v.get("text-align"), "center");
+  assert.strictEqual(v.get("font-variant-numeric"), "tabular-nums");
+  assert.strictEqual(v.get("font-size"), "var(--t-md)");
+  assert.strictEqual(decls(S + " .val:hover").get("border-color"), "var(--muted)");
+  // Its border is id-weighted, so the global field focus cannot reach it: it has a field focus of its own (desktop-focus.test.js lists it).
+  const f = decls(S + " .val:focus-visible");
+  assert.deepStrictEqual([f.get("outline"), f.get("border-color"), f.get("box-shadow")], ["none", "var(--accent)", "0 0 0 1px var(--accent)"]);
+  assert.ok(!decls(S + " .val").has("border-left") && !decls(S + " .val").has("border-right"), "one border all round, not the legacy left and right rules");
+});
+
+test("a sample is a --bg box in mono, 8px 12px, 6px corners, 1.45 lines, set in the size it previews", () => {
+  // §B6 `.s-bg.mono.m2-sample`: no border, --bg, `white-space: pre`, the inline font-size is the setting (initSettings / paintFsSample set it).
+  const s = decls(CARD + " .sample");
+  assert.strictEqual(s.get("background"), "var(--bg)");
+  assert.strictEqual(s.get("border"), "0");
+  assert.strictEqual(s.get("border-radius"), "var(--r-ctl)");
+  assert.strictEqual(s.get("padding"), "8px 12px");
+  assert.strictEqual(s.get("font-family"), "var(--font-mono)");
+  assert.strictEqual(s.get("line-height"), "1.45");
+  assert.strictEqual(s.get("white-space"), "pre");
+  assert.strictEqual(s.get("overflow"), "hidden");
+  assert.strictEqual(s.get("min-width"), "0", "a long line is cut inside the grid column, it does not widen the card");
+  assert.strictEqual(s.get("color"), "var(--fg)");
+  assert.match(read("app.js"), /s\.style\.fontSize = fontPrefs\.get\(surface\) \+ "px"/, "the size stays the inline style paintFsSample sets");
+});
+
+test("the Alerts row is §E2's: a label above the first line, the switch and its reason in the two columns after it", () => {
+  const A = CARD + " > #fsrow-alerts";
+  assert.strictEqual(decls(A).get("align-items"), "start", "M8.1 .m8-alrow: a tall reason must not centre the label against itself");
+  assert.strictEqual(decls(A + " > .lbl").get("padding-top"), "1px");
+  assert.strictEqual(decls(A + " > :is(.notify-opt, #notify-why)").get("grid-column"), "2 / 4");
+  // The switch is the kit's drawn checkbox on a .check label.
+  assert.strictEqual(decls(".check").get("display"), "flex");
+  assert.strictEqual(decls(".check-box").get("width"), "14px");
+  // A one-line reason sits under the switch's text (14px box + 8px gap = 22px in), 2px below it: 12/18 --muted.
+  const why = decls(A + " > #notify-why");
+  assert.strictEqual(why.get("margin"), "2px 0 0");
+  assert.strictEqual(why.get("padding-left"), "22px");
+  assert.strictEqual(why.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(why.get("line-height"), "var(--lh-sm)");
+  assert.strictEqual(why.get("color"), "var(--muted)");
+  // A reason with steps is M8.1 `.m8-stack-4`: flush left under the switch, 12px between its parts.
+  const blk = decls(A + " > #notify-why.notify-block");
+  assert.deepStrictEqual([blk.get("display"), blk.get("flex-direction"), blk.get("gap"), blk.get("margin-top"), blk.get("padding-left")], ["flex", "column", "var(--sp-3)", "var(--sp-3)", "0"]);
+  assert.strictEqual(blk.get("color"), "var(--fg)", "the blocked list's lead words and the heading are --fg; the muted parts carry .muted themselves (§E3 d)");
+  assert.strictEqual(decls(A + " > #notify-why.notify-block > *").get("margin"), "0");
+  assert.strictEqual(decls(":root").get("--sp-3"), "12px");
+  // `.m8-stack` (heading, 8px, list) and `.m8-steps` (18px in, 4px between, no margin).
+  const how = decls(A + " #notify-why .notify-how");
+  assert.deepStrictEqual([how.get("display"), how.get("flex-direction"), how.get("gap")], ["flex", "column", "var(--sp-2)"]);
+  const steps = decls(A + " #notify-why .notify-steps");
+  assert.deepStrictEqual([steps.get("margin"), steps.get("padding-left"), steps.get("display"), steps.get("flex-direction"), steps.get("gap")], ["0", "18px", "flex", "column", "4px"]);
+  // Check again is the kit's small button: the panel's `.btn` rule (0 12px, --t-md, --r-ctl) is answered one id heavier, and it has a hover.
+  const sm = decls(P + " > #settings #notify-why .btn.btn-sm");
+  assert.deepStrictEqual([sm.get("padding"), sm.get("border-radius"), sm.get("font-size")], ["0 8px", "var(--r-chip)", "var(--t-sm)"]);
+  assert.strictEqual(decls(P + " > #settings .fs-card .btn:where(:not(.pri)):hover").get("background"), "var(--line)", "Keyboard shortcuts and Check again light up under the pointer");
+  const panel = P + " > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn";
+  const at = (sel) => DESK_CSS.indexOf(sel + " {");
+  assert.ok(at(P + " > #settings #notify-why .btn.btn-sm") > at(panel), "written after the panel rule");
+  // Every new class has its rule.
+  for (const sel of [CARD, A + " > #notify-why.notify-block", A + " #notify-why .notify-how", A + " #notify-why .notify-steps"]) assert.ok(has(sel), sel);
+});
+
+test("the value box's field focus is listed with the page fields that need one of their own", () => {
+  const src = fs.readFileSync(path.join(__dirname, "desktop-focus.test.js"), "utf8");
+  assert.ok(src.includes('"#page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible"'), "PAGE_FIELDS names the stepper's value box");
+});
+
+// ---- the Alerts row's DOM: every state of the reason, painted from notifyRowCopy ----------------------------------------------
+// The two app.js functions are lifted out of the page script (as profilepage.test.js does) and run on the fake DOM above, with the
+// real attention.js beside them.
+function lift(name) {
+  const src = read("app.js");
+  const at = src.indexOf("function " + name + "(");
+  assert.ok(at >= 0, name + " is in app.js");
+  return src.slice(at, src.indexOf("\n}\n", at) + 2);
+}
+const NOTIFY_ON = "When this tab is not focused: blocked on you or done. This browser only.";
+const NOTIFY_ASK = " Your browser asks for permission when you turn it on.";
+function makeNotifyDom({ secure = true, perm = "default", origin = "https://box.example", wanted = false, prompt = "granted" } = {}) {
+  const el = (tag, id, cls) => { const n = new FNode(tag); if (id) n.id = id; if (cls) n.className = cls; return n; };
+  const root = el("div");
+  const row = root.appendChild(el("div", "fsrow-alerts", "fsrow card-row"));
+  const cb = row.appendChild(el("input", "notify-toggle"));
+  const why = row.appendChild(el("div", "notify-why", "hint"));
+  const store = new Map(wanted ? [["agent-box:notify", "1"]] : []);
+  const ctx = {
+    document: { getElementById: (id) => root.all((n) => n.id === id)[0] || null, createElement: (t) => new FNode(t), createTextNode: (t) => new FText(t) },
+    window: { isSecureContext: secure, location: { origin } },
+    URL,  // a browser has it; a bare vm context does not
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+    console,
+  };
+  ctx.$ = (id) => ctx.document.getElementById(id);
+  if (perm !== "unsupported") {
+    ctx.Notification = { permission: perm, requestPermission: async () => { if (prompt !== "default") ctx.Notification.permission = prompt; return prompt; } };
+  }
+  vm.createContext(ctx);
+  new vm.Script(read("attention.js"), { filename: "attention.js" }).runInContext(ctx);
+  for (const fn of ["notifyPerm", "notifyMono", "paintNotifyWhy", "initNotifyToggle"]) new vm.Script(lift(fn), { filename: "app.js:" + fn }).runInContext(ctx);
+  return { ctx, root, row, cb, why, store };
+}
+const monos = (n) => withCls(n, "mono").map((m) => m.textContent);
+
+test("on an http page the row says it is not available there, names the page and gives the two ways out; the switch stays off and disabled", () => {
+  const origin = "http://100.76.118.121:8899";
+  const { ctx, cb, why } = makeNotifyDom({ secure: false, perm: "default", origin });
+  ctx.initNotifyToggle();
+  assert.strictEqual(cb.disabled, true);
+  assert.strictEqual(cb.checked, false);
+  assert.ok(classesOf(why).includes("notify-block"));
+  const [para, how] = kids(why);
+  assert.strictEqual(para.tag, "p");
+  assert.strictEqual(para.textContent, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://100.76.118.121:8899.");
+  assert.deepStrictEqual(monos(para), ["https://", origin], "the scheme and the page's address are machine text");
+  assert.deepStrictEqual(classesOf(para), ["t-sm", "muted"]);
+  assert.strictEqual(how.tag, "div");
+  assert.strictEqual(kids(how)[0].textContent, "How to enable");
+  assert.deepStrictEqual(classesOf(kids(how)[0]), ["t-sm", "w-600"]);
+  const items = withCls(how, "notify-steps")[0].children.filter((c) => c.nodeType === 1);
+  assert.deepStrictEqual(items.map((li) => li.textContent), [
+    "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.",
+    "From another device, put HTTPS in front of CuliBox yourself, for example tailscale serve or your own reverse proxy, and open that https:// address.",
+  ]);
+  assert.deepStrictEqual(items.map((li) => classesOf(li)), [["muted"], ["muted"]], "§E3 a: the whole list is muted, bullets included");
+  assert.deepStrictEqual(monos(items[0]), ["http://127.0.0.1:8899"]);
+  assert.deepStrictEqual(monos(items[1]), ["tailscale serve", "https://"]);
+  assert.strictEqual(withCls(why, "btn").length, 0, "nothing to check again on a page that cannot ask");
+  assert.strictEqual(kids(why).length, 2);
+});
+
+test("the page's origin never becomes markup: the row is built with text nodes, not innerHTML", () => {
+  const origin = 'http://x"><img src=x onerror=alert(1)>:8899';
+  const { ctx, why } = makeNotifyDom({ secure: false, origin });
+  ctx.initNotifyToggle();
+  assert.strictEqual(why.all((n) => n.tag === "img").length, 0);
+  // new URL() refuses it: no origin is claimed, and nothing of it is printed.
+  assert.ok(!why.textContent.includes("<img"));
+  const hostile = "http://a.b:1";
+  const dom = makeNotifyDom({ secure: false, origin: hostile });
+  dom.ctx.initNotifyToggle();
+  assert.ok(dom.why.textContent.includes(hostile));
+  for (const fn of ["notifyMono", "paintNotifyWhy", "initNotifyToggle"]) assert.doesNotMatch(lift(fn), /innerHTML|insertAdjacentHTML|outerHTML/, fn);
+});
+
+test("blocked in the browser: the browser-by-browser steps and Check again; the switch is disabled", () => {
+  const { ctx, cb, why } = makeNotifyDom({ perm: "denied", wanted: true });
+  ctx.initNotifyToggle();
+  assert.strictEqual(cb.disabled, true);
+  assert.strictEqual(cb.checked, false, "off, though the user had opted in: nothing can be sent");
+  assert.ok(classesOf(why).includes("notify-block"));
+  const [para, list, again] = kids(why);
+  assert.strictEqual(para.textContent, "This browser has blocked notifications for this address. Only the browser can undo that:");
+  const items = kids(list);
+  assert.deepStrictEqual(items.map((li) => kids(li)[0].textContent), ["Chrome, Edge:", "Firefox:", "Safari:"]);
+  assert.deepStrictEqual(items.map((li) => classesOf(kids(li)[0])), [["w-500"], ["w-500"], ["w-500"]], "the lead word is --fg 500, the rest muted");
+  assert.deepStrictEqual(items.map((li) => classesOf(kids(li)[1])), [["muted"], ["muted"], ["muted"]]);
+  assert.strictEqual(items[0].textContent, "Chrome, Edge: click the icon left of the address, set Notifications to Allow, then reload.");
+  assert.strictEqual(items[1].textContent, "Firefox: click the icon left of the address and clear the Notifications block, then reload.");
+  assert.strictEqual(items[2].textContent, "Safari: Safari \u203a Settings \u203a Websites \u203a Notifications, set this address to Allow.");
+  const btn = kids(again)[0];
+  assert.strictEqual(btn.tag, "button");
+  assert.strictEqual(btn.type, "button");
+  assert.strictEqual(btn.textContent, "Check again");
+  assert.deepStrictEqual(classesOf(btn), ["btn", "btn-sm"]);
+  assert.strictEqual(classesOf(list).includes("muted"), false, "the list is not muted as a whole (§E3 d)");
+  assert.deepStrictEqual(items.map((li) => classesOf(li)), [[], [], []], "so a bullet and a lead word are --fg");
+});
+
+test("Check again reads the permission again: unblocked, the switch is usable and holds the focus; still blocked, the new button holds it", () => {
+  const { ctx, cb, why, store } = makeNotifyDom({ perm: "denied", wanted: true });
+  ctx.initNotifyToggle();
+  // Still blocked: the block is redrawn, and the keyboard stays on the button that took the press.
+  FNode.focused = null;
+  withCls(why, "btn")[0].click();
+  assert.strictEqual(cb.disabled, true);
+  assert.strictEqual(withCls(why, "btn").length, 1);
+  assert.strictEqual(FNode.focused, withCls(why, "btn")[0], "focus is on the redrawn Check again, not lost to the page");
+  // The user unblocked it in the browser: permission is granted, and the opt-in they had made comes back on.
+  ctx.Notification.permission = "granted";
+  withCls(why, "btn")[0].click();
+  assert.strictEqual(cb.disabled, false);
+  assert.strictEqual(cb.checked, true);
+  assert.strictEqual(why.textContent, NOTIFY_ON);
+  assert.strictEqual(withCls(why, "btn").length, 0);
+  assert.strictEqual(FNode.focused, cb, "the press's button is gone: the switch it unlocked takes the focus");
+  assert.strictEqual(store.get("agent-box:notify"), "1");
+});
+
+test("available, switched off, the browser still to ask: the helper says what it does and that the browser will ask", () => {
+  const { ctx, cb, why } = makeNotifyDom({ perm: "default", wanted: false });
+  ctx.initNotifyToggle();
+  assert.deepStrictEqual([cb.disabled, cb.checked], [false, false]);
+  assert.strictEqual(why.textContent, NOTIFY_ON + NOTIFY_ASK);
+  assert.strictEqual(classesOf(why).includes("notify-block"), false);
+  assert.strictEqual(kids(why).length, 0, "plain text under the switch");
+});
+
+test("available and on (granted and opted in): the same line without the ask, so it is there on reopen too", () => {
+  const { ctx, cb, why } = makeNotifyDom({ perm: "granted", wanted: true });
+  ctx.initNotifyToggle();
+  assert.deepStrictEqual([cb.disabled, cb.checked], [false, true]);
+  assert.strictEqual(why.textContent, NOTIFY_ON);
+});
+
+test("permission granted but the switch off: the helper does not promise a prompt that will not come", () => {
+  const { ctx, cb, why } = makeNotifyDom({ perm: "granted", wanted: false });
+  ctx.initNotifyToggle();
+  assert.deepStrictEqual([cb.disabled, cb.checked], [false, false]);
+  assert.strictEqual(why.textContent, NOTIFY_ON);
+});
+
+test("no Notification at all: the secure page says the browser lacks it, and an http page still says how to get HTTPS", () => {
+  const a = makeNotifyDom({ perm: "unsupported", secure: true });
+  a.ctx.initNotifyToggle();
+  assert.strictEqual(a.cb.disabled, true);
+  assert.strictEqual(a.why.textContent, "This browser does not support notifications.");
+  assert.strictEqual(classesOf(a.why).includes("notify-block"), false);
+  const b = makeNotifyDom({ perm: "unsupported", secure: false, origin: "http://box.lan:9000" });
+  b.ctx.initNotifyToggle();
+  assert.match(b.why.textContent, /^Not available at this address\./);
+  assert.match(b.why.textContent, /open http:\/\/127\.0\.0\.1:9000\./);
+});
+
+test("turning it on: granted repaints the helper as on; a prompt left unanswered keeps the refusal line; a Block shows the blocked steps", async () => {
+  // Granted.
+  let d = makeNotifyDom({ perm: "default", prompt: "granted" });
+  d.ctx.initNotifyToggle();
+  d.cb.checked = true;
+  await d.cb.onchange();
+  assert.strictEqual(d.store.get("agent-box:notify"), "1");
+  assert.deepStrictEqual([d.cb.checked, d.cb.disabled], [true, false]);
+  assert.strictEqual(d.why.textContent, NOTIFY_ON, "no 'You will be notified when an agent needs you…' any more");
+  // Dismissed: the prompt closed without an answer, the permission is still "default".
+  d = makeNotifyDom({ perm: "default", prompt: "default" });
+  d.ctx.initNotifyToggle();
+  d.cb.checked = true;
+  await d.cb.onchange();
+  assert.strictEqual(d.store.has("agent-box:notify"), false);
+  assert.deepStrictEqual([d.cb.checked, d.cb.disabled], [false, false], "off, and the user can try again");
+  assert.strictEqual(d.why.textContent, "Permission was not granted, so notifications stay off.");
+  assert.strictEqual(classesOf(d.why).includes("notify-block"), false);
+  // The line is for this refusal: opening Settings again reads the permission afresh.
+  d.ctx.initNotifyToggle();
+  assert.strictEqual(d.why.textContent, NOTIFY_ON + NOTIFY_ASK);
+  // Blocked from the prompt: the browser will not ask again, so the row turns into the blocked steps at once.
+  d = makeNotifyDom({ perm: "default", prompt: "denied" });
+  d.ctx.initNotifyToggle();
+  d.cb.checked = true;
+  await d.cb.onchange();
+  assert.strictEqual(d.store.has("agent-box:notify"), false);
+  assert.deepStrictEqual([d.cb.checked, d.cb.disabled], [false, true]);
+  assert.match(d.why.textContent, /^This browser has blocked notifications for this address\./);
+  assert.strictEqual(withCls(d.why, "btn").length, 1);
+});
+
+test("turning it off clears the opt-in and the helper stays (it is the row's text, not a message that goes away)", async () => {
+  const d = makeNotifyDom({ perm: "granted", wanted: true });
+  d.ctx.initNotifyToggle();
+  d.cb.checked = false;
+  await d.cb.onchange();
+  assert.strictEqual(d.store.has("agent-box:notify"), false);
+  assert.strictEqual(d.why.textContent, NOTIFY_ON);
+  assert.strictEqual(d.cb.checked, false);
+});
+
+test("a prompt that throws is a refusal, not a crash", async () => {
+  const d = makeNotifyDom({ perm: "default" });
+  d.ctx.Notification.requestPermission = async () => { throw new Error("no"); };
+  d.ctx.initNotifyToggle();
+  d.cb.checked = true;
+  await d.cb.onchange();
+  assert.strictEqual(d.cb.checked, false);
+  assert.strictEqual(d.why.textContent, "Permission was not granted, so notifications stay off.");
+});
+
+test("initSettings draws the Shortcuts label once; app.css hides it below the breakpoint", () => {
+  const el = (tag, id, cls) => { const n = new FNode(tag); if (id) n.id = id; if (cls) n.className = cls; return n; };
+  const root = el("div");
+  const p = root.appendChild(el("p", null, "card-row"));
+  const btn = p.appendChild(el("button", "kbd-open-settings", "btn"));
+  const ctx = { document: { getElementById: (id) => root.all((n) => n.id === id)[0] || null, createElement: (t) => new FNode(t) } };
+  ctx.$ = (id) => ctx.document.getElementById(id);
+  vm.createContext(ctx);
+  new vm.Script(lift("fsShortcutsLabel"), { filename: "app.js:fsShortcutsLabel" }).runInContext(ctx);
+  ctx.fsShortcutsLabel();
+  ctx.fsShortcutsLabel();
+  const labels = withCls(p, "lbl");
+  assert.strictEqual(labels.length, 1, "twice is still once");
+  assert.strictEqual(labels[0].textContent, "Shortcuts");
+  assert.strictEqual(labels[0].id, "fs-kbd-lbl");
+  assert.strictEqual(p.children.indexOf(labels[0]), 0, "before the button, so the label reads first");
+  assert.strictEqual(p.children[1], btn);
+  assert.match(lift("initSettings"), /fsShortcutsLabel\(\)/, "initSettings calls it (it runs at boot, and the node exists by then)");
+  const bare = { document: { getElementById: () => null } };
+  bare.$ = (id) => bare.document.getElementById(id);
+  vm.createContext(bare);
+  new vm.Script(lift("fsShortcutsLabel"), { filename: "app.js:fsShortcutsLabel" }).runInContext(bare);
+  assert.doesNotThrow(() => bare.fsShortcutsLabel(), "no button, no label, no error");
 });

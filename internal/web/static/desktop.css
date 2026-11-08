@@ -1983,10 +1983,61 @@
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm:where(:not(.pri)):where(:not(.btn-danger)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)):hover { border-color: var(--red); background: var(--red-tint); }
-  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
-  #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
-  #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
+
+  /* Appearance (UI plan 4 Task 8; frame M2.5, digest-design §B6): one card of six rows on one grid. The card is §C7's `.card` (--panel, --r-card)
+     with `.m2-acard`'s 4px 20px; it is a plain wrapper in index.html and not a `.card` because app.css gives that class the amber session-card
+     look on a phone. A row is `.m2-arow`: a 120px label, a 132px stepper, then the sample, 24px apart, 12px above and below, the hairline between
+     rows the kit's `.card-row + .card-row`. Shortcuts is the sixth row: its label is built by initSettings (app.js fsShortcutsLabel) and the
+     button spans the two columns after it. */
+  #page-host > #settings-modal.as-page .fs-card { padding: 4px 20px; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) {
+    display: grid; grid-template-columns: 120px 132px minmax(0, 1fr); column-gap: 24px; row-gap: 0; align-items: center;
+    margin: 0; padding: 12px 0; border-bottom: 0; font-size: var(--t-md); line-height: var(--lh-md);
+  }
+  /* The stale hint sits between Alerts and Shortcuts (hidden below), so the kit's adjacent-sibling hairline cannot reach Shortcuts: it has its own. */
+  #page-host > #settings-modal.as-page .fs-card > .hint + .card-row { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page .fs-card .lbl { width: auto; font-size: var(--t-md); font-weight: var(--w-medium); color: var(--fg); }
+  #page-host > #settings-modal.as-page .fs-card > p.card-row > #fs-kbd-lbl { display: block; }
+  #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 2 / 4; justify-self: start; }
+  /* The stepper (§B6 `.m2-step`): the kit's 28px `.btn.btn-icon` buttons and a 60 x 28 `.input` with its --faint rim, 4px apart: 124px in the 132px
+     column. The frame measures 28px square (frames/m2-6, pixel scan), not the 24px of `.btn-sm`. The value's border is id-weighted, so the global
+     field focus cannot reach it: it has the same focus of its own, as the other page fields do (desktop-focus.test.js). */
+  #page-host > #settings-modal.as-page .fs-card .stepper { display: flex; align-items: center; gap: var(--sp-1); width: auto; border: 0; }
+  #page-host > #settings-modal.as-page .fs-card .stepper button {
+    flex: none; width: var(--h-ctl); height: var(--h-ctl); padding: 0; border: 1px solid transparent; border-radius: var(--r-ctl);
+    background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); font-weight: var(--w-medium); line-height: 1; cursor: pointer;
+  }
+  #page-host > #settings-modal.as-page .fs-card .stepper button:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val {
+    flex: none; width: 60px; height: var(--h-ctl); padding: 0 4px; border: 1px solid var(--faint); border-radius: var(--r-ctl);
+    background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md);
+    font-variant-numeric: tabular-nums; text-align: center;
+  }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val:hover { border-color: var(--muted); }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  /* The sample (§B6 `.s-bg.mono.m2-sample`): a --bg box, no border, mono, set at the size it previews (paintFsSample sets the inline font-size). The
+     line is cut inside its column, not wrapped: a line that reflows as it grows shows the wrapping, not the size. */
+  #page-host > #settings-modal.as-page .fs-card .sample {
+    min-width: 0; padding: 8px 12px; border: 0; border-radius: var(--r-ctl); background: var(--bg); color: var(--fg);
+    font-family: var(--font-mono); line-height: 1.45; white-space: pre; overflow: hidden;
+  }
+  /* Alerts (M8.1 `.m8-alrow`, §E2): top-aligned, the label 1px down to sit on the switch's first line, the switch (a kit `.check`) and its reason
+     across the two columns after it. A one-line reason sits under the switch's text (14px box + 8px gap = 22px in, 2px below). A reason with a way
+     out (an http page, a blocked browser) is `.m8-stack-4`: flush left, 12px between the paragraph, the steps and Check again; the steps are
+     `.m8-stack` (the heading, 8px, the list) and `.m8-steps` (18px in, 4px apart). Its own colour is --fg (the heading and a lead word are); what is
+     muted says so itself. paintNotifyWhy (app.js) builds them from text nodes. */
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts { align-items: start; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > .lbl { padding-top: 1px; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 2 / 4; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { margin: 2px 0 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); padding-left: 0; color: var(--fg); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block > * { margin: 0; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
+  /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
+     the kit's own hover never reached them and Check again's `.btn-sm` values are asked for again, one id heavier (§C3, as API tokens' row buttons do). */
+  #page-host > #settings-modal.as-page > #settings .fs-card .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #settings #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
 
   /* What the page head already says is not said twice (the phone keeps every one of these strings, so each is
      hidden here and nothing is edited in index.html): the API tokens hint (its description), the Appearance hint
@@ -1994,7 +2045,7 @@
      the description, the rest is the note below), About's version line (its description) and its Report a
      problem button (its action). */
   #page-host > #settings-modal.as-page > #tokens > .set-head + .hint,
-  #page-host > #settings-modal.as-page > #settings > .hint:not(#notify-why),
+  #page-host > #settings-modal.as-page > #settings > .fs-card > .hint,
   #page-host > #settings-modal.as-page > #accounts > .set-head + .hint,
   #page-host > #settings-modal.as-page > #about > #about-version { display: none; }
   /* Its own rule: a browser without :has() drops the one rule that names it, not the list above. */

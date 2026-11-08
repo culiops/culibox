@@ -3384,27 +3384,107 @@ function notifyTransitions() {
   }
 }
 
-// initNotifyToggle wires Settings → Appearance → Desktop notifications.
-function initNotifyToggle() {
+// notifyPerm: what the browser says about notifications ("unsupported" when it has no Notification at all).
+function notifyPerm() {
+  return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+}
+
+// notifyMono appends `text` to `parent` as text nodes, with the parts named in `mono` (in the order they occur in
+// the text) as machine text. Text only, never markup: the page's own origin is in some of these strings.
+function notifyMono(parent, text, mono) {
+  let rest = text;
+  for (const m of mono || []) {
+    const i = rest.indexOf(m);
+    if (i < 0) continue;
+    if (i > 0) parent.appendChild(document.createTextNode(rest.slice(0, i)));
+    const span = document.createElement("span");
+    span.className = "mono";
+    span.textContent = m;
+    parent.appendChild(span);
+    rest = rest.slice(i + m.length);
+  }
+  if (rest) parent.appendChild(document.createTextNode(rest));
+}
+
+// paintNotifyWhy fills the Alerts row's reason (#notify-why) from notifyRowCopy (attention.js): one line under the
+// switch, or, for a state with a way out, a paragraph, the steps (under a heading when the copy has one) and, when
+// the browser can be asked again, Check again (`onAgain`). Frame M8.1.
+function paintNotifyWhy(why, copy, onAgain) {
+  why.textContent = "";
+  if (!copy.para) {
+    why.classList.remove("notify-block");
+    why.textContent = copy.helper;
+    return;
+  }
+  why.classList.add("notify-block");
+  const el = (tag, cls) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    return n;
+  };
+  const para = el("p", "t-sm muted");
+  notifyMono(para, copy.para, copy.paraMono);
+  why.appendChild(para);
+  const list = el("ul", "notify-steps t-sm");
+  for (const step of copy.steps) {
+    const li = el("li", step.lead ? "" : "muted");   // a list with no lead words is muted whole, bullets too (§E3 a)
+    if (step.lead) {
+      const lead = el("span", "w-500");
+      lead.textContent = step.lead;
+      li.appendChild(lead);
+      li.appendChild(document.createTextNode(" "));
+    }
+    const body = el("span", "muted");
+    notifyMono(body, step.text, step.mono);
+    li.appendChild(body);
+    list.appendChild(li);
+  }
+  if (copy.heading) {
+    const how = el("div", "notify-how");
+    const h = el("span", "t-sm w-600");
+    h.textContent = copy.heading;
+    how.appendChild(h);
+    how.appendChild(list);
+    why.appendChild(how);
+  } else {
+    why.appendChild(list);
+  }
+  if (copy.checkAgain) {
+    const wrap = el("div");
+    const b = el("button", "btn btn-sm");
+    b.type = "button";
+    b.textContent = "Check again";
+    b.onclick = onAgain;
+    wrap.appendChild(b);
+    why.appendChild(wrap);
+  }
+}
+
+// initNotifyToggle wires Settings → Appearance → Desktop notifications: the switch, and the reason under it that
+// says why it is off and how to turn it on (F39/F47; wording from frame M8.1, attention.js notifyRowCopy). It
+// re-reads the browser's permission on every call: Settings opening, Check again, and each answer to the prompt.
+// `refused`: the prompt just closed without a permission, so its line replaces the helper this once.
+function initNotifyToggle(refused) {
   const cb = $("notify-toggle"), why = $("notify-why");
   if (!cb || !why) return;
-  const perm = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  const perm = notifyPerm();
   const avail = notifyAvailability(window.isSecureContext, perm);
   cb.disabled = !avail.enabled;
   cb.checked = avail.enabled && notifyChecked(notifyWanted(), perm);
-  why.textContent = avail.reason;
+  const copy = notifyRowCopy(avail.state, cb.checked, window.location.origin, perm);
+  if (refused && avail.state === "ready") copy.helper = "Permission was not granted, so notifications stay off.";
+  paintNotifyWhy(why, copy, () => {
+    initNotifyToggle();
+    // The button that took the press was redrawn or is gone: keep the keyboard on its successor, or on the switch it unlocked.
+    const next = why.querySelector(".btn") || (cb.disabled ? null : cb);
+    if (next) next.focus();
+  });
   cb.onchange = async () => {
-    if (!cb.checked) { setNotifyWanted(false); why.textContent = ""; return; }
+    if (!cb.checked) { setNotifyWanted(false); initNotifyToggle(); return; }
     let p = "denied";
     try { p = await Notification.requestPermission(); } catch (_) {}
-    if (p === "granted") {
-      setNotifyWanted(true);
-      why.textContent = "You will be notified when an agent needs you and this tab is not focused.";
-    } else {
-      cb.checked = false;
-      setNotifyWanted(false);
-      why.textContent = "Permission was not granted, so notifications stay off.";
-    }
+    setNotifyWanted(p === "granted");
+    initNotifyToggle(p !== "granted");
   };
 }
 
@@ -6564,7 +6644,21 @@ function bumpFs(surface, delta) {
   if (val) val.value = fontPrefs.get(surface);
   paintFsSample(surface);
 }
+// fsShortcutsLabel draws "Shortcuts", the row label the Appearance frame (M2.5) puts beside the Keyboard shortcuts
+// button. Desktop copy comes from here and not from index.html, which the phone also shows; app.css hides the node
+// below the breakpoint. Once: initSettings runs at boot and again on Reset.
+function fsShortcutsLabel() {
+  if ($("fs-kbd-lbl")) return;
+  const btn = $("kbd-open-settings");
+  if (!btn) return;
+  const lbl = document.createElement("span");
+  lbl.id = "fs-kbd-lbl";
+  lbl.className = "lbl";
+  lbl.textContent = "Shortcuts";
+  btn.before(lbl);
+}
 function initSettings() {
+  fsShortcutsLabel();
   for (const s of FS_SURFACES) {
     const val = document.querySelector('.fs-val[data-fs="' + s + '"]');
     if (val) val.value = fontPrefs.get(s);

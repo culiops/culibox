@@ -278,6 +278,7 @@ const PAGE_FIELDS = [
   ["#page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible", "the credential drawer's fields"],
   ["#page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible", "the Credentials page's add-flow fields (the drawer's own, heavier rule above wins there)"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible", "the profile page's fields"],
+  ["#page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible", "the Appearance page's text-size value boxes"],
 ];
 
 test("fields whose page rule sets an id-weighted border get a field focus of their own (>= 2px of accent)", () => {
