@@ -115,16 +115,19 @@ const PFC_PICK_TOKENS = "Tokens are long-lived, and the agent can read them whil
 const PFC_PICK_LEGACY = "Move the old-style AWS setting to a saved connection, or remove it, before adding connections.";
 const PFC_PICK_NONE = "Nothing matches.";
 
-// pfcPickOption: one option: its name (with the PROD / production tag), the line under it and, on one that is added already,
-// the word at its right. Added ones are not buttons that do anything: a disabled button, no handler.
+// pfcPickOption: one option, a kit menu row (.menu-item): its name (with the PROD / production tag) and the line under it in
+// one .menu-text, and on one that is added already the word at its right. Added ones are not buttons that do anything: a
+// disabled button, no handler.
 function pfcPickOption(rec, it) {
-  const b = pfvMk("button", "pfv-opt" + (it.create ? " pfv-create" : ""));
+  const b = pfvMk("button", "menu-item pfv-opt" + (it.create ? " pfv-create" : ""));
   b.type = "button";
   const t = pfvMk("span", "pfv-opt-t");
   t.append(it.title);
   if (it.tag) t.append(" ", pfvMk("span", "pfv-tag", it.tag));
-  b.append(t);
-  if (it.sub) b.append(pfvMk("span", "pfv-opt-s", it.sub));
+  const text = pfvMk("span", "menu-text");
+  text.append(t);
+  if (it.sub) text.append(pfvMk("span", "pfv-opt-s", it.sub));
+  b.append(text);
   if (it.added === true) {
     b.disabled = true;
     b.append(pfvMk("span", "pfv-opt-r", "Added"));
@@ -180,7 +183,7 @@ function pfcPickTabbed(rec) {
 // the filter narrows the options in place (by name and by the line under it), hides a group with nothing left and says when
 // nothing matches; what was typed is kept on rec.ui, so drawing the form again does not lose it.
 function pfcPicker(rec, spec) {
-  const pop = pfvMk("div", "pfv-pick");
+  const pop = pfvMk("div", "pfv-pick menu");
   pop.setAttribute("role", "dialog");
   pop.setAttribute("aria-label", spec.label);
   let first = null;
@@ -203,7 +206,9 @@ function pfcPicker(rec, spec) {
   const groups = [];
   for (const g of spec.groups) {
     const node = pfvMk("div", "pfv-pick-grp");
-    if (g.title) node.append(pfvMk("p", "pfv-pick-g", g.title));
+    // A div, not a p: the page zeroes the padding of every p (desktop.css, `#pfv :is(h2, h3, h4, p, dl, dd)`), and the kit label's
+    // own padding is what lines the heading up with the rows.
+    if (g.title) node.append(pfvMk("div", "menu-label grp-label", g.title));
     if (g.note) node.append(pfvMk("p", "pfv-pick-note", g.note));
     const mine = [];
     for (const it of g.items) {

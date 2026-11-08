@@ -495,12 +495,16 @@ test("the session row menu is the kit menu: the kit's surface, rows of --h-menu,
   }
   assert.deepStrictEqual(page.flatMap((r) => parts(r.selector)).filter((p) => /\.mi(-row|-x)?(?![\w-])/.test(p)), [],
     "no desktop rule on the legacy .mi rows (a .mi- class that is NOT a legacy row, such as .mi-off, is another component's)");
-  // The row icons are inline SVG (not a font glyph): 14px in the kit's 16px slot, drawn in the text colour.
-  const ico = ruleFor(page, ["#session-menu .menu-item > .menu-icon svg", "#session-menu .menu-check svg"]);
-  assert.strictEqual(decl(ico, "width"), "14px");
-  assert.strictEqual(decl(ico, "height"), "14px");
-  assert.strictEqual(decl(ico, "display"), "block");
-  assert.deepStrictEqual(ico.decls.map(([p]) => p).filter((p) => /^(color|stroke|fill)/.test(p)), [], "the icon takes the slot's colour (muted, red on End session…)");
+  // The row icons are inline SVG (not a font glyph) with no width or height of their own: 14px in the kit's 16px slot, on the kit's
+  // .menu-icon so every kit menu has them (the session row's, the profile page's ⋯), drawn in the slot's colour; the tab switcher's
+  // check, in its own slot, is the same size.
+  for (const ico of [ruleFor(kit, [".menu-icon svg"]), ruleFor(page, ["#session-menu .menu-check svg"])]) {
+    assert.ok(ico, "the icon sizing rule");
+    assert.strictEqual(decl(ico, "width"), "14px");
+    assert.strictEqual(decl(ico, "height"), "14px");
+    assert.deepStrictEqual(ico.decls.map(([p]) => p).filter((p) => /^(color|stroke|fill)/.test(p)), [], "the icon takes the slot's colour (muted, red on End session…)");
+  }
+  assert.strictEqual(ruleFor(page, ["#session-menu .menu-item > .menu-icon svg"]), undefined, "no second copy on the one menu");
   // A long label never wraps out of its 30px row: it is clipped with an ellipsis.
   const text = ruleFor(page, ["#session-menu .menu-item > .menu-text"]);
   assert.strictEqual(decl(text, "white-space"), "nowrap");

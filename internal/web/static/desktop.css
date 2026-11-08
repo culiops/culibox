@@ -388,6 +388,10 @@
   }
   .menu-item:hover { background: var(--raise); }
   .menu-icon { width: 16px; flex: none; color: var(--muted); display: inline-flex; justify-content: center; }
+  /* The icons are inline SVG (menuIconSvg, tabIcon) that carry no width or height: 14px in the 16px slot, stroked in the slot's
+     own colour (muted, red on a danger row). Every kit menu's, not one popover's. The slot is a flex box, so the icon is a block
+     in it without a display of its own (a kit display needs a [hidden] partner). */
+  .menu-icon svg { width: 14px; height: 14px; }
   .menu-text { flex: 1 1 auto; min-width: 0; }
   .menu-kbd { flex: none; font-family: var(--font-mono); font-size: var(--t-xs); color: var(--muted); }
   .menu-sep { height: 1px; background: var(--line); margin: 4px -4px; }
@@ -952,9 +956,8 @@
   }
   #session-menu.open:has(> .menu-item, > .menu-row) { display: flex; }
   #session-menu .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* The icons are inline SVG (menuIconSvg, tabIcon), 14px in the 16px slot, stroked in the slot's own colour:
-     muted, red on End session… (no font glyph: those are tofu where no installed font has them). */
-  #session-menu .menu-item > .menu-icon svg, #session-menu .menu-check svg { width: 14px; height: 14px; display: block; }
+  /* The row icons are the kit's (.menu-icon svg, 14px); the tab switcher's check, in its own slot, is the same size. */
+  #session-menu .menu-check svg { width: 14px; height: 14px; display: block; }
 
   /* The tab switcher: a row is the tab (a kit .menu-item, taking the width) beside its close, a kit ghost
      icon button at the small size (24px, --muted, --hover under the pointer: .btn-ghost.btn-icon.btn-sm).
@@ -2184,12 +2187,13 @@
   #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
-  #page-host > #settings-modal.as-page #pfv .pfv-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 190px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
-  #page-host > #settings-modal.as-page #pfv .pfv-menu[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-menu-item { display: block; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-menu-item:hover { background: var(--raise); }
-  #page-host > #settings-modal.as-page #pfv .pfv-menu-red { color: var(--red); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-menu-item:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The ⋯ menu (frame M5.4) is the kit menu (kitMenuButton rows): the kit's `.menu:has(> .menu-item)` draws the surface and the 30px
+     rows, in flow, so this places it under the button: the frame's .m5-pop-r (200px wide, the kit's min-width: 220px is what shows),
+     above the page. Display stays the kit's, so [hidden] still closes it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-more > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; width: 200px; }
+  /* The ⋯ shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
+  #page-host > #settings-modal.as-page #pfv .pfv-more .pfv-btn[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: var(--t-sm); color: var(--red); }
@@ -2345,32 +2349,38 @@
   #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: var(--t-sm); color: var(--red); }
   /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
-     than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it. */
+     than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it.
+     It is the kit menu (no frame draws it): .pfv-pick.menu takes the kit's surface through this selector, since its options sit in
+     .pfv-pick-list and the kit's `.menu:has(> .menu-item)` never matches; display: block puts back what app.css's legacy .menu hides
+     until .open. Its options are kit rows (.menu-item.pfv-opt), its headings the kit's .menu-label.grp-label. */
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap { position: relative; margin-top: 12px; }
   #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-addwrap { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-addwrap > .pfv-add { margin-top: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; width: 420px; max-width: 100%; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+  #page-host > #settings-modal.as-page #pfv .pfv-pick { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; box-sizing: border-box; display: block; width: 420px; max-width: 100%; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--e-pop); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-find { display: block; margin: 2px 0 4px; max-width: none; }
   /* Tall enough for the mockup's whole list (578px); a longer one scrolls here, under the filter, instead of running down the page. It keeps the
      height it opened at (--pfv-pick-min, set by pfv-cloud.js) while the filter hides options, so the page does not scroll under the user as they type. */
   #page-host > #settings-modal.as-page #pfv .pfv-pick-list { min-height: min(var(--pfv-pick-min, 0px), calc(100vh - 180px)); max-height: min(580px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-grp:not([hidden]) ~ .pfv-pick-grp:not([hidden])::before { content: ""; display: block; height: 1px; margin: 6px 4px; background: var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-pick-g { padding: 8px 10px 2px; font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-note { padding: 0 10px 4px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none { padding: 6px 10px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-pick-none[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; width: 100%; padding: 7px 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+  /* An option is a kit row: the kit's .menu-item draws it (flex, gap, 10px of padding, --raise under the pointer). It grows past the
+     kit's 30px for a second line (min-height where the kit says height), and with that line gets block padding. An Added option, a
+     disabled button, takes no hover. */
+  #page-host > #settings-modal.as-page #pfv .pfv-opt { height: auto; min-height: var(--h-menu); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:has(.pfv-opt-s) { padding: 6px 10px; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt:hover:not(:disabled) { background: var(--raise); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled:hover { background: transparent; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible { background: var(--raise); outline: 2px solid var(--accent); outline-offset: -2px; }
   /* primitives.css strikes every disabled control through; an option that is Added is not struck (the mockup's).
      It is dimmed like every disabled control (the rules after #169's). */
   #page-host > #settings-modal.as-page #pfv .pfv-opt:disabled { text-decoration: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-t { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-weight: 500; overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { grid-column: 1; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
   #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: var(--t-sm); }
