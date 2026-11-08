@@ -112,14 +112,16 @@ function toggleSidebar() {
   // No sidebar to toggle below the breakpoint (the bottom nav picks the
   // screen), and a value stored here would silently flip the next wide window.
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
-  // Each state shows exactly one toggle (header ☰ with the sidebar, the rail's
-  // ☰ without), so the one just pressed disappears: hand focus to the other.
+  // Each state shows exactly one toggle (the sidebar's «, the rail's » without), so
+  // the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const railToggle = rail && rail.querySelector(".ri.tog"); // not the first .ri: + comes before the dots and the ☰
+  const railToggle = rail && rail.querySelector(".ri.tog"); // by class: the » is not the only .ri
   const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
+  // Shown again: the splitter's aria-valuenow reads the drawn width (a page loaded hidden never had one).
+  if (!hidden && typeof syncSplitterAria === "function") syncSplitterAria();
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
@@ -306,9 +308,11 @@ function paintDrawerHead() {
   sess.title = n;
 }
 
-// paintDrawerTabs: the underline on a pane's Files tab follows the drawer
-// (the only header tab with data-k; Activity/Access are views, Cell.setView).
-// Classes only, never a rebuild: see drawerFollowFocus.
+// paintDrawerTabs: the pressed state of a pane's Files control follows the drawer:
+// the toggle button of a terminal pane, or the one Files tab of a pane of files (the
+// only header controls with data-k; Activity/Access are views, Cell.setView). Only
+// aria-pressed moves, which is also what draws it (desktop.css): the kit's one pressed
+// look, never a second selected tab. Never a rebuild: see drawerFollowFocus.
 function paintDrawerTabs(cell) {
   if (!cell || !cell.bar) return;
   const term = cellTerminal(cell);
@@ -316,9 +320,8 @@ function paintDrawerTabs(cell) {
   // A pane of files has no session; its tab is the drawer's only while it is
   // the focused one.
   const mine = drawerState.sessionId === sid && (sid !== null || cell === focusedCell);
-  for (const b of cell.bar.querySelectorAll(".ph-tab[data-k]")) {
+  for (const b of cell.bar.querySelectorAll("[data-k]")) {
     const on = mine && drawerState.open === b.dataset.k;
-    b.classList.toggle("open", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
   }
 }
@@ -593,22 +596,23 @@ function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
   // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
-  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId() });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || ""].join(":")).join("|");
+  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId(), mac: IS_MAC });
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog btn btn-ghost btn-icon btn-sm" : "");
     b.setAttribute("aria-label", it.label);
     // A session's hover text is its bare name (the "waiting" suffix is in the
     // accessible name and the dot's colour); the toggle and add keep their label.
     b.title = it.kind === "session" ? it.title : it.label;
     if (it.kind === "session") {
       const d = document.createElement("span");
-      // An expired sign-in needs you while the agent still works: the dot says so too.
-      d.className = activityClass(it.alert ? "waiting" : it.activity).cls;
+      // deskDot is the row's and the pane header's dot: an expired sign-in
+      // blocks on you while the agent still works, and a finished turn is neutral.
+      d.className = it.dot.cls;
       b.appendChild(d);
       // it.name, not it.label: label carries "— waiting for you" for the
       // button's accessible name, and a freshly-opened tab is titled from this
@@ -623,21 +627,40 @@ function renderRail48() {
   const mid = document.createElement("div");
   mid.className = "rin";
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
-  // Logo, the primary + under it, the session dots, then the quota bars and the
-  // ☰ at the foot (p2); renderRateLimits fills the bars. Re-parked on every
-  // rebuild because replaceChildren drops them.
-  rail.replaceChildren(railLogo(), mk(items[items.length - 1]), mid, railMeters(), mk(items[0]));
+  // Top to bottom (m1-2): the logo, the » that brings the sidebar back (level with the
+  // sidebar's «), the primary +, the session dots, then the quota bars at the foot;
+  // renderRateLimits fills the bars. Re-parked on every rebuild because
+  // replaceChildren drops them.
+  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), mid, railMeters());
   paintRailMeters();
 }
 
 // paintSideElevated: the sidebar footer's "N elevated", red while any session
-// has an AWS write window open. A lapsed window clears on the next poll.
+// has an AWS write window open. With none open it is not there at all: "0 elevated"
+// is a line that says nothing. A lapsed window clears on the next poll.
 function paintSideElevated() {
   const el = $("side-elevated");
   if (!el) return;
   const n = elevatedCount(lastSessions, Date.now());
-  el.textContent = n + " elevated";
+  el.hidden = n === 0;
+  el.textContent = n > 0 ? n + " elevated" : "";
   el.classList.toggle("hot", n > 0);
+}
+
+// paintSideHints: the sidebar top's palette and collapse buttons name their chord, from the
+// registry (so it is the Mac spelling on a Mac, and a rebound key cannot leave it stale). The
+// same text is the tooltip and the accessible name, as the frames draw it. The rail's » takes
+// its from railItems.
+function paintSideHints() {
+  const set = (id, label, shortcut) => {
+    const el = $(id);
+    if (!el) return;
+    const t = hintTitle(label, shortcut, IS_MAC);
+    el.title = t;
+    el.setAttribute("aria-label", t);
+  };
+  set("side-palette", "Command palette", "palette.open");
+  set("side-collapse", "Hide sidebar", "sidebar.toggle");
 }
 
 // paintSideCost: the footer's "$ today", the same sum the Analytics page shows
@@ -1300,7 +1323,8 @@ function hintShortcuts() {
 // On the phone layout each row stacks (keys, then the description indented): the
 // aligned desktop columns are wider than the dialog. Decided when it opens (#59).
 function showShortcuts() {
-  const rows = helpRows(IS_MAC);
+  // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
+  const rows = helpRows(IS_MAC).filter((r) => !(mobileActive(window.innerWidth) && r.label === scEntry("session.nextNeeds").label));
   const runtime = tierRuntimeLabel(boxRuntime);
   return askDialog({
     title: "Keyboard shortcuts",
@@ -1348,7 +1372,12 @@ function updateStatusLine() {
 //
 // Built with createElement and textContent, never innerHTML — these values
 // come from a file on disk written by an external hook.
-function renderRateLimitsInto(host, rl) {
+//
+// limitLine is the desktop sidebar's alone (#limits-side): a window at 100% or more
+// swaps its percentage for "limit reached · resets 25m" instead of a number that
+// reads like 78%. The header meters and the phone's band keep the percentage and the
+// countdown; the line is no alert, so no amber and no notification ride on it.
+function renderRateLimitsInto(host, rl, limitLine) {
   host.replaceChildren();
   const now = Math.floor(Date.now() / 1000);
   const windows = [["5h", rl && rl.five_hour], ["wk", rl && rl.seven_day]];
@@ -1371,12 +1400,16 @@ function renderRateLimitsInto(host, rl) {
     const fill = document.createElement("i");
     fill.style.width = m.width;
     bar.appendChild(fill);
+    const atLimit = !!limitLine && m.limit;
     const pc = document.createElement("span");
     pc.className = "pc";
     pc.textContent = m.unknown ? "–" : m.pct + "%";
+    pc.hidden = atLimit;
     const rs = document.createElement("span");
-    rs.className = "rs";
-    rs.textContent = m.reset;
+    rs.className = atLimit ? "rs limit" : "rs";
+    rs.textContent = atLimit ? m.limitText : m.reset;
+    // A narrow sidebar cuts the line short: the full text is the title too.
+    if (atLimit) rs.title = m.limitText;
     el.append(name, bar, pc, rs);
     if (note) {
       const ag = document.createElement("span");
@@ -1386,7 +1419,7 @@ function renderRateLimitsInto(host, rl) {
     }
     // The bar carries no text, so the meter needs an accessible name of its own.
     el.setAttribute("role", "img");
-    el.setAttribute("aria-label", (m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + m.reset) + (note ? ", " + note : ""));
+    el.setAttribute("aria-label", (m.unknown ? m.label + " window reset, usage unknown" : m.label + " usage " + m.pct + "%, " + (atLimit ? m.limitText : m.reset)) + (note ? ", " + note : ""));
     host.appendChild(el);
     count++;
   }
@@ -1415,7 +1448,7 @@ function renderRateLimits(rl) {
   for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
     if (!host) continue;
-    const count = renderRateLimitsInto(host, lims);
+    const count = renderRateLimitsInto(host, lims, id === "limits-side");
     if (count && name !== ACCT_DEFAULT) {
       const lab = document.createElement("span");
       lab.className = "acct-lab";
@@ -1485,6 +1518,16 @@ let replyFocused = false;
 // in flight. A flag that must survive a rebuild the poll can trigger has to
 // live somewhere the rebuild does not reach.
 let pendingSends = new Set();
+// replyFlash: the line a finished send leaves under the reply field, per session
+// ({ text, until } in ms): "Sent" for REPLY_SENT_MS, or why the send failed for
+// REPLY_ERROR_MS (long enough to read after looking away, short enough not to
+// outlive the state it described; the next try clears it). Module level for the
+// reason pendingSends is: the 3 s poll rebuilds the strip while a send just
+// landed, and a line kept in the closure would go with the old field.
+// buildReplyComposer's refresh() reads it, so a rebuilt field shows what is left.
+const REPLY_SENT_MS = 2000;
+const REPLY_ERROR_MS = 30000;
+let replyFlash = new Map();
 // cardExpanded: desktop needs-you cards currently showing their full message
 // instead of cardContent's one-line text. Page-local, keyed by session id —
 // unlike openPeekId this is NOT "one at a time": several waiting sessions can
@@ -1534,8 +1577,9 @@ function peekRowFor(li) {
 // the ONE place the 403/409/410/400 mapping lives — extracted out of
 // togglePeek's composer so the mobile reply sheet (openReplySheet) can share
 // it without a live `<li>` to close over. Returns true on success (204),
-// false otherwise; never throws.
-async function sendReplyFor(s, text, onFail) {
+// false otherwise; never throws. opts.quiet: no "Sent" toast, for the desktop
+// composer, which says it under its own field (F65); an error still toasts.
+async function sendReplyFor(s, text, onFail, opts) {
   try {
     const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
       method: "POST",
@@ -1543,7 +1587,7 @@ async function sendReplyFor(s, text, onFail) {
       body: JSON.stringify({ text: text }),
     });
     if (res.status === 204) {
-      showToast("Sent");
+      if (!(opts && opts.quiet)) showToast("Sent");
       return true;
     }
     // Distinct statuses carry distinct meanings — say which one happened.
@@ -1845,6 +1889,7 @@ function buildReplyComposer(s, opts) {
   // torn down and rebuilt by the 3s poll while a send is still outstanding.
   // refresh() writes the disabled flags from the gate every time it runs, so
   // anything set behind its back is undone by the next call.
+  let flashTimer = null;
   const refresh = () => {
     // The poll's live copy, not the one this composer was built with: it can
     // outlive several polls (an opt-in, reply_ready turning true).
@@ -1865,7 +1910,15 @@ function buildReplyComposer(s, opts) {
     input.disabled = closed;
     send.classList.toggle("off", closed);
     input.classList.toggle("off", closed);
-    why.textContent = st.reason;
+    // What the last send left (replyFlash) outranks the gate's reason until it
+    // runs out: a refresh that overwrote it would hide "Sent" at once, and the
+    // failure the operator most needs to read right after a refused send.
+    const flash = replyFlash.get(s.id);
+    const live = !!flash && flash.until > Date.now();
+    if (flash && !live) replyFlash.delete(s.id);
+    why.textContent = live ? flash.text : st.reason;
+    clearTimeout(flashTimer);
+    flashTimer = live ? setTimeout(refresh, flash.until - Date.now()) : null;
     if (o.onGate) o.onGate(closed);
     return st;
   };
@@ -1885,13 +1938,18 @@ function buildReplyComposer(s, opts) {
         : "That text contains control characters and was not sent.";
       return;
     }
+    replyFlash.delete(s.id);
     pendingSends.add(s.id);
     refresh();
     try {
-      const ok = await sendReplyFor(s, text, (msg) => { why.textContent = msg; });
+      // The button says "Sending…" if the request takes a moment (F65); the
+      // outcome is the line under the field (replyFlash), so no "Sent" toast.
+      const ok = await withPending(send, "Sending…", () =>
+        sendReplyFor(s, text, (msg) => { replyFlash.set(s.id, { text: msg, until: Date.now() + REPLY_ERROR_MS }); }, { quiet: true }));
       if (ok) {
         input.value = "";
         if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+        replyFlash.set(s.id, { text: "Sent", until: Date.now() + REPLY_SENT_MS });
       }
     } finally {
       // Runs whether the send succeeded, was rejected, or threw — including
@@ -2121,21 +2179,29 @@ function renderSession(s, opts) {
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
-  const act = sessionDot(s);
+  // The desktop row's dot is deskDot (a finished turn is neutral, F21-B); the
+  // phone's rows (never compact) keep sessionDot. takenOver: another tab of this
+  // browser took the session over, a fact only this page's terminal tab knows;
+  // the compact row's dot and sub-line say so in the shared connection words (F55).
+  const tab = terminalTabFor(s.id);
+  const takenOver = compact && !!tab && tab.status() === "taken over";
+  const act = compact ? deskDot(s, { takenOver }) : sessionDot(s);
   const adot = document.createElement("span");
   adot.className = act.cls;
   // Someone else is holding this session from another browser. It rides ON the
   // activity dot as an outline rather than as a second marker: the row has one
   // status light, and a second square beside it read as a second state.
-  const tab = terminalTabFor(s.id);
   const elsewhere = attachedElsewhere(s, !!tab && tab.status() === "connected");
   if (elsewhere) adot.classList.add("watching");
-  const label = elsewhere
+  // A taken-over row keeps the outline (another tab holds the session) but its
+  // tooltip is the connection word alone: "open in another tab" already says who.
+  const viewed = elsewhere && !takenOver;
+  const label = viewed
     ? (act.title ? act.title + "; someone is viewing this session elsewhere"
                  : "Someone is viewing this session elsewhere")
     : act.title;
   if (label) {
-    adot.title = elsewhere
+    adot.title = viewed
       ? "Someone is viewing this session in another browser or device. Opening it here disconnects them."
       : act.title;
     adot.setAttribute("role", "img");
@@ -2189,7 +2255,7 @@ function renderSession(s, opts) {
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
 
   if (compact) {
-    paintCompactRow(li, sname, grow, s);
+    paintCompactRow(li, sname, grow, s, { takenOver });
     return li;
   }
 
@@ -2276,8 +2342,9 @@ function renderSession(s, opts) {
 // paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
 // the ⋯ menu button and the sub-line. The chip carries the tier or the open
 // write window; the account and AWS binding are in the row's tooltip instead of
-// further chips, so a row never grows a second line of badges.
-function paintCompactRow(li, sname, grow, s) {
+// further chips, so a row never grows a second line of badges. conn is what only
+// the page knows about the connection ({ takenOver }), for the sub-line's words.
+function paintCompactRow(li, sname, grow, s, conn) {
   const nowMs = Date.now();
   const chip = rowChip(s, nowMs, boxRuntime);
   const facts = [s.id];
@@ -2307,20 +2374,29 @@ function paintCompactRow(li, sname, grow, s) {
   }
   const kb = document.createElement("button");
   kb.type = "button";
-  kb.className = "kbtn";
+  // The kit's ghost icon button, 24px (the frames' .row-menu); .kbtn keeps the reveal on hover.
+  kb.className = "kbtn btn btn-ghost btn-icon btn-sm";
   kb.textContent = "⋯"; // U+22EF, as on the mobile row
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
+  // The kit's disclosure state: expanded while this row's own menu is open (desktop.css shows it pressed).
+  kb.setAttribute("aria-expanded", rowMenuOpenFor(s.id) ? "true" : "false");
   kb.title = "Session actions";
   // No stopPropagation: see the mobile row's note on the document-click closers.
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
   // A nested shell has no sub-line: it has no summary and no ask to show.
-  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s);
+  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s, conn);
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
-    d.textContent = sub.text;
+    if (sub.mono) {
+      // An ask: "Asks to run" and the tool call after it, the call in mono (machine text, frame m1-1).
+      const m = document.createElement("span");
+      m.className = "mono";
+      m.textContent = sub.mono;
+      d.append(sub.lead, m);
+    } else d.textContent = sub.text;
     // The name button is the keyboard path; the sub-line is the same action for
     // a pointer (spec 7: it replaces the old summary-to-peek click). An SSO
     // sign-in line opens the session's Access view instead, where sign-in lives.
@@ -2334,9 +2410,15 @@ function paintCompactRow(li, sname, grow, s) {
 function renderDesktopEntry(it) {
   if (it.header) {
     const h = document.createElement("li");
-    h.className = it.key === "needs-you" ? "grp hot" : "grp";
+    // The kit's group label (uppercase, muted) carries the type; only Needs you
+    // is amber. "Done · your turn" is as neutral as Running and Idle. .grp keeps
+    // the sidebar's own spacing.
+    h.className = "grp grp-label" + (it.key === "needs-you" ? " is-needs" : "");
     h.dataset.sid = it.id;
-    h.textContent = it.label + " \u00b7 " + it.count;
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = String(it.count);
+    h.append(it.label + " \u00b7 ", n);
     return h;
   }
   return renderSession(it.s, { compact: true });
@@ -2382,7 +2464,7 @@ function buildCardComposer(s) {
 function stripOpenButton(s) {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = "btn";
+  b.className = "btn btn-sm";
   b.textContent = "Open terminal";
   b.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
   return b;
@@ -2434,16 +2516,20 @@ function renderNeedsBody(s, opts) {
   const toggleLabel = expanded ? "Hide the full message" : "Show the full message";
   txt.title = toggleLabel;
   txt.setAttribute("aria-label", toggleLabel);
-  if (expanded) {
-    const cached = cardPeekCache.get(s.id);
+  // An ask in the strip keeps the command on line 1 whether or not it is
+  // expanded (F51): expanding wraps it and adds below it, it never swaps the line
+  // just read for the agent's message. Any other card shows the full message in
+  // place of its one-line summary.
+  const askStrip = inStrip && c.ask;
+  const bash = askStrip ? bashCommand(s.ask) : null;
+  const cached = expanded ? cardPeekCache.get(s.id) : undefined;
+  if (expanded && !askStrip) {
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
-    // A pending tool call has no message to fetch, so the peek says "No message
-    // yet." The strip's job there is the whole command, wrapped, not that note.
-    if (inStrip && c.ask && cached && cached.muted) {
-      txt.textContent = c.text;
-      txt.classList.remove("muted");
-    }
+  } else if (bash !== null) {
+    // "Asks to run" is the label's, so a Bash call is its command alone (frame m1-1); every other tool
+    // keeps Tool(args). The expanded strip keeps this line too (F51), and the full command is below it.
+    txt.textContent = bash;
   } else {
     txt.textContent = c.text;
   }
@@ -2452,6 +2538,16 @@ function renderNeedsBody(s, opts) {
   txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
   syncMaskHint(txt, txt.textContent);
+  // The message the agent said before the call, on its own line under the
+  // command. A pending tool call often has none ("No message yet.", muted): then
+  // there is no line, and nothing shows while it loads.
+  if (askStrip && cached && !cached.muted && cached.text) {
+    const msg = document.createElement("div");
+    msg.className = "askmsg";
+    msg.textContent = cached.text;
+    body.appendChild(msg);
+    syncMaskHint(msg, cached.text);
+  }
 
   // The full command, once expanded — what Yes/No will answer. textContent
   // only; wrapped, monospace (spec §2.5).
@@ -2472,8 +2568,11 @@ function renderNeedsBody(s, opts) {
 
   const acts = document.createElement("div");
   acts.className = "nacts";
+  // The strip's action row (.nacts) is all the kit's 24px .btn-sm (Yes also the amber .btn-yes), like Open
+  // terminal. The reply composer's send (buildReplyComposer) keeps its own height.
+  const sm = inStrip ? " btn-sm" : "";
   if (c.enableReplies) {
-    acts.appendChild(buildEnableRepliesButton(s.id, () => {
+    const en = buildEnableRepliesButton(s.id, () => {
       // replyable is in the signature, so the card re-rendered with its reply
       // field; land the operator in it rather than on <body>.
       // Desktop has no card: the field is in the ask strip over the pane.
@@ -2481,7 +2580,9 @@ function renderNeedsBody(s, opts) {
       const strip = mobileActive(window.innerWidth) ? null : Array.from(document.querySelectorAll(".needstrip")).find((n) => n.dataset.sid === s.id);
       const fld = (li && li.querySelector(".nbody .fld")) || (strip && strip.querySelector(".fld"));
       if (fld) fld.focus();
-    }));
+    });
+    if (inStrip) en.classList.add("btn-sm");
+    acts.appendChild(en);
   }
   if (c.reply) {
     // The card's counterpart to the sidebar peek panel's "Allow replies from
@@ -2490,7 +2591,7 @@ function renderNeedsBody(s, opts) {
     // the surface an operator actually answers from.
     const dis = document.createElement("button");
     dis.type = "button";
-    dis.className = "btn";
+    dis.className = "btn" + sm;
     dis.textContent = "Disallow replies";
     dis.title = "Revoke this session's sidebar-reply permission";
     dis.onclick = async () => {
@@ -2512,7 +2613,7 @@ function renderNeedsBody(s, opts) {
     const pair = [["yes", inStrip ? "Yes" : "1 Yes"], ["no", "No"]].map(([choice, label]) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "btn";
+      b.className = "btn" + sm + (inStrip && choice === "yes" ? " btn-yes" : "");
       b.textContent = label;
       b.disabled = !ans.enabled || pendingAnswers.has(s.id);
       b.classList.toggle("off", b.disabled);
@@ -2539,10 +2640,13 @@ function renderNeedsBody(s, opts) {
     acts.appendChild(open);
   }
   body.appendChild(acts);
-  if (ans.note) {
+  // The one line that says why an ask has no live Yes/No (answerState): replies
+  // off (F50), not expanded yet (F51), or a prompt too long to show here.
+  const askWhy = ans.note || ans.reason;
+  if (askWhy) {
     const why = document.createElement("span");
     why.className = "peek-why";
-    why.textContent = ans.note;
+    why.textContent = askWhy;
     body.appendChild(why);
   }
   if (composer) body.appendChild(composer.why);
@@ -2729,6 +2833,70 @@ function ssoLocalSig(id) {
 
 const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.";
 
+// ssoDone: id -> the session's activity at the last look, for each session whose
+// AWS sign-in THIS tab finished (F63). The pane keeps SSO_DONE_TOAST as a line
+// with a ✕ (tabs.js buildSSODoneLine) after the toast is gone, because the retry
+// hint is the part an operator needs a minute later. The broker clears the need
+// at sign-in, so the sign-in card is gone before the line matters: this is its own
+// state, not the card's. pruneSSODone decides each poll whether it stays.
+const ssoDone = new Map();
+
+// ssoDoneHeard: the ids whose kept line has been drawn as a live region already. The strip
+// is rebuilt whenever something else on it moves, and a rebuilt live region reads out again:
+// the line is announced the first time it appears for a sign-in, and drawn silently after.
+// It follows ssoDone: a line that goes away (or a new sign-in) is announced fresh next time.
+const ssoDoneHeard = new Set();
+
+// ssoDoneFirstShow: true the first time the line for `id` is drawn since its sign-in
+// finished (buildSSODoneLine adds role="status" then and only then).
+function ssoDoneFirstShow(id) {
+  if (ssoDoneHeard.has(id)) return false;
+  ssoDoneHeard.add(id);
+  return true;
+}
+
+// markSSODone: this tab's sign-in for `id` just finished (next to the toast).
+function markSSODone(id) {
+  const s = lastSessions.find((x) => x.id === id);
+  ssoDone.set(id, s ? s.activity : "");
+  ssoDoneHeard.delete(id);
+  // The strip is drawn from the poll; do not wait for the next one.
+  if (!mobileActive(window.innerWidth)) cells.forEach((c) => c.repaintReply());
+}
+
+// ssoDoneShown: whether the pane draws the line for session `s`: kept, and not
+// while the record still shows an expired sign-in (that strip is the form).
+function ssoDoneShown(s) {
+  return !!s && ssoDone.has(s.id) && s.need !== "sso" && connSSOSources(s).length === 0;
+}
+
+// pruneSSODone: one look per poll. A line stays while the session has not gone
+// from not working to working (ssoDoneKeep); a session that left the list or
+// ended drops it. Runs in refreshSessions right after pruneSSO.
+function pruneSSODone() {
+  const byId = new Map(lastSessions.map((s) => [s.id, s]));
+  for (const [id, prev] of Array.from(ssoDone)) {
+    const s = byId.get(id);
+    if (s && ssoDoneKeep(prev, s.activity, !!s.exited)) ssoDone.set(id, s.activity);
+    else { ssoDone.delete(id); ssoDoneHeard.delete(id); }
+  }
+}
+
+// dismissSSODone: the ✕.
+function dismissSSODone(id) {
+  ssoDone.delete(id);
+  ssoDoneHeard.delete(id);
+  cells.forEach((c) => c.repaintReply());
+}
+
+// pruneReplyFlash: the line a send left under a reply field (replyFlash) goes with
+// its session. Both lines time themselves out, but only when a field reads them,
+// so a session that left the list must not keep one.
+function pruneReplyFlash() {
+  const ids = new Set(lastSessions.map((s) => s.id));
+  for (const id of Array.from(replyFlash.keys())) if (!ids.has(id)) replyFlash.delete(id);
+}
+
 // ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
 function ssoAdopt(id, body) {
   ssoStatus.set(id, body || {});
@@ -2776,8 +2944,8 @@ function stopSSOPoll(id) {
 
 // ssoPollTick: one read of the flow. `last` is pruneSSO's final look after the
 // need cleared: a finished sign-in clears the need before the poller sees "ok",
-// so this is the only place the success toast can still come from. It never
-// writes the maps (the card is gone).
+// so this is the only place the success toast (and the pane's kept line,
+// markSSODone) can still come from. It never writes the card's maps (the card is gone).
 async function ssoPollTick(id, last) {
   if (ssoPolling.has(id)) return;
   ssoPolling.add(id);
@@ -2794,7 +2962,7 @@ async function ssoPollTick(id, last) {
   const login = ssoLoginOf(body.sso, ssoTarget(id));
   const state = login ? login.state : "";
   if (last) {
-    if (state === "ok") showToast(SSO_DONE_TOAST);
+    if (state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
     return;
   }
   if (!ssoPollers.has(id)) return; // stopped while the request was in flight
@@ -2802,7 +2970,7 @@ async function ssoPollTick(id, last) {
   ssoAdopt(id, body);
   if (state !== "waiting") {
     stopSSOPoll(id);
-    if (state === "ok") showToast(SSO_DONE_TOAST);
+    if (state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
   }
   if (ssoLocalSig(id) !== before || state !== "waiting") refreshSessions();
 }
@@ -2848,7 +3016,7 @@ async function ssoSignIn(s) {
   if (status === 200 && body && body.login) {
     ssoFlows.set(id, body.login);
     if (body.login.state === "waiting") startSSOPoll(id);
-    else if (body.login.state === "ok") showToast(SSO_DONE_TOAST);
+    else if (body.login.state === "ok") { showToast(SSO_DONE_TOAST); markSSODone(id); }
   } else if (status === 502) {
     ssoFlows.set(id, { fallback: (body && body.command) || ssoCommand(id) });
   } else {
@@ -2933,7 +3101,10 @@ function renderSSOBody(s, opts) {
   acts.className = "nacts";
   const signIn = document.createElement("button");
   signIn.type = "button";
-  signIn.className = "btn pri";
+  // In the strip's action row (.nacts) every button is the kit's 24px .btn-sm, Open terminal's size (renderNeedsBody
+  // does the same). The reply composer's send and the locked-store form's Unlock keep their own height.
+  const sm = inStrip ? " btn-sm" : "";
+  signIn.className = "btn pri" + sm;
   signIn.textContent = waiting ? "Waiting for sign-in…" : l && l.state === "failed" ? "Try again" : "Sign in";
   signIn.disabled = waiting || ssoStarting.has(s.id);
   signIn.classList.toggle("off", signIn.disabled);
@@ -2942,7 +3113,7 @@ function renderSSOBody(s, opts) {
 
   const copy = document.createElement("button");
   copy.type = "button";
-  copy.className = "btn";
+  copy.className = "btn" + sm;
   copy.textContent = "Copy host command";
   copy.disabled = !m.command;
   copy.classList.toggle("off", copy.disabled);
@@ -3104,6 +3275,9 @@ function rowLocal(s) {
   return {
     killing: killing.has(s.id),
     heldHere: !!tab && tab.status() === "connected",
+    // Parked on "taken over": the row reads "open in another tab" (F55). Not
+    // derivable from the session record, so it must move the signature.
+    takenOver: !!tab && tab.status() === "taken over",
     // No context %: the compact row does not draw it (the pane header does), and
     // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
@@ -3263,6 +3437,8 @@ async function refreshSessions() {
     }
   }
   pruneSSO();
+  pruneSSODone();
+  pruneReplyFlash();
   signalAttention();
   notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis
@@ -5473,8 +5649,28 @@ $("spawn").addEventListener("submit", async (ev) => {
 // open menu changes nothing.
 let sessionMenuSid = null;
 let sessionMenuAnchor = null;
+// The session whose sidebar row's ⋯ opened the open menu (null when a pane header's ⋯, the tab
+// switcher or nothing did): that ⋯ reads expanded, whichever node the row is by then.
+let sessionMenuRowSid = null;
 
 function sessionMenuId() { return sessionMenuSid; }
+
+// rowMenuOpenFor: whether the menu open right now hangs from this session's sidebar row.
+function rowMenuOpenFor(sid) {
+  const menu = $("session-menu");
+  return !!sid && sessionMenuRowSid === sid && !!menu && menu.classList.contains("open");
+}
+
+// syncRowMenuExpanded: the row ⋯ whose menu is open says aria-expanded="true" (desktop.css keeps it
+// shown and draws it pressed, m5-1), every other row's says "false". Found by session id, not by the
+// node the menu was opened from: the list rebuilds a row under an open menu (paintCompactRow sets
+// the same state on the new node).
+function syncRowMenuExpanded() {
+  for (const kb of document.querySelectorAll("#sessions .drow .kbtn[aria-expanded]")) {
+    const li = kb.closest(".drow");
+    kb.setAttribute("aria-expanded", li && rowMenuOpenFor(li.dataset.sid) ? "true" : "false");
+  }
+}
 
 function closeSessionMenu(restoreFocus) {
   const menu = $("session-menu");
@@ -5482,6 +5678,8 @@ function closeSessionMenu(restoreFocus) {
   const a = sessionMenuAnchor;
   sessionMenuSid = null;
   sessionMenuAnchor = null;
+  sessionMenuRowSid = null;
+  syncRowMenuExpanded();
   // Focus goes back where it came from, but only when the trigger is still on
   // the page: a poll may have replaced the row while the menu was open.
   if (restoreFocus && a && a.isConnected) a.focus();
@@ -5876,34 +6074,137 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-// `extra` (optional) are pane-level rows ({label, run}) shown above the session's
-// own, for a narrow pane header that has no room for their buttons; `s` may then
-// be null (a pane of files has no session).
+// menuIconSvg: the row icon for a menuIcon kind, as inline SVG in the product's icon style
+// (tabs.js tabIcon / dockIcon: 14x14, no fill, currentColor, 1.2 stroke, round caps and joins),
+// so the menu does not depend on any font having a glyph. Shapes the product already draws are
+// reused: Files is the pane header's folder, Copy and Duplicate are the dock's two windows (the
+// latter with a plus), End session is the dock's cross. The rest are drawn here. null for "".
+function menuIconSvg(kind) {
+  if (!kind) return null;
+  const NS = "http://www.w3.org/2000/svg";
+  const add = (svg, tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    svg.append(n);
+  };
+  let svg;
+  if (kind === "files") {
+    svg = tabIcon("files");
+  } else if (kind === "copy" || kind === "duplicate") {
+    svg = dockIcon("own");
+    if (kind === "duplicate") add(svg, "path", { d: "M5.5 7v3M4 8.5h3" });
+  } else if (kind === "end") {
+    svg = dockIcon("hide");
+  } else {
+    svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 14 14");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.2");
+    if (kind === "pencil") {
+      add(svg, "path", { d: "M2 12l.7-3L9.7 2a1.2 1.2 0 0 1 1.7 0l.6.6a1.2 1.2 0 0 1 0 1.7L5 11.3z" });
+      add(svg, "path", { d: "M8.4 3.3l2.3 2.3" });
+    } else if (kind === "pie") {
+      add(svg, "circle", { cx: "7", cy: "7", r: "5.5" });
+      add(svg, "path", { d: "M7 7V1.5A5.5 5.5 0 0 1 12.5 7z", fill: "currentColor", stroke: "none" });
+    } else if (kind === "split") {
+      add(svg, "rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" });
+      add(svg, "path", { d: "M7 2.5v9" });
+    } else if (kind === "pause") {
+      add(svg, "rect", { x: "3.5", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
+      add(svg, "rect", { x: "8", y: "2.5", width: "2.5", height: "9", rx: ".8", fill: "currentColor", stroke: "none" });
+    } else if (kind === "tray") {
+      add(svg, "path", { d: "M7 2v6.5M4.2 6l2.8 2.8L9.8 6" });
+      add(svg, "path", { d: "M2 9.5v2c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-2" });
+    }
+  }
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("data-icon", kind);
+  return svg;
+}
+
+// One row of the desktop (kit) session menu: .menu-item > .menu-icon + .menu-text, as frame
+// M5.1 draws it. `icon` is a menuIcon kind; the slot is decoration (aria-hidden) and, with no
+// icon, stays an empty 16px box so the text of every row lines up.
+function kitMenuButton(label, icon, danger, run) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = danger ? "menu-item is-danger" : "menu-item";
+  b.setAttribute("role", "menuitem");
+  const ic = document.createElement("span");
+  ic.className = "menu-icon";
+  ic.setAttribute("aria-hidden", "true");
+  const svg = menuIconSvg(icon);
+  if (svg) ic.append(svg);
+  const tx = document.createElement("span");
+  tx.className = "menu-text";
+  tx.textContent = label;
+  b.append(ic, tx);
+  b.onclick = run;
+  return b;
+}
+
+// kitMenuNodes: the kit menu's children. `own` are the pane's own rows ({label, run}), a group
+// of their own when there are any; `items` are menuItems' for the session. A .menu-sep goes
+// between groups and nowhere else (menuGroups drops the empty ones).
+function kitMenuNodes(own, items, s) {
+  const groups = [];
+  if (own.length) groups.push(own.map((it) => kitMenuButton(it.label, "", false, () => { closeSessionMenu(false); it.run(); })));
+  for (const g of menuGroups(items)) {
+    // Close first, then act: an action that opens a dialog would otherwise leave the menu
+    // floating over it.
+    groups.push(g.map((it) => kitMenuButton(it.label, menuIcon(it.id), it.danger, () => { closeSessionMenu(false); runSessionAction(it.id, s); })));
+  }
+  const nodes = [];
+  groups.forEach((g, i) => {
+    if (i > 0) {
+      const sep = document.createElement("div");
+      sep.className = "menu-sep";
+      sep.setAttribute("role", "separator");
+      nodes.push(sep);
+    }
+    nodes.push(...g);
+  });
+  return nodes;
+}
+
+// `extra` (optional) are pane-level rows ({label, run}) shown above the session's own, for a
+// narrow pane header that has no room for their buttons; `s` may then be null (a pane of files
+// has no session). Desktop draws the kit menu (F12); the phone keeps the flat .mi list.
 function openSessionMenu(anchor, s, extra) {
   const menu = $("session-menu");
   if (!menu) return;
-  const own = (extra || []).map((it) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "mi";
-    b.setAttribute("role", "menuitem");
-    b.textContent = it.label;
-    b.onclick = () => { closeSessionMenu(false); it.run(); };
-    return b;
-  });
+  const desktop = !mobileActive(window.innerWidth);
   // Desktop only: a shell listed under its parent gets the short shell menu.
-  const nestedShell = !!s && !mobileActive(window.innerWidth) && isNestedShell(s, lastSessions);
-  const nodes = own.concat(s ? menuItems(s, { nested: nestedShell }).map((it) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = it.danger ? "mi dgr" : "mi";
-    b.setAttribute("role", "menuitem");
-    b.textContent = it.label;
-    // Close first, then act: an action that opens a dialog would otherwise
-    // leave the menu floating over it.
-    b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
-    return b;
-  }) : []);
+  const nestedShell = !!s && desktop && isNestedShell(s, lastSessions);
+  const items = s ? menuItems(s, { nested: nestedShell }) : [];
+  let nodes;
+  if (desktop) {
+    nodes = kitMenuNodes(extra || [], items, s);
+  } else {
+    const own = (extra || []).map((it) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "mi";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      b.onclick = () => { closeSessionMenu(false); it.run(); };
+      return b;
+    });
+    nodes = own.concat(items.map((it) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = it.danger ? "mi dgr" : "mi";
+      b.setAttribute("role", "menuitem");
+      b.textContent = it.label;
+      // Close first, then act: an action that opens a dialog would otherwise
+      // leave the menu floating over it.
+      b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
+      return b;
+    }));
+  }
   menu.replaceChildren(...nodes);
   sessionMenuSid = s ? s.id : null;
   placeSessionMenu(menu, anchor);
@@ -5914,22 +6215,24 @@ function openSessionMenu(anchor, s, extra) {
 // header's tab switcher, which reuses the same element and its closing rules.
 function placeSessionMenu(menu, anchor) {
   sessionMenuAnchor = anchor;
+  // A sidebar row's ⋯ hangs the menu from the whole row (m5-1: below it, the menu's right edge on
+  // the row's), not from the 24px button, so the menu never covers the row's own sub-line.
+  const row = anchor.closest ? anchor.closest("#sessions .drow") : null;
+  sessionMenuRowSid = row ? row.dataset.sid || null : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
-  const r = anchor.getBoundingClientRect();
-  const w = menu.offsetWidth;
-  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  syncRowMenuExpanded();
   // Rows sit anywhere down the rail, so a menu opened near the bottom flips
   // above its row rather than clipping. The height has to be measured AFTER the
   // items are in, because the item list varies per session.
-  const h = menu.offsetHeight;
-  const below = r.bottom + 4;
-  menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
+  const pos = menuPlace((row || anchor).getBoundingClientRect(), menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight, row ? ROW_MENU_GAP : MENU_GAP);
+  menu.style.left = pos.left + "px";
+  menu.style.top = pos.top + "px";
   // Focus lands on the first item. The precedent popover in this app leaves
   // focus on the trigger, which puts its own items somewhere unpredictable in
   // the tab order — acceptable for a menu of file actions, not for one whose
   // last item ends a running agent.
-  const first = menu.querySelector(".mi");
+  const first = menu.querySelector(".menu-item, .mi");
   if (first) first.focus();
 }
 
@@ -5997,17 +6300,14 @@ document.addEventListener("keydown", (e) => {
   const menu = $("session-menu");
   if (!menu || !menu.classList.contains("open")) return;
   if (e.key === "Escape") { e.preventDefault(); closeSessionMenu(true); return; }
-  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   // Arrow navigation, which the app's other popover does not have. Same reason
   // as the focus move above: reaching a destructive item must not depend on
-  // tabbing blindly through the document.
-  const items = Array.from(menu.querySelectorAll(".mi"));
-  if (items.length === 0) return;
+  // tabbing blindly through the document. Rows only: a kit menu's .menu-sep
+  // separators are not items, so the keys step over them.
+  const items = Array.from(menu.querySelectorAll(".menu-item, .mi"));
+  const next = menuNavIndex(items.length, items.indexOf(document.activeElement), e.key);
+  if (next === null) return;
   e.preventDefault();
-  const at = items.indexOf(document.activeElement);
-  const next = e.key === "ArrowDown"
-    ? (at < 0 ? 0 : (at + 1) % items.length)
-    : (at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
   items[next].focus();
 });
 
@@ -6235,6 +6535,7 @@ $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
 $("side-audit").addEventListener("click", () => openAudit());
 $("side-palette").addEventListener("click", openPalette);
+paintSideHints();
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
 {
@@ -6427,6 +6728,10 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     else paintSideCost(); // the footer was skipped while narrow
     paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
+    // F05: the terminals were built at the old width; a desktop's graphite and a phone's black are
+    // set on the live xterm objects (pane tabs and docked shells), nothing is rebuilt. Before
+    // renderGrid, which may build terminals of its own: this call has dropped the cache, so they read the tokens fresh.
+    if (typeof applyTermThemeAll === "function") applyTermThemeAll();
     if (typeof renderGrid === "function") renderGrid();
   });
 }
@@ -6498,6 +6803,26 @@ bindShortcut("session.jump", (e, ctx) => {
   // true, so the digit is swallowed either way and never falls through to the agent.
   if (s) openTerminal(s.id, s.name);
   return true;
+});
+
+// Next that needs you (F69): Mod+Shift+J and the palette's command. Goes to the
+// next session blocked on you, then those whose turn is done, in the sidebar's
+// order (nextNeedsYou, deskshell.js), and wraps. "Goes to" is exactly what
+// Mod+digit does: openTerminal focuses the session's pane or opens it. With
+// nothing waiting it does nothing, but the key is still consumed (true), as an
+// out-of-range digit is: it must not fall through to the browser's own binding.
+function goNextNeedsYou() {
+  const s = nextNeedsYou(lastSessions, selectedSessionId());
+  if (s) openTerminal(s.id, s.name);
+  return true;
+}
+
+// Desktop only: the phone has no sidebar groups, so the key is not ours there.
+// A held key repeats: swallow it, or it would spin through every waiting session.
+bindShortcut("session.nextNeeds", (e, ctx) => {
+  if (ctx.mobile) return false;
+  if (e.repeat) return true;
+  return goNextNeedsYou();
 });
 
 // Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused

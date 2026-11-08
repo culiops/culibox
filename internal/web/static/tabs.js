@@ -52,8 +52,9 @@ let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it
 // is visible on screen, so the message only has to say why.
 const PANE_LIMIT_MSG = "Pane limit reached.";
 let maximized = null;
-// Below this width a pane's desktop header keeps dot + name + one chip (D9).
-const NARROW_PANE_PX = 560;
+// Below this width a pane's desktop header keeps dot + name + one chip (D9): the
+// meta `haiku-4.5 · ctx 35% · $3.12` (F14) needs the room the tabs and Files take.
+const NARROW_PANE_PX = 640;
 
 // `restoring` is what protects the stored snapshot during boot: every layout call
 // boot makes (applyCap(4) and friends) would otherwise write an empty grid over it
@@ -156,6 +157,14 @@ class Cell {
       });
       this._ro.observe(this.el);
     }
+    // The header's meta wraps in whole units (desktop.css); the ones that no longer fit are
+    // clipped, and fitPaneMeta takes them out of the tab order and the accessibility tree. This
+    // observes the current meta (renderHeader re-points it at every rebuild), so a width change
+    // that moves a unit re-runs the fit. dispose() disconnects it.
+    this._metaRo = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+      const meta = this.bar.querySelector(".ph-meta");
+      if (meta) fitPaneMeta(meta);
+    }) : null;
     // Explicit so the sentinel is deliberate, not an implicit `undefined`
     // that syncNeeds' first call happens to treat correctly.
     this._needsKey = "";
@@ -883,8 +892,8 @@ class Cell {
 
   // renderHeader builds the desktop pane header (spec 5.3): one line, fixed
   // slot order, empty slots collapse. Left: dot, name (a switcher when the pane
-  // holds several tabs), chips, model, context %. Right: Terminal · Files ·
-  // Activity · Access, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
+  // holds several tabs), chips, the meta `model · ctx N% · $cost`. Right: Terminal ·
+  // Activity · Access, the Files toggle, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
   // what shows; this only paints it. Rebuilt on every renderBar like the strip
   // it replaces, so no listener outlives its node.
   renderHeader() {
@@ -910,9 +919,9 @@ class Cell {
 
     const main = el("div");
     main.className = "ph-main";
-    // The terminal's own pushed activity, like the old tab dot; a viewer has none.
-    const a = t && t.kind === "terminal" && typeof t.activity === "function"
-      ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : m.dot;
+    // The session record's dot (deskDot) when the pane has one; the terminal's own
+    // pushed activity only without a record; a viewer has none (headerDot).
+    const a = headerDot(m, t);
     if (a) {
       const dot = el("span");
       dot.className = a.cls + " ph-dot";
@@ -964,25 +973,51 @@ class Cell {
       const ab = acctBadgeEl(s);
       if (ab) main.append(ab);
     }
+    // The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): one kit .ph-meta line of up to three
+    // items, the model (raw id in its title), the ctx button and the cost. The wrap places
+    // units in this order and drops the LAST first, so the order IS the priority: the cost
+    // gives way first, then ctx, then the model (F14: the model label is the point). Each
+    // unit after the first LEADS with its " · " (decoration, aria-hidden), so whatever is
+    // left never ends on a lone separator: see .ph-meta in desktop.css.
+    const units = [];
     if (m.model) {
       const mo = el("span", m.model);
-      mo.className = "ph-model mono";
-      main.append(mo);
+      mo.className = "ph-model";
+      if (m.modelTitle) mo.title = m.modelTitle;
+      units.push(["mi-model", mo]);
     }
     if (m.ctx && sid) {
       // R2: the same action as the old tab's usage chip, Context by tool.
       const ctx = el("button", m.ctx);
       ctx.className = "ph-ctx";
-      const ut = typeof usageTitle === "function" ? usageTitle(t.usage()) : "";
-      ctx.title = (ut ? ut + " \u2014 " : "") + "click for context by tool";
+      const u = t.usage();
+      const ut = typeof usageTitle === "function" ? usageTitle(u) : "";
+      ctx.title = "Context used " + u.pct + "%" + (ut ? " \u00B7 " + ut : "") + " \u2014 click for context by tool";
       ctx.onclick = (e) => { e.stopPropagation(); openPaneView(sid, "activity"); };
-      main.append(ctx);
+      units.push(["mi-ctx", ctx]);
     }
     if (m.cost) {
       const cost = el("span", m.cost);
-      cost.className = "ph-cost mono";
+      cost.className = "ph-cost";
       cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
-      main.append(cost);
+      units.push(["mi-cost", cost]);
+    }
+    if (units.length) {
+      const meta = el("span");
+      meta.className = "ph-meta";
+      units.forEach(([kind, node], i) => {
+        const unit = el("span");
+        unit.className = "ph-mi " + kind;
+        if (i > 0) {
+          const sp = el("span", " \u00B7 ");
+          sp.className = "ph-msep";
+          sp.setAttribute("aria-hidden", "true");
+          unit.append(sp);
+        }
+        unit.append(node);
+        meta.append(unit);
+      });
+      main.append(meta);
     }
 
     const side = el("div");
@@ -992,14 +1027,13 @@ class Cell {
     tabs.className = paneTabsClass(defs);
     tabs.setAttribute("role", "group");
     tabs.setAttribute("aria-label", "Pane views");
-    // Terminal, Activity and Access are the pane's views (.on, one of the
-    // three); Files is the drawer's toggle (.open, paintDrawerTabs). Each tab is
-    // ONE button holding its icon and its label: a narrow pane shows the icon
-    // (CSS, desktop.css), so the tab keeps its name either way (#13).
-    const tabButton = (def) => {
-      const b = el("button");
-      b.title = def.label;
-      b.setAttribute("aria-label", def.label);
+    // Terminal, Activity and Access are the pane's views (.on, one of the three).
+    // Files is not a view: it is the drawer's toggle, a button after the tabs
+    // (below), pressed while the drawer is open (paintDrawerTabs), so exactly one
+    // tab looks selected (G6). A pane of files has no views: Files is its one tab.
+    // Each tab is ONE button holding its icon and its label: a narrow pane shows
+    // the icon (CSS, desktop.css), so the tab keeps its name either way (#13).
+    const withIcon = (b, def) => {
       const ico = el("span");
       ico.className = "ph-ico";
       ico.append(tabIcon(def.icon));
@@ -1008,7 +1042,16 @@ class Cell {
       b.append(ico, lbl);
       return b;
     };
-    // A pane of files has no session to describe: Files alone (paneTabs).
+    const tabButton = (def) => {
+      const b = el("button");
+      b.title = def.label;
+      b.setAttribute("aria-label", def.label);
+      return withIcon(b, def);
+    };
+    const filesPress = (b) => {
+      b.dataset.k = "files";
+      b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+    };
     for (const def of defs) {
       const b = tabButton(def);
       if (def.id === "terminal") {
@@ -1022,8 +1065,7 @@ class Cell {
         };
       } else if (def.id === "files") {
         b.className = "ph-tab";
-        b.dataset.k = "files";
-        b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+        filesPress(b);
       } else {
         b.className = "ph-tab" + (this.view === def.id ? " on" : "");
         b.dataset.v = def.id;
@@ -1041,8 +1083,20 @@ class Cell {
     const sep = el("span");
     sep.className = "ph-sep";
     side.append(tabs, sep);
+    if (term) {
+      // A ghost button, not a tab: its pressed look is the kit's raise + 1px ring.
+      const fdef = paneFilesToggle();
+      const files = el("button");
+      files.className = "btn btn-ghost btn-sm ph-files";
+      files.title = "Files drawer (" + shortcutHint("files.toggle", IS_MAC) + ")";
+      files.setAttribute("aria-label", fdef.label);
+      files.setAttribute("aria-pressed", "false");
+      withIcon(files, fdef);
+      filesPress(files);
+      side.append(files);
+    }
     const sh = el("button", "+ Shell");
-    sh.className = "ph-shell";
+    sh.className = "btn btn-ghost btn-sm ph-shell";
     sh.title = "New shell for this session, same directory and tier, docked below by default (" + shortcutHint("shell.below", IS_MAC) + ")";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     sh.onclick = (e) => {
@@ -1091,6 +1145,14 @@ class Cell {
     side.append(ics);
 
     this.bar.replaceChildren(main, side);
+    // The meta is new: observe it instead of the one just replaced, then fit it now (the bar is
+    // laid out; a pane with no layout gets nothing hidden, and the observer fires when it has).
+    const metaEl = this.bar.querySelector(".ph-meta");
+    if (this._metaRo) {
+      this._metaRo.disconnect();
+      if (metaEl) this._metaRo.observe(metaEl);
+    }
+    if (metaEl) fitPaneMeta(metaEl);
     paintDrawerTabs(this);
   }
 
@@ -1132,13 +1194,22 @@ class Cell {
     const term = cellTerminal(this);
     const s = term ? (lastSessions || []).find((x) => x.id === term.id) || null : null;
     const model = s ? needStripModel(s) : null;
+    // The sign-in line this tab's finished sign-in keeps (F63): under a need's
+    // strip, or alone as a neutral one when nothing needs you. It frames nothing
+    // (`needs` below is the need's amber frame only).
+    const done = !!s && ssoDoneShown(s);
     this.el.classList.toggle("needs", !!model);
     // The page-local inputs the body reads beyond the session record (the same
     // list rowLocal feeds rowSig), so a flow moving on or the full text
-    // arriving repaints it. The active tab kind is deliberately absent.
-    const local = model ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
-      pendingSends.has(s.id), ssoLocalSig(s.id)].join("|") : "";
-    const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local : "";
+    // arriving repaints it. The active tab kind is deliberately absent. The
+    // replies switch is here as three states: stripKey reads it as on/not-on, but
+    // "not heard yet" (undefined) and "answered off" (false) draw differently (the
+    // replies-off line, F50), so a strip built before /api/meta answers must be
+    // drawn again when it says off.
+    const local = model || done ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
+      pendingSends.has(s.id), ssoLocalSig(s.id), done, globalThis.repliesEnabled === false].join("|") : "";
+    const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local
+      : done ? "n:" + s.id + "|" + local : "";
     if (key === this._needsKey) return;
     // A half-typed reply outranks a repaint: while the reply FIELD has focus, a
     // poll that moved only something incidental (summary, AWS connections, SSO
@@ -1151,10 +1222,15 @@ class Cell {
     const holdSig = model ? stripHoldKey(s, repOn) : "";
     const ae = document.activeElement;
     if (this._strip && model && holdSig === this._holdSig && ae && ae.matches && ae.matches(".fld") && this._strip.contains(ae)) return;
+    // A send in flight keeps its strip too (F65): the Send button is saying
+    // "Sending…" and the line under the field waits for the outcome, and a
+    // rebuild mid-request would leave both on a node that is gone. The key is not
+    // stored, so the first sync after the send settles repaints if anything moved.
+    if (this._strip && model && holdSig === this._holdSig && pendingSends.has(s.id)) return;
     this._needsKey = key;
     this._holdSig = holdSig;
     this.dropStrip();
-    if (model) {
+    if (model || done) {
       this._strip = buildNeedStrip(s, model, () => positionDrawer());
       this.bar.after(this._strip);
     }
@@ -1208,6 +1284,7 @@ class Cell {
 
   dispose() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+    if (this._metaRo) { this._metaRo.disconnect(); this._metaRo = null; }
     this.dropStrip();
     this._dropView();
     this.tabs.forEach((t) => t.dispose?.());
@@ -1243,6 +1320,15 @@ function dockIcon(kind) {
     add("path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" });
   }
   return svg;
+}
+
+// fitPaneMeta: mark the units of a pane header's meta that the wrap pushed off its line
+// (.mi-off, visibility: hidden: not focusable, not announced) and clear the mark on those
+// that fit again. The rule itself is deskshell.js's metaUnitsOff.
+function fitPaneMeta(meta) {
+  const units = Array.from(meta.children);
+  const off = metaUnitsOff(units.map((u) => u.getBoundingClientRect().top), meta.getBoundingClientRect());
+  units.forEach((u, i) => u.classList.toggle("mi-off", off[i]));
 }
 
 // tabIcon: the pane header's tab glyphs as inline SVG, in dockIcon's style, for a
@@ -1296,7 +1382,32 @@ function dockHolding(id) {
   return cells.find((c) => c.dockTabs.has(id)) || null;
 }
 
-// buildNeedStrip: the desktop ask strip (spec 5.3). The amber label, then
+// buildSSODoneLine: the line a pane keeps after this tab finished an AWS sign-in
+// (F63): the toast's own words, which are the part to act on (tell the agent to
+// retry), and the kit's ghost ✕. role="status" so it is read once as it appears,
+// as the toast was: only on the line's first appearance for this sign-in
+// (ssoDoneFirstShow, app.js). The strip is rebuilt whenever something else on it
+// moves, and a rebuilt live region would read the same sentence out again.
+function buildSSODoneLine(s) {
+  const row = document.createElement("div");
+  row.className = "ssodone";
+  if (ssoDoneFirstShow(s.id)) row.setAttribute("role", "status");
+  const txt = document.createElement("span");
+  txt.className = "ssodone-txt";
+  txt.textContent = SSO_DONE_TOAST;
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "btn btn-ghost btn-icon btn-sm";
+  x.setAttribute("aria-label", "Dismiss");
+  x.title = "Dismiss";
+  x.textContent = "\u2715";
+  x.onclick = (e) => { e.stopPropagation(); dismissSSODone(s.id); };
+  row.append(txt, x);
+  return row;
+}
+
+// buildNeedStrip: the desktop ask strip (spec 5.3). The amber label (muted, on
+// the panel, for a finished turn: .is-done), then
 // renderNeedsBody's blocks (app.js): the one-line mono text (click expands it to
 // the full message), Yes/No and the composer ONLY when replies are on and the
 // session is replyable, and Open terminal. D24: with replies off that is the
@@ -1304,19 +1415,31 @@ function dockHolding(id) {
 // textContent (renderNeedsBody and the label here); nothing is parsed as HTML.
 // An SSO or store-locked session shows its own sign-in / unlock body instead of
 // the ask text (cardContent decides) and gets the .rich layout.
+// With `model` null the strip is only the sign-in line this tab's finished
+// sign-in keeps (ssoDoneShown): neutral, as a finished turn is. Otherwise the line,
+// when kept, is the strip's last row.
 // onSize runs when the strip's height changes, so the drawer under it follows.
 function buildNeedStrip(s, model, onSize) {
   const strip = document.createElement("div");
   strip.className = "needstrip";
   strip.dataset.sid = s.id;
-  const c = cardContent(s);
-  const rich = !!(c.sso || c.unlock);
-  if (rich) strip.classList.add("rich");
-  if (cardExpanded.has(s.id)) strip.classList.add("open");
-  const label = document.createElement("span");
-  label.className = "ns-label";
-  label.textContent = stripLabel(model.label);
-  strip.append(label, renderNeedsBody(s, { strip: true }));
+  let rich = false;
+  if (model) {
+    const c = cardContent(s);
+    rich = !!(c.sso || c.unlock);
+    if (rich) strip.classList.add("rich");
+    if (cardExpanded.has(s.id)) strip.classList.add("open");
+    // A finished turn is neutral (F21-B); only an agent blocked on you is amber.
+    if (model.tone === "done") strip.classList.add("is-done");
+    const label = document.createElement("span");
+    label.className = "ns-label";
+    label.textContent = stripLabel(model.label);
+    strip.append(label, renderNeedsBody(s, { strip: true }));
+  } else {
+    strip.classList.add("is-done");
+  }
+  // Not in a sign-in or unlock form, which lays itself out as a row (.rich).
+  if (!rich && ssoDoneShown(s)) strip.append(buildSSODoneLine(s));
   let ro = null;
   if (typeof ResizeObserver === "function" && typeof onSize === "function") {
     ro = new ResizeObserver(() => onSize());

@@ -66,6 +66,9 @@ const SHORTCUTS = [
   { id: "session.jump", label: "Jump to session 1–9", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, codes: "Digit1-9" }],
     allow: scAllow(1, 0, 0, 0, 1) },
+  { id: "session.nextNeeds", label: "Next that needs you", group: "Sessions & panes", scope: "global", status: "bound",
+    chords: [{ mod: true, shift: true, code: "KeyJ" }],
+    allow: scAllow(1, 0, 0, 0, 1) },
   { id: "shell.below", label: "+ Shell below", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ ctrl: true, shift: true, code: "Backquote" }],
     allow: scAllow(1, 0, 0, 0, 0) },
@@ -152,6 +155,14 @@ function shortcutHint(id, mac) {
   const entry = scEntry(id);
   const first = entry && scPrimary(entry, mac)[0];
   return first ? renderChord(first, mac) : "";
+}
+
+// hintTitle: a button's tooltip and accessible name, "Command palette (Ctrl+Shift+K)":
+// its own label and, in brackets, the chord the registry binds to `id` on this
+// platform. A label alone when the id has no chord here.
+function hintTitle(label, id, mac) {
+  const chord = shortcutHint(id, mac);
+  return chord ? label + " (" + chord + ")" : label;
 }
 
 function jumpHint(n, mac) {
@@ -259,7 +270,7 @@ function helpTextStacked(rows, runtimeLabel) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, jumpHint,
+    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, hintTitle, jumpHint,
     shortcutMatches, shortcutFor, bindShortcut, dispatchShortcut, _resetShortcutBindings, cmKeys, helpRows, helpText,
     helpTextStacked,
   };

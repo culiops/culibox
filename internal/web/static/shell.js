@@ -581,12 +581,27 @@ function persistSidebarSplit(pct) {
 // after indentation: truncation was structural, not incidental. Dragging is the
 // root-cause fix; the row tooltip covers whatever is still too long.
 const WIDTH_KEY = "agent-box:sidebarWidth";
-const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script
+const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script and #split-v's aria-valuemin/max
+const SIDEBAR_STEP = 16; // one arrow-key press on #split-v
 
 function setSidebarWidth(px) {
   px = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
   document.documentElement.style.setProperty("--sidebar-w", px + "px");
+  // The splitter's separator role reports the width it is at (its min/max are in index.html).
+  const sep = document.getElementById("split-v");
+  if (sep) sep.setAttribute("aria-valuenow", String(Math.round(px)));
   return px;
+}
+
+// syncSplitterAria: aria-valuenow follows the width the sidebar is drawn at. A page loaded with the
+// sidebar hidden paints no width (0), so the static 290 in index.html would be announced until
+// the first step: this re-reads it when the sidebar is shown and when the handle takes focus.
+function syncSplitterAria() {
+  const sidebar = document.getElementById("sidebar");
+  const sep = document.getElementById("split-v");
+  if (!sidebar || !sep) return;
+  const drawn = Math.round(sidebar.getBoundingClientRect().width);
+  if (drawn > 0) sep.setAttribute("aria-valuenow", String(drawn));
 }
 
 function persistSidebarWidth(px) {
@@ -703,6 +718,26 @@ function initWidthSplitter() {
   // hatch from a drag that went wrong. 290 mirrors desktop.css's --sidebar-w
   // default; the two must move together.
   handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(290)); fitAll(); });
+
+  // The keyboard way: ArrowRight widens, ArrowLeft narrows, 16px a press, kept like a drag
+  // (and the terminals refit, as after one). Not with a modifier: Ctrl+Arrow and the like
+  // belong to the browser and the page. The first press steps from the width it is drawn at.
+  handle.addEventListener("keydown", (e) => {
+    const dir = widthKeyDir(e.key);
+    if (!dir || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    const cur = sidebar.getBoundingClientRect().width;
+    const next = stepWidth(cur, dir, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_STEP);
+    // At a clamp (or a held key at one) the step lands where the sidebar already is: no
+    // localStorage write and no refit per repeat.
+    if (next === cur) return;
+    persistSidebarWidth(setSidebarWidth(next));
+    fitAll();
+  });
+  // aria-valuenow starts at the width the page was painted with (the stored one, applied
+  // pre-paint), and is re-read when the handle takes focus (it may have been hidden at load).
+  handle.addEventListener("focus", syncSplitterAria);
+  syncSplitterAria();
 }
 
 // --- ask dialog --------------------------------------------------------------

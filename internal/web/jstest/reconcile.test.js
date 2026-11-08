@@ -144,7 +144,7 @@ test("rowSig changes on every field a row or card renders, and only those", () =
     ask_full: "Bash(x y)", summary: "bye", replyable: true, attached: true, cwd: "/y" })) {
     assert.notStrictEqual(rowSig(Object.assign({}, base, { [k]: v }), local), s0, k);
   }
-  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, replies: true, sending: true, expanded: true, answering: true, elev: true })) {
+  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, replies: true, sending: true, expanded: true, answering: true, elev: true, takenOver: true })) {
     assert.notStrictEqual(rowSig(base, Object.assign({}, local, { [k]: v })), s0, k);
   }
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");
@@ -183,4 +183,19 @@ test("rowSig changes when a shell's label changes, and when its parent does", ()
   assert.notStrictEqual(rowSig(Object.assign({}, sh, { parent_id: "q" }), { shellLabel: "shell 1" }), s0, "re-parenting repaints the row");
   assert.notStrictEqual(rowSig(Object.assign({}, sh, { parent_id: "" }), { shellLabel: "shell 1" }), s0);
   assert.strictEqual(rowSig(Object.assign({}, sh), { shellLabel: "shell 1" }), s0);
+});
+
+// F21-B (#172): the desktop row's dot, group and sub-line follow attentionClass,
+// which is derived from fields the sig already lists (exited, activity, need,
+// aws_connections), so a row repaints exactly when its attention moves.
+test("rowSig tells an ask from a finished turn from a working session", () => {
+  const ask = { id: "s", name: "n", activity: "waiting", need: "ask", ask: "ls", attention: "block" };
+  const turn = { id: "s", name: "n", activity: "waiting", need: "turn", attention: "done" };
+  const working = { id: "s", name: "n", activity: "working" };
+  assert.notStrictEqual(rowSig(ask, {}), rowSig(turn, {}));
+  assert.notStrictEqual(rowSig(turn, {}), rowSig(working, {}));
+  assert.notStrictEqual(rowSig(ask, {}), rowSig(working, {}));
+  // Even with every other rendered field equal, the need alone moves it.
+  assert.notStrictEqual(rowSig({ ...turn, ask: "" }, {}), rowSig({ ...turn, need: "ask", ask: "" }, {}));
+  assert.notStrictEqual(rowSig({ ...turn, exited: true }, {}), rowSig(turn, {}), "a session that ends is repainted");
 });

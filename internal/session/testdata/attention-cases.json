@@ -1,0 +1,12 @@
+[
+  {"name": "ask blocks", "info": {"activity": "waiting", "need": "ask"}, "want": "block"},
+  {"name": "sso blocks even while working", "info": {"activity": "working", "need": "sso", "aws_connections": [{"name": "dev", "sso_expired": "example-sso"}]}, "want": "block"},
+  {"name": "store locked blocks even while working", "info": {"activity": "working", "need": "store_locked"}, "want": "block"},
+  {"name": "finished turn is done", "info": {"activity": "waiting", "need": "turn"}, "want": "done"},
+  {"name": "waiting with no need still blocks", "info": {"activity": "waiting"}, "want": "block"},
+  {"name": "exited session with a stale sso need is nothing", "info": {"exited": true, "activity": "done", "need": "sso", "aws_connections": [{"name": "dev", "sso_expired": "example-sso"}]}, "want": ""},
+  {"name": "idle is nothing", "info": {"activity": "idle"}, "want": ""},
+  {"name": "working is nothing", "info": {"activity": "working"}, "want": ""},
+  {"name": "detached is nothing", "info": {"activity": "detached"}, "want": ""},
+  {"name": "crashed exited session is nothing", "info": {"exited": true, "activity": "crashed"}, "want": ""}
+]

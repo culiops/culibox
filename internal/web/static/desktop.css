@@ -88,8 +88,8 @@
     --focus-w: 2px; --focus-off: 2px;
     --pane-ring: inset 0 0 0 1px var(--accent);  /* the focused pane, only with 2+ panes (D26) */
 
-    /* The xterm theme. Defined here only: terminal-tab.js still passes xterm its own
-       colours until a later change applies these. */
+    /* The xterm theme: terminal-tab.js termTheme reads these once per desktop entry
+       (a phone leaves them undefined and keeps xterm on pure black). */
     --term-bg: var(--bg); --term-fg: var(--fg); --term-cursor: var(--accent);
     --term-sel: #283a54;
     --ansi-0: #23282f; --ansi-1: #ec6a6e; --ansi-2: #5ccb8f; --ansi-3: #e2b65e;
@@ -221,6 +221,7 @@
   /* Disabled: #169's dimmed look above; here only the hover keeps the resting fill. */
   .btn:disabled:hover { background: var(--raise); }
   .btn-primary:disabled:hover, .btn.pri:disabled:hover { background: var(--accent); }
+  .btn-yes:disabled:hover { background: var(--amber); }
   .btn-ghost:disabled:hover, .btn.gh:disabled:hover, .btn-danger:disabled:hover, .btn.dgr:disabled:hover { background: transparent; }
 
   /* --- segmented control (every range, view, 1-2-4 and box/host switch) ----- */
@@ -488,7 +489,7 @@
   header, #hint { display: none; }
 
   /* --- sidebar top -------------------------------------------------------- */
-  #side-top { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 14px 12px 10px; }
+  #side-top { display: flex; flex: none; flex-direction: column; gap: var(--sp-3); padding: 12px 16px; }
   .side-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .side-logo { flex: none; }
   .side-name { font-size: var(--t-lg); font-weight: 600; white-space: nowrap; }
@@ -507,16 +508,18 @@
   }
   #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
   #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
-  #side-palette, #side-collapse {
-    width: 26px; height: 24px; padding: 0; font: var(--t-md) var(--font-ui); line-height: 1; cursor: pointer;
-    background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
-  }
-  #side-palette:hover, #side-collapse:hover { color: var(--fg); background: var(--raise); }
+  /* #side-palette (a drawn magnifier, 14px: the ⌕ glyph is ~7px in fallback fonts) and #side-collapse
+     (the « text, which reads) are the kit's .btn .btn-ghost .btn-icon .btn-sm in index.html (m1-1):
+     their look is the kit's, not ours. */
+  #side-palette svg { display: block; flex: none; width: 14px; height: 14px; }
   .pbtn {
     width: 100%; padding: 8px 12px; font: 600 var(--t-md) var(--font-ui); cursor: pointer;
     background: var(--accent); color: var(--on-fill); border: 0; border-radius: var(--r-ctl);
   }
   .pbtn:hover { background: var(--accent-hover); }
+  /* New session is the sidebar's own .pbtn, sized like the kit's .btn: 28px high (--h-ctl), the full width of
+     the sidebar's 16px padding (m1-1). */
+  #side-new { height: var(--h-ctl); padding: 0 12px; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
@@ -535,7 +538,7 @@
   /* --- sidebar footer ----------------------------------------------------- */
   #side-foot {
     margin-top: auto; /* stays at the bottom whatever the panes above it do */
-    display: flex; flex: none; flex-direction: column; gap: 8px; padding: 10px 12px 8px;
+    display: flex; flex: none; flex-direction: column; gap: 8px; padding: 12px 16px;
     border-top: 1px solid var(--line); background: var(--panel);
   }
   #limits-side { display: flex; flex-direction: column; gap: 6px; }
@@ -549,14 +552,22 @@
   #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
   #limits-side .mtr.hot .bar i { background: var(--fg); }
   #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
+  /* A window at 100% or more (renderRateLimitsInto, F32): "limit reached · resets 25m" replaces the
+     percentage. Plain --fg at 600: not amber (that is an agent blocked on you) and not red (a fact,
+     not a write). It is wider than "2h 14m left", so it may shrink and ellipsize before the label does. */
+  #limits-side .mtr .pc[hidden] { display: none; }
+  #limits-side .mtr .limit { color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
   #side-cost { font-variant-numeric: tabular-nums; }
   #side-cost[hidden] { display: none; }
+  /* With no cost and no elevated window the row is empty: no row, so no 8px gap above the links. */
+  .side-stats:not(:has(> :not([hidden]))) { display: none; }
   #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: 600; }
-  .side-links { display: flex; gap: 2px; margin: 0 -6px; }
+  .side-links { display: flex; gap: 2px; margin: 0 -8px; } /* the buttons' 8px padding: the first word starts on the 16px edge */
   .side-links button {
-    padding: 5px 8px; font: var(--t-md) var(--font-ui); cursor: pointer;
+    padding: 5px 8px; font: var(--t-sm) var(--font-ui); cursor: pointer;
     background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
   }
   .side-links button:hover { color: var(--fg); background: var(--raise); }
@@ -572,18 +583,21 @@
 
 
   /* --- the 52px rail (sidebar hidden) ------------------------------------- */
-  .sidebar-hidden .rail48 { width: 52px; padding: 10px 0; gap: 4px; background: var(--panel); border-right: 1px solid var(--line); }
+  .sidebar-hidden .rail48 { width: 52px; padding: 12px 0 10px; gap: 6px; background: var(--panel); border-right: 1px solid var(--line); }
   .rail-logo { display: flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 28px; margin-bottom: 4px; }
-  .ri { width: 36px; height: 32px; border-radius: var(--r-ctl); }
+  .ri { width: 32px; height: 32px; border-radius: var(--r-ctl); }
   .ri:hover { background: var(--raise); }
-  .ri.tog { flex: none; } /* the rail's ☰ (toggleSidebar hands focus to it) */
+  /* The rail's » (toggleSidebar hands focus to it): the sidebar « turned around, the kit's 24px ghost
+     icon button (.btn .btn-ghost .btn-icon .btn-sm on the element), so it hovers like the one it replaces. */
+  .ri.tog { flex: none; width: var(--h-sm); height: var(--h-sm); border-radius: var(--r-chip); }
+  .ri.tog:hover { background: var(--hover); }
   /* app.css gives a waiting row a tint and a 3px stripe; the rail says it with
      the amber dot alone, and keeps the accent mark for the focused one. */
   .ri.alert { background: transparent; box-shadow: none; }
   .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
   .ri .dot { width: 10px; height: 10px; }
-  /* + under the logo is the one primary control of the rail (p2). */
-  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 var(--t-xl) var(--font-ui); color: var(--on-fill); background: var(--accent); }
+  /* + under the logo is the one primary control of the rail (p2), the size of the kit's .btn-icon.btn-sm. */
+  .ri.add { width: var(--h-sm); height: var(--h-sm); margin: 2px 0 8px; border-radius: var(--r-chip); font: 600 var(--t-xl) var(--font-ui); color: var(--on-fill); background: var(--accent); }
   .ri.add:hover { background: var(--accent-hover); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
   .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
@@ -597,32 +611,41 @@
   .rm.stale { opacity: .5; } /* its reading is old: same dimming as the meter row */
 
   /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
-  #sessions { padding: 2px 8px 8px; }
-  .grp {
-    list-style: none; padding: 14px 6px 5px; font-size: var(--t-xs); font-weight: 500;
-    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
-  }
-  .grp:first-child { padding-top: 6px; }
-  .grp.hot { color: var(--amber); }
+  #sessions { padding: 0 8px 8px; }
+  /* A group header is `li.grp.grp-label`: the kit's .grp-label draws the type
+     (uppercase, muted; .is-needs makes Needs you amber and nothing else), .grp
+     only the sidebar's spacing (12px above, 4px below, the label's text on the rows' dot edge,
+     16px from the sidebar's edge: m1-1). "Done · your turn" is as neutral as Running. */
+  .grp { list-style: none; padding: 12px 8px 4px; }
+  /* A row is 6px + the 20px name line + the 18px sub-line + 6px = 50px (the frame's .srow), the dot
+     10px before the name. */
   #sessions .drow {
-    position: relative; gap: 9px; align-items: flex-start; padding: 7px 8px 8px; margin-bottom: 1px;
+    position: relative; gap: 10px; align-items: flex-start; padding: 6px 8px; margin-bottom: 1px;
     border: 0; border-radius: var(--r-chip); background: transparent;
   }
-  #sessions .drow:hover { background: var(--raise); }
+  #sessions .drow:hover { background: var(--hover); } /* half a step: quieter than the selected row's --raise */
   #sessions .drow.sel { background: var(--raise); }
-  /* Open in some pane (not necessarily the focused one): a faint left bar. */
-  #sessions .drow.inpane { box-shadow: inset 2px 0 0 var(--faint); }
-  #sessions .drow.sel.inpane { box-shadow: inset 2px 0 0 var(--accent); }
-  #sessions .drow .dot { margin-top: 5px; }
-  #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: 18px; }
+  /* Open in some pane (not necessarily the focused one): a 2px bar on the sidebar's own edge (the
+     row sits 8px in), 6px short of the row's top and bottom, faint (m1-1's .is-in-pane). The selected
+     row keeps the accent bar (founder C1: selected = accent bar + --raise fill). */
+  #sessions .drow.inpane::before {
+    content: ""; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 2px;
+    border-radius: 1px; background: var(--faint); pointer-events: none;
+  }
+  #sessions .drow.sel.inpane::before { background: var(--accent); }
+  #sessions .drow .dot { margin-top: 6px; }
+  #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: var(--lh-md); }
   #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
+  #sessions .drow:not(.nested) .nm { font-weight: var(--w-medium); line-height: var(--lh-md); }
   #sessions .drow .bdg { flex: none; }
   /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
      an open write window is red (D23). */
   .dchip {
-    flex: none; padding: 0 6px; font: 500 var(--t-xs)/17px var(--font-ui); white-space: nowrap;
+    flex: none; padding: 0 6px; font: 500 var(--t-xs)/18px var(--font-ui); white-space: nowrap;
     color: var(--muted); background: var(--raise); border-radius: var(--r-chip);
   }
+  /* The tier is a machine word: the kit's .chip-box / .chip-host (mono, 400). */
+  .dchip.box, .dchip.host { font-family: var(--font-mono); font-weight: var(--w-regular); }
   /* The session's cost: muted mono text, no border, before the chip. Never
      shrinks or wraps, so the name (flex:1, min-width:0) truncates first. */
   .dcost {
@@ -633,34 +656,41 @@
   .dchip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   #sessions .drow:hover .dchip.box { background: var(--line); }
   /* The ⋯ takes no room until the row is hovered or something in it is
-     focused; it stays tabbable so a keyboard user reaches it. */
+     focused; it stays tabbable so a keyboard user reaches it. Its look is the kit's .btn .btn-ghost
+     .btn-icon .btn-sm (24px, --t-sm: the frames' .row-menu) from paintCompactRow; what is here is the
+     reveal and the resets of app.css's id-level #sessions .kbtn (14px font, 0 4px padding). The -2px
+     margins keep the name line's 20px: a 24px button must not make the row taller on hover. */
   #sessions .drow .kbtn {
-    flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; height: 18px;
-    color: var(--muted); border-radius: var(--r-chip);
+    flex: none; width: 0; height: var(--h-sm); margin: -2px 0; padding: 0; border: 0; overflow: hidden; opacity: 0;
+    font: var(--w-medium) var(--t-sm)/1 var(--font-ui); border-radius: var(--r-chip);
   }
-  #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible {
-    width: 20px; opacity: 1;
+  /* Shown on hover, on the selected row, and while its own menu is open (m5-1: the opener stays, pressed). */
+  #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible,
+  #sessions .drow.sel .kbtn, #sessions .drow .kbtn[aria-expanded="true"] {
+    width: var(--h-sm); opacity: 1;
   }
   /* Touch screens wider than 700px have no hover, so the ⋯ would never show:
      keep it visible (#12). Nested in the desktop block on purpose. */
   @media (hover: none) {
-    #sessions .drow .kbtn { width: 20px; opacity: 1; }
+    #sessions .drow .kbtn { width: var(--h-sm); opacity: 1; }
   }
   #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
+  /* The kit's pressed look (.btn[aria-pressed="true"]): a menu button is expanded, not pressed, so it says so with aria-expanded. */
+  #sessions .drow .kbtn[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
   #sessions .drow .nm:focus-visible { border-radius: 2px; }
   #sessions .drow .sub {
-    margin-top: 2px; font-size: var(--t-sm); line-height: 16px; color: var(--muted); cursor: pointer;
+    font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); cursor: pointer;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #sessions .drow .sub.amber { color: var(--amber); }
   /* A companion shell under its parent (v5-3): "↳ shell N" + the chip, indented,
      one line, no sub-line. The status dot is the shell's own, smaller than a
      session's so the row reads as a child. */
-  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 18px; }
+  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 26px; }
   #sessions .drow .nest-arrow {
-    flex: none; width: 9px; font: 400 var(--t-sm)/18px var(--font-ui); color: var(--muted); text-align: center;
+    flex: none; width: 9px; font: 400 var(--t-sm)/var(--lh-md) var(--font-ui); color: var(--muted); text-align: center;
   }
-  #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 6px; margin-right: 1px; }
+  #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 7px; margin-right: 1px; }
   #sessions .drow.nested .nm { color: var(--muted); }
   #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }
 
@@ -676,15 +706,16 @@
     --ph-main-min: 140px;
     position: relative; container-type: inline-size;
     display: grid; grid-template-columns: minmax(var(--ph-main-min), 1fr) minmax(0, auto); align-items: center; column-gap: 10px;
-    height: 38px; padding: 0 8px 0 12px; overflow: hidden; white-space: nowrap;
-    background: var(--bg); border-bottom: 1px solid var(--line);
+    height: var(--h-ph); padding: 0 6px 0 12px; overflow: hidden; white-space: nowrap;
+    background: var(--panel); border-bottom: 1px solid var(--line);
   }
   .cell-bar[hidden] { display: none; }
   .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
   .ph-main .ph-dot { flex: none; }
   .ph-name {
-    /* The model shrinks ~1000x faster, and the 1px keeps the sub-pixel share the
-       name still loses from clipping its last letters. */
+    /* Everything beside the name shrinks 10^4 to 10^6 times faster (the meta, then the long
+       chips), so its share of a deficit is under the 1/64px layout unit: at 1000x the name
+       lost 0.2px, enough for Chrome to ellipsize "agent-box" to "agent-b…". */
     flex: 0 1 auto; min-width: 5ch; padding-right: 1px; overflow: hidden; text-overflow: ellipsis;
     font: 600 var(--t-md) var(--font-ui); color: var(--fg);
   }
@@ -698,134 +729,175 @@
   .ph-st { flex: none; font-size: var(--t-sm); color: var(--muted); }
   /* Neutral containment and read credential; only an open write window is
      red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
-     long cloud/write chips give way down to a stub, then the name does. */
+     long cloud/write chips give way down to a stub, then the name does: 10^4 times
+     the name's shrink, or a long write chip took the name down with it (the name lost
+     letters in a 726px pane, measured #172). */
   .ph-chip {
     flex: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
     padding: 0 6px; font: 500 var(--t-xs)/18px var(--font-ui); color: var(--muted);
     background: var(--raise); border-radius: var(--r-chip);
   }
-  .ph-chip.cloud, .ph-chip.write { flex: 0 1 auto; min-width: 7ch; }
+  .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
   .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
-  /* The model gives way before the name does: an ellipsis, never a cut letter. */
-  .ph-model {
-    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: var(--t-sm); color: var(--muted);
+  /* The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): the kit's .ph-meta look (mono, --t-xs,
+     --muted), one line after the chips. It gives way before the name does, and gives way in
+     WHOLE units, never as half a value ("$3." says nothing) or a lone "·": the line wraps and
+     its height clips the second row. The wrap places units in DOM order and drops the last
+     first, so the order IS the priority: cost, then ctx, then the model (F14: a 700px pane
+     keeps haiku-4.5 and ctx 35%). Each unit after the first leads with its own separator. */
+  .ph-meta {
+    flex: 0 1000000 auto; min-width: 0; display: flex; flex-flow: row wrap; align-content: flex-start;
+    height: var(--lh-xs); overflow: hidden;
+    font: var(--t-xs)/var(--lh-xs) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap;
   }
-  /* The cost is the last slot: short, so it never shrinks (a clipped "$1." says
-     nothing); the model and the name give way before it. */
-  .ph-cost {
-    flex: none; font-size: var(--t-sm); white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
-  }
+  /* The empty first item makes the line non-empty before the first unit is placed, so a unit wider
+     than the room wraps away like the others instead of showing as its first few characters.
+     It is a full line tall: a zero-height first line would put the wrapped row at the top. */
+  .ph-meta::before { content: ""; flex: none; height: var(--lh-xs); }
+  .ph-mi { flex: none; display: flex; align-items: center; white-space: pre; }
+  .mi-model { flex: 0 1 auto; min-width: 0; }
+  .ph-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ph-cost { flex: none; }
+  .ph-msep { flex: none; }
+  /* A unit the wrap pushed off the line (tabs.js fitPaneMeta marks it): clipped already, and now not
+     focusable and not announced either. visibility, not display, so the fit is measured on the same boxes. */
+  .mi-off { visibility: hidden; }
+  /* ctx is a button (into Activity), set like its neighbours: the 2px pad is cancelled by the
+     margin, so the line reads as the three words it is. */
   .ph-ctx {
-    flex: none; padding: 1px 4px; font: var(--t-sm) var(--font-ui); font-variant-numeric: tabular-nums;
-    color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
+    flex: none; margin: 0 -2px; padding: 0 2px; font: inherit; font-variant-numeric: inherit;
+    color: inherit; background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   .ph-ctx:hover { color: var(--fg); background: var(--raise); }
   .ph-side { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; overflow: hidden; padding: 1px 2px; }
   .ph-ics { display: contents; }
   .ph-tabs { display: flex; align-items: center; gap: 2px; }
+  /* The kit's .ptab (ui-kit.css, m1-1/m1-2): 24px, --t-sm medium, --muted; hover --hover; the
+     one selected look is below. */
   .ph-tab {
     display: inline-flex; align-items: center;
-    padding: 4px 9px; font: var(--t-md) var(--font-ui); color: var(--muted);
-    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+    height: var(--h-sm); padding: 0 10px; font: var(--w-medium) var(--t-sm) var(--font-ui); color: var(--muted);
+    background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   /* Each tab holds its icon and its word; only the narrow rule below swaps them. */
   .ph-ico { display: none; }
   .ph-ico svg { display: block; width: 14px; height: 14px; }
-  .ph-tab:hover { color: var(--fg); }
+  .ph-tab:hover { color: var(--fg); background: var(--hover); }
   .ph-tab.on { color: var(--fg); background: var(--raise); }
-  /* Files is a toggle over the pane (the drawer): an underline while open.
-     Terminal, Activity and Access are the pane's views: .on above. */
-  .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
+  /* ONE selected look for a tab (G6): Terminal, Activity and Access are the pane's views, .on.
+     Files over a terminal pane is not a tab but the .ph-files toggle (the kit's .btn[aria-pressed]
+     look, never a tab look). A pane of FILES has Files as its one tab, so while the drawer is open
+     on it the tab takes the same selected look: aria-pressed, which paintDrawerTabs sets. */
+  .ph-tab[aria-pressed="true"] { color: var(--fg); background: var(--raise); }
+  .ph-files { flex: none; }
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
-  .ph-shell {
-    padding: 4px 10px; font: 500 var(--t-sm) var(--font-ui); color: var(--fg); cursor: pointer;
-    background: var(--raise); border: 0; border-radius: var(--r-ctl);
-  }
-  .ph-shell:hover { background: var(--line); }
+  /* + Shell is the kit's .btn .btn-ghost .btn-sm (tabs.js): its look is the kit's, not ours. */
   .ph-shell[hidden] { display: none; }
-  /* ⋯ ⛶ × take no room until the header is hovered or holds focus; ⛶ stays
-     while its pane is maximized, so the way back is never hidden. */
+  /* ⋯ ⛶ × keep their 24px at all times and only fade in while the header is hovered or holds focus,
+     so the pointer entering never moves the header (F18: the meta's room is the same in or out).
+     No pointer-events while they are invisible, so a click cannot land on an icon nobody sees;
+     keyboard focus reveals them like the pointer. ⛶ stays while its pane is maximized, so the way
+     back is never hidden. */
   .ph-ic {
-    flex: none; width: 0; height: 24px; padding: 0; overflow: hidden; opacity: 0;
+    flex: none; width: 24px; height: 24px; padding: 0; overflow: hidden; opacity: 0; pointer-events: none;
     font: var(--t-md) var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
     background: transparent; border: 0; border-radius: var(--r-ctl);
   }
-  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
+  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { opacity: 1; pointer-events: auto; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
   .ph-more { font-size: var(--t-lg); }
   /* A narrow header's one control is always visible, never an overlay. */
-  .ph-ics.nar .ph-more { width: 24px; opacity: 1; }
+  .ph-ics.nar .ph-more { opacity: 1; pointer-events: auto; }
   .ph-max.pin { color: var(--fg); }
   .ph-del:hover { color: var(--red); }
   .cell-bar button:focus-visible { outline: var(--focus); outline-offset: -2px; }
 
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
-     tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
-     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 557px is
-     the bar's content box (a 577px pane), not tabs.js's NARROW_PANE_PX (560): with
-     the pointer over the header (⋯ ⛶ × in the flow) the wide padding clips Terminal
-     up to a 575px pane (measured with the 13px tabs, #171; #13 had 568 with 12.5px),
-     so the compact look reaches 577 and the wide one starts with 2px to spare. */
-  @container (max-width: 557px) {
+     tabs tighten, + Shell loses its label and the separator goes. Below tabs.js's
+     NARROW_PANE_PX (640) only ⋯ stays in the flow (see .ph-ics.nar; Maximize and Close
+     pane live in its menu), so ⋯ ⛶ × (which always keep their 24px each, wide) do not
+     widen this side there: a plain pane's wide look (3 text tabs, the separator, Files,
+     + Shell, ⋯) fits beside the name's 140px from a 521px pane (#172, 1px steps; #171 had
+     575 with four tabs and ⋯ ⛶ × hovered). A MAXIMIZED pane keeps its ⛶ pinned beside ⋯
+     (26px more): its wide look needs 547px and clipped Terminal up to 546. One rule serves
+     both (the plain pane pays 26px of room it did not need, still words): compact up to a
+     548px pane, which is 528px of content box (the bar's 20px padding), and the wide look
+     starts with 2px to spare. From 640 up the side column is 402px, a 572px pane, which
+     every wide pane exceeds. The frame's 575px panes (m1-1) draw the wide look. */
+  @container (max-width: 528px) {
     .ph-sep { display: none; }
-    .ph-tab { padding: 4px 5px; }
-    .ph-shell { font-size: 0; padding: 4px 8px; }
+    .ph-tab { padding: 0 5px; }
+    .ph-files { padding: 0 5px; }
+    .ph-shell { font-size: 0; padding: 0 8px; gap: 0; }
     .ph-shell::before { content: "+"; font: 500 var(--t-md)/1 var(--font-ui); }
   }
-  /* Too narrow for four words (the compact text tabs need a 443px pane, 423px of
-     content box, measured with the 13px tabs): the same four tabs as icons, 24px
-     squares like ⋯ ⛶ ×, still named by title and aria-label (#13). A maximized
-     pane keeps its ⛶ in the flow, which costs 26px the + Shell button gives back
-     here, or Terminal clips at 339-354px. The rule holds
-     below 339px too, though + would fit there from a 249px pane: a rare corner
-     (a maximized pane under 339px) kept to one rule. */
-  @container (max-width: 439px) {
+  /* Too narrow for three words beside Files (the compact text look needs a 439px pane,
+     419px of content box, measured): the three tabs and Files as icons, 24px squares like
+     ⋯ ⛶ ×, still named by title and aria-label (#13); the tabs' 0 5px padding above makes
+     the icon one. A maximized pane keeps its ⛶ in the flow, which costs 26px the + Shell
+     button gives back here, or Terminal clips at 328-357px. The rule holds below 328px
+     too, though + would fit there from a 227px pane: a rare corner (a maximized pane
+     under 328px) kept to one rule. */
+  @container (max-width: 420px) {
     .ph-lbl { display: none; }
     .ph-ico { display: block; }
-    .ph-tab { padding: 5px; }
+    .ph-files { padding: 0 4px; }
     .cell-bar:has(.ph-max.pin) .ph-shell { display: none; }
   }
-  /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text tabs need
-     a 469px pane (449px of content box): measured, Terminal clipped up to 468. Up to
-     a 470px pane it draws the icons (2px to spare); + Shell keeps its room until the
+  /* A maximized pane's ⛶ stays in the flow beside ⋯ (26px), so its text look needs
+     a 465px pane (445px of content box): measured, Terminal clipped up to 464. Up to
+     a 466px pane it draws the icons (2px to spare); + Shell keeps its room until the
      rule above. A plain pane keeps its words down to that rule. */
-  @container (max-width: 450px) {
+  @container (max-width: 446px) {
     .cell-bar:has(.ph-max.pin) .ph-lbl { display: none; }
     .cell-bar:has(.ph-max.pin) .ph-ico { display: block; }
-    .cell-bar:has(.ph-max.pin) .ph-tab { padding: 5px; }
+    .cell-bar:has(.ph-max.pin) .ph-files { padding: 0 4px; }
   }
-  /* Too narrow for four icons beside the name's room (a 338px pane or less, 318px
-     of content box): dot, name, chip, + and ⋯. Files and Activity stay one click
-     away in the pane's ⋯ menu (Open files here, Context by tool), Access in the
-     palette. A pane of files has ONE tab (paneTabsClass marks it `one`), which fits
-     in far less: it stays, or the pane loses its only header control (#123). */
-  @container (max-width: 318px) {
-    .ph-tabs:not(.one) { display: none; }
+  /* Too narrow for the icons (three tabs and Files) beside the name's room (a 332px
+     pane or less, 312px of content box; they need 331px, measured): dot, name, chip, +
+     and ⋯. Files (the toggle) and Activity stay one click away in the pane's ⋯ menu
+     (Open files here, Context by tool), Access in the palette. A pane of files has ONE
+     tab (paneTabsClass marks it `one`), which fits in far less: it stays, or the pane
+     loses its only header control (#123). */
+  @container (max-width: 312px) {
+    .ph-tabs:not(.one), .ph-files { display: none; }
   }
   /* The one-tab group's own floor. Beside the name's 140px, + Shell and ⋯ its 24px
-     icon is clipped in a pane narrower than 249px (229px of content box), so below
-     it the tab hides too. 236px leaves 8px of slack: Files shows from a 257px pane. */
+     icon is clipped in a pane narrower than 253px (233px of content box), so below
+     it the tab hides too. 236px leaves 4px of slack: Files shows from a 257px pane. */
   @container (max-width: 236px) {
     .ph-tabs.one { display: none; }
   }
-  /* + Shell (25px, the compact "+" above) fits beside the name's 140px and ⋯ from
-     a 223px pane (203px of content box); below it, the name keeps its room and
-     the + goes too. 210px leaves 7px of slack and clears the 202px panes of four
+  /* + Shell (26.7px, the compact "+" above) fits beside the name's 140px and ⋯ from
+     a 227px pane (207px of content box); below it, the name keeps its room and
+     the + goes too. 210px leaves 4px of slack and clears the 202px panes of four
      columns at 701px. */
   @container (max-width: 210px) {
     .ph-shell { display: none; }
   }
 
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
-     an 8px gutter: the room goes to the panes, and two panes at 1440px stay
-     above the narrow threshold. */
+     an 8px gutter: the room goes to the panes. Two panes at 1440px (575px each,
+     beside the 290px sidebar) are narrow by design (m1-1 draws them so): one chip,
+     no meta. */
   /* isolation: the xterm scrollbar of a pane (z-index 11) must not paint above
      the drawer (z-index 10) that covers it. */
   #grid { gap: 1px; padding: 0; background: var(--line); isolation: isolate; }
   #grid.empty { background: var(--bg); }
+
+  /* The terminal surface (F05, m1-1/m1-2): graphite, not a black embed. The xterm
+     theme (terminal-tab.js termTheme) paints --term-bg; the pane around it and
+     the padding that frames it are the same colour, so there is no seam where
+     the cell ends and the terminal starts. 6px 10px is the kit's .term padding;
+     A phone keeps the black cell and 4px: both are the shared rules in app.css.
+     content-box: the fit addon sizes the grid from the parent's computed width and
+     height and only subtracts the padding of .xterm itself. Under the global
+     border-box those include .pane-term's own padding, so the grid came out up to
+     a padding too big and the last row ran into the dock or the cell edge. */
+  .cell { background: var(--bg); }
+  .pane-term { box-sizing: content-box; padding: 6px 10px; background: var(--term-bg); }
 
   /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
   .cell.focus:not(.drop-hot) { outline: none; }
@@ -872,6 +944,25 @@
   /* The amber pane frame is gone on desktop: the ask strip under the header
      carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
   .cell.needs::after { content: none; }
+
+  /* The row's ⋯ menu (F12, M5.1) is the kit menu, placed by script. Its look is the kit's
+     `.menu:has(> .menu-item)` (panel, hairline, card radius, popover shadow, 30px rows, a separator
+     between groups only); the kit rule renders in flow, so this puts back what a script-placed
+     popover needs: fixed (placeSessionMenu sets left and top), above the panes, closed until .open.
+     240px is the frame's width, wider only for a label that needs it (the narrow pane header's
+     "Close pane (the session keeps running)"). A row is one 30px line, so a long label is clipped
+     rather than wrapped. The tab switcher below has no .menu-item children and keeps the legacy
+     popover until Plan 3; its text goes on the type scale (12.5px was off it). */
+  #session-menu:has(> .menu-item) {
+    position: fixed; z-index: 40; display: none;
+    width: max-content; min-width: 240px; max-width: calc(100vw - 16px);
+  }
+  #session-menu.open:has(> .menu-item) { display: flex; }
+  #session-menu > .menu-item > .menu-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The icons are inline SVG (menuIconSvg), 14px in the 16px slot, stroked in the slot's own colour:
+     muted, red on End session… (no font glyph: those are tofu where no installed font has them). */
+  #session-menu > .menu-item > .menu-icon svg { width: 14px; height: 14px; display: block; }
+  #session-menu .mi { font-size: var(--t-md); }
 
   /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
   .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
@@ -1026,11 +1117,15 @@
      wording and gates as the old sidebar card; only the place moved. */
   .needstrip {
     flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
-    gap: 6px 10px; padding: 6px 12px; min-width: 0; font-size: var(--t-sm);
-    background: color-mix(in srgb, var(--amber) 9%, var(--bg)); border-bottom: 1px solid var(--line);
+    gap: 6px 10px; padding: 8px 12px; min-width: 0; font-size: var(--t-sm);
+    background: var(--amber-tint); border-bottom: 1px solid var(--line);
   }
   .needstrip .nbody { display: contents; }
   .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: var(--t-sm); white-space: nowrap; }
+  /* A finished turn (F21-B): the same strip, neutral. It stays because it carries
+     the reply field; amber is for an agent blocked on you. */
+  .needstrip.is-done { background: var(--panel); }
+  .needstrip.is-done .ns-label { color: var(--muted); }
   .needstrip .peektxt {
     grid-area: 1 / 2; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     cursor: pointer; font-weight: 400; color: var(--fg);
@@ -1039,16 +1134,20 @@
   .needstrip .peektxt.muted { font-style: italic; color: var(--muted); }
   .needstrip .peektxt:focus-visible { border-radius: var(--r-chip); }
   .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; gap: 6px; margin: 0; }
-  /* A primary here (the SSO strip's Sign in) is the kit primitive: the strip's secondary fill,
-     border and hover skip it. :where(:not(.pri)) leaves each rule's weight as it was. */
-  .needstrip .nacts .btn { padding: 3px 10px; border-radius: var(--r-ctl); }
-  .needstrip .nacts .btn:where(:not(.pri)) { background: var(--raise); border: 1px solid var(--line); }
-  .needstrip .nacts .btn:where(:not(.pri)):hover { background: var(--background3); }
-  .needstrip .nacts .btn.off:where(:not(.pri)) { background: var(--raise); }
-  /* The one amber-filled button in the product: Yes (amber = needs-you only). */
-  .needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri)) { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
-  .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin: 0; }
+  /* A primary here (the SSO strip's Sign in) and Yes (the kit's amber .btn-yes, the one amber-filled button
+     in the product: amber = needs-you only) are kit primitives: the strip's secondary fill, border and hover
+     skip them. :where(...) leaves each rule's weight as it was. Every button of the action row (.nacts: Yes, No,
+     Open terminal, Enable / Disallow replies, Sign in / Try again, Copy host command) is .btn-sm; the padding
+     and radius override is for a .btn in it that is not. The reply composer's send and the locked-store form's
+     Unlock are .btn.pri outside .nacts and keep their own height. */
+  .needstrip .nacts .btn:where(:not(.btn-sm)) { padding: 3px 10px; border-radius: var(--r-ctl); }
+  .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)) { background: var(--raise); border: 1px solid var(--line); }
+  .needstrip .nacts .btn:where(:not(.pri):not(.btn-yes)):hover { background: var(--background3); }
+  .needstrip .nacts .btn.off:where(:not(.pri):not(.btn-yes)) { background: var(--raise); }
+  .needstrip .askfull, .needstrip .askmsg, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  /* An expanded ask: line 1 stays the command; what the agent said before it is the next line (F51). */
+  .needstrip .askmsg { color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
   .needstrip .askfull {
     min-width: 0; padding: 6px 8px; font: var(--t-sm)/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
     background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-chip);
@@ -1056,6 +1155,11 @@
   .needstrip .rep { display: flex; gap: 6px; }
   .needstrip .rep .fld { flex: 1; min-width: 0; }
   .needstrip .peek-why, .needstrip .maskhint { font-size: var(--t-sm); color: var(--muted); }
+  /* The sign-in line a pane keeps after this tab's sign-in (F63): muted text and the kit's ghost ✕. Alone it is
+     a .needstrip.is-done (the neutral look above); under a need it is the strip's last row. */
+  .needstrip .ssodone { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .needstrip .ssodone-txt { flex: 1; min-width: 0; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+  .needstrip .ssodone .btn { flex: none; }
   /* An expired AWS sign-in or a locked store: the form is the content, so the
      body keeps its own layout beside the label. */
   .needstrip.rich { display: flex; align-items: flex-start; }
@@ -1919,8 +2023,15 @@
     box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
   }
   #ask-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
-  #ask-modal .dlg-x { padding: 2px 8px; border-radius: var(--r-ctl); }
-  #ask-modal .dlg-x:hover { background: var(--raise); color: var(--fg); }
+  /* The close cross is the kit's ghost icon button (.btn .btn-ghost .btn-icon .btn-sm: 24px square, muted, a
+     hover fill) on the page's type scale, not app.css's 19px glyph. The class list cannot go on the shared
+     markup (primitives.css's .btn reaches the phone), so the kit's values are stated here. */
+  #ask-modal .dlg-x {
+    display: inline-flex; align-items: center; justify-content: center; width: var(--h-sm); min-height: var(--h-sm); padding: 0;
+    border: 1px solid transparent; border-radius: var(--r-chip); background: transparent; color: var(--muted);
+    font-size: var(--t-lg); font-weight: var(--w-medium); line-height: 1;
+  }
+  #ask-modal .dlg-x:hover { background: var(--hover); color: var(--fg); }
   #ask-modal #ask-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #ask-modal .dlg-body { padding: 4px 20px 18px; }
   #ask-modal #ask-body { margin: 6px 0 10px; font-size: var(--t-md); color: var(--muted); }

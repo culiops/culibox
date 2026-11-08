@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 // classifyTermPath normalises through fsops.js's global, as in the browser.
 global.normalizePath = require("../static/fsops.js").normalizePath;
-const { isBrokenMouseReport, hasSize, resolveTermPath, classifyTermPath, termKeyAction } = require("../static/terminal-tab.js");
+const { isBrokenMouseReport, hasSize, resolveTermPath, classifyTermPath, termKeyAction, termTheme } = require("../static/terminal-tab.js");
 
 test("an SGR mouse report with NaN coordinates is dropped", () => {
   assert.strictEqual(isBrokenMouseReport("\x1b[<0;NaN;NaNm"), true);
@@ -754,4 +754,207 @@ test("sendResize sends each size once per socket and again on a new one", () => 
     tab.sendResize();
     assert.deepStrictEqual(sockets[1].sent, [{ type: "resize", rows: 24, cols: 100 }]);
   } finally { delete global.WebSocket; delete global.location; }
+});
+
+// termTheme (F05): the xterm theme, built from the kit tokens on a desktop and
+// pinned to the old black on a phone. get(name) reads one CSS custom property.
+const TOKENS = {
+  "--bg": "#0d0f12", "--term-bg": "#0d0f12", "--term-fg": "#e6e9ee", "--term-cursor": "#6ea8fe", "--term-sel": "#283a54",
+};
+for (let i = 0; i < 16; i++) TOKENS["--ansi-" + i] = "#a0" + (i < 10 ? "0" : "") + i;
+const fakeGet = (name) => (name in TOKENS ? TOKENS[name] : "");
+const ANSI_NAMES = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+  "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+
+test("termTheme on a phone is exactly the old black, whatever the tokens say", () => {
+  assert.deepStrictEqual(termTheme(fakeGet, true), { background: "#000000" });
+  assert.deepStrictEqual(termTheme(() => { throw new Error("a phone never reads a token"); }, true), { background: "#000000" });
+});
+
+test("termTheme on a desktop maps the kit tokens to the xterm option names", () => {
+  const t = termTheme(fakeGet, false);
+  assert.strictEqual(t.background, "#0d0f12");
+  assert.strictEqual(t.foreground, "#e6e9ee");
+  assert.strictEqual(t.cursor, "#6ea8fe");
+  assert.strictEqual(t.cursorAccent, "#0d0f12");
+  assert.strictEqual(t.selectionBackground, "#283a54");
+  assert.strictEqual(ANSI_NAMES.length, 16);
+  ANSI_NAMES.forEach((name, i) => assert.strictEqual(t[name], TOKENS["--ansi-" + i], name + " = --ansi-" + i));
+  assert.deepStrictEqual(Object.keys(t).sort(),
+    ["background", "foreground", "cursor", "cursorAccent", "selectionBackground", ...ANSI_NAMES].sort());
+});
+
+test("termTheme trims a token read from getComputedStyle", () => {
+  const t = termTheme((n) => "  " + fakeGet(n) + " ", false);
+  assert.strictEqual(t.background, "#0d0f12");
+  assert.strictEqual(t.brightWhite, "#a015");
+});
+
+test("termTheme leaves out an empty token, and the background falls back to the old black", () => {
+  const t = termTheme((n) => (n === "--term-bg" || n === "--ansi-3" || n === "--term-sel" ? "" : fakeGet(n)), false);
+  assert.strictEqual(t.background, "#000000");
+  assert.ok(!("yellow" in t), "an empty --ansi-3 sets no yellow");
+  assert.ok(!("selectionBackground" in t), "an empty --term-sel sets no selection colour");
+  assert.strictEqual(t.red, "#a001");
+  assert.deepStrictEqual(termTheme(() => "", false), { background: "#000000" });
+});
+
+test("termTheme without --bg sets no cursorAccent", () => {
+  const t = termTheme((n) => (n === "--bg" ? "" : fakeGet(n)), false);
+  assert.ok(!("cursorAccent" in t));
+  assert.strictEqual(t.cursor, "#6ea8fe");
+});
+
+// currentTermTheme / applyTermThemeAll: the tokens are read once per desktop
+// entry, a phone crossing drops them, and the crossing re-themes every terminal.
+function withDesktopGlobals(width, fn) {
+  const saved = ["window", "document", "getComputedStyle", "mobileActive", "eachTerminal"].map((k) => [k, global[k], k in global]);
+  const reads = { n: 0 };
+  global.window = { innerWidth: width.v };
+  global.document = { documentElement: {} };
+  global.getComputedStyle = () => ({ getPropertyValue: (name) => { reads.n++; return " " + fakeGet(name) + " "; } });
+  global.mobileActive = (w) => Number(w) <= 700;
+  try { fn(reads); } finally {
+    for (const [k, v, had] of saved) { if (had) global[k] = v; else delete global[k]; }
+  }
+}
+
+test("currentTermTheme reads the tokens once per desktop entry and hands out copies", () => {
+  const { currentTermTheme } = require("../static/terminal-tab.js");
+  const w = { v: 1440 };
+  withDesktopGlobals(w, (reads) => {
+    const a = currentTermTheme();
+    assert.strictEqual(a.background, "#0d0f12");
+    assert.strictEqual(a.brightWhite, "#a015");
+    const reads1 = reads.n;
+    assert.ok(reads1 > 0);
+    const b = currentTermTheme();
+    assert.strictEqual(reads.n, reads1, "the second desktop call does not read the stylesheet again");
+    assert.notStrictEqual(a, b, "each terminal gets its own object");
+    assert.deepStrictEqual(a, b);
+    a.background = "#123456";
+    assert.strictEqual(currentTermTheme().background, "#0d0f12", "editing a copy never edits the cache");
+
+    w.v = 390; global.window.innerWidth = 390;
+    assert.deepStrictEqual(currentTermTheme(), { background: "#000000" });
+    assert.strictEqual(reads.n, reads1, "a phone reads no token");
+
+    w.v = 1440; global.window.innerWidth = 1440;
+    assert.strictEqual(currentTermTheme().background, "#0d0f12");
+    assert.ok(reads.n > reads1, "the next desktop entry reads the tokens again");
+  });
+});
+
+test("applyTermThemeAll themes every terminal eachTerminal yields, pane tabs and docked shells", () => {
+  const { applyTermThemeAll, TerminalTab } = require("../static/terminal-tab.js");
+  const w = { v: 1440 };
+  withDesktopGlobals(w, () => {
+    const mk = () => { const t = Object.create(TerminalTab.prototype); t.term = { options: { theme: { background: "#000000" } } }; return t; };
+    const pane = mk(), dock = mk(), noTerm = Object.create(TerminalTab.prototype);
+    global.eachTerminal = (cb) => { for (const t of [pane, dock, noTerm]) cb(t); };
+    applyTermThemeAll();
+    assert.strictEqual(pane.term.options.theme.background, "#0d0f12");
+    assert.strictEqual(dock.term.options.theme.background, "#0d0f12");
+    assert.notStrictEqual(pane.term.options.theme, dock.term.options.theme);
+    w.v = 390; global.window.innerWidth = 390;
+    applyTermThemeAll();
+    assert.deepStrictEqual(pane.term.options.theme, { background: "#000000" });
+    assert.deepStrictEqual(dock.term.options.theme, { background: "#000000" });
+  });
+});
+
+// A crossing always re-reads the stylesheet (applyTermThemeAll drops the cache first), so a theme
+// cached from an empty first read (tokens not applied yet) cannot stick, and neither can a stale one.
+function withTokens(tokens, fn) {
+  const saved = ["window", "document", "getComputedStyle", "mobileActive", "eachTerminal"].map((k) => [k, global[k], k in global]);
+  const reads = { n: 0 };
+  global.window = { innerWidth: 1440 };
+  global.document = { documentElement: {} };
+  global.getComputedStyle = () => ({ getPropertyValue: (name) => { reads.n++; return tokens.v[name] || ""; } });
+  global.mobileActive = (w) => Number(w) <= 700;
+  // Start from no cached desktop theme whatever ran before: one phone read drops it.
+  global.window.innerWidth = 390;
+  require("../static/terminal-tab.js").currentTermTheme();
+  global.window.innerWidth = 1440;
+  try { fn(reads); } finally {
+    for (const [k, v, had] of saved) { if (had) global[k] = v; else delete global[k]; }
+  }
+}
+
+test("applyTermThemeAll clears the cached desktop theme, so an empty first read does not stick", () => {
+  const { applyTermThemeAll, currentTermTheme, TerminalTab } = require("../static/terminal-tab.js");
+  const tokens = { v: {} }; // the kit tokens are not defined yet: every read is empty
+  withTokens(tokens, (reads) => {
+    assert.deepStrictEqual(currentTermTheme(), { background: "#000000" });
+    tokens.v = { "--term-bg": "#0d0f12", "--term-fg": "#e6e8eb" }; // the stylesheet has arrived
+    assert.strictEqual(currentTermTheme().background, "#000000", "without a crossing the cache is kept");
+    const t = Object.create(TerminalTab.prototype);
+    t.term = { options: { theme: { background: "#000000" } } };
+    global.eachTerminal = (cb) => cb(t);
+    const before = reads.n;
+    applyTermThemeAll();
+    assert.ok(reads.n > before, "the crossing reads the tokens again");
+    assert.strictEqual(t.term.options.theme.background, "#0d0f12");
+    assert.strictEqual(t.term.options.theme.foreground, "#e6e8eb");
+    assert.strictEqual(currentTermTheme().background, "#0d0f12", "and the fresh read is what later terminals copy");
+  });
+});
+
+test("applyTermThemeAll drops the cache even when there is no terminal to theme yet", () => {
+  const { applyTermThemeAll, currentTermTheme } = require("../static/terminal-tab.js");
+  const tokens = { v: { "--term-bg": "#111111" } };
+  withTokens(tokens, () => {
+    assert.strictEqual(currentTermTheme().background, "#111111");
+    tokens.v = { "--term-bg": "#222222" };
+    delete global.eachTerminal; // tabs.js not loaded: nothing to theme
+    applyTermThemeAll();
+    assert.strictEqual(currentTermTheme().background, "#222222");
+  });
+});
+
+test("the breakpoint listener re-themes the terminals BEFORE renderGrid, so a terminal the grid builds on the crossing copies a fresh theme", () => {
+  const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
+  const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
+  const at = app.indexOf('if (typeof mobileMediaQuery === "function" && window.matchMedia) {');
+  assert.ok(at > 0);
+  const block = app.slice(at, app.indexOf("\n}\n", at) + 3);
+  const calls = [];
+  const log = (n) => () => { calls.push(n); return { ignoreCollapsed: false }; };
+  let cb = null;
+  const ctx = {
+    window: { innerWidth: 390, matchMedia: () => ({ addEventListener: (_, f) => { cb = f; } }) },
+    mobileMediaQuery: () => "(max-width: 700px)", closePage: log("closePage"), applyCollapsed: log("applyCollapsed"),
+    bootFlags: log("bootFlags"), deskStorage: () => ({}), readCollapsed: () => ({}), mobileActive: () => false,
+    restoreDrawerNodes: log("restoreDrawerNodes"), paintSideCost: log("paintSideCost"), paintSteerToggle: log("paintSteerToggle"),
+    refreshSessions: log("refreshSessions"), renderGrid: log("renderGrid"), applyTermThemeAll: log("applyTermThemeAll"),
+  };
+  vm.runInNewContext(block, ctx);
+  assert.equal(typeof cb, "function", "the handler registered");
+  cb();
+  assert.ok(calls.includes("applyTermThemeAll") && calls.includes("renderGrid"));
+  assert.ok(calls.indexOf("applyTermThemeAll") < calls.indexOf("renderGrid"), "order: " + calls.join(" > "));
+  assert.strictEqual(calls.filter((c) => c === "applyTermThemeAll").length, 1, "once");
+});
+
+test("the breakpoint listener re-themes the terminals, and the constructor builds its theme from termTheme", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
+  const at = app.indexOf("matchMedia(mobileMediaQuery()).addEventListener");
+  assert.ok(at > 0);
+  const handler = app.slice(at, app.indexOf("\n  });\n}", at));
+  assert.match(handler, /applyTermThemeAll\(\)/);
+  const tt = fs.readFileSync(path.join(__dirname, "../static/terminal-tab.js"), "utf8");
+  assert.match(tt, /scrollback: 5000, theme: currentTermTheme\(\),/);
+  assert.ok(!/theme: \{ background: "#000000" \}/.test(tt), "no hard-coded theme left in the constructor");
+});
+
+test("desktop.css frames the terminal edge to edge: graphite cell, kit padding, content-box so fit() sees the content size", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../static/desktop.css"), "utf8");
+  assert.match(css, /^\s*\.cell \{ background: var\(--bg\); \}$/m);
+  assert.match(css, /^\s*\.pane-term \{ box-sizing: content-box; padding: 6px 10px; background: var\(--term-bg\); \}$/m);
+  // The phone's black cell and 4px padding are the shared rules, untouched.
+  const app = fs.readFileSync(path.join(__dirname, "../static/app.css"), "utf8");
+  assert.match(app, /\.cell \{[^}]*background: #000;/);
+  assert.match(app, /\.pane-term \{ flex: 1; min-height: 0; padding: 4px; \}/);
 });

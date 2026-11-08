@@ -169,11 +169,19 @@ test("desktop.css does not bound the info body by the viewport", () => {
   assert.ok(!/100dvh|100vh/.test(r), "viewport bound would ignore the dialog's 88vh cap");
 });
 
-// The pane header's three container queries (#13), measured on the bar's content
-// box (cell width minus 20): below ICONS_MAX every tab is an icon, below
-// COLLAPSE_MAX the tab group is gone, below COMPACT_MAX the text tabs tighten.
-// The floors are measured widths where the content stops fitting; a threshold
-// under its floor clips a control, one far above it hides room that was free.
+// The pane header's container queries (#13, re-measured for #172 Task 3, again after the kit tab/+ Shell
+// look and the always-reserved ⋯ ⛶ ×), on the bar's content box (cell width minus 20): below ICONS_MAX
+// every tab and Files is an icon, below COLLAPSE_MAX the tabs and Files are gone, below COMPACT_MAX the
+// text tabs tighten. The floors are measured widths where the content stops fitting (pane width = content
+// box + 20; the bar keeps a 140px name column and the 10px column gap); a threshold under its floor clips a
+// control, one far above it hides room that was free. HOW they were measured: Playwright on the review
+// instance, a 2-column grid sized so one pane is exactly W px, W = 300..800 in 1px steps, in five states: a
+// session pane (a short and a 35-character name), a pane of files, a maximized pane, and a pane under 640px
+// with a long write chip. Per width: any control past the side column's edge, any scrollWidth over
+// clientWidth, any meta unit half shown or shown without being on the line (or hidden while on it), the
+// name's width. Result, all states: no problem at any width. Before (Plan 1's header, same sweep): 575px
+// panes clipped by the hovered wide look, a cost cut at 578-635 hovered; after, with NARROW_PANE_PX at 640
+// and only ⋯ in the flow below it, the wide look needs a plain 521px pane and a maximized 547px pane.
 function containerRules() {
   const out = [];
   const re = /@container\s*\(max-width:\s*(\d+)px\)\s*\{/g;
@@ -187,46 +195,58 @@ function containerRules() {
 }
 const headerRule = (has) => containerRules().find((r) => has.test(r.body));
 
+// NARROW_PANE_PX (tabs.js) is the pane width below which the header is dot, name and ONE chip and only
+// ⋯ stays in the flow (D9; m1-1 draws the 575px panes of two columns at 1440px that way). The meta needs
+// the room above it: from 640 up the hovered header's side column is 407px, a 577px pane.
+test("the narrow verdict is 640px, as the frames draw it", () => {
+  const tabs = fs.readFileSync(path.join(__dirname, "..", "static", "tabs.js"), "utf8");
+  assert.match(tabs, /const NARROW_PANE_PX = 640;/);
+});
+
 test("the pane header's container thresholds are ordered and above the widths where each look fits", () => {
   const compact = headerRule(/\.ph-sep\s*\{/);
   const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
-  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/);
   const floor = headerRule(/^\s*\.ph-shell\s*\{/);
   assert.ok(compact && icons && collapse && floor, "the compact, icon, collapse and + Shell floor rules each exist");
   assert.ok(floor.px < collapse.px && collapse.px < icons.px && icons.px < compact.px, "floor < collapse < icons < compact");
-  assert.ok(collapse.px >= 310, "icons need 310 px of content box: never shown in less");
-  // Measured with the 13px tabs (#171 F06; VERIFY-A section 4c, re-run in the fix wave): the compact text tabs
-  // clip Terminal below a 443 px pane (423 content); the wide look with the pointer on the header clips it up
-  // to a 575 px pane (555 content).
-  assert.ok(icons.px >= 423, "text tabs need 423 px of content box: never shown in less");
-  assert.ok(compact.px >= 556, "the hover icons clip the wide look up to a 575 px pane (555 content)");
+  // Measured (see above): three icon tabs + the Files icon + ⋯ + the "+" need a 331px pane (311 content);
+  // the three compact text tabs + Files need 439px (419 content); a plain pane's wide look needs 521px,
+  // a maximized one (⛶ pinned beside ⋯) 547px (527 content), and one rule serves both.
+  assert.ok(collapse.px >= 311, "the icons need 311 px of content box: never shown in less");
+  assert.ok(icons.px >= 419, "the compact text tabs need 419 px of content box: never shown in less");
+  assert.ok(compact.px >= 527, "a maximized pane's wide look clips Terminal up to a 546 px pane (527 content)");
+  // Not far above the floor either: more than ~8px of slack hides room that was free.
+  assert.ok(collapse.px <= 311 + 8 && icons.px <= 419 + 8 && compact.px <= 527 + 8, "thresholds sit within 8px of the measured floors");
 });
 
 // A maximized pane keeps ⛶ pinned in the flow beside ⋯ (26 px), so its compact text tabs need 26 px more
-// than a plain pane's: measured, Terminal clips up to a 468 px pane (448 content). Below its own floor a
-// maximized pane draws the icons; a plain pane keeps its words down to the icon rule.
+// than a plain pane's: measured, they need a 465px pane (445 content) where a plain pane's need 439. Below
+// its own floor a maximized pane draws the icons; a plain pane keeps its words down to the icon rule.
 test("a maximized pane switches to icons at its own, wider floor", () => {
   const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
   const compact = headerRule(/\.ph-sep\s*\{/);
   const maxed = headerRule(/\.cell-bar:has\(\.ph-max\.pin\) \.ph-lbl\s*\{/);
   assert.ok(maxed, "a container rule for the maximized pane's labels");
-  assert.ok(maxed.px >= 449, "a maximized pane's text tabs need 449 px of content box");
+  assert.ok(maxed.px >= 445, "a maximized pane's text tabs need 445 px of content box");
   assert.ok(icons.px < maxed.px && maxed.px < compact.px, "icons < maximized icons < compact");
   assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-lbl \{ display: none; \}/);
   assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-ico \{ display: block; \}/);
-  assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-tab \{ padding: 5px; \}/);
+  assert.ok(!/\.ph-tab/.test(maxed.body), "the tabs' 5px compact padding already makes the icon a 24px square");
+  assert.match(maxed.body, /\.cell-bar:has\(\.ph-max\.pin\) \.ph-files \{ padding: 0 4px; \}/, "Files is a 24px icon square too");
   assert.ok(!/ph-shell/.test(maxed.body), "+ Shell stays: the icons leave it room down to the icon rule");
 });
 
 // The founder chose "dot, name, chip, + and ⋯" for a 250-338 px pane: only the
-// four tabs hide there. + Shell (25.4 px) beside the 140 px name column and ⋯
-// fits from a 223 px pane (203 content), measured; below it, both go.
+// tabs and the Files toggle hide there (Files is no longer in the tab group, so the collapse rule
+// names it). + Shell (24.7 px) beside the 140 px name column and ⋯
+// fits from a 227 px pane (207 content), measured; below it, both go.
 test("in a narrow pane only the tabs hide; + Shell stays down to the width where it fits", () => {
-  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/);
   const floor = headerRule(/^\s*\.ph-shell\s*\{/);
-  assert.ok(/^\s*\.ph-tabs:not\(\.one\)\s*\{\s*display:\s*none;?\s*\}\s*$/.test(collapse.body), "the collapse rule hides the tabs of a group of several, and nothing else");
+  assert.ok(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{\s*display:\s*none;?\s*\}\s*$/.test(collapse.body), "the collapse rule hides the tabs of a group of several and the Files toggle, and nothing else");
   assert.ok(/^\s*\.ph-shell\s*\{\s*display:\s*none;?\s*\}\s*$/.test(floor.body), "the floor rule hides + Shell");
-  assert.ok(floor.px >= 203, "+ Shell needs 203 px of content box: never shown in less");
+  assert.ok(floor.px >= 207, "+ Shell needs 207 px of content box: never shown in less");
   assert.ok(floor.px < 230, "a 250 px pane (230 content) still shows + Shell");
 });
 
@@ -269,7 +289,10 @@ test("below the icon threshold every tab shows its icon and hides its label", ()
   const icons = headerRule(/^\s*\.ph-lbl\s*\{/);
   assert.ok(/\.ph-lbl\s*\{[^}]*display:\s*none/.test(icons.body), "label hidden");
   assert.ok(/\.ph-ico\s*\{[^}]*display:\s*block/.test(icons.body), "icon shown");
-  assert.ok(/\.ph-tab\s*\{[^}]*padding:\s*5px\s*[;}]/.test(icons.body), "5 px all round: a 24 px square like the other header icons");
+  // 14px icon + 5px each side = 24px, the kit tab's 24px height: a square like the other header icons. The compact
+  // rule above sets that padding (the icon rule needs no tab padding of its own); Files has a 1px border, so 4px.
+  assert.ok(/\.ph-tab \{ padding: 0 5px; \}/.test(headerRule(/\.ph-sep\s*\{/).body), "compact and icon tabs: 0 5px under the 24px height");
+  assert.ok(/\.ph-files \{ padding: 0 4px; \}/.test(icons.body), "Files: 4px + its 1px border each side");
   assert.ok(/\.cell-bar:has\(\.ph-max\.pin\) \.ph-shell\s*\{[^}]*display:\s*none/.test(icons.body), "a maximized pane's pinned button gives + Shell's room");
 });
 
@@ -331,21 +354,204 @@ test("the credentials store strip's buttons wrap instead of spilling out of the 
   assert.ok(rules.some((b) => /white-space:\s*normal/.test(b) && /max-width:\s*100%/.test(b)), "wrap, inside the strip's width");
 });
 
-// #123: the 318px rule is sized for FOUR icons beside the name's room. A pane of files
+// #123: the 310px rule is sized for the three icon tabs and the Files icon beside the name's room. A pane of files
 // has one tab (24px), which fits far below it: the group is marked `one` (paneTabsClass)
 // and the rule leaves it alone, or the Files tab was gone from every 271-338px pane.
 test("the narrow-pane collapse spares a one-tab group (a pane of files keeps its Files tab)", () => {
-  assert.ok(headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/), "the collapse rule is scoped to groups that are not `one`");
+  assert.ok(headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/), "the collapse rule is scoped to groups that are not `one`");
   assert.ok(!headerRule(/^\s*\.ph-tabs\s*\{\s*display:\s*none/), "no rule hides every .ph-tabs");
 });
 
-// Measured: with + Shell and the 140px name column, one icon tab is clipped in a pane
-// narrower than 249px (content box 229) except 224-230, clean from 249. Below that it
-// hides too (8px of slack), or the lone Files tab is cut in half.
+// Measured (kit + Shell, 1px steps, #172): with + Shell and the 140px name column, one icon tab needs a 253px
+// pane (content box 233). Below that it hides too (4px of slack), or the lone Files tab is cut in half.
 test("a one-tab group hides only below the width where its single icon stops fitting", () => {
   const floor = headerRule(/^\s*\.ph-tabs\.one\s*\{\s*display:\s*none;?\s*\}\s*$/);
-  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\)\s*\{/);
+  const collapse = headerRule(/^\s*\.ph-tabs:not\(\.one\), \.ph-files\s*\{/);
   assert.ok(floor, "a rule hides the one-tab group in a very narrow pane");
-  assert.ok(floor.px >= 229, "the icon is clipped up to a 248px pane (228 content): never shown in less");
-  assert.ok(floor.px < collapse.px, "and it lasts far below the width four icons need");
+  assert.ok(floor.px >= 233, "the icon is clipped up to a 252px pane (232 content): never shown in less");
+  assert.ok(floor.px < collapse.px, "and it lasts far below the width the icons need");
+});
+
+// #172 Task 3 (G6, F13, F14): one selected look for a tab, Files a pressed ghost button, the meta in the kit's
+// .ph-meta look, wrapped so a unit leaves whole.
+test("a tab has ONE selected look: --raise fill, --fg, no underline, no .open class (G6)", () => {
+  const on = rulesFor(".ph-tab.on").join(" ");
+  assert.match(on, /color:\s*var\(--fg\)/);
+  assert.match(on, /background:\s*var\(--raise\)/);
+  assert.deepStrictEqual(rulesFor(".ph-tab.open"), [], "the accent underline of the Files tab is gone");
+  assert.ok(!/inset 0 -2px 0 var\(--accent\)/.test(block), "no underline anywhere in the header");
+  // A pane of files has Files as its one tab: pressed (the drawer is open) takes the same look.
+  const pressed = rulesFor('.ph-tab[aria-pressed="true"]').join(" ");
+  assert.match(pressed, /color:\s*var\(--fg\)/);
+  assert.match(pressed, /background:\s*var\(--raise\)/);
+});
+
+test("the Files toggle is the kit's ghost button, not a tab: no bespoke look, only its place in the row", () => {
+  assert.ok(rulesFor(".ph-files").every((b) => !/background|box-shadow|color/.test(b)), "its pressed look is the kit's .btn[aria-pressed]");
+  assert.ok(rulesFor('.btn[aria-pressed="true"]').some((b) => /background:\s*var\(--raise\)/.test(b) && /inset 0 0 0 1px var\(--faint\)/.test(b)));
+  assert.strictEqual(headerRule(/^\s*\.ph-lbl\s*\{/).body.match(/\.ph-files \{ padding: 0 4px; \}/).length, 1, "icon mode: a 24px square");
+});
+
+test("the meta is the kit's .ph-meta look (mono, --t-xs, --muted) and gives way in whole units, cost first", () => {
+  const m = rulesFor(".ph-meta").join(" ");
+  assert.match(m, /font:\s*var\(--t-xs\)\/var\(--lh-xs\) var\(--font-mono\)/);
+  assert.match(m, /color:\s*var\(--muted\)/);
+  // The wrap places units in DOM order and drops the last first, so the DOM order (model, ctx, cost) IS the give-way
+  // order, cost first (F14, #172 acceptance: a 700px pane keeps haiku-4.5 and ctx 35%). Nothing reverses or reorders it.
+  assert.match(m, /flex-flow:\s*row wrap/, "plain row wrap: the last unit wraps away first");
+  assert.ok(!/row-reverse|wrap-reverse|direction/.test(m), "no reversed flow");
+  assert.deepStrictEqual([".mi-cost", ".mi-ctx", ".mi-model"].flatMap((c) => rulesFor(c)).filter((b) => /order:/.test(b)), [], "no unit is re-ordered: the DOM order is the priority");
+  assert.match(m, /height:\s*var\(--lh-xs\)/, "the second row is clipped");
+  assert.match(m, /overflow:\s*hidden/);
+  assert.match(rulesFor(".ph-meta::before").join(" "), /height:\s*var\(--lh-xs\)/, "the zero-width first item is a full line tall");
+  // The meta shrinks far faster than the name, so the name never loses a sub-pixel to Chrome's ellipsis.
+  const shrink = (sel) => +/flex:\s*0\s+(\d+)\s+auto/.exec(rulesFor(sel).join(" "))[1];
+  assert.ok(shrink(".ph-meta") > shrink(".ph-chip.write") && shrink(".ph-chip.write") >= 10000 && shrink(".ph-chip.cloud") >= 10000);
+});
+
+// The frames' pane header (m1-1/m1-2, ui-kit.css .ptab, .btn-ghost .btn-sm): view tabs are the kit's
+// tab type (--t-sm, weight 500, --muted, 24px, --r-chip), hover --hover, selected --raise + --fg.
+test("a view tab is the kit's .ptab: 24px, --t-sm medium, --muted, hover --hover, selected --raise (G6, F18)", () => {
+  const tab = rulesFor(".ph-tab").join(" ");
+  assert.match(tab, /height:\s*var\(--h-sm\)/);
+  assert.match(tab, /font:\s*(var\(--w-medium\)|500) var\(--t-sm\) var\(--font-ui\)/);
+  assert.match(tab, /color:\s*var\(--muted\)/);
+  assert.match(tab, /border-radius:\s*var\(--r-chip\)/);
+  assert.match(tab, /padding:\s*0 10px/);
+  assert.ok(!/var\(--t-md\)|padding:\s*4px/.test(tab), "not Plan 1's 13px / 4px 9px tab");
+  const hover = rulesFor(".ph-tab:hover").join(" ");
+  assert.match(hover, /color:\s*var\(--fg\)/);
+  assert.match(hover, /background:\s*var\(--hover\)/);
+});
+
+test("+ Shell is the kit's ghost button: the header keeps no look of its own for it", () => {
+  const look = (b) => /background|color|font:|border|box-shadow/.test(b.replace(/font-size:\s*0/, ""));
+  assert.ok(rulesFor(".ph-shell").every((b) => !look(b)), "only the compact + label's size and padding, never a fill, colour or border");
+  assert.deepStrictEqual(rulesFor(".ph-shell:hover"), [], "hover is .btn-ghost:hover");
+  assert.ok(rulesFor(".ph-shell[hidden]").some((b) => /display:\s*none/.test(b)), "a header with no shell profile hides it");
+  // The compact "+": the kit button's 6px gap would sit between the label's empty text and the glyph (+6px), so it is 0.
+  assert.match(headerRule(/\.ph-sep\s*\{/).body, /\.ph-shell \{ font-size: 0; padding: 0 8px; gap: 0; \}/);
+});
+
+// F18 / ruling 2: hovering the header never moves it. ⋯ ⛶ × keep their 24px at all times and only fade in
+// (opacity), so the meta's room is the same with the pointer in or out; pointer-events stay off while they
+// are invisible so a click cannot land on an icon nobody sees. Keyboard focus reveals them too.
+test("the header's ⋯ ⛶ × always hold their 24px: hover and focus change opacity, never width", () => {
+  const base = rulesFor(".ph-ic").join(" ");
+  assert.match(base, /width:\s*24px/);
+  assert.ok(!/width:\s*0/.test(base), "no collapsed width to grow from");
+  assert.match(base, /opacity:\s*0/);
+  assert.match(base, /pointer-events:\s*none/);
+  const shown = rulesFor(".cell-bar:hover .ph-ic").join(" ");
+  assert.match(shown, /opacity:\s*1/);
+  assert.match(shown, /pointer-events:\s*auto/);
+  assert.ok(!/width/.test(shown), "the revealed state changes no size");
+  assert.deepStrictEqual(rulesFor(".cell-bar:focus-within .ph-ic"), rulesFor(".cell-bar:hover .ph-ic"), "keyboard focus reveals them like the pointer");
+  assert.ok(rulesFor(".ph-ics.nar .ph-more").some((b) => /opacity:\s*1/.test(b) && /pointer-events:\s*auto/.test(b)), "a narrow header's ⋯ is always usable");
+});
+
+test("a meta unit that wrapped off the line is visibility: hidden: out of the tab order and the accessibility tree", () => {
+  const off = rulesFor(".mi-off").join(" ");
+  assert.match(off, /visibility:\s*hidden/);
+  assert.ok(!/display:\s*none/.test(off), "no layout change: the fit is measured on the same boxes");
+});
+
+// ---- task 9b: the session workspace's chrome takes the frames' metrics (ui-kit.css .ph .ask .srow .rail; m1-1, m5-1) ----------
+// Each value is the kit's own, as a token; a raw px is only where the kit writes one (the 2px bar, the 6/8/12/16 paddings).
+const decl = (sel) => rulesFor(sel).join(" ");
+
+test("the pane header is the kit's .ph: --panel, --h-ph high, 12px left and 6px right", () => {
+  const bar = rulesFor(".cell-bar").find((b) => /container-type/.test(b));
+  assert.ok(bar, ".cell-bar rule");
+  assert.match(bar, /height:\s*var\(--h-ph\)/);
+  assert.match(bar, /padding:\s*0 6px 0 12px/);
+  assert.match(bar, /background:\s*var\(--panel\)/);
+  assert.match(bar, /border-bottom:\s*1px solid var\(--line\)/);
+});
+
+test("the ask strip is the kit's .ask: 8px 12px on --amber-tint, Open terminal a real .btn-sm, Yes text --on-fill", () => {
+  const strip = decl(".needstrip");
+  assert.match(strip, /padding:\s*8px 12px/);
+  assert.match(strip, /background:\s*var\(--amber-tint\)/);
+  assert.ok(!/color-mix/.test(strip), "no mixed tint");
+  assert.match(decl(".needstrip.is-done"), /background:\s*var\(--panel\)/, "the neutral strip is unchanged");
+  // The padding and radius override skips .btn-sm, so Open terminal is the kit's 24px chip-radius button.
+  assert.ok(rulesFor(".needstrip .nacts .btn:where(:not(.btn-sm))").some((b) => /padding:\s*3px 10px/.test(b) && /border-radius:\s*var\(--r-ctl\)/.test(b)));
+  assert.deepStrictEqual(rulesFor(".needstrip .nacts .btn"), [], "no override reaches a .btn-sm");
+  assert.match(decl(".needstrip .nacts"), /align-items:\s*center/, "the buttons centre on the line");
+  // Yes is the kit's amber .btn-yes (amber fill, --on-fill text): the strip's secondary fill, border and hover skip it.
+  assert.match(decl(".btn-yes"), /background:\s*var\(--amber\)[^}]*color:\s*var\(--on-fill\)/);
+  const skip = ".needstrip .nacts .btn:where(:not(.pri):not(.btn-yes))";
+  assert.ok(rulesFor(skip).some((b) => /background:\s*var\(--raise\)/.test(b)), "the secondary fill skips Yes");
+  assert.ok(rulesFor(skip + ":hover").length === 1 && rulesFor(".needstrip .nacts .btn.off:where(:not(.pri):not(.btn-yes))").length === 1);
+  assert.deepStrictEqual(rulesFor('.needstrip .nacts .btn[data-choice="yes"]:where(:not(.pri))'), [], "no bespoke Yes rule left");
+  assert.match(decl(".btn-yes:disabled:hover"), /background:\s*var\(--amber\)/, "a disabled Yes keeps its fill on hover");
+  assert.ok(!/#1a1304/i.test(block), "no raw dark text left in the strip");
+});
+
+test("sidebar group labels and rows follow the frame's rhythm", () => {
+  assert.match(decl(".grp"), /padding:\s*12px 8px 4px/);
+  assert.deepStrictEqual(rulesFor(".grp:first-child"), [], "the first label has the same 12px above it");
+  const row = decl("#sessions .drow");
+  // Hover is half a step (--hover), always quieter than the selected row's --raise: a hovered row never reads as a second selected one.
+  assert.match(decl("#sessions .drow:hover"), /background:\s*var\(--hover\)/);
+  assert.match(decl("#sessions .drow.sel"), /background:\s*var\(--raise\)/);
+  assert.ok(block.lastIndexOf("#sessions .drow.sel {") > block.lastIndexOf("#sessions .drow:hover {"), "selected + hovered stays --raise (declared later, same weight)");
+  assert.match(row, /gap:\s*10px/);
+  assert.match(row, /padding:\s*6px 8px/);
+  assert.match(decl("#sessions .drow .sname"), /line-height:\s*var\(--lh-md\)/);
+  assert.match(decl("#sessions .drow:not(.nested) .nm"), /font-weight:\s*var\(--w-medium\)/);
+  const sub = decl("#sessions .drow .sub");
+  assert.match(sub, /line-height:\s*var\(--lh-sm\)/);
+  assert.ok(!/margin-top/.test(sub), "the sub-line sits right under the name");
+  assert.match(decl(".dchip"), /font:\s*500 var\(--t-xs\)\/18px/, "18px high chip");
+  assert.match(decl(".dchip.box"), /font-family:\s*var\(--font-mono\)[^}]*font-weight:\s*var\(--w-regular\)/, "the tier is mono 400 like .chip-box");
+  assert.match(decl("#sessions .drow.nested"), /padding:\s*3px 8px 4px 26px/);
+});
+
+test("the in-pane bar sits on the sidebar's edge on every in-pane row, faint, accent on the selected one", () => {
+  const bar = decl("#sessions .drow.inpane::before");
+  assert.match(bar, /left:\s*-8px/);
+  assert.match(bar, /top:\s*6px/);
+  assert.match(bar, /bottom:\s*6px/);
+  assert.match(bar, /width:\s*2px/);
+  assert.match(bar, /border-radius:\s*1px/);
+  assert.match(bar, /background:\s*var\(--faint\)/);
+  assert.match(decl("#sessions .drow.sel.inpane::before"), /background:\s*var\(--accent\)/, "C1: the selected row keeps the accent bar");
+  assert.deepStrictEqual(rulesFor("#sessions .drow.inpane"), [], "no inset shadow on the row any more");
+  assert.ok(!rulesFor("#sessions .drow.sel").some((b) => /box-shadow/.test(b)));
+});
+
+test("the row ⋯ shows on hover, on the selected row and while its own menu is open, pressed in the last case", () => {
+  const shown = rulesFor('#sessions .drow .kbtn[aria-expanded="true"]');
+  assert.ok(shown.some((b) => /background:\s*var\(--raise\)/.test(b) && /box-shadow:\s*inset 0 0 0 1px var\(--faint\)/.test(b)), "the kit's pressed look");
+  const reveal = rulesFor("#sessions .drow:hover .kbtn").join(" ");
+  assert.match(reveal, /opacity:\s*1/);
+  assert.match(reveal, /width:\s*var\(--h-sm\)/);
+  assert.ok(rulesFor("#sessions .drow.sel .kbtn").some((b) => /opacity:\s*1/.test(b)), "the selected row's ⋯ stays");
+  assert.ok(rulesFor('#sessions .drow .kbtn[aria-expanded="true"]').some((b) => /opacity:\s*1/.test(b) && /width:\s*var\(--h-sm\)/.test(b)), "an open menu's ⋯ is neither collapsed nor transparent");
+  // The pressed look is declared after the hover fill, so hovering the open menu's ⋯ keeps it pressed (the kit's order).
+  assert.ok(block.lastIndexOf('#sessions .drow .kbtn[aria-expanded="true"] {') > block.indexOf("#sessions .drow .kbtn:hover {"));
+});
+
+test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New session, 12px links", () => {
+  assert.match(decl("#side-top"), /padding:\s*12px 16px/);
+  assert.match(decl("#side-top"), /gap:\s*var\(--sp-3\)/, "12px between the top rows, as .m1-side-top");
+  assert.match(decl("#side-new"), /height:\s*var\(--h-ctl\)/);
+  assert.match(decl("#side-foot"), /padding:\s*12px 16px/);
+  assert.match(decl(".side-links button"), /font:\s*var\(--t-sm\) var\(--font-ui\)/);
+  assert.match(decl(".side-links"), /margin:\s*0 -8px/, "the first link's word starts on the 16px edge");
+});
+
+test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button (accent, p2)", () => {
+  const rail = decl(".sidebar-hidden .rail48");
+  assert.match(rail, /padding:\s*12px 0 10px/);
+  assert.match(rail, /gap:\s*6px/);
+  assert.match(decl(".ri"), /width:\s*32px[^}]*height:\s*32px|height:\s*32px[^}]*width:\s*32px/);
+  assert.match(decl(".ri"), /border-radius:\s*var\(--r-ctl\)/);
+  const add = decl(".ri.add");
+  assert.match(add, /width:\s*var\(--h-sm\)/);
+  assert.match(add, /height:\s*var\(--h-sm\)/);
+  assert.match(add, /background:\s*var\(--accent\)/, "the decided accent stays");
+  assert.match(decl(".ri.on"), /background:\s*var\(--raise\)[^}]*box-shadow:\s*inset 2px 0 0 var\(--accent\)/, "C1: selected = raise + the accent inset");
 });

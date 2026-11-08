@@ -62,8 +62,8 @@
             <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
           </div>
           <span class="side-fill"></span>
-          <button id="side-palette" type="button" title="Command palette" aria-label="Open command palette">&#8984;</button>
-          <button id="side-collapse" type="button" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
+          <button id="side-palette" type="button" class="btn btn-ghost btn-icon btn-sm" title="Command palette" aria-label="Command palette"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.2" cy="6.2" r="4"/><path d="M9.2 9.2l3.3 3.3"/></svg></button>
+          <button id="side-collapse" type="button" class="btn btn-ghost btn-icon btn-sm" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
         </div>
         <button id="side-new" type="button" class="pbtn">New session</button>
       </div>
@@ -107,7 +107,7 @@
         <div id="limits-side"></div>
         <div class="side-stats">
           <span id="side-cost" hidden></span>
-          <span id="side-elevated">0 elevated</span>
+          <span id="side-elevated" hidden></span>
         </div>
         <div class="side-links">
           <button id="side-audit" type="button" hidden>Audit</button>
@@ -116,7 +116,7 @@
         </div>
       </div>
     </aside>
-    <div id="split-v" role="separator" aria-orientation="vertical" title="Drag to resize the sidebar"></div>
+    <div id="split-v" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuemin="200" aria-valuemax="560" aria-valuenow="290" tabindex="0" title="Drag or use the arrow keys to resize the sidebar, double-click to reset"></div>
     <div id="term-topbar">
       <button id="tt-back" class="ic" aria-label="Back to sessions">&#8249;</button>
       <span id="tt-dot" class="dot"></span>
