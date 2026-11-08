@@ -27,6 +27,11 @@ function spawnAWS(p) {
   return out;
 }
 const spawnBase = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
+// spawnIsShellProfile: the profile runs a plain shell (its bin is one of SPAWN_SHELL_BINS), so a session of it has no agent.
+// A capability test on what the profile runs, the one profileTouchLine uses for "host · bash", never "is it Claude".
+function spawnIsShellProfile(p) {
+  return !!p && SPAWN_SHELL_BINS.has(spawnBase(p.bin));
+}
 
 // spawnTierOf: the tier a profile runs under. boxRuntime, when given, is the
 // answer of /api/meta: without a box layer every session is host tier whatever
@@ -38,6 +43,11 @@ function spawnTierOf(profile, boxRuntime) {
 
 // profileTouchLine: what a session of this profile can reach, in a line:
 //   box · aws culipulse-prod · gh culiops     host · not contained     host · bash
+// A private copy's source is written with the home prefix as ~ (frame M4.1, "private copy of ~/culiops-agent-box"), the way
+// every other path on the page is: shortPath (fsops.js) reads the page's HOME_DIR and leaves a path outside home whole.
+// Its callers are the New session list and the empty state, both desktop-only.
+// boxRuntime is passed only once /api/meta has answered (`metaLoaded ? boxRuntime : undefined`): its "" before that reads as
+// "no box layer" and would call every box profile "host · not contained"; undefined falls back to the profile's own runtime.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
   if (spawnTierOf(prof, boxRuntime) === "host") {
@@ -48,7 +58,7 @@ function profileTouchLine(p, boxRuntime) {
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
-  if (prof.clone_of) parts.push("private copy of " + prof.clone_of);
+  if (prof.clone_of) parts.push("private copy of " + spawnDep("shortPath", "./fsops.js")(prof.clone_of));
   if (parts.length === 1) parts.push("no credentials");
   return parts.join(" · ");
 }
@@ -271,17 +281,26 @@ function reachModel(o) {
   };
 }
 
+const SPAWN_CLAUDE_HOME = "~/.claude";
+// spawnExpand: `text` with its leading `short` path put back as `full`; text that does not start with `short` (or an
+// absent `full`) comes back as it was, so a tooltip never says more than the row does.
+function spawnExpand(text, short, full) {
+  return short && full && text.startsWith(short) ? full + text.slice(short.length) : text;
+}
+
 // reachRows: the rows of the "This agent will be able to" box, projected from
 // reachModel (one line per fact; the profile page draws the same model in blocks).
 //   profile  the ProfileView (with the account the form currently shows, if the
 //            caller overrides it)
 //   tier     "box" | "host" as the form currently has it
-//   cwd      the workspace as it is to be shown
+//   cwd      the workspace as it is to be shown (home written ~)
+//   cwdFull  the same workspace as the field holds it: the row's tooltip says this one
 //   meta     /api/meta: aws_connections [{name, prod, write_capable}], static_tokens
 //   creds    GET /api/credentials, or null when it could not be read:
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
 //   bundleImports  /api/meta bundle_imports: lists the CLAUDE.md imports row
-// A row is {k, v, prod?, name?, tone?}. An AWS row with prod set is drawn by the
+// A row is {k, v, prod?, name?, tone?, full?, path?}: `full` is the tooltip text when it is longer than `v` (a path
+// not abbreviated), `path` the part of `v` drawn as machine text. An AWS row with prod set is drawn by the
 // caller as name + a red PROD tag + the rest of v (v starts with name). tone:
 // "warn" (amber, needs you). Containment is never coloured: red is for PROD and
 // write only (the PROD flag), a host session is told in words.
@@ -289,8 +308,23 @@ function reachModel(o) {
 function reachRows(o) {
   const x = o || {};
   const m = reachModel(x);
-  const rows = [{ k: "Files", v: m.files }];
-  if (m.original) rows.push({ k: "Original", v: m.original });
+  const shortOf = spawnDep("shortPath", "./fsops.js");
+  const files = { k: "Files", v: m.files };
+  // The workspace is drawn short (~/…), its tooltip long: `full` is the same text with the path as the field holds it,
+  // `path` the part of `v` drawn as machine text. Neither is sent when there is no workspace, or on the host.
+  if (x.tier !== "host" && x.cwd) {
+    files.path = x.cwd;
+    const full = spawnExpand(m.files, x.cwd, x.cwdFull);
+    if (full !== m.files) files.full = full;
+  }
+  const rows = [files];
+  if (m.original) {
+    const clone = String(x.profile && x.profile.clone_of || "");
+    const row = { k: "Original", v: m.original, path: shortOf(clone) + "/.git" };
+    const full = spawnExpand(m.original, shortOf(clone), clone);
+    if (full !== m.original) row.full = full;
+    rows.push(row);
+  }
 
   for (const it of m.cloud.filter((i) => i.kind === "AWS" || i.kind === "Old-style AWS")) {
     const f = it.facts;
@@ -311,7 +345,7 @@ function reachRows(o) {
 
   const names = (kinds) => m.reachable.filter((i) => kinds.includes(i.kind)).map((i) => i.name);
   const reads = m.reachable.filter((i) => i.kind === "Folder" || i.original === true).map((i) => i.name);
-  if (reads.length) rows.push({ k: "Reads", v: reads.join(", ") });
+  if (reads.length) rows.push({ k: "Reads", v: reads.join(", "), path: reads.join(", ") });
   if (m.reachable.some((i) => i.kind === "Files" && i.original !== true)) rows.push({ k: "Imports", v: "CLAUDE.md imports, read-only copies" });
   const domains = names(["Domain"]);
   if (domains.length) rows.push({ k: "Domains", v: domains.join(", ") });
@@ -319,7 +353,11 @@ function reachRows(o) {
   if (x.tier === "host") rows.push({ k: "Network", v: "not contained" });
   else if (m.network) rows.push({ k: "Network", v: m.network.open ? "open" : "allowlist only" });
 
-  if (m.account) rows.push({ k: "Account", v: m.account });
+  if (m.account) {
+    const row = { k: "Account", v: m.account };
+    if (m.account.includes(SPAWN_CLAUDE_HOME)) row.path = SPAWN_CLAUDE_HOME; // "default (~/.claude)": the folder is machine text
+    rows.push(row);
+  }
   if (m.store) rows.push({ k: "Store", v: m.store.v, tone: m.store.tone });
   return rows;
 }
@@ -337,17 +375,43 @@ function pickSpawnProfile(profiles, last, shellProfile) {
   return list.length ? list[0].name : "";
 }
 
-// pickSpawnCwd: the workspace the dialog opens on. The profile's own default wins
-// (it always did); then the last spawn's directory, but only when that spawn was
-// of THIS profile, so a leftover directory of another profile is never prefilled;
-// then the first workspace usable on the tier.
-function pickSpawnCwd(o) {
+// spawnCwdChoice: the workspace the dialog opens on, and where it came from (the help line under the field says
+// so: "From the profile", "Last used"). The profile's own default wins (it always did); then the last spawn's
+// directory, but only when that spawn was of THIS profile, so a leftover directory of another profile is never
+// prefilled; then the first workspace usable on the tier.
+//   o.skipScratch (default false; the desktop passes true): a last directory under /tmp is not prefilled either (the
+//   session of a throwaway run, F38: it reads as a leftover test path). Off, the answer is the one the dialog always
+//   gave, which is what the phone keeps.
+//   -> {cwd, source: "profile" | "last" | "default"}
+function spawnCwdChoice(o) {
   const x = o || {};
   const p = x.profile || {};
-  if (p.default_cwd) return p.default_cwd;
+  if (p.default_cwd) return { cwd: p.default_cwd, source: "profile" };
   const last = x.last;
-  if (last && last.cwd && p.name && last.agent === p.name) return last.cwd;
-  return spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier);
+  if (last && last.cwd && p.name && last.agent === p.name && !(x.skipScratch === true && spawnScratchCwd(last.cwd))) return { cwd: last.cwd, source: "last" };
+  return { cwd: spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier), source: "default" };
+}
+
+// spawnScratchCwd: /tmp itself or anything under it, whole components ("/tmpfoo" is not scratch).
+function spawnScratchCwd(p) {
+  const t = String(p).replace(/\/+$/, "");
+  return t === "/tmp" || t.startsWith("/tmp/");
+}
+
+// pickSpawnCwd: the workspace alone.
+function pickSpawnCwd(o) {
+  return spawnCwdChoice(o).cwd;
+}
+
+// spawnWsNoteFor: the help line under the Workspace field while it still holds what the dialog opened on (frames
+// M4.1 and M4.2): "Last used · 48 project roots · type to filter · ↵ to pick", "From the profile · type to
+// filter · ↵ to pick" (no count: the profile named the folder, the roots are not what is being offered), and the
+// plain caption for a default.
+function spawnWsNoteFor(source, count) {
+  const idle = spawnDep("spawnWsIdleNote", "./dirpicker.js");
+  if (source === "last") return "Last used · " + idle(count);
+  if (source === "profile") return "From the profile · type to filter · \u21b5 to pick";
+  return idle(count);
 }
 
 // spawnHotkeyAction: what a submit of the New session form does (the Spawn button,
@@ -380,5 +444,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
+  module.exports = { spawnIsShellProfile, profileTouchLine, reachRows, reachModel, pickSpawnProfile, pickSpawnCwd, spawnCwdChoice, spawnWsNoteFor, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
 }

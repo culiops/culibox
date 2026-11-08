@@ -141,6 +141,8 @@ function page(over) {
     stEntries: [{ name: "grafana-prod", prod: true, env: ["GRAFANA_SERVICE_ACCOUNT_TOKEN"], hosts: [{ host: "grafana.acme.example.com", port: 443 }] }],
     pfCredsView: { store: { initialized: true, locked: false }, aws: [] },
     ghApps: ["acme-app"], refreshCredLists: async () => { calls.push("refreshCredLists"); },
+    // tabs.js draws the dock's glyphs (the ⋯ menu's Duplicate… and Delete… icons); a bare svg stands in here.
+    tabIcon: () => new Node("svg"), dockIcon: () => new Node("svg"),
     awsErrText: (e) => "aws: " + e.message,
     CRED_D4: "The agent will be able to change this AWS account: create, modify and delete resources.",
     CRED_D4_REMEDY: "Use a role without write access as the base and put this one under Elevate.",
@@ -190,7 +192,7 @@ function page(over) {
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js"]) {
+  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -400,22 +402,23 @@ test("a read-only profile has no Edit, the config.json note, Duplicate as the pr
   assert.strictEqual(dup.length, 1);
   assert.ok(dup[0].className.includes("pfv-btn-primary"));
   assert.strictEqual(byText(root, "button", "Start session").length, 1);
-  assert.strictEqual(byCls(root, "pfv-menu").length, 0);
+  assert.strictEqual(byCls(root, "menu").length, 0);
   assert.strictEqual(byCls(root, "pfv-btn-icon").length, 0);
   assert.strictEqual(byText(root, "button", "Switch to box").length, 0, "a profile you cannot edit has nothing to switch");
 });
 
-test("an editable profile has Start session and a menu with Duplicate and a red Delete…", async () => {
+test("an editable profile has Start session and a menu with Duplicate… and a red Delete… (the kit menu: profile-menu.test.js)", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
   const root = t.els["pfv-in"];
   const [start] = byText(root, "button", "Start session");
   assert.ok(start.className.includes("pfv-btn-secondary"));
-  const menu = byCls(root, "pfv-menu")[0];
+  const menu = byCls(root, "menu")[0];
   assert.ok(menu.hidden, "closed until the ⋯ button opens it");
-  const items = byCls(menu, "pfv-menu-item");
-  assert.deepStrictEqual(items.map((i) => i.textContent), ["Duplicate", "Delete…"]);
-  assert.ok(items[1].className.includes("pfv-menu-red"));
+  assert.strictEqual(menu.getAttribute("aria-label"), "aws-ops profile actions");
+  const items = byCls(menu, "menu-item");
+  assert.deepStrictEqual(items.map((i) => i.textContent), ["Duplicate…", "Delete…"]);
+  assert.ok(items[1].className.includes("is-danger"));
   const more = byCls(root, "pfv-btn-icon")[0];
   assert.strictEqual(more.getAttribute("aria-label"), "More actions for aws-ops");
   assert.strictEqual(more.getAttribute("aria-expanded"), "false");
@@ -707,7 +710,7 @@ test("a list refetch with the same data keeps the nav, the page, the focus and t
   const navKids = t.els["pf-navlist"].children.slice();
   const pageKids = t.els["pfv-in"].children.slice();
   byCls(t.els["pfv-in"], "pfv-btn-icon")[0].click();
-  const menu = byCls(t.els["pfv-in"], "pfv-menu")[0];
+  const menu = byCls(t.els["pfv-in"], "menu")[0];
   assert.strictEqual(menu.hidden, false);
   const focused = navKids[2];
   focused.focus();
@@ -2007,7 +2010,7 @@ test("the + Add picker is a dialog under its link: a filter, then AWS connection
   assert.strictEqual(filter.getAttribute("placeholder"), "Filter connections and tokens");
   assert.strictEqual(filter.getAttribute("aria-label"), "Filter connections and tokens");
   assert.strictEqual(Node.focused, filter, "focus starts in the filter");
-  assert.deepStrictEqual(groupsOf(t).map((g) => texts(g, "pfv-pick-g")[0]), ["AWS connections", "GitHub", "Tokens"]);
+  assert.deepStrictEqual(groupsOf(t).map((g) => texts(g, "menu-label")[0]), ["AWS connections", "GitHub", "Tokens"]);
   assert.deepStrictEqual(groupsOf(t).map((g) => byCls(g, "pfv-opt").map(optName)), [
     ["prod-read PROD", "staging-read", "sandbox", "sso-lab", "New AWS connection…"],
     ["Another org or user", "New GitHub App…"],
@@ -2126,7 +2129,7 @@ test("while the profile has the old-style AWS setting the picker says why AWS ca
   assert.deepStrictEqual(byCls(aws(), "pfv-opt").map(optName), [], "the server takes the old-style setting or saved connections, never both");
   assert.deepStrictEqual(texts(aws(), "pfv-pick-note"), ["Move the old-style AWS setting to a saved connection, or remove it, before adding connections."]);
   assert.strictEqual(optBtn(t, "cloud", "New AWS connection…"), undefined, "a connection made now could not be saved with it");
-  assert.deepStrictEqual(groupsOf(t).slice(1).map((g) => texts(g, "pfv-pick-g")[0]), ["GitHub", "Tokens"], "the rest is unaffected");
+  assert.deepStrictEqual(groupsOf(t).slice(1).map((g) => texts(g, "menu-label")[0]), ["GitHub", "Tokens"], "the rest is unaffected");
   // Taking the setting away (pending, like any removal) frees AWS in the same edit.
   byText(rowFor(t, "cloud", "AWS", "Old-style AWS setting"), "button", "Remove")[0].click();
   assert.strictEqual(t.run("pfvState").picker, "cloud", "the picker stays open under the row");
@@ -2346,7 +2349,7 @@ test("Also reachable's picker is the same popover with its two kinds, no filter 
   assert.strictEqual(pop.getAttribute("role"), "dialog");
   assert.strictEqual(pop.getAttribute("aria-label"), "Add a folder or a domain");
   assert.strictEqual(byCls(pop, "pfv-pick-find").length, 0, "two options need no filter");
-  assert.strictEqual(byCls(pop, "pfv-pick-g").length, 0);
+  assert.strictEqual(byCls(pop, "menu-label").length, 0);
   assert.deepStrictEqual(optsOf(t, "reachable").map(optName), ["Folder it can read", "Domain it can reach"]);
   assert.deepStrictEqual(optsOf(t, "reachable").map((b) => texts(b, "pfv-opt-s")[0]), [
     "Read only, at the same path inside the box. Never list secrets.", "A hostname or *.example.com, over HTTPS",
@@ -4684,7 +4687,8 @@ const nameErr = (t) => texts(field(t, "name").parent, "pfv-ferr");
 const wsErr = (t) => texts(field(t, "folder").parent, "pfv-ferr");
 const btn = (t, label) => byText(rootOf(t), "button", label)[0];
 const POSTS = (t) => t.calls.filter((c) => c.startsWith("POST"));
-const dupMenu = (t, label) => byText(rootOf(t), "button", label || "Duplicate")[0];
+// The ⋯ menu's Duplicate… of an editable profile, or the primary Duplicate of a config.json one (it has no menu).
+const dupMenu = (t, label) => byText(rootOf(t), "button", label || (byCls(rootOf(t), "menu").length ? "Duplicate…" : "Duplicate"))[0];
 const navAdd = (t) => byCls(t.els["pf-navlist"], "pfv-ni-add")[0];
 const NO_DOCKER = { boxRuntime: "", boxUnavailableReason: "Docker is not installed" };
 const nextBtn = (t, label) => byCls(rootOf(t), "pfv-next-btn").find((b) => texts(b, "pfv-next-t")[0] === label);
@@ -5149,7 +5153,7 @@ test("duplicate of a config.json profile creates an editable profile", async () 
   const root = rootOf(t);
   assert.deepStrictEqual(texts(root, "pfv-note"), [], "no config.json line");
   assert.ok(byText(root, "button", "Edit").length > 0, "a profile you can edit");
-  assert.strictEqual(byText(root, "button", "Duplicate").length, 1);
+  assert.strictEqual(byText(root, "button", "Duplicate…").length, 1, "the menu's Duplicate…");
 });
 
 test("duplicating a private copy gives the copy its own folder, and it stays in a box", async () => {

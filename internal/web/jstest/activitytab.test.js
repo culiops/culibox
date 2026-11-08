@@ -178,5 +178,8 @@ test("outcome tone colours out-rank the muted .act-out default", () => {
 test("the New session dialog fits the viewport and keeps its action row pinned", () => {
   const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   assert.match(css, /#spawn-modal\s*\{[^}]*max-height:\s*calc\(100vh - 32px\)/);
-  assert.match(css, /#spawn \.spawn-actions\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*0/);
+  // Pinned by being outside the form's scroll box (frame M4.1, #173): out of flow on the card's bottom edge, with the
+  // body (a fixed min(640px, ...) tall) keeping its band free. It was sticky inside the form before.
+  assert.match(css, /#spawn \.spawn-actions\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*0/);
+  assert.match(css, /#spawn-modal \.dlg-body\s*\{[^}]*height:\s*min\(640px,[^}]*margin-bottom:\s*var\(--ns-foot\)/);
 });

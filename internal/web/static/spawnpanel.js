@@ -146,14 +146,17 @@ function renderSpawnPlist() {
     b.dataset.name = p.name;
     b.setAttribute("aria-pressed", p.name === cur ? "true" : "false");
     if (p.name === cur) b.classList.add("sel");
-    const touch = spawnPanelEl("span", "sp-touch", profileTouchLine(p, boxRuntime));
+    const touch = spawnPanelEl("span", "sp-touch", profileTouchLine(p, metaLoaded ? boxRuntime : undefined));
     const nhLabel = notHomeLabel(p.not_home);
     if (nhLabel) {
       const nh = spawnPanelEl("span", "sp-nothome", nhLabel);
       nh.title = notHomeTitle(p.not_home);
       touch.append(" ", nh);
     }
-    b.append(spawnPanelEl("span", "sp-name", p.name), touch);
+    // A long name ends in an ellipsis (desktop.css), so its whole text is the tooltip (frame M4.1's title attributes).
+    const nm = spawnPanelEl("span", "sp-name", p.name);
+    nm.title = p.name;
+    b.append(nm, touch);
     b.onclick = () => spawnPlistPick(p.name);
     b.onkeydown = (e) => {
       if (e.key === "ArrowDown") { e.preventDefault(); spawnPlistMove(b, 1); }
@@ -201,6 +204,7 @@ function renderSpawnReach() {
     profile: acct ? Object.assign({}, p, { account: acct }) : p,
     tier: spawnCurrentTier(),
     cwd: shortPath(getCwd()),
+    cwdFull: getCwd(),
     meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
     bundleImports,
@@ -208,16 +212,21 @@ function renderSpawnReach() {
   paintReachRows(box, rows, { title: "This agent will be able to" });
 }
 
-// paintReachRows draws reachRows' rows into `box`, replacing what it held: a
-// row per key. An AWS row on a prod connection carries the red PROD tag after
-// its name. Every string is server or operator text, so it goes in through
-// textContent only.
+// paintReachRows draws reachRows' rows into `box`, replacing what it held: the title, then one label/value grid
+// (frame M4.1) with a row per key. A value's tooltip is its full text (`full` when the row abbreviates a path);
+// a path inside it is its own mono span; an AWS row on a prod connection carries the red PROD tag after its name.
+// Every string is server or operator text, so it goes in through textContent only.
 function paintReachRows(box, rows, opts) {
   const o = opts || {};
   const value = (r, cls) => {
     const v = spawnPanelEl("span", cls);
+    v.title = r.full || r.v;
+    const at = r.path ? r.v.indexOf(r.path) : -1;
     if (r.prod && r.name && r.v.startsWith(r.name)) {
       v.append(r.name, spawnPanelEl("span", "sr-prod", "PROD"), r.v.slice(r.name.length));
+    } else if (at >= 0) {
+      const before = r.v.slice(0, at), after = r.v.slice(at + r.path.length);
+      v.append(...(before ? [before] : []), spawnPanelEl("span", "sr-path", r.path), ...(after ? [after] : []));
     } else {
       v.textContent = r.v;
     }
@@ -225,12 +234,14 @@ function paintReachRows(box, rows, opts) {
   };
   const kids = [];
   if (o.title) kids.push(spawnPanelEl("div", "sr-title", o.title));
+  const grid = spawnPanelEl("div", "sr-grid");
   for (const r of rows || []) {
     const row = spawnPanelEl("div", "sr-row");
     if (r.tone) row.classList.add("tone-" + r.tone);
     row.append(spawnPanelEl("span", "sr-k", r.k), value(r, "sr-v"));
-    kids.push(row);
+    grid.append(row);
   }
+  kids.push(grid);
   box.replaceChildren(...kids);
 }
 

@@ -92,7 +92,7 @@ test("the xterm bar stays visible at rest, but only when there is something to s
   assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar.invisible").length === 0, "plain .invisible (nothing to scroll) is not overridden");
 });
 
-test("the New session dialog is a plain rounded card with a header and Esc, not the box frame", () => {
+test("the New session dialog is a plain rounded card with a header and a close, not the box frame", () => {
   assert.ok(rulesFor("#spawn-modal::before").some((b) => /display:\s*none/.test(b)), "box frame hidden");
   const card = rulesFor("#spawn-modal").join(" ");
   assert.ok(/border-radius:\s*var\(--r-dlg\)/.test(card), "rounded card");
@@ -100,21 +100,105 @@ test("the New session dialog is a plain rounded card with a header and Esc, not 
   assert.ok(/width:\s*820px/.test(card) && /max-height:\s*calc\(100vh - 32px\)/.test(card), "size unchanged");
   const title = rulesFor("#spawn-modal .dlg-title").join(" ");
   assert.ok(/position:\s*static/.test(title) && /transform:\s*none/.test(title), "no legend in the border");
-  assert.ok(/border-bottom:\s*1px solid var\(--line\)/.test(title), "header rule");
+  // The header's rule is the body's border-top (frame M4.1, #173), so the title carries none of its own.
+  assert.ok(!/border-bottom/.test(title), "the title's rule moved to the body");
+  assert.ok(/border-top:\s*1px solid var\(--line\)/.test(rulesFor("#spawn-modal .dlg-body").join(" ")), "header rule");
   assert.ok(rulesFor("#spawn-modal .dlg-head").some((b) => /position:\s*absolute/.test(b)), "close in the corner");
-  assert.ok(rulesFor("#spawn-modal .dlg-x::before").some((b) => /content:\s*"Esc"/.test(b)), "Esc hint");
-  // Centred on the ~52px header (title: 16px padding + one 15px line), not pinned
-  // by a fixed top that only matches one control height.
+  // The close is the dialogs' one ghost X (F28, #173): a 28px square with no "Esc" word beside it.
+  assert.deepStrictEqual(rulesFor("#spawn-modal .dlg-x::before"), [], "no Esc word");
+  const x = rulesFor("#spawn-modal .dlg-x").join(" ");
+  assert.ok(/width:\s*var\(--h-ctl\)/.test(x) && /color:\s*var\(--muted\)/.test(x), "ghost icon square");
+  // Level with the title text: the head is 16px above and 12px below the 28px close (frame M4.1, #173), so the
+  // close sits 16px down and 16px in, and the title is centred on the same 28px.
   const head = rulesFor("#spawn-modal .dlg-head").join(" ");
-  assert.ok(/top:\s*26px/.test(head) && /transform:\s*translateY\(-50%\)/.test(head), "close centred on the header");
-  assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /var\(--raise\)/.test(b)));
+  assert.ok(/top:\s*var\(--sp-4\)/.test(head) && /right:\s*var\(--sp-4\)/.test(head) && !/transform/.test(head), "close level with the title");
+  assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /background:\s*var\(--hover\)/.test(b) && /color:\s*var\(--fg\)/.test(b)));
 });
 
-test("the profile list does not size the dialog: the form decides the height and the list scrolls", () => {
+// Gate fix wave (#173, DIFF G1-G3): the dialog cards wear the kit's --e-dlg (not a private 0 18px 60px), their backdrop is the
+// kit's --scrim (New session is box-framed, so the box-less rule never reached it), and the ask title is not tracked out.
+test("every desktop dialog card has the kit's --e-dlg shadow (G1)", () => {
+  for (const sel of ["#spawn-modal", "#ask-modal", "dialog:not(.as-page):not([box-]):not(.sheet-dialog)"]) {
+    const r = rulesFor(sel).join(" ");
+    assert.match(r, /box-shadow:\s*var\(--e-dlg\)/, sel);
+    assert.doesNotMatch(r, /18px 60px/, sel + " keeps no private shadow");
+  }
+});
+
+// Safari 16 (the product's floor) does not resolve a custom property inside ::backdrop: it inherits from :root only in Chrome
+// 122+, Firefox 120+ and Safari 17.4+, so `background: var(--scrim)` would be invalid there and the dialog would lose its
+// scrim. The two rules state --scrim's value as a literal; this keeps the literal and the token the same colour.
+test("the dialog backdrop is the kit's scrim as a literal (no var() inside ::backdrop), on the box-less dialogs, the ask dialog and New session (G3)", () => {
+  const token = /--scrim:\s*(rgba?\([^)]*\))/.exec(css);
+  assert.ok(token, "the --scrim token");
+  const norm = (c) => c.replace(/\s+/g, "").replace(/(\D)0?\.(\d)/g, "$10.$2");
+  for (const sel of ["dialog:not([box-])::backdrop", "#ask-modal::backdrop", "#spawn-modal::backdrop"]) {
+    const rs = rulesFor(sel);
+    assert.ok(rs.length > 0, sel + " has a rule");
+    for (const b of rs) {
+      assert.doesNotMatch(b, /var\(/, sel + " reads no custom property");
+      const m = /background:\s*(rgba?\([^)]*\))/.exec(b);
+      assert.ok(m, sel + " has a literal background");
+      assert.strictEqual(norm(m[1]), norm(token[1]), sel + " is the --scrim colour");
+    }
+    assert.ok(!rs.some((b) => /rgba\(5, ?7, ?9/.test(b)), sel + " keeps no private scrim colour");
+  }
+  assert.ok(/::backdrop[^{}]*\{[^{}]*rgba\(5, 6, 8, \.62\)/.test(css), "written as the token is");
+});
+
+test("the ask title is not tracked out: it carries letter-spacing 0 like New session's (G2)", () => {
+  assert.match(rulesFor("#ask-modal .dlg-title").join(" "), /letter-spacing:\s*0\b/);
+  assert.match(rulesFor("#spawn-modal .dlg-title").join(" "), /letter-spacing:\s*0\b/);
+});
+
+// G12 (#171 follow-up 8, #173): a dialog's fields rest on the kit's --faint border, not --line: Report a problem's textarea
+// (the generic dialog .fld) and the ask dialog's prompt field (New folder, Rename, the protected-folder name), which is the
+// kit's .input: 32px, 0 10px, --r-ctl, --bg, --t-md. Their keyboard focus stays the accent border + 1px accent shadow.
+test("a plain dialog's .fld rests on --faint and its focus rule still out-weighs it (G12)", () => {
+  const SEL = "dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld";
+  const rest = rulesFor(SEL).join(" ");
+  assert.match(rest, /border-color:\s*var\(--faint\)/);
+  assert.doesNotMatch(rest, /var\(--line\)/);
+  assert.match(rulesFor(SEL + ":focus-visible").join(" "), /border-color:\s*var\(--accent\)[^}]*box-shadow:\s*0 0 0 1px var\(--accent\)/);
+  // Report a problem's own rule leaves the border alone, so the field takes that colour.
+  assert.doesNotMatch(rulesFor("#bug-modal #bug-what").join(" "), /(^|[ ;])border(-color)?:/);
+});
+
+test("the ask dialog's prompt field is the kit's .input, resting on --faint, with the accent focus (G12)", () => {
+  const r = rulesFor("#ask-modal #ask-input").join(" ");
+  for (const re of [/height:\s*var\(--h-lg\)/, /padding:\s*0 10px/, /border:\s*1px solid var\(--faint\)/, /border-radius:\s*var\(--r-ctl\)/,
+    /background:\s*var\(--bg\)/, /color:\s*var\(--fg\)/, /font-size:\s*var\(--t-md\)/, /font-family:\s*var\(--font-ui\)/]) assert.match(r, re, String(re));
+  assert.doesNotMatch(r, /var\(--line\)/, "no --line at rest");
+  assert.match(rulesFor("#ask-modal #ask-input:focus-visible").join(" "), /outline:\s*none;\s*border-color:\s*var\(--accent\);\s*box-shadow:\s*0 0 0 1px var\(--accent\)/);
+});
+
+// F28 (#173): the three plain dialogs (ask, New session, Report a problem) close with the same X: the kit's ghost
+// icon button, a --h-ctl square, muted, a --hover fill on hover, the × glyph on the page's type scale.
+test("the ask, New session and Report a problem closes are one ghost icon button", () => {
+  const SELS = ["#ask-modal .dlg-x", "#spawn-modal .dlg-x", '#bug-modal .dhd .btn.gh[data-close="bug-modal"]'];
+  const look = SELS.map((sel) => rulesFor(sel).join(" "));
+  const want = [/width:\s*var\(--h-ctl\)/, /min-height:\s*var\(--h-ctl\)/, /padding:\s*0;/, /background:\s*transparent/, /color:\s*var\(--muted\)/,
+    /border-radius:\s*var\(--r-ctl\)/, /font-size:\s*var\(--t-lg\)/, /justify-content:\s*center/];
+  for (let i = 0; i < SELS.length; i++) for (const re of want) assert.match(look[i], re, SELS[i] + " " + re);
+  for (const sel of SELS) {
+    const hover = rulesFor(sel + ":hover").join(" ");
+    assert.match(hover, /background:\s*var\(--hover\)/, sel);
+    assert.match(hover, /color:\s*var\(--fg\)/, sel);
+  }
+  // The bug dialog's id has to weigh over the box-less dialogs' `.dhd .btn.gh` padding, size and --raise hover.
+  assert.ok(rulesFor("dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh").length > 0, "the rule it must out-weigh is still there");
+  // No "Esc" word on any of the three, and the phone's own close (#spawn-topbar .spawn-x) is not one of them.
+  for (const sel of ["#ask-modal .dlg-x::before", "#spawn-modal .dlg-x::before", '#bug-modal .dhd .btn.gh[data-close="bug-modal"]::before']) assert.deepStrictEqual(rulesFor(sel), [], sel);
+  assert.deepStrictEqual(rulesFor("#spawn-topbar .spawn-x"), [], "desktop.css leaves the phone sheet's close alone");
+});
+
+// The body is a fixed height now (frame M4.1, #173): neither the list nor the form sizes the dialog, each scrolls inside
+// its column. (It used to be the other way round: the form decided and the list was kept from stretching it.)
+test("the profile list does not size the dialog: the body's height is fixed and the list scrolls", () => {
   const r = rulesFor("#spawn-plist").join(" ");
-  assert.ok(/contain:\s*size/.test(r), "contain: size");
-  assert.ok(/align-self:\s*stretch/.test(r), "stretch to the form's height");
-  assert.ok(/overflow-y:\s*auto/.test(r), "still scrolls");
+  assert.ok(/min-height:\s*0/.test(r), "may be shorter than its rows");
+  assert.ok(/overflow:\s*auto/.test(r), "still scrolls");
+  assert.ok(/height:\s*min\(640px,/.test(rulesFor("#spawn-modal .dlg-body").join(" ")), "the body, not the list or the form, sets the height");
 });
 
 test("the Model select is a styled native select that never clips a long id", () => {

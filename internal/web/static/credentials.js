@@ -813,7 +813,7 @@ if (typeof module !== "undefined" && module.exports) {
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead, awsGateBoxEmpty,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
     awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
-    awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
+    awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC, awsFootNote, awsFootReasons, setDisabledReason,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
     GH_ROUTE_CHOICES, GH_PAT_SUGGESTION, ghPatValueWarning, GH_APP_HELP, credDeleteText, credColumnCount,
     CRED_TABLE_MIN_WIDTH, credTablesAt,
@@ -1548,8 +1548,16 @@ function awsEl(tag, cls, text) { return credEl(tag, cls, text); }
 function awsBtn(label, cls, onclick) {
   const b = awsEl("button", "btn" + (cls ? " " + cls : ""), label);
   b.type = "button";
-  b.onclick = onclick;
+  b.onclick = awsUnlessOff(b, onclick);
   return b;
+}
+
+// awsUnlessOff: `fn` as `btn`'s click, run only while the button is not aria-disabled. On desktop a button
+// that cannot act yet stays aria-disabled instead of disabled (setDisabledReason), so its title shows the
+// reason and Tab reaches it; Enter and Space on a button are a click, so this is the one place all three
+// (click, Enter, Space) are stopped. A real `disabled` button never gets here.
+function awsUnlessOff(btn, fn) {
+  return (...args) => (btn.getAttribute("aria-disabled") === "true" ? undefined : fn(...args));
 }
 
 function awsShowFoot(on) {
@@ -2390,6 +2398,65 @@ function awsBuildFoot(f) {
   f.opts.foot.replaceChildren(checkAll, note, cancel, save);
 }
 
+// awsWaitingText: the foot's note when rows wait for "I understand", and the Save reason with it.
+function awsWaitingText(n) {
+  return n + (n === 1 ? " row is" : " rows are") + " waiting for “I understand”.";
+}
+
+// awsFootNote: the foot's note line for the rows' states (awsRowState of each, in order). It is the foot's one
+// account of why Save is off, which is why awsFootReasons reuses it word for word.
+function awsFootNote(f, states) {
+  const waiting = states.filter((s) => s.needsAck).length;
+  const ready = states.filter((s) => s.canSave).length;
+  const unchecked = states.filter((s) => !s.canSave && !s.needsAck).length;
+  const edit = f.mode === "edit";
+  if (waiting) return awsWaitingText(waiting);
+  if (f.rows.length && !edit) return ready + " of " + f.rows.length + " ready to save." + (ready && unchecked ? " Rows that did not pass a check are left as they are." : "");
+  if (edit && !ready) return f.rows.some((r) => r.mode === "sso_direct") ? "Check that the permission set is read-only before saving." : "Check the new role before saving.";
+  return "";
+}
+
+// awsFootReasons: why the foot's two buttons cannot act, in the words of their tooltips (F03, M5.6); "" when
+// the button can, or when the reason is plain (a save in flight). Where the note already says why Save is off
+// (rows waiting for "I understand", or an edit that has not been checked) the Save reason IS the note's text, so
+// the tooltip and the line beside it never disagree; the add view with rows but none ready and none waiting
+// ("0 of 2 ready to save.") has no sentence of that kind and says "Nothing ready to save yet". `states` is
+// awsRowState of each row, when the caller has it already.
+function awsFootReasons(f, states = f.rows.map(awsRowState)) {
+  const waiting = states.filter((s) => s.needsAck).length;
+  const ready = states.filter((s) => s.canSave).length;
+  let save = "";
+  if (!f.saving) {
+    if (waiting > 0 || (f.mode === "edit" && ready === 0)) save = awsFootNote(f, states);
+    else if (ready === 0) save = "Nothing ready to save yet";
+  }
+  return { check: !f.rows.length ? "Nothing to check yet: tick a profile above" : "", save };
+}
+
+// awsDesktop: the desktop layout, as drawerDesktop() (app.js, which loads after this file) decides it.
+function awsDesktop() {
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
+// setDisabledReason: a button that cannot act yet, and why (F03, M5.6). Desktop: aria-disabled="true" and the
+// reason as its title, never the disabled attribute: a disabled button gets no hover in some browsers and no
+// focus, so its reason could be neither read nor reached. Turned on again, both go. The click guard is
+// awsUnlessOff. The phone keeps `disabled`, as it always had, with no title; whichever of the other state a
+// window narrowed or widened across 700px left behind is cleared, so a repaint always leaves one state.
+function setDisabledReason(el, off, reason, desktop) {
+  if (!desktop) {
+    el.disabled = !!off;
+    el.removeAttribute("aria-disabled");
+    el.removeAttribute("title");
+    return;
+  }
+  el.disabled = false;
+  if (off) el.setAttribute("aria-disabled", "true");
+  else el.removeAttribute("aria-disabled");
+  if (off && reason) el.setAttribute("title", reason);
+  else el.removeAttribute("title");
+}
+
 function awsPaintFoot() {
   const f = awsFlow;
   if (!f) return;
@@ -2404,18 +2471,15 @@ function awsPaintFoot() {
   const states = f.rows.map(awsRowState);
   const waiting = states.filter((s) => s.needsAck).length;
   const ready = states.filter((s) => s.canSave).length;
-  const unchecked = f.rows.filter((r, i) => !states[i].canSave && !states[i].needsAck).length;
   const edit = f.mode === "edit";
   ca.textContent = edit ? "Check" : "Check all";
-  ca.disabled = !f.rows.length || f.saving;
+  const desktop = awsDesktop(), why = awsFootReasons(f, states);
+  setDisabledReason(ca, !f.rows.length || f.saving, why.check, desktop);
   sv.textContent = edit ? "Save" : (f.opts && f.opts.saveLabel) || "Save all";
   const off = f.saving || ready === 0 || waiting > 0;
-  sv.disabled = off;
+  setDisabledReason(sv, off, why.save, desktop);
   sv.classList.toggle("off", off);
-  let text = "";
-  if (waiting) text = waiting + (waiting === 1 ? " row is" : " rows are") + " waiting for “I understand”.";
-  else if (f.rows.length && !edit) text = ready + " of " + f.rows.length + " ready to save." + (ready && unchecked ? " Rows that did not pass a check are left as they are." : "");
-  else if (edit && !ready) text = f.rows.some((r) => r.mode === "sso_direct") ? "Check that the permission set is read-only before saving." : "Check the new role before saving.";
+  const text = awsFootNote(f, states);
   note.textContent = text;
   if (f.noteBox) f.noteBox.textContent = text;
   if (f.msgBox) f.msgBox.textContent = f.msg || "";
@@ -2510,7 +2574,7 @@ function awsDelete(entry, reload, btn) {
 (function awsWire() {
   if (typeof document === "undefined") return;
   credActionHandlers.aws = { add: () => awsOpenAdd(), edit: (entry) => awsOpenEdit(entry), delete: awsDelete };
-  const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = fn; };
+  const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = awsUnlessOff(e, fn); };
   on("aws-check-all", () => awsCheckAll());
   on("aws-save", () => awsSaveAll());
   on("aws-cancel", () => awsExit());

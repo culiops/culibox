@@ -34,6 +34,10 @@ const HOOKS = new Set([
   "fs-dec",  // app.js initSettings/bumpFs: classList.contains("fs-dec") picks the decrement button
   "fs-inc",  // app.js initSettings/bumpFs: classList.contains("fs-inc") picks the increment button
   "fs-val",  // app.js initSettings/bumpFs: querySelector('.fs-val[data-fs="…"]'); visual styling comes from .stepper .val
+  // app.js openTabSwitcher's phone-width fallback rows (.mi-row > .mi + .mi-x), kept byte for byte. The pane
+  // header that opens the switcher is drawn on desktop only, where the kit rows (.menu-row) are built
+  // instead, so these are never on screen and the desktop rules that once styled them are gone.
+  "mi-row", "mi-x",
   // pagehost.js openPage: body.classList.add("page-" + id), the S4 contract's
   // per-page body hook for later page CSS; built by concatenation, so the
   // extractor above cannot see it.

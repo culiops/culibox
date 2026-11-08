@@ -256,40 +256,40 @@ function pfvMenuClose(refocus) {
   if (refocus) m.btn.focus();
 }
 
-// pfvMoreMenu: the ⋯ button and its menu, Duplicate and Delete… (red). It closes
-// on a second press, a click elsewhere and Esc (which must not also close the page).
+// pfvMoreMenu: the ⋯ button and its menu (frame M5.4): the kit menu, Duplicate…, a separator and Delete… (red). Opening
+// puts focus on Duplicate… and the arrow keys walk the rows (kitmenu.js). It closes on a second press, a click elsewhere
+// and Esc (which gives focus back to the ⋯ and must not also close the page). Duplicate… and Delete… close it the same
+// way, focus on the ⋯ first, so a cancelled confirm hands focus back to the ⋯ and not to the body.
 function pfvMoreMenu(name) {
   const wrap = pfvMk("div", "pfv-more");
   const btn = pfvBtn("", "secondary pfv-btn-icon");
   btn.setAttribute("aria-label", "More actions for " + name);
+  btn.setAttribute("title", "More actions");
   btn.setAttribute("aria-haspopup", "menu");
   btn.setAttribute("aria-expanded", "false");
   btn.append(pfvDotsIcon());
-  const pop = pfvMk("div", "pfv-menu");
+  const pop = pfvMk("div", "menu");
   pop.setAttribute("role", "menu");
+  pop.setAttribute("aria-label", name + " profile actions");
   pop.hidden = true;
-  const item = (label, cls, fn) => {
-    const i = pfvMk("button", "pfv-menu-item" + cls, label);
-    i.type = "button";
-    i.setAttribute("role", "menuitem");
-    i.onclick = fn;
-    return i;
-  };
-  pop.append(
-    item("Duplicate", "", () => { pfvMenuClose(false); return pfvDuplicate(); }),
-    item("Delete…", " pfv-menu-red", () => { pfvMenuClose(false); return pfvDelete(); }),
-  );
+  const dup = kitMenuButton("Duplicate…", "duplicate", false, () => { pfvMenuClose(true); return pfvDuplicate(); });
+  pop.append(dup, kitMenuSep(), kitMenuButton("Delete…", "delete", true, () => { pfvMenuClose(true); return pfvDelete(); }));
   btn.onclick = () => {
     if (pfvMenu && pfvMenu.wrap === wrap) { pfvMenuClose(false); return; }
     pfvMenuClose(false);
     pfvMenu = { wrap, btn, pop };
     pop.hidden = false;
     btn.setAttribute("aria-expanded", "true");
+    dup.focus();
   };
   wrap.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Escape" || !pfvMenu) return;
-    ev.preventDefault();
-    pfvMenuClose(true);
+    if (!pfvMenu || pfvMenu.wrap !== wrap) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      pfvMenuClose(true);
+      return;
+    }
+    kitMenuKeys(pop, ev);
   });
   wrap.append(btn, pop);
   return wrap;
@@ -710,12 +710,7 @@ async function pfvDelete() {
   const name = pfvState.name;
   if (!name) return;
   const order = profiles.map((p) => p.name);
-  const ok = await askConfirm({
-    title: "Delete profile",
-    body: 'Delete the profile "' + name + '"? Running sessions are unaffected. The profile\'s saved workspace default and environment allowlist will be lost. This cannot be undone.',
-    confirmLabel: "Delete",
-    danger: true,
-  });
+  const ok = await deleteProfileAsk(name);
   if (!ok) return;
   pfvState.errors = [];
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
