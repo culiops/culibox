@@ -128,9 +128,14 @@ test("app.css base --an-* are today's hex, and up/down are today's danger/ok (mo
   assert.match(css, /--an-down:\s*var\(--ok\)/);
 });
 
-test("app.css hides #an-ctl at base (an empty flex item would shift mobile's header by one gap); desktop shows it", () => {
-  assert.match(stripComments(read("app.css")), /#an-ctl\s*\{\s*display:\s*none;?\s*\}/);
-  assert.match(stripComments(read("desktop.css")), /#page-host > #analytics-modal\.as-page #an-ctl\s*\{[^}]*display:\s*flex/);
+test("app.css hides #an-ctl at base (an empty flex item would shift mobile's header by one gap); the page hides the phone's head and title", () => {
+  const app = stripComments(read("app.css"));
+  const desk = stripComments(read("desktop.css"));
+  assert.match(app, /#an-ctl\s*\{\s*display:\s*none;?\s*\}/);
+  // The page's own head and toolbar (UI plan 5 Task 4) replace the phone's .dlg-head: it, and the legend title above it, are
+  // not drawn on the page, so #an-ctl is never shown there and the page has no rule for it.
+  assert.match(desk, /#page-host > #analytics-modal\.as-page > \.dlg-title,\s*#page-host > #analytics-modal\.as-page > \.dlg-head\s*\{\s*display:\s*none/);
+  assert.doesNotMatch(desk, /#an-ctl/, "nothing on desktop draws into or shows #an-ctl any more");
 });
 
 test("desktop KPI deltas are neutral, not the status red/green", () => {

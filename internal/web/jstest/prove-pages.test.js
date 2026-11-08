@@ -233,6 +233,9 @@ class TextNode {
   get textContent() { return this.text; }
 }
 
+// The element with focus (a browser has one per document); reset by each env.
+let focused = null;
+
 // A fake DOM element: what auditpage.js touches, plus a record of every classList call so a test can see that no
 // `.on` is ever toggled.
 class El {
@@ -250,6 +253,7 @@ class El {
     this.colSpan = 1;
     this.cls = [];
     this.classCalls = [];
+    this.style = {};
     const self = this;
     this.classList = {
       toggle(c, force) {
@@ -279,7 +283,9 @@ class El {
     }
   }
   appendChild(n) { this.append(n); return n; }
-  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  // A node taken out of its parent is no longer in the page (a browser drops focus from it).
+  replaceChildren(...nodes) { for (const c of this.children) c.parent = null; this.children = []; this.append(...nodes); }
+  focus() { focused = this; }
   addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
   closest(sel) { for (let n = this; n; n = n.parent) if (n.tag && matches(n, sel)) return n; return null; }
   querySelectorAll(sel) { return queryAll(this, sel); }
@@ -813,4 +819,586 @@ test("every class the Audit markup and script use has a rule or is a named hook"
   const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
   const undef = [...used].filter((c) => !defined.has(c) && !hooks.has(c));
   assert.deepStrictEqual(undef, [], "classes with no rule");
+});
+
+// =====================================================================================================================
+// Analytics: the head and the toolbar (Task 4; frames M3.1/M3.2, digest-design §A1, §B1-§B4, §F3)
+// =====================================================================================================================
+
+const ANP = "#page-host > #analytics-modal.as-page";
+const analyticsTree = () => kids(parseHtml(dialogHtml("analytics-modal")))[0];
+
+// The phone's markup of #analytics-modal, from the title to the end: the page's nodes are added in front of it and none of
+// it is edited, so the modal the phone opens is the same bytes as on main c47442b.
+const PHONE_MARKUP = [
+  "    <h2 class=\"pane-head dlg-title\">Analytics</h2>",
+  "    <div class=\"dlg-head\">",
+  "      <div class=\"dlg-tabs\" id=\"an-tabs\">",
+  "        <button type=\"button\" data-antab=\"overview\" class=\"act\">Overview · Cost</button>",
+  "        <button type=\"button\" data-antab=\"models\">Models</button>",
+  "        <button type=\"button\" data-antab=\"projects\">Projects</button>",
+  "        <button type=\"button\" data-antab=\"sessions\">Sessions</button>",
+  "        <button type=\"button\" data-antab=\"tools\">Tools</button>",
+  "      </div>",
+  "      <span class=\"spacer\"></span>",
+  "      <span id=\"analytics-range\" class=\"an-caption\" style=\"margin:0\"></span>",
+  "      <span id=\"an-ctl\"></span>",
+  "      <button id=\"analytics-refresh\" type=\"button\" title=\"Re-scan transcripts now\">Re-scan</button>",
+  "      <button class=\"dlg-x\" type=\"button\" data-close=\"analytics-modal\" title=\"Close\">×</button>",
+  "    </div>",
+  "    <div class=\"dlg-body\">",
+  "      <div id=\"analytics-body\"></div>",
+  "    </div>",
+  "  </dialog>",
+].join("\n");
+
+// stripPage: a node's class list without the classes that belong to one page, so both pages' components compare equal.
+const PAGE_ONLY = new Set(["au-tools", "an-phead", "an-ptools", "an-pcustom"]);
+const shape = (n) => n.tag + classes(n).filter((c) => !PAGE_ONLY.has(c)).map((c) => "." + c).join("");
+
+test("Analytics and Audit share one head, toolbar and KPI component", () => {
+  const au = auditTree();
+  const an = analyticsTree();
+  const [auHead, auTools] = kids(au);
+  const [anHead, anTools] = kids(an);
+  // The same class sequence: page-head > page-head-text > h1.page-title + p.page-desc; page-actions > … page-esc.
+  assert.strictEqual(shape(anHead), "div.page-head");
+  assert.strictEqual(shape(anHead), shape(auHead));
+  const [anText, anActions] = kids(anHead);
+  const [auText, auActions] = kids(auHead);
+  assert.deepStrictEqual(kids(anText).map(shape), ["h1.page-title", "p.page-desc"]);
+  assert.deepStrictEqual(kids(anText).map(shape), kids(auText).map(shape));
+  assert.strictEqual(shape(anActions), "div.page-actions");
+  assert.strictEqual(shape(anActions), shape(auActions));
+  assert.strictEqual(shape(kids(anActions).pop()), "button.btn.btn-ghost.page-esc");
+  assert.strictEqual(shape(kids(anActions).pop()), shape(kids(auActions).pop()));
+  assert.deepStrictEqual(kids(kids(anActions).pop()).map(shape), kids(kids(auActions).pop()).map(shape), "both Esc ✕ are span.kbd-hint then ✕");
+  // The toolbar: .toolbar > .seg[role=group] > button.seg-item[aria-pressed], on both.
+  assert.strictEqual(shape(anTools), "div.toolbar");
+  assert.strictEqual(shape(anTools), shape(auTools));
+  for (const tools of [auTools, anTools]) {
+    const segs = kids(tools).filter((n) => classes(n).includes("seg"));
+    assert.ok(segs.length >= 2, "a toolbar of segmented controls");
+    for (const seg of segs) {
+      assert.strictEqual(shape(seg), "div.seg");
+      assert.strictEqual(seg.attrs.role, "group");
+      assert.ok(seg.attrs["aria-label"], "a group is named");
+      assert.ok(kids(seg).length >= 3);
+      for (const b of kids(seg)) {
+        assert.strictEqual(shape(b), "button.seg-item");
+        assert.strictEqual(b.attrs.type, "button");
+        assert.ok(b.attrs["aria-pressed"] === "true" || b.attrs["aria-pressed"] === "false", "aria-pressed, not .on");
+      }
+    }
+  }
+  // The KPI row. Audit's builder emits the kit's kpi-row > kpi > kpi-value + kpi-label; Analytics' joins this check with
+  // its own KPI row in Task 5 (anKpiRow), which this task does not touch.
+  const { run, el } = auditEnv();
+  run("auData.summary = { issued: 1, refused: 0, elevations: 0, egress_allowed: 0, egress_denied: 0 }; auPaintKpis();");
+  assert.deepStrictEqual(classes(kids(kids(au)[2])[0]), ["kpi-row"], "the KPI tiles' row is the kit's .kpi-row");
+  assert.deepStrictEqual([...new Set(el("au-kpis").elements.map((t) => t.className))], ["kpi"]);
+  assert.deepStrictEqual([...new Set(el("au-kpis").elements.flatMap((t) => t.elements.map((c) => c.className)))], ["kpi-value", "kpi-label"]);
+});
+
+test("the Analytics markup: the page's nodes in front, the phone's modal after them byte for byte", () => {
+  const html = dialogHtml("analytics-modal");
+  assert.ok(html.startsWith('<dialog id="analytics-modal" box-="square" shear-="top">\n'), "the opening tag is untouched");
+  assert.ok(html.endsWith(PHONE_MARKUP), "everything the phone shows is the markup of main c47442b");
+  const an = analyticsTree();
+  assert.deepStrictEqual(kids(an).map(sig), ["div.page-head.an-phead", "div.toolbar.an-ptools", "div.toolbar.an-pcustom", "h2.pane-head.dlg-title", "div.dlg-head", "div.dlg-body"]);
+  const [head, tools, custom] = kids(an);
+
+  // The head (digest-design §A1, the copy of M3.1 and M3.2).
+  assert.deepStrictEqual(kids(head).map(sig), ["div.page-head-text", "div.page-actions"]);
+  const [headText, actions] = kids(head);
+  assert.deepStrictEqual(kids(headText).map(sig), ["h1.page-title", "p.page-desc"]);
+  assert.strictEqual(text(kids(headText)[0]), "Analytics");
+  assert.strictEqual(kids(headText)[1].attrs.id, "an-pdesc");
+  assert.strictEqual(text(kids(headText)[1]), "", "the description is painted from the window (anSyncPageControls)");
+  assert.deepStrictEqual(kids(actions).map(sig), ["button.btn", "button.btn.btn-ghost.page-esc"]);
+  const [rescan, esc] = kids(actions);
+  assert.strictEqual(rescan.attrs.id, "an-rescan");
+  assert.strictEqual(rescan.attrs.type, "button");
+  assert.strictEqual(rescan.attrs.title, "Re-scan transcripts now");
+  assert.strictEqual(text(rescan), "Re-scan");
+  assert.strictEqual(esc.attrs.type, "button");
+  assert.strictEqual(esc.attrs["data-close"], "analytics-modal", "initDialogs wires every [data-close] button");
+  assert.strictEqual(esc.attrs["aria-label"], "Close (Esc)");
+  assert.strictEqual(esc.attrs.title, "Close (Esc)");
+  assert.deepStrictEqual(kids(esc).map(sig), ["span.kbd-hint"]);
+  assert.strictEqual(text(esc), "Esc✕");
+
+  // The toolbar: View seg | spacer | Range seg | Compare (§B2).
+  assert.deepStrictEqual(kids(tools).map(sig), ["div.seg", "span.grow", "div.seg", "button.btn"]);
+  const [view, , range, compare] = kids(tools);
+  assert.strictEqual(view.attrs.id, "an-pview");
+  assert.strictEqual(view.attrs.role, "group");
+  assert.strictEqual(view.attrs["aria-label"], "View");
+  assert.deepStrictEqual(kids(view).map((b) => b.attrs["data-antab"]), ["overview", "models", "projects", "sessions", "tools"]);
+  assert.deepStrictEqual(kids(view).map(text), ["Overview · Cost", "Models", "Projects", "Sessions", "Tools"], "the words of today's tabs");
+  assert.deepStrictEqual(kids(view).map((b) => b.attrs["aria-pressed"]), ["true", "false", "false", "false", "false"], "Overview is pressed before the first paint");
+  assert.strictEqual(range.attrs.id, "an-prange");
+  assert.strictEqual(range.attrs.role, "group");
+  assert.strictEqual(range.attrs["aria-label"], "Range");
+  assert.deepStrictEqual(kids(range).map((b) => b.attrs["data-range"]), ["7d", "30d", "90d", "all", "custom"], "the keys of RANGES, then custom");
+  assert.deepStrictEqual(kids(range).map(text), ["7d", "30d", "90d", "All", "Custom…"]);
+  assert.deepStrictEqual(kids(range).map((b) => b.attrs["aria-pressed"]), ["false", "true", "false", "false", "false"], "30d is pressed before the first paint");
+  for (const b of [...kids(view), ...kids(range)]) assert.strictEqual(b.attrs.type, "button");
+  assert.strictEqual(compare.attrs.id, "an-compare");
+  assert.strictEqual(compare.attrs.type, "button");
+  assert.strictEqual(compare.attrs["aria-pressed"], "false");
+  assert.strictEqual(compare.attrs.title, "Compare this window to the equal-length window before it", "§A1: the frame's title, not today's `immediately`");
+  assert.strictEqual(text(compare), "Compare", "no ⇄: the glyph is gone from the frame's label");
+
+  // The Custom range row (not designed, §F3): hidden until Custom… opens it, built from the kit's parts.
+  assert.ok("hidden" in custom.attrs, "hidden before the first paint");
+  assert.deepStrictEqual(kids(custom).map(sig), ["span.t-sm.muted", "input.input.input-sm.an-date", "input.input.input-sm.an-date", "button.btn"]);
+  assert.strictEqual(text(kids(custom)[0]), "Custom range");
+  assert.deepStrictEqual(kids(custom).slice(1, 3).map((n) => [n.attrs.type, n.attrs["aria-label"]]), [["date", "From"], ["date", "To"]]);
+  assert.ok(custom.children.some((c) => c.text && c.text.includes("→")), "the arrow between the dates");
+  assert.strictEqual(kids(custom)[3].attrs.id, "an-papply");
+  assert.strictEqual(kids(custom)[3].attrs.type, "button");
+  assert.strictEqual(text(kids(custom)[3]), "Apply");
+});
+
+// --- Analytics: the script, run against that markup ---------------------------------------------------------------
+
+// analyticsEnv: analytics.js in a context whose document is the real Analytics dialog markup, with a focus model (a node
+// taken out of the page loses focus, as in a browser) and an api() that records its calls. `page(true)` is pagehost
+// re-parenting the dialog (the as-page class); a phone modal never has it.
+function analyticsEnv(file = "analytics.js") {
+  focused = null;
+  const dlg = fromParsed(analyticsTree());
+  const body = new El("body");
+  const inPage = (n) => { for (let x = n; x; x = x.parent) if (x === dlg) return true; return false; };
+  const document = {
+    getElementById: (id) => findId(dlg, id),
+    querySelectorAll: (sel) => queryAll(dlg, sel),
+    querySelector: (sel) => queryAll(dlg, sel)[0] || null,
+    createElement: (tag) => new El(tag),
+    body,
+    get activeElement() { return focused && inPage(focused) ? focused : body; },
+  };
+  const calls = [];
+  const gates = [];
+  const api = (path, opts) => {
+    calls.push(path);
+    if (opts && opts.method === "POST") return new Promise((r) => gates.push(r));
+    const q = /from=([\d-]+)&to=([\d-]+)/.exec(path);
+    return Promise.resolve(q ? { from: q[1], to: q[2] } : {});
+  };
+  const ctx = { document, window: { innerWidth: 1440 }, api, openDialog() {}, console };
+  vm.createContext(ctx);
+  new vm.Script(read(file), { filename: file }).runInContext(ctx);
+  return {
+    ctx, dlg, calls, gates, document,
+    run: (code) => vm.runInContext(code, ctx),
+    el: (id) => findId(dlg, id),
+    page: (on) => (on ? dlg.classList.add("as-page") : dlg.classList.remove("as-page")),
+  };
+}
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const pressedOf = (group) => group.elements.map((b) => b.attrs["aria-pressed"]);
+
+// The same node objects remain, and aria-pressed follows AN.tab, AN.range and AN.compare (Custom… and the row as the phone's `.on`).
+test("page controls are updated in place", () => {
+  const { run, el, page } = analyticsEnv();
+  page(true);
+  const nodes = {
+    view: [...el("an-pview").elements], range: [...el("an-prange").elements], compare: el("an-compare"), desc: el("an-pdesc"),
+    custom: el("an-papply").parent, dates: el("an-papply").parent.elements.filter((n) => n.tag === "input"), apply: el("an-papply"),
+    head: el("an-pdesc").parent.parent, tools: el("an-pview").parent,
+  };
+  const same = () => {
+    assert.ok(el("an-pview").elements.every((b, i) => b === nodes.view[i]), "the view items are the same nodes");
+    assert.ok(el("an-prange").elements.every((b, i) => b === nodes.range[i]), "the range items are the same nodes");
+    assert.strictEqual(el("an-compare"), nodes.compare);
+    assert.strictEqual(el("an-pdesc"), nodes.desc);
+    assert.strictEqual(el("an-papply").parent, nodes.custom);
+    assert.deepStrictEqual(nodes.dates.map((n) => n.parent === nodes.custom), [true, true]);
+  };
+
+  run('AN.tab = "overview"; AN.range = "30d"; AN.compare = false; AN.customOpen = false; AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.data = null; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["true", "false", "false", "false", "false"]);
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"]);
+  assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
+  assert.strictEqual(nodes.custom.hidden, true);
+  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-09 → 2026-11-07 (UTC)", "§A1, from AN before a window has loaded");
+  same();
+
+  run('AN.tab = "sessions"; AN.range = "90d"; AN.compare = true; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["false", "false", "false", "true", "false"]);
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "false", "true", "false", "false"]);
+  assert.strictEqual(el("an-compare").attrs["aria-pressed"], "true");
+  same();
+
+  run('AN.range = "all"; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "false", "false", "true", "false"]);
+  run('AN.tab = "tools"; AN.range = "7d"; AN.compare = false; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["false", "false", "false", "false", "true"]);
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["true", "false", "false", "false", "false"]);
+  assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
+
+  // Custom… mirrors today's `.on` exactly: lit by an applied custom range, not by the row being open.
+  run('AN.range = "custom"; AN.customOpen = false; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "false", "false", "false", "true"]);
+  assert.strictEqual(nodes.custom.hidden, false, "an applied custom range keeps its row");
+  run('AN.range = "30d"; AN.customOpen = true; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"], "open but not applied: Custom… is not pressed");
+  assert.strictEqual(nodes.custom.hidden, false);
+  run('AN.customOpen = false; anSyncPageControls();');
+  assert.strictEqual(nodes.custom.hidden, true);
+
+  // The description follows the window that loaded, like the page-only append it replaces (the summary's own from and to).
+  run('AN.data = { from: "2026-10-01", to: "2026-10-30", costByDay: { days: [] } }; anSyncPageControls();');
+  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-01 → 2026-10-30 (UTC)");
+  same();
+  // Nothing is ever built or removed by the sync: the head and the toolbar keep their children.
+  assert.strictEqual(nodes.head.elements.length, 2);
+  assert.strictEqual(nodes.tools.elements.length, 4);
+  assert.ok(!/replaceChildren|appendChild|createElement|innerHTML|\bel\(/.test(fnBody(stripJsComments(read("analytics.js")), "anSyncPageControls")), "the sync only sets attributes, hidden and text");
+});
+
+// fnBody: the source of function `name` (its braces and everything between them).
+function fnBody(src, name) {
+  const m = new RegExp("(?:async )?function " + name + "\\s*\\(").exec(src);
+  assert.ok(m, name + " is defined");
+  const open = src.indexOf("{", src.indexOf(")", m.index));
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(open, i + 1);
+  }
+  throw new Error("unbalanced braces in " + name);
+}
+
+test("a phone modal's page nodes are never touched: anSyncPageControls is a no-op unless the dialog is the page", () => {
+  const { run, el, page } = analyticsEnv();
+  page(false);
+  run('AN.tab = "tools"; AN.range = "7d"; AN.compare = true; AN.customOpen = true; AN.from = "2026-10-24"; AN.to = "2026-10-30"; anSyncPageControls();');
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["true", "false", "false", "false", "false"], "markup as shipped");
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"]);
+  assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
+  assert.strictEqual(el("an-papply").parent.hidden, true);
+  assert.strictEqual(el("an-pdesc").textContent, "");
+});
+
+test("a click on a view, range, Compare or Custom… item leaves focus on that control", async () => {
+  const { run, el, page, calls } = analyticsEnv();
+  page(true);
+  run("anWirePage();");
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.data = { from: AN.from, to: AN.to, costByDay: { days: [] } };');
+  // Each click: focus the item (what a pointer or Enter does), run its handler, let the load finish and the body render.
+  const press = async (group, key, attr) => {
+    const b = el(group).elements.find((x) => x.dataset[attr] === key) || el(group);
+    b.focus();
+    el(group).onclick({ target: b });
+    await settle();
+    assert.strictEqual(vm_active(), b, group + " " + key + ": focus is still on the control");
+    return b;
+  };
+  const vm_active = () => run("document.activeElement");
+
+  let b = await press("an-pview", "sessions", "antab");
+  assert.strictEqual(run("AN.tab"), "sessions");
+  assert.strictEqual(b.attrs["aria-pressed"], "true");
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["false", "false", "false", "true", "false"]);
+  // The phone's tab strip follows the same state (anSetTab syncs both).
+  assert.deepStrictEqual(el("an-tabs").elements.map((t) => t.cls.includes("act")), [false, false, false, true, false]);
+
+  calls.length = 0;
+  b = await press("an-prange", "7d", "range");
+  assert.strictEqual(run("AN.range"), "7d");
+  assert.strictEqual(b.attrs["aria-pressed"], "true");
+  assert.strictEqual(el("an-prange").elements.filter((x) => x.attrs["aria-pressed"] === "true").length, 1);
+  assert.strictEqual(run("AN.from"), run("anRangeFrom('7d')"));
+  assert.ok(calls.some((c) => c.startsWith("/api/analytics/summary?from=" + run("AN.from"))), "a range pick loads that window");
+
+  const cmp = el("an-compare");
+  cmp.focus();
+  cmp.onclick({ target: cmp });
+  assert.strictEqual(cmp.attrs["aria-pressed"], "true", "pressed at once, not after the load");
+  await settle();
+  assert.strictEqual(run("AN.compare"), true);
+  assert.strictEqual(run("document.activeElement"), cmp, "Compare keeps focus");
+  assert.strictEqual(el("an-compare"), cmp);
+
+  b = await press("an-prange", "custom", "range");
+  assert.strictEqual(run("AN.customOpen"), true);
+  assert.strictEqual(el("an-papply").parent.hidden, false, "Custom… opens the row");
+  assert.deepStrictEqual(el("an-papply").parent.elements.filter((n) => n.tag === "input").map((n) => n.value), [run("AN.from"), run("AN.to")], "the dates default to the window");
+  assert.strictEqual(b.attrs["aria-pressed"], "false", "not applied yet: as today's chip");
+  // Custom… again closes the row it opened.
+  b.focus();
+  el("an-prange").onclick({ target: b });
+  assert.strictEqual(el("an-papply").parent.hidden, true);
+  assert.strictEqual(run("document.activeElement"), b);
+});
+
+test("Apply on the page's Custom range row swaps a reversed range, loads it and lights Custom…", async () => {
+  const { run, el, page, calls } = analyticsEnv();
+  page(true);
+  run("anWirePage();");
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.customOpen = true; anSyncPageControls();');
+  const [from, to] = el("an-papply").parent.elements.filter((n) => n.tag === "input");
+  // An empty field applies nothing.
+  from.value = "2026-11-01"; to.value = "";
+  calls.length = 0;
+  el("an-papply").onclick({ target: el("an-papply") });
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(run("AN.range"), "30d");
+  // A reversed range is ordered (clampRange), written back into the fields and loaded.
+  from.value = "2026-11-01"; to.value = "2026-10-05";
+  el("an-papply").focus();
+  el("an-papply").onclick({ target: el("an-papply") });
+  assert.deepStrictEqual([run("AN.range"), run("AN.from"), run("AN.to")], ["custom", "2026-10-05", "2026-11-01"]);
+  assert.deepStrictEqual([from.value, to.value], ["2026-10-05", "2026-11-01"]);
+  assert.ok(calls.includes("/api/analytics/summary?from=2026-10-05&to=2026-11-01"));
+  await settle();
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "false", "false", "false", "true"]);
+  assert.strictEqual(el("an-papply").parent.hidden, false, "a custom range keeps its row open");
+  assert.strictEqual(run("document.activeElement"), el("an-papply"), "Apply keeps focus");
+  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-05 → 2026-11-01 (UTC)");
+  // A preset closes the row again; reopened, the fields show the window then.
+  const seven = el("an-prange").elements[0];
+  el("an-prange").onclick({ target: seven });
+  assert.strictEqual(el("an-papply").parent.hidden, true);
+  await settle();
+  el("an-prange").onclick({ target: el("an-prange").elements[4] });
+  assert.deepStrictEqual([from.value, to.value], [run("AN.from"), run("AN.to")]);
+});
+
+test("openAnalytics resets the page's controls with the state it resets", async () => {
+  const { run, el, page } = analyticsEnv();
+  page(true);
+  run('AN.tab = "tools"; AN.range = "custom"; AN.compare = true; AN.customOpen = true; anSyncPageControls();');
+  await run("openAnalytics()");
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["true", "false", "false", "false", "false"]);
+  assert.deepStrictEqual(pressedOf(el("an-prange")), ["false", "true", "false", "false", "false"]);
+  assert.strictEqual(el("an-compare").attrs["aria-pressed"], "false");
+  assert.strictEqual(el("an-papply").parent.hidden, true);
+  assert.match(el("an-pdesc").textContent, /^Spend read from Claude Code transcripts · \d{4}-\d\d-\d\d → \d{4}-\d\d-\d\d \(UTC\)$/);
+});
+
+test("the page's body holds no controls and no window line: the head carries them", async () => {
+  const { run, el, page } = analyticsEnv();
+  page(true);
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.customOpen = true; AN.range = "custom"; AN.data = { from: AN.from, to: AN.to, costByDay: { days: [] } }; anRender();');
+  const body = el("analytics-body");
+  assert.deepStrictEqual(body.elements.map((n) => n.className), ["an-empty"], "an empty window is the one line, with no control strip, custom row or window hint");
+  assert.strictEqual(body.textContent, "No usage recorded in this window. Try a wider range or Re-scan.");
+  assert.strictEqual(el("an-ctl").children.length, 0, "#an-ctl stays empty on the page");
+  const src = stripJsComments(read("analytics.js"));
+  assert.ok(!/anCustomRow|an-customrow/.test(src), "the JS-built Custom row is gone: the static .an-pcustom replaces it");
+  assert.ok(!/hint\.textContent \+= /.test(src), "the window is not appended to the first hint any more");
+  assert.ok(!/anControls\(true\)/.test(src));
+});
+
+// --- Analytics: the phone's strip and buttons are unchanged ---------------------------------------------------------
+
+// serialize: [tag, class, type, title, style width, value, …children] (a text node is its text).
+const serialize = (n) => (n instanceof TextNode ? n.text : [n.tag, n.className, n.attrs.type || n.type || "", n.title || "", n.style.width || "", n.value || "", ...n.children.map(serialize)]);
+const CMP_TITLE = "Compare this window to the equal-length window immediately before it";
+const chip = (cls, text) => ["button", cls, "button", "", "", "", text];
+// The control strip anControls(false) drew on main c47442b for three states of AN, taken from that file (pinned here).
+const PHONE_STRIP = {
+  default: ["div", "an-controls", "", "", "", "",
+    ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip", "7d"), chip("an-chip on", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip", "Custom…"),
+    ["span", "", "", "", "12px", ""],
+    ["button", "an-chip", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+  custom: ["div", "an-controls", "", "", "", "",
+    ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip", "7d"), chip("an-chip", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip on", "Custom…"),
+    ["input", "an-date", "date", "", "", "2026-10-01"], ["span", "an-clabel", "", "", "", "", "→"], ["input", "an-date", "date", "", "", "2026-10-30"], chip("an-chip", "Apply"),
+    ["span", "", "", "", "12px", ""],
+    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+  seven: ["div", "an-controls", "", "", "", "",
+    ["span", "an-clabel", "", "", "", "", "Range"], chip("an-chip on", "7d"), chip("an-chip", "30d"), chip("an-chip", "90d"), chip("an-chip", "All"), chip("an-chip", "Custom…"),
+    ["span", "", "", "", "12px", ""],
+    ["button", "an-chip on", "button", CMP_TITLE, "", "", "⇄ Compare vs prev period"]],
+};
+
+test("the phone's control strip, anControls(false), is the strip main drew: classes, copy, order", () => {
+  const { run } = analyticsEnv();
+  const strip = (code) => serialize(run(code));
+  assert.deepStrictEqual(strip('AN.from = "2026-10-01"; AN.to = "2026-10-30"; AN.range = "30d"; AN.compare = false; AN.customOpen = false; anControls(false)'), PHONE_STRIP.default);
+  assert.deepStrictEqual(strip('AN.range = "custom"; AN.compare = true; AN.customOpen = true; anControls(false)'), PHONE_STRIP.custom);
+  assert.deepStrictEqual(strip('AN.from = "2026-10-24"; AN.to = "2026-10-30"; AN.range = "7d"; AN.customOpen = false; anControls(false)'), PHONE_STRIP.seven);
+});
+
+test("the phone's chips, tabs and Re-scan still work on the modal", async () => {
+  const { run, el, page, calls, gates } = analyticsEnv();
+  page(false);
+  run('AN.data = { from: "2026-10-09", to: "2026-11-07", costByDay: { days: [] } }; AN.from = "2026-10-09"; AN.to = "2026-11-07";');
+  // The strip is the first child of the body on the modal, and each chip sets AN as it did.
+  run("anRender();");
+  const body = el("analytics-body");
+  assert.deepStrictEqual(body.elements.map((n) => n.className), ["an-controls", "an-empty"]);
+  const chips = () => body.elements[0].elements.filter((n) => n.cls.includes("an-chip"));
+  chips()[0].onclick();
+  assert.deepStrictEqual([run("AN.range"), run("AN.customOpen")], ["7d", false]);
+  await settle();
+  assert.ok(calls.some((c) => c.startsWith("/api/analytics/summary?from=")), "a chip loads its window");
+  chips()[4].onclick();
+  assert.strictEqual(run("AN.customOpen"), true, "Custom… opens the inline inputs on the phone");
+  assert.strictEqual(body.elements[0].elements.filter((n) => n.tag === "input").length, 2);
+  // Apply on the inline inputs: swapped, custom, loaded.
+  const [f, t] = body.elements[0].elements.filter((n) => n.tag === "input");
+  f.value = "2026-11-01"; t.value = "2026-10-05";
+  body.elements[0].elements.find((n) => n.textContent === "Apply").onclick();
+  assert.deepStrictEqual([run("AN.range"), run("AN.from"), run("AN.to")], ["custom", "2026-10-05", "2026-11-01"]);
+  await settle();
+  // The tab strip: .act follows AN.tab, the page's seg is left alone.
+  run('anSetTab("models");');
+  assert.strictEqual(run("AN.tab"), "models");
+  assert.deepStrictEqual(el("an-tabs").elements.map((n) => n.cls.includes("act")), [false, true, false, false, false]);
+  assert.deepStrictEqual(pressedOf(el("an-pview")), ["true", "false", "false", "false", "false"], "the hidden page seg keeps its markup on the phone");
+  // Re-scan: disabled and "Scanning…" while it runs, the same words after.
+  const btn = el("analytics-refresh");
+  calls.length = 0;
+  const done = run("anRescan(document.getElementById('analytics-refresh'))");
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(btn.textContent, "Scanning…");
+  assert.deepStrictEqual(calls, ["/api/analytics/ingest"]);
+  gates[0]({});
+  await done;
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, "Re-scan");
+  assert.ok(calls.some((c) => c.startsWith("/api/analytics/summary?from=2026-10-05&to=2026-11-01")), "and reloads the window");
+  // A phone never steals focus back.
+  assert.strictEqual(run("document.activeElement"), run("document.body"));
+});
+
+test("Re-scan on the page: the same body, and focus returns to it when the browser dropped it", async () => {
+  const { run, el, page, gates, document } = analyticsEnv();
+  page(true);
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07";');
+  const btn = el("an-rescan");
+  btn.focus();
+  const done = run("anRescan(document.getElementById('an-rescan'))");
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(btn.textContent, "Scanning…");
+  focused = null; // a disabled button loses focus in browsers that apply the focus fixup rule
+  gates[0]({});
+  await done;
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, "Re-scan");
+  assert.strictEqual(document.activeElement, btn, "back on Re-scan");
+  // Focus the user moved elsewhere in the meantime is not taken back.
+  const other = el("an-compare");
+  btn.focus();
+  const again = run("anRescan(document.getElementById('an-rescan'))");
+  other.focus();
+  gates[1]({});
+  await again;
+  assert.strictEqual(document.activeElement, other);
+  // A failed scan still re-enables it.
+  const failing = run("anRescan(document.getElementById('an-rescan'))");
+  gates[2](Promise.reject(new Error("409")));
+  await failing;
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, "Re-scan");
+});
+
+test("the page controls are wired once, the phone's tab strip and Re-scan through the same functions", () => {
+  const app = stripJsComments(read("app.js"));
+  assert.match(app, /anRescan\(anRefresh\)/, "the phone's Re-scan");
+  assert.match(app, /anRescan\(\$\("an-rescan"\)\)|anRescan\(anRescanBtn\)/, "the page's Re-scan");
+  assert.match(app, /anSetTab\(b\.dataset\.antab\)/, "the phone's tab strip goes through anSetTab");
+  assert.match(app, /anWirePage\(\)/, "the page's seg, Compare and Apply are wired by analytics.js");
+  assert.ok(!/AN\.tab = b\.dataset\.antab/.test(app), "no second copy of the tab logic");
+  assert.ok(!/api\("\/api\/analytics\/ingest"/.test(app), "the scan lives in anRescan");
+  // Nothing queries [data-antab] broadly: the page's seg items carry it too and must not be wired as phone tabs.
+  for (const f of fs.readdirSync(STATIC).filter((x) => x.endsWith(".js"))) {
+    assert.ok(!/querySelectorAll\(["'`]\[data-antab/.test(read(f)), f + " queries every [data-antab]");
+    assert.ok(!/querySelector(?:All)?\(["'`]button\[data-antab/.test(read(f)) || f === "app.js", f);
+  }
+  const wired = (read("analytics.js").match(/function anWirePage[\s\S]*?\n}\n/) || [""])[0];
+  assert.match(wired, /an-pview/);
+  assert.match(wired, /an-prange/);
+  assert.match(wired, /an-compare/);
+  assert.match(wired, /an-papply/);
+});
+
+// --- Analytics: the CSS ------------------------------------------------------------------------------------------
+
+test("the desktop-only Analytics nodes are hidden at base", () => {
+  // app.css, outside any @media: the phone's modal holds the nodes and never shows them. The selector carries the dialog's
+  // id: desktop.css's kit .page-head and .toolbar (display: flex, one class, later in the cascade) would out-rank a bare
+  // class in a modal widened past 700px, which pagehost.js leaves a modal.
+  const app = parseRules(APP_CSS);
+  const hide = app.filter((r) => parts(r.selector).includes("#analytics-modal .an-phead"));
+  assert.strictEqual(hide.length, 1);
+  assert.deepStrictEqual(parts(hide[0].selector), ["#analytics-modal .an-phead", "#analytics-modal .an-ptools", "#analytics-modal .an-pcustom"]);
+  assert.strictEqual(hide[0].decls.get("display"), "none");
+  assert.deepStrictEqual(hide[0].at, [], "a base rule: not inside @media");
+  assert.ok(!app.some((r) => r !== hide[0] && parts(r.selector).some((s) => /an-phead|an-ptools|an-pcustom|an-pview|an-prange|an-compare|an-rescan|an-pdesc/.test(s))), "app.css says nothing else about them");
+
+  // desktop.css shows them only under the page, and hides the phone's title and head there.
+  const mine = RULES.filter((r) => parts(r.selector).some((s) => /an-phead|an-ptools|an-pcustom|an-pview|an-prange|an-compare|an-rescan|an-pdesc|an-papply/.test(s)));
+  assert.ok(mine.length >= 3);
+  for (const r of mine) for (const s of parts(r.selector)) if (/an-phead|an-ptools|an-pcustom|an-pview|an-prange|an-compare|an-rescan|an-pdesc|an-papply/.test(s)) assert.ok(s.startsWith(ANP), s + " is not prefixed with the page");
+  for (const c of [".an-phead", ".an-ptools", ".an-pcustom"]) assert.strictEqual(decls(ANP + " > " + c).get("display"), "flex", c + " is shown on the page");
+  assert.strictEqual(decls(ANP + " > .dlg-title").get("display"), "none", "the phone's legend title is not drawn on the page");
+  assert.strictEqual(decls(ANP + " > .dlg-head").get("display"), "none", "nor its head: tabs, caption, #an-ctl, Re-scan and ×");
+  // Page-weight rules for the phone's nodes: the closing × and the strip are gone from the page's view, not restyled.
+  assert.deepStrictEqual(RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(ANP) && /#an-ctl|#an-tabs|#analytics-refresh|\.dlg-x|#analytics-range/.test(s))).map((r) => r.selector), []);
+  // The kit gives .toolbar and .btn a display, which beats the UA's [hidden]: the custom row hides through its own rule.
+  const shown = BASE_RULES.findIndex((r) => parts(r.selector).includes(ANP + " > .an-pcustom"));
+  const hidden = BASE_RULES.findIndex((r) => parts(r.selector).includes(ANP + " > .an-pcustom[hidden]"));
+  assert.ok(shown >= 0 && hidden > shown, "the [hidden] rule follows the show rule");
+  assert.strictEqual(decls(ANP + " > .an-pcustom[hidden]").get("display"), "none");
+  // The page is the base page rule's column (head, toolbar, custom row, then the body scrolling): not Analytics' old grid.
+  assert.strictEqual(decls(ANP).get("display"), undefined);
+  assert.strictEqual(decls(ANP).get("grid-template-columns"), undefined);
+  assert.strictEqual(decls("#page-host > dialog.as-page").get("flex-direction"), "column");
+});
+
+test("Analytics and Audit set their head and toolbar in one shared rule each", () => {
+  const head = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .page-head"));
+  assert.strictEqual(head.length, 1, "one rule for the Audit head");
+  assert.ok(parts(head[0].selector).includes(ANP + " > .page-head"), "the same rule sets the Analytics head");
+  assert.strictEqual(head[0].decls.get("padding"), "var(--sp-6) var(--sp-8) var(--sp-3)", "§B1: 24px 32px 12px, not the kit's 20px");
+  assert.strictEqual(head[0].decls.get("flex"), "none", "the head stays put");
+  const tools = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools"));
+  assert.strictEqual(tools.length, 1);
+  assert.deepStrictEqual(parts(tools[0].selector), [AU + " > .toolbar.au-tools", ANP + " > .toolbar.an-ptools", ANP + " > .toolbar.an-pcustom"], "the same rule sets Audit's toolbar and both Analytics rows");
+  assert.strictEqual(tools[0].decls.get("padding"), "0 var(--sp-8) var(--sp-4)", "§B2: 0 32px 16px");
+  assert.strictEqual(tools[0].decls.get("flex-wrap"), "wrap", "760px never scrolls sideways");
+  // The wrap does not undo the toolbar's own layout.
+  const kit = decls(".toolbar");
+  assert.strictEqual(kit.get("display"), "flex");
+  assert.strictEqual(kit.get("align-items"), "center");
+  assert.strictEqual(kit.get("gap"), "var(--sp-3)");
+  // Everything under the toolbars scrolls and the dialog's own body is that scroller (base .dlg-body: flex 1, min-height 0).
+  const body = decls(ANP + " > .dlg-body");
+  assert.strictEqual(body.get("padding"), "0 var(--sp-8) var(--sp-6)", "§B0: .m3-body, so the body lines up with the toolbar");
+  assert.strictEqual(body.get("grid-column"), undefined);
+  assert.strictEqual(body.get("grid-row"), undefined);
+  const base = decls(".dlg-body", parseRules(APP_CSS));
+  assert.strictEqual(base.get("flex"), "1");
+  assert.strictEqual(base.get("min-height"), "0");
+  assert.strictEqual(base.get("overflow-y"), "auto");
+});
+
+test("the Custom range row is kit .toolbar parts: 28px date fields that keep their width and the kit focus", () => {
+  const field = decls(ANP + " > .an-pcustom .input");
+  assert.strictEqual(field.get("width"), "auto", "the kit's .input is width: 100%");
+  assert.strictEqual(field.get("flex"), "none");
+  assert.strictEqual(decls(".input.input-sm").get("height"), "var(--h-ctl)", "28px beside 28px buttons");
+  // No page rule of its own for the dates' border or focus: the global field focus covers the kit .input.
+  const own = RULES.filter((r) => parts(r.selector).some((s) => /\.an-date/.test(s)));
+  assert.deepStrictEqual(own.map((r) => r.selector), [".an-date:focus"], "no page rule names .an-date: only the one that answers app.css's focus opt-out");
+  assert.deepStrictEqual([...own[0].decls], [["box-shadow", "0 0 0 1px var(--accent)"]]);
+  // The Analytics dialog's JS-built phone inputs keep app.css's .an-date, and the page's static ones wear it as a hook too.
+  assert.ok(parseRules(APP_CSS).some((r) => parts(r.selector).includes(".an-date")));
+});
+
+test("no Analytics head rule uses color-mix, nesting or @layer, and none sets a type size of its own", () => {
+  const rules = RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(ANP + " > .page-head") || s.startsWith(ANP + " > .toolbar") || s.startsWith(ANP + " > .an-p")));
+  assert.ok(rules.length >= 4);
+  for (const r of rules) for (const [prop, v] of r.decls) {
+    assert.ok(!/color-mix/.test(v), r.selector + " { " + prop + " } uses color-mix");
+    assert.ok(!/^font/.test(prop), r.selector + " sets " + prop + ": the kit's head and toolbar parts draw the type");
+  }
+  assert.ok(!/@layer/.test(DESK_CSS));
 });

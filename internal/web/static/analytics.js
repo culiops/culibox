@@ -283,12 +283,39 @@ async function openAnalytics() {
   AN.to = anTodayUTC();
   AN.from = anRangeFrom("30d");
   syncTabButtons();
+  anSyncPageControls();
   await anLoad();
 }
 
 function syncTabButtons() {
   for (const b of document.querySelectorAll("#an-tabs button")) {
     b.classList.toggle("act", b.dataset.antab === AN.tab);
+  }
+}
+
+// anSetTab: choose a view. The phone's tab strip (.act) and the page's view switch (aria-pressed) both follow AN.tab; the
+// window's data is already loaded, so it only re-renders (no refetch).
+function anSetTab(tab) {
+  AN.tab = tab;
+  syncTabButtons();
+  anSyncPageControls();
+  anRender();
+}
+
+// anRescan: read the transcripts again, then reload the window. `btn` is the phone's #analytics-refresh or the page's
+// #an-rescan: it disables itself and says "Scanning…" meanwhile. On the page it is the control in use, so focus comes
+// back to it if the disabled button lost it (and only then: a focus the user moved on is left where they put it).
+async function anRescan(btn) {
+  const keep = anIsPage() && document.activeElement === btn;
+  btn.disabled = true;
+  btn.textContent = "Scanning…";
+  try { await api("/api/analytics/ingest", { method: "POST" }); await anLoad(); }
+  catch (_) { /* leave the current view; the range line still shows */ }
+  finally {
+    btn.disabled = false;
+    btn.textContent = "Re-scan";
+    const now = document.activeElement;
+    if (keep && (!now || now === document.body)) btn.focus();
   }
 }
 
@@ -391,34 +418,20 @@ function anRender() {
   const range = document.getElementById("analytics-range");
   if (range && AN.data) range.textContent = `${AN.data.from} → ${AN.data.to} (UTC)`;
   body.replaceChildren();
-  // On the desktop page the range chips + Compare live in the page header
-  // (#an-ctl); the modal keeps them at the top of the body.
-  const page = anIsPage();
+  // On the desktop page the view switch, range, Compare and the window line are the page's head and toolbar: static nodes
+  // (index.html) that stay where they are and are brought up to date in place. The modal keeps its control strip at the
+  // top of the body.
   const ctl = document.getElementById("an-ctl");
   if (ctl) ctl.replaceChildren();
-  if (page && ctl) {
-    ctl.appendChild(anControls(true));
-    // Custom's two date inputs would not fit the header: a second row, first in the body.
-    if (AN.customOpen || AN.range === "custom") body.appendChild(anCustomRow());
-  } else {
-    body.appendChild(anControls(false));
-  }
+  if (anIsPage()) anSyncPageControls();
+  else body.appendChild(anControls());
   const d = AN.data;
   if (!d || !d.costByDay.days.length) {
-    if (page) body.appendChild(el("p", "an-hint", `${d ? d.from : AN.from} → ${d ? d.to : AN.to} (UTC)`));
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
   const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
   (R[AN.tab] || anOverview)(body);
-  // The mockup shows the window in the first chart's caption; the header's own
-  // #analytics-range caption is hidden on the page.
-  if (page) {
-    const win = `${d.from} → ${d.to} (UTC)`;
-    const hint = body.querySelector(".an-section .an-hint");
-    if (hint) hint.textContent += " · " + win;
-    else body.insertBefore(el("p", "an-hint", win), body.querySelector(".an-section"));
-  }
   // Time-series charts read left→right oldest→newest; open scrolled to the most
   // recent day so a window with a leading empty gap doesn't render blank.
   const tw = body.querySelector(".an-timewrap");
@@ -453,51 +466,132 @@ function anIsPage() {
   return !!(dlg && dlg.classList.contains("as-page"));
 }
 
-// the Custom range's date inputs + Apply, as one list of nodes
+// the Custom range's date inputs + Apply (the phone's inline strip), as one list of nodes
 function anCustomInputs() {
   const from = el("input", "an-date"); from.type = "date"; from.value = AN.from || "";
   const to = el("input", "an-date"); to.type = "date"; to.value = AN.to || "";
   const dash = el("span", "an-clabel", "→");
   const apply = el("button", "an-chip", "Apply");
   apply.type = "button";
-  apply.onclick = () => {
-    if (!from.value || !to.value) return;
-    const r = clampRange(from.value, to.value);
-    AN.range = "custom"; AN.from = r.from; AN.to = r.to; anLoad();
-  };
+  apply.onclick = () => { anApplyCustom(from.value, to.value); };
   return [from, dash, to, apply];
 }
-function anCustomRow() {
-  const row = el("div", "an-customrow");
-  row.append(el("span", "an-clabel", "Custom range"), ...anCustomInputs());
-  return row;
+
+// The range controls' actions, shared by the phone's chips and the page's seg. Each sets AN, brings the page's controls
+// up to date at once (a no-op on the phone) and reloads or re-renders as it always did.
+
+// anPickRange: a preset window ending today. The page's Custom row closes with it.
+function anPickRange(key) {
+  AN.range = key; AN.customOpen = false; AN.from = anRangeFrom(key); AN.to = anTodayUTC();
+  anSyncPageControls();
+  anLoad();
 }
 
-// control strip: range presets + compare toggle. `page` = the desktop header
-// slot: no inline date inputs (anCustomRow), and the shorter Compare label.
-function anControls(page) {
+// anToggleCustom: show or hide the Custom range's date inputs. Nothing is fetched; the page only shows its row (the body
+// does not change), the phone re-renders its strip.
+function anToggleCustom() {
+  AN.customOpen = !AN.customOpen;
+  if (anIsPage()) anSyncPageControls();
+  else anRender();
+}
+
+// anApplyCustom: load [f, t] as the window, a reversed pair swapped (clampRange). Nothing happens while a date is empty.
+// Returns the ordered range, or null.
+function anApplyCustom(f, t) {
+  if (!f || !t) return null;
+  const r = clampRange(f, t);
+  AN.range = "custom"; AN.from = r.from; AN.to = r.to;
+  anSyncPageControls();
+  anLoad();
+  return r;
+}
+
+// anToggleCompare: compare this window with the equal-length one before it.
+function anToggleCompare() {
+  AN.compare = !AN.compare;
+  anSyncPageControls();
+  anLoad();
+}
+
+// control strip of the phone's modal: range presets + compare toggle, the Custom range's dates inline. (The desktop page
+// has no strip: its toolbar is static markup, anSyncPageControls.)
+function anControls() {
   const wrap = el("div", "an-controls");
   const lbl = el("span", "an-clabel", "Range");
   wrap.appendChild(lbl);
   for (const key of ["7d", "30d", "90d", "all"]) {
     const b = el("button", "an-chip" + (AN.range === key ? " on" : ""), key === "all" ? "All" : key);
     b.type = "button";
-    b.onclick = () => { AN.range = key; AN.customOpen = false; AN.from = anRangeFrom(key); AN.to = anTodayUTC(); anLoad(); };
+    b.onclick = () => anPickRange(key);
     wrap.appendChild(b);
   }
   // Custom range: a chip that reveals two date inputs + Apply.
   const custom = el("button", "an-chip" + (AN.range === "custom" ? " on" : ""), "Custom…");
   custom.type = "button";
-  custom.onclick = () => { AN.customOpen = !AN.customOpen; anRender(); };
+  custom.onclick = anToggleCustom;
   wrap.appendChild(custom);
-  if (!page && (AN.customOpen || AN.range === "custom")) wrap.append(...anCustomInputs());
+  if (AN.customOpen || AN.range === "custom") wrap.append(...anCustomInputs());
   const spacer = el("span"); spacer.style.width = "12px"; wrap.appendChild(spacer);
-  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), page ? "⇄ Compare" : "⇄ Compare vs prev period");
+  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), "⇄ Compare vs prev period");
   cmp.type = "button";
   cmp.title = "Compare this window to the equal-length window immediately before it";
-  cmp.onclick = () => { AN.compare = !AN.compare; anLoad(); };
+  cmp.onclick = anToggleCompare;
   wrap.appendChild(cmp);
   return wrap;
+}
+
+// ---- the desktop page's head and toolbar (index.html .an-phead, .an-ptools, .an-pcustom) -----------------------
+// Static nodes: nothing here rebuilds them, so the control a click came from keeps focus.
+
+// anSyncPageControls: bring them up to date with AN: aria-pressed on the view and range items, Custom… and Compare
+// (Custom… mirrors the phone's `.on`: lit by an applied custom range, not by the row being open), the Custom row's hidden,
+// and the description's window (the loaded data's, else the requested one). The row's dates default to the window when
+// the row opens. A no-op unless the dialog is the page.
+function anSyncPageControls() {
+  if (!anIsPage()) return;
+  const dlg = document.getElementById("analytics-modal");
+  const press = (b, on) => b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of dlg.querySelectorAll("#an-pview [data-antab]")) press(b, b.dataset.antab === AN.tab);
+  for (const b of dlg.querySelectorAll("#an-prange [data-range]")) press(b, AN.range === b.dataset.range);
+  const cmp = dlg.querySelector("#an-compare");
+  if (cmp) press(cmp, AN.compare);
+  const row = dlg.querySelector(".an-pcustom");
+  if (row) {
+    const open = AN.customOpen || AN.range === "custom";
+    if (open && row.hidden) {
+      const dates = row.querySelectorAll(".an-date");
+      if (dates[0]) dates[0].value = AN.from || "";
+      if (dates[1]) dates[1].value = AN.to || "";
+    }
+    row.hidden = !open;
+  }
+  const desc = dlg.querySelector("#an-pdesc");
+  if (desc) {
+    const d = AN.data;
+    const from = d ? d.from : AN.from, to = d ? d.to : AN.to;
+    desc.textContent = "Spend read from Claude Code transcripts" + (from && to ? ` · ${from} → ${to} (UTC)` : "");
+  }
+}
+
+// anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
+function anWirePage() {
+  const dlg = document.getElementById("analytics-modal");
+  if (!dlg) return;
+  const on = (sel, fn) => { const n = dlg.querySelector(sel); if (n) n.onclick = fn; };
+  on("#an-pview", (e) => { const b = e.target.closest("button[data-antab]"); if (b) anSetTab(b.dataset.antab); });
+  on("#an-prange", (e) => {
+    const b = e.target.closest("button[data-range]");
+    if (!b) return;
+    if (b.dataset.range === "custom") anToggleCustom();
+    else anPickRange(b.dataset.range);
+  });
+  on("#an-compare", anToggleCompare);
+  on("#an-papply", () => {
+    const dates = dlg.querySelectorAll(".an-pcustom .an-date");
+    if (dates.length < 2) return;
+    const r = anApplyCustom(dates[0].value, dates[1].value);
+    if (r) { dates[0].value = r.from; dates[1].value = r.to; }
+  });
 }
 
 // ---- Overview ---------------------------------------------------------------
