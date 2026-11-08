@@ -336,7 +336,7 @@ test("in a narrow pane only the tabs hide; + Shell stays down to the width where
 
 // The profile page in a narrow window (Task 11 slice gate, gap 1). The shell takes 502 px (sidebar 290, Settings nav 212), so #pfv is 398 px in a
 // 900 px window and 199 px in a 701 px one. The steps are container rules on #pfv, each inside the desktop block (so mobile cannot see them):
-// 863 puts the scope under the name, 624 puts a block's label above its body (the Edit link stays on the label's line), 440 puts Remove or Undo
+// 863 puts the scope under the name, 624 puts a block's label above its body (the Edit button stays on the label's line), 440 puts Remove or Undo
 // on its own line under a row's content, 390 stacks every GitHub permission with its control under it (together, never one row alone) and wraps an
 // option's segmented control (Agent's Effort: 284 px of choices, which held its grid track open past the block in a 701 to 800 px window), 300 puts
 // the kind word above the content and lets the chip after "In a box" wrap (the cards of Runs in and of New profile), 240 trims the margins so Discard
@@ -350,11 +350,15 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   assert.match(at(624), /\.pfv-act \{ grid-column: 2; grid-row: 1;/);
   assert.match(at(624), /\.pfv-body, [^{]*\.pfv-adv-body \{ grid-column: 1 \/ -1; grid-row: 2;/);
   assert.match(at(624), /\.pfv-rows \{ grid-template-columns: minmax\(0, 1fr\);/, "a row's track may be narrower than its longest word");
+  // The head needs no step: it wraps its actions under the title from the start (UI plan 4 Task 3), so nothing of it is left here.
+  assert.doesNotMatch(at(624), /\.pfv-head|\.pfv-acts|\.page-actions/);
+  // Edit keeps the 2px lift in column 2 (row 1): the label's first line is the same 20px as the value's, so it stays centred on it.
+  assert.doesNotMatch(at(624), /\.btn \{[^}]*margin-top/);
   // Remove never sits beside an input: it has its own line under the content, at the right.
   assert.match(at(440), /\.pfv-row \{ grid-template-columns: 52px minmax\(0, 1fr\);/);
   assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);
   assert.match(at(300), /\.pfv-row \{ display: flex; flex-direction: column;/);
-  assert.match(at(240), /\.pfv-in \{ padding: 20px 12px 120px;/);
+  assert.match(at(240), /\.pfv-in \{ padding: 0 12px 32px;/);
   // A permission and its control share a line while they fit (and wrap on their own if one ever does not); at 390 all of them stack.
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
   assert.match(at(390), /\.pfv-perm \{ flex-direction: column; flex-wrap: nowrap; align-items: flex-start;/);

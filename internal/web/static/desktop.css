@@ -2455,7 +2455,10 @@
   body.page-settings-modal #split-v::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; }
   body.page-settings-modal #split-v::after { background: transparent; }
   body.page-settings-modal #split-v:hover::after, body.page-settings-modal #split-v.dragging::after { background: var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 940px; padding: 28px 32px 140px; }
+  /* The overview is a bounded column (§B1.3, §B1.5): 884px at most and left-aligned (the frame leaves 54px free at the right of a 1440px window),
+     32px at its sides and below; the head carries the 24px above (the New profile page draws the same one). The Settings frame hides every
+     panel's own bottom edge, so there is no 140px under it for a floating bar: Save and Cancel sit in the block. */
+  #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 884px; padding: 0 32px 32px; }
   #page-host > #settings-modal.as-page #pfv :is(h2, h3, h4, p, dl, dd) { margin: 0; padding: 0; }
   #page-host > #settings-modal.as-page .pfv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
@@ -2480,51 +2483,71 @@
   #page-host > #settings-modal.as-page .pfv-lock { flex: none; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-lock { color: var(--muted); }
 
-  /* The header: name, containment chip, the agent line; Start session and the menu. */
-  #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-head-main { min-width: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 10px; }
+  /* The head (§B1.4, the kit's .page-head §C7, the one settingshead.js draws on the other five pages): the name and its containment chip
+     (the kit's .chip .chip-box, §C5) over the agent line (13/20 --muted, the model in mono 12/18), then Start session, the ⋯ or Duplicate…, a
+     divider and Esc ✕. Top-aligned, gap 16, 24px above and 20px below; the column's own 32px sides are outside it. It wraps when the text
+     cannot keep 240px beside the actions (the page is the window less 502px), the actions then going under the title instead of pushing Esc ✕
+     out of reach. New profile and Duplicate (pfv-new.js) draw the same element with the title and the line alone. */
+  #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-4); padding: var(--sp-6) 0 var(--sp-5); }
+  #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 240px; min-width: 0; }
+  /* The title row (§B1.4 `.m2-titlerow`): the name, then the chip, 8px apart. A long name is cut short, as on the other pages. */
+  #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 8px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* New profile's and Duplicate's title (an h2 at --t-lg: they have no frame). */
   #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-lg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-xs)/1 var(--font-mono); }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip-host { box-shadow: inset 0 0 0 1px var(--faint); }
   #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
+  /* The actions (the kit's .page-actions: gap 8, centred): on a line of their own, when they must, they wrap rather than run out of the page. The
+     divider is 1x16 with 4px either side of the actions' own gap (§B1.4 `.m2-vsep`). */
+  #page-host > #settings-modal.as-page #pfv .pfv-head .page-actions { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-head .set-sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: var(--h-ctl); padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
   /* The kit's primary (F11), except "Save as host…" (.pfv-btn-host, below): red text on a clear
      button, never a fill, and no accent hover. :where keeps the weights. */
   #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host)) { background: var(--accent); color: var(--on-fill); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host, :disabled)):hover { background: var(--accent-hover); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
   /* The ⋯ menu (frame M5.4) is the kit menu (kitMenuButton rows): the kit's `.menu:has(> .menu-item)` draws the surface and the 30px
      rows, in flow, so this places it under the button: the frame's .m5-pop-r (200px wide, the kit's min-width: 220px is what shows),
      above the page. Display stays the kit's, so [hidden] still closes it. */
   #page-host > #settings-modal.as-page #pfv .pfv-more > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; width: 200px; }
-  /* The ⋯ shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
-  #page-host > #settings-modal.as-page #pfv .pfv-more .pfv-btn[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
+  /* The ⋯ (the kit's .btn .btn-icon: 28x28) shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
+  #page-host > #settings-modal.as-page #pfv .pfv-more .btn-icon[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
   #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -4px 0 24px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: var(--t-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-err:first-child { margin-top: var(--sp-6); }
 
-  /* The sheet: a card of blocks, a label column, the plain-words values, Edit at the right. */
-  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); font-weight: 600; }
+  /* The sheet (§B2): a card of blocks (the kit's .card: --panel, --r-card), each a row of three columns: the label (132px), the plain-words value
+     and, beside it, Edit. It does not clip (overflow stays visible): the "+ Add" picker of a block in edit hangs out of the card. */
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 120px minmax(0, 1fr) 56px; column-gap: 20px; position: relative; padding: 18px 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 132px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; position: relative; padding: 14px 16px 14px 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-label { font-size: var(--t-md); font-weight: 600; line-height: 20px; }
+  /* G2: a row takes --hover under the pointer (not the block in edit, which is --raise), with the card's corners at its first and last row. The
+     ghost Edit's own hover fill is --hover too, so on a hovered row it steps up to --raise. */
+  #page-host > #settings-modal.as-page #pfv .pfv-block:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
+  #page-host > #settings-modal.as-page #pfv .pfv-block:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-block:only-child { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #pfv .pfv-block:not(.pfv-editing):hover { background: var(--hover); }
+  #page-host > #settings-modal.as-page #pfv .pfv-block:hover .pfv-act > .btn-ghost:hover { background: var(--raise); }
+  /* The label (§B2 `.m2-blabel`): 13/20, 600; a column, so Advanced's count sits 2px under its name. */
+  #page-host > #settings-modal.as-page #pfv .pfv-label { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-md); font-weight: 600; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-body { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-act { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  /* Edit (§B2 `.m2-edit`): the kit's .btn .btn-ghost .btn-sm, 2px up so the 24px button is centred on the value's 20px first line. */
+  #page-host > #settings-modal.as-page #pfv .pfv-act > .btn { margin-top: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 var(--t-md)/20px var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-link:hover { text-decoration: underline; }
   /* Remove and "Move to a saved connection" sit inside a scope line, so they take its size. */
   #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page #pfv .pfv-main { line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: var(--t-sm); color: var(--muted); }
+  /* The value is --fg 500, the helper --muted at --t-sm and as wide as the value column (§B2: no third text tier, no measure of its own). */
+  #page-host > #settings-modal.as-page #pfv .pfv-main { font-weight: 500; line-height: 20px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub { margin-top: 2px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-sub { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-red { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-red + .pfv-sub { margin-top: 2px; }
@@ -2554,14 +2577,15 @@
   #page-host > #settings-modal.as-page #pfv .pfv-nh-fix { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-nh-detail { font-size: var(--t-sm); }
 
-  /* Advanced: its own card, folded, "Advanced · N set". */
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1 / 3; display: flex; align-items: center; gap: 6px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 2 / 3; margin-top: 4px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fold { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; line-height: 20px; text-align: left; cursor: pointer; }
+  /* Advanced: its own card, folded. The chevron and the name are the kit's disclosure row (.fold: flex, centred, gap 8, padding 0 2px), which
+     the button rule below only strips to a bare button; the count is under the name (§A2 `.m2-advst`: 12/18, --muted, 400). The label, the
+     helper and Edit are one row like every block (the narrow steps name .pfv-adv-label and .pfv-adv-body). */
+  #page-host > #settings-modal.as-page #pfv .pfv-fold { border: 0; background: none; color: inherit; font: inherit; font-weight: 600; line-height: 20px; text-align: left; cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-chev { flex: none; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-open .pfv-chev { transform: rotate(90deg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-advst { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-muted { color: var(--muted); font-weight: 400; }
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 16px; font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dt { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
@@ -2746,13 +2770,14 @@
   }
 
   /* Narrow windows. The shell takes 502px (sidebar 290 + Settings nav 212), so a 900px window leaves the page 398px and a 701px one 199px,
-     and the block's 120px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
+     and the block's 132px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
      no narrow design: these steps only stack what it already draws, in its own grammar, and change nothing above them. The thresholds
      are the page's width (#pfv), measured: at 624px (a 1126px window) the label column starts to cost the body more than it is worth;
      at 440px (942px) a row's content, with a kind word and Remove beside it, falls under what a name and a value need; at 300px (802px)
      it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. The permissions have
      a step of their own, at 390px (see it). */
-  /* The label above its body, the Edit link on the label's line, the body the full width. */
+  /* The label above its body, the Edit button on the label's line (it keeps its 2px lift: the label's first line is the same 20px), the body the
+     full width. The head needs no step of its own: it wraps its actions under the title from the start (the base rule), and they wrap too. */
   @container (max-width: 624px) {
     #page-host > #settings-modal.as-page #pfv .pfv-block { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
     #page-host > #settings-modal.as-page #pfv .pfv-label, #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1; grid-row: 1; }
@@ -2762,10 +2787,6 @@
     /* A row's track may be narrower than its longest word, and a path or an id breaks anywhere rather than run out of the page. */
     #page-host > #settings-modal.as-page #pfv .pfv-rows { grid-template-columns: minmax(0, 1fr); }
     #page-host > #settings-modal.as-page #pfv :is(.pfv-nm, .pfv-mono) { overflow-wrap: anywhere; }
-    /* The header's title and its actions (with "Unsaved changes" among them) go on two lines rather than squeeze the name into a column. */
-    #page-host > #settings-modal.as-page #pfv .pfv-head { flex-wrap: wrap; }
-    #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 12em; }
-    #page-host > #settings-modal.as-page #pfv .pfv-acts { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
   }
   /* A row keeps its kind word and its content side by side; Remove or Undo goes on its own line under the content, at the right, so it can
      never sit on an input. A variable's value goes under its name, a definition under its term. */
@@ -2803,8 +2824,8 @@
   }
   /* A window under 743px leaves the page under 241px (199px at 701px): less margin, so Discard and Save still fit beside each other inside the block. */
   @container (max-width: 240px) {
-    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 20px 12px 120px; }
-    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 16px 14px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 0 12px 32px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 14px; }
   }
   /* --- the Credentials drawer over the profile page (spec 5.7; the mockup's `drawer` and `drawer-tok` states) ----------- */
   /* A scrim and a drawer, both fixed and so out of the page's grid; neither is a .dbd or a .dft (selectSettingsTab hides those). They

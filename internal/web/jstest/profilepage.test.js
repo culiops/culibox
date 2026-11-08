@@ -65,6 +65,13 @@ const hasCls = (cls) => (n) => n.className.split(/\s+/).includes(cls);
 const byCls = (root, cls) => root.all(hasCls(cls));
 const texts = (root, cls) => byCls(root, cls).map((n) => n.textContent);
 const byText = (root, tag, text) => root.all((n) => n.tag === tag && n.textContent.trim() === text);
+// The page head's title and its one line: the profile page's own (h1.page-title, p.page-desc) or the New profile and Duplicate page's (h2.pfv-title-name, p.pfv-hsub).
+const titles = (root) => [...texts(root, "page-title"), ...texts(root, "pfv-title-name")];
+const subs = (root) => [...texts(root, "page-desc"), ...texts(root, "pfv-hsub")];
+const classesOf = (n) => n.className.split(/\s+/).filter(Boolean);
+// A block's label as words: Advanced's label also holds its count under the name (span.pfv-advst), which is not part of the name.
+const labelName = (l) => { const k = l.children.find((c) => c instanceof Node); return k ? k.textContent : l.textContent; };
+const labelNames = (root) => byCls(root, "pfv-label").map(labelName);
 
 const view = (name, over) => Object.assign({ name, editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, over);
 const PROFILES = [
@@ -189,10 +196,12 @@ function page(over) {
     askConfirm: async (o) => { calls.push("confirm:" + o.title + ":" + (o.danger ? "danger" : "")); box.asked.push(o); return box.confirmAnswer !== false; },
     openSpawnDialog: (n) => { calls.push("spawn:" + n); },
     setDialogError: (id, m) => { calls.push("error:" + m); },
+    // settingshead.js settingsEscButton closes the page through it (shell.js).
+    closeDialogFromUI: (id) => { calls.push("close:" + id); },
   }, over);
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js"]) {
+  for (const f of ["svgicon.js", "kitmenu.js", "fsops.js", "workhome.js", "workmode.js", "spawnpreview.js", "spawnform.js", "profileform.js", "importsmodel.js", "envrows.js", "profileview.js", "profileedit.js", "settingshead.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   for (const fn of ["buildSeg", "optApplies"]) new vm.Script(appFn(fn), { filename: "app.js:" + fn }).runInContext(ctx);
@@ -244,7 +253,7 @@ test("a nav item shows its profile", async () => {
   byCls(t.els["pf-navlist"], "pfv-ni")[3].click();
   await new Promise((r) => setTimeout(r, 0));
   assert.strictEqual(t.run("pfvState").name, "runbook-host");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["runbook-host"]);
 });
 
 test("pfvShow fetches the stored profile and draws the seven blocks from the read model", async () => {
@@ -254,11 +263,11 @@ test("pfvShow fetches the stored profile and draws the seven blocks from the rea
   assert.strictEqual(t.run("pfvState").name, "aws-ops");
   assert.strictEqual(t.run("pfvState").doc.rev, "r1");
   const root = t.els["pfv-in"];
-  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["aws-ops"]);
-  assert.deepStrictEqual(texts(root, "pfv-chip"), ["box"]);
-  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Claude Code · claude-opus-5-5 · high effort"]);
+  assert.deepStrictEqual(titles(root), ["aws-ops"]);
+  assert.deepStrictEqual(texts(root, "chip"), ["box"]);
+  assert.deepStrictEqual(subs(root), ["Claude Code · claude-opus-5-5 · high effort"]);
   assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This agent will be able to"]);
-  assert.deepStrictEqual(texts(root, "pfv-label").map((s) => s.replace(/\s*· .*$/, "")), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
   // Edit on every block of an editable profile, "+ Add" on the two row blocks.
   assert.strictEqual(byText(root, "button", "Edit").length, 7);
   assert.deepStrictEqual(byText(root, "button", "Edit").map((b) => b.getAttribute("aria-label")), [
@@ -397,28 +406,176 @@ test("a host profile has Can reach, Switch to box and no cloud blocks", async ()
   const t = page();
   await t.box.pfvShow("runbook-host");
   const root = t.els["pfv-in"];
-  assert.deepStrictEqual(texts(root, "pfv-chip"), ["host"]);
-  assert.ok(byCls(root, "pfv-chip")[0].className.includes("pfv-chip-host"));
-  assert.deepStrictEqual(texts(root, "pfv-label").map((s) => s.replace(/\s*· .*$/, "")), ["Runs in", "Workspace", "Agent", "Can reach", "Advanced"]);
+  assert.deepStrictEqual(texts(root, "chip"), ["host"]);
+  assert.ok(byCls(root, "chip")[0].className.includes("chip-host"));
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Can reach", "Advanced"]);
   // Spec 5.4 sentence, one line.
   assert.deepStrictEqual(texts(byCls(root, "pfv-block")[0], "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
   assert.strictEqual(byText(root, "button", "Switch to box").length, 1);
   assert.strictEqual(byCls(root, "pfv-add").length, 0);
 });
 
-test("a read-only profile has no Edit, the config.json note, Duplicate as the primary and no menu", async () => {
+test("a read-only profile has no Edit, the config.json note and no menu", async () => {
   const t = page();
   await t.box.pfvShow("claude");
   const root = t.els["pfv-in"];
   assert.strictEqual(byText(root, "button", "Edit").length, 0);
   assert.deepStrictEqual(texts(root, "pfv-note"), ["Defined in config.json. Duplicate it to change it."]);
-  const dup = byText(root, "button", "Duplicate");
-  assert.strictEqual(dup.length, 1);
-  assert.ok(dup[0].className.includes("pfv-btn-primary"));
   assert.strictEqual(byText(root, "button", "Start session").length, 1);
   assert.strictEqual(byCls(root, "menu").length, 0);
-  assert.strictEqual(byCls(root, "pfv-btn-icon").length, 0);
+  assert.strictEqual(byCls(root, "btn-icon").length, 0);
   assert.strictEqual(byText(root, "button", "Switch to box").length, 0, "a profile you cannot edit has nothing to switch");
+});
+
+// The page head (UI plan 4 Task 3, design digest §B1.4 and §B2): the kit's page head, the one the other five Settings pages draw
+// (settingshead.js): an H1, the one line, the actions, a 1x16 divider, then Esc ✕ (settingsEscButton). Start session is the one
+// primary; the ⋯ is the kit's 28px icon button; Duplicate… on a profile you cannot change is a secondary.
+const headOf = (root) => byCls(root, "pfv-head")[0];
+const shownActions = (root) => byCls(headOf(root), "page-actions")[0].children.filter((c) => c instanceof Node && !c.hidden);
+
+test("an editable profile: Start session is the primary, then ⋯, a divider and Esc ✕", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const root = t.els["pfv-in"];
+  const [start, more, sep, esc, ...rest] = shownActions(root);
+  assert.deepStrictEqual(rest, [], "four things in the head's actions: the note about unsaved changes is hidden while nothing changed");
+  assert.strictEqual(start.tag, "button");
+  assert.strictEqual(start.textContent, "Start session");
+  assert.deepStrictEqual(classesOf(start), ["btn", "btn-primary"]);
+  // ⋯: the kit's icon button (28px comes from .btn-icon, see settings-shell.test.js), inside the wrapper the menu hangs from.
+  assert.ok(classesOf(more).includes("pfv-more"));
+  const dots = byCls(more, "btn-icon")[0];
+  assert.deepStrictEqual(classesOf(dots), ["btn", "btn-icon"]);
+  assert.strictEqual(dots.getAttribute("aria-label"), "More actions for aws-ops");
+  assert.strictEqual(dots.getAttribute("title"), "More actions");
+  assert.strictEqual(dots.getAttribute("aria-haspopup"), "menu");
+  assert.deepStrictEqual(byCls(more, "menu").length, 1, "the kit menu is untouched");
+  assert.deepStrictEqual(classesOf(sep), ["set-sep"]);
+  assert.strictEqual(sep.getAttribute("aria-hidden"), "true");
+  assert.deepStrictEqual(classesOf(esc), ["btn", "btn-ghost", "btn-sm", "set-esc"], "settingsEscButton");
+  assert.strictEqual(esc.getAttribute("aria-label"), "Close (Esc)");
+  assert.strictEqual(esc.textContent, "Esc✕");
+  esc.click();
+  assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("close:")), ["close:settings-modal"]);
+  // One primary in the whole view.
+  assert.strictEqual(root.all((n) => classesOf(n).includes("btn-primary") || classesOf(n).includes("pfv-btn-primary")).length, 1);
+});
+
+test("a read-only profile: Start session is the primary and Duplicate… is a secondary", async () => {
+  const t = page();
+  await t.box.pfvShow("claude");
+  const root = t.els["pfv-in"];
+  const [start, dup, sep, esc, ...rest] = shownActions(root);
+  assert.deepStrictEqual(rest, []);
+  assert.deepStrictEqual([start.textContent, classesOf(start)], ["Start session", ["btn", "btn-primary"]]);
+  assert.strictEqual(dup.textContent, "Duplicate…", "the label is exactly Duplicate…, like the menu's");
+  assert.deepStrictEqual(classesOf(dup), ["btn"]);
+  assert.deepStrictEqual(classesOf(sep), ["set-sep"]);
+  assert.ok(classesOf(esc).includes("set-esc"));
+  assert.deepStrictEqual(root.all((n) => /Duplicate/.test(n.textContent) && classesOf(n).some((c) => /primary/.test(c))), [], "no element with Duplicate in it is a primary");
+  assert.strictEqual(root.all((n) => classesOf(n).some((c) => /primary/.test(c))).length, 1, "Start session is the only primary");
+  dup.click();
+  assert.strictEqual(t.run("pfvState").page, "dup", "it opens the Duplicate page");
+});
+
+test("the head: the title is an h1, the model in the description is span.mono, and the section title reads This agent will be able to", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const root = t.els["pfv-in"];
+  const [h1] = byCls(headOf(root), "page-title");
+  assert.strictEqual(h1.tag, "h1");
+  assert.strictEqual(h1.textContent, "aws-ops");
+  const chip = byCls(headOf(root), "chip")[0];
+  assert.deepStrictEqual(classesOf(chip), ["chip", "chip-box"]);
+  assert.strictEqual(chip.parent, h1.parent, "the chip sits beside the title");
+  const [desc] = byCls(headOf(root), "page-desc");
+  assert.strictEqual(desc.tag, "p");
+  assert.strictEqual(desc.textContent, "Claude Code · claude-opus-5-5 · high effort");
+  const mono = byCls(desc, "mono");
+  assert.deepStrictEqual(mono.map((n) => [n.tag, n.textContent, classesOf(n)]), [["span", "claude-opus-5-5", ["mono", "t-sm"]]], "only the model is machine text");
+  assert.deepStrictEqual(texts(root, "pfv-sheet-h"), ["This agent will be able to"]);
+  assert.strictEqual(byCls(root, "pfv-sheet-h")[0].tag, "h2", "under the h1");
+  // A host profile's chip is the kit's host one.
+  const h = page();
+  await h.box.pfvShow("runbook-host");
+  assert.deepStrictEqual(classesOf(byCls(h.els["pfv-in"], "chip")[0]), ["chip", "chip-host"]);
+});
+
+test("the head is correct whenever the page draws: on the first open (after the dialog is the page) and on a redraw", async () => {
+  const t = page();
+  // Before the dialog is the page (selectSettingsTab's first call) nothing is drawn: the head would be a phone's.
+  t.els["settings-modal"].classList.remove("as-page");
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-head").length, 0);
+  // openSettings calls pfvShow again once openDialog made it the page.
+  t.els["settings-modal"].classList.add("as-page");
+  await t.box.pfvShow("aws-ops");
+  assert.strictEqual(byCls(t.els["pfv-in"], "set-esc").length, 1);
+  t.run("pfvRender()");
+  assert.strictEqual(byCls(t.els["pfv-in"], "set-esc").length, 1, "a redraw replaces the head, it does not stack a second Esc ✕");
+});
+
+test("pfvHeaderPrimary: Start session is the one primary until a block is in edit, then the head has none (Save is)", async () => {
+  const t = page();
+  const pri = t.box.pfvHeaderPrimary;
+  assert.strictEqual(pri({ readOnly: false, editing: false }), "start");
+  assert.strictEqual(pri({ readOnly: true, editing: false }), "start", "a profile you cannot change still starts");
+  assert.strictEqual(pri({ readOnly: false, editing: true }), "none");
+  // The head follows it: with a block open, Start session is a secondary.
+  await t.box.pfvShow("aws-ops");
+  byText(t.els["pfv-in"], "button", "Edit")[0].click();
+  const [start] = shownActions(t.els["pfv-in"]);
+  assert.strictEqual(start.textContent, "Start session");
+  assert.deepStrictEqual(classesOf(start), ["btn"], "demoted while a block is open");
+  assert.strictEqual(byCls(headOf(t.els["pfv-in"]), "btn-primary").length, 0);
+});
+
+test("Edit is a ghost small button in column 3 with the block's aria-label", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  const labels = t.run("PFV_EDIT_LABEL");
+  const blocks = byCls(t.els["pfv-in"], "pfv-block");
+  assert.strictEqual(blocks.length, 7);
+  for (const b of blocks) {
+    const id = b.dataset.block;
+    // Label, body, act: the grid's three columns in this order (label 132px, value, Edit).
+    assert.deepStrictEqual(b.children.map((c) => classesOf(c)[0]), ["pfv-label", "pfv-body", "pfv-act"], id);
+    const edit = byCls(b.children[2], "btn").filter((n) => n.textContent === "Edit");
+    assert.strictEqual(edit.length, 1, id);
+    assert.strictEqual(edit[0].tag, "button");
+    assert.deepStrictEqual(classesOf(edit[0]), ["btn", "btn-ghost", "btn-sm"], id);
+    assert.strictEqual(edit[0].getAttribute("aria-label"), labels[id], id);
+    assert.strictEqual(edit[0].type, "button");
+  }
+});
+
+test("Advanced shows its count under the label, in its own card", async () => {
+  const t = page();
+  await t.box.pfvShow("aws-ops");
+  let adv = blockOf(t, "advanced");
+  let label = byCls(adv, "pfv-label")[0];
+  assert.deepStrictEqual(label.children.map((c) => classesOf(c)[0]), ["fold", "pfv-advst"], "the name, then the count under it, not after it on the line");
+  assert.strictEqual(label.children[0].textContent, "Advanced");
+  assert.strictEqual(label.children[1].textContent, "none set");
+  assert.strictEqual(byCls(label, "pfv-chev").length, 1, "the chevron stays with the name");
+  assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "nothing to unfold: no dead toggle");
+  assert.strictEqual(adv.parent.children.length, 1, "Advanced is the only block of its own card");
+  assert.notStrictEqual(adv.parent, blockOf(t, "network").parent);
+  DOCS["aws-ops"].args = ["--verbose"];
+  DOCS["aws-ops"].env = { LOG_LEVEL: "debug" };
+  try {
+    await t.box.pfvShow("aws-ops");
+    adv = blockOf(t, "advanced");
+    label = byCls(adv, "pfv-label")[0];
+    const fold = byCls(label, "pfv-fold")[0];
+    assert.deepStrictEqual(classesOf(fold), ["pfv-fold", "fold"], "the chevron and the name are the kit's disclosure row");
+    assert.deepStrictEqual(label.children.map((c) => classesOf(c)[0]), ["pfv-fold", "pfv-advst"]);
+    assert.strictEqual(fold.textContent, "Advanced");
+    assert.strictEqual(texts(label, "pfv-advst")[0], "2 set");
+  } finally {
+    delete DOCS["aws-ops"].args;
+    delete DOCS["aws-ops"].env;
+  }
 });
 
 test("an editable profile has Start session and a menu with Duplicate… and a red Delete… (the kit menu: profile-menu.test.js)", async () => {
@@ -426,14 +583,14 @@ test("an editable profile has Start session and a menu with Duplicate… and a r
   await t.box.pfvShow("aws-ops");
   const root = t.els["pfv-in"];
   const [start] = byText(root, "button", "Start session");
-  assert.ok(start.className.includes("pfv-btn-secondary"));
+  assert.ok(classesOf(start).includes("btn-primary"));
   const menu = byCls(root, "menu")[0];
   assert.ok(menu.hidden, "closed until the ⋯ button opens it");
   assert.strictEqual(menu.getAttribute("aria-label"), "aws-ops profile actions");
   const items = byCls(menu, "menu-item");
   assert.deepStrictEqual(items.map((i) => i.textContent), ["Duplicate…", "Delete…"]);
   assert.ok(items[1].className.includes("is-danger"));
-  const more = byCls(root, "pfv-btn-icon")[0];
+  const more = byCls(root, "btn-icon")[0];
   assert.strictEqual(more.getAttribute("aria-label"), "More actions for aws-ops");
   assert.strictEqual(more.getAttribute("aria-expanded"), "false");
   more.click();
@@ -505,7 +662,7 @@ test("Advanced is folded with its count, and opens by itself when something is s
   const t = page();
   await t.box.pfvShow("aws-ops");
   let adv = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "advanced");
-  assert.strictEqual(texts(adv, "pfv-label")[0], "Advanced · none set");
+  assert.deepStrictEqual([labelName(byCls(adv, "pfv-label")[0]), texts(adv, "pfv-advst")[0]], ["Advanced", "none set"]);
   assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "nothing to unfold: no dead toggle");
   assert.strictEqual(byCls(adv, "pfv-adv-sum").length, 1);
 
@@ -513,7 +670,7 @@ test("Advanced is folded with its count, and opens by itself when something is s
   try {
     await t.box.pfvShow("aws-ops");
     adv = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "advanced");
-    assert.strictEqual(texts(adv, "pfv-label")[0], "Advanced · 1 set");
+    assert.deepStrictEqual([labelName(byCls(adv, "pfv-label")[0]), texts(adv, "pfv-advst")[0]], ["Advanced", "1 set"]);
     const fold = byCls(adv, "pfv-fold")[0];
     assert.strictEqual(fold.getAttribute("aria-expanded"), "true");
     assert.deepStrictEqual(texts(adv, "pfv-dl"), ["Arguments--verbose"]);
@@ -534,7 +691,7 @@ test("pfvDelete confirms in red, deletes, and shows the next profile in list ord
   assert.ok(t.calls.includes("confirm:Delete profile:danger"));
   assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
   assert.strictEqual(t.run("pfvState").name, "infra-terraform", "the profile that followed it in the list");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["infra-terraform"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["infra-terraform"]);
 });
 
 test("deleting the last profile in the list shows the one before it", async () => {
@@ -589,7 +746,7 @@ test("a slower answer for the profile you left does not replace the one on scree
   release();
   await first;
   assert.strictEqual(t.run("pfvState").name, "infra-terraform");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["infra-terraform"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["infra-terraform"]);
 });
 
 test("machine text (paths, hosts, ids, env names) is drawn in the mono class, words are not", async () => {
@@ -625,11 +782,11 @@ test("a refetched profile list redraws the page from the fresh row", async () =>
   t.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"]);
   delete t.box.docs["aws-ops"].runtime;
   await t.box.pfvShow("aws-ops");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["box"]);
   // The list is fetched again (app.js loadProfiles -> renderProfileList -> pfvRenderNav) and the row changed.
   t.box.profiles = PROFILES.map((p) => (p.name === "aws-ops" ? Object.assign({}, p, { runtime: "host" }) : p));
   t.box.pfvRenderNav();
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"]);
 });
 
 // --- delete keeps the page steady -------------------------------------------------
@@ -644,7 +801,7 @@ test("a deleted profile leaves the screen as soon as the DELETE succeeds, before
   await new Promise((r) => setTimeout(r, 0));
   assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
   assert.strictEqual(t.run("pfvState").name, "", "nothing selected while the reload is out");
-  assert.strictEqual(byCls(t.els["pfv-in"], "pfv-title-name").length, 0, "the deleted profile's header, Start session and menu are gone");
+  assert.strictEqual(titles(t.els["pfv-in"]).length, 0, "the deleted profile's header, Start session and menu are gone");
   assert.ok(!byCls(t.els["pf-navlist"], "pfv-ni-name").some((n) => n.textContent === "aws-ops"), "and its nav row");
   release();
   await done;
@@ -658,7 +815,7 @@ test("a failed list reload cannot bring the deleted profile back, even when it w
   await lone.box.pfvDelete();
   assert.strictEqual(lone.run("pfvState").name, "");
   // Nothing left to show: the New profile page (R19), not a blank pane and not the profile that was deleted.
-  assert.deepStrictEqual(texts(lone.els["pfv-in"], "pfv-title-name"), ["New profile"]);
+  assert.deepStrictEqual(titles(lone.els["pfv-in"]), ["New profile"]);
   assert.ok(!lone.calls.some((c) => c === "GET /api/profiles/aws-ops" && lone.calls.indexOf(c) !== lone.calls.lastIndexOf(c)), "never fetched again");
 
   const many = page();
@@ -723,7 +880,7 @@ test("a list refetch with the same data keeps the nav, the page, the focus and t
   await t.box.pfvShow("aws-ops");
   const navKids = t.els["pf-navlist"].children.slice();
   const pageKids = t.els["pfv-in"].children.slice();
-  byCls(t.els["pfv-in"], "pfv-btn-icon")[0].click();
+  byCls(t.els["pfv-in"], "btn-icon")[0].click();
   const menu = byCls(t.els["pfv-in"], "menu")[0];
   assert.strictEqual(menu.hidden, false);
   const focused = navKids[2];
@@ -875,7 +1032,7 @@ test("save sends the merged profile with rev and schema, then shows it read-only
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
   assert.strictEqual(t.run("pfvState").openBlock, "");
   assert.strictEqual(t.run("pfvState").pending, false);
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-sonnet-5 · high effort"], "the read view shows the new model");
+  assert.deepStrictEqual(subs(t.els["pfv-in"]), ["Claude Code · claude-sonnet-5 · high effort"], "the read view shows the new model");
   assert.deepStrictEqual(texts(blockOf(t, "agent"), "pfv-saved"), ["Saved"]);
   t.run("pfvExpireSaved()");
   assert.ok(byCls(blockOf(t, "agent"), "pfv-saved").every((n) => n.hidden), "Saved goes after a moment");
@@ -918,7 +1075,7 @@ test("a 409 shows changed-elsewhere inside the block and keeps nothing pending a
   assert.strictEqual(t.run("pfvState").openBlock, "");
   assert.strictEqual(t.run("pfvState").doc.rev, "r7");
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-opus-5 · high effort"]);
+  assert.deepStrictEqual(subs(t.els["pfv-in"]), ["Claude Code · claude-opus-5 · high effort"]);
   assert.strictEqual(t.box.puts.length, 1, "Reload writes nothing");
 });
 
@@ -1056,7 +1213,7 @@ test("discard restores the read view with no PUT", async () => {
   assert.strictEqual(t.run("pfvState").openBlock, "");
   assert.strictEqual(t.run("pfvState").pending, false);
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-hsub"), ["Claude Code · claude-opus-5-5 · high effort"]);
+  assert.deepStrictEqual(subs(t.els["pfv-in"]), ["Claude Code · claude-opus-5-5 · high effort"]);
   clickBtn(blockOf(t, "agent"), "Edit");
   assert.strictEqual(field(t, "options.model").value, "claude-opus-5-5", "the form opens on what is stored, not the discarded pick");
 });
@@ -1357,7 +1514,7 @@ test("a save for a profile you have left does not draw over the one on screen", 
   release();
   await saving;
   assert.strictEqual(t.run("pfvState").name, "runbook-host");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["runbook-host"]);
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-saved").length, 0);
 });
 
@@ -1439,7 +1596,7 @@ test("a profile opened while a save is in flight still lands when the save retur
   await showing;
   assert.strictEqual(t.run("pfvState").name, "runbook-host");
   assert.strictEqual(t.run("pfvState").doc && t.run("pfvState").doc.name, "runbook-host", "the pane is not left blank");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["runbook-host"]);
 });
 
 test("an answer to an older pfvShow cannot replace what Reload fetched", async () => {
@@ -2704,7 +2861,7 @@ test("a profile that stores no runtime and resolves to host saves host, without 
   const t = page({ profiles: PROFILES.map((p) => (p.name === "infra-terraform" ? Object.assign({}, p, { runtime: "host" }) : p)) });
   t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
   await t.box.pfvShow("infra-terraform");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"]);
   clickBtn(blockOf(t, "agent"), "Edit");
   pickModel(t, "claude-sonnet-5");
   await saveBlock(t, "agent");
@@ -2814,7 +2971,7 @@ const rowTier = (name, runtime) => PROFILES.map((p) => (p.name === name ? Object
 test("a list row that says host over a stored box: the page reads box, and a Cloud or Agent save writes box with no confirm", async () => {
   const t = cloudPage({ profiles: [PROFILES[0], cloudView({ runtime: "host" }), PROFILES[2], PROFILES[3]] });
   await t.box.pfvShow("aws-ops");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["box"]);
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["In a box"]);
   assert.ok(blockOf(t, "cloud"), "a box profile has its Cloud block");
   clickBtn(blockOf(t, "cloud"), "Edit");
@@ -2834,7 +2991,7 @@ test("a list row that says host over a stored box: the page reads box, and a Clo
 test("a list row that says box over a stored host: the page reads On this machine, and a save writes host", async () => {
   const t = page({ profiles: rowTier("runbook-host", "box") });
   await t.box.pfvShow("runbook-host");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"]);
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
   assert.ok(!blockOf(t, "cloud"), "a host profile has no Cloud block");
   clickBtn(blockOf(t, "agent"), "Edit");
@@ -2850,7 +3007,7 @@ test("a profile that stores no runtime takes the resolved tier, from the list ro
     const t = page({ profiles: rowTier("infra-terraform", row) });
     t.box.docs["infra-terraform"] = { name: "infra-terraform", bin: "claude", rev: "r2" };
     await t.box.pfvShow("infra-terraform");
-    assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), [want]);
+    assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), [want]);
     clickBtn(blockOf(t, "agent"), "Edit");
     pickModel(t, "claude-sonnet-5");
     await saveBlock(t, "agent");
@@ -2872,7 +3029,7 @@ test("after a host switch whose list refetch gave back the old row, the page rea
   assert.strictEqual(t.box.puts[0].runtime, "host");
   assert.strictEqual(t.box.asked.length, 1, "the switch asked once");
   assert.strictEqual(t.box.profiles.find((p) => p.name === "aws-ops").runtime, "box", "the list row is stale");
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["host"], "the page reads the stored tier");
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["host"], "the page reads the stored tier");
   assert.deepStrictEqual(texts(blockOf(t, "runs"), "pfv-main"), ["On this machine: runs as you, with your files, your network and your credentials"]);
   assert.ok(!blockOf(t, "cloud"), "no Cloud block on a host profile");
   clickBtn(blockOf(t, "agent"), "Edit");
@@ -3133,14 +3290,14 @@ test("advanced opens by itself when something is set", async () => {
   // Nothing set: folded, with nothing to unfold; the Edit link opens the form all the same.
   const t = page();
   await t.box.pfvShow("aws-ops");
-  assert.strictEqual(texts(advOf(t), "pfv-label")[0], "Advanced · none set");
+  assert.strictEqual(texts(advOf(t), "pfv-advst")[0], "none set");
   assert.ok(!advOf(t).className.includes("pfv-open"));
   assert.strictEqual(byCls(advOf(t), "pfv-fold").length, 0);
   // Something set: open, listing it, and the form opened from the Edit link holds it.
   const set = page();
   set.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { args: ["--verbose"], env: { LOG_LEVEL: "debug" } });
   await set.box.pfvShow("aws-ops");
-  assert.strictEqual(texts(advOf(set), "pfv-label")[0], "Advanced · 2 set");
+  assert.strictEqual(texts(advOf(set), "pfv-advst")[0], "2 set");
   assert.ok(advOf(set).className.includes("pfv-open"), "open without a click");
   assert.strictEqual(byCls(advOf(set), "pfv-fold")[0].getAttribute("aria-expanded"), "true");
   assert.deepStrictEqual(texts(advOf(set), "pfv-dl"), ["Arguments--verboseEnvironmentLOG_LEVEL"]);
@@ -3152,7 +3309,7 @@ test("advanced opens by itself when something is set", async () => {
   await openAdv(t, "aws-ops");
   typeArgs(t, "--verbose");
   assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
-  assert.strictEqual(texts(advOf(t), "pfv-label")[0], "Advanced · 1 set");
+  assert.strictEqual(texts(advOf(t), "pfv-advst")[0], "1 set");
   assert.ok(advOf(t).className.includes("pfv-open"));
   assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
 });
@@ -3870,7 +4027,7 @@ test("Switch to box opens Runs in with Box chosen and the line for it; nothing i
   assert.strictEqual(t.box.puts[0].runtime, "box");
   assert.ok(!("aws_connections" in t.box.puts[0]) && !("tokens" in t.box.puts[0]), "nothing was restored");
   // Now a box profile with nothing bound: the read view offers what to add.
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-chip"), ["box"]);
+  assert.deepStrictEqual(texts(t.els["pfv-in"], "chip"), ["box"]);
   assert.strictEqual(byText(blockOf(t, "cloud"), "button", "+ Add access").length, 1);
   assert.strictEqual(byText(blockOf(t, "reachable"), "button", "+ Add folder or domain").length, 1);
 });
@@ -3902,7 +4059,7 @@ test("leaving with unsaved changes asks; Discard leaves, Keep editing stays: swi
   assert.strictEqual(t.run("pfvState").name, "infra-terraform");
   assert.strictEqual(t.run("pfvState").pending, false);
   assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["infra-terraform"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["infra-terraform"]);
 });
 
 test("switching profile with nothing changed asks nothing, ends an open block and does not ask for the profile already shown", async () => {
@@ -4256,7 +4413,7 @@ test("a nav click on the profile the edit was kept for brings it back too; anoth
   assert.strictEqual(t.run("pfvState").name, "runbook-host");
   assert.deepStrictEqual(Object.keys(t.run("pfvState").edits), []);
   assert.strictEqual(byCls(t.els["pfv-in"], "pfv-editing").length, 0);
-  assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-title-name"), ["runbook-host"]);
+  assert.deepStrictEqual(titles(t.els["pfv-in"]), ["runbook-host"]);
   assert.strictEqual(keptOf(t).name, "aws-ops", "still kept");
   // Reopening Settings shows runbook-host (the one on screen): that does not restore aws-ops's edit onto it.
   await t.box.pfvShow();
@@ -4521,14 +4678,15 @@ test("Effort not set says who decides, until one is lit", async () => {
 });
 
 test("Advanced keeps its fold label while editing: the chevron turned down and what is set, the form under it", async () => {
-  for (const [doc, word] of [[{}, "Advanced · none set"], [{ args: ["--verbose"], env: { LOG_LEVEL: "debug" } }, "Advanced · 2 set"]]) {
+  for (const [doc, word] of [[{}, "none set"], [{ args: ["--verbose"], env: { LOG_LEVEL: "debug" } }, "2 set"]]) {
     const t = page();
     await openAdv(t, "aws-ops", doc);
     const adv = advOf(t);
     assert.ok(adv.className.includes("pfv-editing"));
     const label = byCls(adv, "pfv-label")[0];
-    assert.strictEqual(label.textContent, word);
-    assert.ok(label.className.includes("pfv-adv-label"), "the label spans the block, so the form sits under it");
+    assert.strictEqual(labelName(label), "Advanced");
+    assert.strictEqual(texts(label, "pfv-advst")[0], word, "the count is under the name, as in the read view");
+    assert.ok(label.className.includes("pfv-adv-label"));
     assert.strictEqual(byCls(label, "pfv-chev").length, 1);
     assert.ok(adv.className.includes("pfv-open"), "the chevron is turned down");
     assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "there is nothing to fold while it is edited");
@@ -4702,7 +4860,7 @@ const wsErr = (t) => texts(field(t, "folder").parent, "pfv-ferr");
 const btn = (t, label) => byText(rootOf(t), "button", label)[0];
 const POSTS = (t) => t.calls.filter((c) => c.startsWith("POST"));
 // The ⋯ menu's Duplicate… of an editable profile, or the primary Duplicate of a config.json one (it has no menu).
-const dupMenu = (t, label) => byText(rootOf(t), "button", label || (byCls(rootOf(t), "menu").length ? "Duplicate…" : "Duplicate"))[0];
+const dupMenu = (t, label) => byText(rootOf(t), "button", label || "Duplicate…")[0];
 const navAdd = (t) => byCls(t.els["pf-navlist"], "pfv-ni-add")[0];
 const NO_DOCKER = { boxRuntime: "", boxUnavailableReason: "Docker is not installed" };
 const nextBtn = (t, label) => byCls(rootOf(t), "pfv-next-btn").find((b) => texts(b, "pfv-next-t")[0] === label);
@@ -4720,8 +4878,8 @@ test("New profile asks for three things and the page says nothing else", async (
   const root = rootOf(t);
   assert.strictEqual(t.run("pfvState").page, "new");
   assert.strictEqual(t.run("pfvState").name, "", "no profile is on screen");
-  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["New profile"]);
-  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Three choices to start. Everything else is added on the profile's page."]);
+  assert.deepStrictEqual(titles(root), ["New profile"]);
+  assert.deepStrictEqual(subs(root), ["Three choices to start. Everything else is added on the profile's page."]);
   assert.deepStrictEqual(texts(root, "pfv-flabel"), ["Name", "Where it runs", "Workspace"]);
   assert.strictEqual(field(t, "name").getAttribute("placeholder"), "e.g. payments-readonly");
   assert.strictEqual(field(t, "name").value, "");
@@ -4841,15 +4999,15 @@ test("Create sends the three inputs through POST and lands on the new profile's 
   assert.strictEqual(st.page, "");
   assert.strictEqual(st.name, "payments-readonly");
   const root = rootOf(t);
-  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["payments-readonly"]);
-  assert.deepStrictEqual(texts(root, "pfv-chip"), ["box"]);
-  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["Claude Code · agent's default model"]);
+  assert.deepStrictEqual(titles(root), ["payments-readonly"]);
+  assert.deepStrictEqual(texts(root, "chip"), ["box"]);
+  assert.deepStrictEqual(subs(root), ["Claude Code · agent's default model"]);
   // The created state: the read view with what to do next.
   assert.deepStrictEqual(texts(root, "pfv-next-p"), ["Profile created. It can start sessions now."]);
   assert.deepStrictEqual(texts(root, "pfv-next-h"), ["Next, if this agent needs them"]);
   assert.deepStrictEqual(texts(root, "pfv-next-t"), ["Add cloud access", "Pick a model", "Add a folder it can read"]);
   assert.deepStrictEqual(texts(root, "pfv-next-d"), ["AWS, GitHub or a token", "Claude Code's default until you do", "Read only, outside the workspace"]);
-  assert.deepStrictEqual(texts(root, "pfv-label").map((x) => x.replace(/\s*· .*$/, "")), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
+  assert.deepStrictEqual(labelNames(root), ["Runs in", "Workspace", "Agent", "Cloud and tokens", "Also reachable", "Network", "Advanced"]);
   // It is in the nav, and the picker of the New page is gone.
   assert.ok(byCls(t.els["pf-navlist"], "pfv-ni-name").map((n) => n.textContent).includes("payments-readonly"));
   assert.strictEqual(t.box.pickers[0].destroyed, true);
@@ -4972,7 +5130,7 @@ test("Cancel on New profile goes back to the profile it came from", async () => 
   assert.deepStrictEqual(t.calls.filter((c) => c.startsWith("confirm")), [], "Cancel is the user's own answer");
   assert.strictEqual(t.run("pfvState").page, "");
   assert.strictEqual(t.run("pfvState").name, "aws-ops");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["aws-ops"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["aws-ops"]);
   assert.strictEqual(t.box.pickers[0].destroyed, true);
   // With no profile to go back to there is no Cancel to press.
   const e = page({ profiles: [] });
@@ -5046,7 +5204,7 @@ test("deleting the last profile in the list leaves the New profile page, not a b
   t.box.gone = "solo";
   await t.box.pfvDelete();
   assert.strictEqual(t.run("pfvState").page, "new");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["New profile"]);
   assert.strictEqual(byText(rootOf(t), "button", "Cancel").length, 0, "nothing to go back to");
 });
 
@@ -5056,13 +5214,13 @@ test("a New profile that came up while an older pfvShow was still loading is not
   await t.box.pfvNew();
   await first;
   assert.strictEqual(t.run("pfvState").page, "new", "the older show gave way");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["New profile"]);
 });
 
 // --- Duplicate -----------------------------------------------------------------------------------------------------------------
 
 const dupFromMenu = async (t, label) => {
-  const more = byCls(rootOf(t), "pfv-btn-icon")[0];
+  const more = byCls(rootOf(t), "btn-icon")[0];
   if (more) more.click();
   await dupMenu(t, label).click();
 };
@@ -5076,8 +5234,8 @@ test("Duplicate opens the New profile page filled in, with what the copy will al
   await dupFromMenu(t);
   const root = rootOf(t);
   assert.strictEqual(t.run("pfvState").page, "dup");
-  assert.deepStrictEqual(texts(root, "pfv-title-name"), ["Copy of aws-ops"]);
-  assert.deepStrictEqual(texts(root, "pfv-hsub"), ["A new profile with the same settings as aws-ops. Give it a name and check the rest."]);
+  assert.deepStrictEqual(titles(root), ["Copy of aws-ops"]);
+  assert.deepStrictEqual(subs(root), ["A new profile with the same settings as aws-ops. Give it a name and check the rest."]);
   assert.strictEqual(field(t, "name").value, "", "names cannot change later, so the user picks it");
   assert.strictEqual(field(t, "name").getAttribute("placeholder"), "aws-ops-copy");
   assert.strictEqual(field(t, "tier-box").checked, true, "where it runs is copied");
@@ -5113,7 +5271,7 @@ test("Create copy writes every binding under the typed name and the copy's overv
   delete want.rev;
   assert.deepStrictEqual(t.box.posts, [want], "every binding, the agent and the folder; no revision");
   assert.strictEqual(t.run("pfvState").name, "aws-ops-copy");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["aws-ops-copy"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["aws-ops-copy"]);
   assert.deepStrictEqual(cloudNames(t), original, "the copy lists the same cloud rows");
   // The status line, and no next steps: a copy already has what it needs (R59; the steps are New profile's, b-created).
   assert.deepStrictEqual(texts(rootOf(t), "pfv-next-p"), ["Profile created. It can start sessions now."]);
@@ -5156,7 +5314,7 @@ test("duplicate of a config.json profile creates an editable profile", async () 
   assert.deepStrictEqual(texts(rootOf(t), "pfv-note"), ["Defined in config.json. Duplicate it to change it."]);
   await dupMenu(t).click();
   assert.strictEqual(t.run("pfvState").page, "dup");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["Copy of claude"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["Copy of claude"]);
   assert.strictEqual(field(t, "name").getAttribute("placeholder"), "claude-copy");
   assert.strictEqual(field(t, "tier-host").checked, true, "claude runs on this machine");
   typeName(t, "claude-copy");
@@ -5331,7 +5489,7 @@ test("opening the page with no profile to show is the New profile page, not a bl
   const t = page({ profiles: [] });
   await t.box.pfvShow();
   assert.strictEqual(t.run("pfvState").page, "new");
-  assert.deepStrictEqual(texts(rootOf(t), "pfv-title-name"), ["New profile"]);
+  assert.deepStrictEqual(titles(rootOf(t)), ["New profile"]);
   assert.strictEqual(byText(rootOf(t), "button", "Cancel").length, 0, "nothing to go back to");
   // The Profiles tab selected again leaves it as it is.
   typeName(t, "half");

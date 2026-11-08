@@ -882,3 +882,147 @@ test("the new classes all have a rule or a HOOKS entry", () => {
   for (const [n, ok] of Object.entries(names)) assert.ok(ok, n + " has a desktop rule");
   assert.match(fs.readFileSync(path.join(__dirname, "classnames.test.js"), "utf8"), /"set-esc"/, "classnames.test.js HOOKS lists set-esc, with its reason");
 });
+
+// ---- Task 3: the Profiles overview (frame M2.1, digest-design §B1.3-4, §B2, §C3, §C7, §D) ----------------------------------------
+// profilepage.test.js pins the markup (what the head holds, in which order, with which classes); these pin the values the kit
+// classes and the page's own rules give it.
+const PV = P + " #pfv";
+// The narrow-window steps are `@container` rules that override these on purpose (desktop-chrome.test.js pins them): the values
+// below are the ones above every step, so the rules inside a container block are left out.
+function withoutContainers(css) {
+  let out = "";
+  let at = 0;
+  for (let i = css.indexOf("@container"); i >= 0; i = css.indexOf("@container", at)) {
+    out += css.slice(at, i);
+    let depth = 0;
+    let j = css.indexOf("{", i);
+    for (; j < css.length; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}" && --depth === 0) break;
+    }
+    at = j + 1;
+  }
+  return out + css.slice(at);
+}
+const BASE_RULES = parseRules(withoutContainers(DESK_CSS));
+const bdecls = (sel) => decls(sel, BASE_RULES);
+const bhas = (sel) => BASE_RULES.some((r) => parts(r.selector).includes(sel));
+
+test("the overview is a bounded column: 884px at most, left-aligned, 32px sides, and the head carries the 24px top", () => {
+  // §B1.3 `.m2-col { max-width: 884px }` (no margin auto) and §B1.5 `.m2-body { padding: 0 32px 32px }`.
+  const col = bdecls(PV + " .pfv-in");
+  assert.strictEqual(col.get("max-width"), "884px");
+  assert.strictEqual(col.get("padding"), "0 32px 32px");
+  assert.strictEqual(col.get("margin"), undefined, "left-aligned, as the frame (54px free at the right of a 1440 window)");
+  // The quiet line under the head moved with the head's own 20px padding (it was 26px of margin).
+  assert.strictEqual(bdecls(PV + " .pfv-note").get("margin"), "-4px 0 24px");
+});
+
+test("the profile head is the page head the other five pages draw: flex, top-aligned, gap 16, padding 24px 0 20px, wrapping", () => {
+  // §B1.4 / §C7; the same values as `.set-head` (Task 2), which sits in a panel and not under #pfv.
+  const h = bdecls(PV + " .pfv-head");
+  assert.strictEqual(h.get("display"), "flex");
+  assert.strictEqual(h.get("align-items"), "flex-start");
+  assert.strictEqual(h.get("gap"), "var(--sp-4)");
+  assert.strictEqual(h.get("padding"), "var(--sp-6) 0 var(--sp-5)");
+  assert.strictEqual(h.get("flex-wrap"), "wrap", "a narrow page puts the actions under the title instead of pushing Esc ✕ out of reach");
+  assert.strictEqual(h.get("margin"), undefined, "the old 26px margin under the head is the padding now");
+  assert.strictEqual(h.get("justify-content"), undefined);
+  const main = bdecls(PV + " .pfv-head-main");
+  assert.strictEqual(main.get("flex"), "1 1 240px");
+  assert.strictEqual(main.get("min-width"), "0");
+  // The title row: the name, then the chip, 8px apart (§B1.4 `.m2-titlerow`); a long name is cut short, not wrapped.
+  const row = bdecls(PV + " .pfv-title");
+  assert.strictEqual(row.get("display"), "flex");
+  assert.strictEqual(row.get("align-items"), "center");
+  assert.strictEqual(row.get("gap"), "8px");
+  const name = bdecls(PV + " .pfv-title .page-title");
+  assert.strictEqual(name.get("overflow"), "hidden");
+  assert.strictEqual(name.get("text-overflow"), "ellipsis");
+  assert.strictEqual(name.get("white-space"), "nowrap");
+  assert.strictEqual(name.get("min-width"), "0");
+  // The chip is the kit's .chip (§C5), not a page chip of its own.
+  assert.ok(!bhas(PV + " .pfv-chip") && !bhas(PV + " .pfv-chip-host"), "no page chip: .chip .chip-box / .chip-host");
+  assert.strictEqual(bdecls(".chip").get("height"), "18px");
+  // The actions: gap 8 from the kit's .page-actions; they may wrap on their own line, and the divider is 1x16 with 4px either side.
+  const acts = bdecls(PV + " .pfv-head .page-actions");
+  assert.strictEqual(acts.get("flex-wrap"), "wrap");
+  assert.strictEqual(acts.get("min-width"), "0");
+  assert.strictEqual(bdecls(".page-actions").get("gap"), "var(--sp-2)");
+  const sep = bdecls(PV + " .pfv-head .set-sep");
+  assert.deepStrictEqual([sep.get("flex"), sep.get("width"), sep.get("height"), sep.get("margin"), sep.get("background")], ["none", "1px", "16px", "0 4px", "var(--line)"]);
+  // Not the page's old header rules.
+  assert.ok(!bhas(PV + " .pfv-acts"), "pfv-acts is the kit's .page-actions now");
+});
+
+test("the buttons are the kit's: .btn is 28px, the ⋯ is .btn-icon (28x28) and the page's own .pfv-btn is 28px too", () => {
+  assert.strictEqual(bdecls(":root").get("--h-ctl"), "28px");
+  assert.strictEqual(bdecls(".btn").get("min-height"), "var(--h-ctl)");
+  assert.strictEqual(bdecls(".btn-icon").get("width"), "var(--h-ctl)");
+  assert.strictEqual(bdecls(PV + " .pfv-btn").get("height"), "var(--h-ctl)", "Save, Cancel, Create profile and Switch to box: 28px, not 32px");
+  assert.ok(!bhas(PV + " .pfv-btn-icon"), "the ⋯ trigger is .btn.btn-icon: no 32px page rule of its own");
+  // Pressed while its menu is open (kit .btn.is-pressed: a menu button is expanded, not pressed).
+  const open = bdecls(PV + ' .pfv-more .btn-icon[aria-expanded="true"]');
+  assert.strictEqual(open.get("background"), "var(--raise)");
+  assert.strictEqual(open.get("box-shadow"), "inset 0 0 0 1px var(--faint)");
+});
+
+test("a block is the frame's row: label 132px, the value, then Edit; 24px between; padding 14px 16px 14px 20px", () => {
+  // §B2 `.m2-blk`.
+  const b = bdecls(PV + " .pfv-block");
+  assert.strictEqual(b.get("display"), "grid");
+  assert.strictEqual(b.get("grid-template-columns"), "132px minmax(0, 1fr) auto");
+  assert.strictEqual(b.get("column-gap"), "24px");
+  assert.strictEqual(b.get("align-items"), "start");
+  assert.strictEqual(b.get("padding"), "14px 16px 14px 20px");
+  assert.strictEqual(bdecls(PV + " .pfv-block + .pfv-block").get("border-top"), "1px solid var(--line)");
+  // The label (§B2 `h3.t-md.w-600.m2-blabel`: 13/20, 600, a column with the count 2px under the name).
+  const l = bdecls(PV + " .pfv-label");
+  assert.deepStrictEqual([l.get("font-size"), l.get("font-weight"), l.get("line-height")], ["var(--t-md)", "600", "20px"]);
+  assert.deepStrictEqual([l.get("display"), l.get("flex-direction"), l.get("gap")], ["flex", "column", "2px"]);
+  // The value is --fg 500 and the helper --muted at --t-sm (§B2: no third text tier), with no measure of its own: it wraps with the column.
+  const main = bdecls(PV + " .pfv-main");
+  assert.strictEqual(main.get("font-weight"), "500");
+  assert.strictEqual(main.get("color"), "var(--fg)");
+  const sub = bdecls(PV + " .pfv-sub");
+  assert.strictEqual(sub.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(sub.get("color"), "var(--muted)");
+  assert.strictEqual(sub.get("max-width"), undefined, "the helper runs the width of the value column, as the frame's");
+  // The section title, 15/22 600, 10px above the card.
+  const sh = bdecls(PV + " .pfv-sheet-h");
+  assert.deepStrictEqual([sh.get("font-size"), sh.get("line-height"), sh.get("font-weight"), sh.get("margin-bottom")], ["var(--t-lg)", "var(--lh-lg)", "600", "10px"]);
+  // The card: --panel, --r-card (it does not clip: the "+ Add" picker hangs out of an edited block).
+  const card = bdecls(PV + " .pfv-sheet");
+  assert.strictEqual(card.get("background"), "var(--panel)");
+  assert.strictEqual(card.get("border-radius"), "var(--r-card)");
+  assert.strictEqual(card.get("overflow"), undefined);
+  assert.strictEqual(bdecls(PV + " .pfv-sheet + .pfv-sheet").get("margin-top"), "12px", "Advanced's own card sits 12px under the first");
+});
+
+test("Edit sits beside the value, on its first line, and a row takes --hover under the pointer", () => {
+  // §B2 `.m2-edit { margin-top: -2px }`: the 24px button centred on the 20px first line.
+  assert.strictEqual(bdecls(PV + " .pfv-act > .btn").get("margin-top"), "-2px");
+  // G2 ("add row hover tint"): the row, but not the block in edit (that is --raise). Corners follow the card's.
+  assert.strictEqual(bdecls(PV + " .pfv-block:not(.pfv-editing):hover").get("background"), "var(--hover)");
+  assert.strictEqual(bdecls(PV + " .pfv-block:first-child").get("border-radius"), "var(--r-card) var(--r-card) 0 0");
+  assert.strictEqual(bdecls(PV + " .pfv-block:last-child").get("border-radius"), "0 0 var(--r-card) var(--r-card)");
+  assert.strictEqual(bdecls(PV + " .pfv-block:only-child").get("border-radius"), "var(--r-card)");
+  // The ghost button's own hover fill (--hover) would vanish on a hovered row: it steps up one.
+  assert.strictEqual(bdecls(PV + " .pfv-block:hover .pfv-act > .btn-ghost:hover").get("background"), "var(--raise)");
+  assert.strictEqual(bdecls(":root").get("--hover"), "#181b1f");
+});
+
+test("Advanced is its own card with its count under the label: the name is the kit's disclosure row, the count 12/18 muted 400", () => {
+  const n = bdecls(PV + " .pfv-advst");
+  assert.deepStrictEqual([n.get("font-size"), n.get("line-height"), n.get("font-weight"), n.get("color")], ["var(--t-sm)", "var(--lh-sm)", "400", "var(--muted)"]);
+  // The kit's .fold (§C: flex, centred, gap 8, padding 0 2px) draws the chevron and the name; the button rule only strips the button.
+  const kit = bdecls(".fold");
+  assert.deepStrictEqual([kit.get("display"), kit.get("align-items"), kit.get("gap"), kit.get("padding")], ["flex", "center", "var(--sp-2)", "0 2px"]);
+  const fold = bdecls(PV + " .pfv-fold");
+  for (const p of ["display", "gap", "padding", "align-items"]) assert.strictEqual(fold.get(p), undefined, p + " is the kit's");
+  assert.strictEqual(fold.get("border"), "0");
+  assert.strictEqual(fold.get("cursor"), "pointer");
+  assert.strictEqual(bdecls(PV + " .pfv-adv-sum").get("font-size"), "var(--t-sm)", "the helper line, as every block's");
+  // The label no longer spans two columns: the count and the value sit on the label's row, like every block.
+  assert.ok(!bhas(PV + " .pfv-adv-label") && !bhas(PV + " .pfv-adv-body"), "no base rule: only the narrow steps name them");
+});

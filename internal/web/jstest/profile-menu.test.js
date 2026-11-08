@@ -329,7 +329,7 @@ test("desktop.css: the page's own ⋯ popover is gone; the kit menu is placed un
 });
 
 test("desktop.css: the ⋯ shows pressed (--raise) while its menu is open", () => {
-  const r = ruleFor(PFV + ' .pfv-more .pfv-btn[aria-expanded="true"]');
+  const r = ruleFor(PFV + ' .pfv-more .btn-icon[aria-expanded="true"]');
   assert.ok(r, "an aria-expanded rule on the trigger");
   assert.strictEqual(decl(r, "background"), "var(--raise)");
   assert.strictEqual(decl(r, "color"), "var(--fg)");

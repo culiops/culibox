@@ -42,8 +42,9 @@ const HOOKS = new Set([
   // per-page body hook for later page CSS; built by concatenation, so the
   // extractor above cannot see it.
   "page-settings-modal", "page-analytics-modal", "page-audit-page",
-  // settingshead.js settingsEscButton: marks the "Esc ✕" close button so the profile page head (profilepage.js) and the
-  // tests can find it again; its whole look is the kit's .btn.btn-ghost.btn-sm, so no rule names it.
+  // settingshead.js settingsEscButton: marks the "Esc ✕" close button, which every Settings page head wears (the profile page's
+  // too: profilepage.js pfvDrawHeader calls the same builder), so the tests (settings-shell.test.js, profilepage.test.js) can find
+  // it again; its whole look is the kit's .btn.btn-ghost.btn-sm, so no rule names it.
   "set-esc",
 ]);
 
