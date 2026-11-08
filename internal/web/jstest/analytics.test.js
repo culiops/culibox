@@ -6,7 +6,7 @@ const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
   foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
-  daysBetween, clampRange, stackedLayout,
+  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -227,4 +227,60 @@ test("modelColor: stable per model index, wraps the palette", () => {
   assert.equal(modelColor(models, "a"), modelColor(models, "a")); // stable
   assert.notEqual(modelColor(models, "a"), modelColor(models, "b"));
   assert.equal(modelColor(models, "a"), modelColor(models, "h")); // 8th wraps to 1st (7 colors)
+});
+
+// ---- the page's KPI counts and the Sessions view's three tiles (UI plan 5, #175; digest-design §A2, §A3) ----
+
+test("anCountText: thousands separators under 10,000, fmtCompact from there", () => {
+  assert.equal(anCountText(0), "0");
+  assert.equal(anCountText(1420), "1,420");
+  assert.equal(anCountText(3994), "3,994");
+  assert.equal(anCountText(9999), "9,999");
+  assert.equal(anCountText(10000), fmtCompact(10000));
+  assert.equal(anCountText(10400000000), fmtCompact(10400000000));
+  assert.equal(anCountText(10400000000), "10.4B");
+});
+
+// A made-up window: two projects, three sessions. The costliest SESSION is in acme-api (one session, $120.50) and the
+// costliest PROJECT is acme-web-frontend (two sessions, $160.14): the two tiles name different projects.
+const SESS_ROWS = [
+  { sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-30", model: "claude-opus-5-5", input: 1000, output: 200, cacheRead: 5000, cacheCreation: 0, prompts: 10, costUsd: 120 },
+  { sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-31", model: "claude-sonnet-5-5", input: 10, output: 5, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 0.5 },
+  { sessionId: "2cf1c405bbbb", project: "-home-dev-acme-web-frontend", day: "2026-10-30", model: "claude-opus-5-5", input: 100, output: 20, cacheRead: 500, cacheCreation: 0, prompts: 4, costUsd: 90 },
+  { sessionId: "9d3dc2afcccc", project: "-home-dev-acme-web-frontend", day: "2026-10-26", model: "claude-opus-5-5", input: 1, output: 1, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 70.14 },
+];
+// The data the view reads, folded the way anLoad folds it (topSessions, byProject, sessionCount).
+const sessionData = (rows) => ({
+  sessionCount: distinctSessions(rows),
+  topSessions: topSessionsByCost(rows, 18),
+  byProject: foldProjects(rows, 14),
+});
+
+test("anSessionKpis: sessions in the window, the costliest session by its project, the costliest project by its cost", () => {
+  const d = sessionData(SESS_ROWS);
+  assert.equal(d.sessionCount, 3);
+  assert.deepEqual(anSessionKpis(d).map((t) => ({ value: t.value, label: t.label })), [
+    { value: "3", label: "Sessions in this window" },
+    { value: "$121", label: "Costliest session · acme-api" },
+    { value: "$160", label: "Costliest project · acme-web-frontend" },
+  ]);
+  // The values are today's formatters on today's data: usd of the top session's cost, usd of the top project's COST.
+  assert.equal(usd(d.topSessions[0].cost), "$121");
+  assert.equal(usd(d.byProject[0].cost), "$160");
+  // A window of 1,420 sessions reads 1,420, not 1k.
+  assert.equal(anSessionKpis({ ...d, sessionCount: 1420 })[0].value, "1,420");
+  assert.equal(anSessionKpis({ ...d, sessionCount: 12500 })[0].value, fmtCompact(12500));
+});
+
+test("anSessionKpis: no sessions or projects gives a dash and the plain label", () => {
+  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], byProject: [] });
+  assert.deepEqual(tiles.map((t) => ({ value: t.value, label: t.label })), [
+    { value: "0", label: "Sessions in this window" },
+    { value: "—", label: "Costliest session" },
+    { value: "—", label: "Costliest project" },
+  ]);
+  // A session or project with no name (a row with an empty project) does not leave a dangling " · " in the label.
+  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], byProject: [{ project: "", cost: 3 }] });
+  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Costliest project"]);
+  assert.deepEqual(nameless.map((t) => t.value), ["1", "$3.00", "$3.00"]);
 });

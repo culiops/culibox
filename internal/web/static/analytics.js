@@ -247,12 +247,36 @@ function projShort(p) {
   return p.replace(/^-home-[^-]+-/, "").replace(/^-/, "");
 }
 
+// ---- the desktop page's KPI figures -------------------------------------------------------------------------------
+
+// anCountText: a count in a KPI tile: thousands separators below 10,000 ("1,420"), fmtCompact from there.
+function anCountText(n) {
+  n = Number(n) || 0;
+  return n < 10000 ? n.toLocaleString("en-US") : fmtCompact(n);
+}
+
+// anSessionKpis: the three tiles of the Sessions view (digest-design §A3), from the loaded window's sessionCount, topSessions
+// and byProject (both cost-descending). The two "Costliest" tiles carry a project in the label and a COST in the value: the top
+// session's project and cost, the top project's name and cost. With none, a dash and the plain label (and a project with no
+// name leaves no dangling " · ").
+function anSessionKpis(d) {
+  const named = (label, name) => (name ? label + " · " + name : label);
+  const top = (d.topSessions || [])[0];
+  const proj = (d.byProject || [])[0];
+  return [
+    { value: anCountText(d.sessionCount), label: "Sessions in this window" },
+    { value: top ? usd(top.cost) : "—", label: named("Costliest session", top && projShort(top.project)) },
+    { value: proj ? usd(proj.cost) : "—", label: named("Costliest project", proj && projShort(proj.project)) },
+  ];
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
+    anCountText, anSessionKpis,
   };
 }
 
@@ -597,16 +621,27 @@ function anWirePage() {
 // ---- Overview ---------------------------------------------------------------
 function anOverview(root) {
   const d = AN.data, t = d.costByDay.totals;
-  const kpis = el("div", "an-kpis");
-  const tiles = [
-    ["cost", usd(t.cost), "total cost"],
-    ["", fmtCompact(t.tokens), "tokens"],
-    ["", String(d.sessionCount), "sessions"],
-    ["", String(t.prompts), "prompts"],
-    ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
-  ];
-  for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
-  root.appendChild(kpis);
+  if (anIsPage()) {
+    // The page's tiles: the kit's KPI row, the frame's labels (M3.1, §A2) and thousands separators on the counts.
+    root.appendChild(anKpiRow([
+      { value: usd(t.cost), label: "Total cost" },
+      { value: fmtCompact(t.tokens), label: "Tokens" },
+      { value: anCountText(d.sessionCount), label: "Sessions" },
+      { value: anCountText(t.prompts), label: "Prompts" },
+      { value: usd(d.sessionCount ? t.cost / d.sessionCount : 0), label: "Avg per session" },
+    ]));
+  } else {
+    const kpis = el("div", "an-kpis");
+    const tiles = [
+      ["cost", usd(t.cost), "total cost"],
+      ["", fmtCompact(t.tokens), "tokens"],
+      ["", String(d.sessionCount), "sessions"],
+      ["", String(t.prompts), "prompts"],
+      ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
+    ];
+    for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
+    root.appendChild(kpis);
+  }
 
   const sec = anSection("Cost over time", "Stacked by model · daily");
   const box = el("div", "an-box");
@@ -637,6 +672,7 @@ function anOverview(root) {
 
 // ---- Models -----------------------------------------------------------------
 function anModels(root) {
+  if (anIsPage()) return anModelsPage(root);
   const d = AN.data;
   const sec = anSection("Per-model breakdown", "Cost, volume & efficiency · window");
   const mc = collapseZeroCost(d.byModel); // fold $0 (unpriced) models into "other"
@@ -672,6 +708,7 @@ function anModels(root) {
 
 // ---- Projects ---------------------------------------------------------------
 function anProjects(root) {
+  if (anIsPage()) return anProjectsPage(root);
   const d = AN.data;
   const sec = anSection("Cost by project", "Bar split shows the model mix inside each project · window");
   const box = el("div", "an-box");
@@ -696,6 +733,7 @@ function anProjects(root) {
 
 // ---- Sessions ---------------------------------------------------------------
 function anSessions(root) {
+  if (anIsPage()) return anSessionsPage(root);
   const d = AN.data;
   const g = el("div", "an-grid2");
   const bh = el("div", "an-box"); bh.appendChild(el("h4", null, "Session cost distribution"));
@@ -734,6 +772,7 @@ function anSessions(root) {
 
 // ---- Tools ------------------------------------------------------------------
 function anTools(root) {
+  if (anIsPage()) return anToolsPage(root);
   const d = AN.data;
   const sec = anSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
   if (!d.tools.length) {
@@ -752,6 +791,145 @@ function anTools(root) {
     g.appendChild(box);
   }
   sec.appendChild(g); root.appendChild(sec);
+}
+
+// ---- the desktop page's views (Models, Projects, Sessions, Tools) ------------------------------------------------------
+// The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
+// The page's parts are the kit's: a KPI row, h2.section-title with its caption, cards (.an-card: --panel and --r-card, a name
+// of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
+// Models, Projects and Tools have no frame: they carry today's content in those parts (plan call 13).
+
+// anModelsPage: the per-model table in a card, then the two share cards under "Why $ ≠ token count".
+function anModelsPage(root) {
+  const d = AN.data;
+  const mc = collapseZeroCost(d.byModel);
+  const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
+  const sec = anPSection("Per-model breakdown", "Cost, volume & efficiency · window");
+  const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1));
+  for (const x of mc) {
+    const tr = el("tr");
+    // A model id is machine text (mono); the "other (unpriced)" row is a label, so sans and muted.
+    const nm = el("td");
+    const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
+    nm.append(sw, el("span", x.model === "other (unpriced)" ? "muted" : "mono t-sm", shortModel(x.model)));
+    const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
+    tr.append(nm, anTd(usd(x.cost), "num w-500"), anTd(Math.round(x.cost / totalCost * 100) + "%", "num"),
+      anTd(fmtCompact(x.tokens), "num"), anTd(String(x.prompts), "num"),
+      anTd(fmtCompact(x.outPerPrompt), "num"), anTd(crShare + "%", "num"));
+    tbl.appendChild(tr);
+  }
+  const card = anCard();
+  card.appendChild(anTableWrap(tbl));
+  sec.appendChild(card);
+  root.appendChild(sec);
+
+  const totTok = mc.reduce((s, x) => s + x.tokens, 0) || 1;
+  const bt = anCard("Share of tokens"), bc = anCard("Share of cost");
+  const bodyT = anCardBody(bt), bodyC = anCardBody(bc);
+  const maxTok = Math.max(1, ...mc.map((x) => x.tokens));
+  for (const x of mc) anHbar(bodyT, shortModel(x.model), x.tokens, maxTok, anModelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
+  const maxC = Math.max(1, ...mc.map((x) => x.cost));
+  for (const x of mc) anHbar(bodyC, shortModel(x.model), x.cost, maxC, anModelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  const g = el("div", "an-pgrid");
+  g.append(bt, bc);
+  const s2 = anPSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
+  s2.appendChild(g);
+  root.appendChild(s2);
+}
+
+// anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
+function anProjectsPage(root) {
+  const d = AN.data;
+  const sec = anPSection("Cost by project", "Bar split shows the model mix inside each project · window");
+  const card = anCard();
+  const body = anCardBody(card);
+  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
+  for (const p of d.byProject) {
+    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
+    anHbarSegs(body, projShort(p.project), p.cost, maxP, segs, usd);
+  }
+  anLegend(body, d.models);
+  sec.appendChild(card);
+  root.appendChild(sec);
+
+  const s2 = anPSection("Detail");
+  const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"], 1));
+  for (const p of d.byProject) {
+    const tr = el("tr");
+    tr.append(anIdTd(projShort(p.project), "an-wrap"), anTd(usd(p.cost), "num w-500"), anTd(fmtCompact(p.tokens), "num"), anTd(String(p.prompts), "num"));
+    tbl.appendChild(tr);
+  }
+  const card2 = anCard();
+  card2.appendChild(anTableWrap(tbl));
+  s2.appendChild(card2);
+  root.appendChild(s2);
+}
+
+// anSessionsPage: M3.2 (digest-design §B8). Three KPI tiles, then a split: the top-sessions table in a card, and "Session cost"
+// (the cost bands) beside it. The split is one column below 1000px of body (desktop.css).
+function anSessionsPage(root) {
+  const d = AN.data;
+  root.appendChild(anKpiRow(anSessionKpis(d)));
+  const split = el("div", "an-split");
+
+  const left = anPSection("Top sessions by cost", "Spot the runaway session. Counts include subagent and synthetic transcripts.");
+  const tbl = el("table", "an-table an-stbl");
+  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4));
+  for (const s of d.topSessions) {
+    const tr = el("tr");
+    // Session, Project and a single Model are ids (mono, wrapping instead of clipping); "mixed" and the day are muted sans.
+    tr.append(anIdTd(s.sid), anTd(s.day, "sub tnum"), anIdTd(projShort(s.project), "an-wrap"),
+      s.model === "mixed" ? anTd("mixed", "sub an-wrap") : anIdTd(shortModel(s.model), "an-wrap"),
+      anTd(fmtCompact(s.tokens), "num"), anTd(String(s.prompts), "num"), anTd(usd(s.cost), "num w-500"));
+    tbl.appendChild(tr);
+  }
+  const card = anCard();
+  card.appendChild(anTableWrap(tbl));
+  left.appendChild(card);
+
+  const right = anPSection("Session cost");
+  const bands = anCard(null, "Sessions per cost band");
+  const rows = el("div", "an-bands");
+  const maxH = Math.max(1, ...d.sessionHist.map((b) => b.count));
+  for (const b of d.sessionHist) {
+    const row = el("div", "an-band");
+    const meter = el("span", "meter");
+    const fill = el("i"); fill.style.width = (b.count / maxH * 100) + "%"; // no colour: the meter's own accent
+    meter.appendChild(fill);
+    row.append(el("span", "t-sm tnum", b.label), meter, el("span", "t-sm tnum an-band-n", anCountText(b.count)));
+    rows.appendChild(row);
+  }
+  anCardBody(bands).appendChild(rows);
+  right.appendChild(bands);
+
+  split.append(left, right);
+  root.appendChild(split);
+}
+
+// anToolsPage: one card per kind, as today's boxes.
+function anToolsPage(root) {
+  const d = AN.data;
+  const sec = anPSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
+  if (!d.tools.length) {
+    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
+    root.appendChild(sec); return;
+  }
+  const kinds = {};
+  for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
+  const kc = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
+  const g = el("div", "an-pgrid");
+  for (const kind of Object.keys(kinds)) {
+    const card = anCard(kind);
+    const body = anCardBody(card);
+    const items = kinds[kind].slice(0, 10);
+    const max = Math.max(1, ...items.map((t) => t.records));
+    for (const t of items) anHbar(body, t.name, t.records, max, kc[kind] || "var(--accent)", fmtCompact);
+    g.appendChild(card);
+  }
+  sec.appendChild(g);
+  root.appendChild(sec);
 }
 
 // ---- comparison block -------------------------------------------------------
@@ -886,14 +1064,59 @@ function anSection(title, hint) {
   return s;
 }
 function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
+// The desktop page's parts (callers are the page's views, behind anIsPage()). anKpiRow, anCard and anPSection are general: the
+// Overview builds on them too.
+// anKpiRow: the kit's KPI row, the one Audit draws too: div.kpi-row > div.kpi > span.kpi-value + span.kpi-label. The label
+// ellipsizes (desktop.css), so it carries its full text in title: the tile's own, else the label.
+function anKpiRow(tiles) {
+  const row = el("div", "kpi-row");
+  for (const t of tiles) {
+    const tile = el("div", "kpi");
+    const label = el("span", "kpi-label", t.label);
+    label.setAttribute("title", t.title || t.label);
+    tile.append(el("span", "kpi-value", t.value), label);
+    row.appendChild(tile);
+  }
+  return row;
+}
+// anPSection: a section of the page: the kit's h2.section-title and, on its baseline, a muted caption (M3.2's title row).
+function anPSection(title, caption) {
+  const sec = el("section", "an-psec");
+  const head = el("div", "an-psec-head");
+  head.appendChild(el("h2", "section-title", title));
+  if (caption) head.appendChild(el("span", "t-sm muted", caption));
+  sec.appendChild(head);
+  return sec;
+}
+// anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
+// it is a bare panel, as a table's card is. Content goes in anCardBody (padded) or, for a table, straight in.
+function anCard(title, caption) {
+  const card = el("div", "an-card");
+  if (title || caption) {
+    const head = el("div", "card-head");
+    if (title) head.appendChild(el("h3", "t-md w-600", title));
+    if (caption) head.appendChild(el("span", "t-sm muted", caption));
+    card.appendChild(head);
+  }
+  return card;
+}
+function anCardBody(card) { const b = el("div", "an-card-body"); card.appendChild(b); return b; }
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
 // anHead: the header row. Columns from firstNum on hold numbers: their header gets
 // "num" like their cells (anTd(text, "num")), so desktop.css can right-align both.
-function anHead(cols, firstNum) { const tr = el("tr"); cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, c))); return tr; }
+// The page writes the labels in sentence case (§A3: Session, Day, …); the phone's stay as given.
+function anHead(cols, firstNum) {
+  const page = anIsPage();
+  const tr = el("tr");
+  cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, page ? c.charAt(0).toUpperCase() + c.slice(1) : c)));
+  return tr;
+}
 // anTableWrap keeps a wide table scrollable on its own on narrow viewports, so
 // the dialog body never scrolls horizontally.
 function anTableWrap(tbl) { const d = el("div", "an-tablewrap"); d.appendChild(tbl); return d; }
 function anTd(text, cls) { const td = el("td", cls); td.textContent = text; return td; }
+// anIdTd (the page): a cell holding an identifier: the cell is sans and the id sits in the kit's span.mono.t-sm (machine text only).
+function anIdTd(text, cls) { const td = el("td", cls); td.appendChild(el("span", "mono t-sm", text)); return td; }
 // anLegend shows `models`, but colours each by its index in `colorModels` (the
 // canonical list) so legend swatches match chart/bar colours even when the
 // legend displays only a subset (e.g. priced models).

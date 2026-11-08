@@ -2345,7 +2345,8 @@
   #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); }
   /* A column flex scroller shrinks its children before it scrolls: none of them give way. */
   #page-host > #audit-page.as-page > .au-scroll > * { flex: none; }
-  #page-host > #audit-page.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #audit-page.as-page .kpi-label,
+  #page-host > #analytics-modal.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* The table's card clips the row tint to its 8px corners (the frame's inline overflow: hidden). */
   #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; container-name: au-card; container-type: inline-size; }
@@ -2435,6 +2436,79 @@
      base red/green (and good/bad) pairs are status colours (D23). */
   #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); }
   #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
+
+  /* --- Analytics bodies: KPI row, cards, kit tables, Sessions (UI plan 5 Task 5; frame M3.2, digest-design §B5, §B8, §C8, §C9) --- */
+  /* The body is a container, so the Sessions split can answer the room it has (call 10): 1440 gives it 1086px (the sidebar's 290px
+     and the page's two 32px sides are gone), 1280 gives 926. */
+  #page-host > #analytics-modal.as-page #analytics-body { container-name: an-body; container-type: inline-size; }
+  /* The KPI row is the kit's (.kpi-row, .kpi, .kpi-value, .kpi-label); 16px to what follows (§B0 .m3-body's gap). */
+  #page-host > #analytics-modal.as-page #analytics-body > .kpi-row { margin-bottom: var(--sp-4); }
+
+  /* A section: the title and its caption on one baseline, then the card (§B8 .m3-sec, .m3-row). */
+  #page-host > #analytics-modal.as-page .an-psec { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0 0 var(--sp-4); }
+  #page-host > #analytics-modal.as-page .an-psec-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-width: 0; }
+  /* A card is --panel at --r-card with no outline (§C8 .card). Its name is ours: app.css's `.card` is the phone's amber session card. */
+  #page-host > #analytics-modal.as-page .an-card { background: var(--panel); border-radius: var(--r-card); min-width: 0; }
+  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  #page-host > #analytics-modal.as-page .an-card-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+  /* A table's card clips its row hover to the 8px corners (the frame's inline overflow: hidden). */
+  #page-host > #analytics-modal.as-page .an-card > .an-tablewrap { border-radius: var(--r-card); }
+  /* Two cards side by side (the share cards, one card per tool kind): equal columns, one when the body is narrow. */
+  #page-host > #analytics-modal.as-page .an-pgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+
+  /* Tables: §C9's .tbl look on the page's .an-table (app.css's uppercase 10px head and 3px cells are the phone's). Each number column
+     is right-aligned under its header by the F01 rules above; the text columns are left. */
+  #page-host > #analytics-modal.as-page .an-table { font-size: var(--t-md); font-variant-numeric: normal; }
+  #page-host > #analytics-modal.as-page .an-table th {
+    height: var(--h-row); padding: 0 var(--sp-3); font-size: var(--t-sm); font-weight: var(--w-medium); color: var(--muted);
+    text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  #page-host > #analytics-modal.as-page .an-table td { height: var(--h-row); padding: 0 var(--sp-3); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  #page-host > #analytics-modal.as-page .an-table tr:last-child td { border-bottom: 0; }
+  #page-host > #analytics-modal.as-page .an-table tr + tr:hover { background: var(--hover); }
+  #page-host > #analytics-modal.as-page .an-table td.sub { color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-table td.tnum { font-variant-numeric: tabular-nums; }
+  /* An id, a project or a model wraps instead of clipping (§B8 .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
+  #page-host > #analytics-modal.as-page .an-table td.an-wrap { height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+
+  /* Sessions (M3.2): the table and the cost bands side by side, 300px for the bands; the table's columns are fixed (88, 100, Project
+     the rest, 104, 76, 72, 72 = 512px of the 770px the table gets at 1440). */
+  #page-host > #analytics-modal.as-page .an-split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; min-height: 0; }
+  #page-host > #analytics-modal.as-page .an-split > .an-psec { margin-bottom: 0; }
+  #page-host > #analytics-modal.as-page .an-stbl { table-layout: fixed; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1) { width: 88px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2) { width: 100px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4) { width: 104px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5) { width: 76px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6) { width: 72px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: 72px; }
+  /* The cost bands: label, bar, count (§B8 .m3-hbar). The bar is the kit's .meter, whose fill is the accent. */
+  #page-host > #analytics-modal.as-page .an-bands { display: flex; flex-direction: column; }
+  #page-host > #analytics-modal.as-page .an-band { display: grid; grid-template-columns: 56px minmax(0, 1fr) 48px; align-items: center; column-gap: var(--sp-3); height: 22px; }
+  #page-host > #analytics-modal.as-page .an-band-n { text-align: right; }
+  /* Below 1000px of body the split is one column: side by side the Project column shrinks under 172px, and to 98px at 1280, where a
+     long project name wraps to three lines (§G5). */
+  @container an-body (max-width: 999px) {
+    #page-host > #analytics-modal.as-page .an-split { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* Under 672px (the fixed columns' 512px and 160px for Project) the columns size to their content, Project keeping a minimum, and the
+     card's own wrapper scrolls what is still too wide: the page never scrolls sideways. */
+  @container an-body (max-width: 671px) {
+    #page-host > #analytics-modal.as-page .an-stbl { table-layout: auto; }
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: auto; }
+    #page-host > #analytics-modal.as-page .an-stbl :is(th, td):nth-child(3) { min-width: 160px; }
+    #page-host > #analytics-modal.as-page .an-pgrid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* Text app.css sets in raw px for the phone gets a kit step here (Plan 1 follow-up 1). */
+  #page-host > #analytics-modal.as-page .an-empty { font-size: var(--t-md); line-height: var(--lh-md); }
+  #page-host > #analytics-modal.as-page .an-badge { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-bar .cap { font-size: var(--t-xs); }
 
   /* --- chrome for the remaining modals, palette, toast, store banner, login (S4, spec 5.13) --- */
   /* No behaviour change: only the tokens and type move. Generic dialog chrome is

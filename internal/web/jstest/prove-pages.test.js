@@ -891,13 +891,24 @@ test("Analytics and Audit share one head, toolbar and KPI component", () => {
       }
     }
   }
-  // The KPI row. Audit's builder emits the kit's kpi-row > kpi > kpi-value + kpi-label; Analytics' joins this check with
-  // its own KPI row in Task 5 (anKpiRow), which this task does not touch.
+  // The KPI row. Audit's builder emits the kit's kpi-row > kpi > kpi-value + kpi-label, and so does Analytics' (anKpiRow):
+  // the same tags and the same class sequence, one component on both pages.
   const { run, el } = auditEnv();
   run("auData.summary = { issued: 1, refused: 0, elevations: 0, egress_allowed: 0, egress_denied: 0 }; auPaintKpis();");
   assert.deepStrictEqual(classes(kids(kids(au)[2])[0]), ["kpi-row"], "the KPI tiles' row is the kit's .kpi-row");
   assert.deepStrictEqual([...new Set(el("au-kpis").elements.map((t) => t.className))], ["kpi"]);
   assert.deepStrictEqual([...new Set(el("au-kpis").elements.flatMap((t) => t.elements.map((c) => c.className)))], ["kpi-value", "kpi-label"]);
+  const auShape = (tile) => [tile.tag, tile.className, tile.elements.map((c) => [c.tag, c.className])];
+  const auTile = auShape(el("au-kpis").elements[0]);
+  const aenv = analyticsEnv();
+  aenv.page(true);
+  const arow = aenv.run('anKpiRow([{ value: "1", label: "A" }, { value: "2", label: "B", title: "Bee" }])');
+  assert.strictEqual(arow.tag, "div");
+  assert.strictEqual(arow.className, "kpi-row", "the same row class as Audit's #au-kpis");
+  assert.strictEqual(arow.elements.length, 2);
+  for (const t of arow.elements) assert.deepStrictEqual(auShape(t), auTile, "an Analytics tile is an Audit tile: div.kpi > span.kpi-value + span.kpi-label");
+  assert.deepStrictEqual(arow.elements.map((t) => t.elements.map((c) => c.textContent)), [["1", "A"], ["2", "B"]]);
+  assert.deepStrictEqual(arow.elements.map((t) => t.elements[1].attrs.title), ["A", "Bee"], "an ellipsized label keeps its full text in title (its own, else the label)");
 });
 
 test("the Analytics markup: the page's nodes in front, the phone's modal after them byte for byte", () => {
@@ -976,6 +987,9 @@ function analyticsEnv(file = "analytics.js") {
     querySelectorAll: (sel) => queryAll(dlg, sel),
     querySelector: (sel) => queryAll(dlg, sel)[0] || null,
     createElement: (tag) => new El(tag),
+    // The chart builders make SVG nodes; the fake DOM does not tell them apart.
+    createElementNS: (_ns, tag) => new El(tag),
+    createTextNode: (t) => new TextNode(t),
     body,
     get activeElement() { return focused && inPage(focused) ? focused : body; },
   };
@@ -1401,4 +1415,444 @@ test("no Analytics head rule uses color-mix, nesting or @layer, and none sets a 
     assert.ok(!/^font/.test(prop), r.selector + " sets " + prop + ": the kit's head and toolbar parts draw the type");
   }
   assert.ok(!/@layer/.test(DESK_CSS));
+});
+
+// =====================================================================================================================
+// Analytics: the KPI row, the kit tables and the Sessions view (Task 5; frame M3.2, digest-design §A2, §A3, §B5, §B8, §C8,
+// §C9, §F4, §G5, §G9, §G11)
+// =====================================================================================================================
+
+// A made-up window, in the shape /api/analytics/* returns it: two days of one model, two unpriced models, three projects,
+// four sessions (one in a long-named project, one with a single model) and tools of two kinds.
+const ROW = (o) => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 0, costUsd: 0, ...o });
+const FIXTURE = {
+  summary: [
+    ROW({ day: "2026-10-30", model: "claude-opus-5-5", input: 4000000000, output: 100000000, cacheRead: 6000000000, prompts: 2000, costUsd: 3000 }),
+    ROW({ day: "2026-10-31", model: "claude-opus-5-5", input: 100000000, output: 100000000, cacheRead: 100000000, prompts: 1994, costUsd: 1300 }),
+  ],
+  models: [
+    ROW({ model: "claude-opus-5-5", input: 4100000000, output: 200000000, cacheRead: 6100000000, prompts: 3994, sessions: 4, costUsd: 4300 }),
+    ROW({ model: "<synthetic>", prompts: 41, sessions: 3 }),
+    ROW({ model: "", prompts: 27, sessions: 1 }),
+  ],
+  projects: [
+    ROW({ project: "-home-dev-acme-api", model: "claude-opus-5-5", input: 10, prompts: 11, costUsd: 120.5 }),
+    ROW({ project: "-home-dev-acme-terraform-course-eu-west", model: "claude-opus-5-5", input: 10, prompts: 5, costUsd: 160.14 }),
+    ROW({ project: "-home-dev-acme-docs", model: "claude-opus-5-5", input: 10, prompts: 2, costUsd: 4.2 }),
+  ],
+  sessions: [
+    ROW({ sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-30", model: "claude-opus-5-5", input: 634300000, prompts: 10, costUsd: 120 }),
+    ROW({ sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-31", model: "claude-sonnet-5-5", input: 100, prompts: 1, costUsd: 0.5 }),
+    ROW({ sessionId: "2cf1c405bbbb", project: "-home-dev-acme-terraform-course-eu-west", day: "2026-10-30", model: "claude-opus-5-5", input: 410700000, prompts: 116, costUsd: 90 }),
+    ROW({ sessionId: "9d3dc2afcccc", project: "-home-dev-acme-terraform-course-eu-west", day: "2026-10-26", model: "claude-opus-5-5", input: 124300000, prompts: 92, costUsd: 70.14 }),
+    ROW({ sessionId: "0174c7b1dddd", project: "-home-dev-acme-docs", day: "2026-10-15", model: "claude-opus-5-5", input: 5000, prompts: 2, costUsd: 4.2 }),
+  ],
+  tools: [
+    { kind: "skill", name: "review", records: 40 }, { kind: "skill", name: "deploy", records: 7 },
+    { kind: "mcp_server", name: "docs", records: 3 },
+  ],
+};
+
+// load: AN.data as anLoad folds it from FIXTURE (the page's views read it), with the session count overridable.
+function loadWindow(env, over = {}) {
+  env.ctx.FX = { ...FIXTURE, ...over };
+  env.run(`(function () {
+    AN.from = "2026-10-09"; AN.to = "2026-11-07";
+    const sess = FX.sessions;
+    AN.data = {
+      from: AN.from, to: AN.to, costByDay: foldCostByDay(FX.summary), byModel: normModels(FX.models), byProject: foldProjects(FX.projects, 14),
+      sessions: sess, sessionHist: sessionCostBuckets(sess), topSessions: topSessionsByCost(sess, 18), sessionCount: distinctSessions(sess),
+      tools: FX.tools, cmp: null,
+    };
+    AN.data.models = AN.data.costByDay.models;
+    AN.data.pricedModels = pricedModelIds(AN.data.byModel);
+  })();`);
+}
+// view: a view function run into a fresh root, whose children are what anRender would put in the body.
+function view(env, fn) {
+  const root = new El("div");
+  env.ctx.ROOT = root;
+  env.run(fn + "(ROOT);");
+  return root;
+}
+const tilesOf = (row) => row.elements.map((t) => ({ value: t.elements[0].textContent, label: t.elements[1].textContent }));
+const THS = ["Session", "Day", "Project", "Model", "Tokens", "Prompts", "Cost"];
+// the table of a card (a tablewrap holds it), as { head: [th…], rows: [[td…]…] }
+function tableOf(card) {
+  const wrap = card.elements.find((n) => n.cls.includes("an-tablewrap"));
+  assert.ok(wrap, "the card holds the table in its .an-tablewrap");
+  const tbl = wrap.elements[0];
+  assert.strictEqual(tbl.tag, "table");
+  const [head, ...rows] = tbl.elements;
+  return { tbl, head: head.elements, rows: rows.map((r) => r.elements) };
+}
+
+test("overview KPI labels on the page are the frame's", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  env.run("AN.data.sessionCount = 1420;");
+  const root = view(env, "anOverview");
+  const row = root.elements[0];
+  assert.strictEqual(row.className, "kpi-row", "the page's KPI row is the kit's, first in the body");
+  assert.deepStrictEqual(tilesOf(row), [
+    { value: "$4.3k", label: "Total cost" },
+    { value: "10.4B", label: "Tokens" },
+    { value: "1,420", label: "Sessions" },
+    { value: "3,994", label: "Prompts" },
+    { value: "$3.03", label: "Avg per session" },
+  ], "§A2: the labels and the thousands separators on the counts; tokens stay compact");
+  assert.ok(!root.elements.some((n) => n.cls.includes("an-kpis")), "no legacy KPI grid beside it");
+  // The rest of the Overview is Task 6's: still there, after the row.
+  assert.ok(root.elements.length > 1);
+});
+
+test("overview KPI labels on the phone are unchanged", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  loadWindow(env);
+  env.run("AN.data.sessionCount = 1420;");
+  const root = view(env, "anOverview");
+  const grid = root.elements[0];
+  assert.strictEqual(grid.className, "an-kpis");
+  assert.deepStrictEqual(grid.elements.map((t) => [t.className, t.elements.map((c) => [c.className, c.textContent])]), [
+    ["an-kpi", [["v cost", "$4.3k"], ["l", "total cost"]]],
+    ["an-kpi", [["v", "10.4B"], ["l", "tokens"]]],
+    ["an-kpi", [["v", "1420"], ["l", "sessions"]]],
+    ["an-kpi", [["v", "3994"], ["l", "prompts"]]],
+    ["an-kpi", [["v cost", "$3.03"], ["l", "avg / session"]]],
+  ]);
+});
+
+test("F01 pin: a numeric column's header and cells are .num together, on the phone and on the page", () => {
+  for (const page of [false, true]) {
+    const env = analyticsEnv();
+    env.page(page);
+    const flags = (cols, firstNum) => [...env.run(`anHead(${JSON.stringify(cols)}, ${firstNum}).children.map((th) => th.className === "num")`)];
+    assert.deepStrictEqual(flags(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), [false, false, false, false, true, true, true], "th.num on exactly the last three");
+    assert.deepStrictEqual(flags(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1), [false, true, true, true, true, true, true]);
+    assert.deepStrictEqual(flags(["project", "cost", "tokens", "prompts"], 1), [false, true, true, true]);
+    // Every table the views draw: a column's th carries num exactly when its cells do.
+    loadWindow(env);
+    const numCls = (n) => n.cls.includes("num");
+    for (const fn of ["anModels", "anProjects", "anSessions"]) {
+      const tables = [];
+      const walk = (n) => { if (n.tag === "table") tables.push(n); n.elements.forEach(walk); };
+      walk(view(env, fn));
+      assert.ok(tables.length >= 1, fn + " draws a table");
+      for (const t of tables) {
+        const [head, ...rows] = t.elements;
+        assert.ok(rows.length >= 1);
+        const want = head.elements.map(numCls);
+        assert.ok(want.includes(true) && want.includes(false));
+        for (const r of rows) assert.deepStrictEqual(r.elements.map(numCls), want, fn + (page ? " (page)" : " (phone)") + ": " + r.textContent);
+      }
+    }
+  }
+  // CSS: .num is right-aligned and tabular on th and td alike, the text columns left.
+  const num = decls(".an-table .num");
+  assert.strictEqual(num.get("text-align"), "right");
+  assert.strictEqual(num.get("font-variant-numeric"), "tabular-nums");
+  assert.strictEqual(decls(".an-table th, .an-table td").get("text-align") || decls(".an-table th").get("text-align"), "left");
+});
+
+test("page tables use the kit head", () => {
+  // JS: the header labels are capitalised on the page, and only there.
+  const page = analyticsEnv();
+  page.page(true);
+  const ths = (env, cols, n) => [...env.run(`anHead(${JSON.stringify(cols)}, ${n}).children.map((th) => th.textContent)`)];
+  assert.deepStrictEqual(ths(page, ["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), THS);
+  assert.deepStrictEqual(ths(page, ["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1), ["Model", "Cost", "% cost", "Tokens", "Prompts", "Out/prompt", "Cache-read"]);
+  const phone = analyticsEnv();
+  phone.page(false);
+  assert.deepStrictEqual(ths(phone, ["session", "day", "project", "model", "tokens", "prompts", "cost"], 4), THS.map((t) => t.toLowerCase()), "the phone stays lowercase");
+  // CSS: §C9 on .an-table. 12px / 500 / muted / sentence case, 32px rows, a hairline under each.
+  const th = decls(ANP + " .an-table th");
+  assert.strictEqual(th.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(th.get("font-weight"), "var(--w-medium)");
+  assert.strictEqual(th.get("color"), "var(--muted)");
+  assert.strictEqual(th.get("text-transform"), "none", "app.css's uppercase 10px head is the phone's");
+  assert.strictEqual(th.get("letter-spacing"), "0");
+  assert.strictEqual(th.get("height"), "var(--h-row)");
+  assert.strictEqual(th.get("padding"), "0 var(--sp-3)");
+  assert.strictEqual(th.get("border-bottom"), "1px solid var(--line)");
+  assert.strictEqual(th.get("white-space"), "nowrap");
+  const td = decls(ANP + " .an-table td");
+  assert.strictEqual(td.get("height"), "var(--h-row)");
+  assert.strictEqual(td.get("padding"), "0 var(--sp-3)");
+  assert.strictEqual(td.get("border-bottom"), "1px solid var(--line)");
+  assert.strictEqual(td.get("white-space"), "nowrap");
+  assert.strictEqual(decls(ANP + " .an-table").get("font-size"), "var(--t-md)", "13px body cells, not app.css's 12px");
+  assert.strictEqual(decls(ANP + " .an-table tr:last-child td").get("border-bottom"), "0");
+  assert.strictEqual(decls(ANP + " .an-table tr + tr:hover").get("background"), "var(--hover)");
+  assert.strictEqual(decls(ANP + " .an-table td.sub").get("color"), "var(--muted)");
+});
+
+test("Sessions on the page follow M3.2", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  env.run("AN.data.sessionCount = 1420;");
+  const root = view(env, "anSessions");
+  assert.deepStrictEqual(root.elements.map((n) => n.tag + "." + n.className), ["div.kpi-row", "div.an-split"]);
+  const [row, split] = root.elements;
+
+  // A 3-tile KPI row (§A3): the costliest session's project and the costliest project's cost.
+  assert.deepStrictEqual(tilesOf(row), [
+    { value: "1,420", label: "Sessions in this window" },
+    { value: "$121", label: "Costliest session · acme-api" },
+    { value: "$160", label: "Costliest project · acme-terraform-course-eu-west" },
+  ]);
+  assert.strictEqual(row.elements[2].elements[1].attrs.title, "Costliest project · acme-terraform-course-eu-west", "the label ellipsizes, so the title keeps all of it (§G11)");
+
+  // The split: the table's section, then the cost bands'.
+  assert.deepStrictEqual(split.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
+  const [left, right] = split.elements;
+
+  // Left: h2.section-title and its caption on one row, then the table in a card.
+  assert.deepStrictEqual(left.elements.map((n) => n.tag + "." + n.className), ["div.an-psec-head", "div.an-card"]);
+  const head = left.elements[0];
+  assert.deepStrictEqual(head.elements.map((n) => [n.tag, n.className, n.textContent]), [
+    ["h2", "section-title", "Top sessions by cost"],
+    ["span", "t-sm muted", "Spot the runaway session. Counts include subagent and synthetic transcripts."],
+  ]);
+  const { tbl, head: ths, rows } = tableOf(left.elements[1]);
+  assert.strictEqual(tbl.className, "an-table an-stbl");
+  assert.deepStrictEqual(ths.map((t) => t.textContent), THS);
+  assert.deepStrictEqual(ths.map((t) => t.className), ["", "", "", "", "num", "num", "num"]);
+  assert.strictEqual(rows.length, 4);
+  // Rows are the top sessions by cost; each cell is as §B8 draws it.
+  const cell = (c) => [c.className, c.elements.map((s) => [s.tag, s.className, s.textContent]), c.textContent];
+  assert.deepStrictEqual(rows[0].map(cell), [
+    ["", [["span", "mono t-sm", "3d6b98e8"]], "3d6b98e8"],
+    ["sub tnum", [], "2026-10-31"],
+    ["an-wrap", [["span", "mono t-sm", "acme-api"]], "acme-api"],
+    ["sub an-wrap", [], "mixed"],
+    ["num", [], "634.3M"],
+    ["num", [], "11"],
+    ["num w-500", [], "$121"],
+  ]);
+  assert.deepStrictEqual(rows[1].map(cell).map((c) => c[2]), ["2cf1c405", "2026-10-30", "acme-terraform-course-eu-west", "opus-5-5", "410.7M", "116", "$90.00"]);
+  assert.deepStrictEqual(cell(rows[1][3]), ["an-wrap", [["span", "mono t-sm", "opus-5-5"]], "opus-5-5"], "a single model is mono, not muted");
+  assert.deepStrictEqual(cell(rows[1][2])[1], [["span", "mono t-sm", "acme-terraform-course-eu-west"]], "a long project name is whole in its cell: CSS wraps it");
+  assert.deepStrictEqual(rows.map((r) => r[0].textContent), ["3d6b98e8", "2cf1c405", "9d3dc2af", "0174c7b1"]);
+
+  // Right: "Session cost", a card whose head is only the caption, five rows of label, bar and count.
+  assert.deepStrictEqual(right.elements.map((n) => n.tag + "." + n.className), ["div.an-psec-head", "div.an-card"]);
+  assert.deepStrictEqual(right.elements[0].elements.map((n) => [n.tag, n.className, n.textContent]), [["h2", "section-title", "Session cost"]]);
+  const card = right.elements[1];
+  assert.deepStrictEqual(card.elements.map((n) => n.tag + "." + n.className), ["div.card-head", "div.an-card-body"]);
+  assert.deepStrictEqual(card.elements[0].elements.map((n) => [n.tag, n.className, n.textContent]), [["span", "t-sm muted", "Sessions per cost band"]]);
+  const bands = card.elements[1].elements[0];
+  assert.strictEqual(bands.className, "an-bands");
+  assert.strictEqual(bands.elements.length, 5);
+  assert.deepStrictEqual(bands.elements.map((b) => b.className), Array(5).fill("an-band"));
+  assert.deepStrictEqual(bands.elements.map((b) => b.elements.map((c) => c.tag + "." + c.className)), Array(5).fill(["span.t-sm tnum", "span.meter", "span.t-sm tnum an-band-n"]));
+  assert.deepStrictEqual(bands.elements.map((b) => b.elements[0].textContent), ["<$1", "$1–5", "$5–15", "$15–40", "$40+"], "today's bucket labels, sans");
+  // 3 sessions are <$5.00... the fixture: $4.20 (<$5), $70.14 and $90 and $120.50 ($40+).
+  assert.deepStrictEqual(bands.elements.map((b) => b.elements[2].textContent), ["0", "1", "0", "0", "3"]);
+  assert.deepStrictEqual(bands.elements.map((b) => b.elements[1].elements[0].style.width), ["0%", "33.33333333333333%", "0%", "0%", "100%"], "widths are count / the largest count; the fill is the kit's accent (no colour inline)");
+  assert.ok(bands.elements.every((b) => b.elements[1].elements[0].style.background === undefined));
+  // The old "Session shape" / "Fleet at a glance" boxes are gone from the page.
+  const all = [];
+  const walk = (n) => { all.push(n); n.elements.forEach(walk); };
+  walk(root);
+  assert.ok(!all.some((n) => /an-box|an-fleet|an-grid2|an-section/.test(n.className)));
+  assert.ok(!/Fleet at a glance|Session shape|Session cost distribution/.test(root.textContent));
+});
+
+test("Sessions on the phone are unchanged: Session shape, Fleet at a glance, lowercase heads", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  loadWindow(env);
+  const root = view(env, "anSessions");
+  const all = [];
+  const walk = (n) => { all.push(n); n.elements.forEach(walk); };
+  walk(root);
+  const text = (cls) => all.filter((n) => n.cls.includes(cls)).map((n) => n.textContent);
+  assert.deepStrictEqual(text("an-section").map((t) => t.slice(0, 20)), ["Session shapeSession", "Top sessions by cost"]);
+  assert.ok(text("an-hint").includes("Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts."));
+  assert.ok(text("an-fleet")[0].includes("Costliest session: $121 (acme-api)"));
+  assert.deepStrictEqual(all.filter((n) => n.tag === "th").map((n) => n.textContent), ["session", "day", "project", "model", "tokens", "prompts", "cost"]);
+  assert.ok(!all.some((n) => /kpi-row|an-card|an-psec|an-split|section-title/.test(n.className)), "none of the page's nodes");
+});
+
+test("the split stacks below 1000px of body", () => {
+  // The body is the container; at 1440 it is 1086 wide (290px sidebar, 32px sides), so the 300px column sits beside a 770px
+  // table (§B8) and at 1280 (926) it stacks, which keeps the Project column at 414px (§G5).
+  const body = decls(ANP + " #analytics-body");
+  assert.strictEqual(body.get("container-type"), "inline-size");
+  assert.strictEqual(body.get("container-name"), "an-body");
+  const split = decls(ANP + " .an-split");
+  assert.strictEqual(split.get("display"), "grid");
+  assert.strictEqual(split.get("grid-template-columns"), "minmax(0, 1fr) 300px");
+  assert.strictEqual(split.get("gap"), "var(--sp-4)");
+  assert.strictEqual(split.get("align-items"), "start", "the short card does not stretch to the table's height");
+  const stacked = CONTAINER_RULES.filter((r) => parts(r.selector).includes(ANP + " .an-split"));
+  assert.strictEqual(stacked.length, 1);
+  assert.ok(stacked[0].at.includes("@container an-body (max-width: 999px)"), "below 1000px of body");
+  assert.strictEqual(stacked[0].decls.get("grid-template-columns"), "minmax(0, 1fr)", "one column");
+  // The grid is not a media query: the page's width is the sidebar's business.
+  assert.ok(!RULES.some((r) => parts(r.selector).some((s) => s.includes(".an-split")) && r.at.some((a) => a.startsWith("@media") && !a.includes("701px"))));
+  // The fixed columns, M3's .m3-ts: 88/100/auto/104/76/72/72 (sum of the fixed ones 512).
+  assert.strictEqual(decls(ANP + " .an-stbl").get("table-layout"), "fixed");
+  const w = (n) => decls(ANP + " .an-stbl th:nth-child(" + n + ")").get("width");
+  assert.deepStrictEqual([1, 2, 3, 4, 5, 6, 7].map(w), ["88px", "100px", undefined, "104px", "76px", "72px", "72px"]);
+  // A body too narrow for them sizes the columns to the content (Project keeps room) and the card's wrapper scrolls, not the page.
+  const narrow = CONTAINER_RULES.filter((r) => r.at.includes("@container an-body (max-width: 671px)"));
+  assert.ok(narrow.length >= 1);
+  assert.strictEqual(narrow.find((r) => parts(r.selector).includes(ANP + " .an-stbl")).decls.get("table-layout"), "auto");
+  for (const n of [1, 2, 4, 5, 6, 7]) assert.ok(narrow.some((r) => parts(r.selector).includes(ANP + " .an-stbl th:nth-child(" + n + ")") && r.decls.get("width") === "auto"), "column " + n + " lets go of its width");
+  assert.ok(narrow.some((r) => parts(r.selector).includes(ANP + " .an-stbl :is(th, td):nth-child(3)") && /^\d+px$/.test(r.decls.get("min-width"))), "Project keeps a minimum");
+  // Session, Project and Model wrap instead of clipping (§B8 .m3-wrap): one line is still the 32px row, 6 + 20 + 6.
+  const wrap = decls(ANP + " .an-table td.an-wrap");
+  assert.strictEqual(wrap.get("white-space"), "normal");
+  assert.strictEqual(wrap.get("overflow-wrap"), "anywhere");
+  assert.strictEqual(wrap.get("height"), "auto");
+  assert.strictEqual(wrap.get("padding-top"), "6px");
+  assert.strictEqual(wrap.get("padding-bottom"), "6px");
+  assert.strictEqual(wrap.get("line-height"), "var(--lh-md)");
+  // The cost bands (§B8): label 56px, bar, count 48px; 22px rows 12px apart; the count right-aligned.
+  const band = decls(ANP + " .an-band");
+  assert.strictEqual(band.get("display"), "grid");
+  assert.strictEqual(band.get("grid-template-columns"), "56px minmax(0, 1fr) 48px");
+  assert.strictEqual(band.get("column-gap"), "var(--sp-3)");
+  assert.strictEqual(band.get("height"), "22px");
+  assert.strictEqual(band.get("align-items"), "center");
+  assert.strictEqual(decls(ANP + " .an-band-n").get("text-align"), "right");
+});
+
+test("the page's cards and sections: a panel with the kit's radius, a title row on one baseline, 16px apart", () => {
+  const card = decls(ANP + " .an-card");
+  assert.strictEqual(card.get("background"), "var(--panel)");
+  assert.strictEqual(card.get("border-radius"), "var(--r-card)");
+  assert.strictEqual(card.get("border"), undefined, "the kit's .card has no outline");
+  assert.strictEqual(decls(ANP + " .an-card > .an-tablewrap").get("border-radius"), "var(--r-card)", "a table card clips its row hover to the corners");
+  assert.strictEqual(decls(ANP + " .an-card-body").get("padding"), "var(--sp-3) var(--sp-4) var(--sp-4)", "§D1 .m3-cardbody: 12px 16px 16px");
+  assert.strictEqual(decls(ANP + " .an-card .card-head > :is(h2, h3)").get("margin"), "0");
+  const head = decls(ANP + " .an-psec-head");
+  assert.strictEqual(head.get("display"), "flex");
+  assert.strictEqual(head.get("align-items"), "baseline");
+  assert.strictEqual(head.get("gap"), "10px");
+  assert.strictEqual(head.get("flex-wrap"), "wrap", "a long caption drops under the title instead of overflowing");
+  const sec = decls(ANP + " .an-psec");
+  assert.strictEqual(sec.get("display"), "flex");
+  assert.strictEqual(sec.get("flex-direction"), "column");
+  assert.strictEqual(sec.get("gap"), "var(--sp-2)");
+  assert.strictEqual(sec.get("min-width"), "0");
+  assert.strictEqual(decls(ANP + " #analytics-body > .kpi-row").get("margin-bottom"), "var(--sp-4)", "§B0: 16px between the KPI row and what follows");
+  // The KPI labels ellipsize on both pages through one rule.
+  const label = RULES.filter((r) => parts(r.selector).includes(AU + " .kpi-label"));
+  assert.strictEqual(label.length, 1);
+  assert.ok(parts(label[0].selector).includes(ANP + " .kpi-label"));
+  assert.strictEqual(label[0].decls.get("text-overflow"), "ellipsis");
+  // The phone's amber .card is never worn: the page's card has its own name.
+  const WEARS_CARD = /["'`](?:[^"'`\n]*\s)?card(?:\s[^"'`\n]*)?["'`]/;
+  assert.ok(WEARS_CARD.test('el("div", "card")') && WEARS_CARD.test('el("div", "x card y")') && !WEARS_CARD.test('el("div", "an-card")'), "the matcher sees a class word");
+  assert.ok(!WEARS_CARD.test(stripJsComments(read("analytics.js"))), "no element of analytics.js wears .card");
+});
+
+test("Models, Projects and Tools on the page: cards, kit tables and section titles, the same content", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  const cards = (n) => n.elements.filter((c) => c.cls.includes("an-card"));
+  const head = (sec) => sec.elements[0].elements.map((n) => [n.tag, n.className, n.textContent]);
+
+  const models = view(env, "anModels");
+  assert.deepStrictEqual(models.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
+  assert.deepStrictEqual(head(models.elements[0]), [["h2", "section-title", "Per-model breakdown"], ["span", "t-sm muted", "Cost, volume & efficiency · window"]]);
+  const m = tableOf(cards(models.elements[0])[0]);
+  assert.deepStrictEqual(m.head.map((t) => t.textContent), ["Model", "Cost", "% cost", "Tokens", "Prompts", "Out/prompt", "Cache-read"]);
+  assert.deepStrictEqual(m.rows.map((r) => r.map((c) => c.textContent)), [
+    ["opus-5-5", "$4.3k", "100%", "10.4B", "3994", "50k", "59%"],
+    ["other (unpriced)", "$0.00", "0%", "0", "68", "0", "0%"],
+  ], "the same figures as the phone's table");
+  assert.deepStrictEqual(m.rows[0][0].elements.map((c) => [c.tag, c.className]), [["span", "an-swatch"], ["span", "mono t-sm"]], "a model: its swatch and its id in mono");
+  assert.deepStrictEqual(m.rows[1][0].elements.map((c) => [c.tag, c.className]), [["span", "an-swatch"], ["span", "muted"]], "the unpriced row is a label, not a model id: sans, muted");
+  assert.deepStrictEqual(m.rows.map((r) => r[1].className), ["num w-500", "num w-500"]);
+  assert.strictEqual(models.elements[1].elements[0].elements[0].textContent, "Why $ ≠ token count");
+  const share = models.elements[1].elements[1];
+  assert.strictEqual(share.className, "an-pgrid");
+  assert.deepStrictEqual(share.elements.map((c) => c.className), ["an-card", "an-card"]);
+  assert.deepStrictEqual(share.elements.map((c) => c.elements[0].elements.map((t) => t.textContent)), [["Share of tokens"], ["Share of cost"]]);
+
+  const projects = view(env, "anProjects");
+  assert.deepStrictEqual(projects.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
+  assert.deepStrictEqual(head(projects.elements[0]), [["h2", "section-title", "Cost by project"], ["span", "t-sm muted", "Bar split shows the model mix inside each project · window"]]);
+  assert.deepStrictEqual(head(projects.elements[1]), [["h2", "section-title", "Detail"]]);
+  const p = tableOf(cards(projects.elements[1])[0]);
+  assert.deepStrictEqual(p.head.map((t) => t.textContent), ["Project", "Cost", "Tokens", "Prompts"]);
+  assert.deepStrictEqual(p.rows.map((r) => r[0].textContent), ["acme-terraform-course-eu-west", "acme-api", "acme-docs"]);
+  assert.deepStrictEqual(p.rows[0][0].elements.map((c) => [c.tag, c.className]), [["span", "mono t-sm"]]);
+  assert.strictEqual(p.rows[0][0].className, "an-wrap", "a long project wraps, never clips");
+  assert.deepStrictEqual(p.rows.map((r) => r[1].textContent), ["$160", "$121", "$4.20"]);
+
+  const tools = view(env, "anTools");
+  assert.deepStrictEqual(tools.elements.map((n) => n.tag + "." + n.className), ["section.an-psec"]);
+  assert.deepStrictEqual(head(tools.elements[0]), [["h2", "section-title", "Skills · plugins · MCP"], ["span", "t-sm muted", "What the agents actually invoked · by records"]]);
+  const grid = tools.elements[0].elements[1];
+  assert.strictEqual(grid.className, "an-pgrid");
+  assert.deepStrictEqual(grid.elements.map((c) => c.className), ["an-card", "an-card"]);
+  assert.deepStrictEqual(grid.elements.map((c) => c.elements[0].elements[0].textContent), ["skill", "mcp_server"], "a card per kind, titled as today");
+  assert.deepStrictEqual(grid.elements[0].elements[1].elements.map((r) => [r.elements[0].textContent, r.elements[2].textContent]), [["review", "40"], ["deploy", "7"]]);
+  // No tools: today's sentence, in the section.
+  loadWindow(env, { tools: [] });
+  const none = view(env, "anTools");
+  assert.strictEqual(none.textContent.endsWith("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."), true);
+});
+
+test("no off-scale analytics text on desktop", () => {
+  // app.css sets these in raw px for the phone and nothing in desktop.css answered them (Plan 1 follow-up 1): each gets a
+  // kit step under the page.
+  const app = parseRules(APP_CSS);
+  const raw = (sel) => app.filter((r) => parts(r.selector).includes(sel)).map((r) => r.decls.get("font-size")).filter(Boolean).pop();
+  const STEP = /^var\(--t-(?:xs|sm|md|lg|xl|kpi)\)$/;
+  for (const sel of [".an-empty", ".an-hint", ".an-badge", ".an-bar .cap"]) {
+    assert.match(raw(sel) || "", /px$/, sel + " is a px size on the phone (so the page must answer it)");
+    const size = decls(ANP + " " + sel).get("font-size");
+    assert.match(size || "", STEP, sel + " has a kit size under the page");
+  }
+  assert.strictEqual(decls(ANP + " .an-empty").get("line-height"), "var(--lh-md)");
+  // Every analytics rule the page wrote in this task sets a size only through a token (desktop-type.test.js covers the whole file).
+  for (const r of RULES) {
+    if (!parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:card|psec|split|band|table|empty|hint|badge|bar)|\.kpi/.test(s))) continue;
+    for (const [k, v] of r.decls) if (k === "font-size") assert.match(v, STEP, r.selector);
+  }
+});
+
+// The phone's views, pinned: the DOM each draws for the fixture, hashed. These are digests of what main c47442b built (the view
+// functions are untouched since); a page branch that leaks into the phone changes one of them.
+const crypto = require("node:crypto");
+const fullSig = (n) => (n instanceof TextNode ? n.text : [n.tag, n.className, n.attrs, n.style, n.title || "", n.innerHTML || "", ...n.children.map(fullSig)]);
+const digest = (root) => crypto.createHash("sha256").update(JSON.stringify(fullSig(root))).digest("hex").slice(0, 16);
+const PHONE_VIEWS = {
+  anOverview: "3d597d4de7c0eae7", anModels: "96d856c5596543ea", anProjects: "0fff16c5db41cc5d",
+  anSessions: "99fd16067d3a4557", anTools: "0ab70056be45b675", anToolsEmpty: "8891756e9267971f",
+};
+
+test("the phone's five views draw what main drew, byte for byte", () => {
+  const env = analyticsEnv();
+  env.page(false);
+  const got = {};
+  loadWindow(env, { tools: [] });
+  got.anToolsEmpty = digest(view(env, "anTools"));
+  loadWindow(env);
+  env.run("AN.data.sessionCount = 1420;");
+  for (const fn of ["anOverview", "anModels", "anProjects", "anSessions", "anTools"]) got[fn] = digest(view(env, fn));
+  assert.deepStrictEqual(got, PHONE_VIEWS);
+});
+
+test("every class the Analytics views build has a rule or is a named hook", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  const used = new Set();
+  const walk = (n) => { n.cls.forEach((c) => used.add(c)); n.elements.forEach(walk); };
+  for (const fn of ["anOverview", "anModels", "anProjects", "anSessions", "anTools"]) walk(view(env, fn));
+  for (const c of ["kpi-row", "kpi", "kpi-value", "kpi-label", "an-card", "an-card-body", "an-psec", "an-psec-head", "an-split", "an-stbl", "an-wrap", "an-bands", "an-band", "an-band-n", "an-pgrid", "section-title", "card-head", "meter"]) assert.ok(used.has(c), c + " is built");
+  const hooks = new Set(["an-timewrap"]);
+  const css = DESK_CSS + APP_CSS + stripComments(read("primitives.css"));
+  const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+  assert.deepStrictEqual([...used].filter((c) => !defined.has(c) && !hooks.has(c)), [], "classes with no rule");
 });
