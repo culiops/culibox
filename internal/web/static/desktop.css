@@ -2085,6 +2085,20 @@
   #ask-modal.wide { width: 500px; max-width: calc(100vw - 40px); }
   /* End session (opts.cls "end"): the frame's 480px card. */
   #ask-modal.end { width: 480px; max-width: calc(100vw - 40px); }
+  /* Keyboard shortcuts (opts.cls "keys", F29, frame M5.3): the 880px card of two columns of key chips. It comes after
+     #ask-modal.info's 560px so it wins. A footless ask has no footer to keep on screen, so on a short window the
+     list scrolls (the dialog's own 88vh cap bounds .dlg-body, which clips). Labels are --t-md sans; the chips are the
+     kit's .kbd; "or" and "drag" are --t-sm muted. */
+  #ask-modal.keys { width: 880px; max-width: calc(100vw - 40px); }
+  #ask-modal.keys #ask-extra { min-height: 0; overflow-y: auto; }
+  .sc-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--sp-10); }
+  .sc-col { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+  .sc-grp { display: flex; flex-direction: column; gap: 2px; }
+  .sc-grp > .grp-label { padding-bottom: var(--sp-1); }
+  .sc-row { display: flex; align-items: center; gap: var(--sp-3); min-height: 30px; }
+  .sc-label { flex: 1 1 auto; min-width: 0; font-size: var(--t-md); line-height: var(--lh-md); }
+  .sc-chord { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
+  .sc-word { font-size: var(--t-sm); color: var(--muted); }
   #ask-modal #ask-extra[hidden] { display: none; }
   #ask-modal .ask-note { margin: 14px 0 0; font-size: var(--t-sm); color: var(--muted); }
   #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); }

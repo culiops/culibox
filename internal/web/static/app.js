@@ -1317,18 +1317,63 @@ function hintShortcuts() {
     + ` · ${jumpHint(1, IS_MAC)}-9 session · ${shortcutHint("help.open", IS_MAC)} shortcuts`;
 }
 
+// shortcutsGridEl: the desktop's Keyboard shortcuts body (frame M5.3), from helpGrid (shortcuts.js): two columns
+// of groups, a row per shortcut (its label, then its keys as the kit's .kbd chips, "or" between alternatives).
+// Built with createElement and textContent, never innerHTML.
+function shortcutsGridEl(grid) {
+  const mk = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const cols = mk("div", "sc-cols");
+  for (const col of grid) {
+    const colEl = mk("div", "sc-col");
+    for (const g of col) {
+      const grp = mk("div", "sc-grp");
+      grp.append(mk("div", "grp-label", g.group));
+      for (const r of g.rows) {
+        const row = mk("div", "sc-row");
+        const chord = mk("span", "sc-chord");
+        r.alts.forEach((alt, i) => {
+          if (i) chord.append(mk("span", "sc-word", "or"));
+          for (const t of alt) chord.append(t.kbd !== undefined ? mk("kbd", "kbd", t.kbd) : mk("span", "sc-word", t.text));
+        });
+        row.append(mk("span", "sc-label", r.label), chord);
+        grp.append(row);
+      }
+      colEl.append(grp);
+    }
+    cols.append(colEl);
+  }
+  return cols;
+}
+
 // showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
-// desktop, Mod+/ and ?, Settings, About). The rows come from the registry
-// (shortcuts.js) plus the box runtime; the text goes in through textContent in askDialog.
-// On the phone layout each row stacks (keys, then the description indented): the
-// aligned desktop columns are wider than the dialog. Decided when it opens (#59).
+// desktop, Mod+/ and ?, Settings, About). The rows come from the registry (shortcuts.js).
+// Desktop: two columns of key chips (shortcutsGridEl), no footer and no Close button (the X is the
+// close), no Runtime line (Settings › About shows the box runtime) (F29, M5.3). Only .keys sizes the
+// dialog, so the grid does not also ask for the wide card.
+// Phone: the text goes in through textContent in askDialog, each row stacking (keys, then the
+// description indented) because the aligned columns are wider than the dialog, then the Runtime
+// line and Close. Decided when it opens (#59).
 function showShortcuts() {
+  if (!mobileActive(window.innerWidth)) {
+    return askDialog({
+      title: "Keyboard shortcuts",
+      info: true,
+      footless: true,
+      cls: "keys",
+      wide: false,
+      extra: [shortcutsGridEl(helpGrid(IS_MAC))],
+    });
+  }
   // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
-  const rows = helpRows(IS_MAC).filter((r) => !(mobileActive(window.innerWidth) && r.label === scEntry("session.nextNeeds").label));
-  const runtime = tierRuntimeLabel(boxRuntime);
+  const rows = helpRows(IS_MAC).filter((r) => r.label !== scEntry("session.nextNeeds").label);
   return askDialog({
     title: "Keyboard shortcuts",
-    body: mobileActive(window.innerWidth) ? helpTextStacked(rows, runtime) : helpText(rows, runtime),
+    body: helpTextStacked(rows, tierRuntimeLabel(boxRuntime)),
     confirmLabel: "Close",
     info: true,
   });

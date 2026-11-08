@@ -89,7 +89,9 @@ const SHORTCUTS = [
     chords: [{ mod: true, code: "KeyS" }] },
   { id: "palette.insert", label: "Palette: open in new pane / insert path", group: "Editor & files", scope: "palette",
     status: "bound", chords: [{ mod: true, keys: ["Enter"] }] },
-  { id: "spawn.submit", label: "New session: spawn", group: "Sessions & panes", scope: "spawn", status: "bound",
+  // deskLabel: what the desktop's Keyboard shortcuts grid says (the dialog's button reads "Start session" there);
+  // the phone's help text keeps `label`.
+  { id: "spawn.submit", label: "New session: spawn", deskLabel: "New session: start", group: "Sessions & panes", scope: "spawn", status: "bound",
     chords: [{ mod: true, keys: ["Enter"] }] },
   { id: "ui.escape", label: "Close a dialog, menu or page", group: "General", scope: "global", status: "help-only",
     chords: [], text: { mac: "Esc", other: "Esc" } },
@@ -135,12 +137,19 @@ function scKeyName(chord) {
   return "";
 }
 
-function renderChord(chord, mac) {
+// chordKeys: the tokens of a chord in the order renderChord writes them, one per key cap. Off the Mac
+// ["Ctrl", "Shift", "K"]; on it the glyphs ["⇧", "⌘", "K"]. renderChord joins them; the desktop's
+// Keyboard shortcuts dialog draws one chip per token.
+function chordKeys(chord, mac) {
   const key = scKeyName(chord);
   const ctrl = !!chord.ctrl || (!!chord.mod && !mac);
   const cmd = !!chord.mod && !!mac;
-  if (mac) return (ctrl ? "⌃" : "") + (chord.alt ? "⌥" : "") + (chord.shift ? "⇧" : "") + (cmd ? "⌘" : "") + key;
-  return [ctrl ? "Ctrl" : "", chord.alt ? "Alt" : "", chord.shift ? "Shift" : "", key].filter(Boolean).join("+");
+  if (mac) return [ctrl ? "⌃" : "", chord.alt ? "⌥" : "", chord.shift ? "⇧" : "", cmd ? "⌘" : "", key].filter(Boolean);
+  return [ctrl ? "Ctrl" : "", chord.alt ? "Alt" : "", chord.shift ? "Shift" : "", key].filter(Boolean);
+}
+
+function renderChord(chord, mac) {
+  return chordKeys(chord, mac).join(mac ? "" : "+");
 }
 
 function scPrimary(entry, mac) {
@@ -240,6 +249,36 @@ function helpRows(mac) {
   return rows;
 }
 
+// The Keyboard shortcuts dialog's two columns on the desktop (frame M5.3): the groups of each, top to bottom.
+// A group not named here follows in the last column, so a new group is never dropped.
+const SC_GRID_COLUMNS = [["General", "Terminal"], ["Sessions & panes", "Editor & files"]];
+
+// scHelpTokens: a help-only text ("Shift+drag", "↑ ↓ Enter") as chips and words. Keys are written capitalised or
+// as a glyph; a lower-case word ("drag") is plain text beside them.
+function scHelpTokens(text) {
+  return String(text).split(/[\s+]+/).filter(Boolean).map((t) => (/^[a-z]+$/.test(t) ? { text: t } : { kbd: t }));
+}
+
+// helpGrid(mac) -> [[{ group, rows: [{ label, alts }] }, ...], [...]]: the same shortcuts as helpRows, as key chips
+// for the desktop dialog. `alts` is one entry per way to do it (the dialog puts "or" between them), each a list of
+// { kbd } chips and { text } words. The label is deskLabel when the row has one.
+function helpGrid(mac) {
+  const byGroup = new Map();
+  for (const s of SHORTCUTS) {
+    if (s.status === "reserved") continue;
+    const alts = s.status === "help-only"
+      ? [scHelpTokens(s.text[mac ? "mac" : "other"])]
+      : scPrimary(s, mac).map((c) => chordKeys(c, mac).map((k) => ({ kbd: k })));
+    if (!byGroup.has(s.group)) byGroup.set(s.group, []);
+    byGroup.get(s.group).push({ label: s.deskLabel || s.label, alts });
+  }
+  const cols = SC_GRID_COLUMNS.map((names) => names.filter((g) => byGroup.has(g)).map((g) => ({ group: g, rows: byGroup.get(g) })));
+  for (const [g, rows] of byGroup) {
+    if (!SC_GRID_COLUMNS.some((names) => names.includes(g))) cols[cols.length - 1].push({ group: g, rows });
+  }
+  return cols;
+}
+
 // The order the help screen lists its groups in. A group not named here (none
 // today) follows these, in the order its first row appears.
 const SC_GROUP_ORDER = ["General", "Sessions & panes", "Terminal", "Editor & files"];
@@ -270,8 +309,8 @@ function helpTextStacked(rows, runtimeLabel) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, renderChord, activeChords, shortcutHint, hintTitle, jumpHint,
+    isMacPlatform, IS_MAC, SHORTCUTS, chordMatches, chordKeys, renderChord, activeChords, shortcutHint, hintTitle, jumpHint,
     shortcutMatches, shortcutFor, bindShortcut, dispatchShortcut, _resetShortcutBindings, cmKeys, helpRows, helpText,
-    helpTextStacked,
+    helpTextStacked, helpGrid,
   };
 }
