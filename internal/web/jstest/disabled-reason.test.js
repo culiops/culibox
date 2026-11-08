@@ -10,12 +10,14 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { awsFootReasons, setDisabledReason } = require("../static/credentials.js");
+const { awsFootNote, awsFootReasons, setDisabledReason, awsRowStateFor: rowState } = require("../static/credentials.js");
 
 const STATIC = path.join(__dirname, "..", "static");
 const CHECK_REASON = "Nothing to check yet: tick a profile above";
 const SAVE_REASON = "Nothing ready to save yet";
 const WAIT_ONE = "1 row is waiting for “I understand”.";
+const CHECK_ROLE = "Check the new role before saving.";
+const CHECK_PS = "Check that the permission set is read-only before saving.";
 
 // --- the pure pieces ------------------------------------------------------------------------------
 
@@ -36,11 +38,56 @@ test("awsFootReasons: a row waiting for 'I understand' beside a ready one gives 
   assert.strictEqual(awsFootReasons({ rows: [ready, waiting, waiting], saving: false }).save, "2 rows are waiting for “I understand”.");
 });
 
-test("awsFootReasons: nothing ready wins over waiting (the brief's order), all ready and saving say nothing", () => {
-  assert.strictEqual(awsFootReasons({ rows: [waiting], saving: false }).save, SAVE_REASON);
+test("awsFootReasons: one row waiting for 'I understand' and none ready says so, as the note does", () => {
+  const f = { rows: [waiting], saving: false };
+  assert.strictEqual(awsFootReasons(f).save, WAIT_ONE);
+  assert.strictEqual(awsFootReasons(f).save, awsFootNote(f, f.rows.map(rowState)), "the note's own text");
+  assert.strictEqual(awsFootReasons({ rows: [waiting, unchecked], saving: false }).save, WAIT_ONE);
+});
+
+test("awsFootReasons: the add view with rows but none ready and none waiting keeps 'Nothing ready to save yet'", () => {
+  const f = { rows: [unchecked, unchecked], saving: false };
+  assert.strictEqual(awsFootNote(f, f.rows.map(rowState)), "0 of 2 ready to save.", "the note is the count, not a reason");
+  assert.strictEqual(awsFootReasons(f).save, SAVE_REASON);
+});
+
+test("awsFootReasons: all ready and saving say nothing", () => {
   assert.deepStrictEqual(awsFootReasons({ rows: [ready, ready], saving: false }), { check: "", save: "" });
   assert.deepStrictEqual(awsFootReasons({ rows: [ready], saving: true }), { check: "", save: "" });
   assert.deepStrictEqual(awsFootReasons({ rows: [unchecked], saving: true }), { check: "", save: "" });
+  assert.deepStrictEqual(awsFootReasons({ rows: [waiting], saving: true }), { check: "", save: "" }, "a save in flight is plain, whatever else is waiting");
+});
+
+// An edit is one connection: before its check the note says what to do, and the Save title says the same.
+const unchangedEdit = { orig: { source_profile: "base", role_arn: "arn:r", mode: "" }, source_profile: "base", role_arn: "arn:r", mode: "" };
+
+test("awsFootReasons in edit mode: before a check the Save title is the foot note (role)", () => {
+  const f = { mode: "edit", rows: [{ assume: null }], saving: false };
+  assert.strictEqual(awsFootNote(f, f.rows.map(rowState)), CHECK_ROLE);
+  assert.deepStrictEqual(awsFootReasons(f), { check: "", save: CHECK_ROLE });
+});
+
+test("awsFootReasons in edit mode: an sso_direct connection reads the permission-set note", () => {
+  const f = { mode: "edit", rows: [{ mode: "sso_direct", gate: null }], saving: false };
+  assert.deepStrictEqual(awsFootReasons(f), { check: "", save: CHECK_PS });
+  const g = { mode: "edit", rows: [{ mode: "sso_direct", gate: { state: "read_only" } }], saving: false };
+  assert.strictEqual(awsFootReasons(g).save, "", "a read-only gate can save");
+});
+
+test("awsFootReasons in edit mode: a row waiting for 'I understand' reads the waiting text, a checked or unchanged one nothing", () => {
+  assert.strictEqual(awsFootReasons({ mode: "edit", rows: [waiting], saving: false }).save, WAIT_ONE);
+  assert.strictEqual(awsFootReasons({ mode: "edit", rows: [ready], saving: false }).save, "");
+  assert.strictEqual(awsFootReasons({ mode: "edit", rows: [unchangedEdit], saving: false }).save, "", "an edit that leaves the role alone needs no check");
+});
+
+test("awsFootReasons in edit mode: saving says nothing", () => {
+  assert.deepStrictEqual(awsFootReasons({ mode: "edit", rows: [{ assume: null }], saving: true }), { check: "", save: "" });
+});
+
+test("awsFootReasons takes the row states from a caller that has them, and works them out when it has none", () => {
+  const f = { rows: [ready, waiting], saving: false };
+  const states = f.rows.map(rowState);
+  assert.deepStrictEqual(awsFootReasons(f, states), awsFootReasons(f));
 });
 
 // An element with the three things setDisabledReason may touch.
@@ -402,6 +449,52 @@ test("desktop Settings page foot: Save all is held (a click, Enter and Space sav
   press(sv, " ");
   await settle();
   assert.strictEqual(saves(p), 0);
+});
+
+test("desktop Settings page foot, edit mode: Save all's title and the foot note are the same sentence before a check", async () => {
+  const p = page({ statics: true });
+  p.box.reply = reply();
+  const role = "arn:aws:iam::111111111111:role/agentbox-dev";
+  p.box.awsOpenEdit({ name: "acme-dev", source_profile: "base", role_arn: role, region: "eu-west-1" });
+  await settle();
+  const sv = p.byId["aws-save"], note = p.byId["aws-foot-note"];
+  assert.strictEqual(sv.textContent, "Save");
+  assert.strictEqual(note.textContent, "", "an edit that leaves the role alone needs no check: Save is live");
+  assert.strictEqual(sv.getAttribute("aria-disabled"), null);
+  // Changing the role makes the old check void.
+  const rin = p.byId["creds-body"].querySelectorAll("input").find((i) => i.value === role);
+  rin.value = role + "-2";
+  rin.oninput();
+  assert.strictEqual(note.textContent, CHECK_ROLE);
+  assert.strictEqual(sv.getAttribute("aria-disabled"), "true");
+  assert.strictEqual(sv.getAttribute("title"), note.textContent);
+  p.byId["aws-save"].click();
+  await settle();
+  assert.strictEqual(saves(p), 0);
+});
+
+test("desktop drawer foot: with one row waiting and none ready the Save title is the foot note, not 'Nothing ready'", async () => {
+  const p = page();
+  const opts = await openDrawer(p);
+  await tick(opts, "acme-ops");
+  btnIn(opts.foot, "Check all").click();
+  await settle();
+  const sv = btnIn(opts.foot, "Save all");
+  assert.strictEqual(sv.getAttribute("aria-disabled"), "true");
+  assert.ok(opts.foot.textContent.includes(WAIT_ONE), "the foot note says the row is waiting");
+  assert.strictEqual(sv.getAttribute("title"), WAIT_ONE);
+});
+
+test("desktop drawer foot: 0 of N ready keeps the frame copy for Save all beside the count", async () => {
+  const p = page();
+  const opts = await openDrawer(p);
+  p.box.reply = reply({ opsFails: true });
+  await tick(opts, "acme-ops");
+  btnIn(opts.foot, "Check all").click();
+  await settle();
+  const sv = btnIn(opts.foot, "Save all");
+  assert.ok(opts.foot.textContent.includes("0 of 1 ready to save."));
+  assert.strictEqual(sv.getAttribute("title"), SAVE_REASON);
 });
 
 test("phone Settings page foot: disabled as before, no title", async () => {
