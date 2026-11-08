@@ -343,6 +343,18 @@ function initDirPicker(opts) {
     dpReopen();
   });
   dpInput.addEventListener("keydown", dpKeydown);
+  // Desktop: Tab (or Shift+Tab) out of the field closes the list, so it never stays over the tree whose row just took focus
+  // (GATE3 finding 1: with real Tab presses it stayed open, covering the rows). The rule is wspicker.js's: only focus moving
+  // to a focusable element that is neither the field, nor the list, nor an ancestor of the list closes it. A pointer press on
+  // a row (a plain div) lands on nothing (relatedTarget null) or on a container around the list, and the click picks the row.
+  // The phone keeps its behaviour: Escape, a pick or an outside click.
+  const dpFocusOut = (e) => {
+    if (!(typeof drawerDesktop === "function" && drawerDesktop())) return;
+    const to = e.relatedTarget;
+    if (to && to !== dpInput && !dpList.contains(to) && !to.contains(dpList)) dpClose();
+  };
+  dpInput.addEventListener("focusout", dpFocusOut);
+  dpList.addEventListener("focusout", dpFocusOut);
   document.addEventListener("click", (e) => {
     if (e.target !== dpInput && !dpList.contains(e.target)) dpClose();
   });

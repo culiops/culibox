@@ -123,6 +123,8 @@ function killDialogDeskOpts(name, id, shellNames, cwd) {
     " keeps " + (n === 1 ? "that shell running as its own row." : "those shells running as their own rows.")]);
   opts.confirmLabel = n === 1 ? "End both" : "End all";
   opts.altLabel = "End " + label + " only";
+  // The desktop footer keeps one row and ellipsizes this button before it wraps: the whole label is its tooltip.
+  opts.altTitle = opts.altLabel;
   return opts;
 }
 

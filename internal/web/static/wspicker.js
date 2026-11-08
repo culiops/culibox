@@ -45,7 +45,8 @@
 // inline(): true when the list sits inside its field's own container, placed by the stylesheet (New session on the desktop:
 // frame M4.3, a kit menu under the input, in the form's scroll box). It draws kit rows (.menu-item) and sets no top, left,
 // width or max-height; false or unset keeps the fixed placement from the input's rect and the legacy .ft-opt rows (the
-// phone, the profile page). lastUsed(): the folder the last session started in; only an inline list pins it (first row,
+// phone, the profile page); an inline list also starts a search with its first row active (the row Enter picks, drawn as
+// the frame draws it). lastUsed(): the folder the last session started in; only an inline list pins it (first row,
 // trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
 // instead of spawnWsIdleNote's (New session names where the field's value came from).
 //
@@ -134,8 +135,9 @@ function createWsPicker(opts) {
       const lab = document.createElement("span");
       lab.textContent = r.label;
       const hint = document.createElement("span");
-      // Not .hint inside a kit row: app.css's global .hint adds a 7px top margin and 11px type.
-      hint.className = drawnInline ? "wsp-hint t-sm muted ellipsis" : "hint";
+      // Not .hint inside a kit row: app.css's global .hint adds a 7px top margin and 11px type. The frame's parent folder is
+      // machine text, `mono t-xs muted` (M4.3).
+      hint.className = drawnInline ? "wsp-hint mono t-xs muted ellipsis" : "hint";
       hint.textContent = r.hint;
       if (drawnInline) lab.className = "menu-text mono t-sm ellipsis";
       // A kit row spaces its cells by gap: an empty hint (a project root has no parent to show) would add a dead 10px.
@@ -226,20 +228,30 @@ function createWsPicker(opts) {
     const found = broke ? [] : pinned(pickerRows({ mode: "fuzzy", hits: data.results || [] }));
     const text = dirPickerNote(found.length, !!(data && data.truncated), broke);
     render(found, text);
+    // Inline (New session on the desktop, frame M4.3): the first hit is drawn highlighted, as the row Enter takes anyway (enter()
+    // picks row 0 of a fuzzy list when none is active). The idle list, the phone's and the profile page's start with none.
+    if (drawnInline && found.length) setActive(0, false);
     note(text, false);
+  }
+
+  // setActive: the one place a row becomes the active one (the arrows, and an inline search's first row): aria-selected on the
+  // row, aria-activedescendant on the field. `reveal` scrolls it into view: the arrows ask, the first row does not (the list was
+  // just drawn from the top, and typing must not scroll the form behind it).
+  function setActive(i, reveal) {
+    const prev = list.children[active];
+    if (prev) prev.setAttribute("aria-selected", "false");
+    active = i;
+    const el = list.children[active];
+    if (el) {
+      el.setAttribute("aria-selected", "true");
+      if (reveal) el.scrollIntoView({ block: "nearest" });
+      input.setAttribute("aria-activedescendant", el.id);
+    }
   }
 
   function move(delta) {
     if (!shown.length) return;
-    const prev = list.children[active];
-    if (prev) prev.setAttribute("aria-selected", "false");
-    active = pickerNextIndex(active, delta, shown.length);
-    const el = list.children[active];
-    if (el) {
-      el.setAttribute("aria-selected", "true");
-      el.scrollIntoView({ block: "nearest" });
-      input.setAttribute("aria-activedescendant", el.id);
-    }
+    setActive(pickerNextIndex(active, delta, shown.length), true);
   }
 
   function choose(i) {

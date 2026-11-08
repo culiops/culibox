@@ -324,7 +324,12 @@ test("the footer hint is hidden by a base rule in app.css (the phone never shows
   const m = /#ask-modal #ask-hint\s*\{([^{}]*)\}/.exec(desk);
   assert.ok(m, "desktop #ask-hint rule");
   assert.match(m[1], /display:\s*block/);
-  assert.match(m[1], /flex:\s*1 1 auto/);
+  // The hint is the elastic part of the footer (gate fix #173): it takes what the buttons leave and gives it up first.
+  assert.match(m[1], /flex:\s*1 1 0(px)?\s*;/);
+  assert.match(m[1], /min-width:\s*0/);
+  assert.match(m[1], /white-space:\s*nowrap/);
+  assert.match(m[1], /overflow:\s*hidden/);
+  assert.match(m[1], /text-overflow:\s*ellipsis/);
   assert.match(m[1], /font-size:\s*var\(--t-sm\)/);
   assert.match(m[1], /color:\s*var\(--muted\)/);
 });
@@ -349,6 +354,39 @@ test("desktop.css draws the End session card: 480 px, a footer rule, the kit but
   assert.match(rule("#ask-modal #ask-body"), /color:\s*var\(--fg\)/, "the first paragraph is the foreground, the notes are muted");
   // The three dialogs' one close (desktop-chrome.test.js pins its look); here only that the New session one lost its "Esc" word.
   assert.ok(!desk.includes("#spawn-modal .dlg-x::before"), "the New session close drops its Esc word");
+});
+
+// Gate fix (#173, GATE3 finding 5): a 20-character session name wrapped "End both" onto a second row. On the desktop the
+// footer stays on ONE row in the 480px card: the hint shrinks first (to nothing), then the alt button ellipsizes.
+test("the End session footer does not wrap on the desktop: Cancel and the red button hold their width, the alt gives way (after the hint)", () => {
+  const desk = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => { const i = desk.indexOf(sel + " {"); assert.ok(i >= 0, sel); return desk.slice(i, desk.indexOf("}", i)); };
+  // app.css wraps this row on every width (the phone keeps that); its selector weighs (1,2,0), so the desktop's states it again.
+  assert.match(rule("#ask-modal .ask-actions:has(#ask-alt:not([hidden]))"), /flex-wrap:\s*nowrap/);
+  assert.match(readStatic("app.css"), /\.ask-actions:has\(#ask-alt:not\(\[hidden\]\)\)\s*\{\s*flex-wrap:\s*wrap;/, "the phone footer is unchanged");
+  assert.match(rule("#ask-modal .ask-actions button"), /flex:\s*none/, "Cancel and OK never shrink");
+  const alt = rule("#ask-modal #ask-alt");
+  assert.match(alt, /flex:\s*0 1 auto/, "the alt is the one button that may shrink");
+  assert.match(alt, /min-width:\s*0/);
+  assert.match(rule("#ask-modal .ask-actions button"), /text-overflow:\s*ellipsis/);
+  assert.match(rule("#ask-modal .ask-actions button"), /overflow:\s*hidden/);
+});
+
+test("askDialog puts the full alt label in the alt button's title when the dialog gives one (the desktop End session), and clears it on the next ask", async () => {
+  const t = askEnv();
+  const a = t.ctx.askChoice({ title: "t", body: "b", altLabel: "End payments-api-rewrite only", altTitle: "End payments-api-rewrite only" });
+  assert.strictEqual(t.els["ask-alt"].textContent, "End payments-api-rewrite only");
+  assert.strictEqual(t.els["ask-alt"].title, "End payments-api-rewrite only");
+  t.els["ask-modal"].close("cancel");
+  await a;
+  const b = t.ctx.askChoice({ title: "t", body: "b", altLabel: "End session only" });
+  assert.strictEqual(t.els["ask-alt"].title, "", "the phone's dialog gives none: nothing is added there");
+  t.els["ask-modal"].close("cancel");
+  await b;
+  const c = t.ctx.askConfirm({ title: "t", body: "b" });
+  assert.strictEqual(t.els["ask-alt"].title, "");
+  t.els["ask-modal"].close("cancel");
+  await c;
 });
 
 test("shell.js builds notes with createElement (no innerHTML): a path in a note is text", () => {

@@ -27,6 +27,29 @@ test("touch line: box with several names, clone and nothing", () => {
   assert.strictEqual(profileTouchLine({}), "box · no credentials");
 });
 
+// The server sends clone_of as an absolute path; the page writes home as ~ everywhere else (fsops.js shortPath reads
+// window.HOME_DIR), and frame M4.1 draws "box · private copy of ~/culiops-agent-box".
+test("touch line: a private copy's source is written with ~ for the home prefix, whole components only", () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window"), prev = globalThis.window;
+  globalThis.window = { HOME_DIR: "/home/me" };
+  try {
+    const line = (clone_of) => profileTouchLine({ runtime: "box", clone_of });
+    assert.strictEqual(line("/home/me/culiops-agent-box"), "box · private copy of ~/culiops-agent-box");
+    assert.strictEqual(line("/home/me"), "box · private copy of ~");
+    assert.strictEqual(line("/home/me2/x"), "box · private copy of /home/me2/x", "/home/me2 is not inside /home/me");
+    assert.strictEqual(line("/srv/shared/api"), "box · private copy of /srv/shared/api");
+    assert.strictEqual(line("~/culiops-agent-box"), "box · private copy of ~/culiops-agent-box", "already short");
+    assert.strictEqual(line("learning-hubs"), "box · private copy of learning-hubs");
+    assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], clone_of: "/home/me/w" }), "box · aws a · private copy of ~/w");
+  } finally {
+    if (had) globalThis.window = prev; else delete globalThis.window;
+  }
+});
+
+test("touch line: before the home directory is known the path is left as the server sent it", () => {
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "/home/me/w" }), "box · private copy of /home/me/w");
+});
+
 test("touch line: host claude is not contained, host bash says bash", () => {
   assert.strictEqual(profileTouchLine({ runtime: "host", bin: "claude", claude: true }), "host · not contained");
   assert.strictEqual(profileTouchLine({ runtime: "host", bin: "bash" }), "host · bash");
@@ -873,6 +896,12 @@ test("desktop.css: a Workspace option is a 30px kit row, mono --t-sm, raised und
   assert.match(t, /font-size:\s*var\(--t-sm\)/);
   assert.match(t, /text-overflow:\s*ellipsis/);
   assert.match(ruleOf("#spawn-ws-list .wsp-hint"), /flex:\s*0 1 auto/, "the parent folder gives way before the name does");
+  // The parent folder of a nested hit is machine text like the frame's `.mono.t-xs.muted` span (gate fix, DIFF M4.3).
+  const hint = ruleOf("#spawn-ws-list .wsp-hint");
+  assert.match(hint, /font-family:\s*var\(--font-mono\)/);
+  assert.match(hint, /font-size:\s*var\(--t-xs\)/);
+  assert.match(hint, /line-height:\s*var\(--lh-xs\)/);
+  assert.match(hint, /color:\s*var\(--muted\)/);
   const last = ruleOf("#spawn-ws-list .wsp-last");
   assert.match(last, /flex:\s*none/);
   assert.match(last, /font-size:\s*var\(--t-sm\)/);

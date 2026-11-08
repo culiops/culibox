@@ -1528,8 +1528,10 @@
     width: 820px; max-width: 96vw; max-height: calc(100vh - 32px); padding: 0;
     top: min(90px, 10vh); bottom: auto; margin: 0 auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg);
-    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); overflow: hidden;
+    box-shadow: var(--e-dlg); overflow: hidden;
   }
+  /* New session is box-framed, so the box-less dialogs' backdrop rule below never reaches it: the kit's scrim, not app.css's #000a. */
+  #spawn-modal::backdrop { background: var(--scrim); }
   #spawn-modal::before { display: none; }
   /* The head is 16px above and 12px below the 28px close (the frame's .dlg-head), the title centred on it; its
      divider is the body's border-top. The right padding keeps a long title clear of the close. */
@@ -1588,7 +1590,12 @@
   /* Hover is quieter than selected (the kit's .srow:hover is --hover, .is-selected --raise). */
   .sp-item:hover { background: var(--hover); }
   .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
-  .sp-name { font-size: var(--t-md); line-height: var(--lh-md); font-weight: var(--w-medium); overflow-wrap: anywhere; }
+  /* A long name ends in an ellipsis (the frame's .srow-name.ellipsis; its full text is the row's title). The column flex
+     item at flex-start is as wide as its text, so it is capped at the row's width for the ellipsis to show. */
+  .sp-name {
+    max-width: 100%; font-size: var(--t-md); line-height: var(--lh-md); font-weight: var(--w-medium);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
   .sp-touch { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
 
   /* The right column: 1.55fr and 1fr, 14px between rows and 16px between columns, scrolling inside the body. */
@@ -1677,6 +1684,34 @@
   #spawn > #spawn-unlock { order: 11; }
   #spawn > #spawn-err { order: 12; }
   #spawn > .spawn-actions { order: 13; }
+  /* Advanced (frame .m4-adv): ONE row, the group label then the option, no rule above it. app.css's .spawn-adv (a
+     border-top and 10px of padding) and .spawn-adv-label (400, .5px tracking, 8px under it) are the phone's too, so
+     this states the desktop's. The label is the kit's .grp-label; the option is the kit's .check (the label's words
+     and the box 8px apart, the box first as the frame draws it: `order`, not markup, so the phone keeps its row). */
+  #spawn > #spawn-adv { display: flex; align-items: center; gap: var(--sp-4); border-top: 0; padding-top: 0; }
+  #spawn-adv .spawn-adv-label {
+    margin: 0; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); color: var(--muted);
+  }
+  #spawn-adv .opt { display: flex; align-items: center; gap: var(--sp-2); cursor: default; }
+  #spawn #spawn-adv .opt > label { flex: none; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #spawn-adv .opt > input[type="checkbox"] { order: -1; }
+  /* Every checkbox of the form (a profile's yes/no options, "Allow replies from the sidebar") is the kit's .check-box:
+     14px, an outline on --bg, accent and a tick when checked (the kit section's .check-box, restated because
+     app.css's two 16px rules for these inputs carry an id each). The box keeps the kit's 3px drop under a 20px line
+     (align-self), whatever the row centres its words on. The keyboard ring is the global 2px one: nothing here
+     touches the outline. */
+  #spawn input[type="checkbox"], #spawn-adv .opt input[type="checkbox"], #spawn-replies-row label.spawn-check input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none; flex: none; position: relative; align-self: flex-start; width: 14px; height: 14px;
+    margin: 3px 0 0; padding: 0; border-radius: var(--r-chip); background: var(--bg); box-shadow: inset 0 0 0 1px var(--muted); cursor: pointer;
+  }
+  #spawn input[type="checkbox"]:checked, #spawn-adv .opt input[type="checkbox"]:checked, #spawn-replies-row label.spawn-check input[type="checkbox"]:checked {
+    background: var(--accent); box-shadow: none;
+  }
+  #spawn input[type="checkbox"]:checked::after, #spawn-adv .opt input[type="checkbox"]:checked::after, #spawn-replies-row label.spawn-check input[type="checkbox"]:checked::after {
+    content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+    border: solid var(--on-fill); border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
   /* Model above Effort, 6px apart: the select takes the column, the seg its own width. */
   #effort-slot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   #effort-slot .opt, #effort-slot .opt.opt-seg { flex: none; flex-direction: row; align-items: center; }
@@ -1710,7 +1745,9 @@
   /* The folder name is machine text --t-sm; a long one ends in an ellipsis, never wraps. The parent folder of a search hit and
      "Last used" trail it, muted, and keep their own width. */
   #spawn-ws-list .menu-text { font-family: var(--font-mono); font-size: var(--t-sm); line-height: var(--lh-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #spawn-ws-list .wsp-hint { flex: 0 1 auto; max-width: 50%; }
+  #spawn-ws-list .wsp-hint {
+    flex: 0 1 auto; max-width: 50%; font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-xs); color: var(--muted);
+  }
   #spawn-ws-list .wsp-last { flex: none; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: nowrap; }
   /* The list's one line of words (nothing found, folder search unavailable). */
   #spawn-ws-list .ft-note { flex: none; display: flex; align-items: center; min-height: var(--h-menu); padding: 0 10px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
@@ -2102,10 +2139,10 @@
      not box-framed (the spawn dialog keeps its frame; the ask dialog is restyled
      below) and not the mobile sheet. */
   /* Not the box-framed spawn and analytics dialogs: they keep their S3 look. */
-  dialog:not([box-])::backdrop, #ask-modal::backdrop { background: rgba(5, 7, 9, .62); }
+  dialog:not([box-])::backdrop, #ask-modal::backdrop { background: var(--scrim); }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) {
     background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r-dlg);
-    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md)/1.45 var(--font-ui); overflow: hidden;
+    box-shadow: var(--e-dlg); font: var(--t-md)/1.45 var(--font-ui); overflow: hidden;
   }
   dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dhd {
     height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--panel);
@@ -2149,7 +2186,7 @@
 
   /* Ask / confirm / prompt dialog (shell.js askDialog), frame M5.2 (#173): a plain card, the title as the
      head, the body, and a footer that carries the "Esc to cancel" hint and the buttons. The box frame is hidden. */
-  #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md)/1.5 var(--font-ui); overflow: hidden; }
+  #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: var(--e-dlg); font: var(--t-md)/1.5 var(--font-ui); overflow: hidden; }
   #ask-modal::before { display: none; }
   /* The head is 16px above and 12px below the 28px close (the frame's .dlg-head); the title is centred on it. */
   #ask-modal .dlg-title {
@@ -2157,6 +2194,8 @@
     display: flex; align-items: center; min-height: calc(var(--sp-4) + var(--h-ctl) + var(--sp-3));
     margin: 0; padding: var(--sp-4) calc(var(--sp-4) + var(--h-ctl) + var(--sp-3)) var(--sp-3) var(--sp-5); background: none;
     font-size: var(--t-lg); font-weight: var(--w-semibold); color: var(--fg);
+    /* The pane head's .5px tracking reaches the title through the box frame (New session's twin rule resets it too). */
+    letter-spacing: 0;
     /* A long title wraps (the whole name of what is deleted stays readable) and
        keeps the close clear. */
     box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: var(--lh-lg);
@@ -2188,10 +2227,20 @@
   }
   #ask-modal.footless .ask-actions { display: none; }
   /* "Esc to cancel" (askDialog's hint): app.css hides it, the phone has no Esc. */
-  #ask-modal #ask-hint { display: block; flex: 1 1 auto; margin: 0; color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  /* The hint is the footer's elastic part: it takes what the buttons leave (basis 0, grow) and is the first to give it up,
+     down to nothing, ending in an ellipsis. */
+  #ask-modal #ask-hint {
+    display: block; flex: 1 1 0; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  /* One row: app.css wraps a footer that has an alt button (the phone keeps that; its selector weighs (1,2,0), so this one
+     repeats it). Cancel and the red button hold their width; only the alt may shrink, once the hint has nothing left, and
+     its label ends in an ellipsis (the whole label is its title). */
+  #ask-modal .ask-actions:has(#ask-alt:not([hidden])) { flex-wrap: nowrap; }
+  #ask-modal #ask-alt { flex: 0 1 auto; min-width: 0; }
   /* The kit's secondary .btn: Cancel, and the alt ("End agent-box only"). A long label ends in an ellipsis, not off the card. */
   #ask-modal .ask-actions button {
-    max-width: 100%; min-height: var(--h-ctl); padding: 0 var(--sp-3); overflow: hidden; text-overflow: ellipsis;
+    flex: none; max-width: 100%; min-height: var(--h-ctl); padding: 0 var(--sp-3); overflow: hidden; text-overflow: ellipsis;
     font-size: var(--t-md); font-weight: var(--w-medium); color: var(--fg); background: var(--raise);
     border: 1px solid transparent; border-radius: var(--r-ctl);
   }

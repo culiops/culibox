@@ -138,9 +138,22 @@ test("killDialogDeskOpts: one shell, names what it ends, what it keeps, and the 
     ],
     confirmLabel: "End both",
     altLabel: "End agent-box only",
+    altTitle: "End agent-box only",
     danger: true,
     cls: "end",
   });
+});
+
+// The desktop footer is one row in a 480px card, so a long name's button ellipsizes (desktop.css): its whole label is the
+// tooltip. Only this dialog gives one: the phone's wraps its row instead and needs none.
+test("killDialogDeskOpts: the alt button's full label is its title; none without an alt, none on the phone", () => {
+  for (const names of [["shell 1"], ["shell 1", "shell 2"]]) {
+    const o = n.killDialogDeskOpts("payments-api-rewrite-v2", "x", names, "~/w");
+    assert.strictEqual(o.altTitle, o.altLabel);
+    assert.strictEqual(o.altTitle, "End payments-api-rewrite-v2 only");
+  }
+  assert.ok(!("altTitle" in n.killDialogDeskOpts("agent-box", "x", [], "~/w")), "no alt, no title");
+  assert.ok(!("altTitle" in n.killDialogOpts("agent", "p", 1)), "the phone's opts are as they were");
 });
 
 test("killDialogDeskOpts: no shells is one red End session, with no shell note and no second way out", () => {

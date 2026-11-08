@@ -38,6 +38,9 @@ function spawnTierOf(profile, boxRuntime) {
 
 // profileTouchLine: what a session of this profile can reach, in a line:
 //   box · aws culipulse-prod · gh culiops     host · not contained     host · bash
+// A private copy's source is written with the home prefix as ~ (frame M4.1, "private copy of ~/culiops-agent-box"), the way
+// every other path on the page is: shortPath (fsops.js) reads the page's HOME_DIR and leaves a path outside home whole.
+// Its callers are the New session list and the empty state, both desktop-only.
 function profileTouchLine(p, boxRuntime) {
   const prof = p || {};
   if (spawnTierOf(prof, boxRuntime) === "host") {
@@ -48,7 +51,7 @@ function profileTouchLine(p, boxRuntime) {
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
-  if (prof.clone_of) parts.push("private copy of " + prof.clone_of);
+  if (prof.clone_of) parts.push("private copy of " + spawnDep("shortPath", "./fsops.js")(prof.clone_of));
   if (parts.length === 1) parts.push("no credentials");
   return parts.join(" · ");
 }

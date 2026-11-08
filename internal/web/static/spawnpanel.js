@@ -153,7 +153,10 @@ function renderSpawnPlist() {
       nh.title = notHomeTitle(p.not_home);
       touch.append(" ", nh);
     }
-    b.append(spawnPanelEl("span", "sp-name", p.name), touch);
+    // A long name ends in an ellipsis (desktop.css), so its whole text is the tooltip (frame M4.1's title attributes).
+    const nm = spawnPanelEl("span", "sp-name", p.name);
+    nm.title = p.name;
+    b.append(nm, touch);
     b.onclick = () => spawnPlistPick(p.name);
     b.onkeydown = (e) => {
       if (e.key === "ArrowDown") { e.preventDefault(); spawnPlistMove(b, 1); }

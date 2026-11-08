@@ -544,8 +544,113 @@ test("an inline row shows the parent folder of a fuzzy hit as a trailing hint", 
   assert.strictEqual(row.children[0].textContent, "culipulse");
   assert.strictEqual(row.children[1].textContent, "work");
   assert.ok(cls(row.children[1]).includes("wsp-hint"), "not .hint: app.css's global .hint adds a top margin and 11px type");
+  // The frame's span is `mono t-xs muted` (M4.3): the class list says so too, not the --t-sm the name has.
+  assert.deepStrictEqual(cls(row.children[1]), ["wsp-hint", "mono", "t-xs", "muted", "ellipsis"]);
   assert.ok(!cls(row.children[1]).includes("hint"));
   assert.deepStrictEqual(lastOf(row), []);
+});
+
+// Gate fix (#173, frame M4.3): the first row of a search is drawn highlighted and it is the one Enter takes, so the row
+// Enter acts on is the row that looks chosen. The idle list (empty query) and the phone's and the profile page's lists
+// start with nothing active, as before.
+const searchHits = [{ rel: "work/a", path: "/home/me/work/a" }, { rel: "work/b", path: "/home/me/work/b" }, { rel: "work/c", path: "/home/me/work/c" }];
+const selected = (p) => p.list.children.map((c, i) => (c.attrs["aria-selected"] === "true" ? i : -1)).filter((i) => i >= 0);
+
+test("inline: after a search renders results, row 0 is active (aria-selected, aria-activedescendant) and Enter picks it", async () => {
+  const t = env();
+  const p = t.make({ inline: () => true });
+  t.server.search = searchHits;
+  type(p, "work");
+  assert.deepStrictEqual(selected(p), [], "nothing before the results are in");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(p), ["a", "b", "c"]);
+  assert.deepStrictEqual(selected(p), [0]);
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], p.list.children[0].id);
+  assert.strictEqual(p.picker.highlighted(), true);
+  fire(p.input, "keydown", { key: "Enter" });
+  assert.strictEqual(p.picker.value(), "/home/me/work/a");
+  assert.deepStrictEqual(p.calls.pick, ["/home/me/work/a"]);
+  assert.strictEqual(p.list.hidden, true);
+});
+
+test("inline: ArrowDown from the active first row goes to row 1, and ArrowUp from row 0 wraps to the last row, as it always did", async () => {
+  const t = env();
+  const p = t.make({ inline: () => true });
+  t.server.search = searchHits;
+  type(p, "work");
+  t.runDebounce();
+  await flush();
+  fire(p.input, "keydown", { key: "ArrowDown" });
+  assert.deepStrictEqual(selected(p), [1], "one row selected at a time");
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], p.list.children[1].id);
+  fire(p.input, "keydown", { key: "ArrowUp" });
+  assert.deepStrictEqual(selected(p), [0]);
+  fire(p.input, "keydown", { key: "ArrowUp" });
+  assert.deepStrictEqual(selected(p), [2], "the same wrap pickerNextIndex always did");
+  fire(p.input, "keydown", { key: "Enter" });
+  assert.strictEqual(p.picker.value(), "/home/me/work/c");
+});
+
+test("inline: a new search starts on its own first row again, and a search that finds nothing activates nothing", async () => {
+  const t = env();
+  const p = t.make({ inline: () => true });
+  t.server.search = searchHits;
+  type(p, "work");
+  t.runDebounce();
+  await flush();
+  fire(p.input, "keydown", { key: "ArrowDown" });
+  fire(p.input, "keydown", { key: "ArrowDown" });
+  t.server.search = [{ rel: "x/y", path: "/home/me/x/y" }, { rel: "x/z", path: "/home/me/x/z" }];
+  type(p, "x");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(selected(p), [0]);
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], p.list.children[0].id);
+  t.server.search = [];
+  type(p, "nothing-here");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(p), []);
+  assert.deepStrictEqual(selected(p), [], "the note row is not an option to land on");
+  assert.strictEqual(p.input.attrs["aria-activedescendant"], undefined);
+  assert.strictEqual(p.picker.highlighted(), false);
+});
+
+test("inline: the pinned Last used row is the active one, so Enter takes it", async () => {
+  const t = env();
+  const p = t.make({ inline: () => true, lastUsed: () => "/home/me/work/b" });
+  t.server.search = searchHits;
+  type(p, "work");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(p), ["b", "a", "c"]);
+  assert.deepStrictEqual(selected(p), [0]);
+  fire(p.input, "keydown", { key: "Enter" });
+  assert.strictEqual(p.picker.value(), "/home/me/work/b");
+});
+
+test("the idle list starts with no active row, inline or not, and a non-inline search too (phone, profile page)", async () => {
+  const t = env();
+  const inline = t.make({ inline: () => true });
+  fire(inline.input, "focus");
+  assert.deepStrictEqual(selected(inline), [], "the idle list is unchanged");
+  assert.strictEqual(inline.input.attrs["aria-activedescendant"], undefined);
+  assert.strictEqual(inline.picker.highlighted(), false);
+  const phone = t.make({ inline: () => false });
+  t.server.search = searchHits;
+  type(phone, "work");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(phone), ["a", "b", "c"]);
+  assert.deepStrictEqual(selected(phone), [], "the phone's search starts with nothing highlighted");
+  assert.strictEqual(phone.input.attrs["aria-activedescendant"], undefined);
+  assert.strictEqual(phone.picker.highlighted(), false);
+  const plain = t.make();
+  type(plain, "work");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(selected(plain), []);
 });
 
 test("Last used: the row for the last spawn's folder comes first with a trailing 'Last used', and Enter/click pick it", () => {

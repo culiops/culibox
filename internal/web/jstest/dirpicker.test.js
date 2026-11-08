@@ -357,3 +357,135 @@ test("pinLastUsed pins fuzzy hits the same way as workspace rows", () => {
   const out = pinLastUsed(hits, "/home/u/b/two");
   assert.deepStrictEqual(out.map((r) => [r.label, r.hint, !!r.lastUsed]), [["two", "b", true], ["one", "a", false]]);
 });
+
+// --- the Files drawer's root list closes when focus leaves it (gate fix #173, GATE3 finding 1) ----------------------------------
+// initDirPicker is DOM wiring on module globals bound to #ft-root-input, so it runs in a vm context on a tiny fake DOM,
+// with the real dirpicker.js. drawerDesktop() is app.js's gate for "not the phone"; it is a function here so each test
+// picks the layout.
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+class FEl {
+  constructor(tag) {
+    this.tag = tag; this.children = []; this.parent = null; this.attrs = {}; this.handlers = {};
+    this.style = {}; this.hidden = false; this.className = ""; this.id = ""; this.title = ""; this.textContent = "";
+    this.value = ""; this.selectionStart = 0; this.selectionEnd = 0;
+  }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  removeAttribute(k) { delete this.attrs[k]; }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); }
+  append(...cs) { for (const c of cs) { c.parent = this; this.children.push(c); } }
+  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.append(...cs); }
+  contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
+  getBoundingClientRect() { return { left: 10, top: 100, bottom: 130, width: 300 }; }
+  setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
+  select() { this.selectionStart = 0; this.selectionEnd = this.value.length; }
+  scrollIntoView() {}
+}
+const fireOn = (el, type, e) => {
+  const ev = Object.assign({ type, target: el, prevented: false, preventDefault() { this.prevented = true; } }, e || {});
+  for (const f of (el.handlers[type] || []).slice()) f(ev);
+  return ev;
+};
+
+function rootListEnv(desktop) {
+  const doc = new FEl("document");
+  const win = new FEl("window");
+  win.innerHeight = 800;
+  const input = new FEl("input"), list = new FEl("div");
+  list.hidden = true;
+  const els = { "ft-root-input": input, "ft-root-list": list };
+  doc.getElementById = (id) => els[id] || null;
+  doc.createElement = (t) => new FEl(t);
+  const picks = [];
+  const state = { desktop };
+  const ctx = vm.createContext({
+    document: doc, window: win, console, Promise, JSON, Math, Array, Object, String, AbortController,
+    setTimeout: () => 1, clearTimeout: () => {}, fetch: async () => ({ ok: true, status: 200, json: async () => ({ results: [] }) }),
+    drawerDesktop: () => state.desktop,
+  });
+  new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", "dirpicker.js"), "utf8"), { filename: "dirpicker.js" }).runInContext(ctx);
+  ctx.initDirPicker({ workspaces: [{ label: "~ (home)", path: "/home/u" }, { label: "notes", path: "/home/u/notes" }], onPick: (p) => picks.push(p) });
+  // The tree is a sibling of the input in the drawer: its row is the next stop of Tab. The drawer holds the whole pick bar.
+  const drawer = new FEl("div");
+  const bar = new FEl("div");
+  drawer.append(bar);
+  bar.append(input);
+  bar.append(list);
+  const treeRow = new FEl("div");
+  drawer.append(treeRow);
+  const open = () => { fireOn(input, "focus"); assert.strictEqual(list.hidden, false, "focus opens the list"); };
+  return { ctx, input, list, drawer, bar, treeRow, picks, state, open };
+}
+
+test("desktop: Tab from the root input into the tree (focus moves to a focusable outside the input and the list) closes the list", () => {
+  const t = rootListEnv(true);
+  t.open();
+  assert.strictEqual(t.input.attrs["aria-expanded"], "true");
+  fireOn(t.input, "focusout", { relatedTarget: t.treeRow });
+  assert.strictEqual(t.list.hidden, true);
+  assert.strictEqual(t.input.attrs["aria-expanded"], "false");
+  assert.strictEqual(t.input.attrs["aria-activedescendant"], undefined);
+});
+
+test("desktop: Shift+Tab out of the input (to a control before it) closes the list too", () => {
+  const t = rootListEnv(true);
+  t.open();
+  fireOn(t.input, "focusout", { relatedTarget: new FEl("button") });
+  assert.strictEqual(t.list.hidden, true);
+});
+
+test("desktop: a pointer pick still works: focus going nowhere (relatedTarget null), into the list, back to the input, or to a container around the list keeps the list", () => {
+  const t = rootListEnv(true);
+  for (const to of [null, undefined, t.list, t.list.children[0], t.input, t.bar, t.drawer]) {
+    t.open();
+    fireOn(t.input, "focusout", { relatedTarget: to });
+    assert.strictEqual(t.list.hidden, false, "kept open for relatedTarget " + (to && to.tag));
+    t.input.attrs["aria-expanded"] = "true";
+  }
+  // The row the pointer pressed is picked: the click handler runs on the rows the list still holds.
+  assert.ok(t.list.children.length > 0);
+  t.list.children[1].onclick();
+  assert.deepStrictEqual(t.picks, ["/home/u/notes"]);
+  assert.strictEqual(t.list.hidden, true);
+});
+
+test("desktop: the list's own focusout (a focusable list in some browsers) follows the same rule", () => {
+  const t = rootListEnv(true);
+  t.open();
+  fireOn(t.list, "focusout", { relatedTarget: t.input });
+  assert.strictEqual(t.list.hidden, false, "back to the input: stays");
+  fireOn(t.list, "focusout", { relatedTarget: t.treeRow });
+  assert.strictEqual(t.list.hidden, true, "out to the tree: closes");
+});
+
+test("desktop: Escape and an outside click behave as before", () => {
+  const t = rootListEnv(true);
+  t.open();
+  fireOn(t.input, "keydown", { key: "Escape" });
+  assert.strictEqual(t.list.hidden, true);
+  t.open();
+  fireOn(t.input, "click"); // the field's own click re-derives the list, it never closes it
+  assert.strictEqual(t.list.hidden, false);
+});
+
+test("the phone is unchanged: focus leaving the input does not close the list (only Escape, a pick or an outside click do)", () => {
+  const t = rootListEnv(false);
+  t.open();
+  fireOn(t.input, "focusout", { relatedTarget: t.treeRow });
+  assert.strictEqual(t.list.hidden, false);
+  assert.strictEqual(t.input.attrs["aria-expanded"], "true");
+  t.state.desktop = true; // the same session across the breakpoint: the gate is read when focus moves
+  fireOn(t.input, "focusout", { relatedTarget: t.treeRow });
+  assert.strictEqual(t.list.hidden, true);
+});
+
+test("without the page's drawerDesktop (a bare script, a test) the list keeps today's behaviour", () => {
+  const t = rootListEnv(true);
+  t.open();
+  t.ctx.drawerDesktop = undefined;
+  fireOn(t.input, "focusout", { relatedTarget: t.treeRow });
+  assert.strictEqual(t.list.hidden, false);
+});

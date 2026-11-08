@@ -115,6 +115,30 @@ test("the New session dialog is a plain rounded card with a header and a close, 
   assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /background:\s*var\(--hover\)/.test(b) && /color:\s*var\(--fg\)/.test(b)));
 });
 
+// Gate fix wave (#173, DIFF G1-G3): the dialog cards wear the kit's --e-dlg (not a private 0 18px 60px), their backdrop is the
+// kit's --scrim (New session is box-framed, so the box-less rule never reached it), and the ask title is not tracked out.
+test("every desktop dialog card has the kit's --e-dlg shadow (G1)", () => {
+  for (const sel of ["#spawn-modal", "#ask-modal", "dialog:not(.as-page):not([box-]):not(.sheet-dialog)"]) {
+    const r = rulesFor(sel).join(" ");
+    assert.match(r, /box-shadow:\s*var\(--e-dlg\)/, sel);
+    assert.doesNotMatch(r, /18px 60px/, sel + " keeps no private shadow");
+  }
+});
+
+test("the dialog backdrop is the kit's --scrim, on the box-less dialogs, the ask dialog and New session (G3)", () => {
+  for (const sel of ["dialog:not([box-])::backdrop", "#ask-modal::backdrop", "#spawn-modal::backdrop"]) {
+    const rs = rulesFor(sel);
+    assert.ok(rs.length > 0, sel + " has a rule");
+    assert.ok(rs.some((b) => /background:\s*var\(--scrim\)/.test(b)), sel);
+    assert.ok(!rs.some((b) => /rgba\(5, ?7, ?9/.test(b)), sel + " keeps no private scrim colour");
+  }
+});
+
+test("the ask title is not tracked out: it carries letter-spacing 0 like New session's (G2)", () => {
+  assert.match(rulesFor("#ask-modal .dlg-title").join(" "), /letter-spacing:\s*0\b/);
+  assert.match(rulesFor("#spawn-modal .dlg-title").join(" "), /letter-spacing:\s*0\b/);
+});
+
 // F28 (#173): the three plain dialogs (ask, New session, Report a problem) close with the same X: the kit's ghost
 // icon button, a --h-ctl square, muted, a --hover fill on hover, the × glyph on the page's type scale.
 test("the ask, New session and Report a problem closes are one ghost icon button", () => {

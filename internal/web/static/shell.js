@@ -856,6 +856,9 @@ function askDialog(opts) {
   const alt = document.getElementById("ask-alt");
   alt.hidden = !askAltVisible(opts.altLabel);
   alt.textContent = opts.altLabel || "";
+  // The desktop End session footer is one row in a 480px card, so a long name's button ends in an ellipsis: the dialog that
+  // can do that passes the whole label as altTitle. Reset on every ask, like the label.
+  alt.title = opts.altTitle || "";
   d.classList.toggle("danger", !!opts.danger);
   d.classList.toggle("info", !!opts.info); // read-only: desktop.css hides Cancel
 

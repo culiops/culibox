@@ -345,6 +345,85 @@ test("the host warning is the kit .elev with a bold red 'host' before today's se
   assert.match(read("index.html"), /<div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network\.<\/div>/);
 });
 
+// --- gate fix wave (#173, DIFF G4 and G9) -----------------------------------------------------------
+
+test("a profile name clips with an ellipsis, like the frame's .srow-name.ellipsis (G9)", () => {
+  const name = rule(".sp-name");
+  assert.match(name, /overflow:\s*hidden/);
+  assert.match(name, /white-space:\s*nowrap/);
+  assert.match(name, /text-overflow:\s*ellipsis/);
+  assert.match(name, /max-width:\s*100%/, "a column flex item at flex-start is as wide as its text unless capped");
+  assert.doesNotMatch(name, /overflow-wrap/, "no longer wraps");
+  assert.match(rule(".sp-touch"), /overflow-wrap:\s*anywhere/, "the touches line still wraps");
+});
+
+// The frame's .m4-adv: the label then the option on ONE row, the option the kit's .check with the kit's .check-box,
+// no rule above it. app.css's .spawn-adv (border-top, padding-top) and .spawn-adv-label are the phone's too, so this
+// is all desktop.css.
+test("Advanced is one row: the label, then the option, no rule above it (G4)", () => {
+  const row = rule("#spawn > #spawn-adv");
+  assert.match(row, /display:\s*flex/);
+  assert.match(row, /align-items:\s*center/);
+  assert.match(row, /gap:\s*var\(--sp-4\)/);
+  assert.match(row, /border-top:\s*0/);
+  assert.match(row, /padding-top:\s*0/);
+  assert.match(row, /order:\s*9/, "it keeps its place in the form");
+  const lab = rule("#spawn-adv .spawn-adv-label");
+  assert.match(lab, /margin:\s*0/);
+  assert.match(lab, /font-size:\s*var\(--t-xs\)/);
+  assert.match(lab, /line-height:\s*var\(--lh-xs\)/);
+  assert.match(lab, /font-weight:\s*var\(--w-semibold\)/);
+  assert.match(lab, /letter-spacing:\s*var\(--track-caps\)/);
+  assert.match(lab, /color:\s*var\(--muted\)/);
+  const opt = rule("#spawn-adv .opt");
+  assert.match(opt, /display:\s*flex/);
+  assert.match(opt, /align-items:\s*center/);
+  assert.match(opt, /gap:\s*var\(--sp-2\)/);
+  assert.match(opt, /cursor:\s*default/);
+  const text = rule("#spawn #spawn-adv .opt > label");
+  assert.match(text, /flex:\s*none/, "the row is as wide as its words, the checkbox does not go to the right edge");
+  assert.match(text, /font-size:\s*var\(--t-md\)/);
+  assert.match(text, /line-height:\s*var\(--lh-md\)/);
+  assert.match(rule("#spawn-adv .opt > input[type=\"checkbox\"]"), /order:\s*-1/, "the box comes first, as the frame draws it, with no markup change");
+});
+
+// The three selectors reach every checkbox in the form and out-weigh app.css's two id-weighted 16px rules
+// (#options .opt input, #spawn label.spawn-check input). Same values as the kit's .check-box (desktop.css's kit section).
+const SPAWN_BOXES = ["#spawn input[type=\"checkbox\"]", "#spawn-adv .opt input[type=\"checkbox\"]", "#spawn-replies-row label.spawn-check input[type=\"checkbox\"]"];
+test("every checkbox in the New session form is the kit's check-box: 14px, --bg with a --muted inset ring, accent and a tick when checked (G4)", () => {
+  for (const sel of SPAWN_BOXES) {
+    const b = rule(sel);
+    for (const re of [/appearance:\s*none/, /-webkit-appearance:\s*none/, /flex:\s*none/, /position:\s*relative/, /width:\s*14px/, /height:\s*14px/, /margin:\s*3px 0 0/,
+      /border-radius:\s*var\(--r-chip\)/, /background:\s*var\(--bg\)/, /box-shadow:\s*inset 0 0 0 1px var\(--muted\)/, /cursor:\s*pointer/]) assert.match(b, re, sel + " " + re);
+    const on = rule(sel + ":checked");
+    assert.match(on, /background:\s*var\(--accent\)/, sel);
+    assert.match(on, /box-shadow:\s*none/, sel);
+    const tick = rule(sel + ":checked::after");
+    assert.match(tick, /content:\s*""/, sel);
+    assert.match(tick, /left:\s*4px/, sel);
+    assert.match(tick, /top:\s*1px/, sel);
+    assert.match(tick, /width:\s*4px/, sel);
+    assert.match(tick, /height:\s*8px/, sel);
+    assert.match(tick, /border:\s*solid var\(--on-fill\)/, sel);
+    assert.match(tick, /border-width:\s*0 2px 2px 0/, sel);
+    assert.match(tick, /transform:\s*rotate\(45deg\)/, sel);
+  }
+  // The keyboard ring is the global 2px one (primitives.css, desktop-focus.test.js): nothing here turns it off.
+  const mine = block.match(/[^{}]*input\[type="checkbox"\][^{}]*\{[^{}]*\}/g).filter((r) => /#spawn(-adv|-replies-row| )/.test(r));
+  assert.ok(mine.length > 0);
+  for (const r of mine) assert.doesNotMatch(r, /outline/, r.trim());
+  // The form's id-weight guard (the field focus rule) is about text fields, and these carry no border.
+  const ring = SPAWN_BOXES.map((s) => rule(s)).join(" ");
+  assert.doesNotMatch(ring, /(^|[ ;])border(-color)?:/);
+});
+
+test("the Advanced row's markup is untouched: the phone keeps its stacked group", () => {
+  const html = read("index.html");
+  assert.match(html, /<div class="span2 spawn-adv" id="spawn-adv">\s*<span class="spawn-adv-label">Advanced<\/span>\s*<div id="options"><\/div>\s*<\/div>/);
+  const app = strip(read("app.css"));
+  assert.match(app, /\.spawn-adv\s*\{\s*border-top:\s*1px solid var\(--border\);\s*padding-top:\s*10px;\s*\}/);
+});
+
 // --- nothing leaks to the phone --------------------------------------------------------------------
 
 test("every rule above is inside the desktop media block; app.css's phone rules are unchanged", () => {

@@ -48,7 +48,8 @@ class N {
 const FIXTURES = [
   { name: "bash", runtime: "box", bin: "bash" },
   { name: "claude", runtime: "host", bin: "claude", claude: true },
-  { name: "agent-box", runtime: "box", bin: "claude", claude: true, clone_of: "~/culiops-agent-box", default_cwd: "/home/u/culiops-agent-box" },
+  { name: "agent-box", runtime: "box", bin: "claude", claude: true, clone_of: "/home/u/culiops-agent-box", default_cwd: "/home/u/culiops-agent-box" },
+  { name: "elsewhere", runtime: "box", bin: "claude", claude: true, clone_of: "/srv/shared/api" },
   { name: "aws-ops", runtime: "box", bin: "claude", claude: true, aws_connections: ["culipulse-prod", "sandbox"], github_owners: ["culiops"] },
   { name: "tokens", runtime: "box", bin: "claude", claude: true, tokens: ["npm", "sentry"] },
   { name: "hostbash", runtime: "host", bin: "/bin/zsh" },
@@ -59,7 +60,9 @@ function page(boxRuntime) {
   const doc = { createElement: (t) => new N(t) };
   const els = { "spawn-plist": new N("div"), agent: Object.assign(new N("select"), { value: "bash" }) };
   const ctx = vm.createContext({
-    document: doc, console, profiles: FIXTURES, boxRuntime, window: {}, PLIST_SEARCH_MIN: 99,
+    // The server sends a clone's source as an absolute path; window.HOME_DIR is what every other path on the page is
+    // shortened with (fsops.js shortPath), so the touches line reads "~/…" in both places (frame M4.1).
+    document: doc, console, profiles: FIXTURES, boxRuntime, window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded: true,
   });
@@ -108,6 +111,27 @@ test("the touches line is the dialog's, not the old 'binary · tier · workspace
   const pg = page("sysbox-runc");
   const rows = emptyRows(pg, ["aws-ops", "agent-box", "claude"]);
   assert.deepStrictEqual(rows.map((r) => r.touch), ["box · aws culipulse-prod, sandbox · gh culiops", "box · private copy of ~/culiops-agent-box", "host · not contained"]);
+});
+
+test("a private copy's source is written with ~ for the home prefix in the empty state and the dialog list alike, and a path outside home is left whole", () => {
+  const pg = page("sysbox-runc");
+  const want = { "agent-box": "box · private copy of ~/culiops-agent-box", elsewhere: "box · private copy of /srv/shared/api" };
+  const rows = emptyRows(pg, ["agent-box", "elsewhere"]);
+  assert.deepStrictEqual(Object.fromEntries(rows.map((r) => [r.name, r.touch])), want);
+  const dialog = dialogTouches(pg);
+  for (const k of Object.keys(want)) assert.strictEqual(dialog[k], want[k], k + ": New session list");
+});
+
+test("each profile row's name carries its full name as the tooltip (a long one ends in an ellipsis, G9)", () => {
+  const pg = page("sysbox-runc");
+  pg.ctx.renderSpawnPlist();
+  const rows = pg.els["spawn-plist"].find("sp-item");
+  assert.strictEqual(rows.length, FIXTURES.length);
+  for (const row of rows) {
+    const name = row.find("sp-name")[0];
+    assert.strictEqual(name.textContent, row.dataset.name);
+    assert.strictEqual(name.title, row.dataset.name);
+  }
 });
 
 test("the empty state's button says Start session, and starts the dialog on that profile", () => {
