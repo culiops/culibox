@@ -6254,10 +6254,11 @@ document.addEventListener("keydown", (e) => {
 async function confirmKill(id, name) {
   const shells = liveShellsOf(id, lastSessions);
   // The desktop dialog names what ends and what is left (frame M5.2); the phone keeps its short question.
-  // shortPath reads the same window.HOME_DIR every other path on the page does; a session with no cwd
-  // (or one the list no longer holds) gives no Files note.
+  // A nested companion shell keeps the short question on desktop too: its copy says "the agent stops",
+  // and a shell has no agent. shortPath reads the same window.HOME_DIR every other path on the page
+  // does; a session with no cwd (or one the list no longer holds) gives no Files note.
   const session = lastSessions.find((s) => s.id === id);
-  const outcome = await askChoice(mobileActive(window.innerWidth)
+  const outcome = await askChoice(mobileActive(window.innerWidth) || isNestedShell(session, lastSessions)
     ? killDialogOpts(name, id, shells.length)
     : killDialogDeskOpts(name, id, shells.map((s) => shellLabel(s, lastSessions)), session && session.cwd ? shortPath(session.cwd) : ""));
   // "End session only" leaves the shells running as top-level rows (the parent

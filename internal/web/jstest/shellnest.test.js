@@ -255,6 +255,27 @@ test("confirmKill on the desktop with no recorded cwd leaves the Files note out"
   assert.deepStrictEqual(plain(gone.asked[0].notes), []);
 });
 
+// The ⏻ on a shell's tab, the palette and the row menu all reach confirmKill for a nested companion shell. "The
+// agent stops now" is false for a shell, so on desktop it keeps today's plain End question; the dialog chrome
+// (Close (Esc), the hint, the kit buttons) comes from askDialog and the stylesheet either way.
+test("confirmKill on the desktop for a nested shell asks today's plain End question, not the agent copy", async () => {
+  const t = confirmKillEnv(1280, KILL_SESSIONS, "confirm");
+  await t.run("s1", "shell 1");
+  assert.deepStrictEqual(plain(t.asked), [n.killDialogOpts("shell 1", "s1", 0)]);
+  assert.ok(!("notes" in t.asked[0]) && !("cls" in t.asked[0]), "no M5.2 notes or card class");
+  assert.doesNotMatch(JSON.stringify(plain(t.asked)), /agent stops/);
+  assert.deepStrictEqual(t.killed, ["s1"], "confirm ends the shell alone");
+  // A nameless tab falls back to the id, as the phone's question does.
+  const bare = confirmKillEnv(1280, KILL_SESSIONS, "cancel");
+  await bare.run("s1", "");
+  assert.deepStrictEqual(plain(bare.asked), [n.killDialogOpts("", "s1", 0)]);
+  assert.deepStrictEqual(bare.killed, []);
+  // The agent session beside it still gets the M5.2 copy on the same desktop.
+  const agent = confirmKillEnv(1280, KILL_SESSIONS, "alt");
+  await agent.run("p", "agent-box");
+  assert.deepStrictEqual(plain(agent.asked), [n.killDialogDeskOpts("agent-box", "p", ["shell 1"], "~/box-clones/culiops-agent-box")]);
+});
+
 test("confirmKill on the phone keeps today's dialog byte for byte", async () => {
   const t = confirmKillEnv(390, KILL_SESSIONS, "alt");
   await t.run("p", "agent-box");
