@@ -1966,10 +1966,12 @@
   #page-host > #settings-modal.as-page #tok-list > .tok-card > .tokempty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #tok-list > .tok-under { margin-top: 8px; padding: 0 2px; }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl { table-layout: fixed; }
-  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(1) { width: 38%; }
-  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(2) { width: 22%; }
-  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(3) { width: 22%; }
-  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(4) { width: 18%; }
+  /* Four equal quarters (T1): the approved render draws Created at x 739, Last used 944 and Actions 1149 of the 820px table, i.e. 205px each; the canvas
+     source's 38 / 22 / 22 / 18 colgroup is lost in the render and in the PNG (gate 3 D7, gate 4), and the approved render wins. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(1) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(2) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(3) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(4) { width: 25%; }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl th:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child { padding-left: 16px; }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl th:last-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding-right: 12px; }
@@ -1991,6 +1993,37 @@
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm:where(:not(.pri)):where(:not(.btn-danger)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)):hover { border-color: var(--red); background: var(--red-tint); }
+  /* A narrow card (D3). The list is the container: the card is the window less the sidebar (290), the nav (212) and 64px of padding, 194px at a 760px
+     window and 135px at the 701px floor, and four columns need ~420px (25% of it must hold "Nov 27, 2026", 86px, and 24px of padding). Below 480px each row
+     is a small grid: the name and Revoke… on the first line, Created and Last used under it as 12/18 muted lines that say their own words (the head row
+     is not drawn), nothing dropped and nothing wider than the card. The name wraps anywhere (its base rule) in the room Revoke… leaves it. An armed row
+     keeps its red tint and edge (the edge is the row's now, not the first cell's); its question takes the card's width and Cancel and Revoke wrap
+     under it, and then wrap between themselves. The table, its rows and its cells leave table layout here (so its column heads are not read in this
+     form: the date lines carry them). The date words are on the date cells only (`td.tnum`), never on the armed row's question cell, which is the
+     second cell of its row. */
+  #page-host > #settings-modal.as-page #tok-list { container-type: inline-size; }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl, #page-host > #settings-modal.as-page #tok-list .tok-tbl tbody { display: block; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl thead, #page-host > #settings-modal.as-page #tok-list .tok-tbl colgroup { display: none; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 7px 12px 7px 16px; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr + tr { border-top: 1px solid var(--line); }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding: 0; border: 0; height: auto; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-nm { grid-column: 1; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { grid-column: 2; grid-row: 1; margin-top: -2px; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum { grid-column: 1 / -1; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: normal; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum:nth-child(2):not(:empty)::before { content: "Created "; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum:nth-child(3):not(.muted)::before { content: "Last used "; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-arm { grid-column: 1 / -1; padding: 4px 0 0; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-confirm { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-ask { flex: 1 1 100%; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-acts { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm { box-shadow: inset 2px 0 0 var(--red); }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm > td:first-child { box-shadow: none; }
+  }
+  /* At the 701px floor the card is 135px: beside Revoke… the name would have 20px, so Revoke… goes under the dates, at the left. */
+  @container (max-width: 180px) {
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { grid-column: 1 / -1; grid-row: auto; justify-self: start; margin-top: 4px; }
+  }
 
   /* Appearance (UI plan 4 Task 8; frame M2.5, digest-design §B6): one card of six rows on one grid. The card is §C7's `.card` (--panel, --r-card)
      with `.m2-acard`'s 4px 20px; it is a plain wrapper in index.html and not a `.card` because app.css gives that class the amber session-card

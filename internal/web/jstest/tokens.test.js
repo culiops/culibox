@@ -14,6 +14,10 @@ const STATIC = path.join(__dirname, "..", "static");
 const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 const SRC = read("tokens.js");
 
+// The card width below which the rows stack (desktop.css): above it the four columns fit.
+const STACK_PX = 480;
+// Below this the name leaves no room beside Revoke… and the button goes under the dates (the 701px floor: a 135px card).
+const FLOOR_PX = 180;
 const CREATED = 1793404800;   // 2026-10-31
 const USED = 1793923200;      // 2026-11-06
 const ARM_COPY = "Revoke? That device is signed out on its next request. This cannot be undone.";
@@ -297,7 +301,21 @@ function rules(src) {
   }
   return out;
 }
-const RULES = rules(DESK);
+// The narrow-card step is an @container block (pinned below on its own); the rules above every step are the table as the frame draws it.
+function containerBlocks(src) {
+  const out = [];
+  const re = /@container\s*\(max-width:\s*(\d+)px\)\s*\{/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let depth = 1, i = re.lastIndex;
+    while (depth && i < src.length) { const ch = src[i++]; if (ch === "{") depth++; else if (ch === "}") depth--; }
+    out.push({ px: +m[1], body: src.slice(re.lastIndex, i - 1), start: m.index, end: i });
+  }
+  return out;
+}
+const STEPS = containerBlocks(DESK);
+const withoutSteps = STEPS.reduceRight((src, b) => src.slice(0, b.start) + src.slice(b.end), DESK);
+const RULES = rules(withoutSteps);
 const decls = (sel) => {
   const merged = new Map();
   for (const [s, d] of RULES) if (s === sel || s.endsWith("} " + sel) || s.endsWith(") " + sel)) for (const [k, v] of d) merged.set(k, v);
@@ -305,10 +323,12 @@ const decls = (sel) => {
 };
 const has = (sel) => RULES.some(([s]) => s === sel || s.endsWith(" " + sel));
 
-test("the table is the kit's: fixed columns at 38 / 22 / 22 / 18, rows 7px above and below, the first cell 16px in", () => {
+test("the table is the kit's: fixed columns at 25% each (the approved render), rows 7px above and below, the first cell 16px in", () => {
   const T = P + " #tok-list .tok-tbl";
   assert.strictEqual(decls(T).get("table-layout"), "fixed");
-  assert.deepStrictEqual([1, 2, 3, 4].map((n) => decls(T + " col:nth-child(" + n + ")").get("width")), ["38%", "22%", "22%", "18%"]);
+  // T1 (ruling: the approved render wins): the canvas colgroup (38 / 22 / 22 / 18) is lost in the render and in the PNG, which draws four equal
+  // quarters of the 820px table (Created at x 739, Last used 944, Actions 1149).
+  assert.deepStrictEqual([1, 2, 3, 4].map((n) => decls(T + " col:nth-child(" + n + ")").get("width")), ["25%", "25%", "25%", "25%"]);
   const td = decls(T + " td");
   assert.strictEqual(td.get("height"), "auto");
   assert.strictEqual(td.get("padding-top"), "7px");
@@ -322,6 +342,59 @@ test("the table is the kit's: fixed columns at 38 / 22 / 22 / 18, rows 7px above
   assert.strictEqual(num.get("padding-top"), "5px", "a 24px button in a 34px row");
   assert.strictEqual(num.get("padding-bottom"), "5px");
   assert.strictEqual(decls(T + " .tok-nm").get("overflow-wrap"), "anywhere", "a long name wraps in its column");
+});
+
+// D3 (gate 3, B6 FAIL at 760): the card is 194px there (760 less the 290 sidebar, the 212 nav and 64 of padding) and four columns do not fit it: the card
+// overran (242 vs 194), Created and Last used overprinted each other and Revoke… was clipped. Below a card width the rows stack, with every datum kept.
+test("a narrow card stacks each row: the name and Revoke… on line 1, Created and Last used under, nothing dropped, no horizontal room needed (D3)", () => {
+  const T = P + " #tok-list .tok-tbl";
+  assert.strictEqual(decls(P + " #tok-list").get("container-type"), "inline-size", "the list is the container the step reads");
+  const steps = STEPS.filter((b) => /#tok-list/.test(b.body));
+  assert.deepStrictEqual(steps.map((b) => b.px), [STACK_PX, FLOOR_PX], "the stack, then the 701px floor");
+  assert.ok(STACK_PX >= 420, "the four columns need ~420px: 25% of it must hold 'Nov 27, 2026' (86px) and 24px of padding");
+  const st = new Map();
+  for (const [sel, d] of rules(steps[0].body)) { const m = st.get(sel) || new Map(); for (const [k, v] of d) m.set(k, v); st.set(sel, m); }
+  const at = (sel) => st.get(P + " #tok-list .tok-tbl" + sel) || new Map();
+  // The table is a stack of grid rows; the head row is not drawn (the date lines carry their own words) and the colgroup does nothing.
+  for (const sel of ["", " tbody"]) assert.strictEqual(at(sel).get("display"), "block", "the table" + sel + " is a block");
+  for (const sel of [" thead", " colgroup"]) assert.strictEqual(at(sel).get("display"), "none", sel);
+  const row = at(" tr");
+  assert.deepStrictEqual([row.get("display"), row.get("grid-template-columns"), row.get("column-gap"), row.get("padding")], ["grid", "minmax(0, 1fr) auto", "12px", "7px 12px 7px 16px"]);
+  assert.strictEqual(at(" tr + tr").get("border-top"), "1px solid var(--line)", "the hairline between rows moves from the cells to the rows");
+  for (const sel of [" td", " td:first-child", " td:last-child"]) assert.deepStrictEqual([at(sel).get("padding"), at(sel).get("border"), at(sel).get("height")], ["0", "0", "auto"], sel + ": the row owns the padding");
+  assert.strictEqual(at(" .tok-nm").get("grid-column"), "1");
+  assert.deepStrictEqual([at(" td.num").get("grid-column"), at(" td.num").get("grid-row"), at(" td.num").get("margin-top")], ["2", "1", "-2px"], "Revoke… at the row's end, on the name's line");
+  // Created and Last used: 12/18 muted lines under the name, across the card, each with its own word (the column heads are gone).
+  const dates = at(" td.tnum");
+  assert.deepStrictEqual([dates.get("grid-column"), dates.get("font-size"), dates.get("line-height"), dates.get("color"), dates.get("white-space")], ["1 / -1", "var(--t-sm)", "var(--lh-sm)", "var(--muted)", "normal"]);
+  // On the date cells only: the armed row's question is the second cell of its row and must not say "Created".
+  assert.strictEqual(at(" td.tnum:nth-child(2):not(:empty)::before").get("content"), '"Created "');
+  assert.strictEqual(at(" td.tnum:nth-child(3):not(.muted)::before").get("content"), '"Last used "', "'Never used' says it itself");
+  assert.ok(![...st.keys()].some((k) => /td:nth-child\(\d\)/.test(k) && !/td\.tnum:nth-child/.test(k)), "no bare td:nth-child rule: it would reach the armed row's question cell");
+  // Armed: the confirm takes the card's width under the name; the question has its own lines and the buttons wrap under it rather than leave the card.
+  assert.strictEqual(at(" .tok-arm").get("grid-column"), "1 / -1");
+  assert.strictEqual(at(" .tok-confirm").get("flex-wrap"), "wrap");
+  assert.strictEqual(at(" .tok-ask").get("flex"), "1 1 100%");
+  assert.deepStrictEqual([at(" .tok-acts").get("flex"), at(" .tok-acts").get("min-width"), at(" .tok-acts").get("flex-wrap")], ["0 1 auto", "0", "wrap"], "the pair may shrink to the card and wrap between themselves (it was flex: none, which overran a 135px card by 3px)");
+  assert.strictEqual(at(" tr.arm").get("box-shadow"), "inset 2px 0 0 var(--red)", "the red edge is the row's now");
+  assert.strictEqual(at(" tr.arm > td:first-child").get("box-shadow"), "none");
+  assert.strictEqual(at(" tr.arm").get("background"), undefined, "the tint is the base rule's");
+  // Every value is a kit token / no px font, no hex, nothing wider than the card, and the card still clips at its corners.
+  for (const [sel, d] of st) for (const [k, v] of d) {
+    assert.doesNotMatch(v, /#[0-9a-f]{3,8}\b/i, sel + " { " + k + " } uses a hex");
+    if (k === "font-size") assert.match(v, /^var\(--t-/, sel);
+    assert.ok(!/^(min-)?width$/.test(k) || !/\d+px/.test(v), sel + " { " + k + ": " + v + " } sets no fixed width");
+  }
+  assert.strictEqual(decls(P + " #tok-list > .tok-card").get("overflow"), "hidden");
+  assert.ok([...st.keys()].every((sel) => sel.startsWith(P + " #tok-list")), "scoped to the page's list");
+  // The floor: at the 701px window the card is 135px and Revoke… beside the name would leave it 20px, so it drops under the dates.
+  const fl = new Map();
+  for (const [sel, d] of rules(steps[1].body)) for (const [k, v] of d) fl.set(sel + "|" + k, v);
+  assert.strictEqual(fl.get(P + " #tok-list .tok-tbl td.num|grid-column"), "1 / -1");
+  assert.strictEqual(fl.get(P + " #tok-list .tok-tbl td.num|grid-row"), "auto");
+  assert.strictEqual(fl.get(P + " #tok-list .tok-tbl td.num|justify-self"), "start");
+  assert.ok(FLOOR_PX >= 135 && FLOOR_PX < 194, "above the 701px floor's 135px card, below the 760px window's 194px one");
+  assert.ok(!decls(T + " td").has("white-space") && !decls(T + " .tok-nm").has("min-width"), "the wide table's own cells are unchanged");
 });
 
 test("the card clips its table to the corners, and the footnote sits 8px under it, 2px in", () => {
