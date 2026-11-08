@@ -991,38 +991,63 @@ test("a block is the frame's row: label 132px, the value, then Edit; 24px betwee
   // The section title, 15/22 600, 10px above the card.
   const sh = bdecls(PV + " .pfv-sheet-h");
   assert.deepStrictEqual([sh.get("font-size"), sh.get("line-height"), sh.get("font-weight"), sh.get("margin-bottom")], ["var(--t-lg)", "var(--lh-lg)", "600", "10px"]);
-  // The card: --panel, --r-card (it does not clip: the "+ Add" picker hangs out of an edited block).
+  // The card: --panel, --r-card (it does not clip: the "+ Add" picker hangs out of an edited block). One card: Advanced is its seventh block,
+  // so no rule spaces a second card under the first (the Edit block's own card is Task 4's).
   const card = bdecls(PV + " .pfv-sheet");
   assert.strictEqual(card.get("background"), "var(--panel)");
   assert.strictEqual(card.get("border-radius"), "var(--r-card)");
   assert.strictEqual(card.get("overflow"), undefined);
-  assert.strictEqual(bdecls(PV + " .pfv-sheet + .pfv-sheet").get("margin-top"), "12px", "Advanced's own card sits 12px under the first");
+  assert.ok(!bhas(PV + " .pfv-sheet + .pfv-sheet"), "Advanced has no card of its own to space");
 });
 
-test("Edit sits beside the value, on its first line, and a row takes --hover under the pointer", () => {
+test("Edit sits beside the value, on its first line, and a row does not light up under the pointer", () => {
   // §B2 `.m2-edit { margin-top: -2px }`: the 24px button centred on the 20px first line.
   assert.strictEqual(bdecls(PV + " .pfv-act > .btn").get("margin-top"), "-2px");
-  // G2 ("add row hover tint"): the row, but not the block in edit (that is --raise). Corners follow the card's.
-  assert.strictEqual(bdecls(PV + " .pfv-block:not(.pfv-editing):hover").get("background"), "var(--hover)");
-  assert.strictEqual(bdecls(PV + " .pfv-block:first-child").get("border-radius"), "var(--r-card) var(--r-card) 0 0");
-  assert.strictEqual(bdecls(PV + " .pfv-block:last-child").get("border-radius"), "0 0 var(--r-card) var(--r-card)");
-  assert.strictEqual(bdecls(PV + " .pfv-block:only-child").get("border-radius"), "var(--r-card)");
-  // The ghost button's own hover fill (--hover) would vanish on a hovered row: it steps up one.
-  assert.strictEqual(bdecls(PV + " .pfv-block:hover .pfv-act > .btn-ghost:hover").get("background"), "var(--raise)");
-  assert.strictEqual(bdecls(":root").get("--hover"), "#181b1f");
+  // §B2: "No hover tint on blocks (none defined)". No rule paints a block under the pointer, none steps Edit's hover up, and the first, last
+  // and only block carry no corner rules (they existed to clip a tint; the card's own radius rounds a transparent row).
+  const hovered = BASE_RULES.flatMap((r) => parts(r.selector)).filter((sel) => sel.startsWith(PV + " .pfv-block") && /:hover|:first-child|:last-child|:only-child/.test(sel));
+  assert.deepStrictEqual(hovered.filter((sel) => !/\.pfv-editing/.test(sel)), [], "no hover tint and no clip radii on .pfv-block");
+  assert.ok(!BASE_RULES.some((r) => parts(r.selector).some((sel) => /\.pfv-block:hover/.test(sel))));
+  assert.strictEqual(bdecls(PV + " .pfv-block").get("background"), undefined, "a row is the card's --panel");
 });
 
-test("Advanced is its own card with its count under the label: the name is the kit's disclosure row, the count 12/18 muted 400", () => {
+test("Advanced is a normal block: its count under the label (12/18 --muted 400), no fold, no chevron, no .fold of the page's", () => {
   const n = bdecls(PV + " .pfv-advst");
   assert.deepStrictEqual([n.get("font-size"), n.get("line-height"), n.get("font-weight"), n.get("color")], ["var(--t-sm)", "var(--lh-sm)", "400", "var(--muted)"]);
-  // The kit's .fold (§C: flex, centred, gap 8, padding 0 2px) draws the chevron and the name; the button rule only strips the button.
-  const kit = bdecls(".fold");
-  assert.deepStrictEqual([kit.get("display"), kit.get("align-items"), kit.get("gap"), kit.get("padding")], ["flex", "center", "var(--sp-2)", "0 2px"]);
-  const fold = bdecls(PV + " .pfv-fold");
-  for (const p of ["display", "gap", "padding", "align-items"]) assert.strictEqual(fold.get(p), undefined, p + " is the kit's");
-  assert.strictEqual(fold.get("border"), "0");
-  assert.strictEqual(fold.get("cursor"), "pointer");
   assert.strictEqual(bdecls(PV + " .pfv-adv-sum").get("font-size"), "var(--t-sm)", "the helper line, as every block's");
-  // The label no longer spans two columns: the count and the value sit on the label's row, like every block.
-  assert.ok(!bhas(PV + " .pfv-adv-label") && !bhas(PV + " .pfv-adv-body"), "no base rule: only the narrow steps name them");
+  // §B2: "Disclosure chevron / expander: none on this page". Nothing of the old fold is left in the page's rules, base or narrow step.
+  const all = DESK_CSS.slice(DESK_CSS.indexOf(PV + " .pfv-in"));
+  assert.doesNotMatch(all, /\.pfv-fold|\.pfv-chev|\.pfv-open|\.pfv-adv-label/, "no fold, chevron, open state or Advanced-only label rule");
+  // The kit's .fold stays in the kit (Credentials' "Stored values" row will use it); the profile page does not.
+  assert.strictEqual(bdecls(".fold").get("gap"), "var(--sp-2)");
+  assert.doesNotMatch(all, /\.fold\b/);
+});
+
+test("the six pages' heads share one set of rules: a rule that carries both selectors cannot drift", () => {
+  // The review found them already apart (the profile head's actions wrapped, the other pages' did not; only one wrapped its description).
+  const H = P + " > .dbd > .set-head";
+  const pairs = [
+    [H, PV + " .pfv-head"],
+    [H + " .page-head-text", PV + " .pfv-head-main"],
+    [H + " .page-actions", PV + " .pfv-head .page-actions"],
+    [H + " .page-title", PV + " .pfv-title .page-title"],
+    [H + " .page-desc", PV + " .pfv-head .page-desc"],
+    [H + " .set-sep", PV + " .pfv-head .set-sep"],
+  ];
+  for (const [a, b] of pairs) {
+    const rule = BASE_RULES.find((r) => parts(r.selector).includes(a));
+    assert.ok(rule, a + " has a rule");
+    assert.ok(parts(rule.selector).includes(b), "the same rule carries " + b);
+    assert.deepStrictEqual(BASE_RULES.filter((r) => parts(r.selector).includes(b)), [rule], b + " has no rule of its own to drift");
+  }
+  // The values both heads get from them.
+  for (const root of [H, PV + " .pfv-head"]) {
+    assert.strictEqual(bdecls(root === H ? H + " .page-desc" : root + " .page-desc").get("overflow-wrap"), "anywhere", "a long description wraps wherever it breaks");
+  }
+  const wrap = bdecls(H + " .page-actions");
+  assert.deepStrictEqual([wrap.get("flex"), wrap.get("flex-wrap"), wrap.get("min-width")], ["0 1 auto", "wrap", "0"]);
+  // The profile's model id is a user-set string, drawn as one mono word in the description: the span takes the paragraph's wrap.
+  assert.strictEqual(bdecls(PV + " .pfv-head .page-desc").get("overflow-wrap"), "anywhere");
+  assert.strictEqual(bdecls(PV + " .pfv-head-main").get("min-width"), "0", "the column may shrink below its longest word");
+  assert.strictEqual(bdecls(".mono").get("white-space"), undefined, ".mono does not forbid the wrap");
 });

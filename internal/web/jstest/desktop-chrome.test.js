@@ -354,6 +354,8 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   assert.doesNotMatch(at(624), /\.pfv-head|\.pfv-acts|\.page-actions/);
   // Edit keeps the 2px lift in column 2 (row 1): the label's first line is the same 20px as the value's, so it stays centred on it.
   assert.doesNotMatch(at(624), /\.btn \{[^}]*margin-top/);
+  // Advanced is a normal block (frame M2.1): no label of its own to place, no fold to wrap, no margin to cancel in any step.
+  for (const px of [624, 300]) assert.doesNotMatch(at(px), /\.pfv-adv-label|\.pfv-fold|\.pfv-adv-body \{ margin-top/, px + "px step");
   // Remove never sits beside an input: it has its own line under the content, at the right.
   assert.match(at(440), /\.pfv-row \{ grid-template-columns: 52px minmax\(0, 1fr\);/);
   assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);

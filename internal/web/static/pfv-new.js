@@ -235,7 +235,11 @@ function pfnDraw(rec, c) {
   const title = pfvMk("div", "pfv-title");
   title.append(pfvMk("h2", "pfv-title-name", dup ? "Copy of " + src.name : "New profile"));
   main.append(title, pfvMk("p", "pfv-hsub", dup ? "A new profile with the same settings as " + src.name + ". Give it a name and check the rest." : PFN_NEW_SUB));
-  head.append(main);
+  // The head ends as every Settings head does (the divider, Esc ✕): the page has no other way to close, and the first-run New profile page
+  // is the only page there is.
+  const acts = pfvMk("div", "page-actions");
+  acts.append(...pfvHeadTail());
+  head.append(main, acts);
   kids.push(head);
 
   const card = pfvMk("div", "pfv-newcard");
@@ -373,7 +377,7 @@ function pfnOpen(kind, src, back) {
   pfvSeq++;
   pfvDropEdits();
   pfvClearSaved();
-  Object.assign(pfvState, { page: kind, src, back, name: "", doc: null, view: null, errors: [], warnings: [], created: "", advOpen: null });
+  Object.assign(pfvState, { page: kind, src, back, name: "", doc: null, view: null, errors: [], warnings: [], created: "" });
   pfvState.edits.draft = pfvNewEdit("draft", false);
   pfvSyncOpen();
   pfvRenderNav();

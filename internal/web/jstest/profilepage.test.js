@@ -70,7 +70,7 @@ const titles = (root) => [...texts(root, "page-title"), ...texts(root, "pfv-titl
 const subs = (root) => [...texts(root, "page-desc"), ...texts(root, "pfv-hsub")];
 const classesOf = (n) => n.className.split(/\s+/).filter(Boolean);
 // A block's label as words: Advanced's label also holds its count under the name (span.pfv-advst), which is not part of the name.
-const labelName = (l) => { const k = l.children.find((c) => c instanceof Node); return k ? k.textContent : l.textContent; };
+const labelName = (l) => l.own;
 const labelNames = (root) => byCls(root, "pfv-label").map(labelName);
 
 const view = (name, over) => Object.assign({ name, editable: true, source: "runtime", runtime: "box", bin: "claude", claude: true }, over);
@@ -549,29 +549,47 @@ test("Edit is a ghost small button in column 3 with the block's aria-label", asy
   }
 });
 
-test("Advanced shows its count under the label, in its own card", async () => {
+// Frame M2.1 (design digest §B2): Advanced is the seventh block of the one card, a normal block with an Edit button and no collapse:
+// its label with "none set" / "N set" under it, the helper as its value, Edit in column 3.
+const ADV_HELPER = "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults.";
+
+test("Advanced is the last block of the one card: its count under the label, the helper as its value, no fold", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
-  let adv = blockOf(t, "advanced");
-  let label = byCls(adv, "pfv-label")[0];
-  assert.deepStrictEqual(label.children.map((c) => classesOf(c)[0]), ["fold", "pfv-advst"], "the name, then the count under it, not after it on the line");
-  assert.strictEqual(label.children[0].textContent, "Advanced");
-  assert.strictEqual(label.children[1].textContent, "none set");
-  assert.strictEqual(byCls(label, "pfv-chev").length, 1, "the chevron stays with the name");
-  assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "nothing to unfold: no dead toggle");
-  assert.strictEqual(adv.parent.children.length, 1, "Advanced is the only block of its own card");
-  assert.notStrictEqual(adv.parent, blockOf(t, "network").parent);
+  const sheets = byCls(t.els["pfv-in"], "pfv-sheet");
+  assert.strictEqual(sheets.length, 1, "one card: Advanced has none of its own");
+  const adv = blockOf(t, "advanced");
+  assert.strictEqual(adv.parent, sheets[0]);
+  assert.deepStrictEqual(sheets[0].children.map((b) => b.dataset.block), ["runs", "workspace", "agent", "cloud", "reachable", "network", "advanced"]);
+  assert.strictEqual(sheets[0].children[6], adv, "the seventh block");
+  const label = byCls(adv, "pfv-label")[0];
+  assert.strictEqual(label.tag, "h3");
+  assert.strictEqual(labelName(label), "Advanced");
+  assert.deepStrictEqual(label.children.map((c) => [c.tag, classesOf(c)[0], c.textContent]), [["span", "pfv-advst", "none set"]], "the count under the name, not after it on the line");
+  assert.deepStrictEqual(adv.children.map((c) => classesOf(c)[0]), ["pfv-label", "pfv-body", "pfv-act"], "label, value, Edit: the three columns");
+  assert.deepStrictEqual(texts(adv, "pfv-adv-sum"), [ADV_HELPER], "§A2: the helper only, with nothing set");
+  assert.strictEqual(byText(adv, "button", "Edit").length, 1);
+  // No collapse: no button in the label, no chevron, no .fold, nothing expanded or not.
+  assert.deepStrictEqual([byCls(adv, "pfv-fold").length, byCls(adv, "fold").length, byCls(adv, "pfv-chev").length], [0, 0, 0]);
+  assert.strictEqual(adv.all((n) => "aria-expanded" in n.attrs).length, 0);
+  assert.strictEqual(adv.all((n) => n.tag === "svg").length, 0, "no chevron icon");
+  assert.strictEqual(adv.className, "pfv-block", "no .pfv-open state either");
+  assert.strictEqual("advOpen" in t.run("pfvState"), false, "the fold's state is gone");
+});
+
+test("Advanced with settings shows what is set as its value, always: nothing to unfold", async () => {
+  const t = page();
   DOCS["aws-ops"].args = ["--verbose"];
   DOCS["aws-ops"].env = { LOG_LEVEL: "debug" };
   try {
     await t.box.pfvShow("aws-ops");
-    adv = blockOf(t, "advanced");
-    label = byCls(adv, "pfv-label")[0];
-    const fold = byCls(label, "pfv-fold")[0];
-    assert.deepStrictEqual(classesOf(fold), ["pfv-fold", "fold"], "the chevron and the name are the kit's disclosure row");
-    assert.deepStrictEqual(label.children.map((c) => classesOf(c)[0]), ["pfv-fold", "pfv-advst"]);
-    assert.strictEqual(fold.textContent, "Advanced");
-    assert.strictEqual(texts(label, "pfv-advst")[0], "2 set");
+    const adv = blockOf(t, "advanced");
+    assert.strictEqual(adv.parent, byCls(t.els["pfv-in"], "pfv-sheet")[0], "still in the one card");
+    assert.deepStrictEqual([labelName(byCls(adv, "pfv-label")[0]), texts(adv, "pfv-advst")[0]], ["Advanced", "2 set"]);
+    assert.deepStrictEqual(texts(adv, "pfv-dl"), ["Arguments--verboseEnvironmentLOG_LEVEL"], "the values are the block's value");
+    assert.strictEqual(byCls(adv, "pfv-adv-sum").length, 0, "the helper stands in for them only when there are none");
+    assert.deepStrictEqual([byCls(adv, "pfv-fold").length, byCls(adv, "pfv-chev").length, adv.all((n) => "aria-expanded" in n.attrs).length], [0, 0, 0]);
+    assert.deepStrictEqual(adv.children.map((c) => classesOf(c)[0]), ["pfv-label", "pfv-body", "pfv-act"]);
   } finally {
     delete DOCS["aws-ops"].args;
     delete DOCS["aws-ops"].env;
@@ -658,26 +676,21 @@ test("boxes unavailable, a profile that names no tier under default_runtime box:
   assert.strictEqual(byCls(runs, "pfv-sub")[1].textContent, "Sessions with this profile can't start until Docker is installed.");
 });
 
-test("Advanced is folded with its count, and opens by itself when something is set", async () => {
+test("Advanced has its count under the label and lists what is set, with no fold to open", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
   let adv = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "advanced");
   assert.deepStrictEqual([labelName(byCls(adv, "pfv-label")[0]), texts(adv, "pfv-advst")[0]], ["Advanced", "none set"]);
-  assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "nothing to unfold: no dead toggle");
   assert.strictEqual(byCls(adv, "pfv-adv-sum").length, 1);
+  assert.strictEqual(byCls(adv, "pfv-dl").length, 0);
 
   DOCS["aws-ops"].args = ["--verbose"];
   try {
     await t.box.pfvShow("aws-ops");
     adv = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "advanced");
     assert.deepStrictEqual([labelName(byCls(adv, "pfv-label")[0]), texts(adv, "pfv-advst")[0]], ["Advanced", "1 set"]);
-    const fold = byCls(adv, "pfv-fold")[0];
-    assert.strictEqual(fold.getAttribute("aria-expanded"), "true");
     assert.deepStrictEqual(texts(adv, "pfv-dl"), ["Arguments--verbose"]);
-    fold.click();
-    adv = byCls(t.els["pfv-in"], "pfv-block").find((b) => b.dataset.block === "advanced");
-    assert.strictEqual(byCls(adv, "pfv-fold")[0].getAttribute("aria-expanded"), "false");
-    assert.strictEqual(byCls(adv, "pfv-dl").length, 0);
+    assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "no button to close it");
   } finally {
     delete DOCS["aws-ops"].args;
   }
@@ -3286,31 +3299,29 @@ const typeRow = (row, name, value) => {
 };
 const unsaved = (t) => !byCls(t.els["pfv-in"], "pfv-unsaved")[0].hidden;
 
-test("advanced opens by itself when something is set", async () => {
-  // Nothing set: folded, with nothing to unfold; the Edit link opens the form all the same.
+test("advanced lists what is set, and the form opened from Edit holds it", async () => {
+  // Nothing set: the helper line, and the Edit button opens the form all the same.
   const t = page();
   await t.box.pfvShow("aws-ops");
   assert.strictEqual(texts(advOf(t), "pfv-advst")[0], "none set");
-  assert.ok(!advOf(t).className.includes("pfv-open"));
   assert.strictEqual(byCls(advOf(t), "pfv-fold").length, 0);
-  // Something set: open, listing it, and the form opened from the Edit link holds it.
+  // Something set: listed as the block's value, and the form opened from the Edit button holds it.
   const set = page();
   set.box.docs["aws-ops"] = Object.assign({}, DOCS["aws-ops"], { args: ["--verbose"], env: { LOG_LEVEL: "debug" } });
   await set.box.pfvShow("aws-ops");
   assert.strictEqual(texts(advOf(set), "pfv-advst")[0], "2 set");
-  assert.ok(advOf(set).className.includes("pfv-open"), "open without a click");
-  assert.strictEqual(byCls(advOf(set), "pfv-fold")[0].getAttribute("aria-expanded"), "true");
+  assert.strictEqual(byCls(advOf(set), "pfv-fold").length, 0, "nothing to open or close");
   assert.deepStrictEqual(texts(advOf(set), "pfv-dl"), ["Arguments--verboseEnvironmentLOG_LEVEL"]);
   clickBtn(advOf(set), "Edit");
   assert.ok(advOf(set).className.includes("pfv-editing"));
   assert.strictEqual(field(set, "args").value, "--verbose");
   assert.deepStrictEqual(envRowsOf(set).map((r) => [rowInputs(r)[0].value, rowInputs(r)[1].value]), [["LOG_LEVEL", "debug"]]);
-  // The first setting saved from "none set" opens the fold by itself, with no click.
+  // The first setting saved from "none set" is listed at once, with no click.
   await openAdv(t, "aws-ops");
   typeArgs(t, "--verbose");
   assert.strictEqual(await clickBtn(advOf(t), "Save"), true);
   assert.strictEqual(texts(advOf(t), "pfv-advst")[0], "1 set");
-  assert.ok(advOf(t).className.includes("pfv-open"));
+  assert.deepStrictEqual(texts(advOf(t), "pfv-dl"), ["Arguments--verbose"]);
   assert.deepStrictEqual(t.box.puts[0].args, ["--verbose"]);
 });
 
@@ -4677,7 +4688,7 @@ test("Effort not set says who decides, until one is lit", async () => {
   assert.deepStrictEqual(byText(blockOf(set, "agent"), "button", "Manage").length, 1);
 });
 
-test("Advanced keeps its fold label while editing: the chevron turned down and what is set, the form under it", async () => {
+test("Advanced keeps its label while editing: the name and what is set under it, no chevron, the form beside it", async () => {
   for (const [doc, word] of [[{}, "none set"], [{ args: ["--verbose"], env: { LOG_LEVEL: "debug" } }, "2 set"]]) {
     const t = page();
     await openAdv(t, "aws-ops", doc);
@@ -4686,10 +4697,10 @@ test("Advanced keeps its fold label while editing: the chevron turned down and w
     const label = byCls(adv, "pfv-label")[0];
     assert.strictEqual(labelName(label), "Advanced");
     assert.strictEqual(texts(label, "pfv-advst")[0], word, "the count is under the name, as in the read view");
-    assert.ok(label.className.includes("pfv-adv-label"));
-    assert.strictEqual(byCls(label, "pfv-chev").length, 1);
-    assert.ok(adv.className.includes("pfv-open"), "the chevron is turned down");
-    assert.strictEqual(byCls(adv, "pfv-fold").length, 0, "there is nothing to fold while it is edited");
+    assert.strictEqual(label.className, "pfv-label", "the same label as every block");
+    assert.strictEqual(adv.all((n) => n.tag === "svg").length, 0, "no chevron: nothing folds");
+    assert.ok(!adv.className.includes("pfv-open"));
+    assert.strictEqual(byCls(adv, "pfv-fold").length, 0);
     assert.ok(byCls(adv, "pfv-edit-body")[0].className.includes("pfv-adv-body"));
   }
   // The other blocks keep their plain label.
@@ -4872,6 +4883,44 @@ const boundPage = () => {
   t.box.rowFor = (d) => Object.assign({}, PROFILES[1], { name: d.name });
   return t;
 };
+
+// Task 1 removed the Settings top bar, so a page head is where the page's "Esc ✕" is. The New profile and Duplicate pages draw the same head
+// as the overview (a title and a line, no action of their own), so they end it the same way: the divider, then Esc ✕.
+test("the New profile and Duplicate heads end like every Settings head: the divider, then Esc ✕", async () => {
+  const closes = (t) => t.calls.filter((c) => c.startsWith("close:"));
+  const tail = (t) => {
+    const acts = byCls(byCls(rootOf(t), "pfv-head")[0], "page-actions");
+    assert.strictEqual(acts.length, 1, "the head's actions");
+    return acts[0].children.filter((c) => c instanceof Node);
+  };
+  const n = await newPage();
+  assert.strictEqual(n.run("pfvState").page, "new");
+  const [sep, esc, ...rest] = tail(n);
+  assert.deepStrictEqual(rest, []);
+  assert.deepStrictEqual(classesOf(sep), ["set-sep"]);
+  assert.strictEqual(sep.getAttribute("aria-hidden"), "true");
+  assert.deepStrictEqual(classesOf(esc), ["btn", "btn-ghost", "btn-sm", "set-esc"], "settingsEscButton");
+  assert.strictEqual(esc.getAttribute("aria-label"), "Close (Esc)");
+  esc.click();
+  assert.deepStrictEqual(closes(n), ["close:settings-modal"]);
+  assert.strictEqual(byCls(rootOf(n), "btn-primary").length + byCls(rootOf(n), "pfv-btn-primary").length, 1, "Create profile is still the one primary");
+  // The first-run page (no profile at all) is the New profile page too.
+  const lone = page({ profiles: [] });
+  await lone.box.pfvShow();
+  assert.strictEqual(lone.run("pfvState").page, "new");
+  assert.strictEqual(byCls(rootOf(lone), "set-esc").length, 1, "the first-run New profile page can be closed from the page");
+  // Duplicate: the same tail.
+  const d = page();
+  await d.box.pfvShow("aws-ops");
+  await dupFromMenu(d);
+  assert.strictEqual(d.run("pfvState").page, "dup");
+  const [dsep, desc] = tail(d);
+  assert.deepStrictEqual([classesOf(dsep), classesOf(desc).includes("set-esc")], [["set-sep"], true]);
+  // The overview keeps its own: one Esc ✕, last.
+  const o = page();
+  await o.box.pfvShow("aws-ops");
+  assert.strictEqual(byCls(rootOf(o), "set-esc").length, 1);
+});
 
 test("New profile asks for three things and the page says nothing else", async () => {
   const t = await newPage();
