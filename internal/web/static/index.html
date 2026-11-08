@@ -702,39 +702,45 @@
     </div>
   </dialog>
 
-  <!-- Desktop only (pagehost.js; auditpage.js fills it): the Audit page. -->
+  <!-- Desktop only (pagehost.js; auditpage.js fills it): the Audit page. M3.3: the kit's page head, toolbar,
+       KPI row and table; Esc ✕ is a [data-close] button, which initDialogs wires. -->
   <dialog id="audit-page" aria-label="Audit">
-    <div class="dhd">
-      <h2 class="grow">Audit</h2>
-      <div class="seg" id="au-range" role="group" aria-label="Range">
-        <button type="button" data-range="24h">24h</button>
-        <button type="button" data-range="7d">7d</button>
-        <button type="button" data-range="30d">30d</button>
+    <div class="page-head">
+      <div class="page-head-text"><h1 class="page-title">Audit</h1>
+        <p class="page-desc">Every credential issued, write elevation, egress connection and settings change, newest first.</p></div>
+      <div class="page-actions"><a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
+        <button class="btn btn-ghost page-esc" id="au-esc" type="button" data-close="audit-page" aria-label="Close (Esc)" title="Close (Esc)"><span class="kbd-hint">Esc</span>✕</button></div>
+    </div>
+    <div class="toolbar au-tools">
+      <div class="seg" id="au-filters" role="group" aria-label="Kind">
+        <button class="seg-item" type="button" data-filter="" aria-pressed="true">All</button>
+        <button class="seg-item" type="button" data-filter="credentials" aria-pressed="false">Credentials</button>
+        <button class="seg-item" type="button" data-filter="elevations" aria-pressed="false">Elevations</button>
+        <button class="seg-item" type="button" data-filter="egress" aria-pressed="false">Egress</button>
+        <button class="seg-item" type="button" data-filter="settings" aria-pressed="false">Settings changes</button>
       </div>
-      <a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
-      <button type="button" class="btn gh" id="au-esc" data-close="audit-page" aria-label="Close" title="Close (Esc)">&times;</button>
-    </div>
-    <div id="au-kpis" class="au-kpis"></div>
-    <div id="au-filters" class="au-filters" role="group" aria-label="Kind">
-      <button type="button" data-filter="">All</button>
-      <button type="button" data-filter="credentials">Credentials</button>
-      <button type="button" data-filter="elevations">Elevations</button>
-      <button type="button" data-filter="egress">Egress</button>
-      <button type="button" data-filter="settings">Settings changes</button>
+      <select class="input" id="au-session" aria-label="Session"></select>
       <span class="grow"></span>
-      <select id="au-session" class="fld" aria-label="Session"></select>
+      <div class="seg" id="au-range" role="group" aria-label="Range">
+        <button class="seg-item" type="button" data-range="24h" aria-pressed="false">24h</button>
+        <button class="seg-item" type="button" data-range="7d" aria-pressed="true">7d</button>
+        <button class="seg-item" type="button" data-range="30d" aria-pressed="false">30d</button>
+      </div>
     </div>
-    <div id="au-scroll" class="au-scroll">
-      <table id="au-table">
-        <thead><tr><th>Time</th><th>Session</th><th>Kind</th><th>What</th><th>Outcome</th></tr></thead>
-        <tbody id="au-body"></tbody>
-      </table>
-    </div>
-    <div id="au-foot" class="au-foot">
-      <span id="au-count"></span>
-      <button type="button" class="btn gh" id="au-more" hidden>Show more</button>
-      <span class="grow"></span>
-      <span id="au-policy"></span>
+    <div class="au-scroll" id="au-scroll">
+      <div class="kpi-row" id="au-kpis"></div>
+      <div class="au-card">
+        <table class="tbl au-tbl" id="au-table">
+          <thead><tr><th>Time</th><th>Session</th><th>Kind</th><th>What</th><th>Outcome</th></tr></thead>
+          <tbody id="au-body"></tbody>
+        </table>
+      </div>
+      <div class="au-foot" id="au-foot">
+        <span id="au-count"></span>
+        <button class="btn btn-sm" type="button" id="au-more" hidden>Show more</button>
+        <span class="grow"></span>
+        <span id="au-policy"></span>
+      </div>
     </div>
   </dialog>
 

@@ -306,7 +306,7 @@
   .input:hover { border-color: var(--muted); }
   /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that sets its own border still
      wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`,
-     `.ac-pcol .fld`, #au-session and .an-date keep --line until their plans adopt the kit .input. */
+     `.ac-pcol .fld` and .an-date keep --line until their plans adopt the kit .input (the Audit page's Session select has). */
   .fld { border-color: var(--faint); }
   .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
@@ -2322,60 +2322,55 @@
     #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act .btn { flex: 1; }
   }
 
-  /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
-  /* Colour roles: red = elevation rows and refused/denied/write outcomes only,
-     green = status words only; everything else is neutral text. Prefixed
-     #page-host > #audit-page.as-page so the page rules outrank the dialog's own. */
+  /* --- Audit page (UI plan 5, #175; frame M3.3, digest-design §B1-§B5, §B9) ----- */
+  /* The page is the kit's: .page-head, .toolbar, .seg, .input, .kpi-row, .tbl and .btn draw it, so its markup
+     wears those classes and this block holds only what the frame sets page-locally (M3's .m3-pagehead, .m3-tools,
+     .m3-body, .m3-fixed, .m3-au) and the product's own cells. Colour roles: red is the granted or extended write
+     elevation (its tint and its Kind), the Outcome tones from auditRowView and the Write elevations KPI when above
+     zero; green is status words only; amber is not used here. Prefixed #page-host > #audit-page.as-page so these
+     outrank the dialog's own rules. */
   .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
   .ac-link:hover { text-decoration: underline; }
-  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
-  #page-host > #audit-page.as-page > .dhd h2 { margin: 0; font: inherit; }
-  #page-host > #audit-page.as-page #au-range { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-range button:hover { background: var(--raise); color: var(--fg); }
-  #page-host > #audit-page.as-page #au-range button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
-  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); text-decoration: none; }
-  #page-host > #audit-page.as-page #au-csv:hover { background: var(--line); }
-  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: var(--t-sm); }
-  #page-host > #audit-page.as-page #au-esc:hover { color: var(--fg); background: var(--raise); }
 
-  #page-host > #audit-page.as-page .au-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); flex: none; border-bottom: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-kpi { padding: 14px 20px; min-width: 0; }
-  #page-host > #audit-page.as-page .au-kpi + .au-kpi { border-left: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-n { font-size: var(--t-xl); font-weight: 600; color: var(--fg); }
-  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: var(--t-md); color: var(--muted); }
+  /* The head and the toolbar stay put; everything from the KPI row down scrolls (the plan's call 9). */
+  #page-host > #audit-page.as-page > .page-head { flex: none; padding: var(--sp-6) var(--sp-8) var(--sp-3); }
+  #page-host > #audit-page.as-page > .toolbar.au-tools { flex-wrap: wrap; padding: 0 var(--sp-8) var(--sp-4); }
+  #page-host > #audit-page.as-page #au-session { flex: none; width: 180px; }
 
-  #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
-  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); cursor: pointer; }
-  #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
-  #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
-  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
-  #page-host > #audit-page.as-page #au-session:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); }
+  /* A column flex scroller shrinks its children before it scrolls: none of them give way. */
+  #page-host > #audit-page.as-page > .au-scroll > * { flex: none; }
+  #page-host > #audit-page.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
-  #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 116px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
-  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: var(--t-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-kind { color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: var(--t-sm); }
-  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table tr.au-elev { background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
-  #page-host > #audit-page.as-page #au-table td.au-bad { color: var(--red); }
-  #page-host > #audit-page.as-page #au-table td.au-ok { color: var(--ok); }
-  #page-host > #audit-page.as-page #au-table td.au-empty { height: 96px; padding: 0 20px; text-align: center; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-empty.au-bad { color: var(--red); }
+  /* The table's card clips the row tint to its 8px corners (the frame's inline overflow: hidden). */
+  #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; }
+  #page-host > #audit-page.as-page .au-tbl { table-layout: fixed; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(1) { width: 116px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(2) { width: 150px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(3) { width: 112px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: 150px; }
+  /* Session, What and Outcome wrap instead of clipping (the frame's .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
+  #page-host > #audit-page.as-page .au-tbl td.au-sess,
+  #page-host > #audit-page.as-page .au-tbl td.au-what,
+  #page-host > #audit-page.as-page .au-tbl td.au-out { height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+  #page-host > #audit-page.as-page .au-tbl td.au-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #page-host > #audit-page.as-page .au-tbl td.au-kind,
+  #page-host > #audit-page.as-page .au-tbl td.au-out { color: var(--muted); }
+  #page-host > #audit-page.as-page .au-tbl td.au-what .au-reason { color: var(--muted); }
+  /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */
+  #page-host > #audit-page.as-page .au-tbl td.au-ok { color: var(--ok); }
+  #page-host > #audit-page.as-page .au-tbl td.au-kind.au-bad,
+  #page-host > #audit-page.as-page .au-tbl td.au-out.au-bad { color: var(--red); font-weight: var(--w-medium); }
+  /* The kit's row tint is overwritten by .tbl tbody tr:hover (0,2,2 over 0,2,1): the red row keeps it under the pointer. */
+  #page-host > #audit-page.as-page .au-tbl tbody tr.is-elevated:hover { background: var(--red-tint); }
+  /* Loading…, the empty line and the failure: one centred cell over the five columns. */
+  #page-host > #audit-page.as-page .au-tbl td.au-empty { height: 96px; text-align: center; white-space: normal; color: var(--muted); }
+  #page-host > #audit-page.as-page .au-tbl td.au-empty.au-bad { color: var(--red); }
 
-  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #audit-page.as-page .au-foot .grow { flex: 1; }
-  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-sm); color: var(--fg); }
-  #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
+  /* The footer sits in flow under the card and scrolls with it (M3.3's .m3-foot). */
+  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-sm); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #audit-page.as-page #au-count { font-variant-numeric: tabular-nums; }
+  /* The kit .btn sets a display, which beats the UA's [hidden] rule: Show more hides only through this one. */
   #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
 
   /* --- Analytics page (S4; pg-4.png) ------------------------------------------ */

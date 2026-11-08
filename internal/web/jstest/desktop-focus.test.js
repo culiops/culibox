@@ -273,13 +273,25 @@ const PAGE_FIELDS = [
   ["#ask-modal #ask-input:focus-visible", "the ask dialog's reply field"],
   ["#store-banner .storepass:focus-visible", "the store banner's password field"],
   ["body > main.card input[type=password]:focus-visible", "the login page's password field"],
-  ["#page-host > #audit-page.as-page #au-session:focus-visible", "the audit page's session select"],
   ["#page-host > #settings-modal.as-page > .dft .fld:focus-visible", "the settings dialogs' footer fields"],
   ["#page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible", "the credential drawer's fields"],
   ["#page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible", "the Credentials page's add-flow fields (the drawer's own, heavier rule above wins there)"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible", "the profile page's fields"],
   ["#page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible", "the Appearance page's text-size value boxes"],
 ];
+
+// The Audit page's Session select is the kit .input (UI plan 5, #175, digest-design §B4), so the field focus above covers
+// it: its page rule sets a width and no border, and it needs no focus rule of its own.
+test("the audit page's session select is a kit .input, and no page rule gives it a border", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  assert.match(html, /<select class="input" id="au-session" aria-label="Session">/);
+  const own = parseRules(desktop).filter((r) => /#au-session/.test(r.selector));
+  assert.ok(own.length > 0, "the page sizes it");
+  for (const r of own) {
+    assert.ok(!r.decls.some(([p]) => /^border/.test(p)), r.selector + " sets a border an id-weighted focus rule would have to beat");
+    assert.ok(!/:focus/.test(r.selector), r.selector + ": the global field focus rule is the one focus look");
+  }
+});
 
 test("fields whose page rule sets an id-weighted border get a field focus of their own (>= 2px of accent)", () => {
   for (const [sel, who] of PAGE_FIELDS) {

@@ -32,16 +32,15 @@ function auText(tag, cls, text) {
 
 // --- paint -------------------------------------------------------------------
 
+// auPaintControls: the pressed item of each switch is marked with aria-pressed alone: the kit's
+// .seg-item[aria-pressed="true"] draws it, and a legacy .on class would bring primitives.css's weight 700
+// back. The items are updated in place, never rebuilt, so the one the user clicked keeps keyboard focus.
 function auPaintControls() {
-  for (const b of document.querySelectorAll("#au-range button")) {
-    const on = b.dataset.range === auState.range;
-    b.classList.toggle("on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of document.querySelectorAll("#au-range .seg-item")) {
+    b.setAttribute("aria-pressed", b.dataset.range === auState.range ? "true" : "false");
   }
-  for (const b of document.querySelectorAll("#au-filters button[data-filter]")) {
-    const on = b.dataset.filter === auState.filter;
-    b.classList.toggle("on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of document.querySelectorAll("#au-filters .seg-item")) {
+    b.setAttribute("aria-pressed", b.dataset.filter === auState.filter ? "true" : "false");
   }
   const csv = auEl("au-csv");
   if (csv) csv.setAttribute("href", auditCsvHref(auState, auState.nowS || Math.floor(Date.now() / 1000)));
@@ -50,9 +49,12 @@ function auPaintControls() {
 function auPaintKpis() {
   const box = auEl("au-kpis");
   if (!box) return;
+  // The kit's tile: .kpi > .kpi-value + .kpi-label. The label ellipsizes (desktop.css), so it carries its full text.
   box.replaceChildren(...auditKpis(auData.summary).map((k) => {
-    const t = auText("div", "au-kpi");
-    t.append(auText("div", "au-n", k.n), auText("div", "au-l", k.label));
+    const t = auText("div", "kpi");
+    const label = auText("span", "kpi-label", k.label);
+    label.setAttribute("title", k.label);
+    t.append(auText("span", k.bad ? "kpi-value is-bad" : "kpi-value", k.n), label);
     return t;
   }));
 }
@@ -78,7 +80,9 @@ const AU_TONE_CLASS = { ok: "au-ok", bad: "au-bad" };
 function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
-  if (v.elevated) tr.className = "au-elev";
+  // The red row is the kit's tr.is-elevated: a granted or extended write elevation. Its Kind is red too; the Outcome
+  // takes its own tone from auditRowView (a refused elevation's is red as well, until Plan 6).
+  if (v.elevated) tr.className = "is-elevated";
   const what = auText("td", "au-what", v.what);
   if (v.reason) what.appendChild(auText("span", "au-reason", " · “" + v.reason + "”"));
   tr.append(

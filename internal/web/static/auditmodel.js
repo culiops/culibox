@@ -15,6 +15,9 @@ const AUD_KINDS = {
 const AUD_ELEV_BAD = new Set(["granted", "extended", "refused"]);
 const AUD_OK = new Set(["allowed", "ok"]);
 const AUD_BAD = new Set(["denied", "private_addr", "bad_auth", "bad_method", "dial_error", "failed"]);
+// A write elevation is a live grant: one that opened or was extended. Only its row is tinted and its Kind red; a refused,
+// dropped, expired or ended elevation opened nothing (UI plan 5, digest-design §B9).
+const AUD_ELEV_LIVE = new Set(["granted", "extended"]);
 
 function audTone(outcome) {
   return (typeof accTone === "function" ? accTone : require("./accessmodel.js").accTone)(outcome);
@@ -52,15 +55,17 @@ function audTime(ts) {
 }
 
 // auditRowView: one table row. `names` maps a session id to its live name.
-// tone is the colour role: an elevation that opened, extended or was refused is
-// a write (red); egress and settings words follow the Access view's table plus
-// the proxy's failure words; anything else is neutral.
+// tone is the colour role of the Outcome: an elevation that opened, extended or
+// was refused is red; egress and settings words follow the Access view's table
+// plus the proxy's failure words; anything else is neutral. elevated is the red
+// row itself: an elevation that opened or was extended, and nothing else.
 function auditRowView(ev, names) {
   const e = ev || {};
   const o = String(e.outcome || "");
-  const elevated = e.kind === "elevation";
+  const isElevation = e.kind === "elevation";
+  const elevated = isElevation && AUD_ELEV_LIVE.has(o);
   let tone;
-  if (elevated && AUD_ELEV_BAD.has(o)) tone = "bad";
+  if (isElevation && AUD_ELEV_BAD.has(o)) tone = "bad";
   else if (AUD_OK.has(o)) tone = "ok";
   else if (AUD_BAD.has(o)) tone = "bad";
   else tone = audTone(o);
@@ -80,16 +85,21 @@ function auditRowView(ev, names) {
 }
 
 const AUD_KPI_LABELS = [
-  ["issued", "credentials issued"], ["refused", "refused"], ["elevations", "write elevations"],
-  ["egress_allowed", "egress allowed"], ["egress_denied", "egress denied"],
+  ["issued", "Credentials issued"], ["refused", "Refused"], ["elevations", "Write elevations"],
+  ["egress_allowed", "Egress allowed"], ["egress_denied", "Egress denied"],
 ];
 
 // auditKpis: the five tiles. No summary yet (or a failed read) is a dash, never
-// a zero that would pass for a measurement.
+// a zero that would pass for a measurement. bad marks the one red value: write
+// elevations above zero. A refusal or a denial is containment working, so it is
+// never bad, whatever its count (digest-design §B5).
 function auditKpis(summary) {
   return AUD_KPI_LABELS.map(([k, label]) => {
     const v = summary ? summary[k] : undefined;
-    return { n: Number.isFinite(v) ? v.toLocaleString("en-US") : "—", label };
+    const known = Number.isFinite(v);
+    const tile = { n: known ? v.toLocaleString("en-US") : "—", label };
+    if (k === "elevations" && known && v > 0) tile.bad = true;
+    return tile;
   });
 }
 
