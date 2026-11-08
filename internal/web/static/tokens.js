@@ -168,6 +168,9 @@ function initTokens() {
 
   const logoutBtn = document.getElementById("tok-logout");
   if (logoutBtn) logoutBtn.onclick = logout;
+  // The desktop Settings nav's foot item (hidden on a phone): the same sign-out, the same confirm.
+  const navLogout = document.getElementById("set-signout");
+  if (navLogout) navLogout.onclick = logout;
 
   const done = document.getElementById("tok-done");
   if (done) done.onclick = () => {

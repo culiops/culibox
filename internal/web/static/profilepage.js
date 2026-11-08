@@ -186,8 +186,8 @@ function pfvOnPage() {
 
 // --- the nav list -------------------------------------------------------------
 
-// pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, the
-// muted tier word, a lock for one you cannot edit, then "+ New profile". The list is
+// pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, a lock
+// for one you cannot edit, the tier chip, then "+ New profile". The list is
 // rebuilt only when what it shows changed (every loadProfiles hands back new objects);
 // otherwise only the current row's aria-current moves, so a refetch or a click never
 // replaces the button that has focus.
@@ -203,13 +203,15 @@ function pfvRenderNav() {
       const b = pfvMk("button", "pfv-ni");
       b.type = "button";
       b.dataset.pfvName = p.name;
-      const tier = pfvMk("span", "pfv-ni-tier");
+      // The M2 row: name, a lock for a read-only profile, then the tier as a chip. The chip holds the word alone
+      // (it is a filled box), so the lock and its words for a screen reader sit beside it, in front.
+      const host = p.runtime === "host";
+      b.append(pfvMk("span", "pfv-ni-name", p.name));
       if (!p.editable) {
         b.setAttribute("title", "Defined in config.json (read-only)");
-        tier.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
+        b.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
       }
-      tier.append(p.runtime === "host" ? "host" : "box");
-      b.append(pfvMk("span", "pfv-ni-name", p.name), tier);
+      b.append(pfvMk("span", host ? "pfv-ni-tier pfv-ni-host" : "pfv-ni-tier", host ? "host" : "box"));
       b.onclick = () => pfvSwitch(p.name);
       return b;
     });

@@ -80,7 +80,7 @@ test("About names the box runtime", () => {
 
 test("base CSS hides every desktop-only Settings node", () => {
   const css = stripComments(BASE_CSS);
-  const m = /\.pg-group, \.pf-touch, \.pf-sec, \.pf-adv, #pf-discard, #about-runtime \{ display: none; \}/.exec(css);
+  const m = /\.pg-group, \.pf-touch, \.pf-sec, \.pf-adv, #pf-discard, #about-runtime, #set-signout \{ display: none; \}/.exec(css);
   assert.ok(m, "the base hide rule is missing");
 });
 
@@ -158,7 +158,7 @@ test("base app.css hides #pfv and #pf-navlist", () => {
 test("desktop.css shows them on the page and takes the old list, form and footer away", () => {
   const css = stripComments(DESK_CSS);
   assert.match(css, /#page-host > #settings-modal\.as-page #pfv \{[^}]*display: block/);
-  assert.match(css, /#page-host > #settings-modal\.as-page > #settings-tabs > \.t\[data-tab="manage"\]\.on \+ #pf-navlist \{[^}]*display: block/);
+  assert.match(css, /#page-host > #settings-modal\.as-page > #settings-tabs > \.t\[data-tab="manage"\]\.on \+ #pf-navlist \{[^}]*display: flex/);
   assert.match(css, /#page-host > #settings-modal\.as-page #manage > \.plist, #page-host > #settings-modal\.as-page #manage > \.ped \{ display: none; \}/);
   assert.match(css, /#page-host > #settings-modal\.as-page > #foot-manage \{ display: none; \}/);
 });
@@ -228,9 +228,10 @@ test("Settings shows the overview when Profiles is selected on the page", () => 
   assert.match(body(APP, "renderProfileList"), /typeof pfvRenderNav === "function"\) pfvRenderNav\(\)/);
 });
 
-// The nav is the approved mockup's on every Settings tab (profile-mockups/option-b/index.html .nav):
-// sentence-case 12px muted group labels, 30px rows, the page's own background.
-test("the Settings nav is the mockup's: sentence-case muted 12px labels, 30px rows, --bg", () => {
+// The nav is the M2 frame's on every Settings tab (UI plan 4, digest-design §B1.2; it replaced the Plan 1 profile-mockups
+// look, which was sentence-case 12px labels on --bg): uppercase 11px .grp-label group labels, 30px rows, the --panel surface.
+// settings-shell.test.js pins the rest of the frame (212px, padding, the nested list, Sign out…).
+test("the Settings nav is the M2 nav: uppercase group labels, 30px rows, --panel", () => {
   const css = stripComments(DESK_CSS);
   const rule = (sel) => {
     const i = css.indexOf(sel + " {");
@@ -238,13 +239,12 @@ test("the Settings nav is the mockup's: sentence-case muted 12px labels, 30px ro
     return css.slice(i, css.indexOf("}", i));
   };
   const nav = rule("#page-host > #settings-modal.as-page > #settings-tabs");
-  assert.match(nav, /background: var\(--bg\)/);
-  assert.match(nav, /gap: 0/);
+  assert.match(nav, /background: var\(--panel\)/);
+  assert.match(nav, /gap: 1px/);
   const label = rule("#page-host > #settings-modal.as-page > #settings-tabs .pg-group");
-  assert.match(label, /font-size: var\(--t-sm\); font-weight: 600; color: var\(--muted\)/);
-  assert.ok(!/text-transform|letter-spacing/.test(label), "no uppercase, no tracking");
-  assert.match(rule("#page-host > #settings-modal.as-page > #settings-tabs .t"), /height: 30px/);
-  assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /font-size: var\(--t-lg\)/);
+  assert.match(label.replace(/\s+/g, " "), /font-size: var\(--t-xs\); line-height: var\(--lh-xs\); font-weight: 600; letter-spacing: var\(--track-caps\); text-transform: uppercase; color: var\(--muted\)/);
+  assert.match(css, /#page-host > #settings-modal\.as-page > #settings-tabs \.t,\s*#page-host > #settings-modal\.as-page > #settings-tabs > #set-signout \{[^}]*height: 30px/);
+  assert.match(rule("#page-host > #settings-modal.as-page > .dhd"), /display: none/);
 });
 
 // Task 16: the old profile form is the phone's alone. Nothing in desktop.css may style it any more: the only rules that name

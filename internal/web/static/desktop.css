@@ -1801,26 +1801,29 @@
   /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
   #page-host > dialog.as-page[box-]::before { display: none; }
 
-  /* --- Settings page (S4): grouped nav ----------------------------------------- */
+  /* --- Settings page (S4; the M2 frame, UI plan 4): grouped nav ----------------- */
   /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
      #settings-modal rules in app.css carry an id, and this outranks them. A
-     grid: the header across, the nav down the left, the open panel and its
-     footer to the right. */
-  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
-  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: var(--t-sm); }
-  #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
+     grid: the nav down the left (212px on every tab, digest-design §B1.2), the
+     open panel and its footer to the right. The header bar is not drawn (§B1:
+     each page's own head carries the title and Esc), so row 1 is empty. */
+  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  #page-host > #settings-modal.as-page > .dhd { display: none; }
 
   /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
-     tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
-     `order` regroups it here. */
+     tokens) · App (Appearance, About), then Sign out… at the foot. The DOM
+     keeps the mobile strip's order; `order` regroups it here. The look is the
+     frame's `.m2-snav` (§B1.2): --panel, padding 16px 8px 12px, gap 1px. */
   #page-host > #settings-modal.as-page > #settings-tabs {
-    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 0;
-    padding: 14px 10px 80px; border: 0; border-right: 1px solid var(--line); background: var(--bg); overflow-y: auto;
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 1px;
+    padding: 16px 8px 12px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 2px; }
+  /* The kit .grp-label (§C2) at the frame's padding (§B1.2 `.m2-navlbl`); the first label sits 4px down. */
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group {
+    display: block; padding: 12px 10px 4px; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: 600;
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 4px; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
@@ -1829,21 +1832,31 @@
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 7; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t {
-    display: flex; align-items: center; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
-    background: transparent; font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
+  /* A row is the kit .nav-item (§C7): 30px, 0 10px, 4px radius, 13/20, hover --hover, selected --raise at 500
+     (§B1.2: no accent bar). Sign out… is a row too, neutral, last: `margin-top: auto` takes the nav's free
+     height, so it rests above the 12px foot padding (the frame's spacer). */
+  #page-host > #settings-modal.as-page > #settings-tabs .t,
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout {
+    display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--panel); color: var(--fg); }
-  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 10; margin-top: auto; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
 
   /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
      and ✕ close the page, so every Done goes, and the two footers that held
      nothing else go with them. */
   #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
-  #page-host > #settings-modal.as-page > .dbd.pad { padding: 22px 28px; }
+  /* The content column (§B1.1, §B1.5): it starts 32px right of the nav and is at most 820px wide,
+     left-aligned (the frame's 884px `.m2-col` less its 32px sides). The page head (a later
+     task) carries the 24px above it. */
+  #page-host > #settings-modal.as-page > .dbd.pad { padding: 0 32px 32px; }
+  #page-host > #settings-modal.as-page > .dbd.pad > * { max-width: 820px; }
   /* A footer wraps rather than overflowing the page: its buttons are one
-     unbreakable row 280-380px wide, more than the panel has below ~1040px (the
-     panel is the window minus the 290px sidebar and the 170px nav), and the
+     unbreakable row 280-380px wide, more than the panel has below ~1080px (the
+     panel is the window minus the 290px sidebar and the 212px nav), and the
      overflow pushed Save past the window edge. A one-line footer is unchanged: 56px, centred. */
   #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 10px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--panel); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
@@ -2380,9 +2393,6 @@
      old form stays in the DOM (the phone's modal uses it); it is
      only not drawn here. */
   #page-host > #settings-modal.as-page #manage > .plist, #page-host > #settings-modal.as-page #manage > .ped { display: none; }
-  /* The nav is 212px on Profiles, where it carries the profile names (the mockup's width);
-     the other tabs keep their 170px, and so their tables and footers keep the widths they were measured at. */
-  #page-host > #settings-modal.as-page.tall { grid-template-columns: 212px minmax(0, 1fr); }
   #page-host > #settings-modal.as-page > #foot-manage { display: none; }
   #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 var(--t-md)/1.5 var(--font-ui); }
   /* The sidebar's width handle is a 7px band between it and the page. On Settings it takes no room (the
@@ -2396,18 +2406,26 @@
   #page-host > #settings-modal.as-page #pfv :is(h2, h3, h4, p, dl, dd) { margin: 0; padding: 0; }
   #page-host > #settings-modal.as-page .pfv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  /* The nav: Profiles stays bold while its profiles show, the profile on screen is the raised row. */
-  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on { background: transparent; color: var(--fg); font-weight: 600; }
-  #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; margin: 2px 0 6px 12px; padding-left: 6px; border-left: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: block; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md) var(--font-ui); text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--panel); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
+  /* The nav, Profiles open (§B1.2 `.m2-plist`): the Profiles row and the profile on screen are both the raised row
+     (the .t.on rule above; no bold-on-transparent parent), and the list is a flex column, 12px in, with no rule line. */
+  #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; gap: 1px; padding: 0 0 4px 12px; }
+  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: flex; flex-direction: column; }
+  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the tier chip. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--hover); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); font-weight: 500; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { justify-content: flex-start; color: var(--accent); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The tier is the kit chip (§C5 `.chip` + `.chip-box`; a host profile adds `.chip-host`'s faint ring); a chip on the
+     selected row steps down to --panel, because raise on raise is invisible. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-host { box-shadow: inset 0 0 0 1px var(--faint); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-tier { background: var(--panel); }
+  /* "+ New profile" is the kit .link-add (§C2, §B1.2 `.m2-addp`): accent 12/18, padding 6px 10px, underline on hover. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { height: auto; padding: 6px 10px; justify-content: flex-start; color: var(--accent); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add:hover { background: transparent; text-decoration: underline; text-underline-offset: 2px; }
   #page-host > #settings-modal.as-page .pfv-lock { flex: none; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-lock { color: var(--muted); }
 
   /* The header: name, containment chip, the agent line; Start session and the menu. */
   #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 26px; }

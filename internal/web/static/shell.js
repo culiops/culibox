@@ -500,7 +500,8 @@ function initDialogs() {
   for (const btn of document.querySelectorAll("[data-close]")) {
     btn.onclick = () => closeDialogFromUI(btn.dataset.close);
   }
-  for (const b of document.querySelectorAll("#settings-tabs button")) {
+  // Tabs only: the nav also holds Sign out… (a desktop-only item; tokens.js wires its click), and it is not a tab.
+  for (const b of document.querySelectorAll("#settings-tabs button[data-tab]")) {
     b.onclick = () => {
       const leave = settingsLeave(b.dataset.tab);
       if (leave === true) selectSettingsTab(b.dataset.tab);

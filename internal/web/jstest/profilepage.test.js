@@ -217,6 +217,20 @@ test("pfvRenderNav lists every profile with its tier word and a read-only marker
   assert.strictEqual(t.els["pf-navlist"].children[t.els["pf-navlist"].children.length - 1], add[0]);
 });
 
+// The M2 nav row (UI plan 4, digest-design §B1.2): the name, then the lock, then the tier chip. The chip is the tier word alone
+// (it is a filled 18px box), so the lock and its screen-reader words are the row's own children, before it, not inside it.
+test("a nav row is name, lock, tier chip: the chip holds the tier word only, and a host chip says so", () => {
+  const t = page();
+  t.box.pfvRenderNav();
+  const items = byCls(t.els["pf-navlist"], "pfv-ni").filter((n) => !hasCls("pfv-ni-add")(n));
+  const order = (n) => n.children.filter((c) => c instanceof Node).map((c) => c.className.split(/\s+/)[0] + (c.tag === "svg" ? "(svg)" : ""));
+  assert.deepStrictEqual(order(items[0]), ["pfv-ni-name", "pfv-lock(svg)", "pfv-sr", "pfv-ni-tier"], "claude: read-only");
+  assert.deepStrictEqual(order(items[1]), ["pfv-ni-name", "pfv-ni-tier"], "aws-ops: editable, no lock");
+  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent), ["host", "box", "box", "host"]);
+  assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].children.length), [0, 0, 0, 0], "nothing but the word inside a chip");
+  assert.deepStrictEqual(items.map((n) => hasCls("pfv-ni-host")(byCls(n, "pfv-ni-tier")[0])), [true, false, false, true]);
+});
+
 test("pfvRenderNav marks the shown profile", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");

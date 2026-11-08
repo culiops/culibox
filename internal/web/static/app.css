@@ -1432,8 +1432,9 @@
     #spawn-plist, #spawn-reach, #spawn-foot-hint, .spawn-lbl-model { display: none; }
     /* Desktop-only parts of the Settings page (desktop.css shows them on the
        page above 700px): the nav's group labels, the profile form's Can touch
-       box, section heads and Advanced fold, Discard, and About's runtime line. */
-    .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime { display: none; }
+       box, section heads and Advanced fold, Discard, About's runtime line and the nav's
+       Sign out… item (a phone signs out from API tokens' footer). */
+    .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime, #set-signout { display: none; }
     /* The desktop page's profile overview and its nav list (desktop.css shows them
        on the page above 700px); a phone keeps the form. */
     #pfv, #pf-navlist { display: none; }
