@@ -81,6 +81,22 @@ function isSubmitHotkey(e, mac) {
   return !!e && matches("spawn.submit", e, mac);
 }
 
+// spawnSubmitLabel: the New session submit's caption. One verb on the desktop (F16, frame M4.1); the phone sheet
+// keeps "Spawn ⏎". `desktop` is the layout (drawerDesktop()), not the platform.
+function spawnSubmitLabel(desktop) {
+  return desktop ? "Start session" : "Spawn ⏎";
+}
+
+// spawnFootHint: the desktop footer's hint, the spawn.submit chord as one key per chip and then the words
+// ({ keys: ["Ctrl", "↵"], text: "to start" }; on the Mac ["⌘", "↵"]). The keys come from the shortcut registry,
+// so the hint cannot drift from the binding isSubmitHotkey tests.
+function spawnFootHint(mac) {
+  const sc = typeof chordKeys === "function" ? { chordKeys, activeChords, SHORTCUTS } : require("./shortcuts.js");
+  const entry = sc.SHORTCUTS.find((s) => s.id === "spawn.submit");
+  const chord = entry && sc.activeChords(entry, mac)[0];
+  return { keys: chord ? sc.chordKeys(chord, mac) : [], text: "to start" };
+}
+
 // PLIST_SEARCH_MIN: the New session profile list gets a search box from this many
 // rendered rows up (desktop only; the list does not exist on mobile).
 const PLIST_SEARCH_MIN = 8;
@@ -125,7 +141,7 @@ function spawnProgressText(seconds, runtime) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     spawnRefusedLocked, spawnRefusedUnavailable, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
-    runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText,
+    runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,
   };
 }

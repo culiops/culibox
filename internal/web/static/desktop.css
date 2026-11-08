@@ -1503,37 +1503,58 @@
   /* 820px: the profile list on the left, the form and the reach box on the
      right. The Profile control of the form (#spawn-agent-row) is replaced by the
      list, which writes the same #agent select; it stays in the DOM. */
-  /* The dialog fits the viewport (the base 88vh left the Spawn row clipped at
-     1280x800): the body scrolls and the action row stays pinned to its bottom. */
-  /* Chrome: a plain rounded card like the ask dialog (no box frame, no legend in the
-     border). The title is a header with its own rule; the close cross sits in the
-     corner and reads "Esc ✕" like the pages. */
+  /* Frames M4.1 and M4.2 (#173). The card hangs min(90px, 10vh) from the top, not centred, so it does not
+     jump as the form changes height (F15). Its body is a fixed 640px (on a short window what is left under that
+     anchor, the head, the footer, the card's own 2px of border and a 16px gap below, as the card's max-height
+     leaves) and each column scrolls inside it. The footer is out of flow at the card's bottom edge, across both
+     columns (G19): its containing block is the dialog (position: fixed in app.css), and neither the body, the
+     plist nor the form is positioned, so the form's scroll box neither clips the footer nor carries it. The body
+     keeps the footer's band free (margin-bottom). --ns-head and --ns-foot are the frame's 56px and 53px: the 28px
+     control with 16px above and 12px below, and the footer's 12px either side of it and its hairline. */
+  /* Chrome: a plain rounded card like the ask dialog (no box frame, no legend in the border). The title is the
+     head; the close cross sits in the corner. */
   #spawn-modal {
+    --ns-head: calc(var(--sp-4) + var(--h-ctl) + var(--sp-3));
+    --ns-foot: calc(var(--sp-3) + var(--h-ctl) + var(--sp-3) + 1px);
     width: 820px; max-width: 96vw; max-height: calc(100vh - 32px); padding: 0;
+    top: min(90px, 10vh); bottom: auto; margin: 0 auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg);
     box-shadow: 0 18px 60px rgba(0, 0, 0, .55); overflow: hidden;
   }
   #spawn-modal::before { display: none; }
+  /* The head is 16px above and 12px below the 28px close (the frame's .dlg-head), the title centred on it; its
+     divider is the body's border-top. The right padding keeps a long title clear of the close. */
   #spawn-modal .dlg-title {
     position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
-    box-sizing: border-box; width: 100%; margin: 0; padding: 16px 20px; background: none;
-    border-bottom: 1px solid var(--line); font-size: var(--t-lg); font-weight: 600; color: var(--fg);
+    display: flex; align-items: center; min-height: var(--ns-head);
+    box-sizing: border-box; width: 100%; margin: 0;
+    padding: var(--sp-4) calc(var(--sp-4) + var(--h-ctl) + var(--sp-3)) var(--sp-3) var(--sp-5); background: none;
+    font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: 600; letter-spacing: 0; color: var(--fg);
   }
-  #spawn-modal .dlg-head { position: absolute; top: 26px; right: 10px; transform: translateY(-50%); padding: 0; border: 0; background: none; }
+  #spawn-modal .dlg-head { position: absolute; top: var(--sp-4); right: var(--sp-4); padding: 0; border: 0; background: none; }
   /* Its close is the dialogs' one ghost X (F28, with #ask-modal and #bug-modal further down), no "Esc" word beside it. */
-  #spawn-modal .dlg-body { display: flex; padding: 0; }
-  #spawn-plist {
-    display: flex; flex-direction: column; gap: 2px; flex: none; width: 236px; box-sizing: border-box;
-    padding: 12px 8px; border-right: 1px solid var(--line); overflow-y: auto;
-    /* The list never sizes the row: the form decides the height and the list scrolls
-       inside it (so a long list, or the filter, cannot stretch the dialog). */
-    contain: size; align-self: stretch;
+  #spawn-modal .dlg-body {
+    display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+    flex: none; height: min(640px, calc(100vh - var(--ns-head) - var(--ns-foot) - 2px - min(90px, 10vh) - var(--sp-4)));
+    margin-bottom: var(--ns-foot); padding: 0; overflow: hidden; border-top: 1px solid var(--line);
   }
-  .sp-head { padding: 2px 10px 8px; font-size: var(--t-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); }
+  /* The list is the left column and scrolls inside the body (its #sp-rows scrolls under the filter). The divider
+     between the columns is its right border (G19). */
+  #spawn-plist {
+    display: flex; flex-direction: column; gap: 2px; min-height: 0; box-sizing: border-box;
+    padding: var(--sp-3) var(--sp-2); border-right: 1px solid var(--line); overflow: auto;
+  }
+  /* The group label: the kit's .grp-label with 4px 8px 6px around it, so its text starts where a row's name does. */
+  .sp-head {
+    padding: var(--sp-1) var(--sp-2) 6px; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: var(--w-semibold);
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
+  }
+  /* A profile row is the kit's .srow (M4.1): 6px 8px, its two lines 1px apart. The selected row's 2px accent bar
+     (the C1 lock) takes 2px of the left padding, so the text stays at 8px. */
   .sp-item {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; box-sizing: border-box;
-    padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
-    background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-ctl);
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; box-sizing: border-box;
+    padding: 6px 8px 6px 6px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
+    background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-chip);
   }
   /* A row's keyboard ring is the inset 2px one: #sp-rows below scrolls (overflow clips both axes)
      with only 2px of padding, which an outset 2px-wide ring at offset 2 (4px out) would be cut by. */
@@ -1555,14 +1576,42 @@
   #sp-rows .sp-item { flex: none; }
   .sp-item[hidden] { display: none; }
   .sp-empty { padding: 8px 10px; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
-  .sp-item:hover { background: var(--raise); }
+  /* Hover is quieter than selected (the kit's .srow:hover is --hover, .is-selected --raise). */
+  .sp-item:hover { background: var(--hover); }
   .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
-  .sp-name { font-size: var(--t-md); font-weight: 600; overflow-wrap: anywhere; }
-  .sp-touch { font-size: var(--t-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+  .sp-name { font-size: var(--t-md); line-height: var(--lh-md); font-weight: var(--w-medium); overflow-wrap: anywhere; }
+  .sp-touch { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
 
-  #spawn { flex: 1; min-width: 0; align-content: start; padding: 14px 18px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  /* The right column: 1.55fr and 1fr, 14px between rows and 16px between columns, scrolling inside the body. */
+  #spawn {
+    min-width: 0; min-height: 0; align-content: start; overflow: auto; padding: 14px var(--sp-5) var(--sp-4);
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px 16px;
+  }
   #spawn label { text-transform: none; letter-spacing: 0; font-size: var(--t-sm); color: var(--muted); }
-  #spawn select, #spawn input, #spawn textarea { border-color: var(--line); border-radius: var(--r-ctl); }
+  /* Each labelled row is the kit's .field: the label, the control and the help 6px apart. A hidden row stays hidden:
+     an author display beats the UA's [hidden], and #runtime-row and #effort-row are shown and hidden by an inline style. */
+  #spawn :is(#spawn-ws-row, #spawn-name-row, #spawn-prompt-row, #runtime-row, #effort-row, #spawn-account-row) {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #spawn #spawn-prompt-row[hidden], #spawn #spawn-account-row[hidden] { display: none; }
+  /* The kit's .field-label: 12/500 --fg, "(optional)" muted and regular (paintSpawnChrome writes the span on the desktop). */
+  #spawn :is(#spawn-ws-row, #spawn-name-row, #spawn-prompt-row, #runtime-row, #effort-row, #spawn-account-row) > label {
+    margin: 0; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-medium); color: var(--fg);
+  }
+  #spawn #spawn-name-row > label .opt { color: var(--muted); font-weight: var(--w-regular); }
+  /* The kit's .field-help for the form's hint lines: the field's gap spaces them, a second line sits 2px under the first. */
+  #spawn .form-hint { margin: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #spawn .form-hint + .form-hint { margin-top: -4px; }
+  #spawn .form-hint:empty { display: none; }
+  /* The kit's .input: --faint border (G12), 6px radius, 32px high, 0 10px; Workspace is machine text, mono --t-sm.
+     These are id-weighted like app.css's #spawn rules they replace; the focus rule below out-weighs them. */
+  #spawn select, #spawn input, #spawn textarea { border-color: var(--faint); border-radius: var(--r-ctl); }
+  #spawn input:not([type=checkbox]):not([type=radio]) { height: var(--h-lg); padding: 0 10px; font-size: var(--t-md); }
+  #spawn select { height: var(--h-lg); padding: 0 10px; font-size: var(--t-md); }
+  #spawn #spawn-ws-input { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #spawn input::placeholder, #spawn textarea::placeholder { color: var(--muted); }
+  /* The first message: the kit's textarea.input, 72px as drawn, never shorter than 52px when dragged. */
+  #spawn textarea { height: 72px; min-height: 52px; padding: 8px 10px; font-size: var(--t-md); line-height: var(--lh-md); }
   /* The id-weighted border above beats the kit's field focus: every text field of the form takes it again here
      (checkboxes and radios keep the ring). #effort-slot's select is inside the form. app.css's two :focus rules for the
      same fields only set the border, so they gain the shadow. */
@@ -1570,16 +1619,42 @@
   #spawn-ws-input:focus, #spawn textarea:focus { box-shadow: 0 0 0 1px var(--accent); }
   /* The submit is app.css's filled primary; its hover is the kit's (F11). */
   #spawn button[type="submit"]:where(:not(:disabled)):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  /* Containment and Effort are the kit's .seg (M4.1): 2px in a --bg bar with a --line ring, 24px items, --t-sm 500.
+     The host item is red only once pressed (M4.2), never before. The buttons are app.css's plain ones (.on, .dgr), so
+     the kit's .seg-item values are stated here, scoped to the form: Settings' segs keep theirs. */
+  #spawn .seg { display: inline-flex; gap: 2px; padding: 2px; border: 0; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+  #spawn .seg[hidden] { display: none; }
+  /* In its field's column the Containment seg keeps its own width instead of stretching across it. */
+  #spawn #runtime-row > .seg { align-self: flex-start; }
+  #spawn .seg button {
+    height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted);
+    font-size: var(--t-sm); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; cursor: pointer;
+  }
+  #spawn .seg button:hover { color: var(--fg); background: var(--hover); }
+  #spawn .seg button.on { background: var(--raise); color: var(--fg); }
+  #spawn .seg button.dgr.on { background: var(--red-tint); color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .45); }
+  /* The host warning (M4.2) is the kit's .elev: a red tint, 8px 12px, a bold red "host" before the sentence. The label is
+     drawn here, desktop only, so the phone's box keeps its one sentence, and only while host is the chosen tier: the same
+     box also says "<dir> cannot be boxed" on the box tier, which is not a host warning. An empty row would still take a
+     grid gap. */
+  #spawn #spawn-warn-row #runtime-warn {
+    display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 12px;
+    background: var(--red-tint); border: 0; border-bottom: 1px solid rgba(240, 106, 106, .45); border-radius: var(--r-ctl);
+    color: var(--fg); font-size: var(--t-sm); line-height: var(--lh-md);
+  }
+  #spawn #spawn-warn-row #runtime-warn[hidden] { display: none; }
+  #spawn:has(#runtime-seg button.dgr.on) #spawn-warn-row #runtime-warn::before { content: "host"; color: var(--red); font-weight: var(--w-semibold); }
+  #spawn-warn-row { margin-top: -4px; }
+  #spawn-warn-row:not(:has(> #runtime-warn:not([hidden]))) { display: none; }
   .spawn-lbl-model { display: inline; }
   #spawn-agent-row, #spawn-prompt-hint { display: none; }
   /* #tier-explain is shown and hidden by an inline style (syncRuntimeField); the
      reach box says the same thing, so it stays hidden here. */
   #tier-explain { display: none !important; }
 
-  /* Fields in the order of the design; the grid is 12 columns wide. */
-  #spawn > #spawn-ws-row, #spawn > #spawn-name-row { grid-column: span 6; }
-  #spawn > #effort-row { grid-column: span 8; }
-  #spawn > #runtime-row { grid-column: span 4; }
+  /* Fields in the order of the design, two columns: Workspace beside Name, the first message across, Effort beside
+     Containment. Workspace wears .span2 (the phone's one column), which would take the whole row. */
+  #spawn > #spawn-ws-row { grid-column: auto; }
   #spawn > #spawn-ws-row { order: 1; }
   #spawn > #spawn-name-row { order: 2; }
   #spawn > #spawn-prompt-row { order: 3; }
@@ -1593,17 +1668,18 @@
   #spawn > #spawn-unlock { order: 11; }
   #spawn > #spawn-err { order: 12; }
   #spawn > .spawn-actions { order: 13; }
-  #effort-slot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  /* Model above Effort, 6px apart: the select takes the column, the seg its own width. */
+  #effort-slot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   #effort-slot .opt, #effort-slot .opt.opt-seg { flex: none; flex-direction: row; align-items: center; }
-  /* The Model control stays a native <select>; only its frame is ours. No width cap, so
-     a long model id is never clipped. */
+  #effort-slot .opt:not(.opt-seg) { align-self: stretch; }
+  /* The Model control stays a native <select>; only its frame is ours: the kit's select.input.mono, the column's
+     width, never capped, so a long model id is never clipped. */
   #effort-slot select {
-    width: auto; max-width: none; padding-right: 28px; appearance: none; -webkit-appearance: none;
-    background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6adc8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
-    border: 1px solid var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono);
+    width: 100%; max-width: none; padding-right: 28px; appearance: none; -webkit-appearance: none;
+    background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+    border: 1px solid var(--faint); border-radius: var(--r-ctl); font-family: var(--font-mono); font-size: var(--t-sm);
   }
   #spawn input[type="checkbox"] { accent-color: var(--accent); }
-  #spawn-name-row input::placeholder { color: var(--muted); }
 
   /* The reach box: what this session will be able to touch, from the profile. */
   #spawn-reach { display: block; box-sizing: border-box; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
@@ -1617,11 +1693,17 @@
     font-size: var(--t-xs); font-weight: 600; letter-spacing: .05em; color: var(--red);
   }
 
+  /* The footer (the kit's .dlg-foot): out of flow at the card's bottom edge across both columns, outside the form's
+     scroll box (see the card's comment above). Cancel is the secondary .btn, Start session the primary, both 28px
+     with 12px either side; the hint on the left is the chord as kit .kbd chips and "to start". */
   #spawn .spawn-actions {
-    position: sticky; bottom: 0; z-index: 2; margin-top: 4px; padding: 12px 0 14px;
-    background: var(--panel); border-top: 1px solid var(--line);
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; gap: var(--sp-2);
+    height: var(--ns-foot); margin: 0; padding: var(--sp-3) var(--sp-5); background: var(--panel); border-top: 1px solid var(--line);
   }
-  #spawn-foot-hint { display: inline; margin-right: auto; font-size: var(--t-sm); color: var(--muted); }
+  #spawn .spawn-actions .btn.gh { background: var(--raise); color: var(--fg); }
+  #spawn .spawn-actions .btn.gh:hover { background: var(--line); }
+  #spawn .spawn-actions button[type="submit"] { padding: 0 var(--sp-3); min-height: var(--h-ctl); }
+  #spawn-foot-hint { display: flex; align-items: center; gap: var(--sp-1); margin-right: auto; font-size: var(--t-sm); line-height: var(--lh-md); color: var(--muted); }
 
   /* --- pages (S4): Settings, Analytics and Audit in the pane area ---------- */
   /* pagehost.js re-parents the dialog into #page-host and shows it non-modally;

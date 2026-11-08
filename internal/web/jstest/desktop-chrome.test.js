@@ -100,16 +100,18 @@ test("the New session dialog is a plain rounded card with a header and a close, 
   assert.ok(/width:\s*820px/.test(card) && /max-height:\s*calc\(100vh - 32px\)/.test(card), "size unchanged");
   const title = rulesFor("#spawn-modal .dlg-title").join(" ");
   assert.ok(/position:\s*static/.test(title) && /transform:\s*none/.test(title), "no legend in the border");
-  assert.ok(/border-bottom:\s*1px solid var\(--line\)/.test(title), "header rule");
+  // The header's rule is the body's border-top (frame M4.1, #173), so the title carries none of its own.
+  assert.ok(!/border-bottom/.test(title), "the title's rule moved to the body");
+  assert.ok(/border-top:\s*1px solid var\(--line\)/.test(rulesFor("#spawn-modal .dlg-body").join(" ")), "header rule");
   assert.ok(rulesFor("#spawn-modal .dlg-head").some((b) => /position:\s*absolute/.test(b)), "close in the corner");
   // The close is the dialogs' one ghost X (F28, #173): a 28px square with no "Esc" word beside it.
   assert.deepStrictEqual(rulesFor("#spawn-modal .dlg-x::before"), [], "no Esc word");
   const x = rulesFor("#spawn-modal .dlg-x").join(" ");
   assert.ok(/width:\s*var\(--h-ctl\)/.test(x) && /color:\s*var\(--muted\)/.test(x), "ghost icon square");
-  // Centred on the ~52px header (title: 16px padding + one 15px line), not pinned
-  // by a fixed top that only matches one control height.
+  // Level with the title text: the head is 16px above and 12px below the 28px close (frame M4.1, #173), so the
+  // close sits 16px down and 16px in, and the title is centred on the same 28px.
   const head = rulesFor("#spawn-modal .dlg-head").join(" ");
-  assert.ok(/top:\s*26px/.test(head) && /transform:\s*translateY\(-50%\)/.test(head), "close centred on the header");
+  assert.ok(/top:\s*var\(--sp-4\)/.test(head) && /right:\s*var\(--sp-4\)/.test(head) && !/transform/.test(head), "close level with the title");
   assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /background:\s*var\(--hover\)/.test(b) && /color:\s*var\(--fg\)/.test(b)));
 });
 
@@ -133,11 +135,13 @@ test("the ask, New session and Report a problem closes are one ghost icon button
   assert.deepStrictEqual(rulesFor("#spawn-topbar .spawn-x"), [], "desktop.css leaves the phone sheet's close alone");
 });
 
-test("the profile list does not size the dialog: the form decides the height and the list scrolls", () => {
+// The body is a fixed height now (frame M4.1, #173): neither the list nor the form sizes the dialog, each scrolls inside
+// its column. (It used to be the other way round: the form decided and the list was kept from stretching it.)
+test("the profile list does not size the dialog: the body's height is fixed and the list scrolls", () => {
   const r = rulesFor("#spawn-plist").join(" ");
-  assert.ok(/contain:\s*size/.test(r), "contain: size");
-  assert.ok(/align-self:\s*stretch/.test(r), "stretch to the form's height");
-  assert.ok(/overflow-y:\s*auto/.test(r), "still scrolls");
+  assert.ok(/min-height:\s*0/.test(r), "may be shorter than its rows");
+  assert.ok(/overflow:\s*auto/.test(r), "still scrolls");
+  assert.ok(/height:\s*min\(640px,/.test(rulesFor("#spawn-modal .dlg-body").join(" ")), "the body, not the list or the form, sets the height");
 });
 
 test("the Model select is a styled native select that never clips a long id", () => {

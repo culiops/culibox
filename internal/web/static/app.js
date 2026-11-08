@@ -5406,6 +5406,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   hideSpawnUnlock();
   spawnPlistResetSearch(); // a fresh open starts with an empty profile filter
   spawnPanelOpen();
+  paintSpawnChrome();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
@@ -5533,6 +5534,38 @@ function refreshEmptyState() {
   if (key !== emptyShownKey) renderGrid();
 }
 
+// paintSpawnChrome: the parts of the New session dialog whose words depend on the layout. On the desktop (frame
+// M4.1) the submit says "Start session", the footer hint is the chord as key chips and "to start", and the Name label's
+// "(optional)" is muted; the phone keeps "Spawn ⏎", its text hint (app.css hides it) and its one text node. The
+// desktop's label is built here, not in index.html, so the phone's markup stays what it was. Called when the dialog
+// opens (the window may have changed size since boot) and at boot.
+function paintSpawnChrome() {
+  const desktop = drawerDesktop();
+  const go = $("spawn").querySelector('button[type="submit"]');
+  if (go && !go.disabled) go.textContent = spawnSubmitLabel(desktop);
+  const foot = $("spawn-foot-hint");
+  if (foot) {
+    if (desktop) {
+      const hint = spawnFootHint(IS_MAC);
+      const keys = hint.keys.map((k) => { const c = document.createElement("kbd"); c.className = "kbd"; c.textContent = k; return c; });
+      foot.replaceChildren(...keys, document.createTextNode(hint.text));
+    } else {
+      foot.textContent = shortcutHint("spawn.submit", IS_MAC) + " to spawn";
+    }
+  }
+  const name = document.querySelector('#spawn-name-row > label[for="sess-name"]');
+  if (name) {
+    if (desktop) {
+      const opt = document.createElement("span");
+      opt.className = "opt";
+      opt.textContent = "(optional)";
+      name.replaceChildren("Name ", opt);
+    } else {
+      name.textContent = "Name (optional)";
+    }
+  }
+}
+
 function initSpawnControl() {
   // The .seg's own buildSeg onChange (wired in syncRuntimeField) already calls
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
@@ -5546,8 +5579,7 @@ function initSpawnControl() {
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
   $("spawn-prompt-hint").textContent = shortcutHint("spawn.submit", IS_MAC) + " spawns";
-  const foot = $("spawn-foot-hint");
-  if (foot) foot.textContent = shortcutHint("spawn.submit", IS_MAC) + " to spawn";
+  paintSpawnChrome();
   // From any field of the form (it bubbles up from the first message, the name,
   // the selects). A button keeps its own Enter. The submit handler spawns only
   // when the workspace field shows the directory in use.
@@ -5618,7 +5650,6 @@ $("spawn").addEventListener("submit", async (ev) => {
   spawnWsPicker.close(); // the field shows the directory in use; an open list is just left over
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
-  const goLabel = goBtn ? goBtn.textContent : "";
   if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
@@ -5671,7 +5702,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     clearInterval(progTimer);
     prog.hidden = true;
     spawnBusy = false;
-    if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = goLabel; }
+    if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = spawnSubmitLabel(drawerDesktop()); }
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
