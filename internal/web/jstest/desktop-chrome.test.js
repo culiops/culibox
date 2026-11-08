@@ -676,6 +676,40 @@ test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New sessio
   assert.match(decl(".side-links"), /margin:\s*0 -8px/, "the first link's word starts on the 16px edge");
 });
 
+// Task 9 of UI plan 4 (#174). M1 (canvas lines 22-23) and M2 (lines 22-23) draw the same quota columns:
+// .m1-q / .m2-q gap var(--sp-3); .qk 20px (label), .qp 34px right (percent), .ql 70px right (reset),
+// every one flex:none, with the kit .meter between them (flex 1 1 auto).
+test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent, 70px reset, 12px apart", () => {
+  assert.match(decl("#limits-side .mtr"), /gap:\s*var\(--sp-3\)/);
+  const lab = decl("#limits-side .mtr > span:first-child");
+  assert.match(lab, /width:\s*20px/);
+  assert.match(lab, /flex:\s*none/);
+  const pc = decl("#limits-side .mtr .pc");
+  assert.match(pc, /width:\s*34px/);
+  assert.match(pc, /flex:\s*none/);
+  assert.match(pc, /text-align:\s*right/);
+  const rs = decl("#limits-side .mtr .rs");
+  assert.match(rs, /width:\s*70px/);
+  assert.match(rs, /flex:\s*none/);
+  assert.match(rs, /text-align:\s*right/);
+  assert.ok(!/em\b|\dch\b/.test(lab + pc + rs), "the em/ch widths of the old columns are gone");
+  assert.match(decl("#limits-side .mtr .bar"), /flex:\s*1\b/, "the bar still takes what the columns leave");
+  // "limit reached · resets 25m" replaces the percentage and is far wider than 70px: it keeps its
+  // own width and may ellipsize, as before the columns were fixed.
+  const lim = decl("#limits-side .mtr .limit");
+  assert.match(lim, /width:\s*auto/);
+  assert.match(lim, /flex:\s*0 1 auto/);
+  assert.match(lim, /min-width:\s*0/);
+});
+
+test("the sidebar's store line is neutral: 12px, --muted, nothing amber, no icon or link", () => {
+  const d = decl("#side-store");
+  assert.match(d, /font-size:\s*var\(--t-sm\)/);
+  assert.match(d, /color:\s*var\(--muted\)/);
+  assert.ok(!/amber|warn|red|--accent/.test(d));
+  assert.match(decl("#side-store[hidden]"), /display:\s*none/);
+});
+
 test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button (accent, p2)", () => {
   const rail = decl(".sidebar-hidden .rail48");
   assert.match(rail, /padding:\s*12px 0 10px/);

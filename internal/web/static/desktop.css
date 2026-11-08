@@ -558,19 +558,23 @@
   #limits-side { display: flex; flex-direction: column; gap: 6px; }
   #limits-side[hidden] { display: none; }
   #limits-side .acct-lab { font-size: var(--t-xs); color: var(--muted); }
-  #limits-side .mtr { gap: 8px; font-size: var(--t-sm); color: var(--muted); }
-  #limits-side .mtr > span:first-child { width: 2.4em; }
+  /* The quota columns are the frames': M1 (.m1-q) and M2 (.m2-q) draw them alike, a var(--sp-3) gap with
+     the label 20px, the percent 34px right and the reset 70px right, each flex:none, and the bar (flex 1,
+     the kit .meter) between. Widths, alignment and gap only: the markup order and the colours are today's. */
+  #limits-side .mtr { gap: var(--sp-3); font-size: var(--t-sm); color: var(--muted); }
+  #limits-side .mtr > span:first-child { width: 20px; flex: none; }
   #limits-side .mtr .bar { flex: 1; width: auto; min-width: 24px; height: 4px; border-radius: 2px; background: var(--line); }
   #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
-  #limits-side .mtr .rs { min-width: 6.4em; text-align: right; }
-  #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
+  #limits-side .mtr .rs { width: 70px; flex: none; text-align: right; }
+  #limits-side .mtr .pc { width: 34px; flex: none; text-align: right; }
   #limits-side .mtr.hot .bar i { background: var(--fg); }
   #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
   /* A window at 100% or more (renderRateLimitsInto, F32): "limit reached · resets 25m" replaces the
      percentage. Plain --fg at 600: not amber (that is an agent blocked on you) and not red (a fact,
-     not a write). It is wider than "2h 14m left", so it may shrink and ellipsize before the label does. */
+     not a write). It is wider than "2h 14m left", so it is no 70px column: it keeps its own width, and may
+     shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
-  #limits-side .mtr .limit { color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
   #side-cost { font-variant-numeric: tabular-nums; }
   #side-cost[hidden] { display: none; }
@@ -579,6 +583,11 @@
   #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: 600; }
+  /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).
+     Its own row above the links, neutral: 12px --muted. Not amber (nothing is blocked yet), no icon, no link;
+     hidden it takes no row and so no 8px gap. */
+  #side-store { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+  #side-store[hidden] { display: none; }
   .side-links { display: flex; gap: 2px; margin: 0 -8px; } /* the buttons' 8px padding: the first word starts on the 16px edge */
   .side-links button {
     padding: 5px 8px; font: var(--t-sm) var(--font-ui); cursor: pointer;
