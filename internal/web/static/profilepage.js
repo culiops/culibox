@@ -34,7 +34,7 @@
 // or view, and the page is the record edits.draft); src what a copy is made from, back the profile Cancel returns to,
 // created the profile whose "Profile created" line the overview shows (createdBy "new": with its next steps, "dup": the line only).
 const pfvState = {
-  name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], advOpen: null, edits: {}, saved: [], warnings: [], saving: false, drawer: false,
+  name: "", doc: null, view: null, openBlock: "", pending: false, errors: [], edits: {}, saved: [], warnings: [], saving: false, drawer: false,
   page: "", src: null, back: "", created: "", createdBy: "",
   get picker() {
     return Object.keys(this.edits).find((i) => this.edits[i].ui && this.edits[i].ui.picker === true) || "";
@@ -56,7 +56,7 @@ let pfvNavKey = "";
 // The open header menu: {wrap, btn, pop}, or null.
 let pfvMenu = null;
 // The nodes the last draw made that later code reaches for: the header's "Unsaved
-// changes" note, each block's Edit link (to give focus back) and the "Saved" notes.
+// changes" note, each block's Edit button (to give focus back) and the "Saved" notes.
 let pfvRefs = { unsaved: null, edit: {}, saved: [] };
 // The timer that takes "Saved" away.
 let pfvSavedTimer = null;
@@ -113,16 +113,13 @@ function pfvIcon(cls, w, h, box, shapes) {
   }
   return s;
 }
-const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1.2" };
+// The frame's lock (M2.1 `.m2-pitem` svg, 10x12, stroke 1). Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so the phone
+// never gets one.
+const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1" };
 function pfvLockIcon() {
-  return pfvIcon("pfv-lock", 10, 11, "0 0 10 11", [
-    ["rect", Object.assign({ x: "1.5", y: "4.6", width: "7", height: "5.4", rx: "1.2" }, PFV_STROKE)],
-    ["path", Object.assign({ d: "M3.2 4.6V3.3a1.8 1.8 0 0 1 3.6 0v1.3" }, PFV_STROKE)],
-  ]);
-}
-function pfvChevronIcon() {
-  return pfvIcon("pfv-chev", 10, 10, "0 0 10 10", [
-    ["path", { d: "M3.5 2l3 3-3 3", fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round", "stroke-linejoin": "round" }],
+  return pfvIcon("pfv-lock", 10, 12, "0 0 10 12", [
+    ["rect", Object.assign({ x: "1.5", y: "5.5", width: "7", height: "5.5", rx: "1" }, PFV_STROKE)],
+    ["path", Object.assign({ d: "M3 5.5V3.75a2 2 0 0 1 4 0V5.5" }, PFV_STROKE)],
   ]);
 }
 function pfvDotsIcon() {
@@ -133,9 +130,9 @@ function pfvDotsIcon() {
   ]);
 }
 
-// pfvMonoNodes: `text` as nodes, machine text in .pfv-mono spans. `known` lists
-// exact strings that are machine text too (the model id).
-function pfvMonoNodes(text, known) {
+// pfvMonoNodes: `text` as nodes, machine text in .pfv-mono spans (or `cls`: the head's agent line wears the kit's "mono t-sm").
+// `known` lists exact strings that are machine text too (the model id).
+function pfvMonoNodes(text, known, cls) {
   const s = String(text == null ? "" : text);
   const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const own = (Array.isArray(known) ? known : []).filter((k) => typeof k === "string" && k !== "").map(esc);
@@ -152,7 +149,7 @@ function pfvMonoNodes(text, known) {
     }
     if (hit === "") { i++; continue; }
     if (i > at) out.push(s.slice(at, i));
-    out.push(pfvMk("span", "pfv-mono", hit));
+    out.push(pfvMk("span", cls || "pfv-mono", hit));
     i += hit.length;
     at = i;
   }
@@ -186,8 +183,8 @@ function pfvOnPage() {
 
 // --- the nav list -------------------------------------------------------------
 
-// pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, the
-// muted tier word, a lock for one you cannot edit, then "+ New profile". The list is
+// pfvRenderNav: the profiles nested under Profiles in the Settings nav: name, a lock
+// for one you cannot edit, the tier chip, then "+ New profile". The list is
 // rebuilt only when what it shows changed (every loadProfiles hands back new objects);
 // otherwise only the current row's aria-current moves, so a refetch or a click never
 // replaces the button that has focus.
@@ -203,13 +200,15 @@ function pfvRenderNav() {
       const b = pfvMk("button", "pfv-ni");
       b.type = "button";
       b.dataset.pfvName = p.name;
-      const tier = pfvMk("span", "pfv-ni-tier");
+      // The M2 row: name, a lock for a read-only profile, then the tier as a chip. The chip holds the word alone
+      // (it is a filled box), so the lock and its words for a screen reader sit beside it, in front.
+      const host = p.runtime === "host";
+      b.append(pfvMk("span", "pfv-ni-name", p.name));
       if (!p.editable) {
         b.setAttribute("title", "Defined in config.json (read-only)");
-        tier.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
+        b.append(pfvLockIcon(), pfvMk("span", "pfv-sr", "read-only, "));
       }
-      tier.append(p.runtime === "host" ? "host" : "box");
-      b.append(pfvMk("span", "pfv-ni-name", p.name), tier);
+      b.append(pfvMk("span", host ? "pfv-ni-tier pfv-ni-host" : "pfv-ni-tier", host ? "host" : "box"));
       b.onclick = () => pfvSwitch(p.name);
       return b;
     });
@@ -240,13 +239,6 @@ function pfvRenderNav() {
 
 // --- the header -----------------------------------------------------------------
 
-function pfvBtn(label, kind, onclick) {
-  const b = pfvMk("button", "pfv-btn pfv-btn-" + kind, label);
-  b.type = "button";
-  if (onclick) b.onclick = onclick;
-  return b;
-}
-
 function pfvMenuClose(refocus) {
   if (!pfvMenu) return;
   const m = pfvMenu;
@@ -262,7 +254,9 @@ function pfvMenuClose(refocus) {
 // way, focus on the ⋯ first, so a cancelled confirm hands focus back to the ⋯ and not to the body.
 function pfvMoreMenu(name) {
   const wrap = pfvMk("div", "pfv-more");
-  const btn = pfvBtn("", "secondary pfv-btn-icon");
+  // The kit's 28px icon button (.btn .btn-icon), a secondary: the menu below is untouched.
+  const btn = pfvMk("button", "btn btn-icon");
+  btn.type = "button";
   btn.setAttribute("aria-label", "More actions for " + name);
   btn.setAttribute("title", "More actions");
   btn.setAttribute("aria-haspopup", "menu");
@@ -295,16 +289,50 @@ function pfvMoreMenu(name) {
   return wrap;
 }
 
+// pfvHeaderPrimary: which control of the head is the page's one primary (frame M2.1 and M2.2). Start session while no block is
+// open, whether the profile can be edited or not; none while a block is in edit, because its Save is the one primary then and
+// Start session steps down to a secondary (frame M2.2: at most one primary in the view). h: {readOnly, editing}.
+function pfvHeaderPrimary(h) {
+  return h && h.editing === true ? "none" : "start";
+}
+
+// pfvKitBtn: a kit button (§C3: .btn, 28px), the page's only button builder: the head's, a block's foot's and the New profile page's. cls adds
+// "btn-primary" for the one primary of the view and nothing for a secondary (Cancel is never primary, and never a ghost).
+function pfvKitBtn(label, cls, onclick) {
+  const b = pfvMk("button", "btn" + (cls ? " " + cls : ""), label);
+  b.type = "button";
+  if (onclick) b.onclick = onclick;
+  return b;
+}
+
+// pfvHeadTail: what ends the actions of every Settings page head: Esc ✕, behind a 1x16 divider when the head has an action of its own before it
+// (the overview: Start session and the menu), and alone when it has none (the New profile and Duplicate pages, pfv-new.js): as settingshead.js,
+// which draws the divider only when there is an action to divide. The Settings top bar is gone, so the head is where the page closes from.
+// settingshead.js builds Esc ✕ for every page; it loads before this script, and a page without it still works. hasAction: false for none.
+function pfvHeadTail(hasAction) {
+  const esc = typeof settingsEscButton === "function" ? [settingsEscButton()] : [];
+  if (hasAction === false) return esc;
+  const sep = pfvMk("span", "set-sep");
+  sep.setAttribute("aria-hidden", "true");
+  return [sep, ...esc];
+}
+
+// pfvDrawHeader: the page head (frame M2.1, design digest §B1.4), the kit's page head the other five Settings pages draw
+// (settingshead.js): the name with its containment chip over the agent line (the model in mono), then Start session, the ⋯ menu
+// (or Duplicate… for a profile defined in config.json), a divider and Esc ✕. The look is desktop.css's, under #pfv.
 function pfvDrawHeader(rv, known) {
   const h = rv.header;
   const head = pfvMk("div", "pfv-head");
-  const left = pfvMk("div", "pfv-head-main");
+  const left = pfvMk("div", "page-head-text pfv-head-main");
   const title = pfvMk("div", "pfv-title");
-  title.append(pfvMk("h2", "pfv-title-name", h.name), pfvMk("span", "pfv-chip" + (h.tier === "host" ? " pfv-chip-host" : ""), h.tier));
-  const sub = pfvMk("p", "pfv-hsub");
-  sub.append(...pfvMonoNodes(h.agentLine, known));
+  const h1 = pfvMk("h1", "page-title", h.name);
+  // A long name ellipsizes in a narrow window (desktop.css): the whole of it is one hover away.
+  h1.setAttribute("title", h.name);
+  title.append(h1, pfvMk("span", "chip " + (h.tier === "host" ? "chip-host" : "chip-box"), h.tier));
+  const sub = pfvMk("p", "page-desc");
+  sub.append(...pfvMonoNodes(h.agentLine, known, "mono t-sm"));
   left.append(title, sub);
-  const acts = pfvMk("div", "pfv-acts");
+  const acts = pfvMk("div", "page-actions");
   // Shown while any open block differs from what is stored; "Show" takes you to it.
   const unsaved = pfvMk("span", "pfv-unsaved");
   unsaved.hidden = !pfvAnyDirty();
@@ -312,11 +340,13 @@ function pfvDrawHeader(rv, known) {
   show.onclick = () => pfvShowBlock(pfvFirstDirty());
   unsaved.append(pfvMk("span", "pfv-udot"), "Unsaved changes", show);
   pfvRefs.unsaved = unsaved;
-  acts.append(unsaved, pfvBtn("Start session", "secondary", () => openSpawnDialog(h.name)));
-  // Read-only: Duplicate is the way to a profile you can change, so it leads and
-  // there is no menu (nothing to delete).
-  if (h.readOnly) acts.append(pfvBtn("Duplicate", "primary", () => pfvDuplicate()));
+  const primary = pfvHeaderPrimary({ readOnly: h.readOnly, editing: pfvState.openBlock !== "" });
+  acts.append(unsaved, pfvKitBtn("Start session", primary === "start" ? "btn-primary" : "", () => openSpawnDialog(h.name)));
+  // Read-only: Duplicate… is the way to a profile you can change, so it is the one action beside Start session and
+  // there is no menu (nothing to delete). It is a secondary: Start session is the page's one primary.
+  if (h.readOnly) acts.append(pfvKitBtn("Duplicate…", "", () => pfvDuplicate()));
   else acts.append(pfvMoreMenu(h.name));
+  acts.append(...pfvHeadTail(true));
   head.append(left, acts);
   return head;
 }
@@ -410,10 +440,10 @@ function pfvDrawBranches(notHome, rows) {
 // user here): the refusals that name one of its rows are drawn under that row.
 function pfvDrawBody(b, known, rec) {
   const body = pfvMk("div", "pfv-body");
-  const empty = b.rows.length === 0 && (b.id === "cloud" || b.id === "reachable");
   b.lines.forEach((line, i) => {
     if (line === "") return;
-    const cls = empty ? "pfv-empty" : i === 0 ? "pfv-main" : "pfv-sub";
+    // An empty Cloud and tokens / Also reachable block is a value and a helper like every other ("Nothing yet", then why: frame M2.1).
+    const cls = i === 0 ? "pfv-main" : "pfv-sub";
     const p = pfvMk("p", cls + (b.tone === "error" && i === b.toneAt ? " pfv-red" : ""));
     p.append(...pfvMonoNodes(line, known));
     body.append(p);
@@ -439,18 +469,21 @@ function pfvDrawBody(b, known, rec) {
   // Offered by the read model only where it can be used.
   if (b.switchToBox) {
     const act = pfvMk("div", "pfv-stmt-act");
-    act.append(pfvBtn("Switch to box", "secondary", pfvSwitchToBox));
+    act.append(pfvKitBtn("Switch to box", "", pfvSwitchToBox));
     body.append(act);
   }
   return body;
 }
 
-// pfvDrawAct: the Edit link, and the "Saved" note for a moment after a save. Only the blocks
+// pfvDrawAct: the Edit button, and the "Saved" note for a moment after a save. Only the blocks
 // that have an editor open; the others are drawn but inert until their task.
 function pfvDrawAct(b) {
   const act = pfvMk("div", "pfv-act");
   if (b.edit) {
-    const link = pfvDrawLink("Edit", "", PFV_EDIT_LABEL[b.id] || "Edit " + b.label.toLowerCase());
+    // The kit's small ghost button (§B2 `.m2-edit`), in the block's third column: beside the value, not a link at the far edge.
+    const link = pfvMk("button", "btn btn-ghost btn-sm", "Edit");
+    link.type = "button";
+    link.setAttribute("aria-label", PFV_EDIT_LABEL[b.id] || "Edit " + b.label.toLowerCase());
     if (PFV_EDITORS[b.id]) link.onclick = () => pfvOpenBlock(b.id);
     pfvRefs.edit[b.id] = link;
     act.append(link);
@@ -467,29 +500,22 @@ function pfvDrawAct(b) {
   return act;
 }
 
-// pfvAdvLabel: what the Advanced label says: the chevron, the name and how many are set.
-const pfvAdvLabel = (b) => [pfvChevronIcon(), b.label, " ", pfvMk("span", "pfv-muted", "· " + b.status)];
+// pfvDrawAdvLabel: Advanced's label, in the read view and while it is edited: the name, and under it how many are set ("none set",
+// "2 set": §A2, under the label and not after it on its line). The same h3 as every block's label: Advanced is a normal block (frame M2.1:
+// no chevron, no collapse), so there is no toggle in it.
+function pfvDrawAdvLabel(b) {
+  const label = pfvMk("h3", "pfv-label", b.label);
+  label.append(pfvMk("span", "pfv-advst", b.status));
+  return label;
+}
 
-// pfvDrawAdvanced: the folded block. "Advanced · N set" opens by itself when N > 0
-// (pfvState.advOpen overrides once the user has toggled it); with nothing set there
-// is nothing to unfold, so the label is not a button.
+// pfvDrawAdvanced: the seventh block of the card. With something set its value is the list of what is; with nothing set it is the helper
+// (b.lines[0]: "Arguments, environment variables, sidebar replies and CLAUDE.md imports. All at their defaults."). Edit is in column 3.
 function pfvDrawAdvanced(b, known) {
-  const open = b.count > 0 && (pfvState.advOpen === null ? b.open === true : pfvState.advOpen);
-  const sec = pfvMk("section", "pfv-block" + (open ? " pfv-open" : ""));
+  const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
-  const label = pfvMk("h4", "pfv-label pfv-adv-label");
-  if (b.count > 0) {
-    const fold = pfvMk("button", "pfv-fold");
-    fold.type = "button";
-    fold.setAttribute("aria-expanded", open ? "true" : "false");
-    fold.append(...pfvAdvLabel(b));
-    fold.onclick = () => { pfvState.advOpen = !open; pfvRender(); };
-    label.append(fold);
-  } else {
-    label.append(...pfvAdvLabel(b));
-  }
   const body = pfvMk("div", "pfv-body pfv-adv-body");
-  if (open) {
+  if (b.count > 0) {
     const dl = pfvMk("dl", "pfv-dl");
     for (const r of b.rows) {
       const dd = pfvMk("dd");
@@ -502,7 +528,7 @@ function pfvDrawAdvanced(b, known) {
   } else {
     body.append(pfvMk("p", "pfv-adv-sum", b.lines[0] || ""));
   }
-  sec.append(label, pfvDrawAct(b), body);
+  sec.append(pfvDrawAdvLabel(b), body, pfvDrawAct(b));
   return sec;
 }
 
@@ -512,7 +538,7 @@ function pfvDrawBlock(b, known) {
   if (b.id === "advanced") return pfvDrawAdvanced(b, known);
   const sec = pfvMk("section", "pfv-block");
   sec.dataset.block = b.id;
-  sec.append(pfvMk("h4", "pfv-label", b.label), pfvDrawBody(b, known), pfvDrawAct(b));
+  sec.append(pfvMk("h3", "pfv-label", b.label), pfvDrawBody(b, known), pfvDrawAct(b));
   return sec;
 }
 
@@ -547,19 +573,35 @@ function pfvRender() {
   pfvRefs = { unsaved: null, edit: {}, saved: [] };
   const o = pfvState.doc.options && typeof pfvState.doc.options === "object" ? pfvState.doc.options : {};
   const known = typeof o.model === "string" && o.model !== "" ? [o.model] : [];
-  const sheet = pfvMk("div", "pfv-sheet");
-  const tail = pfvMk("div", "pfv-sheet");
-  const heading = pfvMk("h3", "pfv-sheet-h", "This agent will be able to");
-  for (const b of rv.blocks) (b.id === "advanced" ? tail : sheet).append(pfvDrawBlock(b, known));
+  const heading = pfvMk("h2", "pfv-sheet-h", "This agent will be able to");
   const kids = [...pfvDrawErrors(), pfvDrawHeader(rv, known)];
   if (rv.note) kids.push(pfvDrawNote(rv.note));
   for (const w of pfvState.warnings) kids.push(pfvMk("p", "pfv-warn", w));
   // Right after Create: what the new profile may need next (pfv-new.js).
   if (pfvState.created !== "" && pfvState.created === pfvState.name) kids.push(pfvNextSteps(rv));
-  kids.push(heading, sheet, tail);
+  kids.push(heading, ...pfvDrawSheets(rv, known));
   root.replaceChildren(...kids);
   pfvMenu = null;
   pfvDrawn = pfvKey();
+}
+
+// pfvDrawSheets: the blocks as cards. One card holds them all (frame M2.1: Advanced is its seventh block); a block in edit is the card of its
+// own (frame M2.2, §B3: "the editing block as its own card"), with the blocks before it in one card and the blocks after it in another,
+// so the card holds the form and its foot and nothing else. Two blocks open at once (a refusal opens a second form) are two cards.
+function pfvDrawSheets(rv, known) {
+  const sheets = [];
+  let card = null;
+  let cardOpen = false;
+  for (const b of rv.blocks) {
+    const open = !!pfvState.edits[b.id];
+    if (card === null || open || cardOpen) {
+      card = pfvMk("div", "pfv-sheet");
+      cardOpen = open;
+      sheets.push(card);
+    }
+    card.append(pfvDrawBlock(b, known));
+  }
+  return sheets;
 }
 
 // pfvCredsKey: what the read model takes from /api/credentials: whether the store is
@@ -627,7 +669,6 @@ async function pfvShow(name) {
   if (pick !== pfvState.name) {
     pfvState.doc = null;
     pfvDropEdits();
-    pfvState.advOpen = null;
     pfvState.errors = [];
     pfvState.warnings = [];
     pfvClearSaved();
@@ -1355,13 +1396,15 @@ function pfvPageLeave(why) {
 // --- editing: the block and its footer --------------------------------------------------------------
 
 // pfvDrawEditBlock: the open block: its label, the form (or, for a block opened only to show a
-// refusal, the read rows), and the footer. The form is drawn from rec.values, so redrawing
+// refusal, the read rows), and the foot. The form is drawn from rec.values, so redrawing
 // it loses nothing. Created once per draw; the parts that change as the user types are
-// filled by pfvFillForm and pfvPaintEdit.
+// filled by pfvFillForm and pfvPaintEdit. Frame M2.2 (§A3, §B3): the section is the card's one block, and its foot, the status line then
+// Cancel and Save, is the last row of it, across the card's full width (the section's grid is the label's and the form's; pfvRender
+// puts the section in a card of its own).
 function pfvDrawEditBlock(b, rec, known) {
-  // Advanced keeps its fold label while it is edited (the mockup's: the chevron turned down and what is set), the form under it.
+  // Advanced keeps its label while it is edited (the name and what is set under it, as in the read view).
   const adv = b.id === "advanced";
-  const sec = pfvMk("section", "pfv-block pfv-editing" + (adv ? " pfv-open" : ""));
+  const sec = pfvMk("section", "pfv-block pfv-editing");
   sec.dataset.block = b.id;
   const body = pfvMk("div", "pfv-body pfv-edit-body" + (adv ? " pfv-adv-body" : ""));
   const top = pfvMk("div", "pfv-top");
@@ -1369,19 +1412,14 @@ function pfvDrawEditBlock(b, rec, known) {
   const foot = pfvMk("div", "pfv-foot");
   const status = pfvMk("div", "pfv-status");
   status.setAttribute("role", "status");
-  const btns = pfvMk("div", "pfv-fbtns");
   // One button for both: with no change it reads Cancel, with changes Discard; either way what it drops is nothing the user has not seen.
-  const discard = pfvBtn("Cancel", "ghost", () => pfvCloseBlock(true, b.id));
-  const save = pfvBtn("Save", "primary", () => pfvSaveBlock(b.id));
-  btns.append(discard, save);
-  foot.append(status, btns);
-  body.append(top, form, foot);
-  let label = pfvMk("h4", "pfv-label", b.label);
-  if (adv) {
-    label = pfvMk("h4", "pfv-label pfv-adv-label");
-    label.append(...pfvAdvLabel(b));
-  }
-  sec.append(label, body);
+  // Cancel is a secondary and Save the view's one primary (the head's Start session steps down while a block is open).
+  const discard = pfvKitBtn("Cancel", "", () => pfvCloseBlock(true, b.id));
+  const save = pfvKitBtn("Save", "btn-primary", () => pfvSaveBlock(b.id));
+  foot.append(status, discard, save);
+  body.append(top, form);
+  const label = adv ? pfvDrawAdvLabel(b) : pfvMk("h3", "pfv-label", b.label);
+  sec.append(label, body, foot);
   rec.block = b;
   rec.known = known;
   rec.nodes = { sec, top, form, status, discard, save };
@@ -1456,6 +1494,7 @@ function pfvPaintEdit(rec) {
   if (n.save.getAttribute("aria-busy") !== "true") {
     const label = (ed && ed.saveLabel && ed.saveLabel(rec, c)) || "Save";
     n.save.textContent = label;
+    // "Save as host…" is still the one primary of the view (the one button that saves), drawn red on clear: a way into losing the container.
     n.save.classList.toggle("pfv-btn-host", label !== "Save");
   }
 }
@@ -1796,7 +1835,8 @@ function pfvSwitchToBox() {
 }
 
 function pfvCard(rec, key, o) {
-  const lab = pfvMk("label", "pfv-card" + (o.checked ? " pfv-on" : "") + (o.disabled ? " pfv-off" : ""));
+  // The kit's option card (§D `.m2-opt`, desktop.css `.opt-card`): the chosen one is-on, filled --raise; .pfv-card lays the radio and the words out.
+  const lab = pfvMk("label", "opt-card pfv-card" + (o.checked ? " is-on" : "") + (o.disabled ? " pfv-off" : ""));
   const r = pfvMk("input");
   r.type = "radio";
   r.name = o.group || "pfv_tier"; // the radio group (an underscore: the class scan reads pfv- words as classes)

@@ -599,13 +599,14 @@ test("desktop creds cards stack when #creds-body is narrow, keyed on the body no
 });
 
 // The fixed-layout tables size every column as a share of the table: a px
-// column left Used by 0px wide in a ~1000px window.
+// column left Used by 0px wide in a ~1000px window. The shares are on the colgroup's <col>s, one set for the head
+// cells and the rows (G16, UI plan 4 Task 5).
 test("desktop creds table: fixed-layout column widths are percentages", () => {
   const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
-  const widths = [...css.matchAll(/\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th:nth-child\(\d\) \{ width: ([^;]+); \}/g)].map((m) => m[1]);
-  assert.ok(widths.length >= 4, "column widths are declared");
+  const widths = [...css.matchAll(/\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab col:nth-child\(\d\) \{ width: ([^;]+); \}/g)].map((m) => m[1]);
+  assert.strictEqual(widths.length, 5, "every column of the one colgroup has a share");
   for (const w of widths) assert.match(w, /^\d+(\.\d+)?%$/);
-  assert.ok(widths.reduce((n, w) => n + parseFloat(w), 0) < 100, "Used by keeps a share");
+  assert.strictEqual(Math.round(widths.reduce((n, w) => n + parseFloat(w), 0) * 10) / 10, 100, "the shares are the whole table, Used by's included");
   assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
 });
 

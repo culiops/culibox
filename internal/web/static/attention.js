@@ -221,13 +221,77 @@ function needsTransitions(prev, sessions, now) {
   return { next, fired };
 }
 
-// notifyAvailability: can the toggle be offered at all on this page? The
-// tailnet http:// origins are not secure contexts, and browsers only expose
-// notifications to secure ones.
+// notifyAvailability: can the toggle be offered at all on this page, and if not, which of the four ways is it
+// unavailable? `state` is "insecure" (a plain-http page: the tailnet origins are not secure contexts, and browsers
+// only expose notifications to secure ones), "unsupported" (no Notification in this browser), "denied" (the user
+// blocked this address in the browser, where only the browser can undo it) or "ready". The state picks the row's
+// words (notifyRowCopy); `reason` is the first sentence of those, for a caller that wants one line.
 function notifyAvailability(secure, permission) {
-  if (!secure) return { enabled: false, reason: "Requires HTTPS — open CuliBox over an https:// URL" };
-  if (permission === "unsupported") return { enabled: false, reason: "This browser does not support notifications." };
-  return { enabled: true, reason: "" };
+  if (!secure) return { enabled: false, state: "insecure", reason: "Not available at this address." };
+  if (permission === "unsupported") return { enabled: false, state: "unsupported", reason: "This browser does not support notifications." };
+  if (permission === "denied") return { enabled: false, state: "denied", reason: "This browser has blocked notifications for this address." };
+  return { enabled: true, state: "ready", reason: "" };
+}
+
+// notifyOrigin: the page's origin as the browser writes it, or "" when `origin` is not one (nothing to say about it).
+function notifyOrigin(origin) {
+  try {
+    const o = new URL(String(origin)).origin;
+    return o === "null" ? "" : o;
+  } catch (_) {
+    return "";
+  }
+}
+
+// notifyLocalhost: this page's address as the machine CuliBox runs on writes it (localhost counts as a secure
+// context): 127.0.0.1 and the page's own port, none when the page has none (the default port is never written).
+function notifyLocalhost(origin) {
+  let port = "";
+  try { port = new URL(String(origin)).port; } catch (_) { /* not an origin: no port to carry */ }
+  return "http://127.0.0.1" + (port ? ":" + port : "");
+}
+
+// notifyRowCopy: the words of Settings > Appearance > Alerts, for the state notifyAvailability named (the wording is
+// frame M8.1: a http origin (a), available (b), blocked (d)). Pure, and the page origin is interpolated here but only
+// ever drawn as text (app.js paintNotifyWhy). `wantedOn` is whether the switch is on. `permission` is optional: with
+// "granted" a switch that is off needs no prompt, so the line does not promise one.
+//   helper     one line under the switch (available, or no Notification), else ""
+//   para       the paragraph of a state with a way out (http, blocked), else ""; paraMono: its machine-text parts, in order
+//   heading    the list's heading ("How to enable" on http), else ""
+//   steps      the list: {lead?, text, mono?}; `mono` names the parts of `text` that are machine text, in order
+//   checkAgain the browser can be asked again (blocked), so the row offers Check again
+// The "ended" class is left out of the helper on purpose: nothing fires on it today (UI plan 4, my call 5).
+function notifyRowCopy(state, wantedOn, origin, permission) {
+  const copy = (o) => Object.assign({ helper: "", para: "", paraMono: [], heading: "", steps: [], checkAgain: false }, o);
+  if (state === "insecure") {
+    const page = notifyOrigin(origin);
+    const local = notifyLocalhost(origin);
+    return copy({
+      para: "Not available at this address. Browsers allow notifications only on https:// or localhost pages" + (page ? ", and this page is " + page + "." : "."),
+      paraMono: page ? ["https://", page] : ["https://"],
+      heading: "How to enable",
+      steps: [
+        { text: "On the machine CuliBox runs on, open " + local + ". Localhost counts as secure.", mono: [local] },
+        { text: "From another device, put HTTPS in front of CuliBox yourself, for example tailscale serve or your own reverse proxy, and open that https:// address.", mono: ["tailscale serve", "https://"] },
+      ],
+    });
+  }
+  if (state === "denied") {
+    return copy({
+      para: "This browser has blocked notifications for this address. Only the browser can undo that:",
+      steps: [
+        { lead: "Chrome, Edge:", text: "click the icon left of the address, set Notifications to Allow, then reload." },
+        { lead: "Firefox:", text: "click the icon left of the address and clear the Notifications block, then reload." },
+        { lead: "Safari:", text: "Safari \u203a Settings \u203a Websites \u203a Notifications, set this address to Allow." },
+      ],
+      checkAgain: true,
+    });
+  }
+  if (state === "ready") {
+    const on = "When this tab is not focused: blocked on you or done. This browser only.";
+    return copy({ helper: wantedOn || permission === "granted" ? on : on + " Your browser asks for permission when you turn it on." });
+  }
+  return copy({ helper: "This browser does not support notifications." });
 }
 
 // notifyChecked: the toggle reads on only when the operator opted in AND the
@@ -417,6 +481,6 @@ function ssoDoneKeep(prevActivity, activity, exited) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
-    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
+    notifyAvailability, notifyRowCopy, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }

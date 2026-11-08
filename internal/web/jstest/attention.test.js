@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
+const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyRowCopy, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -134,12 +134,113 @@ test("idle, done and unknown states never fire", () => {
   assert.deepEqual(r.fired, []);
 });
 
-test("notifyAvailability: insecure origin disables with the HTTPS hint", () => {
-  const a = notifyAvailability(false, "default");
-  assert.strictEqual(a.enabled, false);
-  assert.match(a.reason, /Requires HTTPS — open CuliBox over an https:\/\/ URL/);
-  assert.strictEqual(notifyAvailability(true, "unsupported").enabled, false);
-  assert.deepEqual(notifyAvailability(true, "default"), { enabled: true, reason: "" });
+test("notifyAvailability names the state: insecure, unsupported, denied or ready", () => {
+  // UI plan 4 Task 8 (#174, F39): the row says WHY it is off, so the state is named, not only the switch.
+  const at = (secure, perm) => { const a = notifyAvailability(secure, perm); return [a.enabled, a.state]; };
+  assert.deepEqual(at(false, "default"), [false, "insecure"]);
+  assert.deepEqual(at(true, "unsupported"), [false, "unsupported"]);
+  assert.deepEqual(at(true, "denied"), [false, "denied"]);
+  assert.deepEqual(at(true, "default"), [true, "ready"]);
+  assert.deepEqual(at(true, "granted"), [true, "ready"]);
+  // An http page is an http page whatever the browser says about Notification: HTTPS is the way out either way.
+  assert.deepEqual(at(false, "unsupported"), [false, "insecure"]);
+  assert.deepEqual(at(false, "denied"), [false, "insecure"]);
+  // `reason` stays for a caller that reads it: the first sentence of the row's paragraph, and none when ready.
+  assert.strictEqual(notifyAvailability(false, "default").reason, "Not available at this address.");
+  assert.strictEqual(notifyAvailability(true, "denied").reason, "This browser has blocked notifications for this address.");
+  assert.strictEqual(notifyAvailability(true, "unsupported").reason, "This browser does not support notifications.");
+  assert.strictEqual(notifyAvailability(true, "default").reason, "");
+});
+
+test("notifyRowCopy, http origin: says it is not available here, names the page, and gives the two ways out (M8.1 a)", () => {
+  const c = notifyRowCopy("insecure", false, "http://100.76.118.121:8899");
+  assert.strictEqual(c.para, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://100.76.118.121:8899.");
+  assert.deepEqual(c.paraMono, ["https://", "http://100.76.118.121:8899"], "the parts of the paragraph that are machine text, in order");
+  assert.strictEqual(c.heading, "How to enable");
+  assert.strictEqual(c.helper, "");
+  assert.strictEqual(c.checkAgain, false);
+  assert.deepEqual(c.steps, [
+    { text: "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.", mono: ["http://127.0.0.1:8899"] },
+    { text: "From another device, put HTTPS in front of CuliBox yourself, for example tailscale serve or your own reverse proxy, and open that https:// address.", mono: ["tailscale serve", "https://"] },
+  ]);
+  // The monospaced parts really are in the text, in the order the painter will meet them.
+  for (const t of [{ text: c.para, mono: c.paraMono }, ...c.steps]) {
+    let at = 0;
+    for (const m of t.mono) { const i = t.text.indexOf(m, at); assert.ok(i >= 0, m + " is in: " + t.text); at = i + m.length; }
+  }
+  // Whether the user is opted in changes nothing on a page that cannot ask.
+  assert.deepEqual(notifyRowCopy("insecure", true, "http://100.76.118.121:8899"), c);
+});
+
+test("notifyRowCopy, http origin: the localhost address keeps the page's port, and has none when the page has none", () => {
+  const step = (origin) => notifyRowCopy("insecure", false, origin).steps[0].text;
+  assert.strictEqual(step("http://100.76.118.121:8899"), "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.");
+  // No port (the default 80): http://127.0.0.1, not http://127.0.0.1:
+  assert.strictEqual(step("http://box.example"), "On the machine CuliBox runs on, open http://127.0.0.1. Localhost counts as secure.");
+  assert.strictEqual(step("http://box.example:80"), "On the machine CuliBox runs on, open http://127.0.0.1. Localhost counts as secure.");
+  // Any other port, a name that is not an address, an IPv6 host: the port is the page's own.
+  assert.strictEqual(step("http://box.tailnet.ts.net:3000"), "On the machine CuliBox runs on, open http://127.0.0.1:3000. Localhost counts as secure.");
+  assert.strictEqual(step("http://[fd7a:115c::1]:8899"), "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.");
+  // A page that does not say where it is (or text that is not an origin) makes no claim about the port or the address.
+  for (const o of ["", undefined, null, "null", "not a url"]) {
+    const c = notifyRowCopy("insecure", false, o);
+    assert.strictEqual(c.steps[0].text, "On the machine CuliBox runs on, open http://127.0.0.1. Localhost counts as secure.", String(o));
+    assert.strictEqual(c.para, "Not available at this address. Browsers allow notifications only on https:// or localhost pages.", String(o));
+    assert.deepEqual(c.paraMono, ["https://"], String(o));
+  }
+});
+
+test("notifyRowCopy, blocked in the browser: only the browser can undo it, per browser, and Check again (M8.1 d)", () => {
+  const c = notifyRowCopy("denied", false, "http://127.0.0.1:8899");
+  assert.strictEqual(c.para, "This browser has blocked notifications for this address. Only the browser can undo that:");
+  assert.strictEqual(c.heading, "");
+  assert.strictEqual(c.helper, "");
+  assert.strictEqual(c.checkAgain, true);
+  assert.deepEqual(c.steps, [
+    { lead: "Chrome, Edge:", text: "click the icon left of the address, set Notifications to Allow, then reload." },
+    { lead: "Firefox:", text: "click the icon left of the address and clear the Notifications block, then reload." },
+    { lead: "Safari:", text: "Safari \u203a Settings \u203a Websites \u203a Notifications, set this address to Allow." },
+  ]);
+  assert.deepEqual(c.paraMono, []);
+});
+
+test("notifyRowCopy, available: one line that says what it does and that it is per browser (M8.1 b, c)", () => {
+  const on = "When this tab is not focused: blocked on you or done. This browser only.";
+  const c = notifyRowCopy("ready", true, "https://box.example");
+  assert.strictEqual(c.helper, on);
+  assert.deepEqual([c.para, c.heading, c.steps, c.checkAgain, c.paraMono], ["", "", [], false, []]);
+  // Off: the same line, then what turning it on does. Not "ended": that class does not fire today (my call 5).
+  assert.strictEqual(notifyRowCopy("ready", false, "https://box.example").helper, on + " Your browser asks for permission when you turn it on.");
+  assert.doesNotMatch(on, /ended/i);
+  // Permission already granted and the switch off: turning it on asks nothing, so the line does not say it will.
+  assert.strictEqual(notifyRowCopy("ready", false, "https://box.example", "granted").helper, on);
+  assert.strictEqual(notifyRowCopy("ready", false, "https://box.example", "default").helper, on + " Your browser asks for permission when you turn it on.");
+});
+
+test("notifyRowCopy, no Notification in this browser: says so and nothing else", () => {
+  const c = notifyRowCopy("unsupported", false, "https://box.example");
+  assert.strictEqual(c.helper, "This browser does not support notifications.");
+  assert.deepEqual([c.para, c.heading, c.steps, c.checkAgain], ["", "", [], false]);
+});
+
+test("notifyRowCopy is a pure function: the same input gives the same copy, and no call shares an object", () => {
+  const a = notifyRowCopy("denied", false, "http://x:1");
+  const b = notifyRowCopy("denied", false, "http://x:1");
+  assert.deepEqual(a, b);
+  a.steps.push({ text: "x" });
+  assert.strictEqual(notifyRowCopy("denied", false, "http://x:1").steps.length, 3);
+  assert.deepEqual(notifyRowCopy("nonsense", false, "http://x:1"), notifyRowCopy("unsupported", false, "http://x:1"), "an unknown state is the quiet one, not a thrown error");
+});
+
+test("the notification copy is the approved wording: no 'when an agent needs you', no 'Requires HTTPS'", () => {
+  // F39/F47: both strings were wrong (the first promised more than fires today, the second gave no way out).
+  const fs = require("node:fs");
+  const path = require("node:path");
+  for (const f of ["app.js", "attention.js"]) {
+    const src = fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
+    assert.ok(!/when an agent needs you/i.test(src), f + " still says 'when an agent needs you'");
+    assert.ok(!/Requires HTTPS/i.test(src), f + " still says 'Requires HTTPS'");
+  }
 });
 
 test("notifyChecked is false unless permission is granted", () => {

@@ -440,8 +440,10 @@ function openSettings(tab, group) {
   if (tab === "creds" && group && typeof credFocusGroup === "function") credFocusGroup(group);
   selectSettingsTab(tab || "manage");
   openDialog("settings-modal");
-  // The page is open now (selectSettingsTab ran before it was), so the profile overview can draw.
+  // The page is open now (selectSettingsTab ran before it was), so the profile overview can draw, and so can the
+  // page head of the others (settingshead.js draws nothing until the dialog is the page).
   if ((tab || "manage") === "manage" && typeof pfvShow === "function") pfvShow();
+  if (typeof paintSettingsHead === "function") paintSettingsHead(tab || "manage");
   // shell.js loads before app.js, so initNotifyToggle may not exist yet on the
   // very first paint — guard it. Reopening Settings must reflect a permission
   // revoked in the browser meanwhile, so this re-reads on every open.
@@ -494,13 +496,16 @@ function selectSettingsTab(name) {
   if (name === "manage" && typeof loadProfiles === "function") loadProfiles(false);
   // The desktop page's profile overview (profilepage.js); a no-op on a phone's modal.
   if (name === "manage" && typeof pfvShow === "function") pfvShow();
+  // The other pages' head (title, one line, its one action, Esc ✕); also a no-op on a phone's modal.
+  if (typeof paintSettingsHead === "function") paintSettingsHead(name);
 }
 
 function initDialogs() {
   for (const btn of document.querySelectorAll("[data-close]")) {
     btn.onclick = () => closeDialogFromUI(btn.dataset.close);
   }
-  for (const b of document.querySelectorAll("#settings-tabs button")) {
+  // Tabs only: the nav also holds Sign out… (a desktop-only item; tokens.js wires its click), and it is not a tab.
+  for (const b of document.querySelectorAll("#settings-tabs button[data-tab]")) {
     b.onclick = () => {
       const leave = settingsLeave(b.dataset.tab);
       if (leave === true) selectSettingsTab(b.dataset.tab);

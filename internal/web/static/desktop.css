@@ -304,8 +304,9 @@
   }
   .input::placeholder { color: var(--muted); }
   .input:hover { border-color: var(--muted); }
-  /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that
-     sets its own border still wins until its plan adopts .input. */
+  /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that sets its own border still
+     wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`,
+     `.ac-pcol .fld`, #au-session and .an-date keep --line until their plans adopt the kit .input. */
   .fld { border-color: var(--faint); }
   .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
@@ -557,19 +558,31 @@
   #limits-side { display: flex; flex-direction: column; gap: 6px; }
   #limits-side[hidden] { display: none; }
   #limits-side .acct-lab { font-size: var(--t-xs); color: var(--muted); }
-  #limits-side .mtr { gap: 8px; font-size: var(--t-sm); color: var(--muted); }
-  #limits-side .mtr > span:first-child { width: 2.4em; }
-  #limits-side .mtr .bar { flex: 1; width: auto; min-width: 24px; height: 4px; border-radius: 2px; background: var(--line); }
+  /* The quota columns are the frames': M1 (.m1-q) and M2 (.m2-q) draw them alike, a var(--sp-3) gap with
+     the label 20px, the percent 34px right and the reset 70px right, and the bar (flex 1, the kit .meter)
+     between. Widths, alignment and gap only: the markup order and the colours are today's. The label and the
+     percent never shrink (they are the numbers). The reset column is 74px, not the frame's 70: a measured
+     defect (final review): the longest text fmtCountdown prints, "23h 59m left", is 73.05px at 12px in the
+     product's Inter, and the frame's 70px clipped it at every sidebar width. In a narrow sidebar the row would
+     run into the 16px padding (D5): the bar may shrink to nothing (no 24px floor) and then the reset and a
+     stale reading's age note ("7h old") shrink and ellipsize, so the row stays inside the sidebar from its
+     200px minimum up; the reset is cut only when the row is short of room (the narrowest sidebars), never at the default 290px (a 93px
+     bar). */
+  #limits-side .mtr { gap: var(--sp-3); font-size: var(--t-sm); color: var(--muted); }
+  #limits-side .mtr > span:first-child { width: 20px; flex: none; }
+  #limits-side .mtr .bar { flex: 1; width: auto; min-width: 0; height: 4px; border-radius: 2px; background: var(--line); }
   #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
-  #limits-side .mtr .rs { min-width: 6.4em; text-align: right; }
-  #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
+  #limits-side .mtr .rs { width: 74px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  #limits-side .mtr .acct-age { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #limits-side .mtr .pc { width: 34px; flex: none; text-align: right; }
   #limits-side .mtr.hot .bar i { background: var(--fg); }
   #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
   /* A window at 100% or more (renderRateLimitsInto, F32): "limit reached · resets 25m" replaces the
      percentage. Plain --fg at 600: not amber (that is an agent blocked on you) and not red (a fact,
-     not a write). It is wider than "2h 14m left", so it may shrink and ellipsize before the label does. */
+     not a write). It is wider than "2h 14m left", so it is no 74px column: it keeps its own width, and may
+     shrink and ellipsize before the label does. */
   #limits-side .mtr .pc[hidden] { display: none; }
-  #limits-side .mtr .limit { color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #limits-side .mtr .limit { width: auto; flex: 0 1 auto; color: var(--fg); font-weight: var(--w-semibold); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: var(--t-sm); color: var(--muted); }
   #side-cost { font-variant-numeric: tabular-nums; }
   #side-cost[hidden] { display: none; }
@@ -578,6 +591,11 @@
   #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
   #side-elevated.hot { color: var(--red); font-weight: 600; }
+  /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).
+     Its own row above the links, neutral: 12px --muted. Not amber (nothing is blocked yet), no icon, no link;
+     hidden it takes no row and so no 8px gap. */
+  #side-store { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+  #side-store[hidden] { display: none; }
   .side-links { display: flex; gap: 2px; margin: 0 -8px; } /* the buttons' 8px padding: the first word starts on the 16px edge */
   .side-links button {
     padding: 5px 8px; font: var(--t-sm) var(--font-ui); cursor: pointer;
@@ -1801,26 +1819,29 @@
   /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
   #page-host > dialog.as-page[box-]::before { display: none; }
 
-  /* --- Settings page (S4): grouped nav ----------------------------------------- */
+  /* --- Settings page (S4; the M2 frame, UI plan 4): grouped nav ----------------- */
   /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
      #settings-modal rules in app.css carry an id, and this outranks them. A
-     grid: the header across, the nav down the left, the open panel and its
-     footer to the right. */
-  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
-  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
-  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: var(--t-sm); }
-  #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
+     grid: the nav down the left (212px on every tab, digest-design §B1.2), the
+     open panel and its footer to the right. The header bar is not drawn (§B1:
+     each page's own head carries the title and Esc), so row 1 is empty. */
+  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 212px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  #page-host > #settings-modal.as-page > .dhd { display: none; }
 
   /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
-     tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
-     `order` regroups it here. */
+     tokens) · App (Appearance, About), then Sign out… at the foot. The DOM
+     keeps the mobile strip's order; `order` regroups it here. The look is the
+     frame's `.m2-snav` (§B1.2): --panel, padding 16px 8px 12px, gap 1px. */
   #page-host > #settings-modal.as-page > #settings-tabs {
-    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 0;
-    padding: 14px 10px 80px; border: 0; border-right: 1px solid var(--line); background: var(--bg); overflow-y: auto;
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 1px;
+    padding: 16px 8px 12px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 4px; font-size: var(--t-sm); font-weight: 600; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 2px; }
+  /* The kit .grp-label (§C2) at the frame's padding (§B1.2 `.m2-navlbl`); the first label sits 4px down. */
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group {
+    display: block; padding: 12px 10px 4px; font-size: var(--t-xs); line-height: var(--lh-xs); font-weight: 600;
+    letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted);
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 4px; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
@@ -1829,27 +1850,71 @@
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 7; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t {
-    display: flex; align-items: center; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
-    background: transparent; font-family: var(--font-ui); font-size: var(--t-md); color: var(--fg);
+  /* A row is the kit .nav-item (§C7): 30px, 0 10px, 4px radius, 13/20, hover --hover, selected --raise at 500
+     (§B1.2: no accent bar). Sign out… is a row too, neutral, last: `margin-top: auto` takes the nav's free
+     height, so it rests above the 12px foot padding (the frame's spacer). */
+  #page-host > #settings-modal.as-page > #settings-tabs .t,
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout {
+    display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--panel); color: var(--fg); }
-  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 10; margin-top: auto; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
 
-  /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
-     and ✕ close the page, so every Done goes, and the two footers that held
-     nothing else go with them. */
+  /* Panels and their footers sit right of the nav. Done is modal chrome: the page head's Esc ✕ (settingshead.js)
+     and the Esc key close the page, so every Done goes. So do the footers that held nothing else, and the three
+     "add" footers: Appearance, API tokens and Agent accounts keep their one action in the page head (Reset to
+     defaults, New token, Add account), and Sign out… is the nav's. A phone's modal keeps them all. */
   #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
-  #page-host > #settings-modal.as-page > .dbd.pad { padding: 22px 28px; }
-  /* A footer wraps rather than overflowing the page: its buttons are one
-     unbreakable row 280-380px wide, more than the panel has below ~1040px (the
-     panel is the window minus the 290px sidebar and the 170px nav), and the
-     overflow pushed Save past the window edge. A one-line footer is unchanged: 56px, centred. */
-  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 10px; padding: 8px 20px; border-top: 1px solid var(--line); background: var(--panel); }
+  /* The content column (§B1.1, §B1.5): it starts 32px right of the nav and is at most 820px wide,
+     left-aligned (the frame's 884px `.m2-col` less its 32px sides). */
+  #page-host > #settings-modal.as-page > .dbd.pad { padding: 0 32px 32px; }
+  #page-host > #settings-modal.as-page > .dbd.pad > * { max-width: 820px; }
+
+  /* The page head (§B1.4, the kit's .page-head §C7): ONE set of rules for the head of all six pages, so the two skins cannot drift: the empty
+     .set-head slot each of the five panels opens with (settingshead.js) and the profile page's .pfv-head under #pfv (profilepage.js; New
+     profile and Duplicate, pfv-new.js, draw it too). Top-aligned, gap 16, 24px above and 20px below inside the column (the column's own 32px
+     sides are the panel's, so none here). The kit's .page-head-text / .page-title / .page-desc / .page-actions inside it carry the type (18/24
+     600, 13/20 muted) and the actions' gap 8. It scrolls with the body (Plan 4 call 9), nothing pins it. Not in the frame (it is drawn at
+     1440px): the head wraps when its text cannot keep 240px beside the actions, so a narrow window (the panel is the window less 290 + 212 + 64px)
+     puts them on a line of their own under the title instead of pushing Esc ✕ out of reach to the right, and the actions wrap in turn rather
+     than run out of the page. */
+  #page-host > #settings-modal.as-page > .dbd > .set-head,
+  #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-4); padding: var(--sp-6) 0 var(--sp-5); }
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-head-text,
+  #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 240px; min-width: 0; }
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-actions,
+  #page-host > #settings-modal.as-page #pfv .pfv-head .page-actions { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
+  /* A long title is cut short (§B1.4); a long description wraps instead of overflowing, wherever it breaks: About's version line, and the
+     profile's model id (a user-set string: an inference-profile ARN is ~100 characters in one mono word). */
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-title,
+  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page > .dbd > .set-head .page-desc,
+  #page-host > #settings-modal.as-page #pfv .pfv-head .page-desc { overflow-wrap: anywhere; }
+  /* The divider before Esc ✕ (§B1.4 `.m2-vsep`): 1x16, --line, 4px either side of the actions' own 8px gap. */
+  #page-host > #settings-modal.as-page > .dbd > .set-head .set-sep,
+  #page-host > #settings-modal.as-page #pfv .pfv-head .set-sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
+
+  /* The footers still drawn are the two Credentials save footers (Add AWS accounts, the credential forms): the
+     kit's .dlg-foot (§C7), padding 12px 20px, gap 8px, a --line rule on top, 28px buttons, under the frame's
+     884px column and left-aligned with it, on the page's own surface. It wraps rather than overflowing the page:
+     its buttons are one unbreakable row 280-380px wide, more than the panel has below ~1080px (the panel is the
+     window minus the 290px sidebar and the 212px nav), and the overflow pushed Save past the window edge. A
+     one-line footer is 52px (12 + 28 + 12), centred. */
+  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; max-width: 884px; height: auto; min-height: 0; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
-  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
-  #page-host > #settings-modal.as-page > .dft .btn {
-    padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
+  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about,
+  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings { display: none; }
+  /* The Credentials drawer's foot (#cred-drawer-foot, over the profile page) is the same kit footer: its buttons are named in
+     this rule, so the drawer's Check all / Cancel / Save are the page footer's 28px buttons by construction. The secondary fill,
+     its hover (which skips an aria-disabled button) and the primary come from the Credentials `.btn` rules, which are the same
+     raise / --line values. The foot's padding stays the drawer's own 14px 22px (the foot's rule, below), which lines it up with
+     the head's, the body's and the status line's 22px gutters; the page footer's 20px would not. */
+  #page-host > #settings-modal.as-page > .dft .btn,
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn {
+    min-height: var(--h-ctl); padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
     font-family: var(--font-ui); font-size: var(--t-md);
   }
   /* Save / Done are the kit primary (F11): the footer's secondary fill skips them. */
@@ -1875,48 +1940,226 @@
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #manage .hint { font-size: var(--t-sm); line-height: 1.6; }
 
-  /* Agent accounts, API tokens, Appearance, About: the same content, on the
-     page's tokens. */
+  /* Agent accounts, API tokens, Appearance, About: the same content, on the page's tokens. The button rules
+     start one step in from the panel (`> :not(.set-head)`): the page head is a child of each panel and its
+     buttons are the kit's own (28px action, 24px ghost Esc ✕), which a panel-wide `.btn` rule would repaint
+     raise-filled at 30px. The body's buttons are the kit's 28px too (min-height --h-ctl, padding 0 12px). */
   #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: var(--t-sm); line-height: 1.6; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
-    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn {
+    padding: 0 12px; border: 1px solid transparent; border-radius: var(--r-ctl);
     font-family: var(--font-ui); font-size: var(--t-md);
   }
   /* Agent accounts' Save token is the kit primary (F11): the secondary fill skips it. */
-  #page-host > #settings-modal.as-page > #tokens .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #accounts .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #settings .btn:where(:not(.pri)), #page-host > #settings-modal.as-page > #about .btn:where(:not(.pri)) {
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn:where(:not(.pri)) {
     background: var(--raise); color: var(--fg);
   }
-  #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > #tokens > :not(.set-head) .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > :is(#tokens, #accounts) > :not(.set-head) .btn.dgr { background: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
-  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
-  #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
-  #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
-  #page-host > #settings-modal.as-page #about-version { font-size: var(--t-md); color: var(--fg); }
-  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: var(--t-sm); color: var(--muted); }
+  /* The one-time reveal's buttons (Copy, Done) are the kit's secondary and ghost. The panel's fill rule above is id-weighted, so the
+     kit's own hover never reached them; each takes its hover back here, one id heavier (§C3 `.btn:hover` --line, `.btn-ghost:hover`), and
+     skipping a primary like every page rule that paints a .btn. */
+  #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn:where(:not(.pri)):where(:not(.gh)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn.gh:hover { background: var(--hover); color: var(--fg); }
 
-  /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
-     bordered table per provider. Colour roles (D23): amber = needs you (missing,
-     locked, expired, not checked), red = write / prod / error, green = status;
-     mono only for machine text (account ids, role names, client ids, env names,
-     hosts). The card rules in app.css stay for the mobile modal. */
-  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 14px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  /* API tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
+     the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an
+     item of #tok-list: 8px below the card, 2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
+     last 12px, 24px buttons in 5px cells. Dates are `.tnum` (the kit's tabular figures), "Never used" is `.muted`. */
+  /* The card is --panel and --r-card from this rule, not from the kit's `.card` class (app.css's `.card` is the phone's amber session card, and
+     a page node left behind when the window crosses to a phone would wear it). position: relative holds the narrow stack's clipped heads. */
+  #page-host > #settings-modal.as-page #tok-list > .tok-card { overflow: hidden; position: relative; background: var(--panel); border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #tok-list > .tok-card > .tokempty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page #tok-list > .tok-under { margin-top: 8px; padding: 0 2px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl { table-layout: fixed; }
+  /* Four equal quarters (T1): the approved render draws Created at x 739, Last used 944 and Actions 1149 of the 820px table, i.e. 205px each; the canvas
+     source's 38 / 22 / 22 / 18 colgroup is lost in the render and in the PNG (gate 3 D7, gate 4), and the approved render wins. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(1) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(2) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(3) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(4) { width: 25%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl th:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child { padding-left: 16px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl th:last-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding-right: 12px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { padding-top: 5px; padding-bottom: 5px; }
+  /* A name is user text of any length: it wraps inside its column instead of running under Created. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-nm { white-space: normal; overflow-wrap: anywhere; }
+  /* Armed (the confirm stays in the row, as it did): `tr.arm` wears the tint of the kit's red row (§C7 `tr.is-elevated`) and the 2px red edge Credentials' danger rows
+     wear; the question runs across the other three columns in red, Cancel and Revoke beside it, and wraps before it pushes them off. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm { background: var(--red-tint); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-arm { padding-top: 5px; padding-bottom: 5px; white-space: normal; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-confirm { display: flex; align-items: center; gap: 12px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-ask { flex: 1 1 auto; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-acts { display: flex; flex: none; gap: 4px; }
+  /* Revoke… and Cancel are the kit's small buttons (§C3 `.btn-sm`, `.btn-danger`: the red ring, the red-tint hover). The panel's body rule
+     paints every `.btn` under #tokens at 0 12px, 13px, the secondary fill and a transparent border, so each value is restated one id
+     heavier and after it. */
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm:where(:not(.pri)):where(:not(.btn-danger)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)):hover { border-color: var(--red); background: var(--red-tint); }
+  /* A narrow card (D3). The list is the container: the card is the window less the sidebar (290), the nav (212) and 64px of padding, 194px at a 760px
+     window and 135px at the 701px floor, and four columns need ~420px (25% of it must hold "Nov 27, 2026", 86px, and 24px of padding). Below 480px each row
+     is a small grid: the name and Revoke… on the first line, Created and Last used under it as 12/18 muted lines that say their own words (the head row
+     is clipped to a pixel, not removed, so a screen reader keeps the column heads), nothing dropped and nothing wider than the card. The name wraps anywhere (its base rule) in the room Revoke… leaves it. An armed row
+     keeps its red tint and edge (the edge is the row's now, not the first cell's); its question takes the card's width and Cancel and Revoke wrap
+     under it, and then wrap between themselves. The table, its rows and its cells leave table layout here, so tokens.js gives each part its explicit ARIA role (the native ones would be dropped). The date words are on the date cells only (`td.tnum`), never on the armed row's question cell, which is the
+     second cell of its row. */
+  #page-host > #settings-modal.as-page #tok-list { container-type: inline-size; }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl, #page-host > #settings-modal.as-page #tok-list .tok-tbl tbody { display: block; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl colgroup { display: none; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl thead { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 7px 12px 7px 16px; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr + tr { border-top: 1px solid var(--line); }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding: 0; border: 0; height: auto; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-nm { grid-column: 1; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { grid-column: 2; grid-row: 1; margin-top: -2px; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum { grid-column: 1 / -1; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); white-space: normal; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum:nth-child(2):not(:empty)::before { content: "Created "; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.tnum:nth-child(3):not(.muted)::before { content: "Last used "; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-arm { grid-column: 1 / -1; padding: 4px 0 0; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-confirm { flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-ask { flex: 1 1 100%; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-acts { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm { box-shadow: inset 2px 0 0 var(--red); }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm > td:first-child { box-shadow: none; }
+  }
+  /* At the 701px floor the card is 135px: beside Revoke… the name would have 20px, so Revoke… goes under the dates, at the left. */
+  @container (max-width: 180px) {
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { grid-column: 1 / -1; grid-row: auto; justify-self: start; margin-top: 4px; }
+  }
+
+  /* Appearance (UI plan 4 Task 8; frame M2.5, digest-design §B6): one card of six rows on one grid. The card is §C7's `.card` (--panel, --r-card)
+     with `.m2-acard`'s 4px 20px; it is a plain wrapper in index.html and not a `.card` because app.css gives that class the amber session-card
+     look on a phone. A row is `.m2-arow`: a 120px label, a 132px stepper, then the sample, 24px apart, 12px above and below, the hairline between
+     rows the kit's `.card-row + .card-row`. Shortcuts is the sixth row: its label is built by initSettings (app.js fsShortcutsLabel) and the
+     button spans the two columns after it. */
+  #page-host > #settings-modal.as-page .fs-card { padding: 4px 20px; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) {
+    display: grid; grid-template-columns: 120px 132px minmax(0, 1fr); column-gap: 24px; row-gap: 0; align-items: center;
+    margin: 0; padding: 12px 0; border-bottom: 0; font-size: var(--t-md); line-height: var(--lh-md);
+  }
+  /* The stale hint sits between Alerts and Shortcuts (hidden below), so the kit's adjacent-sibling hairline cannot reach Shortcuts: it has its own. */
+  #page-host > #settings-modal.as-page .fs-card > .hint + .card-row { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page .fs-card .lbl { width: auto; font-size: var(--t-md); font-weight: var(--w-medium); color: var(--fg); }
+  #page-host > #settings-modal.as-page .fs-card > p.card-row > #fs-kbd-lbl { display: block; }
+  #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 2 / 4; justify-self: start; }
+  /* The stepper (§B6 `.m2-step`): the kit's 28px `.btn.btn-icon` buttons and a 60 x 28 `.input` with its --faint rim, 4px apart: 124px in the 132px
+     column. The frame measures 28px square (frames/m2-6, pixel scan), not the 24px of `.btn-sm`. The value's border is id-weighted, so the global
+     field focus cannot reach it: it has the same focus of its own, as the other page fields do (desktop-focus.test.js). */
+  #page-host > #settings-modal.as-page .fs-card .stepper { display: flex; align-items: center; gap: var(--sp-1); width: auto; border: 0; }
+  #page-host > #settings-modal.as-page .fs-card .stepper button {
+    flex: none; width: var(--h-ctl); height: var(--h-ctl); padding: 0; border: 1px solid transparent; border-radius: var(--r-ctl);
+    background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); font-weight: var(--w-medium); line-height: 1; cursor: pointer;
+  }
+  #page-host > #settings-modal.as-page .fs-card .stepper button:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val {
+    flex: none; width: 60px; height: var(--h-ctl); padding: 0 4px; border: 1px solid var(--faint); border-radius: var(--r-ctl);
+    background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md);
+    font-variant-numeric: tabular-nums; text-align: center;
+  }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val:hover { border-color: var(--muted); }
+  #page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  /* The sample (§B6 `.s-bg.mono.m2-sample`): a --bg box, no border, mono, set at the size it previews (paintFsSample sets the inline font-size). The
+     line is cut inside its column, not wrapped: a line that reflows as it grows shows the wrapping, not the size. */
+  #page-host > #settings-modal.as-page .fs-card .sample {
+    min-width: 0; padding: 8px 12px; border: 0; border-radius: var(--r-ctl); background: var(--bg); color: var(--fg);
+    font-family: var(--font-mono); line-height: 1.45; white-space: pre; overflow: hidden;
+  }
+  /* Alerts (M8.1 `.m8-alrow`, §E2): top-aligned, the label 1px down to sit on the switch's first line, the switch (a kit `.check`) and its reason
+     across the two columns after it. A one-line reason sits under the switch's text (14px box + 8px gap = 22px in, 2px below). A reason with a way
+     out (an http page, a blocked browser) is `.m8-stack-4`: flush left, 12px between the paragraph, the steps and Check again; the steps are
+     `.m8-stack` (the heading, 8px, the list) and `.m8-steps` (18px in, 4px apart). Its own colour is --fg (the heading and a lead word are); what is
+     muted says so itself. paintNotifyWhy (app.js) builds them from text nodes. */
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts { align-items: start; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > .lbl { padding-top: 1px; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 2 / 4; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { margin: 2px 0 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); padding-left: 0; color: var(--fg); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block > * { margin: 0; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
+  /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
+     the kit's own hover never reached them and Check again's `.btn-sm` values are asked for again, one id heavier (§C3, as API tokens' row buttons do). */
+  #page-host > #settings-modal.as-page > #settings .fs-card .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #settings #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  /* A narrow card (D4). The card is the container: the window less the sidebar (290), the nav (212) and 64px of padding, 258px at a 760px window,
+     154px of it content box; the three columns need 300px (120 + 24 + 132 + 24) before the sample has a pixel, so below 480px (a 180px sample at
+     least) a row is one column: the label, the stepper (124px at most, its value box giving way first) 8px under it, the sample under that, wrapping
+     in the card where the wide rule cuts it, and Alerts' and Shortcuts' controls under their labels, their long words breaking rather than
+     widening the card; Keyboard shortcuts wraps inside the card (the 701px window's content box is 95px, less than its words); the value box has no
+     padding (its number is centred) so a stepper squeezed to 95px still shows "12.5". 1440 and 1280 (a 610px content box at 1280) are above the step. */
+  #page-host > #settings-modal.as-page .fs-card { container-type: inline-size; }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
+    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 1; }
+    #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 1; max-width: 100%; white-space: normal; }
+    #page-host > #settings-modal.as-page .fs-card .stepper { max-width: 124px; min-width: 0; }
+    #page-host > #settings-modal.as-page .fs-card .stepper .val { flex: 1 1 60px; min-width: 0; max-width: 60px; padding: 0; }
+    #page-host > #settings-modal.as-page .fs-card .sample { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { overflow-wrap: anywhere; }
+  }
+
+  /* What the page head already says is not said twice (the phone keeps every one of these strings, so each is
+     hidden here and nothing is edited in index.html): the API tokens hint (its description), the Appearance hint
+     that still spoke of "the panes behind this dialog" (F35), the Agent accounts paragraph (its first sentence is
+     the description, the rest is the note below), About's version line (its description) and its Report a
+     problem button (its action). */
+  #page-host > #settings-modal.as-page > #tokens > .set-head + .hint,
+  #page-host > #settings-modal.as-page > #settings > .fs-card > .hint,
+  #page-host > #settings-modal.as-page > #accounts > .set-head + .hint,
+  #page-host > #settings-modal.as-page > #about > #about-version { display: none; }
+  /* Its own rule: a browser without :has() drops the one rule that names it, not the list above. */
+  #page-host > #settings-modal.as-page > #about > p:has(> #bug-open) { display: none; }
+  /* The accounts note: sentences 2-4 of that paragraph, built by accounts.js, base-hidden for the phone. */
+  #page-host > #settings-modal.as-page > #accounts > #acct-desk-note { display: block; margin: 0 0 16px; }
+  #page-host > #settings-modal.as-page > #accounts > #acct-desk-note[hidden] { display: none; }
+
+  /* Agent accounts and About have no frame in the pack, so their body is one kit card (§C7 `.card`: --panel,
+     --r-card; rows divided by a 1px --line, `.card-row + .card-row`). Accounts: the list is the card and each
+     account a row. About: Box runtime, Keyboard shortcuts and the report paragraph are its rows (the version line
+     and the Report a problem button went to the head). */
+  #page-host > #settings-modal.as-page > #accounts > #acct-list { overflow: hidden; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row { padding: 14px 16px; border-bottom: 0; }
+  #page-host > #settings-modal.as-page > #accounts > #acct-list > .acct-row + .acct-row { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #about > #about-runtime { display: block; margin: 0; padding: 12px 16px; border-radius: var(--r-card) var(--r-card) 0 0; background: var(--panel); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #about > p:has(> #kbd-open-about) { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  #page-host > #settings-modal.as-page > #about > .hint { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-card) var(--r-card); background: var(--panel); }
+
+  /* Credentials as tables (S4 Task 6, pg-2; UI plan 4 Task 5, frame M2.3, digest-design §B4): the store strip, then one
+     kit card per provider. Colour roles (D23): amber = needs you (a locked or unavailable store, a write probe not
+     checked), red = write / prod / error, green = Ready. "Missing" is a state of the config, not a request: the kit's
+     neutral chip (F27). Mono only for machine text (names, account ids, role names, client ids, env names, hosts). The
+     card rules in app.css stay for the mobile modal. */
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 10px; }
+  /* The strip (§B4 `.m2-strip`): a kit card on the page's own surface, one 40px row: the green dot, "Encrypted store",
+     the muted state, Lock now at the right. app.css's .strip is the amber box, so the surface and the ring are set here;
+     a store that needs the user (locked, unavailable, not set up) is that amber box again, `.need`, with its old room. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px; padding: 8px 8px 8px 14px; border: 0; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > b { font-weight: var(--w-medium); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > #store-lock { margin-left: auto; border-color: transparent; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: var(--t-md); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
+  /* The honest statement once, under the strip (§B4 `.m2-under`: 12/18 muted, 6px below it: the body's 10px gap less 4). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip-wrap > .hint { margin: -4px 0 0; padding: 0 2px; line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: var(--t-md); line-height: 1.4; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st::before { display: inline-block; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.ready { color: var(--ok); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
+  /* F27: the states of the config are muted, not amber: Missing (drawn as the kit's neutral .chip in the tables) and a
+     token whose variable is not set. What needs the user is amber: a locked store, and "Not set up" in the strip. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
@@ -1930,16 +2173,73 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
+  /* The kit's small, ghost and danger buttons (a table row's Edit and Delete, the strip's Lock now, the Stored values
+     toggle) take their own values back from the `.btn` rules above, as the head's do below: one class heavier, written
+     after, and only for what those rules changed (§C3 `.btn-sm`, `.btn-ghost`, `.btn-danger`; §B4's Delete ring). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-ghost:where(:not(.pri)) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-ghost:where(:not(.pri)):where(:not(:disabled)):hover { background: var(--hover); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-danger:where(:not(.pri)):where(:not(:disabled)):hover { border-color: var(--red); background: var(--red-tint); }
+  /* The Credentials page head's buttons are the kit's own (§C3: the 28px secondary action, the 24px ghost Esc ✕), but
+     the rules above paint every `.btn` under #creds (and its drawer twin, which credentials.test.js keeps in step)
+     with 5px 11px, a --line border and the page's raise fill. The head takes its kit values back: one class
+     heavier than those rules (its own), written after them, and only for what they changed. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn:where(:not(.pri)) { padding: 0 12px; border-color: transparent; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)) { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)):hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
+  /* The credential forms (UI plan 4 Task 6; digest-design §C6 `.field-label` and `.input`, §B3's label gap, G19). The add flows draw
+     label.flab + input.fld into #creds-body on the page and into #cred-drawer-body in the drawer; app.css still draws that label as
+     10.5px UPPERCASE with .08em tracking, and only the drawer used to reset it. The label is the kit's field label: 12/18, 500,
+     --fg, sentence case, 6px above its control. The field rests on the kit's --faint border (G12) at the kit's 32px, 0 10px, 6px
+     radius, 13px. It sets no fill, colour or font, so `.fld.ro` keeps its panel fill and muted text and a secret or key textarea
+     its mono (rules with fewer ids, which still win where they name those properties). The border is id-weighted, so the global
+     field focus cannot beat it and the rule has a focus of its own (desktop-focus.test.js lists it). The drawer's own rules
+     below are heavier and win there: its 5px label gap, its 60px textarea, its --faint border. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .flab { margin-bottom: 6px; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld { height: var(--h-lg); padding: 0 10px; border: 1px solid var(--faint); border-radius: var(--r-ctl); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) textarea.fld { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  /* The tab's breadcrumb ("Credentials / Add token", the first child of #creds-body) had no room under it: the kit's 12px, on top of
+     the body's 10px gap. The drawer's crumb is in its header band (#cred-drawer-head), whose padding is pinned, so it is not named. */
+  #page-host > #settings-modal.as-page :is(#creds-body, #cred-drawer-body) .crumb { margin-bottom: 12px; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  /* The head's "Add credential ▾" (credAddMenuAttach): the trigger's wrapper anchors the kit menu, which opens under the
+     trigger, right-aligned and above the page like the profile page's ⋯ (#pfv .pfv-more); the trigger shows pressed
+     while it is open (a menu button is expanded, not pressed: aria-expanded). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add { position: relative; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .btn:where(:not(.pri))[aria-expanded="true"] { background: var(--raise); box-shadow: inset 0 0 0 1px var(--faint); }
 
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab { width: 100%; border-collapse: collapse; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: var(--t-md); line-height: 1.4; overflow-wrap: anywhere; }
+  /* One kit card per provider (§B4 `section.card.m2-sec`: the kit's .card is --panel and --r-card), its table clipped to the corners.
+     The fill and radius are written here and the node does not carry `.card` (final review): app.css's `.card` is the phone's amber
+     session card, which would style a page node left behind when the window crosses to a phone. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; overflow: hidden; background: var(--panel); border-radius: var(--r-card); }
+  /* The captions of the page's credential flows ("Provider", "Profiles on this host", a token's details) and a narrow page's card
+     headers: app.css draws every .sec-h as 10.5px UPPERCASE with .09em tracking, and only the table headers (below) and the drawer
+     reset that, so these still shouted (final review). Sentence case at the label size and weight the drawer's rule uses; the
+     table headers' own, heavier rule below wins where it names the same property. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h { font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .sec-h .count { font-weight: 400; color: var(--muted); }
+  /* Its head (§B4 `.card-head`): the title (13/20 600) and the count chip 12px beside it, 12px 16px, a hairline under it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* An empty section's line sits under the head's hairline; a token provider's note is under its table (§B4 `.m2-secnote`:
+     12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. A <p>
+     has the UA's 1em margin (12px at 12px type) that the frame does not draw, so these lines set their own: none. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint { margin: 0; padding: 12px 16px; border-top: 0; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 8px 16px 10px; border-top: 1px solid var(--line); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .ctab-note-top { margin: 0; padding: 8px 16px 10px; border-bottom: 1px solid var(--line); line-height: var(--lh-sm); }
+  /* The table is the kit's .tbl (the head cells are its th: 32px, 12/500 --muted, sentence case, a hairline under; §B4), so
+     only the rows are set here: 7px above and below, the first cell 16px in and the last 12px, wrapping between words
+     (the shares below are narrow). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th:first-child, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td:first-child { padding-left: 16px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th:last-child, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td:last-child { padding-right: 12px; }
+  /* An entry is one <tbody>: no kit row hairline inside it (its warning or confirmation hangs under the row), one above
+     the next entry. Legacy secrets' rows are one tbody and keep the kit's. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow td { border-bottom: 0; }
   /* Names break between words, never inside one ("Missin/g"). */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-nm { display: inline-block; max-width: 100%; }
@@ -1956,46 +2256,59 @@
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .st { white-space: normal; overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv { overflow-wrap: normal; }
-  /* The GitHub and token tables share one set of column starts (pg-2). AWS has
-     its own columns and keeps the automatic layout. Every width is a share of the
-     table: fixed px columns starved Used by to 0px below a ~1150px window. */
+  /* The GitHub and token tables share one set of column starts (pg-2), and the head cells and the rows one colgroup
+     (G16: credTable draws the <col>s, these are their shares). AWS has its own columns and keeps the automatic layout.
+     Every width is a share of the table: fixed px columns starved Used by to 0px below a ~1150px window. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
-  /* Env is 26%: its 12px host (F06) needs 203px for artifactory.acme.example.com, and 25% gave
-     199 at a 1440 window ("...example.co" / "m"). Status and Used by gave half a point each:
-     Status still holds "environment" (77px) at 1280; a smaller Token wraps the token names. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 26%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 14.5%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
+  /* Token 19.5, Env 26, Status 14.5, Used by 23, Actions 17: the five are the whole table. Env's 12px mono host (F06) takes two
+     lines at the page's real widths (the 820px column cap, 12px cell padding: a 189px box at 1440, 161px at 1280), broken
+     after a dot (credMonoSub), never overflowing; Status holds "environment" (77px) at 1280 and at the floor; a smaller
+     Token wraps the token names; Actions holds Edit and Delete with 8px to spare at the ~1266px floor (16% left 1.4px). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(1) { width: 19.5%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(2) { width: 26%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(3) { width: 14.5%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(4) { width: 23%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(5) { width: 17%; }
+  /* Legacy secrets (§B4): two columns, no header row, 50% / 50%: the approved render (frame M2.3, 410 + 410 of the 820px table) wins over the
+     canvas source's 45 / 55, whose colgroup style is lost in the render and in the PNG (gate 4, C5). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(1) { width: 50%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(2) { width: 50%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
+  /* Machine text is 12/18 mono (§B4 `.mono.t-sm`: the line is 18px, not the 20px a .c-main inherits); the sub-line under it is 12/18 muted (the role and host
+     ones are mono too). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: var(--t-sm); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: var(--t-xs); line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 600; }
+  /* PROD (red) and "from config.json" (neutral) are the kit's chips, 6px after the name, in the UI face: a chip inside a mono line would inherit the
+     mono one (the frame's Inter chip is 42.67px wide, the mono one 38.5px). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main > * + .chip { margin-left: 6px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main .chip { font-family: var(--font-ui); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.bad { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)) { border-color: transparent; background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)):hover { background: var(--raise); color: var(--fg); }
+  /* The actions cell (§B4 `td.num > .m2-acts`): right-aligned, 5px above and below, the buttons 4px apart. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-top: 5px; padding-bottom: 5px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; gap: 4px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-x > td { padding: 0; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: var(--t-md); color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::-webkit-details-marker { display: none; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold[open] > summary::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary:hover { color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .btn { align-self: flex-start; }
+  /* Stored values (§B4 `.m2-fold`): one row, not a card: the ghost toggle (chevron, name), the count chip, the muted line.
+     The chevron is the frame's glyph › in a span (credChevron), 12px, in the ghost button's muted (--fg on hover, with the
+     label), its own inline-block box so the quarter turn when open applies (a transform does not apply to an inline box);
+     no ::before. The body is what the frame leaves undrawn: a panel under the row, its list's labels sentence-case (F17). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 8px; padding: 0 2px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-h { display: flex; align-items: center; gap: 8px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-chev { display: inline-block; font-size: var(--t-sm); line-height: 1; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t[aria-expanded="true"] .vfold-chev { transform: rotate(90deg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b[hidden] { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .link { align-self: flex-start; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b .sv.head { font-size: var(--t-sm); letter-spacing: 0; text-transform: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b .hint { margin: 0; }
   /* The card's room is #creds-body (the window minus the sidebar, the nav and the
      padding), which is 178px at 701px; the drawer's body, #cred-drawer-body, is a
      container the same way. app.css stacks a card in one column only for a
@@ -2380,9 +2693,6 @@
      old form stays in the DOM (the phone's modal uses it); it is
      only not drawn here. */
   #page-host > #settings-modal.as-page #manage > .plist, #page-host > #settings-modal.as-page #manage > .ped { display: none; }
-  /* The nav is 212px on Profiles, where it carries the profile names (the mockup's width);
-     the other tabs keep their 170px, and so their tables and footers keep the widths they were measured at. */
-  #page-host > #settings-modal.as-page.tall { grid-template-columns: 212px minmax(0, 1fr); }
   #page-host > #settings-modal.as-page > #foot-manage { display: none; }
   #page-host > #settings-modal.as-page #pfv { display: block; flex: 1; min-width: 0; overflow-y: auto; container-type: inline-size; background: var(--bg); color: var(--fg); font: 400 var(--t-md)/1.5 var(--font-ui); }
   /* The sidebar's width handle is a 7px band between it and the page. On Settings it takes no room (the
@@ -2392,88 +2702,105 @@
   body.page-settings-modal #split-v::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; }
   body.page-settings-modal #split-v::after { background: transparent; }
   body.page-settings-modal #split-v:hover::after, body.page-settings-modal #split-v.dragging::after { background: var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 940px; padding: 28px 32px 140px; }
+  /* The overview is a bounded column (§B1.3, §B1.5): 884px at most and left-aligned (the frame leaves 54px free at the right of a 1440px window),
+     32px at its sides and below; the head carries the 24px above (the New profile page draws the same one). The Settings frame hides every
+     panel's own bottom edge, so there is no 140px under it for a floating bar: Save and Cancel sit in the block. */
+  #page-host > #settings-modal.as-page #pfv .pfv-in { max-width: 884px; padding: 0 32px 32px; }
   #page-host > #settings-modal.as-page #pfv :is(h2, h3, h4, p, dl, dd) { margin: 0; padding: 0; }
   #page-host > #settings-modal.as-page .pfv-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  /* The nav: Profiles stays bold while its profiles show, the profile on screen is the raised row. */
-  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on { background: transparent; color: var(--fg); font-weight: 600; }
-  #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; margin: 2px 0 6px 12px; padding-left: 6px; border-left: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: block; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md) var(--font-ui); text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--panel); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); }
+  /* The nav, Profiles open (§B1.2 `.m2-plist`): the Profiles row and the profile on screen are both the raised row
+     (the .t.on rule above; no bold-on-transparent parent), and the list is a flex column, 12px in, with no rule line. */
+  #page-host > #settings-modal.as-page > #settings-tabs > #pf-navlist { order: 2; gap: 1px; padding: 0 0 4px 12px; }
+  #page-host > #settings-modal.as-page > #settings-tabs > .t[data-tab="manage"].on + #pf-navlist { display: flex; flex-direction: column; }
+  /* A profile row is a nav row with a 6px gap (`.m2-pitem`): the name grows, then the lock, then the tier chip. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni { display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: var(--r-chip); background: none; color: var(--fg); font: 400 var(--t-md)/var(--lh-md) var(--font-ui); text-align: left; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:hover { background: var(--hover); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] { background: var(--raise); font-weight: 500; }
   #page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { justify-content: flex-start; color: var(--accent); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The tier is the kit chip (§C5 `.chip` + `.chip-box`; a host profile adds `.chip-host`'s faint ring); a chip on the
+     selected row steps down to --panel, because raise on raise is invisible. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-tier { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-xs); line-height: 18px; font-weight: 400; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-host { box-shadow: inset 0 0 0 1px var(--faint); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni[aria-current="true"] .pfv-ni-tier { background: var(--panel); }
+  /* "+ New profile" is the kit .link-add (§C2, §B1.2 `.m2-addp`): accent 12/18, padding 6px 10px, underline on hover. */
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add { height: auto; padding: 6px 10px; justify-content: flex-start; color: var(--accent); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-ni-add:hover { background: transparent; text-decoration: underline; text-underline-offset: 2px; }
   #page-host > #settings-modal.as-page .pfv-lock { flex: none; }
+  #page-host > #settings-modal.as-page #pf-navlist .pfv-lock { color: var(--muted); }
 
-  /* The header: name, containment chip, the agent line; Start session and the menu. */
-  #page-host > #settings-modal.as-page #pfv .pfv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-head-main { min-width: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 10px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-title-name { min-width: 0; overflow-wrap: anywhere; font-size: var(--t-lg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-xs)/1 var(--font-mono); }
-  #page-host > #settings-modal.as-page #pfv .pfv-chip-host { box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-acts { display: flex; align-items: center; flex: none; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r-ctl); font: 500 var(--t-md) var(--font-ui); white-space: nowrap; cursor: pointer; }
-  /* The kit's primary (F11), except "Save as host…" (.pfv-btn-host, below): red text on a clear
-     button, never a fill, and no accent hover. :where keeps the weights. */
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host)) { background: var(--accent); color: var(--on-fill); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-primary:where(:not(.pfv-btn-host, :disabled)):hover { background: var(--accent-hover); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary { background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-secondary:hover { background: var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-icon { width: 32px; padding: 0; }
+  /* The head (§B1.4): the name and its containment chip (the kit's .chip .chip-box, §C5) over the agent line (13/20 --muted, the model in mono
+     12/18), then Start session, the ⋯ or Duplicate…, a divider and Esc ✕. Its box, columns, title, description, actions and divider are the
+     shared head rules (the .set-head ones, above); only the title row is the profile page's. New profile and Duplicate (pfv-new.js) draw the
+     same element (the kit's h1.page-title and p.page-desc, 18/24 and 13/20, as every head) with the title and the line alone, then Esc ✕ with no divider. */
+  /* The title row (§B1.4 `.m2-titlerow`): the name, then the chip, 8px apart. */
+  #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
   /* The ⋯ menu (frame M5.4) is the kit menu (kitMenuButton rows): the kit's `.menu:has(> .menu-item)` draws the surface and the 30px
      rows, in flow, so this places it under the button: the frame's .m5-pop-r (200px wide, the kit's min-width: 220px is what shows),
      above the page. Display stays the kit's, so [hidden] still closes it. */
   #page-host > #settings-modal.as-page #pfv .pfv-more > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; width: 200px; }
-  /* The ⋯ shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
-  #page-host > #settings-modal.as-page #pfv .pfv-more .pfv-btn[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible, #page-host > #settings-modal.as-page #pfv .pfv-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -10px 0 24px; font-size: var(--t-sm); color: var(--muted); }
+  /* The ⋯ (the kit's .btn .btn-icon: 28x28) shows pressed while its menu is open: the kit's .btn.is-pressed (a menu button is expanded, not pressed: aria-expanded). */
+  #page-host > #settings-modal.as-page #pfv .pfv-more .btn-icon[aria-expanded="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
+  #page-host > #settings-modal.as-page #pfv .pfv-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-note { display: flex; align-items: center; gap: 7px; margin: -4px 0 24px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-note-text { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-err { margin-bottom: 16px; font-size: var(--t-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #pfv .pfv-err:first-child { margin-top: var(--sp-6); }
 
-  /* The sheet: a card of blocks, a label column, the plain-words values, Edit at the right. */
-  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); font-weight: 600; }
+  /* The sheet (§B2): one card of seven blocks (the kit's .card: --panel, --r-card; Advanced is the seventh), each a row of three columns: the label
+     (132px), the plain-words value and, beside it, Edit. It does not clip (overflow stays visible): the "+ Add" picker of a block in edit hangs out
+     of the card. A block in edit is a card of its own (§B3), between the blocks before it and the blocks after it, 12px from each ("Gap between
+     the three cards = body gap"). */
+  #page-host > #settings-modal.as-page #pfv .pfv-sheet-h { margin-bottom: 10px; font-size: var(--t-lg); line-height: var(--lh-lg); font-weight: 600; }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet { background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-sheet + .pfv-sheet { margin-top: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 120px minmax(0, 1fr) 56px; column-gap: 20px; position: relative; padding: 18px 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-block { display: grid; grid-template-columns: 132px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; position: relative; padding: 14px 16px 14px 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-block + .pfv-block { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-label { font-size: var(--t-md); font-weight: 600; line-height: 20px; }
+  /* No hover tint on a row (§B2: "No hover tint on blocks (none defined)"): the frame's rows do not light up; Edit's own hover is the kit's. */
+  /* The label (§B2 `.m2-blabel`): 13/20, 600; a column, so Advanced's count sits 2px under its name. */
+  #page-host > #settings-modal.as-page #pfv .pfv-label { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-md); font-weight: 600; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-body { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-act { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  /* Edit (§B2 `.m2-edit`): the kit's .btn .btn-ghost .btn-sm, 2px up so the 24px button is centred on the value's 20px first line. */
+  #page-host > #settings-modal.as-page #pfv .pfv-act > .btn { margin-top: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-link { padding: 0 2px; border: 0; border-radius: var(--r-chip); background: none; color: var(--accent); font: 500 var(--t-md)/20px var(--font-ui); cursor: pointer; }
   #page-host > #settings-modal.as-page #pfv .pfv-link:hover { text-decoration: underline; }
   /* Remove and "Move to a saved connection" sit inside a scope line, so they take its size. */
   #page-host > #settings-modal.as-page #pfv .pfv-rm, #page-host > #settings-modal.as-page #pfv .pfv-act-link { font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page #pfv .pfv-main { line-height: 20px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-sub { max-width: 66ch; margin-top: 2px; font-size: var(--t-sm); color: var(--muted); }
+  /* The value is --fg 500, the helper --muted at --t-sm and as wide as the value column (§B2: no third text tier, no measure of its own). */
+  #page-host > #settings-modal.as-page #pfv .pfv-main { font-weight: 500; line-height: 20px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub { margin-top: 2px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-sub { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-red { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-red + .pfv-sub { margin-top: 2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-empty { line-height: 20px; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-stmt-act { margin-top: 12px; }
 
-  /* A grant is a row: kind, name (and its tag), scope in words. */
-  #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: 14px; align-items: start; }
-  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: 20px; color: var(--muted); }
+  /* A grant is a row: kind, name (and its tag), scope in words (§B2 `.m2-rows`: 52px, the value, a 196px status column, 16px between columns and
+     10px between rows). Three tracks only: an empty fourth one would still cost a 16px gap in every read row. Remove / Undo and the "Set in ..."
+     note of a row in edit sit in column 4, the implicit auto track, which exists only on those rows. The narrow steps below put them back in
+     column 3 (863px) or under the content (440px). The kind word, the status and the mono part are the frame's 12/18 `t-sm` lines (the value
+     line around the mono part stays 20px). */
+  #page-host > #settings-modal.as-page #pfv .pfv-rows { display: grid; gap: 10px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 196px; column-gap: 16px; align-items: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn, #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 4; grid-row: 1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-k { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-id { min-width: 0; }
   #page-host > #settings-modal.as-page #pfv .pfv-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-weight: 500; line-height: 20px; }
   #page-host > #settings-modal.as-page #pfv .pfv-rsub { font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: var(--t-sm); line-height: 20px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-scope { font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page #pfv .pfv-nm .pfv-mono { line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-tag { display: inline-flex; align-items: center; height: 17px; padding: 0 5px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .55); color: var(--red); font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em; }
   #page-host > #settings-modal.as-page #pfv .pfv-miss { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-tnote { margin-top: 12px; font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-empty + .pfv-add { margin-top: 8px; }
+  /* + Add access / + Add folder or domain is the kit's .link-add.t-sm (§C2): 400 12/18, no padding, no radius (the .pfv-link look above is the
+     accent button it is not). Under the helper line of an empty block it is 10px down: `.m2-bc` gap 2 + `.m2-add` margin-top 8 (§B2). */
+  #page-host > #settings-modal.as-page #pfv .pfv-add { display: block; width: fit-content; margin-top: 12px; padding: 0; border-radius: 0; font: 400 var(--t-sm)/var(--lh-sm) var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-sub + .pfv-add { margin-top: 10px; }
 
   /* Branches that did not come home: today's amber chip and rows (the old list and form). */
   #page-host > #settings-modal.as-page #pfv .pfv-nhome { grid-column: 2 / -1; display: grid; gap: 6px; justify-items: start; }
@@ -2483,72 +2810,84 @@
   #page-host > #settings-modal.as-page #pfv .pfv-nh-fix { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-nh-detail { font-size: var(--t-sm); }
 
-  /* Advanced: its own card, folded, "Advanced · N set". */
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1 / 3; display: flex; align-items: center; gap: 6px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 2 / 3; margin-top: 4px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fold { display: flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; line-height: 20px; text-align: left; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-chev { flex: none; color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-open .pfv-chev { transform: rotate(90deg); }
+  /* Advanced (§B2): a normal block, the seventh of the card, with no collapse. Its label carries the count under the name (§A2 `.m2-advst`: 12/18,
+     --muted, 400, in the label's column); with nothing set the helper is its value, with something set the list of what is. */
+  #page-host > #settings-modal.as-page #pfv .pfv-advst { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 400; color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-muted { color: var(--muted); font-weight: 400; }
-  #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-adv-sum { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 16px; font-size: var(--t-md); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dt { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dl dd .pfv-muted { margin-left: 8px; }
 
   /* --- Editing one block (spec 5.5, 5.6) ------------------------------------------ */
-  /* The open block is raised (--raise), its Edit link is gone, and its body spans to the right edge. Look source:
-     profile-mockups/option-b/index.html (.block.editing, .fields, .opt-card, .b-foot) and the b-err / b-err2 shots. */
-  #page-host > #settings-modal.as-page #pfv .pfv-editing { background: var(--raise); }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:first-child { border-radius: var(--r-card) var(--r-card) 0 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:last-child { border-radius: 0 0 var(--r-card) var(--r-card); }
-  #page-host > #settings-modal.as-page #pfv .pfv-editing:only-child { border-radius: var(--r-card); }
+  /* The open block is a card of its own (§B3 `section.card.m2-card.m2-editing`): the kit's --panel like the cards around it, not a raised row; its
+     Edit link is gone, so its grid is the label's column and the form's (§D `.m2-editing .m2-blk`), and the form spans to the right edge. The block
+     keeps no bottom padding: the form carries the 18px above the foot's rule (`padding-bottom: 18px`), and the foot is the block's last row. The
+     radius is the card's, so the 1px ring of a nudged block follows its corners. Look source: digest-design §B3; the b-err / b-err2 shots. */
+  #page-host > #settings-modal.as-page #pfv .pfv-editing { grid-template-columns: 132px minmax(0, 1fr); padding-bottom: 0; border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #pfv .pfv-nudge { box-shadow: inset 0 0 0 1px var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; }
+  #page-host > #settings-modal.as-page #pfv .pfv-edit-body { grid-column: 2 / -1; padding-bottom: 18px; }
   #page-host > #settings-modal.as-page #pfv .pfv-top:empty { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-top-err { margin-bottom: 14px; font-size: var(--t-sm); color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-top-err .pfv-link { margin-left: 2px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-form { min-width: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 440px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 5px; min-width: 0; margin: 0; padding: 0; border: 0; }
-  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: var(--t-sm); font-weight: 500; }
-  /* A fieldset's legend is not a grid item, so the field's 5px gap does not reach it: it carries the gap itself (the mockup's Effort legend). */
-  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 5px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: var(--t-sm); color: var(--muted); }
+  /* The form (§B3 `.m2-form`): 560px at most, 16px between fields; a field (§C6 `.field`) is its label, the control and the help 6px apart. */
+  #page-host > #settings-modal.as-page #pfv .pfv-fields { display: grid; gap: 16px; max-width: 560px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-field { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  /* The label is the kit's field label (§C6 `.field-label`: 12/18, 500, --fg), sentence case: nothing here uppercases it. */
+  #page-host > #settings-modal.as-page #pfv .pfv-flabel { padding: 0; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; color: var(--fg); }
+  /* A fieldset's legend is not a grid item, so the field's 6px gap does not reach it: it carries the gap itself (§D `.m2-legend`). */
+  #page-host > #settings-modal.as-page #pfv .pfv-field > legend.pfv-flabel { margin-bottom: 6px; }
+  #page-host > #settings-modal.as-page #pfv .pfv-hint { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-form > .pfv-ferr { margin-top: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-ferr { font-size: var(--t-sm); color: var(--red); overflow-wrap: anywhere; }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 440px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); color: var(--fg); font: 400 var(--t-md) var(--font-ui); }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--faint); }
+  /* The control is the kit's .input (§C6): 32px, a --faint border at rest (G12), --muted under the pointer, the accent on focus. */
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl { box-sizing: border-box; width: 100%; max-width: 560px; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--faint); border-radius: var(--r-ctl); color: var(--fg); font: 400 var(--t-md) var(--font-ui); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl:hover { border-color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: var(--t-md); }
+  #page-host > #settings-modal.as-page #pfv .pfv-ctl-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-select { appearance: none; padding-right: 30px; cursor: pointer; background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b939e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 11px center; }
   #page-host > #settings-modal.as-page #pfv .pfv-bad, #page-host > #settings-modal.as-page #pfv .pfv-bad:hover { border-color: var(--red); }
   /* The mockup's .in::placeholder (muted, not the browser's grey) and its invalid-and-focused field: the red border stays (.pfv-bad is later than
      .pfv-ctl:focus-visible), so a refused field still reads as one, and its 2px of accent is a 2px shadow outside the red. */
   #page-host > #settings-modal.as-page #pfv .pfv-ctl::placeholder { color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-ctl.pfv-bad:focus-visible { border-color: var(--red); box-shadow: 0 0 0 2px var(--accent); }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg { max-width: 100%; height: 32px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg button { padding: 0 12px; font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { font-weight: 500; }
+  /* A segmented control (Agent's Effort, a permission's Read/Write) is the kit's .seg (§C4), restated here as #spawn's is (its buttons are
+     buildSeg's plain ones: .on, no .seg-item): 2px in a --bg bar with a --line ring, 24px items at --t-sm 500, so the bar is 28px, a .btn's. It
+     is as wide as its choices, not its field (a grid item would stretch the bar across the form). */
+  #page-host > #settings-modal.as-page #pfv .pfv-seg { display: inline-flex; justify-self: start; gap: 2px; max-width: 100%; padding: 2px; border: 0; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button { height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium); font-variant-numeric: tabular-nums; cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button:hover { color: var(--fg); background: var(--hover); }
+  #page-host > #settings-modal.as-page #pfv .pfv-seg button.on { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   #page-host > #settings-modal.as-page #pfv .pfv-manage { font-size: var(--t-sm); line-height: 18px; }
-  /* Where it runs: two cards, the lit one outlined. */
-  #page-host > #settings-modal.as-page #pfv .pfv-choice { gap: 8px; max-width: 440px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-choice > legend.pfv-flabel { margin-bottom: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; row-gap: 2px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; margin: 3px 0 0; accent-color: var(--accent); }
+  /* A choice (Workspace's mode, Runs in's tier): two option cards side by side (§D `.m2-two`: two equal columns, 8px). A card is the kit's
+     .opt-card (§D `.m2-opt`: 10px 12px, --r-ctl, a 1px --line ring, the chosen one filled --raise with no accent ring), which draws the box; this lays
+     out what is in it: a 14px radio (§C6 `.check input`), 8px, then the words (§D `.m2-optt`: the title 13/20 500, the lines 12/18 --muted, 2px apart). */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  /* Anything in the fieldset that is not a card takes the whole row under the cards, not a cell beside one: New profile's hint ("A private copy needs a
+     box." under the one Box card of a copy's Duplicate, "On this machine a profile cannot hold ..." under the two). The legend is no grid item. */
+  #page-host > #settings-modal.as-page #pfv .pfv-choice > :not(.pfv-card) { grid-column: 1 / -1; }
+  /* align-content: start keeps the title row 20px when the card has a second line (the grid would stretch the auto rows to fill the card). */
+  #page-host > #settings-modal.as-page #pfv .pfv-card { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; align-content: start; }
+  #page-host > #settings-modal.as-page #pfv .pfv-card > input { grid-row: 1 / span 3; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-card > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-on { border-color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-off { cursor: default; }
   #page-host > #settings-modal.as-page #pfv .pfv-off .pfv-card-t { color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; }
-  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-t { grid-column: 2; display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page #pfv .pfv-card-d { grid-column: 2; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-chip-word { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--r-chip); background: var(--raise); color: var(--muted); font: 500 var(--t-sm)/1 var(--font-ui); }
   #page-host > #settings-modal.as-page #pfv .pfv-okdot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
   #page-host > #settings-modal.as-page #pfv .pfv-refuse { max-width: 440px; margin-top: 12px; font-size: var(--t-sm); color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-refuse .pfv-link { font-size: var(--t-sm); }
   /* Network: one switch, its consequence under it. */
-  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-  #page-host > #settings-modal.as-page #pfv .pfv-check input { width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  /* The page's checkboxes (Bring work home automatically, the Network switch, a GitHub permission, an Advanced option) stay real inputs and take
+     the kit's .check-box look (§C6, restated as the spawn form's do above): 14px, a --muted ring on --bg, accent and a tick when checked, the words
+     8px away on the default cursor (the frame's `.check`). The keyboard ring is the global 2px one; nothing here touches the outline. */
+  #page-host > #settings-modal.as-page #pfv .pfv-check { display: flex; align-items: flex-start; gap: 8px; cursor: default; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 14px; height: 14px; margin: 3px 0 0; padding: 0; border-radius: var(--r-chip); background: var(--bg); box-shadow: inset 0 0 0 1px var(--muted); cursor: pointer; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input:checked { background: var(--accent); box-shadow: none; }
+  #page-host > #settings-modal.as-page #pfv .pfv-check input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--on-fill); border-width: 0 2px 2px 0; transform: rotate(45deg); }
   #page-host > #settings-modal.as-page #pfv .pfv-check-t { display: block; }
   #page-host > #settings-modal.as-page #pfv .pfv-check-d { display: block; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-consq { max-width: 440px; margin-top: 12px; font-size: var(--t-md); }
@@ -2559,7 +2898,7 @@
   #page-host > #settings-modal.as-page #pfv .pfv-wslist[hidden] { display: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote { font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-wsnote[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; resize: vertical; }
+  #page-host > #settings-modal.as-page #pfv .pfv-area { height: auto; min-height: 72px; padding: 8px 10px; line-height: var(--lh-md); resize: vertical; }
   /* Advanced (editing): the variables and secrets are rows of the page's own grammar (the kind column, the content, Remove or Undo at the right;
      the .pfv-row, .pfv-k, .pfv-rmbtn and .pfv-removed rules of the Cloud rows), the content being the mockup's .kv: a name, and a value or
      where a secret is read from. The rows' inputs are 32px tall, and the kind word and Remove sit at their top (the mockup's .row aligns to start). Look source: option-b/index.html (.kv, tpl-env, tpl-secret). */
@@ -2586,8 +2925,6 @@
   #page-host > #settings-modal.as-page #pfv .pfv-cust[aria-expanded="true"] { margin-bottom: 10px; }
   /* A permission and its Read/Write control: side by side while they fit, the control under it (at the left) when they do not. */
   #page-host > #settings-modal.as-page #pfv .pfv-perm { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 12px; justify-self: stretch; min-height: 30px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg { height: 26px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-perm .pfv-seg button { padding: 0 9px; font-size: var(--t-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-warnw { margin-top: 8px; font-size: var(--t-sm); color: var(--red); }
   /* The "+ Add" picker (the mockup's .pop.picker): a popover that hangs under its link and covers what follows. 420px at most and never wider
      than the form it sits in, so a narrow window cannot push it out of the page; a name or a line under it breaks rather than widen it.
@@ -2622,19 +2959,20 @@
   #page-host > #settings-modal.as-page #pfv .pfv-create .pfv-opt-t { color: var(--accent); }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-s { display: block; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
   #page-host > #settings-modal.as-page #pfv .pfv-opt-r { flex: none; font-size: var(--t-sm); color: var(--muted); }
-  /* The footer: what is unsaved, what is wrong, what else Save takes along; Discard and Save. */
-  #page-host > #settings-modal.as-page #pfv .pfv-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; gap: 2px; min-width: 0; font-size: var(--t-sm); }
+  /* The foot (§B3, §C7 `.dlg-foot`): the block's last row, across the card's whole width: 12px 20px, 8px between, a --line rule on top. The block's
+     padding is 14px 16px 14px 20px, so the foot bleeds out by the right and left of it (the narrow steps say theirs). Its children are the status
+     (what is unsaved, what is wrong, what else Save takes along, what saving costs: the kit's `.hint`, which fills the row), then Cancel (or Discard)
+     and Save, both kit .btn: Save is the one .btn-primary of the view. */
+  #page-host > #settings-modal.as-page #pfv .pfv-foot { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--sp-2); margin: 0 -16px 0 -20px; padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #pfv .pfv-status { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-dirty { display: inline-flex; align-items: center; gap: 8px; }
   #page-host > #settings-modal.as-page #pfv .pfv-st-invalid { color: var(--red); }
   #page-host > #settings-modal.as-page #pfv .pfv-st-nudge { color: var(--fg); }
   #page-host > #settings-modal.as-page #pfv .pfv-fnote { font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page #pfv .pfv-fbtns { display: flex; flex: none; gap: 8px; }
-  #page-host > #settings-modal.as-page #pfv .pfv-fbtns .pfv-btn[hidden] { display: none; }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost { background: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-ghost:hover { background: var(--line); }
-  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). */
-  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); box-shadow: inset 0 0 0 1px rgba(240, 106, 106, .6); }
+  /* "Save as host…": a way into losing the container, so red text on a clear button, never a red fill (the mockup's). It is the same Save (.btn
+     .btn-primary): this rule outranks the kit's fill, weight and hover, weighs 500 like a secondary, and rings the button's own 1px border (the
+     kit's .btn-danger way) where the old page button, which had no border, drew an inset shadow. */
+  #page-host > #settings-modal.as-page #pfv .pfv-btn-host { background: none; color: var(--red); font-weight: var(--w-medium); border-color: rgba(240, 106, 106, .6); }
   #page-host > #settings-modal.as-page #pfv .pfv-udot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
   /* The header's note while any block has changes, the Saved note after a save, and what a save answered with. */
   #page-host > #settings-modal.as-page #pfv .pfv-unsaved { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; font-size: var(--t-sm); }
@@ -2675,26 +3013,24 @@
   }
 
   /* Narrow windows. The shell takes 502px (sidebar 290 + Settings nav 212), so a 900px window leaves the page 398px and a 701px one 199px,
-     and the block's 120px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
+     and the block's 132px label column, a row's kind column and Remove would leave the content none. The mockup is drawn at 1280 and has
      no narrow design: these steps only stack what it already draws, in its own grammar, and change nothing above them. The thresholds
      are the page's width (#pfv), measured: at 624px (a 1126px window) the label column starts to cost the body more than it is worth;
      at 440px (942px) a row's content, with a kind word and Remove beside it, falls under what a name and a value need; at 300px (802px)
      it falls under what is worth keeping beside a kind word; at 240px the margins give way so that Discard and Save fit. The permissions have
      a step of their own, at 390px (see it). */
-  /* The label above its body, the Edit link on the label's line, the body the full width. */
+  /* The label above its body, the Edit button on the label's line (it keeps its 2px lift: the label's first line is the same 20px), the body the
+     full width. The head needs no step of its own: it wraps its actions under the title from the start (the base rule), and they wrap too. */
   @container (max-width: 624px) {
     #page-host > #settings-modal.as-page #pfv .pfv-block { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
-    #page-host > #settings-modal.as-page #pfv .pfv-label, #page-host > #settings-modal.as-page #pfv .pfv-adv-label { grid-column: 1; grid-row: 1; }
+    #page-host > #settings-modal.as-page #pfv .pfv-label { grid-column: 1; grid-row: 1; }
     #page-host > #settings-modal.as-page #pfv .pfv-act { grid-column: 2; grid-row: 1; flex-direction: row; align-items: center; gap: 8px; }
     #page-host > #settings-modal.as-page #pfv .pfv-body, #page-host > #settings-modal.as-page #pfv .pfv-adv-body { grid-column: 1 / -1; grid-row: 2; }
-    #page-host > #settings-modal.as-page #pfv .pfv-adv-body { margin-top: 0; }
+    /* A block in edit: the foot follows the form straight (the form's own 18px is the space; the grid's 8px row gap is not added to it). */
+    #page-host > #settings-modal.as-page #pfv .pfv-editing > .pfv-foot { margin-top: -8px; }
     /* A row's track may be narrower than its longest word, and a path or an id breaks anywhere rather than run out of the page. */
     #page-host > #settings-modal.as-page #pfv .pfv-rows { grid-template-columns: minmax(0, 1fr); }
     #page-host > #settings-modal.as-page #pfv :is(.pfv-nm, .pfv-mono) { overflow-wrap: anywhere; }
-    /* The header's title and its actions (with "Unsaved changes" among them) go on two lines rather than squeeze the name into a column. */
-    #page-host > #settings-modal.as-page #pfv .pfv-head { flex-wrap: wrap; }
-    #page-host > #settings-modal.as-page #pfv .pfv-head-main { flex: 1 1 12em; }
-    #page-host > #settings-modal.as-page #pfv .pfv-acts { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
   }
   /* A row keeps its kind word and its content side by side; Remove or Undo goes on its own line under the content, at the right, so it can
      never sit on an input. A variable's value goes under its name, a definition under its term. */
@@ -2703,8 +3039,11 @@
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { grid-column: 2; grid-row: auto; justify-self: end; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-inote { grid-column: 2; grid-row: auto; }
     #page-host > #settings-modal.as-page #pfv .pfv-kv, #page-host > #settings-modal.as-page #pfv .pfv-dl { grid-template-columns: minmax(0, 1fr); }
+    #page-host > #settings-modal.as-page #pfv .pfv-choice { grid-template-columns: minmax(0, 1fr); }
     #page-host > #settings-modal.as-page #pfv .pfv-foot { flex-wrap: wrap; }
-    #page-host > #settings-modal.as-page #pfv .pfv-fbtns { margin-left: auto; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status { flex: 1 0 100%; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status:empty { display: none; }
+    #page-host > #settings-modal.as-page #pfv .pfv-status + .btn { margin-left: auto; }
   }
   /* Every permission stacks the same way (the permission, then its Read/Write control under it) once the longest one no longer fits beside
      its control, so the list reads as one column instead of one row dropping its control and its neighbours not. "pull requests" and its
@@ -2714,16 +3053,15 @@
     /* An option's segmented control (Agent's Effort, and Advanced's choices) wraps onto a second line when its choices no longer fit in one:
        "low medium high xhigh max" needs 284px and the body has the page less 104px (less 52px from 240px down), so it is 388px that runs out;
        390px keeps a margin. Without it the control's own width held its grid track open past the block. A choice stays one button, and one
-       that is long (a stored value the list no longer has) wraps its text; every line is 26px tall, as the single line is. */
-    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; height: auto; }
-    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; }
+       that is long (a stored value the list no longer has) wraps its text; every line is 24px tall (the kit seg item), as the single line is. */
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg { flex-wrap: wrap; align-content: flex-start; }
+    #page-host > #settings-modal.as-page #pfv .pfv-field > .pfv-seg button { min-width: 0; max-width: 100%; height: auto; min-height: var(--h-sm); padding: 4px 10px; white-space: normal; overflow-wrap: anywhere; }
   }
   /* The kind word above its content, which then has the whole width. */
   @container (max-width: 300px) {
     #page-host > #settings-modal.as-page #pfv .pfv-row { display: flex; flex-direction: column; gap: 2px; }
     #page-host > #settings-modal.as-page #pfv .pfv-row > .pfv-rmbtn { align-self: flex-end; }
     #page-host > #settings-modal.as-page #pfv .pfv-block { column-gap: 12px; }
-    #page-host > #settings-modal.as-page #pfv :is(.pfv-adv-label, .pfv-fold) { flex-wrap: wrap; }
     #page-host > #settings-modal.as-page #pfv .pfv-link { text-align: left; }
     /* The New profile card gives its text the room its padding took. The chip after "In a box" wraps instead of leaving its card, on this
        page's cards (New profile, Duplicate) and on Runs in's alike: they are the same two cards. */
@@ -2732,8 +3070,10 @@
   }
   /* A window under 743px leaves the page under 241px (199px at 701px): less margin, so Discard and Save still fit beside each other inside the block. */
   @container (max-width: 240px) {
-    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 20px 12px 120px; }
-    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 16px 14px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-in { padding: 0 12px 32px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-block { padding: 14px; }
+    #page-host > #settings-modal.as-page #pfv .pfv-editing { padding-bottom: 0; }
+    #page-host > #settings-modal.as-page #pfv .pfv-editing > .pfv-foot { margin: -8px -14px 0; padding: 12px 14px; }
   }
   /* --- the Credentials drawer over the profile page (spec 5.7; the mockup's `drawer` and `drawer-tok` states) ----------- */
   /* A scrim and a drawer, both fixed and so out of the page's grid; neither is a .dbd or a .dft (selectSettingsTab hides those). They
@@ -2782,8 +3122,8 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h { gap: 8px; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .arow-h .nm { font-weight: 600; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .frow { gap: 10px 12px; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .flab { margin-bottom: 5px; font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld { height: 32px; padding: 0 10px; border: 1px solid var(--faint); border-radius: var(--r-ctl); background: var(--bg); font: 400 var(--t-md) var(--font-ui); color: var(--fg); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body textarea.fld { height: auto; min-height: 60px; padding: 7px 10px; line-height: 1.45; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld.ro { background: var(--panel); color: var(--muted); }
@@ -2814,8 +3154,8 @@
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn { justify-self: start; height: 32px; padding: 0 12px; border: 0; }
   /* Create the encrypted store is a secondary here: the foot's Save is the view's primary. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .storecreate .btn:where(:not(.pri)) { background: var(--line); color: var(--fg); font-weight: 500; }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn { height: 32px; padding: 0 12px; border: 0; font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:where(:not(.pri)) { font-weight: 500; }
+  /* The foot's buttons are the kit footer's (named in the .dft .btn rule above: 28px, 0 12px, --t-md, 500). What stays here is the
+     drawer's own look for Cancel: no fill until hovered. */
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)) { background: transparent; }
   #page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-foot > .btn:nth-last-child(2):where(:not(.pri)):hover { background: var(--line); }
 }

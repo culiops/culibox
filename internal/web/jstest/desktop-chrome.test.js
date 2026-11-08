@@ -336,7 +336,7 @@ test("in a narrow pane only the tabs hide; + Shell stays down to the width where
 
 // The profile page in a narrow window (Task 11 slice gate, gap 1). The shell takes 502 px (sidebar 290, Settings nav 212), so #pfv is 398 px in a
 // 900 px window and 199 px in a 701 px one. The steps are container rules on #pfv, each inside the desktop block (so mobile cannot see them):
-// 863 puts the scope under the name, 624 puts a block's label above its body (the Edit link stays on the label's line), 440 puts Remove or Undo
+// 863 puts the scope under the name, 624 puts a block's label above its body (the Edit button stays on the label's line), 440 puts Remove or Undo
 // on its own line under a row's content, 390 stacks every GitHub permission with its control under it (together, never one row alone) and wraps an
 // option's segmented control (Agent's Effort: 284 px of choices, which held its grid track open past the block in a 701 to 800 px window), 300 puts
 // the kind word above the content and lets the chip after "In a box" wrap (the cards of Runs in and of New profile), 240 trims the margins so Discard
@@ -350,20 +350,35 @@ test("the profile page stacks its blocks in narrow windows: container steps on #
   assert.match(at(624), /\.pfv-act \{ grid-column: 2; grid-row: 1;/);
   assert.match(at(624), /\.pfv-body, [^{]*\.pfv-adv-body \{ grid-column: 1 \/ -1; grid-row: 2;/);
   assert.match(at(624), /\.pfv-rows \{ grid-template-columns: minmax\(0, 1fr\);/, "a row's track may be narrower than its longest word");
+  // The head needs no step: it wraps its actions under the title from the start (UI plan 4 Task 3), so nothing of it is left here.
+  assert.doesNotMatch(at(624), /\.pfv-head|\.pfv-acts|\.page-actions/);
+  // Edit keeps the 2px lift in column 2 (row 1): the label's first line is the same 20px as the value's, so it stays centred on it.
+  assert.doesNotMatch(at(624), /\.btn \{[^}]*margin-top/);
+  // Advanced is a normal block (frame M2.1): no label of its own to place, no fold to wrap, no margin to cancel in any step.
+  for (const px of [624, 300]) assert.doesNotMatch(at(px), /\.pfv-adv-label|\.pfv-fold|\.pfv-adv-body \{ margin-top/, px + "px step");
   // Remove never sits beside an input: it has its own line under the content, at the right.
   assert.match(at(440), /\.pfv-row \{ grid-template-columns: 52px minmax\(0, 1fr\);/);
   assert.match(at(440), /\.pfv-row > \.pfv-rmbtn \{ grid-column: 2; grid-row: auto; justify-self: end;/);
   assert.match(at(300), /\.pfv-row \{ display: flex; flex-direction: column;/);
-  assert.match(at(240), /\.pfv-in \{ padding: 20px 12px 120px;/);
+  assert.match(at(240), /\.pfv-in \{ padding: 0 12px 32px;/);
+  // The two option cards of a choice (Workspace's mode, Runs in's tier) go one under the other once a card is under ~190px; the block's foot
+  // puts its status on a line of its own and Cancel and Save, side by side, at the right; at 240 the foot bleeds out by the block's 14px.
+  assert.match(at(440), /\.pfv-choice \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(at(440), /\.pfv-foot \{ flex-wrap: wrap; \}/);
+  assert.match(at(440), /\.pfv-status \{ flex: 1 0 100%; \}/);
+  assert.match(at(440), /\.pfv-status:empty \{ display: none; \}/, "an empty status takes no row (and no gap) of its own");
+  assert.match(at(440), /\.pfv-status \+ \.btn \{ margin-left: auto; \}/);
+  assert.match(at(624), /\.pfv-editing > \.pfv-foot \{ margin-top: -8px; \}/, "the grid's 8px row gap is not added to the form's own 18px");
+  assert.match(at(240), /\.pfv-editing > \.pfv-foot \{ margin: -8px -14px 0; padding: 12px 14px; \}/);
   // A permission and its control share a line while they fit (and wrap on their own if one ever does not); at 390 all of them stack.
   assert.ok(rulesFor("#page-host > #settings-modal.as-page #pfv .pfv-perm").some((b) => /display:\s*flex/.test(b) && /flex-wrap:\s*wrap/.test(b)));
   assert.match(at(390), /\.pfv-perm \{ flex-direction: column; flex-wrap: nowrap; align-items: flex-start;/);
-  // An option's segmented control (the fieldset's own, not a permission's 26px one) wraps its choices once they no longer fit in a row, every line
-  // 26px as the one line is; a long stored value wraps its text instead of widening the control. Without it the control's min-content (284 px for
-  // Effort) held its grid track open and #pfv scrolled sideways at 701 to 800 px (gap N4).
-  assert.match(at(390), /\.pfv-field > \.pfv-seg \{ flex-wrap: wrap; align-content: flex-start; height: auto; \}/);
-  assert.match(at(390), /\.pfv-field > \.pfv-seg button \{ min-width: 0; max-width: 100%; min-height: 26px; padding: 4px 12px; white-space: normal; overflow-wrap: anywhere; \}/);
-  assert.ok(!/\.pfv-perm \.pfv-seg/.test(at(390)), "a permission's Read/Write control keeps its one 26px line");
+  // An option's segmented control (the fieldset's own, not a permission's) wraps its choices once they no longer fit in a row, every line 24px
+  // (the kit's .seg item) as the one line is; a long stored value wraps its text instead of widening the control. Without it the control's
+  // min-content (284 px for Effort) held its grid track open and #pfv scrolled sideways at 701 to 800 px (gap N4).
+  assert.match(at(390), /\.pfv-field > \.pfv-seg \{ flex-wrap: wrap; align-content: flex-start; \}/);
+  assert.match(at(390), /\.pfv-field > \.pfv-seg button \{ min-width: 0; max-width: 100%; height: auto; min-height: var\(--h-sm\); padding: 4px 10px; white-space: normal; overflow-wrap: anywhere; \}/);
+  assert.ok(!/\.pfv-perm \.pfv-seg/.test(at(390)), "a permission's Read/Write control keeps its one line");
   assert.ok(at(390).length < 1100, "the 390 step is the permissions' and the option controls' alone");
   // The chip after "In a box" wraps under the title on every tier card, so Runs in's (a 4px overflow at 701) leaves no card either.
   assert.match(at(300), /\.pfv-card \.pfv-card-t \{ flex-wrap: wrap; gap: 2px 8px; \}/);
@@ -390,23 +405,57 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // its column open past the section's box (overflow: hidden): a 30-character name cut
 // Delete off at 1240 px, a 60-character one scrolled the whole page. The name wraps like
 // the GitHub and token tables' (hyphens first, mid-word only past the column).
-// The token and GitHub tables (table-layout: fixed, shares of the width). Measured on the seeded page (Task 10a, fix
-// wave): the tables are 922 px wide at a 1440 window and 762 px at 1280, a cell's padding is 32 px. The Env column's
-// 12px host (F06) needs 203 px for artifactory.acme.example.com (25% gave it 199 at 1440: "...example.co" / "m"); the
-// Status column keeps its longest word ("environment", 77 px) whole at 1280.
-test("the token tables give the 12px host one line at 1440 and keep Status's words whole at 1280", () => {
+// The token and GitHub tables (table-layout: fixed, shares of the width). The geometry is the page's today (UI plan 4 Task 1's
+// 820px column cap, Task 5's 12px cell padding), as the Task 5 review measured it in a browser: the table is 820px at a 1440
+// window, 714px at 1280 and 700px (CRED_TABLE_MIN_WIDTH, a ~1266px window) at the floor. Env's content box is 189px at 1440
+// and 161px at 1280; a cell's padding is 12px each side (the first cell 16, the last 12). The Env host is mono 12px
+// (advance 0.6em = 7.2px, inferred), and credMonoSub lets it break after each dot, so a long host takes two lines, never
+// overflows. Status keeps its longest word ("environment", 77px at 13px Inter, measured) whole. The Actions cell holds
+// Edit and Delete: the pair is 98.6px (the review: at 1266 a 112px cell showed Edit starting 1.4px inside it, 12px right padding).
+test("the token tables give a long host two lines and no overflow, keep Status's words whole, and hold Edit and Delete at the floor", () => {
   const share = (n) => {
-    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(' + n + ")").join(" ");
+    // The shares are on the colgroup's <col>s (credTable draws them; one set for the head cells and the rows: G16).
+    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").join(" ");
     const m = /width:\s*([\d.]+)%/.exec(r);
     assert.ok(m, "column " + n + " has a share");
     return +m[1];
   };
-  const [token, env, status, actions] = [share(1), share(2), share(3), share(5)];
-  assert.ok(env / 100 * 922 - 32 >= 203, "Env holds artifactory.acme.example.com at 1440: " + env + "%");
-  assert.ok(status / 100 * 762 - 32 >= 77, "Status holds \"environment\" at 1280: " + status + "%");
-  assert.strictEqual(token, 20, "Token keeps its share: less wraps the token names (measured: +54 px of rows at 1440)");
-  assert.strictEqual(actions, 16, "Actions keeps its share: Edit and Delete");
-  assert.ok(100 - token - env - status - actions >= 23, "Used by keeps its share within half a point");
+  const [token, env, status, used, actions] = [1, 2, 3, 4, 5].map(share);
+  assert.strictEqual(Math.round((token + env + status + used + actions) * 10) / 10, 100, "the one colgroup's shares are the whole table");
+  // The geometry the numbers below rest on is still the CSS's.
+  const cap = rulesFor("#page-host > #settings-modal.as-page > .dbd.pad > *").join(" ");
+  assert.match(cap, /max-width:\s*820px/, "the content column's cap");
+  assert.ok(rulesFor(".tbl td").some((b) => /padding:\s*0 var\(--sp-3\)/.test(b)), "the kit's cell padding is --sp-3");
+  assert.ok(/--sp-3:\s*12px/.test(css), "which is 12px");
+  const PAD = 24;
+  const TABLE = { 1440: 820, 1280: 714, 1266: 700 };
+
+  // The host: greedy lines, a break only after a dot (credMonoSub's <wbr>); a label wider than the box would overflow.
+  const HOST = ["artifactory.", "acme.", "example.", "com"];
+  const ADV = 7.2;
+  const lines = (box) => {
+    let n = 1, at = 0;
+    for (const seg of HOST) {
+      const w = seg.length * ADV;
+      assert.ok(w <= box, "the label " + seg + " (" + w + "px) fits the Env box (" + box + "px): no overflow");
+      if (at > 0 && at + w > box) { n++; at = 0; }
+      at += w;
+    }
+    return n;
+  };
+  for (const win of [1440, 1280, 1266]) {
+    const box = env / 100 * TABLE[win] - PAD;
+    assert.ok(lines(box) <= 2, "artifactory.acme.example.com takes " + lines(box) + " lines at " + win + " (Env box " + box.toFixed(1) + "px)");
+  }
+  assert.ok(status / 100 * TABLE[1280] - PAD >= 77, "Status holds \"environment\" at 1280: " + status + "%");
+  assert.ok(status / 100 * TABLE[1266] - PAD >= 77, "and at the floor");
+  assert.strictEqual(token, 19.5, "Token keeps its share (less wraps the token names; 0.5 went to Actions)");
+  assert.strictEqual(env, 26, "Env keeps its share");
+  assert.strictEqual(status, 14.5, "Status keeps its share");
+  assert.ok(used >= 23, "Used by keeps its share");
+  const BUTTONS = 98.6;
+  const cell = actions / 100 * TABLE[1266];
+  assert.ok(cell - 12 - BUTTONS >= 8, "at the floor Edit starts at least 8px inside the Actions cell (" + (cell - 12 - BUTTONS).toFixed(1) + "px), clear of Used by's text: " + actions + "%");
 });
 
 test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {
@@ -625,6 +674,73 @@ test("the sidebar's top and footer are the frame's: 12px 16px, a 28px New sessio
   assert.match(decl("#side-foot"), /padding:\s*12px 16px/);
   assert.match(decl(".side-links button"), /font:\s*var\(--t-sm\) var\(--font-ui\)/);
   assert.match(decl(".side-links"), /margin:\s*0 -8px/, "the first link's word starts on the 16px edge");
+});
+
+// Task 9 of UI plan 4 (#174). M1 (canvas lines 22-23) and M2 (lines 22-23) draw the same quota columns:
+// .m1-q / .m2-q gap var(--sp-3); .qk 20px (label), .qp 34px right (percent), .ql 70px right (reset),
+// every one flex:none, with the kit .meter between them (flex 1 1 auto).
+// The reset column is 74px, not the frame's 70: a MEASURED-DEFECT deviation (pre-merge review, final fix wave item 2). The longest
+// text fmtCountdown prints on the weekly row, "23h 59m left" (usage.js meterModel: hours and minutes, then " left"), is 73.05px at
+// 12px in the product's own Inter, so the frame's 70px clipped it with an ellipsis at every sidebar width. The 70px frame is the
+// design's; the 74px (73.05 + 1, rounded up) is the measurement, and the handoff records it.
+test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent, 74px reset (the frame's 70 + 4, measured), 12px apart", () => {
+  assert.match(decl("#limits-side .mtr"), /gap:\s*var\(--sp-3\)/);
+  const lab = decl("#limits-side .mtr > span:first-child");
+  assert.match(lab, /width:\s*20px/);
+  assert.match(lab, /flex:\s*none/);
+  const pc = decl("#limits-side .mtr .pc");
+  assert.match(pc, /width:\s*34px/);
+  assert.match(pc, /flex:\s*none/);
+  assert.match(pc, /text-align:\s*right/);
+  const rs = decl("#limits-side .mtr .rs");
+  assert.match(rs, /width:\s*74px/, "74px at the default sidebar: \"23h 59m left\" is 73.05px in Inter 12px (D5: it may shrink below that, see the next test)");
+  assert.ok(!/width:\s*70px/.test(rs), "not the frame's 70px, which clipped the longest reset text");
+  assert.match(rs, /text-align:\s*right/);
+  assert.ok(!/em\b|\dch\b/.test(lab + pc + rs), "the em/ch widths of the old columns are gone");
+  assert.match(decl("#limits-side .mtr .bar"), /flex:\s*1\b/, "the bar still takes what the columns leave");
+  // "limit reached · resets 25m" replaces the percentage and is far wider than 70px: it keeps its
+  // own width and may ellipsize, as before the columns were fixed.
+  const lim = decl("#limits-side .mtr .limit");
+  assert.match(lim, /width:\s*auto/);
+  assert.match(lim, /flex:\s*0 1 auto/);
+  assert.match(lim, /min-width:\s*0/);
+});
+
+// D5 (gate 3, B10): the row was 20 + 34 + 70 and three 12px gaps = 160px of columns (now 74px: 164px), so it needed a 193px sidebar (160 + 32 padding + 1 border) before the bar
+// gets a pixel, and the bar's 24px floor made it overrun below 257px (17px into the padding at the 200px minimum; a stale reading's "7h old" note, 31.8px and a
+// fourth gap, overran 10.8px at 250px and was cut off at 217 and 200). The bar may shrink to nothing and the reset and the age ellipsize, so the row stays inside
+// the sidebar's padding at 200 to 257px; at 290px (97px of bar) and up nothing moves.
+test("the sidebar quota row never runs into the padding: the bar shrinks to 0 and the reset and age notes ellipsize (D5)", () => {
+  const bar = decl("#limits-side .mtr .bar");
+  assert.match(bar, /min-width:\s*0\b/, "no 24px floor");
+  assert.ok(!/min-width:\s*24px/.test(bar));
+  assert.match(bar, /flex:\s*1\b/);
+  const rs = decl("#limits-side .mtr .rs");
+  assert.match(rs, /flex:\s*0 1 auto/, "74px wide while there is room, shrinking after the bar is gone (only the 200-217px sidebar is ever short of room)");
+  assert.match(rs, /min-width:\s*0/);
+  assert.match(rs, /overflow:\s*hidden/);
+  assert.match(rs, /text-overflow:\s*ellipsis/);
+  assert.match(rs, /white-space:\s*nowrap/);
+  const age = decl("#limits-side .mtr .acct-age");
+  assert.match(age, /flex:\s*0 1 auto/);
+  assert.match(age, /min-width:\s*0/);
+  assert.match(age, /overflow:\s*hidden/);
+  assert.match(age, /text-overflow:\s*ellipsis/);
+  assert.match(age, /white-space:\s*nowrap/);
+  // The label and the percent never shrink: they are the numbers (20 + 34), and the frame widths of the default sidebar are the same as before.
+  assert.match(decl("#limits-side .mtr > span:first-child"), /flex:\s*none/);
+  assert.match(decl("#limits-side .mtr .pc"), /flex:\s*none/);
+  // The arithmetic of the claim: fresh reading, 200px sidebar: 200 - 32 - 1 = 167px of row, 164px of columns, 3px for the bar.
+  const cols = 20 + 34 + 74 + 3 * 12;
+  assert.ok(200 - 32 - 1 - cols >= 0, "a fresh reading fits at the 200px minimum with a bar of " + (200 - 33 - cols) + "px");
+});
+
+test("the sidebar's store line is neutral: 12px, --muted, nothing amber, no icon or link", () => {
+  const d = decl("#side-store");
+  assert.match(d, /font-size:\s*var\(--t-sm\)/);
+  assert.match(d, /color:\s*var\(--muted\)/);
+  assert.ok(!/amber|warn|red|--accent/.test(d));
+  assert.match(decl("#side-store[hidden]"), /display:\s*none/);
 });
 
 test("the rail: 12px above, 6px apart, dots 32x32, + the kit's 24px icon button (accent, p2)", () => {
