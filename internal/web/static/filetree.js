@@ -107,6 +107,66 @@ function rowMenuIds(o) {
   return ids;
 }
 
+// The row menu on desktop is the kit menu (kitmenu.js), whose rows come in groups with a hairline between
+// two groups: the path actions (where the text is going next door), then Download and New folder here, then
+// Rename and Delete each alone: the destructive one is always last, after a rule. ftMenuGroups regroups
+// rowMenuIds' list (the phone keeps that list and its rules) into those, dropping what the listing leaves out,
+// and ids it does not know.
+const ROW_MENU_GROUPS = [
+  ["insert", "copy", "copyrel", "copycontents"],
+  ["download", "newdir"],
+  ["rename"],
+  ["delete"],
+];
+function ftMenuGroups(ids) {
+  return ROW_MENU_GROUPS.map((g) => g.filter((id) => ids.includes(id))).filter((g) => g.length > 0);
+}
+// The icon of each row (kitmenu.js menuIconSvg kinds): inline SVG, never a glyph a font may lack.
+const ROW_MENU_ICONS = {
+  insert: "insert", copy: "copy", copyrel: "copy", copycontents: "copy",
+  download: "download", newdir: "folder-plus", rename: "pencil", delete: "delete",
+};
+
+// ftKeyAction: what a key does on the tree row `at` (F68). `rows` is every visible row in order,
+// [{dir, open, level}] (level 1 at the root). Returns {index, action}: `index` is the row the key is about
+// (the row to focus for "focus", else `at`), `action` is one of
+//   "focus"     move focus to rows[index]                 ArrowDown / ArrowUp (clamped), Home, End,
+//                                                          ArrowRight into an open folder (its first child),
+//                                                          ArrowLeft to the parent of a file or closed folder
+//   "expand"    open the folder                           ArrowRight on a closed folder
+//   "collapse"  close the folder                          ArrowLeft on an open folder
+//   "open"      what a click does                         Enter
+//   "menu"      open the row's ⋯ menu                     the ContextMenu key, Shift+F10
+//   null        the key is not the tree's: leave it alone (a plain F10 is the browser's menu bar)
+// A clamped ArrowDown at the last row still answers "focus", so the page does not scroll under the key.
+function ftKeyAction(rows, at, key, shift) {
+  const none = { index: at, action: null };
+  const n = rows.length;
+  if (!(n > 0) || !(at >= 0 && at < n)) return none;
+  const row = rows[at];
+  const focus = (i) => ({ index: Math.max(0, Math.min(n - 1, i)), action: "focus" });
+  switch (key) {
+    case "ArrowDown": return focus(at + 1);
+    case "ArrowUp": return focus(at - 1);
+    case "Home": return focus(0);
+    case "End": return focus(n - 1);
+    case "ArrowRight":
+      if (!row.dir) return none;
+      if (!row.open) return { index: at, action: "expand" };
+      // An open folder's first child is the next row one level down; a folder that is empty (or still
+      // loading) has none, and the next row is its sibling.
+      return at + 1 < n && rows[at + 1].level > row.level ? { index: at + 1, action: "focus" } : none;
+    case "ArrowLeft":
+      if (row.dir && row.open) return { index: at, action: "collapse" };
+      for (let i = at - 1; i >= 0; i--) if (rows[i].level === row.level - 1) return { index: i, action: "focus" };
+      return none;
+    case "Enter": return { index: at, action: "open" };
+    case "ContextMenu": return { index: at, action: "menu" };
+    case "F10": return shift ? { index: at, action: "menu" } : none;
+    default: return none;
+  }
+}
+
 // treeBranch builds the box-drawing prefix for one row and the prefix its own
 // children inherit. Depth used to be left padding; drawing it is what makes the
 // tree read as a TUI.
@@ -198,8 +258,41 @@ function ftPaintChanged(set) {
   }
 }
 
-async function ftRenderDir(path, container, prefix) {
+// The tree is one Tab stop, not one per row (F68, the WAI-ARIA tree pattern): the row with tabindex="0" is
+// where Tab lands and the arrows walk from; every other row is tabindex="-1" (focusable by the arrows and a
+// click, skipped by Tab), and so is every row's ⋯, which the menu key reaches instead. ftRovePath is the
+// stop's path, kept here and not in the DOM so a re-render (refresh, expand, a delete) gives the stop back to
+// the same path, or to the first row when that path is gone.
+let ftRovePath = "";
+// ftRoveTo hands the Tab stop to `row` (a focus on it or inside it does this).
+function ftRoveTo(row) {
+  const p = ftRowPaths.get(row);
+  if (!p) return;
+  ftRovePath = p;
+  const tree = row.closest ? row.closest('[role="tree"]') : null;
+  if (tree) for (const r of tree.querySelectorAll('.ft-node[tabindex="0"]')) if (r !== row) r.setAttribute("tabindex", "-1");
+  row.setAttribute("tabindex", "0");
+}
+// ftRoveEnsure: the tree has a Tab stop. A folder that closes takes its rows with it, and the stop with them
+// when the focused row was inside; the first row takes it, or the tree could no longer be reached with Tab.
+function ftRoveEnsure(tree) {
+  if (!tree || tree.querySelector('.ft-node[tabindex="0"]')) return;
+  const first = tree.querySelector(".ft-node");
+  if (first) ftRoveTo(first);
+}
+// ftRowModel: a row as ftKeyAction sees it, read back from its ARIA (a folder is the row that has
+// aria-expanded), so the keys and the screen reader agree on what the tree is.
+function ftRowModel(row) {
+  const ex = row.getAttribute("aria-expanded");
+  return { dir: ex !== null, open: ex === "true", level: Number(row.getAttribute("aria-level")) || 1 };
+}
+
+// `st` is the root render's own bookkeeping, handed down to the folders it auto-opens: every row drawn under
+// it, in visible order, so the one Tab stop is chosen once the whole subtree is there.
+async function ftRenderDir(path, container, prefix, st) {
   prefix = prefix || "";
+  const rootCall = !st && prefix === "";
+  if (rootCall) st = { rows: [] };
   // The pending line sits where the children will go, indented to match them
   // (app.css reads --ft-indent). One line per directory in flight: a restored
   // subtree loads level by level, each into its own box. It is gone before the
@@ -250,6 +343,13 @@ async function ftRenderDir(path, container, prefix) {
     // it also answers "which of the three index.html files is this one".
     label.title = shortPath(full);
     row.append(branch, icon, label);
+    // A tree item, one level per two characters of prefix, named by its entry (not by its content, which
+    // would add the ⋯'s "Folder actions" and the git badge to every name). Out of the Tab order until the
+    // roving stop is chosen (below, or ftRoveTo).
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(prefix.length / 2 + 1));
+    row.setAttribute("aria-label", ent.name);
+    row.setAttribute("tabindex", "-1");
     // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
     // Delete behind the menu; two controls squeezed the name column (badly at
     // 390px) and put a destructive action a finger-width from a harmless one.
@@ -269,9 +369,11 @@ async function ftRenderDir(path, container, prefix) {
     // is a Private Use Area glyph — non-empty, but with no Unicode name — so
     // without this the control announces as nothing at all.
     more.setAttribute("aria-label", moreLabel);
+    more.setAttribute("tabindex", "-1"); // the row's menu key opens this menu; one Tab stop per tree, not two per row
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir, ro); };
     row.append(more);
     ftRowPaths.set(row, full);
+    if (st && st.rows) st.rows.push(row);
     ftMarkRow(row, full, chg);
     // Marks from the status already held: a folder opened later, or a re-list
     // while a refresh is in flight, paints at once instead of waiting.
@@ -285,13 +387,14 @@ async function ftRenderDir(path, container, prefix) {
     if (ent.is_dir) {
       let open = false, childBox = null;
       row.classList.add("dir");
+      row.setAttribute("aria-expanded", "false");
       // openChildren renders this directory's contents into a fresh box right
       // after its row. Shared by the click toggle and the auto-open on render so
       // the two cannot drift in how the subtree is built.
       const openChildren = async () => {
         childBox = document.createElement("div");
         row.after(childBox);
-        await ftRenderDir(full, childBox, b.childPrefix);
+        await ftRenderDir(full, childBox, b.childPrefix, st);
       };
       // setOpen is the one expand/collapse path: the click toggles it, and
       // ftReveal drives it through ftRowOpeners to open the ancestors of a file,
@@ -300,6 +403,7 @@ async function ftRenderDir(path, container, prefix) {
         if (want === open) return;
         open = want;
         icon.textContent = iconFor(ent.name, true, open);
+        row.setAttribute("aria-expanded", open ? "true" : "false");
         if (open) {
           // Persist BEFORE the await: a second click that closes the row toggles
           // `open` synchronously, so the stored state must already reflect open.
@@ -310,6 +414,7 @@ async function ftRenderDir(path, container, prefix) {
           removeExpanded(ftExpanded, full);
           saveExpanded(ftExpanded);
           if (childBox) { childBox.remove(); childBox = null; }
+          ftRoveEnsure(row.closest ? row.closest('[role="tree"]') : null);
         }
       };
       row.onclick = () => setOpen(!open);
@@ -343,6 +448,7 @@ async function ftRenderDir(path, container, prefix) {
       if (shouldAutoOpen(ftExpanded, full)) {
         open = true;
         icon.textContent = iconFor(ent.name, true, true);
+        row.setAttribute("aria-expanded", "true");
         await openChildren();
       }
     } else {
@@ -353,6 +459,13 @@ async function ftRenderDir(path, container, prefix) {
         else openFile(full);
       };
     }
+  }
+  if (rootCall) {
+    // The whole tree is drawn (a restored subtree included): the Tab stop is the row the user last had
+    // focus on if it is still here, else the first row. Folders opened later never take it (st.rows is gone).
+    const stop = st.rows.find((r) => ftRowPaths.get(r) === ftRovePath) || st.rows[0];
+    if (stop) stop.setAttribute("tabindex", "0");
+    st.rows = null;
   }
   return ro;
 }
@@ -404,13 +517,30 @@ async function ftLoadRoot(opts) {
 // preview what the items below will put on the clipboard — "Copy path" copies
 // the absolute path and "Copy relative path" copies a third, different string,
 // so no single header could match all of them.
+//
+// Desktop draws it as the kit menu (kitmenu.js, the same rows as the session row's ⋯): the path as a
+// `.menu-label`, icon rows in groups with a rule between two groups (ftMenuGroups), Delete… red and alone
+// last; it takes focus on its first row, and the arrow keys, Escape and a chosen row hand focus back to the
+// tree row it hung from. The phone keeps the plain buttons and rules it has always had.
 function openRowMenu(anchor, path, name, isDir, readOnly) {
-  if (!document.getElementById("ft-menu")) return;
+  const menu = document.getElementById("ft-menu");
+  if (!menu) return;
+  const desktop = !mobileActive(window.innerWidth);
   const nodes = [];
 
   const head = document.createElement("div");
-  head.className = "ft-menu-path";
-  head.textContent = shortPath(path);
+  if (desktop) {
+    // The path WRAPS (desktop.css), it is not cut with an ellipsis: this line is where a name the tree had to
+    // truncate can be read in full, and the file's own name is the tail of the path.
+    head.className = "menu-label";
+    const p = document.createElement("span");
+    p.className = "mono t-xs muted";
+    p.textContent = shortPath(path);
+    head.append(p);
+  } else {
+    head.className = "ft-menu-path";
+    head.textContent = shortPath(path);
+  }
   nodes.push(head);
 
   // Which items, in which order, is rowMenuIds' (a read-only listing leaves out
@@ -429,6 +559,19 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
     delete: () => confirmDelete(path, name, isDir),
   };
   const ids = rowMenuIds({ isDir: !!isDir, isImage: IMAGE_EXTS.has(extOf(name)), readOnly: readOnly === true });
+  if (desktop) {
+    // Close first and give focus to the row, then act: a dialog (New folder, Rename, Delete) hands focus back
+    // to what had it when it opened, which is now the row, and an action that moves focus on (Insert path
+    // goes to the terminal) still does.
+    ftMenuGroups(ids).forEach((group, i) => {
+      if (i > 0) nodes.push(kitMenuSep());
+      for (const id of group) nodes.push(kitMenuButton(rowMenuLabel(id, isDir), ROW_MENU_ICONS[id], id === "delete", () => { closeRowMenu(true); act[id](); }));
+    });
+    ftShowMenu(anchor, nodes, false, actionsLabel(isDir));
+    const first = menu.querySelector(".menu-item");
+    if (first) first.focus();
+    return;
+  }
   for (const id of ids) {
     if (id === null) { nodes.push(document.createElement("hr")); continue; }
     const b = document.createElement("button");
@@ -445,10 +588,27 @@ function openRowMenu(anchor, path, name, isDir, readOnly) {
 // menu so both look and behave alike; closeRowMenu closes either.
 // `alignLeft` lines the menu's left edge up with the anchor's (a gutter number
 // sits at the left of its pane); the default right-aligns to a trailing ⋯.
-function ftShowMenu(anchor, nodes, alignLeft) {
+// `kitLabel` (a string) makes it the kit's menu: the `.menu` container (desktop.css places it) with
+// role="menu" named by `kitLabel`. Without it the element is the plain popover it was, so the viewer's
+// line-number menu, which shares this element, never inherits a tree menu's class and role.
+// ftMenuFrom is where the open menu hangs from, the tree row holding `anchor` (null for a menu that hangs
+// from none, the viewer's), for closeRowMenu(true) to give focus back to.
+let ftMenuFrom = null;
+function ftShowMenu(anchor, nodes, alignLeft, kitLabel) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   menu.replaceChildren(...nodes);
+  const kit = typeof kitLabel === "string";
+  menu.classList[kit ? "add" : "remove"]("menu");
+  if (kit) {
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", kitLabel);
+  } else {
+    menu.removeAttribute("role");
+    menu.removeAttribute("aria-label");
+  }
+  const row = anchor.closest ? anchor.closest(".ft-node") : null;
+  ftMenuFrom = row ? { row, path: ftRowPaths.get(row) || "" } : null;
 
   menu.classList.add("open"); // must be visible before it can be measured
   const r = anchor.getBoundingClientRect();
@@ -524,9 +684,19 @@ async function copyContents(path, name) {
   });
 }
 
-function closeRowMenu() {
+// closeRowMenu hides the menu. `restoreFocus` (Escape, a chosen row) gives focus back to the tree row it hung
+// from: the live row for the same path when a refresh replaced it meanwhile, none when that path is gone, and
+// never for the viewer's line-number menu, which hangs from no row. A click elsewhere leaves focus where the
+// click put it.
+function closeRowMenu(restoreFocus) {
   const menu = document.getElementById("ft-menu");
+  const was = !!menu && menu.classList.contains("open");
   if (menu) menu.classList.remove("open");
+  const from = ftMenuFrom;
+  ftMenuFrom = null;
+  if (!restoreFocus || !was || !from) return;
+  const row = from.row.isConnected ? from.row : from.path ? ftRowFor(from.path) : null;
+  if (row) row.focus();
 }
 
 async function promptMkdir(dir) {
@@ -776,16 +946,67 @@ async function ftReveal(path) {
   if (!file) return false;
   for (const old of ftTreeEl.querySelectorAll(".ft-sel")) old.classList.remove("ft-sel");
   file.classList.add("ft-sel");
-  file.tabIndex = -1;
+  ftRoveTo(file); // the revealed row is the tree's Tab stop (it was tabindex -1 and out of reach)
   file.scrollIntoView({ block: "nearest" });
   file.focus({ preventScroll: true });
   return true;
+}
+
+// ftTreeSetup makes `el` the tree: role="tree", a name, the arrow keys on its rows, and the Tab stop following
+// focus. Delegated on the one element, so a re-render never has to re-attach anything.
+function ftTreeSetup(el) {
+  el.setAttribute("role", "tree");
+  el.setAttribute("aria-label", "File tree");
+  el.addEventListener("keydown", ftTreeKeydown);
+  el.addEventListener("focusin", (e) => {
+    const row = e.target && e.target.closest ? e.target.closest(".ft-node") : null;
+    if (row) ftRoveTo(row);
+  });
+}
+
+// ftTreeKeydown: the keys of a focused tree row (ftKeyAction decides what each one means). Only a key typed on
+// the row itself counts: Enter on its ⋯ presses the ⋯, and a chord (Ctrl, Alt, Meta) belongs to the app.
+function ftTreeKeydown(e) {
+  const row = e.target;
+  if (!row || !row.classList || !row.classList.contains("ft-node")) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const rows = Array.from(e.currentTarget.querySelectorAll(".ft-node"));
+  const r = ftKeyAction(rows.map(ftRowModel), rows.indexOf(row), e.key, e.shiftKey);
+  if (!r.action) return;
+  e.preventDefault(); // also keeps the browser's own context menu from stacking on the row's
+  if (r.action === "focus") {
+    rows[r.index].focus();
+  } else if (r.action === "expand" || r.action === "collapse") {
+    const op = ftRowOpeners.get(row);
+    if (op) op.setOpen(r.action === "expand");
+  } else if (r.action === "open") {
+    row.click();
+  } else if (r.action === "menu") {
+    const more = row.querySelector(":scope > .ft-more");
+    if (more) more.click();
+  }
+}
+
+// ftMenuKeydown: the open row menu's keys, on the document. Escape closes it (a press that closes a menu is
+// marked used, preventDefault, so the maximized drawer's Escape in app.js leaves it alone) and gives focus
+// back to the row. The arrow keys, Home and End walk the kit's rows, but only while focus is inside the menu:
+// a user who tabbed away keeps their arrows.
+function ftMenuKeydown(e) {
+  const menu = document.getElementById("ft-menu");
+  const open = !!menu && menu.classList.contains("open");
+  if (e.key === "Escape") {
+    if (open) e.preventDefault();
+    closeRowMenu(true);
+    return;
+  }
+  if (open && menu.contains(document.activeElement)) kitMenuKeys(menu, e);
 }
 
 async function initFileTree() {
   ftRootSel = document.getElementById("ft-root-input");
   ftTreeEl = document.getElementById("filetree");
   if (!ftRootSel || !ftTreeEl) return;
+  ftTreeSetup(ftTreeEl); // before the first await: the rows a racing restore draws are already in a tree
 
   ftExpanded = loadExpanded(); // which folders to auto-open as the tree renders
 
@@ -822,14 +1043,7 @@ async function initFileTree() {
     const menu = document.getElementById("ft-menu");
     if (menu && menu.classList.contains("open") && !menu.contains(e.target)) closeRowMenu();
   });
-  // Only a press that closes an open menu is marked used (preventDefault): the
-  // maximized drawer's Escape (app.js) then leaves it alone.
-  document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    const menu = document.getElementById("ft-menu");
-    if (menu && menu.classList.contains("open")) e.preventDefault();
-    closeRowMenu();
-  });
+  document.addEventListener("keydown", ftMenuKeydown);
 
   // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
   // writes, which is most of what changes in this app, is invisible until the
@@ -867,5 +1081,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel,
     listingReadOnly, rowMenuIds, rowMenuLabel, openRowMenu, ftApplyReadOnly, ftRenderDir,
+    ftKeyAction, ftMenuGroups,
   };
 }

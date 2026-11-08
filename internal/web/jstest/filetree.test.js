@@ -174,17 +174,21 @@ test("rowMenuIds: no menu ends on a rule or has two in a row", () => {
 function fakeNode(tag) {
   return { tag, className: "", textContent: "", type: "", onclick: null };
 }
+// The phone's width: these tests pin the plain path header, buttons and rules the phone's menu has always had.
+// The desktop's menu is the kit's (kitmenu.js rows), and filetree-keys.test.js is where it is checked.
 function installMenuDom() {
   const menu = {
     nodes: [], style: {}, offsetWidth: 180, offsetHeight: 200,
     classList: { add() {}, remove() {}, contains: () => false },
+    setAttribute() {}, removeAttribute() {},
     replaceChildren(...n) { this.nodes = n; },
   };
   globalThis.document = {
     getElementById: (id) => (id === "ft-menu" ? menu : null),
     createElement: (tag) => fakeNode(tag),
   };
-  globalThis.window = { innerWidth: 1280, innerHeight: 900, HOME_DIR: "/home/u" };
+  globalThis.window = { innerWidth: 390, innerHeight: 900, HOME_DIR: "/home/u" };
+  globalThis.mobileActive = (w) => Number(w) <= 700;
   Object.assign(globalThis, require("../static/copyfile.js"), require("../static/fsops.js"));
   return menu;
 }

@@ -93,6 +93,7 @@ const THIN_ALLOW = [
   [".dock-ic:focus-visible", INSET + "the dock bar's icon buttons sit at the bar's edge"],
   [".act-row:focus-visible", INSET + "a row spanning the activity list's full width, inside its scroll container"],
   [".vt-mi:focus-visible", INSET + "a menu row: the menu is a popover with 4px padding"],
+  [".ft-node:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],
   [".ft-node.ft-sel:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],
   ["#page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible", INSET + "a nav row of the settings page's left list"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible", INSET + "a segmented button: the group's border is the edge"],

@@ -1052,9 +1052,28 @@
   #drawer-goto-in:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 1px var(--accent); }
   /* app.css opts the tree's path field and the revealed row out of focus: the field takes the kit's field focus, the row a
      2px ring inside it (the row spans #filetree, a scroll container that would clip an outside ring). :focus-visible, so a
-     click or a Reveal does not draw it; app.css's :focus rule is the one that hid it, and this one comes later. */
+     click or a Reveal does not draw it; app.css's :focus rule is the one that hid it, and this one comes later. Every row is
+     focusable now (the tree is a roving-tabindex tree, F68), so every row wears the ring, the selected one included. */
   #ft-root-input:focus { box-shadow: 0 0 0 1px var(--accent); }
-  .ft-node.ft-sel:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  .ft-node:focus-visible, .ft-node.ft-sel:focus-visible { outline: var(--focus); outline-offset: -2px; }
+  /* The row's ⋯ is hidden until the pointer is over it (app.css, hover only); a row with keyboard focus shows it too,
+     so a keyboard user sees what the menu key (Shift+F10, ContextMenu) is about to open. The phone shows it always. */
+  .ft-node:focus-within .ft-more { visibility: visible; }
+  /* The file tree's row menu (no frame: kit values) is the kit menu, placed by script (ftShowMenu sets left and top).
+     filetree.js gives #ft-menu the kit's `.menu` class only while it holds kit rows (the viewer's line-number menu shares
+     the element and stays the plain popover), so each rule hangs from :has(> .menu-item). app.css's `#ft-menu` and
+     `#ft-menu button` are the phone's look and, as id rules, out-rank the kit's class rules: the kit's own values (the
+     hairline, the 4px padding, the popover shadow, the 10px row padding and --t-md size, --raise on hover, red on a
+     danger row) are restated here at (1,1,0) or more, not new ones. app.css's position (fixed), z-index and max-width
+     stay: that is the placement. The path header wraps instead of ending in an ellipsis: it is where a keyboard user
+     reads in full a name the tree cut, and the file's own name is the tail of the path. */
+  #ft-menu:has(> .menu-item) { width: max-content; min-width: 220px; padding: 4px; border: 1px solid var(--line); box-shadow: var(--e-pop); }
+  #ft-menu.open:has(> .menu-item) { display: flex; }
+  #ft-menu .menu-item { display: flex; padding: 0 10px; font-size: var(--t-md); }
+  #ft-menu .menu-item:hover { background: var(--raise); }
+  #ft-menu .menu-item.is-danger { color: var(--red); }
+  #ft-menu .menu-item.is-danger:hover { background: var(--red-tint); }
+  #ft-menu .menu-label { white-space: normal; overflow-wrap: anywhere; }
   #drawer-goto-list {
     position: fixed; z-index: 30; max-height: 260px; overflow-y: auto;
     background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 20px #0009;
