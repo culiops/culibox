@@ -689,8 +689,7 @@ test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent,
   assert.match(pc, /flex:\s*none/);
   assert.match(pc, /text-align:\s*right/);
   const rs = decl("#limits-side .mtr .rs");
-  assert.match(rs, /width:\s*70px/);
-  assert.match(rs, /flex:\s*none/);
+  assert.match(rs, /width:\s*70px/, "70px at the default sidebar (D5: it may shrink below that, see the next test)");
   assert.match(rs, /text-align:\s*right/);
   assert.ok(!/em\b|\dch\b/.test(lab + pc + rs), "the em/ch widths of the old columns are gone");
   assert.match(decl("#limits-side .mtr .bar"), /flex:\s*1\b/, "the bar still takes what the columns leave");
@@ -700,6 +699,35 @@ test("the sidebar quota meters take the M1/M2 columns: 20px label, 34px percent,
   assert.match(lim, /width:\s*auto/);
   assert.match(lim, /flex:\s*0 1 auto/);
   assert.match(lim, /min-width:\s*0/);
+});
+
+// D5 (gate 3, B10): the row is 20 + 34 + 70 and three 12px gaps = 160px of columns, so it needs a 193px sidebar (160 + 32 padding + 1 border) before the bar
+// gets a pixel, and the bar's 24px floor made it overrun below 257px (17px into the padding at the 200px minimum; a stale reading's "7h old" note, 31.8px and a
+// fourth gap, overran 10.8px at 250px and was cut off at 217 and 200). The bar may shrink to nothing and the reset and the age ellipsize, so the row stays inside
+// the sidebar's padding at 200 to 257px; at 290px (97px of bar) and up nothing moves.
+test("the sidebar quota row never runs into the padding: the bar shrinks to 0 and the reset and age notes ellipsize (D5)", () => {
+  const bar = decl("#limits-side .mtr .bar");
+  assert.match(bar, /min-width:\s*0\b/, "no 24px floor");
+  assert.ok(!/min-width:\s*24px/.test(bar));
+  assert.match(bar, /flex:\s*1\b/);
+  const rs = decl("#limits-side .mtr .rs");
+  assert.match(rs, /flex:\s*0 1 auto/, "70px wide while there is room, shrinking after the bar is gone");
+  assert.match(rs, /min-width:\s*0/);
+  assert.match(rs, /overflow:\s*hidden/);
+  assert.match(rs, /text-overflow:\s*ellipsis/);
+  assert.match(rs, /white-space:\s*nowrap/);
+  const age = decl("#limits-side .mtr .acct-age");
+  assert.match(age, /flex:\s*0 1 auto/);
+  assert.match(age, /min-width:\s*0/);
+  assert.match(age, /overflow:\s*hidden/);
+  assert.match(age, /text-overflow:\s*ellipsis/);
+  assert.match(age, /white-space:\s*nowrap/);
+  // The label and the percent never shrink: they are the numbers (20 + 34), and the frame widths of the default sidebar are the same as before.
+  assert.match(decl("#limits-side .mtr > span:first-child"), /flex:\s*none/);
+  assert.match(decl("#limits-side .mtr .pc"), /flex:\s*none/);
+  // The arithmetic of the claim: fresh reading, 200px sidebar: 200 - 32 - 1 = 167px of row, 160px of columns, 7px for the bar.
+  const cols = 20 + 34 + 70 + 3 * 12;
+  assert.ok(200 - 32 - 1 - cols >= 0, "a fresh reading fits at the 200px minimum with a bar of " + (200 - 33 - cols) + "px");
 });
 
 test("the sidebar's store line is neutral: 12px, --muted, nothing amber, no icon or link", () => {
