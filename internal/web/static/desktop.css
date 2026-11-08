@@ -646,12 +646,6 @@
   }
   /* The tier is a machine word: the kit's .chip-box / .chip-host (mono, 400). */
   .dchip.box, .dchip.host { font-family: var(--font-mono); font-weight: var(--w-regular); }
-  /* The session's cost: muted mono text, no border, before the chip. Never
-     shrinks or wraps, so the name (flex:1, min-width:0) truncates first. */
-  .dcost {
-    flex: none; font-size: var(--t-xs); line-height: 17px; white-space: nowrap;
-    font-variant-numeric: tabular-nums; color: var(--muted);
-  }
   .dchip.host { box-shadow: inset 0 0 0 1px var(--faint); }
   .dchip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   #sessions .drow:hover .dchip.box { background: var(--line); }

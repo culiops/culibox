@@ -2354,16 +2354,8 @@ function paintCompactRow(li, sname, grow, s, conn) {
   if (aws) facts.push("AWS: " + aws.title);
   if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR) + sessionWorkHome(s));
   li.title = facts.join("\n");
-  // The session's cost, muted mono, before the chip. cost_usd is absent unless
-  // the whole conversation history is known, and then no "$" is shown at all.
-  const costText = fmtSessionCost(s.cost_usd);
-  if (costText) {
-    const dc = document.createElement("span");
-    dc.className = "dcost mono";
-    dc.textContent = costText;
-    dc.title = "Session cost (all conversations since spawn, as Analytics counts it)";
-    sname.appendChild(dc);
-  }
+  // No per-session cost on the row (the M1 frames draw none; founder 2026-11-08): the pane
+  // header's meta and Analytics show it.
   if (chip) {
     const c = document.createElement("span");
     c.className = "dchip " + chip.tone;
