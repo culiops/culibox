@@ -2085,7 +2085,7 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px; padding: 8px 8px 8px 14px; border: 0; border-radius: var(--r-card); background: var(--panel); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--warn); background: var(--warn-bg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > b { font-weight: var(--w-medium); color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > #store-lock { margin-left: auto; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > #store-lock { margin-left: auto; border-color: transparent; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: var(--t-md); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
@@ -2204,16 +2204,20 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(3) { width: 14.5%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(4) { width: 23%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(5) { width: 17%; }
-  /* Legacy secrets (§B4): two columns, 45% / 55%, no header row. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(1) { width: 45%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(2) { width: 55%; }
+  /* Legacy secrets (§B4): two columns, no header row, 50% / 50%: the approved render (frame M2.3, 410 + 410 of the 820px table) wins over the
+     canvas source's 45 / 55, whose colgroup style is lost in the render and in the PNG (gate 4, C5). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(1) { width: 50%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(2) { width: 50%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
-  /* Machine text is 12px mono (§B4 `.mono.t-sm`); the sub-line under it is 12/18 muted (the role and host ones are mono too). */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-sm); }
+  /* Machine text is 12/18 mono (§B4 `.mono.t-sm`: the line is 18px, not the 20px a .c-main inherits); the sub-line under it is 12/18 muted (the role and host
+     ones are mono too). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: var(--t-sm); }
-  /* PROD (red) and "from config.json" (neutral) are the kit's chips, 6px after the name. */
+  /* PROD (red) and "from config.json" (neutral) are the kit's chips, 6px after the name, in the UI face: a chip inside a mono line would inherit the
+     mono one (the frame's Inter chip is 42.67px wide, the mono one 38.5px). */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main > * + .chip { margin-left: 6px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main .chip { font-family: var(--font-ui); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }

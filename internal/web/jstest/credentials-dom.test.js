@@ -2556,7 +2556,29 @@ test("CSS: one set of column shares on the colgroup, the frame's head cells (12/
   assert.strictEqual(cssDecls(CR + " .ctab td:first-child").get("padding-left"), "16px");
   assert.strictEqual(cssDecls(CR + " .ctab td:last-child").get("padding-right"), "12px");
   const legacy = [1, 2].map((n) => cssDecls(CR + ' .ctab-sec[data-group="legacy"] .ctab col:nth-child(' + n + ")").get("width"));
-  assert.deepStrictEqual(legacy, ["45%", "55%"], "§B4: the legacy table's colgroup");
+  // C5 (ruling: the approved render wins): the canvas source says 45 / 55 but its colgroup style is lost in the render and in the approved PNG, which
+  // draws 50 / 50 (410 + 410 of the 820px table).
+  assert.deepStrictEqual(legacy, ["50%", "50%"], "§B4 as rendered in the approved frame M2.3: the legacy table's two halves");
+  assert.strictEqual(legacy.reduce((a, w) => a + parseFloat(w), 0), 100);
+});
+
+// Plan 4 gate fix wave, Credentials (DIFF.md §3 C1 / C2 / C3).
+test("CSS: machine text in a table is 12/18 (the frame's .mono.t-sm), and a chip inside it keeps the UI face, not the mono one (C1, C2)", () => {
+  const mono = cssDecls(CR + " .ctab .c-main.mono");
+  assert.strictEqual(mono.get("font-size"), "var(--t-sm)");
+  assert.strictEqual(mono.get("line-height"), "var(--lh-sm)", "18px, not the 20px .c-main inherits");
+  assert.strictEqual(cssDecls(":root").get("--lh-sm"), "18px");
+  // The PROD chip sits inside a mono line (the connection name, the env name): the kit's .chip face is Inter (42.67px wide, not the mono 38.5px).
+  assert.strictEqual(cssDecls(CR + " .ctab .c-main .chip").get("font-family"), "var(--font-ui)");
+  assert.strictEqual(cssDecls(CR + " .ctab .c-main > * + .chip").get("margin-left"), "6px", "its 6px gap is untouched");
+});
+
+test("CSS: Lock now in the strip is the kit .btn's transparent border, not a --line ring (C3)", () => {
+  const lock = cssDecls(CR + " .cstrip > #store-lock");
+  assert.strictEqual(lock.get("border-color"), "transparent");
+  assert.strictEqual(lock.get("margin-left"), "auto", "still at the right");
+  assert.strictEqual(cssDecls(CR + " .btn:where(:not(.pri))").get("border-color"), "var(--line)", "the page's other secondary buttons keep their ring");
+  assert.strictEqual(cssDecls(CR + " .btn:where(:not(.pri))").get("background"), "var(--raise)", "and Lock now keeps the --raise fill");
 });
 
 // A <p> has the UA's 1em margin (12px at 12px type), which the frame does not draw: §B4 puts a note flush against its table and
