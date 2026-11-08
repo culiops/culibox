@@ -593,18 +593,33 @@ test("spawnCwdChoice: the same profile's last directory is the 'last' source", (
   assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude" }, last, workspaces: WS, tier: "box" }), { cwd: "/home/u/p", source: "last" });
 });
 
-test("spawnCwdChoice: a last directory under /tmp is not prefilled; the default workspace is", () => {
+test("spawnCwdChoice with skipScratch (the desktop): a last directory under /tmp is not prefilled; the default workspace is", () => {
   const last = { agent: "claude", cwd: "/tmp/claude-1001/x" };
-  const got = spawnCwdChoice({ profile: { name: "claude" }, last, workspaces: WS, tier: "box" });
+  const got = spawnCwdChoice({ profile: { name: "claude" }, last, workspaces: WS, tier: "box", skipScratch: true });
   assert.deepStrictEqual(got, { cwd: "/home/u/proj", source: "default" });
   // /tmp itself, a nested path and a trailing slash are all under /tmp; /tmpfoo and /var/tmp are not.
-  for (const c of ["/tmp", "/tmp/", "/tmp/a/b"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box" }).source, "default", c);
-  for (const c of ["/tmpfoo/x", "/var/tmp/x", "/home/u/tmp"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box" }).source, "last", c);
+  for (const c of ["/tmp", "/tmp/", "/tmp/a/b"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box", skipScratch: true }).source, "default", c);
+  for (const c of ["/tmpfoo/x", "/var/tmp/x", "/home/u/tmp"]) assert.strictEqual(spawnCwdChoice({ profile: { name: "claude" }, last: { agent: "claude", cwd: c }, workspaces: WS, tier: "box", skipScratch: true }).source, "last", c);
 });
 
-test("spawnCwdChoice: the profile default still beats a /tmp last directory", () => {
+test("spawnCwdChoice without skipScratch (the phone): a /tmp last directory is prefilled exactly as before", () => {
+  const profile = { name: "claude" };
+  for (const c of ["/tmp/claude-1001/x", "/tmp", "/tmp/", "/tmp/a/b"]) {
+    const last = { agent: "claude", cwd: c };
+    for (const flag of [undefined, false]) {
+      const o = { profile, last, workspaces: WS, tier: "box" };
+      if (flag !== undefined) o.skipScratch = flag;
+      assert.deepStrictEqual(spawnCwdChoice(o), { cwd: c, source: "last" }, c + " skipScratch " + flag);
+      assert.strictEqual(pickSpawnCwd(o), c, c + " pickSpawnCwd");
+    }
+  }
+  // Only the opt-in flag changes the answer: truthy-but-not-true values do not.
+  assert.strictEqual(spawnCwdChoice({ profile, last: { agent: "claude", cwd: "/tmp/x" }, workspaces: WS, tier: "box", skipScratch: 1 }).source, "last");
+});
+
+test("spawnCwdChoice: the profile default still beats a /tmp last directory, with or without skipScratch", () => {
   const last = { agent: "claude", cwd: "/tmp/claude-1001/x" };
-  assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude", default_cwd: "/home/u/d" }, last, workspaces: WS, tier: "box" }), { cwd: "/home/u/d", source: "profile" });
+  for (const skipScratch of [true, false]) assert.deepStrictEqual(spawnCwdChoice({ profile: { name: "claude", default_cwd: "/home/u/d" }, last, workspaces: WS, tier: "box", skipScratch }), { cwd: "/home/u/d", source: "profile" });
 });
 
 test("spawnCwdChoice: another profile's last directory, or none, falls to the default workspace", () => {
@@ -619,6 +634,7 @@ test("pickSpawnCwd is spawnCwdChoice's cwd, for every case above", () => {
     { profile: { name: "claude", default_cwd: "/home/u/d" }, last: { agent: "claude", cwd: "/home/u/other" }, workspaces: WS, tier: "box" },
     { profile: { name: "claude" }, last: { agent: "claude", cwd: "/home/u/p" }, workspaces: WS, tier: "box" },
     { profile: { name: "claude" }, last: { agent: "claude", cwd: "/tmp/claude-1001/x" }, workspaces: WS, tier: "box" },
+    { profile: { name: "claude" }, last: { agent: "claude", cwd: "/tmp/claude-1001/x" }, workspaces: WS, tier: "box", skipScratch: true },
     { profile: { name: "claude" }, last: { agent: "bash", cwd: "/home/u/p" }, workspaces: WS, tier: "box" },
     { profile: { name: "claude" }, last: null, workspaces: [], tier: "box" },
     {},
@@ -963,7 +979,7 @@ test("New session builds its picker inline, with the last used folder and the so
   assert.match(init, /lastUsed:\s*\(\) =>[^}]*loadLastSpawn\(\)/);
   assert.match(init, /idleText:\s*spawnWsCaption\b/);
   const open = appFn("openSpawnDialog");
-  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: segValue\(\$\("runtime-seg"\)\) \}\);/);
+  assert.match(open, /const choice = spawnCwdChoice\(\{ profile: currentProfile\(\), last, workspaces: workspacesCache, tier: segValue\(\$\("runtime-seg"\)\), skipScratch: drawerDesktop\(\) \}\);/);
   assert.match(open, /setSpawnCwd\(choice\.cwd, choice\.source\);/);
   assert.match(open, /spawnWsPicker\.showIdleNote\(\)/);
   assert.ok(open.indexOf("setSpawnCwd(choice.cwd") < open.indexOf("spawnWsPicker.showIdleNote()"));

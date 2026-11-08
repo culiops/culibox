@@ -5425,11 +5425,12 @@ async function openSpawnDialog(preselectAgent, prefill) {
   // Fresh open: don't carry a stale pick across dialog sessions. In priority
   // order (spawnCwdChoice): the profile's default_cwd, the last spawn's directory
   // only when that spawn was of THIS profile (another profile's leftover is never
-  // prefilled) and not a scratch folder under /tmp, then the first workspace usable
-  // on the tier. A last cwd that is unusable on this tier is still restored; the
-  // warning below names why, so choosing box vs. host stays the user's call, not a
-  // silent discard. The source rides along: the help line under the field names it.
-  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) });
+  // prefilled) and, on the desktop only, not a scratch folder under /tmp (the phone
+  // keeps its prefill as it was), then the first workspace usable on the tier. A
+  // last cwd that is unusable on this tier is still restored; the warning below
+  // names why, so choosing box vs. host stays the user's call, not a silent discard.
+  // The source rides along: the help line under the field names it.
+  const choice = spawnCwdChoice({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")), skipScratch: drawerDesktop() });
   setSpawnCwd(choice.cwd, choice.source);
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);

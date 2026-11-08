@@ -368,15 +368,17 @@ function pickSpawnProfile(profiles, last, shellProfile) {
 // spawnCwdChoice: the workspace the dialog opens on, and where it came from (the help line under the field says
 // so: "From the profile", "Last used"). The profile's own default wins (it always did); then the last spawn's
 // directory, but only when that spawn was of THIS profile, so a leftover directory of another profile is never
-// prefilled, and not a scratch folder under /tmp (the session of a throwaway run, F38: it reads as a leftover test
-// path); then the first workspace usable on the tier.
+// prefilled; then the first workspace usable on the tier.
+//   o.skipScratch (default false; the desktop passes true): a last directory under /tmp is not prefilled either (the
+//   session of a throwaway run, F38: it reads as a leftover test path). Off, the answer is the one the dialog always
+//   gave, which is what the phone keeps.
 //   -> {cwd, source: "profile" | "last" | "default"}
 function spawnCwdChoice(o) {
   const x = o || {};
   const p = x.profile || {};
   if (p.default_cwd) return { cwd: p.default_cwd, source: "profile" };
   const last = x.last;
-  if (last && last.cwd && p.name && last.agent === p.name && !spawnScratchCwd(last.cwd)) return { cwd: last.cwd, source: "last" };
+  if (last && last.cwd && p.name && last.agent === p.name && !(x.skipScratch === true && spawnScratchCwd(last.cwd))) return { cwd: last.cwd, source: "last" };
   return { cwd: spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier), source: "default" };
 }
 
