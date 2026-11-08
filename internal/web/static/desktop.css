@@ -112,9 +112,12 @@
      :not sitting in :where so it adds nothing: it beats .btn's pointer. It is the one
      disabled look on desktop (#171, M7): only it and its restatement below set a
      disabled opacity or cursor (jstest/desktop-primitives.test.js). A control at work (withPending:
-     aria-busy at once, .busy after 300 ms) is busy, not closed. */
+     aria-busy at once, .busy after 300 ms) is busy, not closed. A button that cannot act yet and
+     says why in its title is aria-disabled, not disabled (F03, #173): a disabled button gets no hover
+     and no focus, so the reason could be neither read nor reached. It takes the same look; the strike-through
+     above is :disabled only, so it gets none. */
   button:disabled, [disabled] { text-decoration: none; }
-  :is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
+  :is(button, input, select, textarea):is(:disabled, [aria-disabled="true"]):where(:not(.busy, [aria-busy="true"])) { opacity: .42; cursor: not-allowed; }
   /* The same look, restated at their own weight where a heavier rule would win: app.css's
      shared disabled looks (.cell-sh .45, #ft-refresh, #bug-modal .btn and #ask-ok .5, each
      with cursor: default; the phone keeps them) and the resting cursor: pointer of
@@ -223,6 +226,12 @@
   .btn-primary:disabled:hover, .btn.pri:disabled:hover { background: var(--accent); }
   .btn-yes:disabled:hover { background: var(--amber); }
   .btn-ghost:disabled:hover, .btn.gh:disabled:hover, .btn-danger:disabled:hover, .btn.dgr:disabled:hover { background: transparent; }
+  /* The same for a button that is aria-disabled (it says why in its title, F03 #173): it stays focusable and
+     takes the pointer, so its hover would otherwise light it up like a live one. */
+  .btn[aria-disabled="true"]:hover { background: var(--raise); }
+  .btn-primary[aria-disabled="true"]:hover, .btn.pri[aria-disabled="true"]:hover { background: var(--accent); }
+  .btn-yes[aria-disabled="true"]:hover { background: var(--amber); }
+  .btn-ghost[aria-disabled="true"]:hover, .btn.gh[aria-disabled="true"]:hover, .btn-danger[aria-disabled="true"]:hover, .btn.dgr[aria-disabled="true"]:hover { background: transparent; }
 
   /* --- segmented control (every range, view, 1-2-4 and box/host switch) ----- */
   /* The items are scoped under .seg: primitives.css's `.seg button` (0,1,1) would out-rank a bare
@@ -1806,7 +1815,7 @@
   }
   /* Save / Done are the kit primary (F11): the footer's secondary fill skips them. */
   #page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri)) { background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > .dft .btn:where(:not(.pri)):where(:not([aria-disabled="true"])):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > .dft .btn.gh { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page > .dft .btn.gh:hover { background: var(--raise); color: var(--fg); }
   #page-host > #settings-modal.as-page > .dft .btn.dgr { background: transparent; color: var(--red); }
@@ -1875,7 +1884,7 @@
   /* A primary (Save, Create the encrypted store) is the kit primitive (F11): the page's secondary
      fill, border and hover skip it. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:where(:not(.pri)) { border-color: var(--line); background: var(--raise); color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn:where(:not(.pri)):where(:not([aria-disabled="true"])):hover { background: var(--line); }
   /* .btn is nowrap, so in the store strip at a 701px window (178px wide) "Create the
      encrypted store" (186px) spilled past the warning box, in the strip and again in
      the passphrase form it opens. The label wraps inside the strip instead. */

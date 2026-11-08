@@ -43,6 +43,8 @@ class Node {
   set rows(v) { this._rows = v; }
   get cells() { return this.children.filter((c) => c.tag === "td" || c.tag === "th"); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
   addEventListener() {}
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
@@ -1435,7 +1437,11 @@ test("without opts the Credentials tab behaves as before: AWS add", async () => 
   assert.ok(p.byId["creds-body"].textContent.includes("Add AWS accounts"));
   assert.deepStrictEqual(tabFooters(p), [true, false, true], "the AWS footer replaces the list footer");
   assert.strictEqual(p.byId["aws-save"].textContent, "Save all");
-  assert.strictEqual(p.byId["aws-save"].disabled, true);
+  // On the desktop layout (this page has no mobileActive, the phone's switch) a button that cannot act yet is
+  // aria-disabled with its reason as the title, not disabled (disabled-reason.test.js has the rest, and the phone).
+  assert.strictEqual(p.byId["aws-save"].getAttribute("aria-disabled"), "true");
+  assert.strictEqual(p.byId["aws-save"].getAttribute("title"), "Nothing ready to save yet");
+  assert.strictEqual(p.byId["aws-save"].disabled, false);
   assert.ok(p.byId["aws-foot-note"].textContent === "" || /ready to save/.test(p.byId["aws-foot-note"].textContent));
   p.byId["aws-cancel"].onclick();
   await settle();

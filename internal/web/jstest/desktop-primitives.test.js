@@ -603,7 +603,8 @@ test("field labels are sentence case; .grp-label is the only uppercase kit rule 
 // its own (a shared app.css rule, or a page rule's resting cursor: pointer), ONE desktop rule restates
 // #169's values for exactly those selectors, at their own weight. A muted disabled colour is reset: the
 // .42 already dims the control's own colours, and dimming muted text twice is a second look.
-const ONE_LOOK = ':is(button, input, select, textarea):disabled:where(:not(.busy, [aria-busy="true"]))';
+// A button that says why it cannot act (F03, #173) is aria-disabled, not :disabled: the same rule, the same weight (0,1,1).
+const ONE_LOOK = ':is(button, input, select, textarea):is(:disabled, [aria-disabled="true"]):where(:not(.busy, [aria-busy="true"]))';
 const NOT_BUSY = ':where(:not(.busy, [aria-busy="true"]))';
 const RESTATED = [
   ".cell-sh:disabled", "#ft-refresh[disabled]", "#analytics-refresh:disabled", "#ask-ok:disabled", "#bug-modal .btn:disabled",
@@ -611,9 +612,9 @@ const RESTATED = [
 ];
 const MUTED_RESET = ["#ft-menu button:disabled", "#ft-refresh[disabled]"];
 const bareSel = (sel) => sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, "").replace(/:not\((?:[^()]|\([^()]*\))*\)/g, "");
-// isDisabledPart: a selector that matches a closed control: :disabled, [disabled] or the .off class,
-// outside :not() and :where() (`:hover:not(:disabled)` is the open control).
-const isDisabledPart = (p) => /:disabled|\[disabled\]|\.off(?![\w-])/.test(bareSel(p));
+// isDisabledPart: a selector that matches a closed control: :disabled, [disabled], [aria-disabled="true"] or the
+// .off class, outside :not() and :where() (`:hover:not(:disabled)` is the open control).
+const isDisabledPart = (p) => /:disabled|\[disabled\]|\[aria-disabled=["']?true|\.off(?![\w-])/.test(bareSel(p));
 const isRestate = (r) => JSON.stringify(r.decls) === JSON.stringify([["opacity", ".42"], ["cursor", "not-allowed"]]) &&
   parts(r.selector).every((p) => p.endsWith(NOT_BUSY) && p !== ONE_LOOK);
 // lookOffenders: disabled rules of `src` other than #169's and the restate rule that set opacity or cursor.
@@ -674,8 +675,10 @@ test("one disabled look: the checks find what they should (fixtures)", () => {
     .y .btn.off { opacity: .5; }
     .z:hover:not(:disabled) { cursor: pointer; }
     .w:disabled { text-decoration: none; }
+    .q[aria-disabled="true"] { opacity: .5; }
+    .r[aria-disabled="true"]:hover { background: var(--raise); }
   }`;
-  assert.deepStrictEqual(lookOffenders(desk), [".x:disabled { opacity: .45 }", ".x:disabled { cursor: default }", ".y .btn.off { opacity: .5 }"]);
+  assert.deepStrictEqual(lookOffenders(desk), [".x:disabled { opacity: .45 }", ".x:disabled { cursor: default }", ".y .btn.off { opacity: .5 }", '.q[aria-disabled="true"] { opacity: .5 }']);
   const app = `.p:disabled { opacity: .45; cursor: default; }
     #q[disabled] { opacity: .5; color: var(--muted); }
     #r button:disabled { cursor: not-allowed; color: var(--muted); }
