@@ -709,12 +709,7 @@ async function pfvDelete() {
   const name = pfvState.name;
   if (!name) return;
   const order = profiles.map((p) => p.name);
-  const ok = await askConfirm({
-    title: "Delete profile",
-    body: 'Delete the profile "' + name + '"? Running sessions are unaffected. The profile\'s saved workspace default and environment allowlist will be lost. This cannot be undone.',
-    confirmLabel: "Delete",
-    danger: true,
-  });
+  const ok = await deleteProfileAsk(name);
   if (!ok) return;
   pfvState.errors = [];
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }

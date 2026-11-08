@@ -4906,12 +4906,7 @@ async function editProfile(name) {
 async function deleteProfile(name) {
   // The sibling destructive action (kill session) has always confirmed; this one
   // used to delete on the first click.
-  const ok = await askConfirm({
-    title: "Delete profile",
-    body: 'Delete the profile "' + name + '"? Running sessions are unaffected. The profile\'s saved workspace default and environment allowlist will be lost. This cannot be undone.',
-    confirmLabel: "Delete",
-    danger: true,
-  });
+  const ok = await deleteProfileAsk(name);
   if (!ok) return;
   setDialogError("settings-modal", "");
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
@@ -6258,7 +6253,13 @@ document.addEventListener("keydown", (e) => {
 // stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
   const shells = liveShellsOf(id, lastSessions);
-  const outcome = await askChoice(killDialogOpts(name, id, shells.length));
+  // The desktop dialog names what ends and what is left (frame M5.2); the phone keeps its short question.
+  // shortPath reads the same window.HOME_DIR every other path on the page does; a session with no cwd
+  // (or one the list no longer holds) gives no Files note.
+  const session = lastSessions.find((s) => s.id === id);
+  const outcome = await askChoice(mobileActive(window.innerWidth)
+    ? killDialogOpts(name, id, shells.length)
+    : killDialogDeskOpts(name, id, shells.map((s) => shellLabel(s, lastSessions)), session && session.cwd ? shortPath(session.cwd) : ""));
   // "End session only" leaves the shells running as top-level rows (the parent
   // is gone, so nothing nests them any more).
   const ids = killIdsFor(outcome, id, shells);

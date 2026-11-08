@@ -92,7 +92,7 @@ test("the xterm bar stays visible at rest, but only when there is something to s
   assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar.invisible").length === 0, "plain .invisible (nothing to scroll) is not overridden");
 });
 
-test("the New session dialog is a plain rounded card with a header and Esc, not the box frame", () => {
+test("the New session dialog is a plain rounded card with a header and a close, not the box frame", () => {
   assert.ok(rulesFor("#spawn-modal::before").some((b) => /display:\s*none/.test(b)), "box frame hidden");
   const card = rulesFor("#spawn-modal").join(" ");
   assert.ok(/border-radius:\s*var\(--r-dlg\)/.test(card), "rounded card");
@@ -102,12 +102,35 @@ test("the New session dialog is a plain rounded card with a header and Esc, not 
   assert.ok(/position:\s*static/.test(title) && /transform:\s*none/.test(title), "no legend in the border");
   assert.ok(/border-bottom:\s*1px solid var\(--line\)/.test(title), "header rule");
   assert.ok(rulesFor("#spawn-modal .dlg-head").some((b) => /position:\s*absolute/.test(b)), "close in the corner");
-  assert.ok(rulesFor("#spawn-modal .dlg-x::before").some((b) => /content:\s*"Esc"/.test(b)), "Esc hint");
+  // The close is the dialogs' one ghost X (F28, #173): a 28px square with no "Esc" word beside it.
+  assert.deepStrictEqual(rulesFor("#spawn-modal .dlg-x::before"), [], "no Esc word");
+  const x = rulesFor("#spawn-modal .dlg-x").join(" ");
+  assert.ok(/width:\s*var\(--h-ctl\)/.test(x) && /color:\s*var\(--muted\)/.test(x), "ghost icon square");
   // Centred on the ~52px header (title: 16px padding + one 15px line), not pinned
   // by a fixed top that only matches one control height.
   const head = rulesFor("#spawn-modal .dlg-head").join(" ");
   assert.ok(/top:\s*26px/.test(head) && /transform:\s*translateY\(-50%\)/.test(head), "close centred on the header");
-  assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /var\(--raise\)/.test(b)));
+  assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /background:\s*var\(--hover\)/.test(b) && /color:\s*var\(--fg\)/.test(b)));
+});
+
+// F28 (#173): the three plain dialogs (ask, New session, Report a problem) close with the same X: the kit's ghost
+// icon button, a --h-ctl square, muted, a --hover fill on hover, the × glyph on the page's type scale.
+test("the ask, New session and Report a problem closes are one ghost icon button", () => {
+  const SELS = ["#ask-modal .dlg-x", "#spawn-modal .dlg-x", '#bug-modal .dhd .btn.gh[data-close="bug-modal"]'];
+  const look = SELS.map((sel) => rulesFor(sel).join(" "));
+  const want = [/width:\s*var\(--h-ctl\)/, /min-height:\s*var\(--h-ctl\)/, /padding:\s*0;/, /background:\s*transparent/, /color:\s*var\(--muted\)/,
+    /border-radius:\s*var\(--r-ctl\)/, /font-size:\s*var\(--t-lg\)/, /justify-content:\s*center/];
+  for (let i = 0; i < SELS.length; i++) for (const re of want) assert.match(look[i], re, SELS[i] + " " + re);
+  for (const sel of SELS) {
+    const hover = rulesFor(sel + ":hover").join(" ");
+    assert.match(hover, /background:\s*var\(--hover\)/, sel);
+    assert.match(hover, /color:\s*var\(--fg\)/, sel);
+  }
+  // The bug dialog's id has to weigh over the box-less dialogs' `.dhd .btn.gh` padding, size and --raise hover.
+  assert.ok(rulesFor("dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh").length > 0, "the rule it must out-weigh is still there");
+  // No "Esc" word on any of the three, and the phone's own close (#spawn-topbar .spawn-x) is not one of them.
+  for (const sel of ["#ask-modal .dlg-x::before", "#spawn-modal .dlg-x::before", '#bug-modal .dhd .btn.gh[data-close="bug-modal"]::before']) assert.deepStrictEqual(rulesFor(sel), [], sel);
+  assert.deepStrictEqual(rulesFor("#spawn-topbar .spawn-x"), [], "desktop.css leaves the phone sheet's close alone");
 });
 
 test("the profile list does not size the dialog: the form decides the height and the list scrolls", () => {

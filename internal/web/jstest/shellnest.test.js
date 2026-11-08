@@ -125,3 +125,139 @@ test("killIdsFor: confirm ends the parent then its shells, alt only the parent, 
   assert.deepEqual(n.killIdsFor("cancel", "p", kids), []);
   assert.deepEqual(n.killIdsFor("confirm", "p", []), ["p"]);
 });
+
+// --- killDialogDeskOpts: the desktop End session dialog (frame M5.2) -------------
+
+test("killDialogDeskOpts: one shell, names what it ends, what it keeps, and the files it leaves", () => {
+  assert.deepStrictEqual(n.killDialogDeskOpts("agent-box", "x", ["shell 1"], "~/box-clones/culiops-agent-box"), {
+    title: "End session agent-box?",
+    body: "The agent stops now and agent-box leaves the sidebar. An ended session can't be restarted.",
+    notes: [
+      ["Files in its workspace, ", { mono: "~/box-clones/culiops-agent-box" }, ", are not touched."],
+      ["It has 1 shell open, shell 1. “End agent-box only” keeps that shell running as its own row."],
+    ],
+    confirmLabel: "End both",
+    altLabel: "End agent-box only",
+    danger: true,
+    cls: "end",
+  });
+});
+
+test("killDialogDeskOpts: no shells is one red End session, with no shell note and no second way out", () => {
+  const o = n.killDialogDeskOpts("agent-box", "x", [], "~/w");
+  assert.strictEqual(o.confirmLabel, "End session");
+  assert.ok(!("altLabel" in o), "no altLabel");
+  assert.deepStrictEqual(o.notes, [["Files in its workspace, ", { mono: "~/w" }, ", are not touched."]]);
+  assert.strictEqual(o.danger, true);
+  assert.strictEqual(o.cls, "end");
+});
+
+test("killDialogDeskOpts: shells are listed by their labels and the note reads right for 2 and 3", () => {
+  const two = n.killDialogDeskOpts("agent-box", "x", ["shell 1", "shell 2"], "~/w");
+  assert.deepStrictEqual(two.notes[1], ["It has 2 shells open, shell 1 and shell 2. “End agent-box only” keeps those shells running as their own rows."]);
+  const three = n.killDialogDeskOpts("agent-box", "x", ["shell 1", "shell 2", "shell 3"], "~/w");
+  assert.deepStrictEqual(three.notes[1], ["It has 3 shells open, shell 1, shell 2 and shell 3. “End agent-box only” keeps those shells running as their own rows."]);
+  // With two or more shells "End both" would be untrue (decision 2): today's "End all" stays.
+  for (const o of [two, three]) {
+    assert.strictEqual(o.confirmLabel, "End all");
+    assert.strictEqual(o.altLabel, "End agent-box only");
+  }
+});
+
+test("killDialogDeskOpts: no cwd drops the Files note (no empty paragraph), no name falls back to the id everywhere", () => {
+  for (const cwd of ["", undefined, null]) {
+    const o = n.killDialogDeskOpts("agent-box", "x", ["shell 1"], cwd);
+    assert.strictEqual(o.notes.length, 1, String(cwd));
+    assert.match(o.notes[0][0], /^It has 1 shell open/);
+  }
+  const bare = n.killDialogDeskOpts("agent-box", "x", [], "");
+  assert.deepStrictEqual(bare.notes, []);
+  const o = n.killDialogDeskOpts("", "s-42", ["shell 1"], "~/w");
+  assert.strictEqual(o.title, "End session s-42?");
+  assert.match(o.body, /^The agent stops now and s-42 leaves the sidebar\./);
+  assert.strictEqual(o.altLabel, "End s-42 only");
+  assert.match(o.notes[1][0], /“End s-42 only” keeps that shell/);
+});
+
+test("killDialogDeskOpts: a long path stays one mono part (the CSS wraps it), and the phone's killDialogOpts is untouched", () => {
+  const long = "~/" + "a".repeat(118);
+  const o = n.killDialogDeskOpts("agent-box", "x", [], long);
+  assert.deepStrictEqual(o.notes[0][1], { mono: long });
+  assert.deepStrictEqual(n.killDialogOpts("agent", "p", 0), {
+    title: "End session",
+    body: 'End session "agent"? This cannot be undone.',
+    confirmLabel: "End",
+    danger: true,
+  });
+});
+
+// --- confirmKill (app.js): the desktop gets the M5.2 copy, the phone keeps today's -------------
+// app.js is the page itself and exports nothing, so the real function is cut out of it and run
+// against the real shellnest.js / fsops.js helpers with the page's globals faked.
+function confirmKillEnv(width, sessions, answer) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const src = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  const at = src.indexOf("async function confirmKill(");
+  assert.ok(at >= 0, "confirmKill is in app.js");
+  const code = src.slice(at, src.indexOf("\n}\n", at) + 2);
+  const asked = [];
+  const killed = [];
+  const box = {
+    window: { innerWidth: width, HOME_DIR: "/home/u" },
+    lastSessions: sessions,
+    mobileActive: (w) => Number(w) <= 700,
+    askChoice: async (o) => { asked.push(o); return answer; },
+    killSession: async (id) => { killed.push(id); },
+    Promise, Array,
+  };
+  const ctx = vm.createContext(box);
+  for (const f of ["fsops.js", "shellnest.js"]) new vm.Script(fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8"), { filename: f }).runInContext(ctx);
+  new vm.Script(code, { filename: "app.js:confirmKill" }).runInContext(ctx);
+  return { run: (id, name) => ctx.confirmKill(id, name), asked, killed };
+}
+// Objects built inside the vm carry its realm's prototypes; the JSON round trip makes them comparable.
+const plain = (x) => JSON.parse(JSON.stringify(x));
+const KILL_SESSIONS = [
+  { id: "p", name: "agent-box", cwd: "/home/u/box-clones/culiops-agent-box", created: "2026-10-27T09:00:00Z", status: "live" },
+  { id: "s1", name: "sh-a", parent_id: "p", created: "2026-10-27T09:10:00Z", status: "live" },
+  { id: "s2", name: "sh-b", parent_id: "p", created: "2026-10-27T09:20:00Z", status: "exited" },
+];
+
+test("confirmKill on the desktop asks the M5.2 question: labelled shells, ~ for home, End both ends both", async () => {
+  const t = confirmKillEnv(1280, KILL_SESSIONS, "confirm");
+  await t.run("p", "agent-box");
+  assert.deepStrictEqual(plain(t.asked), [n.killDialogDeskOpts("agent-box", "p", ["shell 1"], "~/box-clones/culiops-agent-box")]);
+  assert.deepStrictEqual(t.killed, ["p", "s1"], "confirm = the parent and its live shells");
+});
+
+test("confirmKill on the desktop: End agent-box only ends the parent alone, Cancel ends nothing", async () => {
+  const alt = confirmKillEnv(1280, KILL_SESSIONS, "alt");
+  await alt.run("p", "agent-box");
+  assert.deepStrictEqual(alt.killed, ["p"]);
+  const no = confirmKillEnv(1280, KILL_SESSIONS, "cancel");
+  await no.run("p", "agent-box");
+  assert.deepStrictEqual(no.killed, []);
+});
+
+test("confirmKill on the desktop with no recorded cwd leaves the Files note out", async () => {
+  const bare = [{ id: "p", name: "agent-box", created: "2026-10-27T09:00:00Z", status: "live" }];
+  const t = confirmKillEnv(1280, bare, "confirm");
+  await t.run("p", "agent-box");
+  assert.deepStrictEqual(plain(t.asked[0].notes), []);
+  assert.strictEqual(t.asked[0].confirmLabel, "End session");
+  assert.deepStrictEqual(t.killed, ["p"]);
+  // A tab for a session the list no longer holds: still the dialog, still no invented path.
+  const gone = confirmKillEnv(1280, [], "confirm");
+  await gone.run("zz", "");
+  assert.strictEqual(gone.asked[0].title, "End session zz?");
+  assert.deepStrictEqual(plain(gone.asked[0].notes), []);
+});
+
+test("confirmKill on the phone keeps today's dialog byte for byte", async () => {
+  const t = confirmKillEnv(390, KILL_SESSIONS, "alt");
+  await t.run("p", "agent-box");
+  assert.deepStrictEqual(plain(t.asked), [n.killDialogOpts("agent-box", "p", 1)]);
+  assert.deepStrictEqual(t.killed, ["p"]);
+});

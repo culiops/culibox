@@ -797,6 +797,28 @@ function askIsBusy(dialogIsOpen) {
   return dialogIsOpen === true;
 }
 
+// askNoteNodes: opts.notes as paragraphs. A note is a list of parts, a part a string or
+// { mono: "…" } (a path or a command, set in the mono face). Built with createElement and
+// text nodes, never innerHTML: a path in a note is text.
+function askNoteNodes(notes) {
+  return (Array.isArray(notes) ? notes : []).map((parts) => {
+    const p = document.createElement("p");
+    p.className = "ask-para";
+    for (const part of Array.isArray(parts) ? parts : [parts]) {
+      if (part && typeof part === "object") {
+        const m = document.createElement("span");
+        m.className = "mono";
+        m.textContent = part.mono;
+        p.appendChild(m);
+      } else p.appendChild(document.createTextNode(String(part)));
+    }
+    return p;
+  });
+}
+
+// The class the last ask put on the dialog (opts.cls), taken off before the next one's goes on.
+let askAppliedCls = "";
+
 // askDialog is the single code path both public helpers use. Every close route
 // (OK, Cancel, ×, Esc, backdrop) resolves the promise exactly once: a caller
 // awaiting a dialog that never settles is stuck forever with no error to show.
@@ -809,13 +831,24 @@ function askDialog(opts) {
   const ok = document.getElementById("ask-ok");
   document.getElementById("ask-title").textContent = opts.title || "";
   document.getElementById("ask-body").textContent = opts.body || "";
-  // Optional nodes under the body (the host switch lists what it removes). Reset on every ask, like the cancel label.
+  // Optional nodes under the body (the host switch lists what it removes), then opts.notes as muted paragraphs.
+  // Reset on every ask, like the cancel label. The card widens for opts.extra (a list needs the room) unless
+  // opts.wide says otherwise; notes are prose and keep the card's width.
   const extra = document.getElementById("ask-extra");
   if (extra) {
-    extra.replaceChildren(...(Array.isArray(opts.extra) ? opts.extra : opts.extra ? [opts.extra] : []));
+    const nodes = Array.isArray(opts.extra) ? opts.extra : opts.extra ? [opts.extra] : [];
+    extra.replaceChildren(...nodes, ...askNoteNodes(opts.notes));
     extra.hidden = !extra.children.length;
-    d.classList.toggle("wide", !extra.hidden);
+    d.classList.toggle("wide", opts.wide === undefined ? nodes.length > 0 : !!opts.wide);
   }
+  // One class for this ask only (the End session card is .end), and the footer's "Esc to cancel": an info
+  // dialog has no Cancel to name. footless drops the footer for this ask; Esc and the X still close it.
+  if (askAppliedCls) d.classList.toggle(askAppliedCls, false);
+  askAppliedCls = opts.cls || "";
+  if (askAppliedCls) d.classList.toggle(askAppliedCls, true);
+  d.classList.toggle("footless", !!opts.footless);
+  const hint = document.getElementById("ask-hint");
+  if (hint) hint.textContent = opts.hint !== undefined ? opts.hint : opts.info ? "" : "Esc to cancel";
   ok.textContent = opts.confirmLabel || "OK";
   // Cancel is reset on every ask, so a label one question gave (the profile page's
   // "Keep editing") never leaks into the next.
@@ -871,6 +904,7 @@ function askDialog(opts) {
     // keypress away (the host switch, discarding unsaved profile changes).
     if (opts.input) input.focus();
     else if (opts.focusCancel) document.getElementById("ask-cancel").focus();
+    else if (opts.footless) document.getElementById("ask-x").focus(); // no footer to land in
     else ok.focus();
   });
 }

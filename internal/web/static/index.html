@@ -202,7 +202,7 @@
     <h2 class="pane-head dlg-title">New session</h2>
     <div class="dlg-head">
       <span class="spacer"></span>
-      <button class="dlg-x" type="button" data-close="spawn-modal" title="Close">×</button>
+      <button class="dlg-x" type="button" data-close="spawn-modal" aria-label="Close (Esc)" title="Close (Esc)">×</button>
     </div>
     <div id="spawn-topbar">
       <button class="spawn-x" type="button" data-close="spawn-modal" title="Close">×</button>
@@ -614,7 +614,7 @@
   <dialog id="bug-modal">
     <div class="dhd">
       <span class="grow">Report a problem</span>
-      <button type="button" class="btn gh" data-close="bug-modal" aria-label="Close" title="Close (Esc)">&times;</button>
+      <button type="button" class="btn gh" data-close="bug-modal" aria-label="Close (Esc)" title="Close (Esc)">&times;</button>
     </div>
     <div class="dbd pad" id="bug-body">
       <label class="flab" for="bug-what">What happened? (optional)</label>
@@ -651,7 +651,7 @@
     <h2 id="ask-title" class="pane-head dlg-title"></h2>
     <div class="dlg-head">
       <span class="spacer"></span>
-      <button class="dlg-x" type="button" id="ask-x" title="Close">×</button>
+      <button class="dlg-x" type="button" id="ask-x" aria-label="Close (Esc)" title="Close (Esc)">×</button>
     </div>
     <div class="dlg-body">
       <p id="ask-body"></p>
@@ -659,6 +659,7 @@
       <label id="ask-label" for="ask-input" class="pf-lbl" hidden></label>
       <input id="ask-input" type="text" autocomplete="off" spellcheck="false" hidden>
       <div class="ask-actions">
+        <span id="ask-hint"></span>
         <button id="ask-cancel" type="button">Cancel</button>
         <button id="ask-alt" type="button" hidden></button>
         <button id="ask-ok" type="button">OK</button>

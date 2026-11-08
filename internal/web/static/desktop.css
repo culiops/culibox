@@ -1520,9 +1520,7 @@
     border-bottom: 1px solid var(--line); font-size: var(--t-lg); font-weight: 600; color: var(--fg);
   }
   #spawn-modal .dlg-head { position: absolute; top: 26px; right: 10px; transform: translateY(-50%); padding: 0; border: 0; background: none; }
-  #spawn-modal .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #spawn-modal .dlg-x::before { content: "Esc"; font-size: var(--t-sm); }
-  #spawn-modal .dlg-x:hover { color: var(--fg); background: var(--raise); }
+  /* Its close is the dialogs' one ghost X (F28, with #ask-modal and #bug-modal further down), no "Esc" word beside it. */
   #spawn-modal .dlg-body { display: flex; padding: 0; }
   #spawn-plist {
     display: flex; flex-direction: column; gap: 2px; flex: none; width: 236px; box-sizing: border-box;
@@ -2023,48 +2021,70 @@
   #bug-modal #bug-status { margin: 0; color: var(--muted); }
   #bug-modal #bug-status a { color: var(--accent); }
 
-  /* Ask / confirm / prompt dialog (shell.js askDialog). The box frame is hidden: a
-     plain card, the title as a header, the close cross in the corner. */
+  /* Ask / confirm / prompt dialog (shell.js askDialog), frame M5.2 (#173): a plain card, the title as the
+     head, the body, and a footer that carries the "Esc to cancel" hint and the buttons. The box frame is hidden. */
   #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md)/1.5 var(--font-ui); overflow: hidden; }
   #ask-modal::before { display: none; }
+  /* The head is 16px above and 12px below the 28px close (the frame's .dlg-head); the title is centred on it. */
   #ask-modal .dlg-title {
     position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
-    margin: 0; padding: 16px 44px 4px 20px; background: none; font-size: var(--t-lg); font-weight: 600; color: var(--fg);
+    display: flex; align-items: center; min-height: calc(var(--sp-4) + var(--h-ctl) + var(--sp-3));
+    margin: 0; padding: var(--sp-4) calc(var(--sp-4) + var(--h-ctl) + var(--sp-3)) var(--sp-3) var(--sp-5); background: none;
+    font-size: var(--t-lg); font-weight: var(--w-semibold); color: var(--fg);
     /* A long title wraps (the whole name of what is deleted stays readable) and
-       keeps 44px clear for the close cross. */
-    box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
+       keeps the close clear. */
+    box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: var(--lh-lg);
   }
-  #ask-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
-  /* The close cross is the kit's ghost icon button (.btn .btn-ghost .btn-icon .btn-sm: 24px square, muted, a
-     hover fill) on the page's type scale, not app.css's 19px glyph. The class list cannot go on the shared
-     markup (primitives.css's .btn reaches the phone), so the kit's values are stated here. */
-  #ask-modal .dlg-x {
-    display: inline-flex; align-items: center; justify-content: center; width: var(--h-sm); min-height: var(--h-sm); padding: 0;
-    border: 1px solid transparent; border-radius: var(--r-chip); background: transparent; color: var(--muted);
+  #ask-modal .dlg-head { position: absolute; top: var(--sp-4); right: var(--sp-4); padding: 0; border: 0; background: none; }
+  /* The one close (F28) on the three plain dialogs, ask, New session and Report a problem: the kit's ghost icon
+     button (.btn .btn-ghost .btn-icon: --h-ctl square, muted, a --hover fill) on the page's type scale, titled
+     "Close (Esc)", the glyph kept as ×. The class list cannot go on the shared markup (primitives.css's .btn
+     reaches the phone), so the kit's values are stated here; the bug dialog's id weighs over the
+     dialogs' `.dhd .btn.gh` rules and the box-less dialog's ghost hover. */
+  #ask-modal .dlg-x, #spawn-modal .dlg-x, #bug-modal .dhd .btn.gh[data-close="bug-modal"] {
+    display: inline-flex; align-items: center; justify-content: center; width: var(--h-ctl); min-height: var(--h-ctl); padding: 0;
+    border: 1px solid transparent; border-radius: var(--r-ctl); background: transparent; color: var(--muted);
     font-size: var(--t-lg); font-weight: var(--w-medium); line-height: 1;
   }
-  #ask-modal .dlg-x:hover { background: var(--hover); color: var(--fg); }
+  #ask-modal .dlg-x:hover, #spawn-modal .dlg-x:hover, #bug-modal .dhd .btn.gh[data-close="bug-modal"]:hover { background: var(--hover); color: var(--fg); }
   #ask-modal #ask-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  #ask-modal .dlg-body { padding: 4px 20px 18px; }
-  #ask-modal #ask-body { margin: 6px 0 10px; font-size: var(--t-md); color: var(--muted); }
+  /* The footer is the body's last child: it takes the body's side padding back (-20px) so its rule spans the card,
+     and the body has no bottom padding of its own (a footless ask gives it back). */
+  #ask-modal .dlg-body { padding: 0 var(--sp-5); }
+  #ask-modal.footless .dlg-body { padding-bottom: var(--sp-5); }
+  #ask-modal #ask-body { margin: 0 0 10px; font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); }
   #ask-modal #ask-label { display: block; margin: 0 0 6px; font-size: var(--t-sm); color: var(--muted); }
+  #ask-modal #ask-label[hidden] { display: none; }
   #ask-modal #ask-input { padding: 7px 10px; background: var(--bg); border-color: var(--line); border-radius: var(--r-ctl); font: var(--t-md) var(--font-ui); }
-  #ask-modal .ask-actions { gap: 8px; margin-top: 16px; }
-  #ask-modal .ask-actions button { padding: 6px 14px; font: 400 var(--t-md) var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
-  #ask-modal .ask-actions button:hover { background: var(--background3); border: 0; }
+  #ask-modal .ask-actions {
+    align-items: center; gap: var(--sp-2); margin: var(--sp-5) calc(-1 * var(--sp-5)) 0; padding: var(--sp-3) var(--sp-5);
+    border-top: 1px solid var(--line);
+  }
+  #ask-modal.footless .ask-actions { display: none; }
+  /* "Esc to cancel" (askDialog's hint): app.css hides it, the phone has no Esc. */
+  #ask-modal #ask-hint { display: block; flex: 1 1 auto; margin: 0; color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-sm); }
+  /* The kit's secondary .btn: Cancel, and the alt ("End agent-box only"). A long label ends in an ellipsis, not off the card. */
+  #ask-modal .ask-actions button {
+    max-width: 100%; min-height: var(--h-ctl); padding: 0 var(--sp-3); overflow: hidden; text-overflow: ellipsis;
+    font-size: var(--t-md); font-weight: var(--w-medium); color: var(--fg); background: var(--raise);
+    border: 1px solid transparent; border-radius: var(--r-ctl);
+  }
+  #ask-modal .ask-actions button:hover { background: var(--line); }
   /* OK is the primary, in the kit's look, except in the read-only Keyboard shortcuts dialog
      (askDialog info), where it is "Close": Close is never primary (F11), so there it keeps the
      row's secondary look. app.css brightens #ask-ok on hover; here the hover is a colour. */
-  #ask-modal:not(.info) #ask-ok { background: var(--accent); color: var(--on-fill); font-weight: 600; }
+  #ask-modal:not(.info) #ask-ok { background: var(--accent); color: var(--on-fill); font-weight: var(--w-semibold); }
   #ask-modal #ask-ok:hover { filter: none; }
   #ask-modal:not(.info) #ask-ok:where(:not(:disabled)):hover { background: var(--accent-hover); }
   #ask-modal #ask-ok:disabled { filter: none; text-decoration: none; }
-  /* Destructive confirm: red text on a clear button, never a red fill. */
-  #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
-  #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
+  /* Destructive confirm: the kit's .btn-danger, red text on a clear button with a 45% red border, never a red fill. */
+  #ask-modal.danger #ask-ok { background: transparent; color: var(--red); border-color: rgba(240, 106, 106, .45); font-weight: var(--w-medium); }
+  #ask-modal.danger #ask-ok:hover { background: var(--red-tint); border-color: var(--red); }
   /* A question that lists what it affects (the profile page's "Save as host", shell.js askDialog opts.extra): a card wide
      enough for the list, and under the body a lead line, the list (a kind and its names) and the question. */
   #ask-modal.wide { width: 500px; max-width: calc(100vw - 40px); }
+  /* End session (opts.cls "end"): the frame's 480px card. */
+  #ask-modal.end { width: 480px; max-width: calc(100vw - 40px); }
   #ask-modal #ask-extra[hidden] { display: none; }
   #ask-modal .ask-note { margin: 14px 0 0; font-size: var(--t-sm); color: var(--muted); }
   #ask-modal .ask-list { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 14px; margin: 8px 0 0; padding: 12px 14px; background: var(--bg); border-radius: var(--r-ctl); font-size: var(--t-md); }
@@ -2072,6 +2092,10 @@
   #ask-modal .ask-list dd { margin: 0; overflow-wrap: anywhere; }
   #ask-modal .ask-mono { font-family: var(--font-mono); font-size: var(--t-sm); }
   #ask-modal .ask-q { margin: 14px 0 0; }
+  /* opts.notes: a muted paragraph under the body, 16px apart as the frame's body gap; a path in one is mono at
+     --t-sm and wraps wherever it must (a 120-character workspace stays inside the card). */
+  #ask-modal .ask-para { margin: var(--sp-4) 0 0; font-size: var(--t-md); line-height: var(--lh-md); color: var(--muted); overflow-wrap: anywhere; }
+  #ask-modal .ask-para .mono { font-size: var(--t-sm); }
 
   /* Command palette. */
   #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: var(--t-md) var(--font-ui); overflow: hidden; }
