@@ -1968,23 +1968,34 @@
   #page-host > #settings-modal.as-page > #about > p:has(> #kbd-open-about) { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--panel); }
   #page-host > #settings-modal.as-page > #about > .hint { margin: 0; padding: 12px 16px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-card) var(--r-card); background: var(--panel); }
 
-  /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
-     bordered table per provider. Colour roles (D23): amber = needs you (missing,
-     locked, expired, not checked), red = write / prod / error, green = status;
-     mono only for machine text (account ids, role names, client ids, env names,
-     hosts). The card rules in app.css stay for the mobile modal. */
-  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 14px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  /* Credentials as tables (S4 Task 6, pg-2; UI plan 4 Task 5, frame M2.3, digest-design §B4): the store strip, then one
+     kit card per provider. Colour roles (D23): amber = needs you (a locked or unavailable store, a write probe not
+     checked), red = write / prod / error, green = Ready. "Missing" is a state of the config, not a request: the kit's
+     neutral chip (F27). Mono only for machine text (names, account ids, role names, client ids, env names, hosts). The
+     card rules in app.css stay for the mobile modal. */
+  #page-host > #settings-modal.as-page #creds-body, #page-host > #settings-modal.as-page #cred-drawer-body { gap: 10px; }
+  /* The strip (§B4 `.m2-strip`): a kit card on the page's own surface, one 40px row: the green dot, "Encrypted store",
+     the muted state, Lock now at the right. app.css's .strip is the amber box, so the surface and the ring are set here;
+     a store that needs the user (locked, unavailable, not set up) is that amber box again, `.need`, with its old room. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip { gap: 8px; padding: 8px 8px 8px 14px; border: 0; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > b { font-weight: var(--w-medium); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip > #store-lock { margin-left: auto; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt { font-size: var(--t-md); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
+  /* The honest statement once, under the strip (§B4 `.m2-under`: 12/18 muted, 6px below it: the body's 10px gap less 4). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip-wrap > .hint { margin-top: -4px; padding: 0 2px; line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: var(--t-md); line-height: 1.4; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st::before { display: inline-block; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.ready { color: var(--ok); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--amber); }
+  /* F27: the states of the config are muted, not amber: Missing (drawn as the kit's neutral .chip in the tables) and a
+     token whose variable is not set. What needs the user is amber: a locked store, and "Not set up" in the strip. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.missing, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.notset { color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.locked { color: var(--amber); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st.notset { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st.invalid { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .hint { font-size: var(--t-sm); line-height: 1.6; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn { padding: 5px 11px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
@@ -1998,6 +2009,14 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .btn { max-width: 100%; white-space: normal; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.dgr:hover { background: var(--danger-tint); }
+  /* The kit's small, ghost and danger buttons (a table row's Edit and Delete, the strip's Lock now, the Stored values
+     toggle) take their own values back from the `.btn` rules above, as the head's do below: one class heavier, written
+     after, and only for what those rules changed (§C3 `.btn-sm`, `.btn-ghost`, `.btn-danger`; §B4's Delete ring). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-ghost:where(:not(.pri)) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-ghost:where(:not(.pri)):where(:not(:disabled)):hover { background: var(--hover); color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .btn.btn-danger:where(:not(.pri)):where(:not(:disabled)):hover { border-color: var(--red); background: var(--red-tint); }
   /* The Credentials page head's buttons are the kit's own (§C3: the 28px secondary action, the 24px ghost Esc ✕), but
      the rules above paint every `.btn` under #creds (and its drawer twin, which credentials.test.js keeps in step)
      with 5px 11px, a --line border and the page's raise fill. The head takes its kit values back: one class
@@ -2007,15 +2026,32 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)) { background: transparent; color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) > .set-head .btn.btn-ghost:where(:not(.pri)):hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .warnbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .amberbox, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .confirm { border-radius: var(--r-ctl); }
+  /* The head's "Add credential ▾" (credAddMenuAttach): the trigger's wrapper anchors the kit menu, which opens under the
+     trigger, right-aligned and above the page like the profile page's ⋯ (#pfv .pfv-more); the trigger shows pressed
+     while it is open (a menu button is expanded, not pressed: aria-expanded). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add { position: relative; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .menu { position: absolute; z-index: 30; top: calc(100% + var(--sp-1)); right: 0; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cred-add > .btn:where(:not(.pri))[aria-expanded="true"] { background: var(--raise); box-shadow: inset 0 0 0 1px var(--faint); }
 
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab { width: 100%; border-collapse: collapse; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); white-space: nowrap; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { padding: 12px 16px; vertical-align: top; font-size: var(--t-md); line-height: 1.4; overflow-wrap: anywhere; }
+  /* One kit card per provider (§B4 `section.card.m2-sec`: the .card class draws --panel and --r-card), its table clipped to the corners. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec { gap: 0; overflow: hidden; }
+  /* Its head (§B4 `.card-head`): the title (13/20 600) and the count chip 12px beside it, 12px 16px, a hairline under it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* An empty section's line sits under the head's hairline; a token provider's note is under its table (§B4 `.m2-secnote`:
+     12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint { padding: 12px 16px; border-top: 0; color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 8px 16px 10px; border-top: 1px solid var(--line); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .ctab-note-top { padding: 8px 16px 10px; border-bottom: 1px solid var(--line); line-height: var(--lh-sm); }
+  /* The table is the kit's .tbl (the head cells are its th: 32px, 12/500 --muted, sentence case, a hairline under; §B4), so
+     only the rows are set here: 7px above and below, the first cell 16px in and the last 12px, wrapping between words
+     (the shares below are narrow). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th:first-child, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td:first-child { padding-left: 16px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab th:last-child, #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab td:last-child { padding-right: 12px; }
+  /* An entry is one <tbody>: no kit row hairline inside it (its warning or confirmation hangs under the row), one above
+     the next entry. Legacy secrets' rows are one tbody and keep the kit's. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow td { border-bottom: 0; }
   /* Names break between words, never inside one ("Missin/g"). */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-nm { display: inline-block; max-width: 100%; }
@@ -2032,46 +2068,51 @@
      break-word, not anywhere: a word only splits if it alone is wider than the column. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .st { white-space: normal; overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv { overflow-wrap: normal; }
-  /* The GitHub and token tables share one set of column starts (pg-2). AWS has
-     its own columns and keeps the automatic layout. Every width is a share of the
-     table: fixed px columns starved Used by to 0px below a ~1150px window. */
+  /* The GitHub and token tables share one set of column starts (pg-2), and the head cells and the rows one colgroup
+     (G16: credTable draws the <col>s, these are their shares). AWS has its own columns and keeps the automatic layout.
+     Every width is a share of the table: fixed px columns starved Used by to 0px below a ~1150px window. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
   /* Env is 26%: its 12px host (F06) needs 203px for artifactory.acme.example.com, and 25% gave
      199 at a 1440 window ("...example.co" / "m"). Status and Used by gave half a point each:
      Status still holds "environment" (77px) at 1280; a smaller Token wraps the token names. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 26%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 14.5%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(1) { width: 20%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(2) { width: 26%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(3) { width: 14.5%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(5) { width: 16%; }
+  /* Legacy secrets (§B4): two columns, 45% / 55%, no header row. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(1) { width: 45%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(2) { width: 55%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main { color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-md); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
+  /* Machine text is 12px mono (§B4 `.mono.t-sm`); the sub-line under it is 12/18 muted (the role and host ones are mono too). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main.mono { font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub { margin-top: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-sub.mono { font-size: var(--t-sm); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: var(--t-xs); line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 600; }
+  /* PROD (red) and "from config.json" (neutral) are the kit's chips, 6px after the name. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .c-main > * + .chip { margin-left: 6px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok { color: var(--ok); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.ok::before { content: "✓ "; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.warn { color: var(--amber); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .pv.bad { color: var(--red); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)) { border-color: transparent; background: transparent; color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act .btn:not(.dgr):where(:not(.pri)):hover { background: var(--raise); color: var(--fg); }
+  /* The actions cell (§B4 `td.num > .m2-acts`): right-aligned, 5px above and below, the buttons 4px apart. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-act { width: 1%; padding-top: 5px; padding-bottom: 5px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ent-act { justify-content: flex-end; gap: 4px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-x > td { padding: 0; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: var(--t-md); color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::-webkit-details-marker { display: none; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary::before { content: "▸ "; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold[open] > summary::before { content: "▾ "; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold > summary:hover { color: var(--fg); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .btn { align-self: flex-start; }
+  /* Stored values (§B4 `.m2-fold`): one row, not a card: the ghost toggle (chevron, name), the count chip, the muted line.
+     The chevron is credChevron's svg, 12px, a quarter turn when open: no glyph and no ::before. The body is what the frame
+     leaves undrawn: a panel under the row, its list's labels sentence-case (F17). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 8px; padding: 0 2px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-h { display: flex; align-items: center; gap: 8px; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t svg { width: 12px; height: 12px; flex: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t[aria-expanded="true"] svg { transform: rotate(90deg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b[hidden] { display: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .link { align-self: flex-start; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b .sv.head { font-size: var(--t-sm); letter-spacing: 0; text-transform: none; }
   /* The card's room is #creds-body (the window minus the sidebar, the nav and the
      padding), which is 178px at 701px; the drawer's body, #cred-drawer-body, is a
      container the same way. app.css stacks a card in one column only for a

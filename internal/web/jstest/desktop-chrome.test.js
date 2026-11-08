@@ -411,7 +411,8 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // Status column keeps its longest word ("environment", 77 px) whole at 1280.
 test("the token tables give the 12px host one line at 1440 and keep Status's words whole at 1280", () => {
   const share = (n) => {
-    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(' + n + ")").join(" ");
+    // The shares are on the colgroup's <col>s (credTable draws them; one set for the head cells and the rows: G16).
+    const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").join(" ");
     const m = /width:\s*([\d.]+)%/.exec(r);
     assert.ok(m, "column " + n + " has a share");
     return +m[1];

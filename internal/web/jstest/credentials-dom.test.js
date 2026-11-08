@@ -23,7 +23,7 @@ class Text { constructor(t) { this.text = t; this.parent = null; } get textConte
 class Node {
   constructor(tag) {
     this.tag = tag; this.children = []; this.parent = null; this.own = "";
-    this.className = ""; this.attrs = {}; this.dataset = {}; this.disabled = false; this.colSpan = 1;
+    this.className = ""; this.attrs = {}; this.dataset = {}; this.disabled = false; this.colSpan = 1; this.handlers = {};
     const self = this;
     this.classList = {
       contains: (c) => self.className.split(/\s+/).includes(c),
@@ -45,7 +45,18 @@ class Node {
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   removeAttribute(k) { delete this.attrs[k]; }
-  addEventListener() {}
+  // Listeners are kept, so a test can fire the keydown the menu wrapper listens to (`fire`).
+  addEventListener(t, f) { (this.handlers[t] = this.handlers[t] || []).push(f); }
+  fire(t, ev) { for (const f of this.handlers[t] || []) f(ev); }
+  contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
+  focus() { Node.active = this; }
+  insertBefore(c, ref) {
+    if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1);
+    c.parent = this;
+    const at = ref ? this.children.indexOf(ref) : -1;
+    if (at < 0) this.children.push(c); else this.children.splice(at, 0, c);
+    return c;
+  }
   appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
   append(...cs) { cs.forEach((c) => this.appendChild(c)); }
   replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
@@ -78,7 +89,15 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
     byId["aws-foot-note"] = new Node("span");
     byId["creds-err"] = new Node("div");
   }
-  const doc = { createElement: (t) => new Node(t), createTextNode: (t) => new Text(t), getElementById: (id) => byId[id] || null };
+  // `listeners` are the document's own (a click elsewhere closes the header menu); `activeElement` is whatever last took focus.
+  const listeners = {};
+  Node.active = null;
+  const doc = {
+    createElement: (t) => new Node(t), createElementNS: (ns, t) => new Node(t), createTextNode: (t) => new Text(t),
+    getElementById: (id) => byId[id] || null,
+    addEventListener: (t, f) => { (listeners[t] = listeners[t] || []).push(f); },
+    get activeElement() { return Node.active; },
+  };
   const box = {
     document: doc, console, Promise, JSON, Date, setTimeout, clearTimeout, reloaded: 0,
     // `reply(path, opt)` answers a call; the default is an empty object.
@@ -92,13 +111,14 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  for (const f of ["pending.js", "store.js", "credentials.js"]) {
+  // svgicon.js and kitmenu.js load before credentials.js on the page (index.html): the Stored values chevron and the header menu use them.
+  for (const f of ["pending.js", "store.js", "svgicon.js", "kitmenu.js", "credentials.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   // The reload every action ends in repaints the whole screen; here it only counts.
   box.realLoadCredentials = box.loadCredentials;
   box.loadCredentials = () => { box.reloaded++; };
-  return { box, doc, calls, byId };
+  return { box, doc, calls, byId, listeners };
 }
 
 const tok = (name, over) => ({ kind: "token", name, provider: "sentry", label: "", description: "", prod: false, env: ["SENTRY_AUTH_TOKEN"], hosts: ["sentry.io"], value_kind: "store", source: "web", status: "ok", used_by: [], ...over });
@@ -374,16 +394,16 @@ test("a narrow page paints cards, a wide page paints tables, from the same view"
 });
 
 // F11 (#171): Close and secondary actions are never primary, and a primary is never restyled as a
-// secondary by CSS. In the tables the AWS section's add sits in the section header beside the
-// others' secondary adds, so the markup says secondary there; the cards keep it the primary.
-test("the AWS add is a secondary in the tables and the primary in the cards", () => {
+// secondary by CSS. The tables have no add button at all (UI plan 4: the page head's "Add credential"
+// menu is the one add, frame M2.3); the cards keep the AWS add as the primary.
+test("the AWS add is the primary in the cards and absent from the tables", () => {
   const view = { store: { initialized: true, locked: false, platform: "linux" }, aws: [], github_apps: [], tokens: [], values: [], legacy_secrets: [], invalid: [] };
   const add = (width) => {
     const p = page({ width });
     p.box.renderCredentials(view);
     return p.byId["creds-body"].querySelectorAll("button").find((b) => b.textContent === "Add AWS accounts");
   };
-  assert.strictEqual(add(900).className, "btn", "tables");
+  assert.strictEqual(add(900), undefined, "tables: the header menu adds");
   assert.strictEqual(add(500).className, "btn pri", "cards");
 });
 
@@ -425,27 +445,34 @@ test("strip, darwin store unavailable and not initialized: still no Create butto
   assert.match(wrap.textContent, /Open Keychain Access/);
 });
 
-test("strip, healthy darwin Keychain: unchanged, no Lock now", () => {
+test("strip, healthy darwin Keychain: the page says it once (dot, name, Keychain), no Lock now", () => {
   const p = page();
   const wrap = stripOf(p, kcStore());
   const strip = wrap.querySelector(".strip");
-  assert.strictEqual(strip.querySelector(".st").textContent, "Keychain");
-  assert.ok(strip.querySelector(".st").className.split(/\s+/).includes("ready"));
-  assert.match(strip.textContent, /Keychain \(macOS\)/);
+  assert.strictEqual(strip.querySelectorAll(".st").length, 0, "no Unlocked/Keychain chip on top of the line below");
+  assert.strictEqual(strip.querySelector("b").textContent, "Encrypted store");
+  assert.strictEqual(strip.querySelector("span.muted").textContent, "Keychain (macOS)");
   assert.deepEqual(btnTexts(wrap), []);
+  // The phone's modal keeps the chip and its sentence.
+  const phone = stripOf(page({ asPage: false }), kcStore());
+  assert.strictEqual(phone.querySelector(".st").textContent, "Keychain");
+  assert.ok(phone.querySelector(".st").className.split(/\s+/).includes("ready"));
+  assert.match(phone.textContent, /Keychain \(macOS\)/);
 });
 
-test("strip, Linux: locked shows the unlock form, unlocked shows Lock now (unchanged)", () => {
+test("strip, Linux: locked shows the unlock form, unlocked shows Lock now, not set up offers Create (unchanged states)", () => {
   const p = page();
   const locked = stripOf(p, { initialized: true, locked: true, platform: "linux", passphrase_mode: true });
   assert.strictEqual(locked.querySelector(".st").textContent, "Locked");
   assert.strictEqual(locked.querySelectorAll(".storeslot").length, 1);
   assert.deepEqual(btnTexts(locked), ["Unlock"]);
   const open = stripOf(p, { initialized: true, locked: false, platform: "linux", passphrase_mode: true });
-  assert.strictEqual(open.querySelector(".st").textContent, "Unlocked");
   assert.deepEqual(btnTexts(open), ["Lock now"]);
   const none = stripOf(p, { initialized: false, locked: false, platform: "linux" });
   assert.deepEqual(btnTexts(none), ["Create the encrypted store"]);
+  // The phone's modal keeps the chip.
+  const phoneOpen = stripOf(page({ asPage: false }), { initialized: true, locked: false, platform: "linux", passphrase_mode: true });
+  assert.strictEqual(phoneOpen.querySelector(".st").textContent, "Unlocked");
 });
 
 // --- #27: a live window crossing the table/card width repaints ---------------------
@@ -2048,4 +2075,502 @@ test("a host sub-line breaks after a dot, never inside a label", () => {
   assert.strictEqual(sub.textContent, "artifactory.acme.example.com, cdn.example.io");
   const kinds = sub.children.map((c) => (c instanceof Node ? c.tag : JSON.stringify(c.textContent)));
   assert.deepStrictEqual(kinds, ['"artifactory."', "wbr", '"acme."', "wbr", '"example."', "wbr", '"com, cdn."', "wbr", '"example."', "wbr", '"io"']);
+});
+
+// --- the Credentials page as frame M2.3 draws it (UI plan 4, #174, Task 5; digest-design §A6, §B4) ----------------------------
+//
+// One strip that says the store once, one header menu that adds, counts in chips, "Missing" a neutral chip, Stored values a
+// chevron disclosure, ghost Edit and danger Delete. The page is table mode (desktop, room for tables); the phone's modal and a
+// narrow desktop page are card mode and keep their markup.
+
+const m23View = (over) => ({
+  store: { initialized: true, locked: false, platform: "linux", expires_at: new Date(Date.now() + ((10 * 60 + 20) * 60 + 30) * 1000).toISOString() },
+  aws: [aws("culipulse-prod", { prod: true, mode: "sso_direct" })],
+  github_apps: [ghApp("test-app")],
+  tokens: [tok("sentry-staging")],
+  values: [{ id: "ANTHROPIC_KEY", updated: "2026-11-01T10:00:00Z", referenced_by: [] }, { id: "SENTRY_KEY", updated: "2026-11-02T10:00:00Z", referenced_by: ["static_tokens/sentry-staging"] }],
+  legacy_secrets: [{ name: "ANTHROPIC_API_KEY", status: "missing" }, { name: "CLAUDE_CODE_OAUTH_TOKEN", status: "ok" }],
+  invalid: [],
+  ...over,
+});
+const paintPage = (view, opts) => {
+  const p = page({ width: 900, ...opts });
+  p.box.renderCredentials(view || m23View());
+  return { p, body: p.byId["creds-body"] };
+};
+const sectionOf = (body, group) => body.querySelectorAll("section").find((s) => s.dataset.group === group);
+const classesOf = (n) => n.className.split(/\s+/);
+
+test("table mode: section headers carry a count chip and no add button", () => {
+  const { body } = paintPage();
+  const heads = body.querySelectorAll("div.sec-h");
+  assert.deepStrictEqual(heads.map((h) => h.querySelector("h2").textContent), ["AWS", "GitHub Apps", "Sentry", "Legacy secrets"]);
+  assert.deepStrictEqual(heads.map((h) => h.querySelector("span.chip").textContent), ["1", "1", "1", "2"]);
+  for (const h of heads) {
+    assert.ok(classesOf(h).includes("card-head"), "the kit's .card-head (frame: 12px gap, 12/16 padding, a hairline under it)");
+    assert.ok(classesOf(h.querySelector("span.chip")).includes("tnum"), "the count is `chip tnum`");
+    assert.strictEqual(h.querySelectorAll("button").length, 0, h.textContent + ": no button in the header");
+    assert.strictEqual(h.querySelectorAll("span.count").length, 0, "the count is a chip, not a glued span");
+  }
+  const labels = body.querySelectorAll("button").map((b) => b.textContent);
+  for (const l of ["Add AWS accounts", "Add GitHub", "Add token"]) assert.ok(!labels.includes(l), l + " is the header menu's now");
+  assert.ok(classesOf(sectionOf(body, "aws")).includes("card"), "a section is the kit's .card");
+});
+
+test("table mode: the empty Tokens section keeps its line, a 0 chip and no add button", () => {
+  const { body } = paintPage(m23View({ tokens: [] }));
+  const sec = sectionOf(body, "tokens");
+  assert.ok(sec, "the Tokens section is there so the empty state can say how to fill it");
+  assert.strictEqual(sec.querySelector("div.sec-h").querySelector("span.chip").textContent, "0");
+  assert.strictEqual(sec.querySelectorAll("button").length, 0);
+  assert.match(sec.textContent, /No tokens yet\./);
+});
+
+test("card mode (phone) keeps its add buttons and count spans", () => {
+  for (const [name, opts] of [["the phone's modal", { asPage: false, width: 900 }], ["a narrow desktop page", { width: 500 }]]) {
+    const { body } = paintPage(m23View(), opts);
+    const heads = body.querySelectorAll("div.sec-h");
+    assert.deepStrictEqual(heads.map((h) => h.querySelector("span.grow").textContent), ["AWS 1", "GitHub Apps 1", "Sentry 1", "Stored values 2", "Legacy secrets 2"], name);
+    assert.deepStrictEqual(heads.map((h) => h.querySelectorAll("button").map((b) => b.textContent)), [["Add AWS accounts"], ["Add GitHub"], ["Add token"], ["Set a value"], []], name);
+    assert.strictEqual(body.querySelectorAll("span.chip").length, 0, name + ": no chip");
+    assert.strictEqual(body.querySelectorAll("h2").length, 0, name + ": the header is the span it always was");
+    assert.strictEqual(body.querySelectorAll("div.leg").length, 2, name + ": legacy secrets are rows, not a table");
+  }
+});
+
+// A page head the way settingshead.js paints it: the trigger, a divider, then Esc ✕ (all in `.page-actions`).
+function headWithTrigger(p) {
+  const actions = new Node("div");
+  actions.className = "page-actions";
+  const btn = new Node("button");
+  btn.id = "set-act-creds";
+  btn.className = "btn";
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
+  const sep = new Node("span");
+  sep.className = "set-sep";
+  actions.append(btn, sep);
+  p.box.credAddMenuAttach(btn);
+  const wrap = btn.parent;
+  return { actions, btn, sep, wrap, pop: wrap.querySelector("div.menu") };
+}
+const menuRows = (pop) => pop.querySelectorAll("button");
+// kitMenuKeys asks for `.menu-item:not([aria-disabled="true"]), .mi`, which the fake DOM's selectors cannot read.
+function teachMenuKeys(pop) {
+  const plain = pop.querySelectorAll.bind(pop);
+  pop.querySelectorAll = (sel) => (sel.startsWith(".menu-item") ? plain("button").filter((n) => n.getAttribute("aria-disabled") !== "true") : plain(sel));
+}
+const keyEv = (key) => { const ev = { key, defaultPrevented: false, preventDefault() { ev.defaultPrevented = true; } }; return ev; };
+
+test("the header menu offers today's three adds", () => {
+  const p = page();
+  assert.deepStrictEqual(Array.from(p.box.credAddItems(), (i) => [i.label, i.kind]), [["Add AWS accounts", "aws"], ["Add GitHub", "github"], ["Add token", "token"]]);
+  assert.strictEqual(typeof p.box.credAddMenuAttach, "function", "settingshead.js finds it on the global object");
+  const { actions, sep, wrap, pop } = headWithTrigger(p);
+  assert.strictEqual(wrap.className, "cred-add");
+  assert.deepStrictEqual(actions.children, [wrap, sep], "the wrapper takes the trigger's place in the head");
+  assert.strictEqual(pop.getAttribute("role"), "menu");
+  assert.strictEqual(pop.hidden, true, "closed until pressed");
+  const rows = menuRows(pop);
+  assert.deepStrictEqual(rows.map((r) => r.querySelector("span.menu-text").textContent), ["Add AWS accounts", "Add GitHub", "Add token"]);
+  for (const r of rows) {
+    assert.ok(classesOf(r).includes("menu-item"), "a kitMenuButton row");
+    assert.strictEqual(r.getAttribute("role"), "menuitem");
+    assert.ok(r.querySelector("span.menu-icon"), "with the kit's icon slot");
+  }
+});
+
+test("the menu opens on the trigger, walks with the arrows, closes on Esc and click-away, and each row runs its add with its group", () => {
+  const p = page();
+  const seen = [];
+  const handlers = vmEval(p, "credActionHandlers");
+  for (const kind of ["aws", "github", "token"]) handlers[kind] = { add: (g, reload) => seen.push([kind, g.key, reload === p.box.loadCredentials]) };
+  p.box.renderCredentials(m23View({ tokens: [tok("sentry-staging"), tok("dd", { provider: "datadog" })] }));
+  const { btn, wrap, pop } = headWithTrigger(p);
+  teachMenuKeys(pop);
+  const rows = menuRows(pop);
+
+  btn.onclick();
+  assert.strictEqual(pop.hidden, false);
+  assert.strictEqual(btn.getAttribute("aria-expanded"), "true");
+  assert.strictEqual(p.doc.activeElement, rows[0], "opening puts focus on the first row");
+  const down = keyEv("ArrowDown");
+  wrap.fire("keydown", down);
+  assert.strictEqual(p.doc.activeElement, rows[1], "ArrowDown walks the rows");
+  assert.strictEqual(down.defaultPrevented, true);
+  const esc = keyEv("Escape");
+  wrap.fire("keydown", esc);
+  assert.strictEqual(pop.hidden, true, "Esc closes");
+  assert.strictEqual(btn.getAttribute("aria-expanded"), "false");
+  assert.strictEqual(p.doc.activeElement, btn, "and gives focus back to the trigger");
+  assert.strictEqual(esc.defaultPrevented, true, "so the page itself does not close on that Esc");
+  wrap.fire("keydown", keyEv("Escape"));
+  assert.strictEqual(p.doc.activeElement, btn, "Esc on a closed menu does nothing");
+
+  btn.onclick();
+  btn.onclick();
+  assert.strictEqual(pop.hidden, true, "a second press closes");
+  btn.onclick();
+  p.listeners.click[0]({ target: rows[2] });
+  assert.strictEqual(pop.hidden, false, "a click inside the menu is not a click away");
+  p.listeners.click[0]({ target: new Node("div") });
+  assert.strictEqual(pop.hidden, true, "a click elsewhere closes");
+
+  btn.onclick();
+  rows[0].onclick();
+  assert.strictEqual(pop.hidden, true, "a row closes the menu first");
+  assert.strictEqual(p.doc.activeElement, btn);
+  rows[1].onclick();
+  rows[2].onclick();
+  assert.deepStrictEqual(seen, [["aws", "aws", true], ["github", "github", true], ["token", "token:datadog", true]], "each add gets its group and the reload; the token one is the first token group");
+});
+
+test("the token add starts from { key: \"token:\" } when there is no token group yet", () => {
+  const p = page();
+  const seen = [];
+  vmEval(p, "credActionHandlers").token = { add: (g) => seen.push(g.key) };
+  p.box.renderCredentials(m23View({ tokens: [] }));
+  const { pop } = headWithTrigger(p);
+  menuRows(pop)[2].onclick();
+  assert.deepStrictEqual(seen, ["token:"]);
+});
+
+test("attaching again never doubles the menu or its listeners; a repaint's new trigger drops the old open menu", () => {
+  const p = page();
+  const first = headWithTrigger(p);
+  p.box.credAddMenuAttach(first.btn);
+  assert.strictEqual(first.actions.querySelectorAll("div.menu").length, 1, "the same trigger gets one menu");
+  assert.strictEqual(first.actions.querySelectorAll("div.cred-add").length, 1);
+  first.btn.onclick();
+  assert.strictEqual(first.pop.hidden, false);
+  const second = headWithTrigger(p);
+  assert.strictEqual(second.actions.querySelectorAll("div.menu").length, 1);
+  assert.strictEqual(first.pop.hidden, true, "a menu the last paint left open is closed with its button");
+  assert.strictEqual(p.listeners.click.length, 1, "one click-away listener on the document, however often the head is painted");
+  second.btn.onclick();
+  assert.strictEqual(second.pop.hidden, false, "the new menu works");
+});
+
+test("an Add / Edit view open in the tab hides the trigger; closing it brings it back", () => {
+  const p = page();
+  const { btn, wrap, sep, pop } = headWithTrigger(p);
+  btn.onclick();
+  vmEval(p, "awsFlow = { mode: 'add', opts: null }");
+  p.box.credAddMenuSync();
+  assert.strictEqual(wrap.hidden, true, "no second add on top of the open one");
+  assert.strictEqual(sep.hidden, true, "and no divider left with nothing before it");
+  assert.strictEqual(pop.hidden, true, "an open menu is closed with it");
+  vmEval(p, "awsFlow = null");
+  p.box.credAddMenuSync();
+  assert.strictEqual(wrap.hidden, false);
+  assert.strictEqual(sep.hidden, false);
+});
+
+test("the strip says it once on the page: dot, Encrypted store, muted unlocked · locks in …, Lock now, then the honest note once", () => {
+  const p = page();
+  const wrap = stripOf(p, m23View().store);
+  const strip = wrap.querySelector(".cstrip");
+  assert.deepStrictEqual(strip.children.map((c) => c.tag), ["span", "b", "span", "button"]);
+  const [dot, name, when, lock] = strip.children;
+  assert.deepStrictEqual(classesOf(dot).slice(0, 2), ["dot", "dot-run"], "the kit's green dot");
+  assert.strictEqual(dot.getAttribute("aria-hidden"), "true");
+  assert.strictEqual(name.textContent, "Encrypted store");
+  assert.ok(classesOf(when).includes("muted"));
+  assert.strictEqual(when.textContent, p.box.storeExpiryText(m23View().store, Date.now()), "the words are storeExpiryText's");
+  assert.match(when.textContent, /^unlocked · locks in 10 h 2\d m$/);
+  assert.strictEqual(lock.textContent, "Lock now");
+  assert.strictEqual(lock.className, "btn btn-sm");
+  assert.strictEqual(lock.id, "store-lock");
+  assert.ok(!wrap.textContent.includes("Values you add here are encrypted at rest."), "the sentence the strip used to add is not drawn");
+  assert.ok(!strip.textContent.includes("Unlocked"), "no chip repeating what the muted line says");
+  const honest = vmEval(p, "STORE_HONEST_STATEMENT");
+  assert.match(honest, /^Values are encrypted at rest, against disk snapshots and backups\./);
+  const note = wrap.querySelectorAll("p").filter((n) => n.textContent === honest);
+  assert.strictEqual(note.length, 1, "the honest statement follows once");
+  assert.strictEqual(wrap.textContent.split(honest).length - 1, 1);
+  assert.ok(classesOf(wrap).includes("cstrip-wrap"));
+});
+
+test("the phone's strip keeps its chip, its sentence and its plain Lock now", () => {
+  const p = page({ asPage: false });
+  const wrap = stripOf(p, m23View().store);
+  const strip = wrap.querySelector(".strip");
+  assert.strictEqual(strip.querySelector(".st").textContent, "Unlocked");
+  assert.match(strip.textContent, /Encrypted store: unlocked · locks in 10 h 2\d m\. Values you add here are encrypted at rest\./);
+  assert.strictEqual(strip.querySelector("button").className, "btn");
+});
+
+test("the strip's states that need the user keep their words and stay marked `need` (amber) on the page", () => {
+  const p = page();
+  const locked = stripOf(p, { initialized: true, locked: true, platform: "linux" }).querySelector(".cstrip");
+  assert.ok(classesOf(locked).includes("need"));
+  assert.strictEqual(locked.querySelector(".st").textContent, "Locked");
+  assert.match(locked.textContent, /Encrypted store: locked\. You can add and replace values while it is locked\. Unlock it so new sessions can use them\./);
+  const none = stripOf(p, { initialized: false, locked: false, platform: "linux" }).querySelector(".cstrip");
+  assert.ok(classesOf(none).includes("need"));
+  assert.strictEqual(none.querySelector(".st").textContent, "Not set up");
+  assert.match(none.textContent, /There is no encrypted store yet\./);
+  const bad = stripOf(p, kcStore({ unavailable: unavailable("key_lost") })).querySelector(".cstrip");
+  assert.ok(classesOf(bad).includes("need"));
+  assert.strictEqual(bad.querySelector(".st").textContent, "Keychain");
+});
+
+test("Missing is a neutral chip and Ready is green text, in the tables and in Legacy secrets", () => {
+  const { body } = paintPage(m23View({ tokens: [tok("fine"), tok("gone", { status: "missing" })] }));
+  const rows = sectionOf(body, "token:sentry").querySelectorAll("tbody");
+  const status = (tb) => tb.rows[0].cells[2].querySelector("span");
+  assert.strictEqual(status(rows[0]).textContent, "Ready");
+  assert.deepStrictEqual(classesOf(status(rows[0])), ["st", "ready"], "Ready is the green text (.st.ready), no chip");
+  assert.strictEqual(status(rows[1]).textContent, "Missing");
+  assert.deepStrictEqual(classesOf(status(rows[1])), ["chip"], "Missing is a plain neutral chip: not .st (amber), not red");
+  const legacy = sectionOf(body, "legacy").querySelectorAll("tr");
+  assert.deepStrictEqual(legacy.map((r) => r.cells[1].querySelector("span").textContent), ["Missing", "Ready"]);
+  assert.deepStrictEqual(classesOf(legacy[0].cells[1].querySelector("span")), ["chip"]);
+  assert.deepStrictEqual(classesOf(legacy[1].cells[1].querySelector("span")), ["st", "ready"]);
+});
+
+// The stylesheet half: read off desktop.css like settings-shell.test.js does (a browser draws it, a test cannot).
+const stripCss = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
+const DESK = stripCss(fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8"));
+function parseCss(src) {
+  const rules = [];
+  const stack = [];
+  let buf = "", paren = 0, quote = null;
+  const flush = () => {
+    const d = buf.trim();
+    buf = "";
+    if (!d || !stack.length) return;
+    const i = d.indexOf(":");
+    if (i > 0) stack[stack.length - 1].decls.set(d.slice(0, i).trim().toLowerCase(), d.slice(i + 1).replace(/\s+/g, " ").trim());
+  };
+  for (const ch of src) {
+    if (quote) { buf += ch; if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; buf += ch; continue; }
+    if (ch === "(") paren++;
+    else if (ch === ")") paren--;
+    if (paren === 0 && ch === "{") { stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: new Map() }); buf = ""; }
+    else if (paren === 0 && ch === ";") flush();
+    else if (paren === 0 && ch === "}") { flush(); const done = stack.pop(); if (done && !done.selector.startsWith("@")) rules.push(done); }
+    else buf += ch;
+  }
+  return rules;
+}
+function splitSel(list) {
+  const out = [];
+  let depth = 0, cur = "";
+  for (const ch of list) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+const CSS_RULES = parseCss(DESK);
+const cssDecls = (sel) => {
+  const out = new Map();
+  for (const r of CSS_RULES) if (splitSel(r.selector).includes(sel)) for (const [k, v] of r.decls) out.set(k, v);
+  return out;
+};
+const PG = "#page-host > #settings-modal.as-page";
+const CR = PG + " :is(#creds, #cred-drawer)";
+const rulesNaming = (re) => CSS_RULES.filter((r) => splitSel(r.selector).some((s) => re.test(s)));
+const asText = (r) => [...r.decls].map(([k, v]) => k + ": " + v).join("; ");
+
+test("CSS: Missing and not-set are not amber; locked and the needy strip are; Ready is green; a chip is neutral", () => {
+  const missing = rulesNaming(/\.st\.(missing|notset)(?![\w-])/).filter((r) => !splitSel(r.selector).every((s) => /\.cstrip/.test(s)));
+  assert.ok(missing.length, "a rule says what a missing status looks like on the page");
+  for (const r of missing) assert.doesNotMatch(asText(r), /--amber|--warn/, r.selector);
+  assert.strictEqual(cssDecls(CR + " .st.missing").get("color"), "var(--muted)");
+  assert.strictEqual(cssDecls(CR + " .st.locked").get("color"), "var(--amber)", "a locked store blocks spawns: it needs you");
+  assert.strictEqual(cssDecls(CR + " .cstrip .st.notset").get("color"), "var(--amber)", "'Not set up' (no store at all) needs you too");
+  const need = cssDecls(CR + " .cstrip.need");
+  assert.match(need.get("border"), /var\(--warn\)/);
+  assert.strictEqual(need.get("background"), "var(--warn-bg)");
+  assert.strictEqual(cssDecls(CR + " .cstrip.need .txt b").get("color"), "var(--amber)");
+  assert.strictEqual(cssDecls(CR + " .st.ready").get("color"), "var(--ok)");
+  const chip = cssDecls(".chip");
+  assert.strictEqual(chip.get("background"), "var(--raise)");
+  assert.strictEqual(chip.get("color"), "var(--muted)");
+  for (const r of rulesNaming(/#creds[^ ]* .*\.chip(?![\w-])/)) assert.doesNotMatch(asText(r), /--amber|--warn|--red/, "nothing on the page recolours the neutral chip: " + r.selector);
+});
+
+test("Stored values is a chevron disclosure: a ghost button with aria-expanded, the chevron, the name, a count chip and the muted line", () => {
+  const { p, body } = paintPage();
+  const fold = sectionOf(body, "values");
+  assert.strictEqual(fold.querySelectorAll("details").length, 0, "no native details");
+  assert.strictEqual(fold.querySelectorAll("summary").length, 0);
+  const row = fold.querySelector("div.vfold-h");
+  const toggle = row.querySelector("button");
+  assert.deepStrictEqual(classesOf(toggle).slice(0, 3), ["btn", "btn-ghost", "btn-sm"]);
+  assert.strictEqual(toggle.getAttribute("aria-expanded"), "false", "drawn closed");
+  const chev = toggle.querySelector("svg");
+  assert.ok(chev, "the chevron is an inline svg");
+  assert.strictEqual(chev.getAttribute("aria-hidden"), "true");
+  assert.strictEqual(toggle.textContent, "Stored values", "the name is the button's text");
+  assert.strictEqual(row.querySelector("span.chip").textContent, "2");
+  assert.ok(classesOf(row.querySelector("span.chip")).includes("tnum"));
+  const note = row.querySelectorAll("span").find((s) => classesOf(s).includes("muted"));
+  assert.strictEqual(note.textContent, "Write-only: Replace or Delete");
+  const panel = fold.querySelector("div.vfold-b");
+  assert.strictEqual(panel.hidden, true, "closed hides the body");
+  toggle.onclick();
+  assert.strictEqual(toggle.getAttribute("aria-expanded"), "true");
+  assert.strictEqual(panel.hidden, false);
+  const set = btnIn(panel, "Set a value");
+  assert.strictEqual(set.className, "link link-add", "Set a value is the accent + link inside the block");
+  assert.deepStrictEqual(panel.querySelectorAll("button").map((b) => b.textContent), ["Set a value", "Replace", "Delete", "Replace", "Delete"]);
+  // A repaint (Replace and Delete both reload) keeps it open.
+  p.box.renderCredentials(m23View());
+  const again = sectionOf(p.byId["creds-body"], "values");
+  assert.strictEqual(again.querySelector("button").getAttribute("aria-expanded"), "true");
+  assert.strictEqual(again.querySelector("div.vfold-b").hidden, false);
+  // Closing it again is remembered the same way.
+  again.querySelector("button").onclick();
+  p.box.renderCredentials(m23View());
+  assert.strictEqual(sectionOf(p.byId["creds-body"], "values").querySelector("div.vfold-b").hidden, true);
+});
+
+test("CSS: the Stored values disclosure draws no ▸/▾ and sizes and turns its svg chevron", () => {
+  assert.deepStrictEqual(CSS_RULES.filter((r) => /#creds|#cred-drawer/.test(r.selector) && /[▸▾]/.test(asText(r))).map((r) => r.selector), [], "no triangle glyph on the Credentials page");
+  assert.deepStrictEqual(rulesNaming(/vfold/).filter((r) => r.decls.has("content")).map((r) => r.selector), [], "no pseudo-content on the disclosure");
+  const svg = cssDecls(CR + " .vfold-t svg");
+  assert.strictEqual(svg.get("width"), "12px", "§B4: a 12px chevron");
+  assert.strictEqual(svg.get("height"), "12px");
+  assert.strictEqual(cssDecls(CR + ' .vfold-t[aria-expanded="true"] svg').get("transform"), "rotate(90deg)");
+  assert.strictEqual(cssDecls(CR + " .vfold-b[hidden]").get("display"), "none", "the body's own display would otherwise show through [hidden]");
+});
+
+test("row actions: ghost Edit, danger Delete, each named for its row", () => {
+  const p = page();
+  const { tb } = tokenTable(p);
+  const [edit, del] = tb.rows[0].querySelectorAll("button");
+  assert.deepStrictEqual([edit.textContent, edit.className], ["Edit", "btn btn-ghost btn-sm"]);
+  assert.deepStrictEqual([del.textContent, del.className], ["Delete", "btn btn-danger btn-sm"]);
+  assert.strictEqual(edit.getAttribute("aria-label"), "Edit sentry-prod");
+  assert.strictEqual(del.getAttribute("aria-label"), "Delete sentry-prod");
+  // The cards (the phone) keep today's buttons.
+  const card = p.box.credTokenCard(tok("sentry-prod"));
+  assert.deepStrictEqual(card.querySelectorAll("button").map((b) => [b.textContent, b.className]), [["Edit", "btn"], ["Delete", "btn dgr"]]);
+});
+
+test("CSS: the kit's ghost, danger and small buttons get their values back from the page's `.btn` rules", () => {
+  const legacy = cssDecls(CR + " .btn");
+  assert.strictEqual(legacy.get("padding"), "5px 11px", "the rule being undone is still there (credentials.test.js, settings-shell.test.js pin it)");
+  const sm = cssDecls(CR + " .btn.btn-sm");
+  assert.strictEqual(sm.get("padding"), "0 8px");
+  assert.strictEqual(sm.get("border-radius"), "var(--r-chip)");
+  assert.strictEqual(sm.get("font-size"), "var(--t-sm)");
+  const ghost = cssDecls(CR + " .btn.btn-ghost:where(:not(.pri))");
+  assert.strictEqual(ghost.get("background"), "transparent");
+  assert.strictEqual(ghost.get("color"), "var(--muted)");
+  assert.strictEqual(ghost.get("border-color"), "transparent");
+  // The hovers skip a disabled button (a Delete that is still referenced must not light up).
+  const ghostHover = cssDecls(CR + " .btn.btn-ghost:where(:not(.pri)):where(:not(:disabled)):hover");
+  assert.strictEqual(ghostHover.get("background"), "var(--hover)");
+  assert.strictEqual(ghostHover.get("color"), "var(--fg)");
+  const danger = cssDecls(CR + " .btn.btn-danger:where(:not(.pri))");
+  assert.strictEqual(danger.get("background"), "transparent");
+  assert.strictEqual(danger.get("color"), "var(--red)");
+  assert.strictEqual(danger.get("border-color"), "rgba(240,106,106,.45)", "§B4: the Delete ring");
+  const dangerHover = cssDecls(CR + " .btn.btn-danger:where(:not(.pri)):where(:not(:disabled)):hover");
+  assert.strictEqual(dangerHover.get("background"), "var(--red-tint)");
+  assert.strictEqual(dangerHover.get("border-color"), "var(--red)");
+  const at = (sel) => DESK.indexOf(sel + " {");
+  assert.ok(at(CR + " .btn.btn-danger:where(:not(.pri))") > at(CR + " .btn.dgr:hover"), "after the page's own button rules, or they would win");
+  assert.ok(at(CR + " .btn.btn-ghost:where(:not(.pri))") > at(CR + " .btn:where(:not(.pri))"));
+});
+
+test("legacy ENV names are mono, in a two-column table with no header row", () => {
+  const { body } = paintPage();
+  const sec = sectionOf(body, "legacy");
+  const table = sec.querySelector("table");
+  assert.ok(table, "a table in table mode");
+  assert.strictEqual(table.querySelectorAll("th").length, 0, "no header row (§A6)");
+  assert.strictEqual(table.querySelector("colgroup").children.length, 2);
+  const names = table.querySelectorAll("tr").map((r) => r.cells[0]);
+  assert.deepStrictEqual(names.map((c) => c.textContent), ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+  for (const c of names) assert.ok(classesOf(c.querySelector("span")).includes("mono"), c.textContent + " is mono");
+  const note = sec.querySelector("p.ctab-note-top");
+  assert.strictEqual(note.textContent, "Defined in config.json. Edit the file to change them, or move the value into the store.");
+  assert.ok(sec.children.indexOf(note) < sec.children.indexOf(table), "the note sits above the table");
+  // The phone's rows are as they were: the name is a <b>.
+  const phone = paintPage(m23View(), { asPage: false }).body;
+  assert.deepStrictEqual(phone.querySelectorAll("div.leg").map((r) => r.querySelector("b").textContent), ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+});
+
+test("names are mono, 'nothing' is muted, PROD and the seed mark are chips (§A6 rows)", () => {
+  const { body } = paintPage(m23View({
+    aws: [aws("culipulse-prod", { prod: true, mode: "sso_direct" }), aws("from-file", { source: "config" })],
+    github_apps: [ghApp("test-app")],
+  }));
+  const awsRows = sectionOf(body, "aws").querySelectorAll("tbody");
+  const first = awsRows[0].rows[0].cells[0];
+  assert.ok(classesOf(first.querySelector("div.c-main")).includes("mono"), "the connection name is mono");
+  assert.deepStrictEqual(first.querySelectorAll("span").map((s) => [s.textContent, s.className]).filter((x) => x[1].includes("chip")), [["PROD", "chip chip-prod"]]);
+  assert.strictEqual(first.querySelector("div.c-sub").textContent, "no elevation", "the sub-line is plain muted, not mono");
+  assert.ok(awsRows[1].rows[0].cells[0].querySelectorAll("span").some((s) => s.className === "chip" && s.textContent === "from config.json"), "the seed mark is a neutral chip");
+  const gh = sectionOf(body, "github").querySelector("tbody").rows[0];
+  assert.ok(classesOf(gh.cells[0].querySelector("div.c-main")).includes("mono"));
+  assert.ok(classesOf(gh.cells[3]).includes("muted"), "'nothing' is muted");
+  assert.ok(!classesOf(awsRows[0].rows[0].cells[4]).includes("muted") || awsRows[0].rows[0].cells[4].textContent === "nothing");
+});
+
+test("table head and body share one colgroup (G16), and the head cells are the kit's .tbl ones", () => {
+  const p = page();
+  for (const [key, cols] of [["aws", 6], ["github", 5], ["token:sentry", 5]]) {
+    const table = p.box.credTable({ key, title: key, entries: [] });
+    assert.ok(classesOf(table).includes("tbl"), key + ": the kit's .tbl");
+    assert.strictEqual(table.children[0].tag, "colgroup", key + ": the colgroup comes first");
+    assert.strictEqual(table.children[0].children.length, cols);
+    assert.strictEqual(table.querySelectorAll("th").length, cols, key + ": one column for each head cell");
+  }
+});
+
+test("CSS: one set of column shares on the colgroup, the frame's head cells (12/500 muted, sentence case) and 7px rows", () => {
+  const shares = [1, 2, 3, 5].map((n) => cssDecls(CR + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").get("width"));
+  for (const w of shares) assert.match(w, /^\d+(\.\d+)?%$/);
+  assert.ok(shares.reduce((a, w) => a + parseFloat(w), 0) < 100, "Used by keeps a share");
+  assert.deepStrictEqual(rulesNaming(/\.ctab(?:-sec[^ ]*)?(?: \.ctab)? th:nth-child/).map((r) => r.selector), [], "no second set of shares on the head cells");
+  const th = cssDecls(CR + " .ctab th");
+  for (const k of ["text-transform", "letter-spacing", "font-size", "font-weight", "color"]) assert.strictEqual(th.get(k), undefined, "the kit's .tbl th stands: " + k);
+  assert.strictEqual(cssDecls(".tbl th").get("font-size"), "var(--t-sm)");
+  assert.strictEqual(cssDecls(".tbl th").get("font-weight"), "var(--w-medium)");
+  assert.strictEqual(cssDecls(".tbl th").get("color"), "var(--muted)");
+  const td = cssDecls(CR + " .ctab td");
+  assert.strictEqual(td.get("padding-top"), "7px", "§B4: 7px rows");
+  assert.strictEqual(td.get("padding-bottom"), "7px");
+  assert.strictEqual(cssDecls(CR + " .ctab td:first-child").get("padding-left"), "16px");
+  assert.strictEqual(cssDecls(CR + " .ctab td:last-child").get("padding-right"), "12px");
+  const legacy = [1, 2].map((n) => cssDecls(CR + ' .ctab-sec[data-group="legacy"] .ctab col:nth-child(' + n + ")").get("width"));
+  assert.deepStrictEqual(legacy, ["45%", "55%"], "§B4: the legacy table's colgroup");
+});
+
+test("CSS: the strip, the section head and the section are the frame's (§B4)", () => {
+  const strip = cssDecls(CR + " .cstrip");
+  assert.strictEqual(strip.get("padding"), "8px 8px 8px 14px");
+  assert.strictEqual(strip.get("gap"), "8px");
+  assert.strictEqual(strip.get("border"), "0");
+  assert.strictEqual(strip.get("background"), "var(--panel)", "the app.css .strip is amber: the page sets its own surface");
+  assert.strictEqual(cssDecls(CR + " .cstrip > #store-lock").get("margin-left"), "auto", "Lock now sits at the right (the frame's spacer)");
+  const head = cssDecls(CR + " .ctab-sec > .sec-h");
+  assert.strictEqual(head.get("padding"), "12px 16px");
+  assert.strictEqual(head.get("gap"), "12px");
+  assert.strictEqual(head.get("border-bottom"), "1px solid var(--line)");
+  assert.strictEqual(head.get("text-transform"), "none");
+  assert.strictEqual(cssDecls(PG + " #creds-body").get("gap"), "10px", "§B4 `.m2-body-tight`");
+  const under = cssDecls(CR + " .cstrip-wrap > .hint");
+  assert.strictEqual(under.get("margin-top"), "-4px");
+  assert.strictEqual(under.get("padding"), "0 2px");
+});
+
+test("CSS: the header menu is positioned under its trigger, above the page, and the trigger shows pressed while it is open", () => {
+  const wrap = cssDecls(CR + " .cred-add");
+  assert.strictEqual(wrap.get("position"), "relative");
+  const pop = cssDecls(CR + " .cred-add > .menu");
+  assert.strictEqual(pop.get("position"), "absolute");
+  assert.strictEqual(pop.get("right"), "0");
+  assert.strictEqual(pop.get("top"), "calc(100% + var(--sp-1))");
+  assert.ok(Number(pop.get("z-index")) >= 30);
+  assert.strictEqual(cssDecls(CR + ' .cred-add > .btn:where(:not(.pri))[aria-expanded="true"]').get("background"), "var(--raise)");
 });
