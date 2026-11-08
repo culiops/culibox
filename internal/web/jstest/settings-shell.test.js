@@ -1172,17 +1172,23 @@ test("the effort control is the kit's .seg look at 28px: 2px in a --bg bar with 
   assert.ok(!bhas(PV + " .pfv-perm .pfv-seg") && !bhas(PV + " .pfv-perm .pfv-seg button"));
 });
 
-test("New profile's and Duplicate's title is cut short with an ellipsis on one line, like every head's (not wrapped anywhere)", () => {
-  const sel = PV + " .pfv-title .pfv-title-name";
+test("New profile's and Duplicate's head is the kit page head: its title is the shared one-line ellipsis rule and it has no title / subline rules of its own (G3-D1)", () => {
+  // The h1.page-title / p.page-desc it draws take the kit's 18/24 600 and 13/20 muted (margin 0) and the shared head rules; the old h2 at --t-lg and its
+  // 12/18 subline with a 3px margin are gone, so Profiles -> New profile does not change the title's size.
+  const sel = PV + " .pfv-title .page-title";
   const rule = BASE_RULES.find((r) => parts(r.selector).includes(sel));
-  assert.ok(rule, "a title rule for the h2 the two pages draw");
+  assert.ok(rule, "the one title rule every head takes");
   const d = rule.decls;
   assert.deepStrictEqual([d.get("min-width"), d.get("overflow"), d.get("text-overflow"), d.get("white-space")], ["0", "hidden", "ellipsis", "nowrap"]);
-  assert.ok(parts(rule.selector).includes(PV + " .pfv-title .page-title"), "the one rule every head's title takes: it cannot drift");
+  assert.ok(parts(rule.selector).includes(P + " > .dbd > .set-head .page-title"), "shared with the five other heads: it cannot drift");
   assert.ok(!rule.decls.has("overflow-wrap"), "no overflow-wrap: anywhere on a one-line title");
-  const own = bdecls(PV + " .pfv-title-name");
-  assert.strictEqual(own.get("overflow-wrap"), undefined);
-  assert.deepStrictEqual([own.get("font-size"), own.get("font-weight")], ["var(--t-lg)", "600"]);
+  assert.ok(!bhas(PV + " .pfv-title-name") && !bhas(PV + " .pfv-hsub"), "no h2 / subline rule of its own");
+  assert.ok(!BASE_RULES.some((r) => /pfv-title-name|pfv-hsub/.test(r.selector)), "and none inside a list either");
+  const title = decls(".page-title");
+  assert.deepStrictEqual([title.get("font-size"), title.get("line-height"), title.get("font-weight")], ["var(--t-xl)", "var(--lh-xl)", "var(--w-semibold)"], "the kit's 18/24 600 the head's h1 inherits");
+  assert.deepStrictEqual([decls(".page-desc").get("font-size"), decls(".page-desc").get("line-height"), decls(".page-desc").get("color")], ["var(--t-md)", "var(--lh-md)", "var(--muted)"], "13/20 muted");
+  const head = BASE_RULES.find((r) => parts(r.selector).includes(PV + " .pfv-head"));
+  assert.ok(head && parts(head.selector).includes(P + " > .dbd > .set-head"), "the head's box is the shared .set-head / .pfv-head rule");
 });
 
 // ---- Credential forms (UI plan 4, Task 6; digest-design §C6 `.field-label` / `.input`, G19) ---------------------------

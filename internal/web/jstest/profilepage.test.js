@@ -65,9 +65,9 @@ const hasCls = (cls) => (n) => n.className.split(/\s+/).includes(cls);
 const byCls = (root, cls) => root.all(hasCls(cls));
 const texts = (root, cls) => byCls(root, cls).map((n) => n.textContent);
 const byText = (root, tag, text) => root.all((n) => n.tag === tag && n.textContent.trim() === text);
-// The page head's title and its one line: the profile page's own (h1.page-title, p.page-desc) or the New profile and Duplicate page's (h2.pfv-title-name, p.pfv-hsub).
-const titles = (root) => [...texts(root, "page-title"), ...texts(root, "pfv-title-name")];
-const subs = (root) => [...texts(root, "page-desc"), ...texts(root, "pfv-hsub")];
+// The page head's title and its one line: every profile-page head (the overview, New profile, Duplicate) is the kit's h1.page-title and p.page-desc.
+const titles = (root) => texts(root, "page-title");
+const subs = (root) => texts(root, "page-desc");
 const classesOf = (n) => n.className.split(/\s+/).filter(Boolean);
 // A block's label as words: Advanced's label also holds its count under the name (span.pfv-advst), which is not part of the name.
 const labelName = (l) => l.own;
@@ -238,6 +238,23 @@ test("a nav row is name, lock, tier chip: the chip holds the tier word only, and
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].textContent), ["host", "box", "box", "host"]);
   assert.deepStrictEqual(items.map((n) => byCls(n, "pfv-ni-tier")[0].children.length), [0, 0, 0, 0], "nothing but the word inside a chip");
   assert.deepStrictEqual(items.map((n) => hasCls("pfv-ni-host")(byCls(n, "pfv-ni-tier")[0])), [true, false, false, true]);
+});
+
+// N2 (diff M2.1#9): the lock is the frame's glyph, 10x12 (it was 10x11). Only the desktop page draws it: pfvRenderNav and pfvDrawNote run behind
+// pfvOnPage(), and the phone's own list and its note have no lock, so the phone cannot change with it.
+test("the read-only lock is the frame's 10x12 glyph: viewBox 0 0 10 12, rect y 5.5 h 5.5 rx 1, stroke 1, the shackle M3 5.5V3.75a2 2 0 0 1 4 0V5.5", () => {
+  const t = page();
+  t.box.pfvRenderNav();
+  const lock = byCls(t.els["pf-navlist"], "pfv-lock")[0];
+  assert.strictEqual(lock.tag, "svg");
+  assert.deepStrictEqual(["width", "height", "viewBox", "aria-hidden"].map((k) => lock.getAttribute(k)), ["10", "12", "0 0 10 12", "true"]);
+  const [rect, shackle] = lock.children;
+  assert.deepStrictEqual([rect.tag, rect.getAttribute("x"), rect.getAttribute("y"), rect.getAttribute("width"), rect.getAttribute("height"), rect.getAttribute("rx")], ["rect", "1.5", "5.5", "7", "5.5", "1"]);
+  assert.deepStrictEqual([shackle.tag, shackle.getAttribute("d")], ["path", "M3 5.5V3.75a2 2 0 0 1 4 0V5.5"]);
+  for (const n of [rect, shackle]) assert.deepStrictEqual(["fill", "stroke", "stroke-width"].map((k) => n.getAttribute(k)), ["none", "currentColor", "1"]);
+  assert.strictEqual(lock.children.length, 2);
+  assert.ok(!/pfv-lock/.test(fs.readFileSync(path.join(STATIC, "app.css"), "utf8")), "the phone's stylesheet never styles it");
+  for (const f of ["app.js", "mobileterm.js", "shell.js"]) assert.ok(!/pfvLockIcon/.test(fs.readFileSync(path.join(STATIC, f), "utf8")), f + " (phone code) does not draw it");
 });
 
 test("pfvRenderNav marks the shown profile", async () => {
@@ -4925,6 +4942,30 @@ test("the New profile and Duplicate heads have no action, so they end with Esc â
   assert.strictEqual(byCls(rootOf(o), "set-sep").length, 1);
   assert.deepStrictEqual([...o.box.pfvHeadTail(true)].map((n) => classesOf(n)[0]), ["set-sep", "btn"]);
   assert.deepStrictEqual([...o.box.pfvHeadTail(false)].map((n) => classesOf(n)[0]), ["btn"]);
+});
+
+test("New profile's and Duplicate's head is the kit page head, as every other head: h1.page-title over p.page-desc, no h2 and no head classes of its own (G3-D1 / P7)", async () => {
+  const kinds = (root) => {
+    const head = byCls(root, "pfv-head")[0];
+    const h = head.all((n) => n.tag === "h1" || n.tag === "h2" || n.tag === "h3");
+    return {
+      heads: h.map((n) => n.tag + "." + classesOf(n).join(".")),
+      desc: byCls(head, "page-desc").map((n) => n.tag),
+      main: classesOf(byCls(head, "pfv-head-main")[0]),
+      own: ["pfv-title-name", "pfv-hsub"].filter((c) => byCls(root, c).length),
+    };
+  };
+  const t = await newPage();
+  assert.deepStrictEqual(kinds(rootOf(t)), { heads: ["h1.page-title"], desc: ["p"], main: ["page-head-text", "pfv-head-main"], own: [] }, "New profile");
+  const d = page();
+  await d.box.pfvShow("aws-ops");
+  await dupFromMenu(d);
+  assert.strictEqual(d.run("pfvState").page, "dup");
+  assert.deepStrictEqual(kinds(rootOf(d)), { heads: ["h1.page-title"], desc: ["p"], main: ["page-head-text", "pfv-head-main"], own: [] }, "Duplicate");
+  // Esc âœ• stays alone at the end (no divider, no head action).
+  for (const x of [t, d]) {
+    assert.deepStrictEqual([byCls(rootOf(x), "set-esc").length, byCls(rootOf(x), "set-sep").length], [1, 0]);
+  }
 });
 
 test("New profile asks for three things and the page says nothing else", async () => {

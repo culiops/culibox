@@ -1882,8 +1882,7 @@
   /* A long title is cut short (§B1.4); a long description wraps instead of overflowing, wherever it breaks: About's version line, and the
      profile's model id (a user-set string: an inference-profile ARN is ~100 characters in one mono word). */
   #page-host > #settings-modal.as-page > .dbd > .set-head .page-title,
-  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title,
-  #page-host > #settings-modal.as-page #pfv .pfv-title .pfv-title-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #pfv .pfv-title .page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #page-host > #settings-modal.as-page > .dbd > .set-head .page-desc,
   #page-host > #settings-modal.as-page #pfv .pfv-head .page-desc { overflow-wrap: anywhere; }
   /* The divider before Esc ✕ (§B1.4 `.m2-vsep`): 1x16, --line, 4px either side of the actions' own 8px gap. */
@@ -2663,12 +2662,9 @@
   /* The head (§B1.4): the name and its containment chip (the kit's .chip .chip-box, §C5) over the agent line (13/20 --muted, the model in mono
      12/18), then Start session, the ⋯ or Duplicate…, a divider and Esc ✕. Its box, columns, title, description, actions and divider are the
      shared head rules (the .set-head ones, above); only the title row is the profile page's. New profile and Duplicate (pfv-new.js) draw the
-     same element with the title and the line alone, then the divider and Esc ✕. */
+     same element (the kit's h1.page-title and p.page-desc, 18/24 and 13/20, as every head) with the title and the line alone, then Esc ✕ with no divider. */
   /* The title row (§B1.4 `.m2-titlerow`): the name, then the chip, 8px apart. */
   #page-host > #settings-modal.as-page #pfv .pfv-title { display: flex; align-items: center; gap: 8px; }
-  /* New profile's and Duplicate's title (an h2 at --t-lg: they have no frame); it is cut short on one line like every head's (the rule above). */
-  #page-host > #settings-modal.as-page #pfv .pfv-title-name { font-size: var(--t-lg); font-weight: 600; }
-  #page-host > #settings-modal.as-page #pfv .pfv-hsub { margin-top: 3px; font-size: var(--t-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page #pfv .pfv-dots { display: block; flex: none; }
   #page-host > #settings-modal.as-page #pfv .pfv-more { position: relative; }
   /* The ⋯ menu (frame M5.4) is the kit menu (kitMenuButton rows): the kit's `.menu:has(> .menu-item)` draws the surface and the 30px

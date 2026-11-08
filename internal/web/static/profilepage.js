@@ -113,11 +113,13 @@ function pfvIcon(cls, w, h, box, shapes) {
   }
   return s;
 }
-const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1.2" };
+// The frame's lock (M2.1 `.m2-pitem` svg, 10x12, stroke 1). Desktop only: pfvRenderNav and pfvDrawNote draw it behind pfvOnPage(), so the phone
+// never gets one.
+const PFV_STROKE = { fill: "none", stroke: "currentColor", "stroke-width": "1" };
 function pfvLockIcon() {
-  return pfvIcon("pfv-lock", 10, 11, "0 0 10 11", [
-    ["rect", Object.assign({ x: "1.5", y: "4.6", width: "7", height: "5.4", rx: "1.2" }, PFV_STROKE)],
-    ["path", Object.assign({ d: "M3.2 4.6V3.3a1.8 1.8 0 0 1 3.6 0v1.3" }, PFV_STROKE)],
+  return pfvIcon("pfv-lock", 10, 12, "0 0 10 12", [
+    ["rect", Object.assign({ x: "1.5", y: "5.5", width: "7", height: "5.5", rx: "1" }, PFV_STROKE)],
+    ["path", Object.assign({ d: "M3 5.5V3.75a2 2 0 0 1 4 0V5.5" }, PFV_STROKE)],
   ]);
 }
 function pfvDotsIcon() {
