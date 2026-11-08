@@ -113,7 +113,8 @@ test("emptyHint splits the palette.open rendering into key caps", () => {
 test("showShortcuts builds its body from the registry and never touches innerHTML", () => {
   const body = stripComments(bodyOf(read("app.js"), "showShortcuts"));
   assert.match(body, /helpRows\(/);
-  assert.match(body, /helpText\(/);
+  assert.match(body, /helpTextStacked\(/);
+  assert.match(body, /helpGrid\(/);
   assert.match(body, /tierRuntimeLabel\(boxRuntime\)/);
   assert.ok(!/innerHTML/.test(body), "help body must go in through textContent");
 });

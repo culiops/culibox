@@ -1294,32 +1294,26 @@ class Cell {
 
 // dockIcon: the shell bar's placement glyphs as inline SVG (sl-1.png), built
 // node by node. Below and Right draw the pane with the dock's half filled; Own
-// pane two overlapping windows; Hide a cross.
+// pane two overlapping windows; Hide a cross. No round caps or joins (svgIcon's
+// round:false); menuIconSvg adds them where it reuses one of these in a menu.
 function dockIcon(kind) {
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 14 14");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.2");
-  const add = (tag, attrs) => {
-    const n = document.createElementNS(NS, tag);
-    for (const k in attrs) n.setAttribute(k, attrs[k]);
-    svg.append(n);
-  };
+  let shapes;
   if (kind === "below" || kind === "right") {
-    add("rect", { x: "1.5", y: "1.5", width: "11", height: "11", rx: "1.5" });
-    add("rect", kind === "below"
-      ? { x: "1.5", y: "8", width: "11", height: "4.5", fill: "currentColor", stroke: "none" }
-      : { x: "7", y: "1.5", width: "5.5", height: "11", fill: "currentColor", stroke: "none" });
+    shapes = [
+      ["rect", { x: "1.5", y: "1.5", width: "11", height: "11", rx: "1.5" }],
+      ["rect", kind === "below"
+        ? { x: "1.5", y: "8", width: "11", height: "4.5", fill: "currentColor", stroke: "none" }
+        : { x: "7", y: "1.5", width: "5.5", height: "11", fill: "currentColor", stroke: "none" }],
+    ];
   } else if (kind === "own") {
-    add("rect", { x: "1.5", y: "4.5", width: "8", height: "8", rx: "1.2" });
-    add("path", { d: "M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5" });
+    shapes = [
+      ["rect", { x: "1.5", y: "4.5", width: "8", height: "8", rx: "1.2" }],
+      ["path", { d: "M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5" }],
+    ];
   } else {
-    add("path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" });
+    shapes = [["path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" }]];
   }
-  return svg;
+  return svgIcon(shapes, { round: false });
 }
 
 // fitPaneMeta: mark the units of a pane header's meta that the wrap pushed off its line
@@ -1336,32 +1330,23 @@ function fitPaneMeta(meta) {
 // a folder, Activity a pulse line, Access a shield with a tick. The tab's title and
 // aria-label carry the meaning; the glyph is decoration.
 function tabIcon(kind) {
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 14 14");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  const add = (tag, attrs) => {
-    const n = document.createElementNS(NS, tag);
-    for (const k in attrs) n.setAttribute(k, attrs[k]);
-    svg.append(n);
-  };
+  let shapes;
   if (kind === "terminal") {
-    add("rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" });
-    add("path", { d: "M4 5.8l2 1.7-2 1.7M7.6 9.3H10" });
+    shapes = [
+      ["rect", { x: "1.5", y: "2.5", width: "11", height: "9", rx: "1.5" }],
+      ["path", { d: "M4 5.8l2 1.7-2 1.7M7.6 9.3H10" }],
+    ];
   } else if (kind === "files") {
-    add("path", { d: "M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z" });
+    shapes = [["path", { d: "M1.5 3.5c0-.55.45-1 1-1h2.8l1.4 1.5h4.8c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-9c-.55 0-1-.45-1-1z" }]];
   } else if (kind === "activity") {
-    add("path", { d: "M1 7.5h2.6l1.5-4.2 3 8.4 1.7-4.2H13" });
+    shapes = [["path", { d: "M1 7.5h2.6l1.5-4.2 3 8.4 1.7-4.2H13" }]];
   } else {
-    add("path", { d: "M7 1.5l4.5 1.7v3.7c0 2.6-1.9 4.4-4.5 5.6-2.6-1.2-4.5-3-4.5-5.6V3.2z" });
-    add("path", { d: "M5 7l1.5 1.5L9.2 5.7" });
+    shapes = [
+      ["path", { d: "M7 1.5l4.5 1.7v3.7c0 2.6-1.9 4.4-4.5 5.6-2.6-1.2-4.5-3-4.5-5.6V3.2z" }],
+      ["path", { d: "M5 7l1.5 1.5L9.2 5.7" }],
+    ];
   }
-  return svg;
+  return svgIcon(shapes);
 }
 
 // takeTerminalTab(id) takes an open session's TerminalTab out of wherever it

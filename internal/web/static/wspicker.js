@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, reanchor })
+//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -42,6 +42,13 @@
 // reanchor: also keep an open list under its field when something behind it scrolls. The list is
 // position: fixed, so a page that scrolls under it (the profile page) needs this; New session never
 // listened for scrolls and does not pass it.
+// inline(): true when the list sits inside its field's own container, placed by the stylesheet (New session on the desktop:
+// frame M4.3, a kit menu under the input, in the form's scroll box). It draws kit rows (.menu-item) and sets no top, left,
+// width or max-height; false or unset keeps the fixed placement from the input's rect and the legacy .ft-opt rows (the
+// phone, the profile page); an inline list also starts a search with its first row active (the row Enter picks, drawn as
+// the frame draws it). lastUsed(): the folder the last session started in; only an inline list pins it (first row,
+// trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
+// instead of spawnWsIdleNote's (New session names where the field's value came from).
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
@@ -66,10 +73,15 @@ function createWsPicker(opts) {
     bound.push([target, type, fn, capture]);
   };
 
+  const inline = () => typeof o.inline === "function" && o.inline() === true;
+  // The row's layout, as drawn: a resize across the phone breakpoint must not leave one kind of row in the other's list.
+  let drawnInline = false;
   const workspaces = () => (typeof workspacesCache !== "undefined" && Array.isArray(workspacesCache) ? workspacesCache : []);
-  const idleRows = () => pickerRows({ mode: "empty", workspaces: workspaces() });
+  // Asked each time rows are drawn: a session started since the last open is seen.
+  const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(rows, o.lastUsed()) : rows);
+  const idleRows = () => pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
   const note = (text, idle) => onNote(text || "", idle === true);
-  const idleNote = (count) => note(spawnWsIdleNote(count), true);
+  const idleNote = (count) => note(typeof o.idleText === "function" ? o.idleText(count) : spawnWsIdleNote(count), true);
 
   function value() { return cwd; }
   // set is the ONE place that writes the canonical value and the field's displayed text together (a
@@ -82,7 +94,11 @@ function createWsPicker(opts) {
 
   function setOpen(show) {
     input.setAttribute("aria-expanded", show ? "true" : "false");
-    if (show) {
+    if (show && inline()) {
+      // Placed by the stylesheet under the field (absolute in its row, 8 rows tall at most): nothing inline, and
+      // nothing left from a fixed-position open before a resize.
+      for (const k of ["top", "left", "width", "bottom", "maxHeight"]) list.style[k] = "";
+    } else if (show) {
       // The list is position: fixed, computed from the input's rect, not from an ancestor. A dialog body
       // or the page clips overflow, and fixed positioning is how the dropdown escapes that (see
       // #ft-root-list's identical comment).
@@ -108,19 +124,31 @@ function createWsPicker(opts) {
   function render(next, noteText) {
     shown = next;
     active = -1;
+    drawnInline = inline();
     input.removeAttribute("aria-activedescendant");
     list.replaceChildren(...next.map((r, i) => {
       const el = document.createElement("div");
-      el.className = "ft-opt";
+      el.className = drawnInline ? "menu-item" : "ft-opt";
       el.setAttribute("role", "option");
       el.setAttribute("aria-selected", "false");
       el.id = uid + "-opt-" + i;
       const lab = document.createElement("span");
       lab.textContent = r.label;
       const hint = document.createElement("span");
-      hint.className = "hint";
+      // Not .hint inside a kit row: app.css's global .hint adds a 7px top margin and 11px type. The frame's parent folder is
+      // machine text, `mono t-xs muted` (M4.3).
+      hint.className = drawnInline ? "wsp-hint mono t-xs muted ellipsis" : "hint";
       hint.textContent = r.hint;
-      el.append(lab, hint);
+      if (drawnInline) lab.className = "menu-text mono t-sm ellipsis";
+      // A kit row spaces its cells by gap: an empty hint (a project root has no parent to show) would add a dead 10px.
+      el.append(lab);
+      if (!drawnInline || r.hint) el.append(hint);
+      if (drawnInline && r.lastUsed === true) {
+        const tag = document.createElement("span");
+        tag.className = "wsp-last t-sm muted";
+        tag.textContent = "Last used";
+        el.append(tag);
+      }
       el.title = r.path;
       el.onclick = () => choose(i);
       return el;
@@ -197,23 +225,33 @@ function createWsPicker(opts) {
     if (mine !== seq) return; // a newer query already won
     abort = null;
     const broke = failed || !data;
-    const found = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
+    const found = broke ? [] : pinned(pickerRows({ mode: "fuzzy", hits: data.results || [] }));
     const text = dirPickerNote(found.length, !!(data && data.truncated), broke);
     render(found, text);
+    // Inline (New session on the desktop, frame M4.3): the first hit is drawn highlighted, as the row Enter takes anyway (enter()
+    // picks row 0 of a fuzzy list when none is active). The idle list, the phone's and the profile page's start with none.
+    if (drawnInline && found.length) setActive(0, false);
     note(text, false);
+  }
+
+  // setActive: the one place a row becomes the active one (the arrows, and an inline search's first row): aria-selected on the
+  // row, aria-activedescendant on the field. `reveal` scrolls it into view: the arrows ask, the first row does not (the list was
+  // just drawn from the top, and typing must not scroll the form behind it).
+  function setActive(i, reveal) {
+    const prev = list.children[active];
+    if (prev) prev.setAttribute("aria-selected", "false");
+    active = i;
+    const el = list.children[active];
+    if (el) {
+      el.setAttribute("aria-selected", "true");
+      if (reveal) el.scrollIntoView({ block: "nearest" });
+      input.setAttribute("aria-activedescendant", el.id);
+    }
   }
 
   function move(delta) {
     if (!shown.length) return;
-    const prev = list.children[active];
-    if (prev) prev.setAttribute("aria-selected", "false");
-    active = pickerNextIndex(active, delta, shown.length);
-    const el = list.children[active];
-    if (el) {
-      el.setAttribute("aria-selected", "true");
-      el.scrollIntoView({ block: "nearest" });
-      input.setAttribute("aria-activedescendant", el.id);
-    }
+    setActive(pickerNextIndex(active, delta, shown.length), true);
   }
 
   function choose(i) {
@@ -366,7 +404,12 @@ function createWsPicker(opts) {
   });
   // An open list stays under its field when the window resizes, and, when asked (reanchor), when something
   // behind it scrolls. The list's own scrolling moves nothing.
-  on(window, "resize", () => { if (!list.hidden) setOpen(true); });
+  on(window, "resize", () => {
+    if (list.hidden) return;
+    // Rows drawn for the other layout: close (reopening draws them for this one) rather than leave legacy rows in a kit menu.
+    if (inline() !== drawnInline) close();
+    else setOpen(true);
+  });
   if (o.reanchor === true) on(document, "scroll", (e) => { if (!list.hidden && !list.contains(e.target)) setOpen(true); }, true);
 
   return { value, set, open, close, destroy, isOpen: () => !list.hidden, highlighted: () => active >= 0, settle, refresh, showIdleNote };

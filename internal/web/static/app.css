@@ -1262,6 +1262,8 @@
     #ask-modal.info #ask-cancel { display: none; }
     #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    /* The footer's "Esc to cancel" is a desktop line (desktop.css shows it); the phone has no Esc. */
+    #ask-hint { display: none; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
     .ask-actions button:hover { border-color: var(--accent); }
     /* The three-button dialog (End session): one-line labels; the row wraps instead. Matches only while #ask-alt is shown. */

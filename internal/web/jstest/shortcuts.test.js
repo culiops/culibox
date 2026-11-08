@@ -541,3 +541,257 @@ test("session.nextNeeds: the chord dispatches on a terminal and on the page, not
     assert.strictEqual(SC.shortcutFor(ev("KeyJ", "j", { ctrl: !mac, meta: mac }), mac, NONE), null);
   }
 });
+
+// ---- F29 (#173 Task 5, frame M5.3): the Keyboard shortcuts dialog as two columns of key chips ----------------------------------
+
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const STATIC = path.join(__dirname, "..", "static");
+const readStatic = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
+function fnSrc(src, name) {
+  const m = new RegExp("(async )?function " + name + "\\s*\\(").exec(src);
+  assert.ok(m, name + " not found");
+  const open = src.indexOf("{", src.indexOf(")", m.index));
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(m.index, i + 1);
+  }
+  throw new Error("unbalanced braces in " + name);
+}
+const kbd = (...keys) => keys.map((k) => ({ kbd: k }));
+const gridRows = (grid) => grid.flatMap((col) => col.flatMap((g) => g.rows));
+const gridRow = (grid, label) => gridRows(grid).find((r) => r.label === label);
+
+test("chordKeys: the tokens renderChord joins, per platform", () => {
+  assert.deepStrictEqual(SC.chordKeys({ mod: true, shift: true, code: "KeyK" }, false), ["Ctrl", "Shift", "K"]);
+  assert.deepStrictEqual(SC.chordKeys({ mod: true, shift: true, code: "KeyK" }, true), ["⇧", "⌘", "K"]);
+  assert.deepStrictEqual(SC.chordKeys({ ctrl: true, shift: true, code: "Backquote" }, true), ["⌃", "⇧", "`"]);
+  assert.deepStrictEqual(SC.chordKeys({ mod: true, keys: ["Enter"] }, false), ["Ctrl", "↵"]);
+  assert.deepStrictEqual(SC.chordKeys({ mod: true, keys: ["Enter"] }, true), ["⌘", "↵"]);
+  assert.deepStrictEqual(SC.chordKeys({ mod: true, codes: "Digit1-9" }, false), ["Ctrl", "1…9"]);
+  assert.deepStrictEqual(SC.chordKeys({ shiftAny: true, keys: ["?"] }, false), ["?"]);
+  assert.deepStrictEqual(SC.chordKeys({ ctrl: true, alt: true, shift: true, code: "KeyX" }, false), ["Ctrl", "Alt", "Shift", "X"]);
+  assert.deepStrictEqual(SC.chordKeys({ ctrl: true, alt: true, shift: true, mod: true, code: "KeyX" }, true), ["⌃", "⌥", "⇧", "⌘", "X"]);
+});
+
+test("renderChord is the chordKeys tokens joined: '+' off the Mac, nothing on it (every chord, both platforms)", () => {
+  for (const s of SC.SHORTCUTS) {
+    for (const c of s.chords) {
+      assert.strictEqual(SC.renderChord(c, false), SC.chordKeys(c, false).join("+"), s.id);
+      assert.strictEqual(SC.renderChord(c, true), SC.chordKeys(c, true).join(""), s.id);
+    }
+  }
+  assert.strictEqual(SC.renderChord({ mod: true, shift: true, code: "KeyK" }, false), "Ctrl+Shift+K");
+  assert.strictEqual(SC.renderChord({ mod: true, shift: true, code: "KeyK" }, true), "⇧⌘K");
+});
+
+test("helpGrid: General and Terminal on the left, Sessions & panes and Editor & files on the right", () => {
+  const grid = SC.helpGrid(false);
+  assert.strictEqual(grid.length, 2);
+  assert.deepStrictEqual(grid[0].map((g) => g.group), ["General", "Terminal"]);
+  assert.deepStrictEqual(grid[1].map((g) => g.group), ["Sessions & panes", "Editor & files"]);
+});
+
+test("helpGrid: every row of helpRows once, in SHORTCUTS order, 'New session: start' for the desktop", () => {
+  for (const mac of [false, true]) {
+    const grid = SC.helpGrid(mac);
+    const want = SC.helpRows(mac).map((r) => (r.label === "New session: spawn" ? "New session: start" : r.label));
+    const got = gridRows(grid).map((r) => r.label);
+    assert.deepStrictEqual([...got].sort(), [...want].sort(), "mac=" + mac);
+    assert.strictEqual(got.filter((l) => l === "New session: start").length, 1);
+    assert.ok(!got.includes("New session: spawn"), "the phone's label is not the desktop's");
+    // Inside a group the rows keep the registry's order.
+    for (const g of grid.flat()) {
+      const order = SC.SHORTCUTS.filter((s) => s.group === g.group).map((s) => s.deskLabel || s.label);
+      assert.deepStrictEqual(g.rows.map((r) => r.label), order, g.group);
+    }
+  }
+  // Only the one row has a desktop label, and helpRows (the phone's text) still says "spawn".
+  assert.deepStrictEqual(SC.SHORTCUTS.filter((s) => s.deskLabel).map((s) => s.id), ["spawn.submit"]);
+  assert.strictEqual(entry("spawn.submit").label, "New session: spawn");
+  assert.ok(SC.helpRows(false).some((r) => r.label === "New session: spawn"));
+});
+
+test("helpGrid: a chord is its kbd tokens, several chords are several alternatives", () => {
+  const grid = SC.helpGrid(false);
+  assert.deepStrictEqual(gridRow(grid, "Command palette").alts, [kbd("Ctrl", "Shift", "K")]);
+  assert.deepStrictEqual(gridRow(grid, "Keyboard shortcuts").alts, [kbd("Ctrl", "/"), kbd("?")]);
+  assert.deepStrictEqual(gridRow(grid, "Paste").alts, [kbd("Ctrl", "V"), kbd("Ctrl", "Shift", "V")]);
+  assert.deepStrictEqual(gridRow(grid, "Copy selection").alts, [kbd("Ctrl", "Shift", "C")]);
+  assert.deepStrictEqual(gridRow(grid, "Jump to session 1–9").alts, [kbd("Ctrl", "1…9")]);
+  assert.deepStrictEqual(gridRow(grid, "New session: start").alts, [kbd("Ctrl", "↵")]);
+  assert.deepStrictEqual(gridRow(grid, "Next that needs you").alts, [kbd("Ctrl", "Shift", "J")], "the desktop keeps it");
+  // Help-only text: the keys are chips, a word that is not a key stays text.
+  assert.deepStrictEqual(gridRow(grid, "Select text when the agent holds the mouse").alts, [[{ kbd: "Shift" }, { text: "drag" }]]);
+  assert.deepStrictEqual(gridRow(grid, "Move and pick in lists").alts, [kbd("↑", "↓", "Enter")]);
+  assert.deepStrictEqual(gridRow(grid, "Close a dialog, menu or page").alts, [kbd("Esc")]);
+});
+
+test("helpGrid(true): the Mac's glyph tokens", () => {
+  const grid = SC.helpGrid(true);
+  assert.deepStrictEqual(gridRow(grid, "Command palette").alts, [kbd("⇧", "⌘", "K")]);
+  assert.deepStrictEqual(gridRow(grid, "Keyboard shortcuts").alts, [kbd("⌘", "/"), kbd("?")]);
+  assert.deepStrictEqual(gridRow(grid, "Paste").alts, [kbd("⌘", "V")]);
+  assert.deepStrictEqual(gridRow(grid, "Copy selection").alts, [kbd("⌘", "C"), kbd("⇧", "⌘", "C")]);
+  assert.deepStrictEqual(gridRow(grid, "New session: start").alts, [kbd("⌘", "↵")]);
+  assert.deepStrictEqual(gridRow(grid, "Select text when the agent holds the mouse").alts, [[{ kbd: "⌥" }, { text: "drag" }]]);
+  assert.deepStrictEqual(gridRow(grid, "Move and pick in lists").alts, [kbd("↑", "↓", "↵")]);
+  for (const r of gridRows(grid)) for (const alt of r.alts) for (const t of alt) {
+    if (t.kbd !== undefined) assert.ok(!/Ctrl|Shift|Alt/.test(t.kbd) || t.kbd === "Esc" || t.kbd === "Enter", t.kbd);
+  }
+});
+
+test("helpGrid carries no Runtime line, and a group the columns do not name is not dropped", () => {
+  for (const mac of [false, true]) assert.ok(!JSON.stringify(SC.helpGrid(mac)).includes("Runtime"));
+  SC.SHORTCUTS.push({ id: "t.extra", label: "Extra", group: "Zeta", scope: "global", status: "help-only", chords: [], text: { mac: "X", other: "X" } });
+  try {
+    const grid = SC.helpGrid(false);
+    assert.deepStrictEqual(grid[1].map((g) => g.group), ["Sessions & panes", "Editor & files", "Zeta"]);
+    assert.deepStrictEqual(gridRow(grid, "Extra").alts, [kbd("X")]);
+  } finally {
+    SC.SHORTCUTS.pop();
+  }
+});
+
+test("helpRows, helpText and helpTextStacked still say 'New session: spawn' (the phone's text is unchanged)", () => {
+  const rows = SC.helpRows(false);
+  assert.strictEqual(rows.find((r) => r.group === "Sessions & panes" && /^New session/.test(r.label)).label, "New session: spawn");
+  assert.ok(SC.helpText(rows, "x").includes("New session: spawn"));
+  assert.ok(SC.helpTextStacked(rows, "x").includes("New session: spawn"));
+  assert.ok(!SC.helpText(rows, "x").includes("New session: start"));
+});
+
+// shortcutsGridEl and showShortcuts live in app.js, a classic script that cannot be required: both are cut out by name and
+// run against a stand-in DOM, with the real registry (shortcuts.js) loaded into the same context.
+function elStub(tag) {
+  return {
+    tag, className: "", textContent: "", children: [], attrs: {},
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    append(...n) { this.children.push(...n); },
+    appendChild(n) { this.children.push(n); return n; },
+    replaceChildren(...n) { this.children = n; },
+  };
+}
+function showShortcutsEnv(width) {
+  const asked = [];
+  const ctx = vm.createContext({
+    window: { innerWidth: width },
+    document: { createElement: elStub },
+    mobileActive: (w) => w <= 700,
+    tierRuntimeLabel: (r) => "tier:" + r,
+    boxRuntime: "sysbox",
+    askDialog: (o) => { asked.push(o); return Promise.resolve({ outcome: "cancel", value: "" }); },
+  });
+  new vm.Script(readStatic("shortcuts.js")).runInContext(ctx);
+  const app = readStatic("app.js");
+  new vm.Script(fnSrc(app, "shortcutsGridEl") + "\n" + fnSrc(app, "showShortcuts")).runInContext(ctx);
+  return { ctx, asked };
+}
+const textOf = (n) => (n.textContent || "") + (n.children || []).map(textOf).join("|");
+
+test("shortcutsGridEl: two columns of groups, a row per shortcut, its chips and an 'or' between alternatives", () => {
+  const { ctx } = showShortcutsEnv(1280);
+  const root = ctx.shortcutsGridEl(SC.helpGrid(false));
+  assert.strictEqual(root.className, "sc-cols");
+  assert.deepStrictEqual(root.children.map((c) => c.className), ["sc-col", "sc-col"]);
+  const groups = root.children.map((col) => col.children.map((g) => g.children[0].textContent));
+  assert.deepStrictEqual(groups, [["General", "Terminal"], ["Sessions & panes", "Editor & files"]]);
+  for (const col of root.children) for (const grp of col.children) {
+    assert.strictEqual(grp.className, "sc-grp");
+    assert.strictEqual(grp.children[0].className, "grp-label", "the kit's group label");
+    assert.strictEqual(grp.children[0].tag, "div");
+    for (const row of grp.children.slice(1)) {
+      assert.strictEqual(row.className, "sc-row");
+      assert.deepStrictEqual(row.children.map((c) => c.className), ["sc-label", "sc-chord"]);
+    }
+  }
+  const rowOf = (label) => root.children.flatMap((c) => c.children).flatMap((g) => g.children.slice(1)).find((r) => r.children[0].textContent === label);
+  const chord = (label) => rowOf(label).children[1].children.map((c) => c.tag + "." + c.className + ":" + c.textContent);
+  assert.deepStrictEqual(chord("Command palette"), ["kbd.kbd:Ctrl", "kbd.kbd:Shift", "kbd.kbd:K"]);
+  assert.deepStrictEqual(chord("Paste"), ["kbd.kbd:Ctrl", "kbd.kbd:V", "span.sc-word:or", "kbd.kbd:Ctrl", "kbd.kbd:Shift", "kbd.kbd:V"]);
+  assert.deepStrictEqual(chord("Keyboard shortcuts"), ["kbd.kbd:Ctrl", "kbd.kbd:/", "span.sc-word:or", "kbd.kbd:?"]);
+  assert.deepStrictEqual(chord("Select text when the agent holds the mouse"), ["kbd.kbd:Shift", "span.sc-word:drag"]);
+  assert.ok(rowOf("Next that needs you"), "the desktop lists it");
+  assert.ok(rowOf("New session: start"));
+  assert.ok(!textOf(root).includes("Runtime"));
+});
+
+test("showShortcuts on the desktop: the key grid, no footer, no Close button, no Runtime line", async () => {
+  const { ctx, asked } = showShortcutsEnv(1280);
+  await ctx.showShortcuts();
+  assert.strictEqual(asked.length, 1);
+  const o = asked[0];
+  assert.strictEqual(o.title, "Keyboard shortcuts");
+  assert.strictEqual(o.info, true);
+  assert.strictEqual(o.footless, true);
+  assert.strictEqual(o.cls, "keys");
+  assert.strictEqual(o.wide, false, "only .keys sizes the dialog");
+  assert.strictEqual(o.body || "", "");
+  assert.strictEqual(o.confirmLabel, undefined, "no Close button: the X is the close");
+  assert.strictEqual(o.extra.length, 1);
+  assert.strictEqual(o.extra[0].className, "sc-cols");
+  assert.ok(!textOf(o.extra[0]).includes("Runtime"));
+  assert.ok(textOf(o.extra[0]).includes("Next that needs you"));
+});
+
+test("showShortcuts on the phone is what it was: stacked text, no Next that needs you, the Runtime line and Close", async () => {
+  const { ctx, asked } = showShortcutsEnv(390);
+  await ctx.showShortcuts();
+  const rows = SC.helpRows(false).filter((r) => r.label !== "Next that needs you");
+  assert.strictEqual(
+    JSON.stringify(asked[0]),
+    JSON.stringify({ title: "Keyboard shortcuts", body: SC.helpTextStacked(rows, "tier:sysbox"), confirmLabel: "Close", info: true }),
+  );
+  assert.ok(asked[0].body.endsWith("\n\nRuntime: tier:sysbox"));
+  assert.ok(asked[0].body.includes("New session: spawn"));
+  assert.ok(!asked[0].body.includes("Next that needs you"));
+});
+
+test("showShortcuts source: the desktop branch passes footless and cls keys, the phone's keeps the stacked text and the Runtime label", () => {
+  const body = fnSrc(readStatic("app.js"), "showShortcuts");
+  assert.match(body, /footless:\s*true/);
+  assert.match(body, /cls:\s*"keys"/);
+  assert.match(body, /wide:\s*false/);
+  assert.match(body, /helpGrid\(IS_MAC\)/);
+  assert.match(body, /helpTextStacked\(/);
+  assert.match(body, /tierRuntimeLabel\(boxRuntime\)/);
+  assert.match(body, /session\.nextNeeds/);
+  assert.ok(!/innerHTML/.test(fnSrc(readStatic("app.js"), "shortcutsGridEl")), "built with createElement and textContent");
+});
+
+test("desktop.css: Keyboard shortcuts is an 880 px card of two columns, as frame M5.3 draws it", () => {
+  const css = readStatic("desktop.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = (sel) => { const i = css.indexOf(sel + " {"); assert.ok(i >= 0, sel); return css.slice(i, css.indexOf("}", i)); };
+  assert.match(rule("#ask-modal.keys"), /width:\s*880px/);
+  assert.match(rule("#ask-modal.keys"), /max-width:\s*calc\(100vw - 40px\)/);
+  assert.match(rule("#ask-modal.keys #ask-extra"), /overflow-y:\s*auto/, "a short window scrolls the list: the footer that held Close is gone");
+  assert.match(rule("#ask-modal.keys #ask-extra"), /min-height:\s*0/);
+  const cols = rule(".sc-cols");
+  assert.match(cols, /display:\s*grid/);
+  assert.match(cols, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(cols, /column-gap:\s*var\(--sp-10\)/);
+  assert.match(rule(".sc-col"), /flex-direction:\s*column/);
+  assert.match(rule(".sc-col"), /gap:\s*var\(--sp-5\)/);
+  assert.match(rule(".sc-grp"), /flex-direction:\s*column/);
+  assert.match(rule(".sc-grp"), /gap:\s*2px/);
+  assert.match(rule(".sc-grp > .grp-label"), /padding-bottom:\s*var\(--sp-1\)/);
+  const row = rule(".sc-row");
+  assert.match(row, /display:\s*flex/);
+  assert.match(row, /align-items:\s*center/);
+  assert.match(row, /min-height:\s*30px/);
+  assert.match(row, /gap:\s*var\(--sp-3\)/);
+  const label = rule(".sc-label");
+  assert.match(label, /flex:\s*1 1 auto/);
+  assert.match(label, /min-width:\s*0/);
+  assert.match(label, /font-size:\s*var\(--t-md\)/);
+  const chord = rule(".sc-chord");
+  assert.match(chord, /display:\s*flex/);
+  assert.match(chord, /gap:\s*var\(--sp-1\)/);
+  assert.match(chord, /flex:\s*none/);
+  assert.match(rule(".sc-word"), /font-size:\s*var\(--t-sm\)/);
+  assert.match(rule(".sc-word"), /color:\s*var\(--muted\)/);
+  // It must beat the read-only dialog's 560 px (#ask-modal.info) by coming after it.
+  assert.ok(css.indexOf("#ask-modal.keys {") > css.indexOf("#ask-modal.info {"));
+});

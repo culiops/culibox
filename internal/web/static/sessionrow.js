@@ -136,7 +136,7 @@ function menuGroups(items) {
 }
 
 // MENU_ICON: the drawing in each row's 16px icon slot, as a KIND the DOM code (menuIconSvg in
-// app.js) draws as inline SVG in the product's icon style. A font glyph is not used: the frame's
+// kitmenu.js) draws as inline SVG in the product's icon style. A font glyph is not used: the frame's
 // placeholder characters are tofu wherever no installed font has them. Reply opt-in and Restart
 // have none drawn, so they keep an empty slot and their text lines up with the rest. One kind per
 // id; Copy working directory and Duplicate are neighbours, so they differ (Duplicate adds a plus).
@@ -148,19 +148,6 @@ const MENU_ICON = {
 // menuIcon: the icon kind for a menuItems id, "" where there is none.
 function menuIcon(id) {
   return Object.prototype.hasOwnProperty.call(MENU_ICON, id) ? MENU_ICON[id] : "";
-}
-
-// menuNavIndex: where the arrow keys move focus inside the open menu. `count` rows, focus on row
-// `at` (-1 when it is on none of them, e.g. a tab switcher's close button). Down and Up wrap; from
-// outside the rows Down lands on the first and Up on the last; Home and End jump. null means the
-// key is not the menu's, so the caller leaves it alone.
-function menuNavIndex(count, at, key) {
-  if (!(count > 0)) return null;
-  if (key === "Home") return 0;
-  if (key === "End") return count - 1;
-  if (key === "ArrowDown") return at < 0 ? 0 : (at + 1) % count;
-  if (key === "ArrowUp") return at < 0 ? count - 1 : (at - 1 + count) % count;
-  return null;
 }
 
 // MENU_GAP / ROW_MENU_GAP: the space between what a menu hangs from and the menu. A ⋯ button leaves 4px
@@ -601,6 +588,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuNavIndex, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, menuGroups, menuIcon, menuPlace, MENU_GAP, ROW_MENU_GAP, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, roleText, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

@@ -75,6 +75,21 @@ function pickerRows(state) {
   return [];
 }
 
+// pinLastUsed puts the folder the last session started in first, marked `lastUsed`, in a list the server returned
+// (frame M4.3: "Last used" trails the first row of the New session list). It only REORDERS: a folder the list does
+// not hold (deleted, a scratch path under /tmp, not a project root, past the search's limit) adds no row, and the rows
+// come back untouched. Paths match as whole paths, a trailing "/" on either side ignored. The matched row is a
+// copy; the input is never changed. No match, or no last folder: the same array.
+function pinLastUsed(rows, lastCwd) {
+  const list = Array.isArray(rows) ? rows : [];
+  const bare = (p) => (typeof p === "string" && p.length > 1 ? p.replace(/\/+$/, "") || "/" : p);
+  const want = bare(lastCwd);
+  if (typeof want !== "string" || want === "") return list;
+  const at = list.findIndex((r) => bare(r.path) === want);
+  if (at < 0) return list;
+  return [Object.assign({}, list[at], { lastUsed: true })].concat(list.slice(0, at), list.slice(at + 1));
+}
+
 // pickerReopenMode answers the question both focus and click on the input ask:
 // "given the text that is in there RIGHT NOW, what should the list show?"
 //
@@ -328,6 +343,18 @@ function initDirPicker(opts) {
     dpReopen();
   });
   dpInput.addEventListener("keydown", dpKeydown);
+  // Desktop: Tab (or Shift+Tab) out of the field closes the list, so it never stays over the tree whose row just took focus
+  // (GATE3 finding 1: with real Tab presses it stayed open, covering the rows). The rule is wspicker.js's: only focus moving
+  // to a focusable element that is neither the field, nor the list, nor an ancestor of the list closes it. A pointer press on
+  // a row (a plain div) lands on nothing (relatedTarget null) or on a container around the list, and the click picks the row.
+  // The phone keeps its behaviour: Escape, a pick or an outside click.
+  const dpFocusOut = (e) => {
+    if (!(typeof drawerDesktop === "function" && drawerDesktop())) return;
+    const to = e.relatedTarget;
+    if (to && to !== dpInput && !dpList.contains(to) && !to.contains(dpList)) dpClose();
+  };
+  dpInput.addEventListener("focusout", dpFocusOut);
+  dpList.addEventListener("focusout", dpFocusOut);
   document.addEventListener("click", (e) => {
     if (e.target !== dpInput && !dpList.contains(e.target)) dpClose();
   });
@@ -554,6 +581,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     classifyPickerQuery, pickerRows,
     pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
-    pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote,
+    pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote, pinLastUsed,
   };
 }
