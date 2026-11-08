@@ -1985,7 +1985,7 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .txt b { color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip.need .txt b { color: var(--amber); }
   /* The honest statement once, under the strip (§B4 `.m2-under`: 12/18 muted, 6px below it: the body's 10px gap less 4). */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip-wrap > .hint { margin-top: -4px; padding: 0 2px; line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip-wrap > .hint { margin: -4px 0 0; padding: 0 2px; line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st { padding: 0; border: 0; font-size: var(--t-md); line-height: 1.4; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .st::before { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .cstrip .st { gap: 7px; }
@@ -2039,10 +2039,11 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h { min-height: 0; flex-wrap: nowrap; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: var(--t-md); letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .sec-h > h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   /* An empty section's line sits under the head's hairline; a token provider's note is under its table (§B4 `.m2-secnote`:
-     12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint { padding: 12px 16px; border-top: 0; color: var(--muted); }
+     12/18 muted, 8px 16px 10px, a hairline above); Legacy secrets' note is above its table with the hairline below it. A <p>
+     has the UA's 1em margin (12px at 12px type) that the frame does not draw, so these lines set their own: none. */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .hint { margin: 0; padding: 12px 16px; border-top: 0; color: var(--muted); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .honest { padding: 8px 16px 10px; border-top: 1px solid var(--line); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .ctab-note-top { padding: 8px 16px 10px; border-bottom: 1px solid var(--line); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec > .ctab-note-top { margin: 0; padding: 8px 16px 10px; border-bottom: 1px solid var(--line); line-height: var(--lh-sm); }
   /* The table is the kit's .tbl (the head cells are its th: 32px, 12/500 --muted, sentence case, a hairline under; §B4), so
      only the rows are set here: 7px above and below, the first cell 16px in and the last 12px, wrapping between words
      (the shares below are narrow). */
@@ -2074,13 +2075,15 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
-  /* Env is 26%: its 12px host (F06) needs 203px for artifactory.acme.example.com, and 25% gave
-     199 at a 1440 window ("...example.co" / "m"). Status and Used by gave half a point each:
-     Status still holds "environment" (77px) at 1280; a smaller Token wraps the token names. */
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(1) { width: 20%; }
+  /* Token 19.5, Env 26, Status 14.5, Used by 23, Actions 17: the five are the whole table. Env's 12px mono host (F06) takes two
+     lines at the page's real widths (the 820px column cap, 12px cell padding: a 189px box at 1440, 161px at 1280), broken
+     after a dot (credMonoSub), never overflowing; Status holds "environment" (77px) at 1280 and at the floor; a smaller
+     Token wraps the token names; Actions holds Edit and Delete with 8px to spare at the ~1266px floor (16% left 1.4px). */
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(1) { width: 19.5%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(2) { width: 26%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(3) { width: 14.5%; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(5) { width: 16%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(4) { width: 23%; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(5) { width: 17%; }
   /* Legacy secrets (§B4): two columns, 45% / 55%, no header row. */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(1) { width: 45%; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-sec[data-group="legacy"] .ctab col:nth-child(2) { width: 55%; }
@@ -2103,16 +2106,18 @@
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab .ctab-ex > * { margin: 0 16px 12px; }
 
   /* Stored values (§B4 `.m2-fold`): one row, not a card: the ghost toggle (chevron, name), the count chip, the muted line.
-     The chevron is credChevron's svg, 12px, a quarter turn when open: no glyph and no ::before. The body is what the frame
-     leaves undrawn: a panel under the row, its list's labels sentence-case (F17). */
+     The chevron is the frame's glyph › in a span (credChevron), 12px, in the ghost button's muted (--fg on hover, with the
+     label), its own inline-block box so the quarter turn when open applies (a transform does not apply to an inline box);
+     no ::before. The body is what the frame leaves undrawn: a panel under the row, its list's labels sentence-case (F17). */
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ctab-fold { gap: 8px; padding: 0 2px; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-h { display: flex; align-items: center; gap: 8px; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t svg { width: 12px; height: 12px; flex: none; }
-  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t[aria-expanded="true"] svg { transform: rotate(90deg); }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-chev { display: inline-block; font-size: var(--t-sm); line-height: 1; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-t[aria-expanded="true"] .vfold-chev { transform: rotate(90deg); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px; border-radius: var(--r-card); background: var(--panel); }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b[hidden] { display: none; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b > .link { align-self: flex-start; }
   #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b .sv.head { font-size: var(--t-sm); letter-spacing: 0; text-transform: none; }
+  #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .vfold-b .hint { margin: 0; }
   /* The card's room is #creds-body (the window minus the sidebar, the nav and the
      padding), which is 178px at 701px; the drawer's body, #cred-drawer-body, is a
      container the same way. app.css stacks a card in one column only for a

@@ -405,11 +405,14 @@ test("the icon is hidden and sized by default, so a wide header is unchanged", (
 // its column open past the section's box (overflow: hidden): a 30-character name cut
 // Delete off at 1240 px, a 60-character one scrolled the whole page. The name wraps like
 // the GitHub and token tables' (hyphens first, mid-word only past the column).
-// The token and GitHub tables (table-layout: fixed, shares of the width). Measured on the seeded page (Task 10a, fix
-// wave): the tables are 922 px wide at a 1440 window and 762 px at 1280, a cell's padding is 32 px. The Env column's
-// 12px host (F06) needs 203 px for artifactory.acme.example.com (25% gave it 199 at 1440: "...example.co" / "m"); the
-// Status column keeps its longest word ("environment", 77 px) whole at 1280.
-test("the token tables give the 12px host one line at 1440 and keep Status's words whole at 1280", () => {
+// The token and GitHub tables (table-layout: fixed, shares of the width). The geometry is the page's today (UI plan 4 Task 1's
+// 820px column cap, Task 5's 12px cell padding), as the Task 5 review measured it in a browser: the table is 820px at a 1440
+// window, 714px at 1280 and 700px (CRED_TABLE_MIN_WIDTH, a ~1266px window) at the floor. Env's content box is 189px at 1440
+// and 161px at 1280; a cell's padding is 12px each side (the first cell 16, the last 12). The Env host is mono 12px
+// (advance 0.6em = 7.2px, inferred), and credMonoSub lets it break after each dot, so a long host takes two lines, never
+// overflows. Status keeps its longest word ("environment", 77px at 13px Inter, measured) whole. The Actions cell holds
+// Edit and Delete: the pair is 98.6px (the review: at 1266 a 112px cell showed Edit starting 1.4px inside it, 12px right padding).
+test("the token tables give a long host two lines and no overflow, keep Status's words whole, and hold Edit and Delete at the floor", () => {
   const share = (n) => {
     // The shares are on the colgroup's <col>s (credTable draws them; one set for the head cells and the rows: G16).
     const r = rulesFor(CREDS + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").join(" ");
@@ -417,12 +420,42 @@ test("the token tables give the 12px host one line at 1440 and keep Status's wor
     assert.ok(m, "column " + n + " has a share");
     return +m[1];
   };
-  const [token, env, status, actions] = [share(1), share(2), share(3), share(5)];
-  assert.ok(env / 100 * 922 - 32 >= 203, "Env holds artifactory.acme.example.com at 1440: " + env + "%");
-  assert.ok(status / 100 * 762 - 32 >= 77, "Status holds \"environment\" at 1280: " + status + "%");
-  assert.strictEqual(token, 20, "Token keeps its share: less wraps the token names (measured: +54 px of rows at 1440)");
-  assert.strictEqual(actions, 16, "Actions keeps its share: Edit and Delete");
-  assert.ok(100 - token - env - status - actions >= 23, "Used by keeps its share within half a point");
+  const [token, env, status, used, actions] = [1, 2, 3, 4, 5].map(share);
+  assert.strictEqual(Math.round((token + env + status + used + actions) * 10) / 10, 100, "the one colgroup's shares are the whole table");
+  // The geometry the numbers below rest on is still the CSS's.
+  const cap = rulesFor("#page-host > #settings-modal.as-page > .dbd.pad > *").join(" ");
+  assert.match(cap, /max-width:\s*820px/, "the content column's cap");
+  assert.ok(rulesFor(".tbl td").some((b) => /padding:\s*0 var\(--sp-3\)/.test(b)), "the kit's cell padding is --sp-3");
+  assert.ok(/--sp-3:\s*12px/.test(css), "which is 12px");
+  const PAD = 24;
+  const TABLE = { 1440: 820, 1280: 714, 1266: 700 };
+
+  // The host: greedy lines, a break only after a dot (credMonoSub's <wbr>); a label wider than the box would overflow.
+  const HOST = ["artifactory.", "acme.", "example.", "com"];
+  const ADV = 7.2;
+  const lines = (box) => {
+    let n = 1, at = 0;
+    for (const seg of HOST) {
+      const w = seg.length * ADV;
+      assert.ok(w <= box, "the label " + seg + " (" + w + "px) fits the Env box (" + box + "px): no overflow");
+      if (at > 0 && at + w > box) { n++; at = 0; }
+      at += w;
+    }
+    return n;
+  };
+  for (const win of [1440, 1280, 1266]) {
+    const box = env / 100 * TABLE[win] - PAD;
+    assert.ok(lines(box) <= 2, "artifactory.acme.example.com takes " + lines(box) + " lines at " + win + " (Env box " + box.toFixed(1) + "px)");
+  }
+  assert.ok(status / 100 * TABLE[1280] - PAD >= 77, "Status holds \"environment\" at 1280: " + status + "%");
+  assert.ok(status / 100 * TABLE[1266] - PAD >= 77, "and at the floor");
+  assert.strictEqual(token, 19.5, "Token keeps its share (less wraps the token names; 0.5 went to Actions)");
+  assert.strictEqual(env, 26, "Env keeps its share");
+  assert.strictEqual(status, 14.5, "Status keeps its share");
+  assert.ok(used >= 23, "Used by keeps its share");
+  const BUTTONS = 98.6;
+  const cell = actions / 100 * TABLE[1266];
+  assert.ok(cell - 12 - BUTTONS >= 8, "at the floor Edit starts at least 8px inside the Actions cell (" + (cell - 12 - BUTTONS).toFixed(1) + "px), clear of Used by's text: " + actions + "%");
 });
 
 test("the AWS connection name is allowed to wrap (a nowrap name overflowed the table's box)", () => {

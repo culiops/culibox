@@ -93,7 +93,7 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   const listeners = {};
   Node.active = null;
   const doc = {
-    createElement: (t) => new Node(t), createElementNS: (ns, t) => new Node(t), createTextNode: (t) => new Text(t),
+    createElement: (t) => new Node(t), createTextNode: (t) => new Text(t),
     getElementById: (id) => byId[id] || null,
     addEventListener: (t, f) => { (listeners[t] = listeners[t] || []).push(f); },
     get activeElement() { return Node.active; },
@@ -111,8 +111,8 @@ function page({ asPage = true, width = 800, tab = false } = {}) {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
-  // svgicon.js and kitmenu.js load before credentials.js on the page (index.html): the Stored values chevron and the header menu use them.
-  for (const f of ["pending.js", "store.js", "svgicon.js", "kitmenu.js", "credentials.js"]) {
+  // kitmenu.js loads before credentials.js on the page (index.html): the header menu is built from its rows.
+  for (const f of ["pending.js", "store.js", "kitmenu.js", "credentials.js"]) {
     new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   // The reload every action ends in repaints the whole screen; here it only counts.
@@ -2404,10 +2404,17 @@ test("Stored values is a chevron disclosure: a ghost button with aria-expanded, 
   const toggle = row.querySelector("button");
   assert.deepStrictEqual(classesOf(toggle).slice(0, 3), ["btn", "btn-ghost", "btn-sm"]);
   assert.strictEqual(toggle.getAttribute("aria-expanded"), "false", "drawn closed");
-  const chev = toggle.querySelector("svg");
-  assert.ok(chev, "the chevron is an inline svg");
+  // §B4: the chevron is the text glyph › (U+203A) in a span[aria-hidden], not an icon; the name is what is left of the button's text.
+  assert.strictEqual(toggle.querySelectorAll("svg").length, 0, "no svg");
+  const chev = toggle.querySelector("span");
+  assert.strictEqual(chev.textContent, "\u203a");
   assert.strictEqual(chev.getAttribute("aria-hidden"), "true");
-  assert.strictEqual(toggle.textContent, "Stored values", "the name is the button's text");
+  assert.ok(classesOf(chev).includes("vfold-chev"));
+  const named = toggle.children.filter((c) => !(c instanceof Node && c.getAttribute("aria-hidden") === "true"));
+  assert.strictEqual(named.map((c) => c.textContent).join(""), "Stored values", "the accessible name is the text after the chevron");
+  const panelId = fold.querySelector("div.vfold-b").id;
+  assert.ok(panelId, "the list has an id");
+  assert.strictEqual(toggle.getAttribute("aria-controls"), panelId, "and the toggle says it controls it");
   assert.strictEqual(row.querySelector("span.chip").textContent, "2");
   assert.ok(classesOf(row.querySelector("span.chip")).includes("tnum"));
   const note = row.querySelectorAll("span").find((s) => classesOf(s).includes("muted"));
@@ -2431,13 +2438,15 @@ test("Stored values is a chevron disclosure: a ghost button with aria-expanded, 
   assert.strictEqual(sectionOf(p.byId["creds-body"], "values").querySelector("div.vfold-b").hidden, true);
 });
 
-test("CSS: the Stored values disclosure draws no ▸/▾ and sizes and turns its svg chevron", () => {
+test("CSS: the Stored values disclosure draws no ▸/▾ and sizes and turns its glyph chevron", () => {
   assert.deepStrictEqual(CSS_RULES.filter((r) => /#creds|#cred-drawer/.test(r.selector) && /[▸▾]/.test(asText(r))).map((r) => r.selector), [], "no triangle glyph on the Credentials page");
   assert.deepStrictEqual(rulesNaming(/vfold/).filter((r) => r.decls.has("content")).map((r) => r.selector), [], "no pseudo-content on the disclosure");
-  const svg = cssDecls(CR + " .vfold-t svg");
-  assert.strictEqual(svg.get("width"), "12px", "§B4: a 12px chevron");
-  assert.strictEqual(svg.get("height"), "12px");
-  assert.strictEqual(cssDecls(CR + ' .vfold-t[aria-expanded="true"] svg').get("transform"), "rotate(90deg)");
+  const chev = cssDecls(CR + " .vfold-chev");
+  assert.strictEqual(chev.get("font-size"), "var(--t-sm)", "§B4: a 12px glyph");
+  assert.strictEqual(chev.get("display"), "inline-block", "a transform does not apply to an inline box");
+  assert.strictEqual(chev.get("color"), undefined, "muted is the ghost button's own colour, and it turns --fg on hover with the label");
+  assert.strictEqual(cssDecls(CR + ' .vfold-t[aria-expanded="true"] .vfold-chev').get("transform"), "rotate(90deg)");
+  assert.deepStrictEqual(rulesNaming(/\.vfold-t[^ ]* svg/).map((r) => r.selector), [], "no svg rule is left");
   assert.strictEqual(cssDecls(CR + " .vfold-b[hidden]").get("display"), "none", "the body's own display would otherwise show through [hidden]");
 });
 
@@ -2501,7 +2510,7 @@ test("legacy ENV names are mono, in a two-column table with no header row", () =
 
 test("names are mono, 'nothing' is muted, PROD and the seed mark are chips (§A6 rows)", () => {
   const { body } = paintPage(m23View({
-    aws: [aws("culipulse-prod", { prod: true, mode: "sso_direct" }), aws("from-file", { source: "config" })],
+    aws: [aws("culipulse-prod", { prod: true, mode: "sso_direct", used_by: ["gate-test-profile"] }), aws("from-file", { source: "config" })],
     github_apps: [ghApp("test-app")],
   }));
   const awsRows = sectionOf(body, "aws").querySelectorAll("tbody");
@@ -2512,8 +2521,10 @@ test("names are mono, 'nothing' is muted, PROD and the seed mark are chips (§A6
   assert.ok(awsRows[1].rows[0].cells[0].querySelectorAll("span").some((s) => s.className === "chip" && s.textContent === "from config.json"), "the seed mark is a neutral chip");
   const gh = sectionOf(body, "github").querySelector("tbody").rows[0];
   assert.ok(classesOf(gh.cells[0].querySelector("div.c-main")).includes("mono"));
-  assert.ok(classesOf(gh.cells[3]).includes("muted"), "'nothing' is muted");
-  assert.ok(!classesOf(awsRows[0].rows[0].cells[4]).includes("muted") || awsRows[0].rows[0].cells[4].textContent === "nothing");
+  // Used by: muted exactly when it says "nothing" (§A6: the AWS row's profile name is plain, the GitHub App's "nothing" is muted).
+  const usedBy = [awsRows[0].rows[0].cells[4], awsRows[1].rows[0].cells[4], gh.cells[3]];
+  assert.deepStrictEqual(usedBy.map((c) => c.textContent), ["gate-test-profile", "nothing", "nothing"]);
+  assert.deepStrictEqual(usedBy.map((c) => classesOf(c).includes("muted")), [false, true, true]);
 });
 
 test("table head and body share one colgroup (G16), and the head cells are the kit's .tbl ones", () => {
@@ -2528,9 +2539,11 @@ test("table head and body share one colgroup (G16), and the head cells are the k
 });
 
 test("CSS: one set of column shares on the colgroup, the frame's head cells (12/500 muted, sentence case) and 7px rows", () => {
-  const shares = [1, 2, 3, 5].map((n) => cssDecls(CR + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").get("width"));
+  const shares = [1, 2, 3, 4, 5].map((n) => cssDecls(CR + ' .ctab-sec:not([data-group="aws"]) .ctab col:nth-child(' + n + ")").get("width"));
   for (const w of shares) assert.match(w, /^\d+(\.\d+)?%$/);
-  assert.ok(shares.reduce((a, w) => a + parseFloat(w), 0) < 100, "Used by keeps a share");
+  // Token 19.5, Env 26, Status 14.5, Used by 23, Actions 17 (fix round 1: Actions 16 -> 17 for Edit and Delete, taken from Token and Used by).
+  assert.deepStrictEqual(shares, ["19.5%", "26%", "14.5%", "23%", "17%"]);
+  assert.strictEqual(Math.round(shares.reduce((a, w) => a + parseFloat(w), 0) * 10) / 10, 100, "the five shares of the one colgroup are the whole table");
   assert.deepStrictEqual(rulesNaming(/\.ctab(?:-sec[^ ]*)?(?: \.ctab)? th:nth-child/).map((r) => r.selector), [], "no second set of shares on the head cells");
   const th = cssDecls(CR + " .ctab th");
   for (const k of ["text-transform", "letter-spacing", "font-size", "font-weight", "color"]) assert.strictEqual(th.get(k), undefined, "the kit's .tbl th stands: " + k);
@@ -2544,6 +2557,15 @@ test("CSS: one set of column shares on the colgroup, the frame's head cells (12/
   assert.strictEqual(cssDecls(CR + " .ctab td:last-child").get("padding-right"), "12px");
   const legacy = [1, 2].map((n) => cssDecls(CR + ' .ctab-sec[data-group="legacy"] .ctab col:nth-child(' + n + ")").get("width"));
   assert.deepStrictEqual(legacy, ["45%", "55%"], "§B4: the legacy table's colgroup");
+});
+
+// A <p> has the UA's 1em margin (12px at 12px type), which the frame does not draw: §B4 puts a note flush against its table and
+// the line of an empty section 12px under the head and 12px above the card's edge, not 12 above the text and 24 below (measured).
+test("CSS: a note or an empty section's line has no outer margin (the p's UA margin would add 12px)", () => {
+  assert.strictEqual(cssDecls(CR + " .ctab-sec > .hint").get("margin"), "0");
+  assert.strictEqual(cssDecls(CR + " .ctab-sec > .ctab-note-top").get("margin"), "0", "Legacy secrets' note is flush above its table");
+  assert.strictEqual(cssDecls(CR + " .cstrip-wrap > .hint").get("margin"), "-4px 0 0", "the honest note: 4px up under the strip, nothing below");
+  assert.strictEqual(cssDecls(CR + " .vfold-b .hint").get("margin"), "0", "the Stored values panel's lines");
 });
 
 test("CSS: the strip, the section head and the section are the frame's (§B4)", () => {
@@ -2560,7 +2582,7 @@ test("CSS: the strip, the section head and the section are the frame's (§B4)", 
   assert.strictEqual(head.get("text-transform"), "none");
   assert.strictEqual(cssDecls(PG + " #creds-body").get("gap"), "10px", "§B4 `.m2-body-tight`");
   const under = cssDecls(CR + " .cstrip-wrap > .hint");
-  assert.strictEqual(under.get("margin-top"), "-4px");
+  assert.strictEqual(under.get("margin"), "-4px 0 0");
   assert.strictEqual(under.get("padding"), "0 2px");
 });
 

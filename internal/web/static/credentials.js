@@ -1220,10 +1220,13 @@ function credTable(g) {
 // repaint (Replace and Delete reload).
 let credValuesOpen = false;
 
-// credChevron: the disclosure's chevron (frame M2.3 draws the glyph ›): an inline svg in the product's icon style, so no
-// font has to carry it. desktop.css sizes it (12px) and turns it a quarter when the row is open.
+// credChevron: the disclosure's chevron, the glyph the frame draws (§B4 `span[aria-hidden] ›`, U+203A): hidden from the
+// accessible name, 12px and muted. desktop.css gives it its own box (a transform does not apply to an inline one) and
+// turns it a quarter when the row is open.
 function credChevron() {
-  return svgIcon([["path", { d: "M5 3l4 4-4 4" }]], { icon: "chevron" });
+  const c = credEl("span", "vfold-chev", "\u203a");
+  c.setAttribute("aria-hidden", "true");
+  return c;
 }
 
 // credValuesFold: Stored values on the page (frame M2.3): a ghost button with aria-expanded (the chevron, the name), a
@@ -1239,6 +1242,8 @@ function credValuesFold(g) {
   toggle.append(credChevron(), document.createTextNode(g.title));
   row.append(toggle, credEl("span", "chip tnum", String(g.entries.length)), credEl("span", "t-sm muted", "Write-only: Replace or Delete"));
   const body = credEl("div", "vfold-b");
+  body.id = "cred-values-body";
+  toggle.setAttribute("aria-controls", body.id);
   body.hidden = !credValuesOpen;
   toggle.onclick = () => {
     credValuesOpen = !credValuesOpen;
