@@ -1414,13 +1414,13 @@ test("what the Appearance panel gained is styled only on the desktop page, so th
 
 test("the card is the frame's: --panel, --r-card, 4px 20px; its rows are one grid, 120px 132px then the sample, 24px apart, 12px 0, hairlines between", () => {
   // §B6 `.card.m2-acard` / `.m2-arow`, §C7 `.card`, `.card-row + .card-row`. The wrapper restates the card's two tokens: it cannot take the class.
-  const card = decls(CARD);
+  const card = bdecls(CARD);
   assert.strictEqual(card.get("background"), "var(--panel)");
   assert.strictEqual(card.get("border-radius"), "var(--r-card)");
   assert.strictEqual(card.get("padding"), "4px 20px");
-  assert.strictEqual(decls(".card").get("background"), "var(--panel)");
-  assert.strictEqual(decls(".card").get("border-radius"), "var(--r-card)");
-  const row = decls(CARD + " > :is(.fsrow, p.card-row)");
+  assert.strictEqual(bdecls(".card").get("background"), "var(--panel)");
+  assert.strictEqual(bdecls(".card").get("border-radius"), "var(--r-card)");
+  const row = bdecls(CARD + " > :is(.fsrow, p.card-row)");
   assert.strictEqual(row.get("display"), "grid");
   assert.strictEqual(row.get("grid-template-columns"), "120px 132px minmax(0, 1fr)");
   assert.strictEqual(row.get("column-gap"), "24px");
@@ -1430,16 +1430,16 @@ test("the card is the frame's: --panel, --r-card, 4px 20px; its rows are one gri
   assert.strictEqual(row.get("margin"), "0");
   assert.strictEqual(row.get("border-bottom"), "0", "the legacy bottom rule (app.css .fsrow) is gone: the divider is the next row's top");
   // The divider is the kit's. Behind the hidden stale hint the adjacent-sibling rule cannot reach Shortcuts, so that one row restates it.
-  assert.strictEqual(decls(".card-row + .card-row").get("border-top"), "1px solid var(--line)");
-  assert.strictEqual(decls(CARD + " > .hint + .card-row").get("border-top"), "1px solid var(--line)");
+  assert.strictEqual(bdecls(".card-row + .card-row").get("border-top"), "1px solid var(--line)");
+  assert.strictEqual(bdecls(CARD + " > .hint + .card-row").get("border-top"), "1px solid var(--line)");
   // The label: 13/20 500 --fg, the frame's `.t-md.w-500`, in a 120px column of its own (the legacy 152px is not here).
-  const lbl = decls(CARD + " .lbl");
+  const lbl = bdecls(CARD + " .lbl");
   assert.strictEqual(lbl.get("width"), "auto");
   assert.strictEqual(lbl.get("font-size"), "var(--t-md)");
   assert.strictEqual(lbl.get("font-weight"), "var(--w-medium)");
   assert.strictEqual(lbl.get("color"), "var(--fg)");
   // Shortcuts: the button spans the two columns after the label and is not stretched.
-  const btn = decls(CARD + " > p.card-row > .btn");
+  const btn = bdecls(CARD + " > p.card-row > .btn");
   assert.strictEqual(btn.get("grid-column"), "2 / 4");
   assert.strictEqual(btn.get("justify-self"), "start");
   // The old rules these replace are gone.
@@ -1450,12 +1450,12 @@ test("the steppers are the frame's: 28px square buttons, 4px, a 60 x 28 value bo
   // §B6: `.btn.btn-icon` = 28 x 28 (--h-ctl) and `.input.tnum.m2-stepv` = 60 x 28, 4px between: 28 + 4 + 60 + 4 + 28 = 124px in the 132px column.
   // MEASURED on frames/m2-6 (a pixel scan of the PNG): the "−" button is x 698-725, y 121-148 (28 x 28), the value box x 730-789 (60) y 121-148 (28).
   // The task brief's "24 px squares" (the kit's .btn-sm) is not what the approved frame draws, so the frame's 28 is pinned.
-  assert.strictEqual(decls(":root").get("--h-ctl"), "28px");
+  assert.strictEqual(bdecls(":root").get("--h-ctl"), "28px");
   const S = CARD + " .stepper";
-  const st = decls(S);
+  const st = bdecls(S);
   assert.deepStrictEqual([st.get("display"), st.get("align-items"), st.get("gap"), st.get("border"), st.get("width")], ["flex", "center", "var(--sp-1)", "0", "auto"]);
-  assert.strictEqual(decls(":root").get("--sp-1"), "4px");
-  const b = decls(S + " button");
+  assert.strictEqual(bdecls(":root").get("--sp-1"), "4px");
+  const b = bdecls(S + " button");
   assert.strictEqual(b.get("width"), "var(--h-ctl)");
   assert.strictEqual(b.get("height"), "var(--h-ctl)");
   assert.strictEqual(b.get("padding"), "0");
@@ -1464,8 +1464,8 @@ test("the steppers are the frame's: 28px square buttons, 4px, a 60 x 28 value bo
   assert.strictEqual(b.get("color"), "var(--fg)");
   assert.strictEqual(b.get("font-size"), "var(--t-md)");
   assert.strictEqual(b.get("font-weight"), "var(--w-medium)");
-  assert.strictEqual(decls(S + " button:hover").get("background"), "var(--line)", "the kit's .btn:hover");
-  const v = decls(S + " .val");
+  assert.strictEqual(bdecls(S + " button:hover").get("background"), "var(--line)", "the kit's .btn:hover");
+  const v = bdecls(S + " .val");
   assert.strictEqual(v.get("width"), "60px");
   assert.strictEqual(v.get("height"), "var(--h-ctl)");
   assert.strictEqual(v.get("padding"), "0 4px");
@@ -1476,16 +1476,16 @@ test("the steppers are the frame's: 28px square buttons, 4px, a 60 x 28 value bo
   assert.strictEqual(v.get("text-align"), "center");
   assert.strictEqual(v.get("font-variant-numeric"), "tabular-nums");
   assert.strictEqual(v.get("font-size"), "var(--t-md)");
-  assert.strictEqual(decls(S + " .val:hover").get("border-color"), "var(--muted)");
+  assert.strictEqual(bdecls(S + " .val:hover").get("border-color"), "var(--muted)");
   // Its border is id-weighted, so the global field focus cannot reach it: it has a field focus of its own (desktop-focus.test.js lists it).
-  const f = decls(S + " .val:focus-visible");
+  const f = bdecls(S + " .val:focus-visible");
   assert.deepStrictEqual([f.get("outline"), f.get("border-color"), f.get("box-shadow")], ["none", "var(--accent)", "0 0 0 1px var(--accent)"]);
-  assert.ok(!decls(S + " .val").has("border-left") && !decls(S + " .val").has("border-right"), "one border all round, not the legacy left and right rules");
+  assert.ok(!bdecls(S + " .val").has("border-left") && !bdecls(S + " .val").has("border-right"), "one border all round, not the legacy left and right rules");
 });
 
 test("a sample is a --bg box in mono, 8px 12px, 6px corners, 1.45 lines, set in the size it previews", () => {
   // §B6 `.s-bg.mono.m2-sample`: no border, --bg, `white-space: pre`, the inline font-size is the setting (initSettings / paintFsSample set it).
-  const s = decls(CARD + " .sample");
+  const s = bdecls(CARD + " .sample");
   assert.strictEqual(s.get("background"), "var(--bg)");
   assert.strictEqual(s.get("border"), "0");
   assert.strictEqual(s.get("border-radius"), "var(--r-ctl)");
@@ -1501,39 +1501,79 @@ test("a sample is a --bg box in mono, 8px 12px, 6px corners, 1.45 lines, set in 
 
 test("the Alerts row is §E2's: a label above the first line, the switch and its reason in the two columns after it", () => {
   const A = CARD + " > #fsrow-alerts";
-  assert.strictEqual(decls(A).get("align-items"), "start", "M8.1 .m8-alrow: a tall reason must not centre the label against itself");
-  assert.strictEqual(decls(A + " > .lbl").get("padding-top"), "1px");
-  assert.strictEqual(decls(A + " > :is(.notify-opt, #notify-why)").get("grid-column"), "2 / 4");
+  assert.strictEqual(bdecls(A).get("align-items"), "start", "M8.1 .m8-alrow: a tall reason must not centre the label against itself");
+  assert.strictEqual(bdecls(A + " > .lbl").get("padding-top"), "1px");
+  assert.strictEqual(bdecls(A + " > :is(.notify-opt, #notify-why)").get("grid-column"), "2 / 4");
   // The switch is the kit's drawn checkbox on a .check label.
-  assert.strictEqual(decls(".check").get("display"), "flex");
-  assert.strictEqual(decls(".check-box").get("width"), "14px");
+  assert.strictEqual(bdecls(".check").get("display"), "flex");
+  assert.strictEqual(bdecls(".check-box").get("width"), "14px");
   // A one-line reason sits under the switch's text (14px box + 8px gap = 22px in), 2px below it: 12/18 --muted.
-  const why = decls(A + " > #notify-why");
+  const why = bdecls(A + " > #notify-why");
   assert.strictEqual(why.get("margin"), "2px 0 0");
   assert.strictEqual(why.get("padding-left"), "22px");
   assert.strictEqual(why.get("font-size"), "var(--t-sm)");
   assert.strictEqual(why.get("line-height"), "var(--lh-sm)");
   assert.strictEqual(why.get("color"), "var(--muted)");
   // A reason with steps is M8.1 `.m8-stack-4`: flush left under the switch, 12px between its parts.
-  const blk = decls(A + " > #notify-why.notify-block");
+  const blk = bdecls(A + " > #notify-why.notify-block");
   assert.deepStrictEqual([blk.get("display"), blk.get("flex-direction"), blk.get("gap"), blk.get("margin-top"), blk.get("padding-left")], ["flex", "column", "var(--sp-3)", "var(--sp-3)", "0"]);
   assert.strictEqual(blk.get("color"), "var(--fg)", "the blocked list's lead words and the heading are --fg; the muted parts carry .muted themselves (§E3 d)");
-  assert.strictEqual(decls(A + " > #notify-why.notify-block > *").get("margin"), "0");
-  assert.strictEqual(decls(":root").get("--sp-3"), "12px");
+  assert.strictEqual(bdecls(A + " > #notify-why.notify-block > *").get("margin"), "0");
+  assert.strictEqual(bdecls(":root").get("--sp-3"), "12px");
   // `.m8-stack` (heading, 8px, list) and `.m8-steps` (18px in, 4px between, no margin).
-  const how = decls(A + " #notify-why .notify-how");
+  const how = bdecls(A + " #notify-why .notify-how");
   assert.deepStrictEqual([how.get("display"), how.get("flex-direction"), how.get("gap")], ["flex", "column", "var(--sp-2)"]);
-  const steps = decls(A + " #notify-why .notify-steps");
+  const steps = bdecls(A + " #notify-why .notify-steps");
   assert.deepStrictEqual([steps.get("margin"), steps.get("padding-left"), steps.get("display"), steps.get("flex-direction"), steps.get("gap")], ["0", "18px", "flex", "column", "4px"]);
   // Check again is the kit's small button: the panel's `.btn` rule (0 12px, --t-md, --r-ctl) is answered one id heavier, and it has a hover.
-  const sm = decls(P + " > #settings #notify-why .btn.btn-sm");
+  const sm = bdecls(P + " > #settings #notify-why .btn.btn-sm");
   assert.deepStrictEqual([sm.get("padding"), sm.get("border-radius"), sm.get("font-size")], ["0 8px", "var(--r-chip)", "var(--t-sm)"]);
-  assert.strictEqual(decls(P + " > #settings .fs-card .btn:where(:not(.pri)):hover").get("background"), "var(--line)", "Keyboard shortcuts and Check again light up under the pointer");
+  assert.strictEqual(bdecls(P + " > #settings .fs-card .btn:where(:not(.pri)):hover").get("background"), "var(--line)", "Keyboard shortcuts and Check again light up under the pointer");
   const panel = P + " > :is(#tokens, #accounts, #settings, #about) > :not(.set-head) .btn";
   const at = (sel) => DESK_CSS.indexOf(sel + " {");
   assert.ok(at(P + " > #settings #notify-why .btn.btn-sm") > at(panel), "written after the panel rule");
   // Every new class has its rule.
   for (const sel of [CARD, A + " > #notify-why.notify-block", A + " #notify-why .notify-how", A + " #notify-why .notify-steps"]) assert.ok(has(sel), sel);
+});
+
+// D4 (gate 3, B6 FAIL at 760): the panel is 258px there and the card's content box 154px, but the row grid (120px 132px, the sample, 24px gaps) needs 300px
+// before the sample gets a pixel: #settings scrolled sideways (376 vs 258), the samples ran 118px past the panel and the steppers and the Alerts text were cut off.
+// Below a card width the row is one column: the label, the stepper under it, the sample under that (wrapping, so it is never cut off), and the Alerts and
+// Shortcuts controls under their labels. 1440 and 1280 are above the step and unchanged.
+test("a narrow Appearance card is one column: label, stepper and sample stack and fit, nothing is cut off, nothing scrolls sideways (D4)", () => {
+  assert.strictEqual(bdecls(CARD).get("container-type"), "inline-size", "the card is the container the step reads");
+  const steps = [];
+  const re = /@container\s*\(max-width:\s*(\d+)px\)\s*\{/g;
+  let m;
+  while ((m = re.exec(DESK_CSS))) {
+    let depth = 1, i = re.lastIndex;
+    while (depth && i < DESK_CSS.length) { const ch = DESK_CSS[i++]; if (ch === "{") depth++; else if (ch === "}") depth--; }
+    const body = DESK_CSS.slice(re.lastIndex, i - 1);
+    if (/\.fs-card/.test(body)) steps.push({ px: +m[1], body });
+  }
+  assert.deepStrictEqual(steps.map((b) => b.px), [480], "one step");
+  // Three columns need 120 + 24 + 132 + 24 = 300px of content box before the sample has any room; 480 leaves it 180px (a line of mono at 12px).
+  assert.ok(480 - (120 + 24 + 132 + 24) >= 180);
+  const st = new Map();
+  for (const r of parseRules(steps[0].body)) { const d = st.get(r.selector) || new Map(); for (const [k, v] of r.decls) d.set(k, v); st.set(r.selector, d); }
+  const at = (sel) => st.get(CARD + sel) || new Map();
+  const row = at(" > :is(.fsrow, p.card-row)");
+  assert.deepStrictEqual([row.get("grid-template-columns"), row.get("row-gap")], ["minmax(0, 1fr)", "8px"], "one column, the control 8px under its label");
+  assert.strictEqual(at(" > #fsrow-alerts > :is(.notify-opt, #notify-why)").get("grid-column"), "1", "the switch and its reason under the label, not in a column that is gone");
+  const kb = at(" > p.card-row > .btn");
+  assert.deepStrictEqual([kb.get("grid-column"), kb.get("max-width"), kb.get("white-space")], ["1", "100%", "normal"], "Keyboard shortcuts under its label, wrapping inside the card (.btn is nowrap: 148px on a 95px content box)");
+  const stp = at(" .stepper");
+  assert.deepStrictEqual([stp.get("max-width"), stp.get("min-width")], ["124px", "0"], "28 + 4 + 60 + 4 + 28 at most, and no wider than the card below that");
+  const val = at(" .stepper .val");
+  assert.deepStrictEqual([val.get("flex"), val.get("min-width"), val.get("max-width"), val.get("padding")], ["1 1 60px", "0", "60px", "0"], "the value box gives way before the card is overrun, and with no padding its number still shows at 31px");
+  const smp = at(" .sample");
+  assert.deepStrictEqual([smp.get("white-space"), smp.get("overflow-wrap")], ["pre-wrap", "anywhere"], "the preview wraps in the card instead of being cut off");
+  assert.strictEqual(at(" > #fsrow-alerts > #notify-why").get("overflow-wrap"), "anywhere", "a long origin or step in the reason breaks rather than widen the card");
+  // The wide rules the step answers are unchanged: the same three columns and the sample cut inside its column.
+  assert.strictEqual(bdecls(CARD + " > :is(.fsrow, p.card-row)").get("grid-template-columns"), "120px 132px minmax(0, 1fr)");
+  assert.strictEqual(bdecls(CARD + " .sample").get("white-space"), "pre");
+  assert.ok([...st.keys()].every((sel) => sel.startsWith(CARD)), "scoped to the card");
+  for (const [sel, d] of st) for (const [k, v] of d) assert.doesNotMatch(v, /#[0-9a-f]{3,8}\b/i, sel + " { " + k + " } uses a hex");
 });
 
 test("the value box's field focus is listed with the page fields that need one of their own", () => {

@@ -2079,6 +2079,22 @@
      the kit's own hover never reached them and Check again's `.btn-sm` values are asked for again, one id heavier (§C3, as API tokens' row buttons do). */
   #page-host > #settings-modal.as-page > #settings .fs-card .btn:where(:not(.pri)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > #settings #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  /* A narrow card (D4). The card is the container: the window less the sidebar (290), the nav (212) and 64px of padding, 258px at a 760px window,
+     154px of it content box; the three columns need 300px (120 + 24 + 132 + 24) before the sample has a pixel, so below 480px (a 180px sample at
+     least) a row is one column: the label, the stepper (124px at most, its value box giving way first) 8px under it, the sample under that, wrapping
+     in the card where the wide rule cuts it, and Alerts' and Shortcuts' controls under their labels, their long words breaking rather than
+     widening the card; Keyboard shortcuts wraps inside the card (the 701px window's content box is 95px, less than its words); the value box has no
+     padding (its number is centred) so a stepper squeezed to 95px still shows "12.5". 1440 and 1280 (a 610px content box at 1280) are above the step. */
+  #page-host > #settings-modal.as-page .fs-card { container-type: inline-size; }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
+    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 1; }
+    #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 1; max-width: 100%; white-space: normal; }
+    #page-host > #settings-modal.as-page .fs-card .stepper { max-width: 124px; min-width: 0; }
+    #page-host > #settings-modal.as-page .fs-card .stepper .val { flex: 1 1 60px; min-width: 0; max-width: 60px; padding: 0; }
+    #page-host > #settings-modal.as-page .fs-card .sample { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { overflow-wrap: anywhere; }
+  }
 
   /* What the page head already says is not said twice (the phone keeps every one of these strings, so each is
      hidden here and nothing is edited in index.html): the API tokens hint (its description), the Appearance hint
