@@ -1944,6 +1944,45 @@
   #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
   #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
+  /* The one-time reveal's buttons (Copy, Done) are the kit's secondary and ghost. The panel's fill rule above is id-weighted, so the
+     kit's own hover never reached them; each takes its hover back here, one id heavier (§C3 `.btn:hover` --line, `.btn-ghost:hover`), and
+     skipping a primary like every page rule that paints a .btn. */
+  #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn:where(:not(.pri)):where(:not(.gh)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn.gh:hover { background: var(--hover); color: var(--fg); }
+
+  /* API tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
+     the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (`p.t-sm.muted.m2-under`: 8px below the card,
+     2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
+     last 12px, 24px buttons in 5px cells. Dates are `.tnum` (the kit's tabular figures), "Never used" is `.muted`. */
+  #page-host > #settings-modal.as-page #tok-list > .tok-card { overflow: hidden; }
+  #page-host > #settings-modal.as-page #tok-list > .tok-card > .tokempty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  #page-host > #settings-modal.as-page #tok-list > .tok-under { margin-top: 8px; padding: 0 2px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl { table-layout: fixed; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(1) { width: 38%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(2) { width: 22%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(3) { width: 22%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl col:nth-child(4) { width: 18%; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl td { height: auto; padding-top: 7px; padding-bottom: 7px; vertical-align: top; line-height: var(--lh-md); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl th:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child { padding-left: 16px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl th:last-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding-right: 12px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl td.num { padding-top: 5px; padding-bottom: 5px; }
+  /* A name is user text of any length: it wraps inside its column instead of running under Created. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-nm { white-space: normal; overflow-wrap: anywhere; }
+  /* Armed (the confirm stays in the row, as it did): the kit's red row (§C7 `tr.is-elevated`) with the 2px red edge Credentials' danger rows
+     wear; the question runs across the other three columns in red, Cancel and Revoke beside it, and wraps before it pushes them off. */
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm { background: var(--red-tint); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl tr.arm > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-arm { padding-top: 5px; padding-bottom: 5px; white-space: normal; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-confirm { display: flex; align-items: center; gap: 12px; }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-ask { flex: 1 1 auto; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+  #page-host > #settings-modal.as-page #tok-list .tok-tbl .tok-acts { display: flex; flex: none; gap: 4px; }
+  /* Revoke… and Cancel are the kit's small buttons (§C3 `.btn-sm`, `.btn-danger`: the red ring, the red-tint hover). The panel's body rule
+     paints every `.btn` under #tokens at 0 12px, 13px, the secondary fill and a transparent border, so each value is restated one id
+     heavier and after it. */
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-sm:where(:not(.pri)):where(:not(.btn-danger)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)) { border-color: rgba(240,106,106,.45); background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > #tokens #tok-list .btn.btn-danger:where(:not(.pri)):hover { border-color: var(--red); background: var(--red-tint); }
   #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: var(--t-md); }
   #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
   #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }

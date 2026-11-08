@@ -16,6 +16,107 @@ function tokWhen(unix) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+// The desktop page's two date columns (UI plan 4, #174; frame M2.4). The API sends unix seconds: created_at always,
+// last_used_at only once the token has authenticated (internal/auth/tokens.go TokenInfo). A token that never connected
+// says so, in words ("Never used"), and a missing created_at is an empty cell, never a made-up day. The phone's row
+// keeps tokWhen's "used never".
+function tokLastUsed(t) {
+  return t && t.last_used_at ? tokWhen(t.last_used_at) : "Never used";
+}
+
+function tokCreated(t) {
+  return t && t.created_at ? tokWhen(t.created_at) : "";
+}
+
+// What the in-row confirm says, on the phone's row and on the page's alike.
+const TOK_ARM_COPY = "Revoke? That device is signed out on its next request. This cannot be undone.";
+// The approved footnote under the page's card (design digest §A7).
+const TOK_FOOTNOTE = "A token is shown once, when you create it. Revoking one signs that device out on its next request.";
+
+// The Settings dialog as the desktop page (pagehost.js sets as-page), not a phone's modal.
+function tokPageMode() {
+  if (typeof document === "undefined") return false;
+  const m = document.getElementById("settings-modal");
+  return !!m && m.classList.contains("as-page");
+}
+
+// tokEl: an element with a class and, when given, its text. Text only (textContent): a token's name is user input.
+function tokEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// tokBtn: one of a page row's buttons (kit small: "btn btn-sm", or "btn btn-danger btn-sm").
+function tokBtn(label, cls, onclick) {
+  const b = tokEl("button", cls, label);
+  b.type = "button";
+  b.onclick = onclick;
+  return b;
+}
+
+// tokPageRow: one token's row of the page's table. Name, Created and Last used (a muted "Never used"), then Revoke…, or,
+// armed, the confirm inside the row: the question across the other three columns with Cancel and Revoke beside it.
+function tokPageRow(t) {
+  const armed = t.id === armedToken;
+  const tr = tokEl("tr", armed ? "arm" : "");
+  tr.appendChild(tokEl("td", "tok-nm", t.name));
+  if (armed) {
+    const td = tokEl("td", "tok-arm");
+    td.colSpan = 3;
+    const box = tokEl("div", "tok-confirm");
+    box.appendChild(tokEl("span", "tok-ask", TOK_ARM_COPY));
+    const acts = tokEl("div", "tok-acts");
+    // No ellipsis on Revoke: this IS the question, not the promise of one.
+    acts.append(
+      tokBtn("Cancel", "btn btn-sm", () => { armedToken = ""; loadTokens(); }),
+      tokBtn("Revoke", "btn btn-danger btn-sm", () => revokeToken(t.id)),
+    );
+    box.appendChild(acts);
+    td.appendChild(box);
+    tr.appendChild(td);
+    return tr;
+  }
+  tr.appendChild(tokEl("td", "tnum", tokCreated(t)));
+  tr.appendChild(tokEl("td", "tnum" + (t.last_used_at ? "" : " muted"), tokLastUsed(t)));
+  const act = tokEl("td", "num");
+  const arm = tokBtn("Revoke…", "btn btn-danger btn-sm", () => { armedToken = t.id; loadTokens(); });
+  arm.setAttribute("aria-label", "Revoke " + t.name);
+  act.appendChild(arm);
+  tr.appendChild(act);
+  return tr;
+}
+
+// tokPageTable: the kit's .tbl, one colgroup (the shares are desktop.css's), the actions column named for a screen reader.
+function tokPageTable(items) {
+  const table = tokEl("table", "tbl tok-tbl");
+  table.setAttribute("aria-label", "API tokens");
+  const cols = tokEl("colgroup");
+  for (let i = 0; i < 4; i++) cols.appendChild(tokEl("col"));
+  table.appendChild(cols);
+  const head = tokEl("tr");
+  for (const h of ["Name", "Created", "Last used", ""]) {
+    const th = tokEl("th", h ? "" : "num", h);
+    if (!h) th.appendChild(tokEl("span", "sr-only", "Actions"));
+    head.appendChild(th);
+  }
+  table.appendChild(tokEl("thead")).appendChild(head);
+  const body = tokEl("tbody");
+  for (const t of items) body.appendChild(tokPageRow(t));
+  table.appendChild(body);
+  return table;
+}
+
+// tokPaintPage: the desktop page's list: one card holding the table (or the line "No tokens yet."), the approved
+// footnote under it. Both are items of #tok-list, so a repaint clears them with the rows.
+function tokPaintPage(list, items) {
+  const card = tokEl("li", "tok-card card");
+  if (!items || items.length === 0) card.appendChild(tokEl("p", "tokempty", "No tokens yet."));
+  else card.appendChild(tokPageTable(items));
+  list.append(card, tokEl("li", "tok-under t-sm muted", TOK_FOOTNOTE));
+}
+
 // Which token's row, if any, is showing its in-row revoke confirm.
 let armedToken = "";
 
@@ -38,6 +139,8 @@ async function loadTokens() {
   // revoked from another tab, or the "gone" case of the list being empty.
   if (armedToken && !(items || []).some((t) => t.id === armedToken)) armedToken = "";
   list.textContent = "";
+  // Checked now, after the request: the first open of Settings selects this tab before the dialog becomes the page.
+  if (tokPageMode()) { tokPaintPage(list, items); return; }
   if (!items || items.length === 0) {
     const li = document.createElement("li");
     li.className = "tokempty";
@@ -56,7 +159,7 @@ async function loadTokens() {
     const meta = document.createElement("span");
     meta.className = "meta";
     if (t.id === armedToken) {
-      meta.textContent = "Revoke? That device is signed out on its next request. This cannot be undone.";
+      meta.textContent = TOK_ARM_COPY;
     } else {
       meta.textContent = "used " + tokWhen(t.last_used_at);
       meta.title = "Created " + tokWhen(t.created_at);
@@ -188,5 +291,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { tokWhen };
+  module.exports = { tokWhen, tokLastUsed, tokCreated };
 }
