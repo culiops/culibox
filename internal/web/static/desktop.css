@@ -2343,12 +2343,23 @@
   #page-host > #audit-page.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* The table's card clips the row tint to its 8px corners (the frame's inline overflow: hidden). */
-  #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; }
+  #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; container-name: au-card; container-type: inline-size; }
   #page-host > #audit-page.as-page .au-tbl { table-layout: fixed; }
   #page-host > #audit-page.as-page .au-tbl th:nth-child(1) { width: 116px; }
   #page-host > #audit-page.as-page .au-tbl th:nth-child(2) { width: 150px; }
   #page-host > #audit-page.as-page .au-tbl th:nth-child(3) { width: 112px; }
   #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: 150px; }
+  /* The fixed columns take 528px and What gets the rest. In a card narrower than that plus about 240px for What (a window under
+     about 1124px, the sidebar being 290px and the page's sides 64px) What would shrink to its cell padding and every row wrap to a
+     character a line, with the card clipping whatever ran past its edge. There the table sizes its columns to their content
+     instead: Time and Kind stay on one line, Session, What and Outcome wrap, nothing clips and nothing scrolls sideways. */
+  @container au-card (max-width: 769px) {
+    #page-host > #audit-page.as-page .au-tbl { table-layout: auto; }
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: auto; }
+  }
   /* Session, What and Outcome wrap instead of clipping (the frame's .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
   #page-host > #audit-page.as-page .au-tbl td.au-sess,
   #page-host > #audit-page.as-page .au-tbl td.au-what,

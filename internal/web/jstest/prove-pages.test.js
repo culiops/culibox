@@ -19,8 +19,8 @@ const APP_CSS = stripComments(read("app.css"));
 
 // --- the CSS, as rules ----------------------------------------------------------------------------------------
 
-// parseRules: every style rule of `src` (comments stripped) as { selector, decls: Map }. A ";" or a brace inside quotes or
-// parentheses is part of the value. At-rule containers (@media) are walked through.
+// parseRules: every style rule of `src` (comments stripped) as { selector, decls: Map, at: [the at-rules around it] }. A ";"
+// or a brace inside quotes or parentheses is part of the value. At-rule containers (@media, @container) are walked through.
 function parseRules(src) {
   const rules = [];
   const stack = [];
@@ -41,7 +41,7 @@ function parseRules(src) {
     if (ch === "(") paren++;
     else if (ch === ")") paren--;
     if (paren === 0 && ch === "{") {
-      stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: new Map() });
+      stack.push({ selector: buf.trim().replace(/\s+/g, " "), decls: new Map(), at: stack.map((n) => n.selector).filter((x) => x.startsWith("@")) });
       buf = "";
     } else if (paren === 0 && ch === ";") {
       flush();
@@ -71,8 +71,13 @@ function parts(list) {
 }
 
 const RULES = parseRules(DESK_CSS);
-// decls: the cascade of every desktop rule that lists exactly `sel` (later rules win), as one Map. Empty when none does.
-function decls(sel, rules = RULES) {
+// Desktop.css is one @media block; a rule inside an @container (the Audit table's narrow card) is a different cascade.
+const inContainer = (r) => r.at.some((a) => a.startsWith("@container"));
+const BASE_RULES = RULES.filter((r) => !inContainer(r));
+const CONTAINER_RULES = RULES.filter(inContainer);
+// decls: the cascade of every desktop rule outside an @container that lists exactly `sel` (later rules win), as one Map.
+// Empty when none does.
+function decls(sel, rules = BASE_RULES) {
   const out = new Map();
   for (const r of rules) if (parts(r.selector).includes(sel)) for (const [k, v] of r.decls) out.set(k, v);
   return out;
@@ -579,6 +584,35 @@ test("the Audit table is fixed at 116/150/112/auto/150, and only the Time cell i
   // Kind and Outcome rest muted.
   assert.strictEqual(decls(AU + " .au-tbl td.au-kind").get("color"), "var(--muted)");
   assert.strictEqual(decls(AU + " .au-tbl td.au-out").get("color"), "var(--muted)");
+});
+
+// A window under about 1124px leaves the card under 770px, where the fixed columns (528px) would leave What nothing: the
+// table then sizes its columns to their content (Review Focus 2: never clip mid-cell, nothing scrolls sideways).
+test("a card too narrow for the fixed columns sizes them to content, in a container query", () => {
+  const card = decls(AU + " .au-card");
+  assert.strictEqual(card.get("container-type"), "inline-size");
+  assert.strictEqual(card.get("container-name"), "au-card");
+  assert.strictEqual(card.get("overflow"), "hidden", "still clips the row tint to the corners where there is room");
+  const fixed = [1, 2, 3, 5].reduce((n, i) => n + parseInt(decls(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), 10), 0);
+  assert.strictEqual(fixed, 528);
+  // One @container, on the card, below the fixed columns plus ~240px for What.
+  const queries = [...new Set(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU + " .au-tbl"))).flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
+  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)"]);
+  const max = Number(/max-width:\s*(\d+)px/.exec(queries[0])[1]);
+  assert.ok(max + 1 >= fixed + 240, "What keeps about 240px (" + (max + 1 - fixed) + "px)");
+  assert.ok(max + 1 <= fixed + 260, "and the fixed layout is not given up sooner than that");
+  const inside = (sel) => decls(sel, CONTAINER_RULES);
+  assert.strictEqual(inside(AU + " .au-tbl").get("table-layout"), "auto");
+  for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), "auto", "th " + i);
+  // Nothing else changes in the narrow card: What stays the one column with no width of its own, and the wrap cells keep
+  // wrapping (the base rules above are not repeated or undone here).
+  assert.deepStrictEqual(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
+    ["table-layout", "width"]);
+  assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("white-space"), "normal");
+  assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("overflow-wrap"), "anywhere");
+  // The base rules come first: a container rule has the same weight as the base one it undoes, so the later one wins.
+  const src = stripComments(read("desktop.css"));
+  assert.ok(src.indexOf("@container au-card") > src.indexOf(AU + " .au-tbl th:nth-child(5) { width: 150px; }"));
 });
 
 test("What and Session wrap, never clip: normal white-space, anywhere, 20px lines, 6px above and below", () => {
