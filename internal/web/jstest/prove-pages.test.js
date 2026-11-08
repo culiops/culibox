@@ -1422,6 +1422,10 @@ test("no Analytics head rule uses color-mix, nesting or @layer, and none sets a 
 // §C9, §F4, §G5, §G9, §G11)
 // =====================================================================================================================
 
+// stripAnalytics: analytics.js without its comments, line comments first: the file's own first line mentions "/api/analytics/*",
+// which stripJsComments would take for the start of a block comment and swallow the next four hundred lines.
+const stripAnalytics = (s) => s.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+
 // A made-up window, in the shape /api/analytics/* returns it: two days of one model, two unpriced models, three projects,
 // four sessions (one in a long-named project, one with a single model) and tools of two kinds.
 const ROW = (o) => ({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 0, costUsd: 0, ...o });
@@ -1627,13 +1631,13 @@ test("Sessions on the page follow M3.2", () => {
     ["", [["span", "mono t-sm", "3d6b98e8"]], "3d6b98e8"],
     ["sub tnum", [], "2026-10-31"],
     ["an-wrap", [["span", "mono t-sm", "acme-api"]], "acme-api"],
-    ["sub an-wrap", [], "mixed"],
+    ["sub", [], "mixed"],
     ["num", [], "634.3M"],
     ["num", [], "11"],
     ["num w-500", [], "$121"],
   ]);
   assert.deepStrictEqual(rows[1].map(cell).map((c) => c[2]), ["2cf1c405", "2026-10-30", "acme-terraform-course-eu-west", "opus-5-5", "410.7M", "116", "$90.00"]);
-  assert.deepStrictEqual(cell(rows[1][3]), ["an-wrap", [["span", "mono t-sm", "opus-5-5"]], "opus-5-5"], "a single model is mono, not muted");
+  assert.deepStrictEqual(cell(rows[1][3]), ["", [["span", "mono t-sm", "opus-5-5"]], "opus-5-5"], "a single model is mono, not muted (§B8: no wrap class)");
   assert.deepStrictEqual(cell(rows[1][2])[1], [["span", "mono t-sm", "acme-terraform-course-eu-west"]], "a long project name is whole in its cell: CSS wraps it");
   assert.deepStrictEqual(rows.map((r) => r[0].textContent), ["3d6b98e8", "2cf1c405", "9d3dc2af", "0174c7b1"]);
 
@@ -1749,7 +1753,7 @@ test("the page's cards and sections: a panel with the kit's radius, a title row 
   // The phone's amber .card is never worn: the page's card has its own name.
   const WEARS_CARD = /["'`](?:[^"'`\n]*\s)?card(?:\s[^"'`\n]*)?["'`]/;
   assert.ok(WEARS_CARD.test('el("div", "card")') && WEARS_CARD.test('el("div", "x card y")') && !WEARS_CARD.test('el("div", "an-card")'), "the matcher sees a class word");
-  assert.ok(!WEARS_CARD.test(stripJsComments(read("analytics.js"))), "no element of analytics.js wears .card");
+  assert.ok(!WEARS_CARD.test(stripAnalytics(read("analytics.js"))), "no element of analytics.js wears .card");
 });
 
 test("Models, Projects and Tools on the page: cards, kit tables and section titles, the same content", () => {
@@ -1855,4 +1859,75 @@ test("every class the Analytics views build has a rule or is a named hook", () =
   const css = DESK_CSS + APP_CSS + stripComments(read("primitives.css"));
   const defined = new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
   assert.deepStrictEqual([...used].filter((c) => !defined.has(c) && !hooks.has(c)), [], "classes with no rule");
+});
+
+test("Model cells are nowrap cells: only Project wraps, so Model keeps its word width in a narrow body", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  loadWindow(env);
+  const { rows } = tableOf(view(env, "anSessions").elements[1].elements[0].elements[1]);
+  assert.ok(rows.length >= 2);
+  for (const r of rows) {
+    assert.deepStrictEqual(r.map((c) => c.cls.includes("an-wrap")), [false, false, true, false, false, false, false], "§B8: Project is the wrap cell, no other");
+  }
+  // The cascade for a Model cell (the 4th): no rule that reaches an .an-table cell by position or by class other than .an-wrap
+  // sets a wrap, and the base cell is nowrap; so a nowrap word can't be squeezed to one glyph by the auto layout.
+  assert.strictEqual(decls(ANP + " .an-table td").get("white-space"), "nowrap");
+  const wrapping = [...RULES].filter((r) => (r.decls.get("white-space") === "normal" || r.decls.get("overflow-wrap") === "anywhere") && parts(r.selector).some((s) => s.startsWith(ANP) && /\.an-(?:table|stbl)/.test(s)));
+  assert.deepStrictEqual(wrapping.map((r) => r.selector), [ANP + " .an-table td.an-wrap"], "only the .an-wrap cell wraps");
+  // The narrow layout gives Project a floor and no other column one: the shortage goes to the wrap cell, never to Model.
+  const narrow = CONTAINER_RULES.filter((r) => r.at.includes("@container an-body (max-width: 671px)") && parts(r.selector).some((s) => /\.an-stbl/.test(s)));
+  const floors = narrow.filter((r) => r.decls.has("min-width")).flatMap((r) => parts(r.selector));
+  assert.deepStrictEqual(floors, [ANP + " .an-stbl :is(th, td):nth-child(3)"]);
+  assert.ok(!narrow.some((r) => r.decls.has("white-space") || r.decls.has("overflow-wrap")), "the narrow layout changes no cell's wrapping");
+});
+
+// --- the page's views and the phone's share their data preparation ------------------------------------------------
+
+test("the page and the phone say the same thing: figures, colours, caps and words come from one preparation", () => {
+  const collect = (root) => {
+    const out = { titles: [], hints: [], cardTitles: [], bars: [], tables: [] };
+    const walk = (n) => {
+      const c = n.cls;
+      if (n.tag === "h3" && !c.length && n.parent && n.parent.cls.includes("an-section")) out.titles.push(n.textContent);
+      if (n.tag === "h2" && c.includes("section-title")) out.titles.push(n.textContent);
+      if (c.includes("an-hint")) out.hints.push(n.textContent);
+      if (n.tag === "span" && c.includes("muted") && n.parent && n.parent.cls.includes("an-psec-head")) out.hints.push(n.textContent);
+      if (n.tag === "h4" || (n.tag === "h3" && c.includes("w-600"))) out.cardTitles.push(n.textContent);
+      if (c.includes("an-hbar")) out.bars.push([n.elements[0].textContent, n.elements[2].textContent, n.elements[1].elements.map((f) => [f.style.width, f.style.background])]);
+      if (n.tag === "table") out.tables.push(n.elements.map((r) => r.elements.map((x) => x.textContent)));
+      n.elements.forEach(walk);
+    };
+    walk(root);
+    return out;
+  };
+  const both = (fn, over) => {
+    const phone = analyticsEnv(); phone.page(false); loadWindow(phone, over);
+    const page = analyticsEnv(); page.page(true); loadWindow(page, over);
+    return [collect(view(phone, fn)), collect(view(page, fn))];
+  };
+  const lower = (rows) => rows.map((r, i) => (i ? r : r.map((t) => t.toLowerCase())));
+  for (const fn of ["anModels", "anProjects", "anTools"]) {
+    const [ph, pg] = both(fn);
+    assert.ok(ph.titles.length >= 1, fn);
+    assert.deepStrictEqual(pg.titles, ph.titles, fn + ": section titles");
+    assert.deepStrictEqual(pg.hints, ph.hints, fn + ": captions");
+    assert.deepStrictEqual(pg.cardTitles, ph.cardTitles, fn + ": card titles");
+    assert.deepStrictEqual(pg.bars, ph.bars, fn + ": bars (names, values, widths, colours)");
+    assert.deepStrictEqual(pg.tables.map(lower), ph.tables.map(lower), fn + ": table rows (the page capitalises the heads)");
+  }
+  // Sessions: the title and the rows. (The phone's "Session shape" boxes and caption differ by design: §F4.)
+  const [ph, pg] = both("anSessions");
+  assert.ok(ph.titles.includes("Top sessions by cost") && pg.titles.includes("Top sessions by cost"));
+  assert.deepStrictEqual(pg.tables.map(lower), ph.tables.map(lower));
+  // No tools: the same sentence.
+  const [pn, gn] = both("anTools", { tools: [] });
+  assert.deepStrictEqual(gn.hints, pn.hints);
+
+  // One definition each: a tool kind's colour, the tool cap, and the words of the three views are written once in analytics.js.
+  const src = stripAnalytics(read("analytics.js"));
+  assert.ok(src.includes("function anModelsPage") && src.includes("function anToolsPage"), "the strip kept the whole file");
+  const once = (lit) => assert.strictEqual(src.split(lit).length - 1, 1, lit + " is written once");
+  for (const lit of ["What the agents actually invoked", "No skill/plugin/MCP attribution", "Per-model breakdown", "Cost, volume & efficiency", "cache-read dominates tokens", "Share of tokens", "Share of cost",
+    "Bar split shows the model mix", "mcp_server: \"var(--an-3)\"", "plugin: \"var(--an-4)\"", "\"model\", \"cost\", \"% cost\"", "\"project\", \"cost\", \"tokens\", \"prompts\"", "\"session\", \"day\", \"project\", \"model\""]) once(lit);
 });

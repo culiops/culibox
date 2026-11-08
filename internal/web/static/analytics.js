@@ -270,6 +270,88 @@ function anSessionKpis(d) {
   ];
 }
 
+// ---- what the Models, Projects, Sessions and Tools views say: one preparation for both skins ----------------------
+// The phone's modal (anModels, anProjects, anSessions, anTools) and the desktop page (the an...Page builders) draw different DOM
+// from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
+
+const AN_COPY = {
+  models: {
+    title: "Per-model breakdown", hint: "Cost, volume & efficiency · window",
+    shareTitle: "Why $ ≠ token count", shareHint: "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree",
+    tokens: "Share of tokens", cost: "Share of cost",
+  },
+  projects: { title: "Cost by project", hint: "Bar split shows the model mix inside each project · window", detail: "Detail" },
+  sessions: { title: "Top sessions by cost" },
+  tools: { title: "Skills · plugins · MCP", hint: "What the agents actually invoked · by records", none: "No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)." },
+};
+// A table's columns and where its numbers start (anHead gives the th from there on .num; the page capitalises the labels).
+const AN_TABLES = {
+  models: [["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1],
+  projects: [["project", "cost", "tokens", "prompts"], 1],
+  sessions: [["session", "day", "project", "model", "tokens", "prompts", "cost"], 4],
+};
+const AN_TOOL_COLORS = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
+
+// anToolGroups: tools rows ({kind, name, records}) as one group per kind, in the order the kinds are met: its colour (the accent
+// for a kind not listed), its first ten rows and the longest bar among them (never under 1).
+function anToolGroups(tools) {
+  const kinds = {};
+  for (const t of tools || []) (kinds[t.kind] = kinds[t.kind] || []).push(t);
+  return Object.keys(kinds).map((kind) => {
+    const items = kinds[kind].slice(0, 10);
+    return { kind, color: AN_TOOL_COLORS[kind] || "var(--accent)", items, max: Math.max(1, ...items.map((t) => t.records)) };
+  });
+}
+
+// anPct: v as a whole percent of total, "59%".
+function anPct(v, total) { return Math.round(v / total * 100) + "%"; }
+
+// anModelFold: the Models view's data: normModels rows with the $0 models folded into "other (unpriced)", the totals the shares
+// divide by (never 0) and the longest token and cost bars (never under 1).
+function anModelFold(byModel) {
+  const rows = collapseZeroCost(byModel);
+  return {
+    rows,
+    totalCost: rows.reduce((s, x) => s + x.cost, 0) || 1,
+    totalTokens: rows.reduce((s, x) => s + x.tokens, 0) || 1,
+    maxTokens: Math.max(1, ...rows.map((x) => x.tokens)),
+    maxCost: Math.max(1, ...rows.map((x) => x.cost)),
+  };
+}
+
+// anModelCells: a model row's figures after its name, as the table prints them (a fold's row).
+function anModelCells(x, fold) {
+  return {
+    cost: usd(x.cost), pct: anPct(x.cost, fold.totalCost), tokens: fmtCompact(x.tokens), prompts: String(x.prompts),
+    outPerPrompt: fmtCompact(x.outPerPrompt), cache: (x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0) + "%",
+  };
+}
+
+// anProjectBars: foldProjects rows as the stacked bars: each project's name, cost and segments (dearest model first, coloured by
+// its place in `models`, titled "model $cost"), and the longest bar (never under 1).
+function anProjectBars(byProject, models) {
+  return {
+    max: Math.max(1, ...byProject.map((x) => x.cost)),
+    bars: byProject.map((p) => ({
+      name: projShort(p.project), cost: p.cost,
+      segs: Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(models, m), t: shortModel(m) + " " + usd(v) })),
+    })),
+  };
+}
+
+// anProjectRow: a project's detail row as text.
+function anProjectRow(p) {
+  return { name: projShort(p.project), cost: usd(p.cost), tokens: fmtCompact(p.tokens), prompts: String(p.prompts) };
+}
+
+// anSessionRow: a top session (topSessionsByCost) as text. `mixed` marks the several-model case, whose model is the word "mixed".
+function anSessionRow(s) {
+  return {
+    sid: s.sid, day: s.day, project: projShort(s.project), model: shortModel(s.model), mixed: s.model === "mixed",
+    tokens: fmtCompact(s.tokens), prompts: String(s.prompts), cost: usd(s.cost),
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
@@ -277,6 +359,7 @@ if (typeof module !== "undefined" && module.exports) {
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
+    anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
   };
 }
 
@@ -674,35 +757,30 @@ function anOverview(root) {
 function anModels(root) {
   if (anIsPage()) return anModelsPage(root);
   const d = AN.data;
-  const sec = anSection("Per-model breakdown", "Cost, volume & efficiency · window");
-  const mc = collapseZeroCost(d.byModel); // fold $0 (unpriced) models into "other"
+  const sec = anSection(AN_COPY.models.title, AN_COPY.models.hint);
+  const fold = anModelFold(d.byModel); // $0 (unpriced) models are folded into "other"
   const box = el("div", "an-box");
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1));
-  const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
-  for (const x of mc) {
+  tbl.appendChild(anHead(...AN_TABLES.models));
+  for (const x of fold.rows) {
     const tr = el("tr");
     const nm = el("td", "mono");
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, document.createTextNode(shortModel(x.model)));
-    const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
-    tr.append(nm, anTd(usd(x.cost), "num"), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim num"),
-      anTd(fmtCompact(x.tokens), "dim num"), anTd(String(x.prompts), "dim num"),
-      anTd(fmtCompact(x.outPerPrompt), "dim num"), anTd(crShare + "%", "dim num"));
+    const c = anModelCells(x, fold);
+    tr.append(nm, anTd(c.cost, "num"), anTd(c.pct, "dim num"), anTd(c.tokens, "dim num"), anTd(c.prompts, "dim num"),
+      anTd(c.outPerPrompt, "dim num"), anTd(c.cache, "dim num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 
   const g = el("div", "an-grid2");
-  const totTok = mc.reduce((s, x) => s + x.tokens, 0) || 1;
-  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, "Share of tokens"));
-  const maxTok = Math.max(1, ...mc.map((x) => x.tokens));
-  for (const x of mc) anHbar(bt, shortModel(x.model), x.tokens, maxTok, anModelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
-  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, "Share of cost"));
-  const maxC = Math.max(1, ...mc.map((x) => x.cost));
-  for (const x of mc) anHbar(bc, shortModel(x.model), x.cost, maxC, anModelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, AN_COPY.models.tokens));
+  for (const x of fold.rows) anHbar(bt, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
+  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, AN_COPY.models.cost));
+  for (const x of fold.rows) anHbar(bc, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
   g.append(bt, bc);
-  const s2 = anSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
+  const s2 = anSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
   s2.appendChild(g); root.appendChild(s2);
 }
 
@@ -710,22 +788,20 @@ function anModels(root) {
 function anProjects(root) {
   if (anIsPage()) return anProjectsPage(root);
   const d = AN.data;
-  const sec = anSection("Cost by project", "Bar split shows the model mix inside each project · window");
+  const sec = anSection(AN_COPY.projects.title, AN_COPY.projects.hint);
   const box = el("div", "an-box");
-  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
-  for (const p of d.byProject) {
-    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
-    anHbarSegs(box, projShort(p.project), p.cost, maxP, segs, usd);
-  }
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars) anHbarSegs(box, b.name, b.cost, pb.max, b.segs, usd);
   anLegend(box, d.models);
   sec.appendChild(box); root.appendChild(sec);
 
-  const s2 = anSection("Detail");
+  const s2 = anSection(AN_COPY.projects.detail);
   const box2 = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"], 1));
+  tbl.appendChild(anHead(...AN_TABLES.projects));
   for (const p of d.byProject) {
+    const r = anProjectRow(p);
     const tr = el("tr");
-    tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost), "num"), anTd(fmtCompact(p.tokens), "dim num"), anTd(String(p.prompts), "dim num"));
+    tr.append(anTd(r.name, "mono"), anTd(r.cost, "num"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"));
     tbl.appendChild(tr);
   }
   box2.appendChild(anTableWrap(tbl)); s2.appendChild(box2); root.appendChild(s2);
@@ -758,13 +834,14 @@ function anSessions(root) {
   g.append(bh, bk);
   const s1 = anSection("Session shape"); s1.appendChild(g); root.appendChild(s1);
 
-  const sec = anSection("Top sessions by cost", "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
+  const sec = anSection(AN_COPY.sessions.title, "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4));
+  tbl.appendChild(anHead(...AN_TABLES.sessions));
   for (const s of d.topSessions) {
+    const r = anSessionRow(s);
     const tr = el("tr");
-    tr.append(anTd(s.sid, "mono"), anTd(s.day, "dim"), anTd(projShort(s.project), "mono"),
-      anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim num"), anTd(String(s.prompts), "dim num"), anTd(usd(s.cost), "num"));
+    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), anTd(r.project, "mono"),
+      anTd(r.model, "dim"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"), anTd(r.cost, "num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
@@ -774,20 +851,15 @@ function anSessions(root) {
 function anTools(root) {
   if (anIsPage()) return anToolsPage(root);
   const d = AN.data;
-  const sec = anSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
+  const sec = anSection(AN_COPY.tools.title, AN_COPY.tools.hint);
   if (!d.tools.length) {
-    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
+    sec.appendChild(anEmpty(AN_COPY.tools.none));
     root.appendChild(sec); return;
   }
-  const kinds = {};
-  for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
-  const kc = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
   const g = el("div", "an-grid2");
-  for (const kind of Object.keys(kinds)) {
-    const box = el("div", "an-box"); box.appendChild(el("h4", null, kind));
-    const items = kinds[kind].slice(0, 10);
-    const max = Math.max(1, ...items.map((t) => t.records));
-    for (const t of items) anHbar(box, t.name, t.records, max, kc[kind] || "var(--accent)", fmtCompact);
+  for (const grp of anToolGroups(d.tools)) {
+    const box = el("div", "an-box"); box.appendChild(el("h4", null, grp.kind));
+    for (const t of grp.items) anHbar(box, t.name, t.records, grp.max, grp.color, fmtCompact);
     g.appendChild(box);
   }
   sec.appendChild(g); root.appendChild(sec);
@@ -795,6 +867,8 @@ function anTools(root) {
 
 // ---- the desktop page's views (Models, Projects, Sessions, Tools) ------------------------------------------------------
 // The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
+// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES, anToolGroups,
+// anModelFold, anProjectBars, anSessionRow ...): only the DOM differs.
 // The page's parts are the kit's: a KPI row, h2.section-title with its caption, cards (.an-card: --panel and --r-card, a name
 // of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
 // Models, Projects and Tools have no frame: they carry today's content in those parts (plan call 13).
@@ -802,21 +876,19 @@ function anTools(root) {
 // anModelsPage: the per-model table in a card, then the two share cards under "Why $ ≠ token count".
 function anModelsPage(root) {
   const d = AN.data;
-  const mc = collapseZeroCost(d.byModel);
-  const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
-  const sec = anPSection("Per-model breakdown", "Cost, volume & efficiency · window");
+  const fold = anModelFold(d.byModel);
+  const sec = anPSection(AN_COPY.models.title, AN_COPY.models.hint);
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1));
-  for (const x of mc) {
+  tbl.appendChild(anHead(...AN_TABLES.models));
+  for (const x of fold.rows) {
     const tr = el("tr");
     // A model id is machine text (mono); the "other (unpriced)" row is a label, so sans and muted.
     const nm = el("td");
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, el("span", x.model === "other (unpriced)" ? "muted" : "mono t-sm", shortModel(x.model)));
-    const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
-    tr.append(nm, anTd(usd(x.cost), "num w-500"), anTd(Math.round(x.cost / totalCost * 100) + "%", "num"),
-      anTd(fmtCompact(x.tokens), "num"), anTd(String(x.prompts), "num"),
-      anTd(fmtCompact(x.outPerPrompt), "num"), anTd(crShare + "%", "num"));
+    const c = anModelCells(x, fold);
+    tr.append(nm, anTd(c.cost, "num w-500"), anTd(c.pct, "num"), anTd(c.tokens, "num"), anTd(c.prompts, "num"),
+      anTd(c.outPerPrompt, "num"), anTd(c.cache, "num"));
     tbl.appendChild(tr);
   }
   const card = anCard();
@@ -824,16 +896,13 @@ function anModelsPage(root) {
   sec.appendChild(card);
   root.appendChild(sec);
 
-  const totTok = mc.reduce((s, x) => s + x.tokens, 0) || 1;
-  const bt = anCard("Share of tokens"), bc = anCard("Share of cost");
+  const bt = anCard(AN_COPY.models.tokens), bc = anCard(AN_COPY.models.cost);
   const bodyT = anCardBody(bt), bodyC = anCardBody(bc);
-  const maxTok = Math.max(1, ...mc.map((x) => x.tokens));
-  for (const x of mc) anHbar(bodyT, shortModel(x.model), x.tokens, maxTok, anModelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
-  const maxC = Math.max(1, ...mc.map((x) => x.cost));
-  for (const x of mc) anHbar(bodyC, shortModel(x.model), x.cost, maxC, anModelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  for (const x of fold.rows) anHbar(bodyT, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
+  for (const x of fold.rows) anHbar(bodyC, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
   const g = el("div", "an-pgrid");
   g.append(bt, bc);
-  const s2 = anPSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
+  const s2 = anPSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
   s2.appendChild(g);
   root.appendChild(s2);
 }
@@ -841,24 +910,22 @@ function anModelsPage(root) {
 // anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
 function anProjectsPage(root) {
   const d = AN.data;
-  const sec = anPSection("Cost by project", "Bar split shows the model mix inside each project · window");
+  const sec = anPSection(AN_COPY.projects.title, AN_COPY.projects.hint);
   const card = anCard();
   const body = anCardBody(card);
-  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
-  for (const p of d.byProject) {
-    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
-    anHbarSegs(body, projShort(p.project), p.cost, maxP, segs, usd);
-  }
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars) anHbarSegs(body, b.name, b.cost, pb.max, b.segs, usd);
   anLegend(body, d.models);
   sec.appendChild(card);
   root.appendChild(sec);
 
-  const s2 = anPSection("Detail");
+  const s2 = anPSection(AN_COPY.projects.detail);
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"], 1));
+  tbl.appendChild(anHead(...AN_TABLES.projects));
   for (const p of d.byProject) {
+    const r = anProjectRow(p);
     const tr = el("tr");
-    tr.append(anIdTd(projShort(p.project), "an-wrap"), anTd(usd(p.cost), "num w-500"), anTd(fmtCompact(p.tokens), "num"), anTd(String(p.prompts), "num"));
+    tr.append(anIdTd(r.name, "an-wrap"), anTd(r.cost, "num w-500"), anTd(r.tokens, "num"), anTd(r.prompts, "num"));
     tbl.appendChild(tr);
   }
   const card2 = anCard();
@@ -874,15 +941,17 @@ function anSessionsPage(root) {
   root.appendChild(anKpiRow(anSessionKpis(d)));
   const split = el("div", "an-split");
 
-  const left = anPSection("Top sessions by cost", "Spot the runaway session. Counts include subagent and synthetic transcripts.");
+  const left = anPSection(AN_COPY.sessions.title, "Spot the runaway session. Counts include subagent and synthetic transcripts.");
   const tbl = el("table", "an-table an-stbl");
-  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4));
+  tbl.appendChild(anHead(...AN_TABLES.sessions));
   for (const s of d.topSessions) {
+    const r = anSessionRow(s);
     const tr = el("tr");
-    // Session, Project and a single Model are ids (mono, wrapping instead of clipping); "mixed" and the day are muted sans.
-    tr.append(anIdTd(s.sid), anTd(s.day, "sub tnum"), anIdTd(projShort(s.project), "an-wrap"),
-      s.model === "mixed" ? anTd("mixed", "sub an-wrap") : anIdTd(shortModel(s.model), "an-wrap"),
-      anTd(fmtCompact(s.tokens), "num"), anTd(String(s.prompts), "num"), anTd(usd(s.cost), "num w-500"));
+    // Session, Project and a single Model are ids (mono); "mixed" and the day are muted sans. Only Project wraps (§B8 .m3-wrap):
+    // Session and Model are words that keep their width.
+    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), anIdTd(r.project, "an-wrap"),
+      r.mixed ? anTd(r.model, "sub") : anIdTd(r.model),
+      anTd(r.tokens, "num"), anTd(r.prompts, "num"), anTd(r.cost, "num w-500"));
     tbl.appendChild(tr);
   }
   const card = anCard();
@@ -911,21 +980,16 @@ function anSessionsPage(root) {
 // anToolsPage: one card per kind, as today's boxes.
 function anToolsPage(root) {
   const d = AN.data;
-  const sec = anPSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
+  const sec = anPSection(AN_COPY.tools.title, AN_COPY.tools.hint);
   if (!d.tools.length) {
-    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
+    sec.appendChild(anEmpty(AN_COPY.tools.none));
     root.appendChild(sec); return;
   }
-  const kinds = {};
-  for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
-  const kc = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
   const g = el("div", "an-pgrid");
-  for (const kind of Object.keys(kinds)) {
-    const card = anCard(kind);
+  for (const grp of anToolGroups(d.tools)) {
+    const card = anCard(grp.kind);
     const body = anCardBody(card);
-    const items = kinds[kind].slice(0, 10);
-    const max = Math.max(1, ...items.map((t) => t.records));
-    for (const t of items) anHbar(body, t.name, t.records, max, kc[kind] || "var(--accent)", fmtCompact);
+    for (const t of grp.items) anHbar(body, t.name, t.records, grp.max, grp.color, fmtCompact);
     g.appendChild(card);
   }
   sec.appendChild(g);

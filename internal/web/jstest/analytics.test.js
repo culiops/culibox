@@ -7,6 +7,7 @@ const {
   foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
   daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
+  anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -283,4 +284,67 @@ test("anSessionKpis: no sessions or projects gives a dash and the plain label", 
   const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], byProject: [{ project: "", cost: 3 }] });
   assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Costliest project"]);
   assert.deepEqual(nameless.map((t) => t.value), ["1", "$3.00", "$3.00"]);
+});
+
+// ---- the data both builders share (the phone's modal and the desktop page): one preparation, two sets of DOM ----
+
+test("anToolGroups: a group per kind in the order met, ten rows at most, the kind's colour, the accent for an unknown kind", () => {
+  const tools = [];
+  for (let i = 1; i <= 12; i++) tools.push({ kind: "skill", name: "s" + i, records: i });
+  tools.push({ kind: "mcp_server", name: "docs", records: 3 }, { kind: "plugin", name: "p", records: 0 }, { kind: "novel", name: "n", records: 2 }, { kind: "mcp_tool", name: "t", records: 1 });
+  const groups = anToolGroups(tools);
+  assert.deepEqual(groups.map((g) => g.kind), ["skill", "mcp_server", "plugin", "novel", "mcp_tool"]);
+  assert.deepEqual(groups.map((g) => g.color), ["var(--an-2)", "var(--an-3)", "var(--an-4)", "var(--accent)", "var(--an-1)"]);
+  assert.equal(groups[0].items.length, 10);
+  assert.deepEqual(groups[0].items.map((t) => t.name), ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"], "the first ten, in the order given");
+  assert.deepEqual(groups.map((g) => g.max), [10, 3, 1, 2, 1], "the longest bar in the group's own rows; never under 1");
+  assert.deepEqual(anToolGroups([]), []);
+  assert.deepEqual(anToolGroups(undefined), []);
+});
+
+test("anModelFold, anModelCells and anPct: the Models figures", () => {
+  const rows = normModels([
+    { model: "claude-opus-5-5", input: 4100, output: 200, cacheRead: 6100, cacheCreation: 0, prompts: 4, sessions: 4, costUsd: 4300 },
+    { model: "<synthetic>", prompts: 41, sessions: 3 },
+    { model: "", prompts: 27, sessions: 1 },
+  ]);
+  const f = anModelFold(rows);
+  assert.deepEqual(f.rows.map((r) => r.model), ["claude-opus-5-5", "other (unpriced)"], "zero-cost models fold into one row");
+  assert.equal(f.totalCost, 4300);
+  assert.equal(f.totalTokens, 10400);
+  assert.equal(f.maxTokens, 10400);
+  assert.equal(f.maxCost, 4300);
+  assert.deepEqual({ ...anModelCells(f.rows[0], f) }, { cost: "$4.3k", pct: "100%", tokens: "10k", prompts: "4", outPerPrompt: "50", cache: "59%" });
+  assert.deepEqual({ ...anModelCells(f.rows[1], f) }, { cost: "$0.00", pct: "0%", tokens: "0", prompts: "68", outPerPrompt: "0", cache: "0%" }, "no tokens: a 0% cache share, not NaN");
+  assert.equal(anPct(1, 3), "33%");
+  assert.equal(anPct(2, 3), "67%");
+  // Nothing priced and nothing counted: totals and maxima stay at 1, so no bar or share divides by zero.
+  const none = anModelFold([]);
+  assert.deepEqual([none.rows.length, none.totalCost, none.totalTokens, none.maxTokens, none.maxCost], [0, 1, 1, 1, 1]);
+});
+
+test("anProjectBars and anProjectRow: the stacked bars' segments (dearest model first) and the detail row", () => {
+  const byProject = foldProjects([
+    { project: "-home-dev-acme-api", model: "a", input: 10, prompts: 2, costUsd: 1 },
+    { project: "-home-dev-acme-api", model: "b", input: 5, prompts: 1, costUsd: 3 },
+    { project: "-home-dev-acme-web", model: "a", input: 1500, prompts: 7, costUsd: 2 },
+  ], 14);
+  const bars = anProjectBars(byProject, ["a", "b"]);
+  assert.equal(bars.max, 4);
+  assert.deepEqual(bars.bars.map((b) => [b.name, b.cost]), [["acme-api", 4], ["acme-web", 2]]);
+  assert.deepEqual(bars.bars[0].segs.map((g) => ({ ...g })), [
+    { v: 3, c: "var(--an-2)", t: "b $3.00" },
+    { v: 1, c: "var(--an-1)", t: "a $1.00" },
+  ]);
+  assert.deepEqual({ ...anProjectRow(byProject[1]) }, { name: "acme-web", cost: "$2.00", tokens: "2k", prompts: "7" });
+  assert.deepEqual(anProjectBars([], []).bars, []);
+  assert.equal(anProjectBars([], []).max, 1);
+});
+
+test("anSessionRow: one session's cells as text; mixed is flagged, a single model is short", () => {
+  const top = topSessionsByCost(SESS_ROWS, 18);
+  assert.deepEqual({ ...anSessionRow(top[0]) }, { sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121" });
+  const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
+  assert.equal(single.model, "opus-5-5");
+  assert.equal(single.mixed, false);
 });
