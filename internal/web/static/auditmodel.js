@@ -84,6 +84,20 @@ function auditRowView(ev, names) {
   };
 }
 
+// auditWhatRuns: the runs of an event's What cell (digest-design §B9). The server marks the identifiers (Event.parts, each
+// { text, id }; id is absent when false); this only reads them. It never splits `what` and never guesses an identifier: no
+// parts (an older server, or the server dropped them because it could not keep them faithful to `what`) or any part the
+// page cannot read is one plain run equal to `what`. Joined, the texts of the parts are `what`, except a store unlock whose
+// ttl the server spells in words ("for 7 days") while `what` keeps "ttl=168h0m0s".
+function auditWhatRuns(ev) {
+  const e = ev || {};
+  const p = e.parts;
+  if (Array.isArray(p) && p.length > 0 && p.every((x) => x !== null && typeof x === "object" && typeof x.text === "string")) {
+    return p.map((x) => ({ text: x.text, id: x.id === true }));
+  }
+  return [{ text: String(e.what || ""), id: false }];
+}
+
 const AUD_KPI_LABELS = [
   ["issued", "Credentials issued"], ["refused", "Refused"], ["elevations", "Write elevations"],
   ["egress_allowed", "Egress allowed"], ["egress_denied", "Egress denied"],
@@ -112,5 +126,5 @@ function auditPolicyText(days) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText };
+  module.exports = { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText, auditWhatRuns };
 }

@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText } =
+const { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText, auditWhatRuns } =
   require("../static/auditmodel.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -137,6 +137,42 @@ test("auditRowView: an unknown session shows its id, none shows an em dash", () 
 test("auditRowView: a missing reason is an empty string, an unknown kind keeps its word", () => {
   assert.strictEqual(auditRowView(ev(), {}).reason, "");
   assert.strictEqual(auditRowView(ev({ kind: "weird" }), {}).kind, "weird");
+});
+
+// auditWhatRuns (UI plan 5, digest-design §B9): the What cell's runs. The server's parts mark the identifiers; the page
+// never guesses them, and never splits `what`. Anything the parts cannot describe is one plain run equal to `what`.
+test("auditWhatRuns: the server's parts come back as runs, id true only where the server said so", () => {
+  const parts = [{ text: "aws " }, { text: "culipulse-prod", id: true }, { text: " · role " }, { text: "agent-ops-write", id: true }, { text: " · elevated", id: false }];
+  const runs = auditWhatRuns(ev({ what: "aws culipulse-prod · role agent-ops-write · elevated", parts }));
+  assert.deepStrictEqual(runs.map((r) => [r.text, r.id]), [
+    ["aws ", false], ["culipulse-prod", true], [" · role ", false], ["agent-ops-write", true], [" · elevated", false],
+  ]);
+  // id is a boolean, and only the literal true counts.
+  assert.deepStrictEqual(auditWhatRuns({ what: "x", parts: [{ text: "x", id: "yes" }, { text: "y", id: 1 }] }).map((r) => r.id), [false, false]);
+});
+
+test("auditWhatRuns: no parts, or parts the page cannot trust, is one plain run equal to what", () => {
+  const what = "encrypted store unlocked · ttl=168h0m0s";
+  const one = [{ text: what, id: false }];
+  const got = (o) => auditWhatRuns({ what, ...o }).map((r) => ({ text: r.text, id: r.id }));
+  assert.deepStrictEqual(got({}), one, "an old server sends no parts");
+  assert.deepStrictEqual(got({ parts: undefined }), one);
+  assert.deepStrictEqual(got({ parts: null }), one);
+  assert.deepStrictEqual(got({ parts: [] }), one, "an empty list");
+  assert.deepStrictEqual(got({ parts: {} }), one, "an object is not a list");
+  assert.deepStrictEqual(got({ parts: "aws" }), one);
+  assert.deepStrictEqual(got({ parts: [{ id: true }] }), one, "a part without text");
+  assert.deepStrictEqual(got({ parts: [{ text: 5 }] }), one, "a part whose text is not a string");
+  assert.deepStrictEqual(got({ parts: [{ text: "ok" }, { text: 5, id: true }] }), one, "one bad part spoils the list: no half guess");
+  assert.deepStrictEqual(got({ parts: [null] }), one);
+  assert.deepStrictEqual(got({ parts: ["aws"] }), one);
+});
+
+test("auditWhatRuns: a missing what is an empty plain run, and a missing event does not throw", () => {
+  assert.deepStrictEqual(auditWhatRuns({}).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns({ what: null }).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns(undefined).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns(null).map((r) => [r.text, r.id]), [["", false]]);
 });
 
 test("auditKpis: five tiles, labelled as the frame has them, numbers grouped", () => {

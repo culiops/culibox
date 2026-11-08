@@ -350,6 +350,7 @@ function auditEnv() {
     getElementById: (id) => findId(dlg, id),
     querySelectorAll: (sel) => queryAll(dlg, sel),
     createElement: (tag) => new El(tag),
+    createTextNode: (t) => new TextNode(t),
   };
   const ctx = { document, window: { innerWidth: 1440 }, lastSessions: [], console, AbortController, fetch: async () => ({}) };
   vm.createContext(ctx);
@@ -452,6 +453,120 @@ test("an elevated row is tr.is-elevated with a red Kind cell", () => {
   assert.strictEqual(cells(denied)[4][1], "denied ×3");
   const created = row({ ts: 1_760_000_000, kind: "settings", what: "token e2e created", outcome: "created", actor: "you" });
   assert.strictEqual(cells(created)[4][0], "au-out");
+});
+
+// --- Audit: the What cell (Task 3; digest-design §B9) --------------------------------------------------------------
+
+// whatCell: the What td of one row, as [kind, tag, className, text] per child node: a text node is ["text", …], an element
+// ["el", tag, className, text].
+function whatCell(run, ev) {
+  const tr = run("auRow(" + JSON.stringify(ev) + ", {})");
+  const td = tr.elements[3];
+  assert.strictEqual(td.className, "au-what");
+  return {
+    td,
+    nodes: td.children.map((c) => (c instanceof El ? ["el", c.tag, c.className, c.textContent] : ["text", c.textContent])),
+    monos: td.elements.filter((c) => c.tag === "span" && c.cls.includes("mono")),
+  };
+}
+
+test("What renders ids in span.mono.t-sm and text as text nodes, then the muted reason", () => {
+  const { run } = auditEnv();
+  const ev = {
+    ts: 1_760_000_000, kind: "elevation", outcome: "granted", actor: "you", reason: "rotate KMS key",
+    what: "write on culipulse-prod · 30 min",
+    parts: [{ text: "write on " }, { text: "culipulse-prod", id: true }, { text: " · 30 min" }],
+  };
+  const { td, nodes, monos } = whatCell(run, ev);
+  assert.deepStrictEqual(nodes, [
+    ["text", "write on "],
+    ["el", "span", "mono t-sm", "culipulse-prod"],
+    ["text", " · 30 min"],
+    ["el", "span", "au-reason", " · “rotate KMS key”"],
+  ], "identifiers are spans, every other run is a text node, the reason comes last in its muted span");
+  assert.strictEqual(td.textContent, "write on culipulse-prod · 30 min · “rotate KMS key”", "the cell reads as the joined runs plus the reason");
+  assert.strictEqual(monos.length, ev.parts.filter((p) => p.id).length, "one mono span per id run");
+
+  // Two identifiers, one text run between them, no reason.
+  const aws = whatCell(run, {
+    ts: 1_760_000_000, kind: "credential", outcome: "minted", what: "aws culipulse-prod · role agent-ops-write · elevated",
+    parts: [{ text: "aws " }, { text: "culipulse-prod", id: true }, { text: " · role " }, { text: "agent-ops-write", id: true }, { text: " · elevated" }],
+  });
+  assert.strictEqual(aws.monos.length, 2);
+  assert.deepStrictEqual(aws.monos.map((m) => m.textContent), ["culipulse-prod", "agent-ops-write"]);
+  assert.strictEqual(aws.td.textContent, "aws culipulse-prod · role agent-ops-write · elevated");
+
+  // A host:port alone is one mono span and nothing else; a masked name arrives as an id part and is mono like any other.
+  const host = whatCell(run, { ts: 1_760_000_000, kind: "egress", outcome: "allowed", what: "registry.terraform.io:443", parts: [{ text: "registry.terraform.io:443", id: true }] });
+  assert.deepStrictEqual(host.nodes, [["el", "span", "mono t-sm", "registry.terraform.io:443"]]);
+  const masked = whatCell(run, { ts: 1_760_000_000, kind: "settings", outcome: "created", what: "token [masked:a1b2] created", parts: [{ text: "token " }, { text: "[masked:a1b2]", id: true }, { text: " created" }] });
+  assert.deepStrictEqual(masked.monos.map((m) => m.textContent), ["[masked:a1b2]"]);
+});
+
+test("no What span without parts", () => {
+  const { run } = auditEnv();
+  // An old server, an empty list, and parts the page cannot use: the text as it came, in one text node, no mono guessed.
+  const base = { ts: 1_760_000_000, kind: "credential", outcome: "minted", what: "aws culipulse-prod · role agent-ops-write · elevated" };
+  for (const extra of [{}, { parts: [] }, { parts: {} }, { parts: [{ id: true }] }, { parts: [{ text: 5 }] }, { parts: null }]) {
+    const c = whatCell(run, { ...base, ...extra });
+    assert.strictEqual(c.monos.length, 0, JSON.stringify(extra));
+    assert.deepStrictEqual(c.nodes, [["text", base.what]], JSON.stringify(extra));
+  }
+  // The reason still follows an old row's text.
+  const old = whatCell(run, { ts: 1_760_000_000, kind: "elevation", outcome: "granted", actor: "you", reason: "why", what: "write on prod · 30 min" });
+  assert.deepStrictEqual(old.nodes, [["text", "write on prod · 30 min"], ["el", "span", "au-reason", " · “why”"]]);
+  // No what at all is an empty cell, not a throw.
+  assert.strictEqual(whatCell(run, { ts: 1_760_000_000, kind: "credential", outcome: "minted" }).td.textContent, "");
+});
+
+test("a part with empty text draws no empty span, and parts that draw nothing fall back to what", () => {
+  const { run } = auditEnv();
+  const base = { ts: 1_760_000_000, kind: "credential", outcome: "minted", what: "aws sandbox" };
+  const some = whatCell(run, { ...base, parts: [{ text: "aws " }, { text: "", id: true }, { text: "sandbox" }] });
+  assert.strictEqual(some.monos.length, 0, "no empty mono span");
+  assert.strictEqual(some.td.textContent, "aws sandbox");
+  const none = whatCell(run, { ...base, parts: [{ text: "" }, { text: "", id: true }] });
+  assert.strictEqual(none.monos.length, 0);
+  assert.deepStrictEqual(none.nodes, [["text", "aws sandbox"]], "never a blank cell when what has text");
+});
+
+test("the store unlock row reads for 7 days", () => {
+  const { run } = auditEnv();
+  // The server keeps what = "… · ttl=168h0m0s" (the CSV export is raw) and spells the parts in words.
+  const ev = {
+    ts: 1_760_000_000, kind: "store", outcome: "unlocked", actor: "cli",
+    what: "encrypted store unlocked · ttl=168h0m0s",
+    parts: [{ text: "encrypted store unlocked" }, { text: " · for 7 days" }],
+  };
+  const c = whatCell(run, ev);
+  assert.strictEqual(c.td.textContent, "encrypted store unlocked · for 7 days");
+  assert.ok(!c.td.textContent.includes("ttl="));
+  assert.strictEqual(c.monos.length, 0, "no mono span at all: 7 days is plain text");
+  // An older server sends no parts: the ttl stays as the server wrote it (never reworded by the page).
+  const old = whatCell(run, { ...ev, parts: undefined });
+  assert.strictEqual(old.td.textContent, "encrypted store unlocked · ttl=168h0m0s");
+  assert.strictEqual(old.monos.length, 0);
+});
+
+test("the What cell is sans 13px fg; identifiers take the kit's .mono.t-sm and the reason is muted", () => {
+  // The cell inherits the kit table's 13px --fg sans; the page adds no font or colour of its own to it.
+  assert.strictEqual(decls(".tbl").get("font-size"), "var(--t-md)");
+  assert.strictEqual(decls(".tbl").get("color"), "var(--fg)");
+  const what = decls(AU + " .au-tbl td.au-what");
+  for (const k of ["font-family", "font-size", "color", "font-weight"]) assert.strictEqual(what.get(k), undefined, "td.au-what sets no " + k);
+  // The identifier spans carry the kit's helpers: mono family, 12px / 18px.
+  assert.strictEqual(decls(".mono").get("font-family"), "var(--font-mono)");
+  assert.strictEqual(decls(".t-sm").get("font-size"), "var(--t-sm)");
+  assert.strictEqual(decls(".t-sm").get("line-height"), "var(--lh-sm)");
+  // The reason is a sans muted span at the cell's 13px, not the 12px of an identifier.
+  const reason = decls(AU + " .au-tbl td.au-what .au-reason");
+  assert.strictEqual(reason.get("color"), "var(--muted)");
+  assert.strictEqual(reason.get("font-family"), undefined);
+  assert.strictEqual(reason.get("font-size"), undefined);
+  // auditpage.js builds the cell from createTextNode and textContent only, with the kit's classes.
+  const js = stripJsComments(read("auditpage.js"));
+  assert.match(js, /document\.createTextNode\(/);
+  assert.match(js, /"mono t-sm"/);
 });
 
 test("Show more is hidden unless the reply has a next page, and the page script never writes HTML", () => {

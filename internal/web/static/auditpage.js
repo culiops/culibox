@@ -77,14 +77,29 @@ function auPaintSessions() {
 
 const AU_TONE_CLASS = { ok: "au-ok", bad: "au-bad" };
 
+// auWhatCell: sans text, with the server's identifiers in mono (digest-design §B9): each id run is the kit's
+// span.mono.t-sm, every other run a text node, then the reason in its muted span. A run with no text draws nothing, and
+// runs that draw nothing at all fall back to the plain `what`, so a row never reads blank.
+function auWhatCell(ev, v) {
+  const td = auText("td", "au-what");
+  let drawn = false;
+  for (const r of auditWhatRuns(ev)) {
+    if (!r.text) continue;
+    drawn = true;
+    td.appendChild(r.id ? auText("span", "mono t-sm", r.text) : document.createTextNode(r.text));
+  }
+  if (!drawn && v.what) td.appendChild(document.createTextNode(v.what));
+  if (v.reason) td.appendChild(auText("span", "au-reason", " · “" + v.reason + "”"));
+  return td;
+}
+
 function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
   // The red row is the kit's tr.is-elevated: a granted or extended write elevation. Its Kind is red too; the Outcome
   // takes its own tone from auditRowView (a refused elevation's is red as well, until Plan 6).
   if (v.elevated) tr.className = "is-elevated";
-  const what = auText("td", "au-what", v.what);
-  if (v.reason) what.appendChild(auText("span", "au-reason", " · “" + v.reason + "”"));
+  const what = auWhatCell(ev, v);
   tr.append(
     auText("td", "au-time", v.time),
     auText("td", "au-sess", v.session),
