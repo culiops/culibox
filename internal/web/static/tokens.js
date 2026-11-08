@@ -83,18 +83,25 @@ function tokNextFocus(id) {
 function tokPageRow(t, btns) {
   const armed = t.id === armedToken;
   const tr = tokEl("tr", armed ? "arm" : "");
-  tr.appendChild(tokEl("td", "tok-nm", t.name));
+  tokRole(tr, "row");
+  tr.appendChild(tokRole(tokEl("td", "tok-nm", t.name), "cell"));
   if (armed) {
-    const td = tokEl("td", "tok-arm");
+    const td = tokRole(tokEl("td", "tok-arm"), "cell");
     td.colSpan = 3;
     const box = tokEl("div", "tok-confirm");
-    box.appendChild(tokEl("span", "tok-ask", TOK_ARM_COPY));
+    // The question is the description of both its buttons: a screen reader on Cancel or Revoke hears what is being asked (only one
+    // row is armed at a time, so the id is unique; a token's id is hex).
+    const ask = tokEl("span", "tok-ask", TOK_ARM_COPY);
+    ask.id = "tok-ask-" + t.id;
+    box.appendChild(ask);
     const acts = tokEl("div", "tok-acts");
     const cancel = tokBtn("Cancel", "btn btn-sm", () => { armedToken = ""; tokFocus = { id: t.id, which: "revoke" }; loadTokens(); });
     cancel.setAttribute("aria-label", "Cancel revoking " + t.name);
+    cancel.setAttribute("aria-describedby", ask.id);
     // No ellipsis on Revoke: this IS the question, not the promise of one.
     const go = tokBtn("Revoke", "btn btn-danger btn-sm", () => revokeToken(t.id));
     go.setAttribute("aria-label", "Revoke " + t.name);
+    go.setAttribute("aria-describedby", ask.id);
     btns.set(t.id, { cancel, revoke: go });
     acts.append(cancel, go);
     box.appendChild(acts);
@@ -102,9 +109,9 @@ function tokPageRow(t, btns) {
     tr.appendChild(td);
     return tr;
   }
-  tr.appendChild(tokEl("td", "tnum", tokCreated(t)));
-  tr.appendChild(tokEl("td", "tnum" + (t.last_used_at ? "" : " muted"), tokLastUsed(t)));
-  const act = tokEl("td", "num");
+  tr.appendChild(tokRole(tokEl("td", "tnum", tokCreated(t)), "cell"));
+  tr.appendChild(tokRole(tokEl("td", "tnum" + (t.last_used_at ? "" : " muted"), tokLastUsed(t)), "cell"));
+  const act = tokRole(tokEl("td", "num"), "cell");
   const arm = tokBtn("Revoke…", "btn btn-danger btn-sm", () => { armedToken = t.id; tokFocus = { id: t.id, which: "cancel" }; loadTokens(); });
   arm.setAttribute("aria-label", "Revoke " + t.name);
   btns.set(t.id, { revoke: arm });
@@ -113,21 +120,29 @@ function tokPageRow(t, btns) {
   return tr;
 }
 
-// tokPageTable: the kit's .tbl, one colgroup (the shares are desktop.css's), the actions column named for a screen reader.
+// tokRole: an explicit ARIA role on a part of the page's table. Below a 480px card desktop.css makes the table a block, its rows grids
+// and its cells blocks, and a browser then drops the table semantics of the native elements; the roles keep them in every width.
+function tokRole(el, role) {
+  el.setAttribute("role", role);
+  return el;
+}
+
+// tokPageTable: the kit's .tbl, one colgroup (the shares are desktop.css's), the actions column named for a screen reader. Every part
+// carries its explicit role (tokRole): the table, its two row groups, its rows, heads and cells.
 function tokPageTable(items, btns) {
-  const table = tokEl("table", "tbl tok-tbl");
+  const table = tokRole(tokEl("table", "tbl tok-tbl"), "table");
   table.setAttribute("aria-label", "API tokens");
   const cols = tokEl("colgroup");
   for (let i = 0; i < 4; i++) cols.appendChild(tokEl("col"));
   table.appendChild(cols);
-  const head = tokEl("tr");
+  const head = tokRole(tokEl("tr"), "row");
   for (const h of ["Name", "Created", "Last used", ""]) {
-    const th = tokEl("th", h ? "" : "num", h);
+    const th = tokRole(tokEl("th", h ? "" : "num", h), "columnheader");
     if (!h) th.appendChild(tokEl("span", "sr-only", "Actions"));
     head.appendChild(th);
   }
-  table.appendChild(tokEl("thead")).appendChild(head);
-  const body = tokEl("tbody");
+  table.appendChild(tokRole(tokEl("thead"), "rowgroup")).appendChild(head);
+  const body = tokRole(tokEl("tbody"), "rowgroup");
   for (const t of items) body.appendChild(tokPageRow(t, btns));
   table.appendChild(body);
   return table;
@@ -140,7 +155,9 @@ function tokPageTable(items, btns) {
 function tokPaintPage(list, items, focus) {
   const btns = new Map();
   list.setAttribute("role", "none");
-  const card = tokEl("li", "tok-card card");
+  // `tok-card` alone, not the kit's `.card`: that name is also the phone's amber session card (app.css), and the list is only cleared
+  // after the phone's fetch answers, so a page card left behind would show amber until then. desktop.css gives .tok-card the fill.
+  const card = tokEl("li", "tok-card");
   card.setAttribute("role", "none");
   if (!items || items.length === 0) card.appendChild(tokEl("p", "tokempty", "No tokens yet."));
   else card.appendChild(tokPageTable(items, btns));

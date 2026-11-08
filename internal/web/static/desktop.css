@@ -1970,7 +1970,9 @@
      the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an
      item of #tok-list: 8px below the card, 2px in). The table has the Credentials tables' numbers (§B4): fixed columns, cells 7px above and below, the first 16px in and the
      last 12px, 24px buttons in 5px cells. Dates are `.tnum` (the kit's tabular figures), "Never used" is `.muted`. */
-  #page-host > #settings-modal.as-page #tok-list > .tok-card { overflow: hidden; }
+  /* The card is --panel and --r-card from this rule, not from the kit's `.card` class (app.css's `.card` is the phone's amber session card, and
+     a page node left behind when the window crosses to a phone would wear it). position: relative holds the narrow stack's clipped heads. */
+  #page-host > #settings-modal.as-page #tok-list > .tok-card { overflow: hidden; position: relative; background: var(--panel); border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #tok-list > .tok-card > .tokempty { margin: 0; padding: 12px 16px; font-size: var(--t-sm); line-height: var(--lh-sm); }
   #page-host > #settings-modal.as-page #tok-list > .tok-under { margin-top: 8px; padding: 0 2px; }
   #page-host > #settings-modal.as-page #tok-list .tok-tbl { table-layout: fixed; }
@@ -2004,15 +2006,15 @@
   /* A narrow card (D3). The list is the container: the card is the window less the sidebar (290), the nav (212) and 64px of padding, 194px at a 760px
      window and 135px at the 701px floor, and four columns need ~420px (25% of it must hold "Nov 27, 2026", 86px, and 24px of padding). Below 480px each row
      is a small grid: the name and Revoke… on the first line, Created and Last used under it as 12/18 muted lines that say their own words (the head row
-     is not drawn), nothing dropped and nothing wider than the card. The name wraps anywhere (its base rule) in the room Revoke… leaves it. An armed row
+     is clipped to a pixel, not removed, so a screen reader keeps the column heads), nothing dropped and nothing wider than the card. The name wraps anywhere (its base rule) in the room Revoke… leaves it. An armed row
      keeps its red tint and edge (the edge is the row's now, not the first cell's); its question takes the card's width and Cancel and Revoke wrap
-     under it, and then wrap between themselves. The table, its rows and its cells leave table layout here (so its column heads are not read in this
-     form: the date lines carry them). The date words are on the date cells only (`td.tnum`), never on the armed row's question cell, which is the
+     under it, and then wrap between themselves. The table, its rows and its cells leave table layout here, so tokens.js gives each part its explicit ARIA role (the native ones would be dropped). The date words are on the date cells only (`td.tnum`), never on the armed row's question cell, which is the
      second cell of its row. */
   #page-host > #settings-modal.as-page #tok-list { container-type: inline-size; }
   @container (max-width: 480px) {
     #page-host > #settings-modal.as-page #tok-list .tok-tbl, #page-host > #settings-modal.as-page #tok-list .tok-tbl tbody { display: block; }
-    #page-host > #settings-modal.as-page #tok-list .tok-tbl thead, #page-host > #settings-modal.as-page #tok-list .tok-tbl colgroup { display: none; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl colgroup { display: none; }
+    #page-host > #settings-modal.as-page #tok-list .tok-tbl thead { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     #page-host > #settings-modal.as-page #tok-list .tok-tbl tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 7px 12px 7px 16px; }
     #page-host > #settings-modal.as-page #tok-list .tok-tbl tr + tr { border-top: 1px solid var(--line); }
     #page-host > #settings-modal.as-page #tok-list .tok-tbl td, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:first-child, #page-host > #settings-modal.as-page #tok-list .tok-tbl td:last-child { padding: 0; border: 0; height: auto; }

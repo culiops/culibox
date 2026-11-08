@@ -118,7 +118,8 @@ test("the page renders a table with Name, Created, Last used and a Revoke… per
   const { ctx, list } = page({ items: TOKENS });
   await ctx.loadTokens();
   const card = list.children[0];
-  assert.ok(card.has("card") && card.has("tok-card"), "one kit card holds the table");
+  assert.ok(card.has("tok-card"), "one card holds the table");
+  assert.ok(!card.has("card"), "and it is not the phone's .card class (app.css's amber session card): its fill and radius are desktop.css's (final review M5)");
   const tables = card.byTag("table");
   assert.strictEqual(tables.length, 1);
   assert.ok(tables[0].has("tbl"), "the kit's .tbl");
@@ -189,7 +190,7 @@ test("no token yet: the card holds the line 'No tokens yet.' and the note stays"
   const { ctx, list } = page({ items: [] });
   await ctx.loadTokens();
   const card = list.children[0];
-  assert.ok(card.has("card"));
+  assert.ok(card.has("tok-card") && !card.has("card"));
   assert.strictEqual(card.byTag("table").length, 0, "no table of nothing");
   assert.strictEqual(card.textContent, "No tokens yet.");
   assert.ok(card.children[0].has("tokempty"));
@@ -357,7 +358,12 @@ test("a narrow card stacks each row: the name and Revoke… on line 1, Created a
   const at = (sel) => st.get(P + " #tok-list .tok-tbl" + sel) || new Map();
   // The table is a stack of grid rows; the head row is not drawn (the date lines carry their own words) and the colgroup does nothing.
   for (const sel of ["", " tbody"]) assert.strictEqual(at(sel).get("display"), "block", "the table" + sel + " is a block");
-  for (const sel of [" thead", " colgroup"]) assert.strictEqual(at(sel).get("display"), "none", sel);
+  // The column heads are not drawn but stay exposed: a visually-hidden clip, not display:none (final review M11), so a screen reader still has them.
+  assert.strictEqual(at(" colgroup").get("display"), "none", "the colgroup has nothing to expose");
+  const head = at(" thead");
+  assert.strictEqual(head.get("display"), undefined, "the heads are not removed from the accessibility tree");
+  assert.deepStrictEqual([head.get("position"), head.get("width"), head.get("height"), head.get("margin"), head.get("padding"), head.get("border"), head.get("overflow"), head.get("clip"), head.get("white-space")],
+    ["absolute", "1px", "1px", "-1px", "0", "0", "hidden", "rect(0 0 0 0)", "nowrap"], "the kit's visually-hidden clip (app.css .sr-only)");
   const row = at(" tr");
   assert.deepStrictEqual([row.get("display"), row.get("grid-template-columns"), row.get("column-gap"), row.get("padding")], ["grid", "minmax(0, 1fr) auto", "12px", "7px 12px 7px 16px"]);
   assert.strictEqual(at(" tr + tr").get("border-top"), "1px solid var(--line)", "the hairline between rows moves from the cells to the rows");
@@ -383,9 +389,11 @@ test("a narrow card stacks each row: the name and Revoke… on line 1, Created a
   for (const [sel, d] of st) for (const [k, v] of d) {
     assert.doesNotMatch(v, /#[0-9a-f]{3,8}\b/i, sel + " { " + k + " } uses a hex");
     if (k === "font-size") assert.match(v, /^var\(--t-/, sel);
-    assert.ok(!/^(min-)?width$/.test(k) || !/\d+px/.test(v), sel + " { " + k + ": " + v + " } sets no fixed width");
+    // The one exception is the heads' visually-hidden clip (1px: a hiding technique, not a layout width).
+    assert.ok(sel.endsWith(".tok-tbl thead") || !/^(min-)?width$/.test(k) || !/\d+px/.test(v), sel + " { " + k + ": " + v + " } sets no fixed width");
   }
   assert.strictEqual(decls(P + " #tok-list > .tok-card").get("overflow"), "hidden");
+  assert.strictEqual(decls(P + " #tok-list > .tok-card").get("position"), "relative", "the card holds the clipped heads, so they cannot sit anywhere else on the page");
   assert.ok([...st.keys()].every((sel) => sel.startsWith(P + " #tok-list")), "scoped to the page's list");
   // The floor: at the 701px window the card is 135px and Revoke… beside the name would leave it 20px, so it drops under the dates.
   const fl = new Map();
@@ -613,11 +621,87 @@ test("on the page the list is a card and a note, not 'a list of 2 items': role n
   await ctx.loadTokens();
   assert.strictEqual(list.getAttribute("role"), "none");
   assert.deepStrictEqual(list.children.map((li) => [li.tag, li.getAttribute("role")]), [["li", "none"], ["li", "none"]]);
-  assert.strictEqual(list.children[0].byTag("table")[0].getAttribute("role"), null, "the table is still a table");
+  assert.strictEqual(list.children[0].byTag("table")[0].getAttribute("role"), "table", "the table is still a table: its role is explicit, because the narrow stack's display values would drop the native one (final review M11)");
   const none = page({ items: [] });
   await none.ctx.loadTokens();
   assert.strictEqual(none.list.getAttribute("role"), "none", "also with no token");
   assert.deepStrictEqual(none.list.children.map((li) => li.getAttribute("role")), ["none", "none"]);
+});
+
+// Final review M11: below a 480px card the table is a block, its rows grids and its cells blocks (desktop.css), which makes browsers
+// drop the table semantics of the native elements. The page's table says what each part is, so a screen reader still reads a table with
+// column heads in every width.
+test("on the page the table, its row groups, rows, heads and cells carry their explicit roles (final review M11)", async () => {
+  const { ctx, list } = page({ items: TOKENS });
+  await ctx.loadTokens();
+  const table = list.children[0].byTag("table")[0];
+  assert.strictEqual(table.getAttribute("role"), "table");
+  assert.strictEqual(table.getAttribute("aria-label"), "API tokens", "and keeps its name");
+  assert.deepStrictEqual(table.byTag("thead").map((n) => n.getAttribute("role")), ["rowgroup"]);
+  assert.deepStrictEqual(table.byTag("tbody").map((n) => n.getAttribute("role")), ["rowgroup"]);
+  const rows = table.byTag("tr");
+  assert.strictEqual(rows.length, 3, "the head row and two tokens");
+  assert.ok(rows.every((tr) => tr.getAttribute("role") === "row"), "every row");
+  assert.deepStrictEqual(table.byTag("th").map((n) => n.getAttribute("role")), ["columnheader", "columnheader", "columnheader", "columnheader"]);
+  assert.ok(table.byTag("td").length === 8 && table.byTag("td").every((n) => n.getAttribute("role") === "cell"), "every cell");
+  // The armed row: its question cell spans the other three and is a cell too.
+  table.byTag("tbody")[0].byTag("tr")[0].byTag("button")[0].onclick();
+  await settle();
+  const armed = list.children[0].byTag("tbody")[0].byTag("tr")[0];
+  assert.strictEqual(armed.getAttribute("role"), "row");
+  assert.deepStrictEqual(armed.byTag("td").map((n) => n.getAttribute("role")), ["cell", "cell"]);
+  // The phone has no table at all, and so no role attribute on anything it draws.
+  const phone = page({ items: TOKENS, asPage: false });
+  await phone.ctx.loadTokens();
+  assert.strictEqual(phone.list.byTag("table").length, 0);
+  assert.ok(phone.list.walk(() => true).every((n) => n.getAttribute("role") === null));
+});
+
+// Final review M10: the armed row's question was visible text only; a screen reader that lands on Cancel or Revoke heard just the name.
+test("the armed row's question is the description of its Cancel and Revoke (final review M10)", async () => {
+  const { ctx, list } = page({ items: TOKENS });
+  await ctx.loadTokens();
+  list.children[0].byTag("tbody")[0].byTag("tr")[1].byTag("button")[0].onclick();
+  await settle();
+  const row = list.children[0].byTag("tbody")[0].byTag("tr")[1];
+  const ask = row.byClass("tok-ask")[0];
+  assert.strictEqual(ask.textContent, ARM_COPY, "the question is today's confirm copy, unchanged");
+  assert.ok(ask.id && ask.id.includes("b2"), "it has an id of its own, made from the token's");
+  const [cancel, go] = row.byTag("button");
+  assert.strictEqual(cancel.getAttribute("aria-describedby"), ask.id);
+  assert.strictEqual(go.getAttribute("aria-describedby"), ask.id);
+  assert.strictEqual(cancel.getAttribute("aria-label"), "Cancel revoking gate-test-token", "the names are as they were");
+  assert.strictEqual(go.getAttribute("aria-label"), "Revoke gate-test-token");
+  // Only one row is armed at a time, so the id is unique on the page; a disarmed list has none.
+  assert.strictEqual(list.byClass("tok-ask").length, 1);
+  cancel.onclick();
+  await settle();
+  assert.strictEqual(list.byClass("tok-ask").length, 0);
+  assert.ok(list.walk((n) => n.getAttribute("aria-describedby") !== null).length === 0, "nothing points at a question that is gone");
+});
+
+// Final review M5: the phone's .card (app.css) is an amber session card. A page node that carries it would be styled by it when the
+// window crosses to a phone and Settings is reopened before /api/tokens answers (loadTokens clears the list only after the fetch).
+test("a page-built node never carries the phone's .card class, so the stale list is not amber while the phone's fetch is out (final review M5)", async () => {
+  const { ctx, list, els } = page({ items: TOKENS });
+  await ctx.loadTokens();
+  assert.deepStrictEqual(list.walk((n) => n.has("card")).map((n) => n.className), [], "no .card on the page's card, table or rows");
+  els["settings-modal"].className = "";                         // the window crossed to a phone's
+  let release;
+  ctx.api = () => new Promise((r) => { release = r; });
+  const loading = ctx.loadTokens();                             // the fetch is out: the page's nodes are still on screen
+  assert.ok(list.children.length > 0, "fixture: the stale page nodes are still there");
+  assert.deepStrictEqual(list.walk((n) => n.has("card")).map((n) => n.className), [], "none of them matches .card while the fetch is out");
+  release(TOKENS);
+  await loading;
+  assert.ok(list.children.every((li) => li.className === "tokrow"), "and the phone's rows replace them");
+});
+
+test("the page's card has its panel fill and radius from a desktop.css rule, not from the .card class (final review M5)", () => {
+  const c = decls(P + " #tok-list > .tok-card");
+  assert.strictEqual(c.get("background"), "var(--panel)");
+  assert.strictEqual(c.get("border-radius"), "var(--r-card)");
+  assert.strictEqual(c.get("overflow"), "hidden", "clipped to its corners, as before");
 });
 
 test("the phone's list has no role, even after the page drew it (the mode can flip)", async () => {
