@@ -27,12 +27,13 @@
 function nmDep(name) {
   const g = {
     attentionClass: typeof attentionClass === "function" ? attentionClass : null,
+    connStateLabel: typeof connStateLabel === "function" ? connStateLabel : null,
     connSSOSources: typeof connSSOSources === "function" ? connSSOSources : null,
     plainSummary: typeof plainSummary === "function" ? plainSummary : null,
     NEEDS_REARM_MS: typeof NEEDS_REARM_MS === "number" ? NEEDS_REARM_MS : null,
   };
   if (g[name] !== null && g[name] !== undefined) return g[name];
-  return require("./attention.js")[name];
+  return require(name === "connStateLabel" ? "./activity.js" : "./attention.js")[name];
 }
 
 const NOTIFY_PREF_DEFAULTS = { master: true, block: true, done: true, ended: true, message: false, chime: false };
@@ -335,6 +336,46 @@ function sysBannerModel(sys, now, fmt) {
   return null;
 }
 
+// paneBarModel(kind, activity, status) -> { key, text, base, dot, countdown, buttons[] } | null: the desktop
+// pane bar (.pane-bar, M8.6/6b/6c, DD A8), pure. kind is the terminal tab's trouble: "offline", "detached",
+// "taken-over", "signedout" (the one sys.signedOut flag) or "ended". For "ended", status is the session's
+// state ("exited" = restartable, anything else = gone from the list) and activity "crashed" reads Crashed.
+// text holds "{n}" where the live seconds go when countdown is set; base is the same line without the
+// countdown (a pane with no retry armed). dot is "detached" | "crashed" | "" (a taken-over or ended pane
+// has none). Buttons carry tone "secondary" | "primary" | "ghost". Ended bars are neutral: Restart primary,
+// Close ghost, no exit code and no duration (the API has neither). A removed session gets Close alone.
+// "detached" reads connStateLabel, the row sub-line's wording, so the two cannot drift.
+function paneBarModel(kind, activity, status) {
+  const retry = { id: "retry", label: "Retry now", tone: "secondary" };
+  switch (kind) {
+    case "offline":
+      return { key: "offline", text: "Lost connection \u00b7 retrying in {n} s", base: "Lost connection", dot: "detached",
+        countdown: true, buttons: [retry] };
+    case "detached": {
+      const w = nmDep("connStateLabel")("detached");
+      const base = w.charAt(0).toUpperCase() + w.slice(1);
+      return { key: "detached", text: base + " in {n} s", base, dot: "detached", countdown: true, buttons: [retry] };
+    }
+    case "taken-over":
+      return { key: "taken-over", text: "Another tab or window took over this session.",
+        base: "Another tab or window took over this session.", dot: "", countdown: false,
+        buttons: [{ id: "takeback", label: "Take back", tone: "secondary" }] };
+    case "signedout":
+      return { key: "signedout", text: "Signed out \u00b7 this terminal reconnects after you sign in",
+        base: "Signed out \u00b7 this terminal reconnects after you sign in", dot: "detached", countdown: false, buttons: [] };
+    case "ended": {
+      const close = { id: "close", label: "Close", tone: "ghost" };
+      if (status !== "exited") return { key: "removed", text: "Removed", base: "Removed", dot: "", countdown: false, buttons: [close] };
+      const crashed = activity === "crashed";
+      const text = crashed ? "Crashed" : "Session ended";
+      return { key: crashed ? "crashed" : "ended", text, base: text, dot: crashed ? "crashed" : "", countdown: false,
+        buttons: [{ id: "restart", label: "Restart", tone: "primary" }, close] };
+    }
+    default:
+      return null;
+  }
+}
+
 // sysVisibilityStep(sys, hidden, now) -> { hiddenSince, paused, poll }: the tab-visibility rule (R20). Hidden
 // records when; coming back after SYS_PAUSE_MS or more (30 s exactly counts) sets paused and asks for a poll at
 // once. paused is cleared elsewhere, by the next OK poll (sysPollOk). Pure: the caller assigns the result.
@@ -554,6 +595,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS, sysBannerModel, railMarkerModel, sysVisibilityStep, SYS_PAUSE_MS,
+  module.exports = { paneBarModel, notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS, sysBannerModel, railMarkerModel, sysVisibilityStep, SYS_PAUSE_MS,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }

@@ -691,7 +691,7 @@ test("rowSubline: a blocked session is still amber", () => {
 test("rowSubline: an exited session's stale sign-in need is not an amber line", () => {
   const dead = { id: "dead", exited: true, activity: "done", need: "sso", aws_connections: [{ name: "dev", sso_expired: "acme" }] };
   assert.equal(d.rowSubline(dead).amber, false);
-  assert.equal(d.rowSubline(dead).text, "exited", "the dot's word for a dead session, not 'AWS sign-in needed'");
+  assert.equal(d.rowSubline(dead).text, "ended", "the row word for a dead session (M8.6c, was \"exited\"), not 'AWS sign-in needed'");
 });
 
 test("deskDot: a finished turn is the neutral idle dot titled 'your turn'; blocked stays the amber waiting dot", () => {
@@ -918,4 +918,14 @@ test("rowSubline: the other needs and every non-ask line keep their shape", () =
   assert.equal(s.mono, undefined);
   assert.equal(d.rowSubline(A.store).mono, undefined);
   assert.deepEqual(Object.keys(d.rowSubline({ activity: "working", summary: "fixing tests" })), ["text", "amber"]);
+});
+
+test("rowSubline: an ended session reads 'ended', a crashed one 'crashed' (the pane bars' vocabulary, M8.6c)", () => {
+  assert.deepEqual(d.rowSubline({ activity: "done", exited: true, summary: "all fixed" }), { text: "ended", amber: false });
+  assert.deepEqual(d.rowSubline({ activity: "crashed", exited: true, summary: "x" }), { text: "crashed", amber: false });
+  assert.deepEqual(d.rowSubline({ activity: "crashed" }), { text: "crashed", amber: false });
+  assert.equal(d.deskDot({ activity: "crashed", exited: true }).title, "crashed");
+  // a live session is untouched: summary or the activity word
+  assert.deepEqual(d.rowSubline({ activity: "working", summary: "fixing" }), { text: "fixing", amber: false });
+  assert.deepEqual(d.rowSubline({ activity: "done", summary: "all fixed" }), { text: "all fixed", amber: false });
 });

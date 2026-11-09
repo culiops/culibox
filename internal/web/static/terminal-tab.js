@@ -588,6 +588,8 @@ class TerminalTab {
     if (a !== this.activityState || why !== this.needWhy()) {
       const prev = this.activityState;
       this.activityState = a; this.needWhyState = why; this.onUpdate?.();
+      // The ended bar reads Crashed only on activity=crashed, which can land a poll after the socket closed.
+      if (this.ended && this.troubleEl && this.paneBarDesk()) this.paintPaneBar("ended");
       // A finished turn is when "what did the agent change?" is worth asking.
       if (typeof gitStatusOnActivity === "function") gitStatusOnActivity(this, prev, a);
     }
@@ -741,6 +743,7 @@ class TerminalTab {
     const rp = { hold: 1, first: true };
     this.replay = rp;
     this.clearRetry();
+    this.signedParked = false;
     this.hideTrouble();
     this.setStatus("connecting…");
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -786,6 +789,7 @@ class TerminalTab {
 
   scheduleRetry() {
     this.clearRetry();
+    if (this.paneSignedOut()) { this.openedAt = 0; this.parkSignedOut(); return; }
     if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0; // a long-lived
     this.openedAt = 0;                                                        // link resets backoff
     const delay = Math.min(1500 * 2 ** this.retries, 10000);
@@ -793,9 +797,32 @@ class TerminalTab {
     this.retryAt = Date.now() + delay;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      if (!this.closed) this.connect();
+      if (this.closed) return;
+      // Signed out since this was armed: no socket, the bar says so (resumeAfterSignIn is the way back).
+      if (this.paneSignedOut()) { this.retryAt = 0; this.parkSignedOut(); return; }
+      this.connect();
     }, delay);
     this.showTrouble("offline");
+  }
+
+  // paneSignedOut: the page's ONE signed-out flag (app.js sys, set by any 401, cleared by the next OK
+  // session poll). `sys` is a const in a later script, so a read before it exists is "not signed out".
+  paneSignedOut() {
+    try { return !!sys.signedOut; } catch (_) { return false; }
+  }
+
+  // parkSignedOut: stop retrying and say so. A 401 will not heal by reconnecting; each attempt was one more
+  // rejected WebSocket. resumeAfterSignIn (called when the flag clears) reconnects the parked pane.
+  parkSignedOut() {
+    this.clearRetry();
+    this.signedParked = true;
+    this.showTrouble("expired");
+  }
+
+  resumeAfterSignIn() {
+    if (!this.signedParked || this.closed || this.ended) return;
+    this.signedParked = false;
+    this.retryNow();
   }
 
   clearRetry() {
@@ -817,7 +844,13 @@ class TerminalTab {
     const probe = await probeServer();
     if (this.closed || !this.retryTimer) return; // reconnected or ended meanwhile
     this.probeFails = probe === "ok" ? 0 : (this.probeFails || 0) + 1;
-    if (probe === "unauthorized") { this.showTrouble("expired"); return; }
+    if (probe === "unauthorized") {
+      // E9: the retry used to stay armed and keep reconnecting a stale login. Tell the page (the one flag the
+      // banner, the title and every pane read), stop the loop, show the bar.
+      try { sysNoteSignedOut(); } catch (_) { /* before app.js defines it */ }
+      this.parkSignedOut();
+      return;
+    }
     if (probe === "unreachable") { this.showTrouble("offline"); return; }
     const status = await sessionStatus(this.id);
     if (this.closed || !this.retryTimer) return;
@@ -929,6 +962,7 @@ class TerminalTab {
   // could fix it.
   showTrouble(kind) {
     if (this.ended || this.closed) return;
+    if (this.paneBarDesk()) { this.paintPaneBar(kind === "expired" ? "signedout" : kind); return; }
     if (!this.troubleEl) {
       this.troubleEl = document.createElement("div");
       this.troubleEl.className = "pane-trouble";
@@ -970,7 +1004,73 @@ class TerminalTab {
     if (!this.troubleTimer && this.retryAt) this.troubleTimer = setInterval(() => this.tickTrouble(), 500);
   }
 
+  // paneBarDesk: the desktop's neutral .pane-bar replaces the legacy bars; the phone keeps .pane-trouble and
+  // .pane-ended exactly as they were.
+  paneBarDesk() {
+    return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+  }
+
+  // paintPaneBar draws the bar paneBarModel (notifymodel.js) describes, and only draws: every word, dot and button
+  // comes from the model. It is rebuilt when the model's key moves and otherwise left alone (the countdown text
+  // ticks in tickTrouble). A signed-out page shows the signed-out bar whatever the tab was told.
+  paintPaneBar(kind) {
+    const k = kind !== "ended" && this.paneSignedOut() ? "signedout" : kind;
+    let model = paneBarModel(k, this.activity(), k === "ended" ? this.endedStatus : "");
+    if (!model) return;
+    // Not designed (no frame words): after three failed probes today's line and its Reload page stay.
+    if (k === "offline" && (this.probeFails || 0) >= 3) {
+      const text = "Still cannot reach the server. Your login may have expired.";
+      model = Object.assign({}, model, { key: "stuck", text, base: text, countdown: false,
+        buttons: [{ id: "reload", label: "Reload page", tone: "secondary" }].concat(model.buttons) });
+    }
+    if (!this.troubleEl || this.troubleKey !== model.key) {
+      this.hideTrouble();
+      const bar = document.createElement("div");
+      bar.className = "pane-bar";
+      bar.setAttribute("role", "status");
+      if (model.dot) {
+        const dot = document.createElement("span");
+        dot.className = "dot dot-" + model.dot;
+        bar.appendChild(dot);
+      }
+      const msg = document.createElement("span");
+      msg.className = "pane-bar-msg";
+      bar.appendChild(msg);
+      for (const b of model.buttons) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-sm" + (b.tone === "primary" ? " btn-primary" : b.tone === "ghost" ? " btn-ghost" : "");
+        btn.textContent = b.label;
+        btn.onclick = () => this.paneBarAct(b.id, btn);
+        bar.appendChild(btn);
+      }
+      this.troubleEl = bar;
+      this.troubleMsg = msg;
+      this.troubleKey = model.key;
+      this.el.insertBefore(bar, this.el.firstChild);
+      this.fit();
+    }
+    this.barModel = model;
+    this.tickTrouble();
+    if (model.countdown && this.retryAt && !this.troubleTimer) this.troubleTimer = setInterval(() => this.tickTrouble(), 500);
+    if (!model.countdown && this.troubleTimer) { clearInterval(this.troubleTimer); this.troubleTimer = null; }
+  }
+
+  paneBarAct(id, btn) {
+    if (id === "retry" || id === "takeback") this.retryNow();
+    else if (id === "reload") location.reload();
+    else if (id === "close") closeTabEverywhere(this);
+    else if (id === "restart") restartSession({ id: this.id }, btn);
+  }
+
   tickTrouble() {
+    if (this.barModel && this.troubleMsg && this.troubleEl) {
+      const m = this.barModel;
+      const left = this.retryAt ? Math.max(0, Math.ceil((this.retryAt - Date.now()) / 1000)) : 0;
+      const t = m.countdown ? (this.retryAt ? m.text.replace("{n}", String(left)) : m.base) : m.text;
+      if (this.troubleMsg.textContent !== t) this.troubleMsg.textContent = t;
+      return;
+    }
     if (!this.troubleCount) return;
     const left = this.retryAt ? Math.max(0, Math.ceil((this.retryAt - Date.now()) / 1000)) : 0;
     this.troubleCount.textContent = this.retryAt ? "retrying in " + left + "s" : "";
@@ -978,7 +1078,10 @@ class TerminalTab {
 
   hideTrouble() {
     if (this.troubleTimer) { clearInterval(this.troubleTimer); this.troubleTimer = null; }
-    if (this.troubleEl) { this.troubleEl.remove(); this.troubleEl = null; this.fit(); }
+    if (this.troubleEl) {
+      this.troubleEl.remove(); this.troubleEl = null; this.fit();
+      this.troubleKey = null; this.barModel = null; this.troubleMsg = null;
+    }
   }
 
   // markTakenOver parks the pane instead of reconnecting: the session is alive
@@ -1000,6 +1103,11 @@ class TerminalTab {
     this.clearRetry();
     this.hideTrouble();
     this.setStatus("ended");
+    if (this.paneBarDesk()) {
+      this.endedStatus = restartable ? "exited" : null;
+      this.paintPaneBar("ended");
+      return;
+    }
     const bar = document.createElement("div");
     bar.className = "pane-ended";
     const msg = document.createElement("span");

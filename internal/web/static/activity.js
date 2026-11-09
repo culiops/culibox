@@ -29,12 +29,14 @@ function activityClass(activity, why) {
 // lost the server (Plan 7 draws it; it sits in the map so the three share one
 // vocabulary). Anything else has no connection word: "". The phone's dot titles
 // in activityClass are NOT these and stay as they are. Plan 7 reuses this map on
-// its pane bars.
+// its pane bars. "ended" and "crashed" are the row's words for an exited / crashed session (M8.6c).
 function connStateLabel(state) {
   switch (state) {
     case "detached":   return "detached \u00b7 reconnecting";
     case "taken-over": return "open in another tab";
     case "offline":    return "offline";
+    case "ended":      return "ended";
+    case "crashed":    return "crashed";
     default:           return "";
   }
 }

@@ -40,3 +40,8 @@ test("connStateLabel does not touch the dot titles the phone draws", () => {
   assert.strictEqual(activityClass("waiting").title, "waiting for input");
   assert.strictEqual(activityClass("done").title, "exited");
 });
+
+test("connStateLabel: ended and crashed are the row sub-line words the pane bars mirror (F55/F56)", () => {
+  assert.strictEqual(connStateLabel("ended"), "ended");
+  assert.strictEqual(connStateLabel("crashed"), "crashed");
+});

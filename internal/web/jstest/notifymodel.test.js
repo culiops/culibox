@@ -735,3 +735,72 @@ test("railMarkerModel: one marker for the first banner (system, else store); neu
   assert.equal(m.railMarkerModel(null, null), null);
   assert.equal(m.railMarkerModel(null, undefined), null);
 });
+
+// ---- Plan 7 Task 8 (#177, DD§A8/E1): the desktop pane-bar model --------------------------------------
+const btns = (b) => b.buttons.map((x) => x.label + ":" + x.tone);
+
+test("paneBarModel: lost connection counts down, with a hollow dot and Retry now", () => {
+  const b = m.paneBarModel("offline", "working", null);
+  assert.strictEqual(b.text, "Lost connection · retrying in {n} s");
+  assert.strictEqual(b.base, "Lost connection");
+  assert.strictEqual(b.dot, "detached");
+  assert.strictEqual(b.countdown, true);
+  assert.deepStrictEqual(btns(b), ["Retry now:secondary"]);
+});
+
+test("paneBarModel: signed out has no countdown and no button, and never offers a retry", () => {
+  const b = m.paneBarModel("signedout", "idle", null);
+  assert.strictEqual(b.text, "Signed out · this terminal reconnects after you sign in");
+  assert.strictEqual(b.dot, "detached");
+  assert.strictEqual(b.countdown, false);
+  assert.deepStrictEqual(b.buttons, []);
+});
+
+test("paneBarModel: detached uses the row sub-line's wording (connStateLabel), capitalised", () => {
+  const { connStateLabel } = require("../static/activity.js");
+  const b = m.paneBarModel("detached", "detached", "detached");
+  assert.strictEqual(b.text, "Detached · reconnecting in {n} s");
+  assert.strictEqual(b.base.toLowerCase(), connStateLabel("detached"));
+  assert.strictEqual(b.dot, "detached");
+  assert.deepStrictEqual(btns(b), ["Retry now:secondary"]);
+});
+
+test("paneBarModel: taken over has no dot and Take back", () => {
+  const b = m.paneBarModel("taken-over", "idle", "running");
+  assert.strictEqual(b.text, "Another tab or window took over this session.");
+  assert.strictEqual(b.dot, "");
+  assert.strictEqual(b.countdown, false);
+  assert.deepStrictEqual(btns(b), ["Take back:secondary"]);
+});
+
+test("paneBarModel: ended is neutral, Restart primary then Close ghost, no dot", () => {
+  const b = m.paneBarModel("ended", "done", "exited");
+  assert.strictEqual(b.text, "Session ended");
+  assert.strictEqual(b.dot, "");
+  assert.deepStrictEqual(btns(b), ["Restart:primary", "Close:ghost"]);
+});
+
+test("paneBarModel: crashed only when activity is crashed; the dot alone is red", () => {
+  const b = m.paneBarModel("ended", "crashed", "exited");
+  assert.strictEqual(b.text, "Crashed");
+  assert.strictEqual(b.dot, "crashed");
+  assert.deepStrictEqual(btns(b), ["Restart:primary", "Close:ghost"]);
+  for (const a of ["done", "idle", "working", "", undefined]) assert.strictEqual(m.paneBarModel("ended", a, "exited").text, "Session ended", String(a));
+});
+
+test("paneBarModel: removed (gone from the list) cannot restart: Close ghost only; crashed does not apply", () => {
+  for (const act of ["done", "crashed"]) {
+    const b = m.paneBarModel("ended", act, null);
+    assert.strictEqual(b.text, "Removed");
+    assert.strictEqual(b.dot, "");
+    assert.deepStrictEqual(btns(b), ["Close:ghost"]);
+  }
+});
+
+test("paneBarModel: no bar carries an exit code or a duration, and an unknown kind is null", () => {
+  for (const [k, a, s] of [["offline"], ["signedout"], ["detached"], ["taken-over"], ["ended", "crashed", "exited"], ["ended", "done", null]]) {
+    const b = m.paneBarModel(k, a, s);
+    assert.ok(!/\bcode\b|status \d|\d+m\b/.test(b.text), k);
+  }
+  assert.strictEqual(m.paneBarModel("nope", "", ""), null);
+});

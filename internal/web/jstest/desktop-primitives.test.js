@@ -231,7 +231,7 @@ const KIT_CLASSES = [
   "scrim", "dlg", "dlg-head", "dlg-title", "dlg-close", "dlg-body", "dlg-foot", "hint",
   "toast", "toast-text", "is-error", "is-warn",
   // Kit gaps two or more plans need (drawn page-local in the mockups).
-  "toolbar", "input-sm", "card-outline", "card-row", "empty-state", "fold", "opt-card", "opt-card-title", "spin", "attn-chip", "banner", "banner-title", "banner-acts",
+  "toolbar", "input-sm", "card-outline", "card-row", "empty-state", "fold", "opt-card", "opt-card-title", "spin", "attn-chip", "banner", "banner-title", "banner-acts", "pane-bar", "pane-bar-msg",
 ];
 const KIT_SELECTORS = [
   "select.input", "textarea.input", ".input.mono", ".input.input-sm", ".grp-label.is-needs",

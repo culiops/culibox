@@ -3366,7 +3366,12 @@ function rowLocal(s) {
 // OK poll (nmOffline), so one blip never flickers the title or the banner.
 const sys = { lastOkAt: null, failSince: null, signedOut: false, hiddenSince: null, paused: false,
   bootVersion: null, version: null, dismissedVersion: "" };
-function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; sys.paused = false; }
+function sysPollOk() {
+  const wasSignedOut = sys.signedOut;
+  sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; sys.paused = false;
+  // Panes parked by the signed-out state reconnect now (Plan 7 Task 8): the flag is the one thing that stopped them.
+  if (wasSignedOut && typeof eachTerminal === "function") eachTerminal((t) => { if (t.resumeAfterSignIn) t.resumeAfterSignIn(); });
+}
 function sysPollFailed(e) {
   const now = Date.now();
   if (sys.failSince == null) sys.failSince = now;

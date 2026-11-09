@@ -506,6 +506,16 @@
   }
   .banner.is-needs .banner-title { color: var(--amber); }
   .banner-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+  /* Pane bar (M8.6/6b/6c, DD§B2): the strip under a pane header that names a lost connection, a sign-out, a detach, a
+     takeover or an ended session. Neutral: the --panel fill and a --line rule, 12/18 --fg text, btn-sm buttons; it is the ask
+     strip's geometry (41 tall, a bar with no button too) on the panel instead of the amber tint. A leading .dot is the only
+     colour (the crashed dot is red); an ended bar has no fill of its own. */
+  .pane-bar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-height: 41px; box-sizing: border-box; flex: none;
+    background: var(--panel); border-bottom: 1px solid var(--line); color: var(--fg);
+    font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  .pane-bar-msg { flex: 1 1 auto; min-width: 0; }
   /* Pending spinner (M8 .m8-spin), drawn still. */
   .spin {
     display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
@@ -540,7 +550,7 @@
      hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
      legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
-    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev, .attn-chip, .banner, .banner-title, .banner-acts)[hidden],
+    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev, .attn-chip, .banner, .banner-title, .banner-acts, .pane-bar)[hidden],
   .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item, > .menu-row)[hidden], .field:has(> .field-label)[hidden],
   .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
   /* === end kit primitives === */
