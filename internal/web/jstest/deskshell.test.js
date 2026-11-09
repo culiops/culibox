@@ -329,6 +329,33 @@ test("a legacy-only elevated session still gets a timed write chip", () => {
   assert.equal(m.chips.find((x) => x.tone === "write").text, "aws \u00b7 WRITE \u00b7 12m");
 });
 
+// G4-D1: the pane header's dot rings in red while a write window is open, on the sidebar row dot's own predicate
+// (sessionElevated), so the model says so once and tabs.js only adds the class. The header's rebuild key already moves
+// with the window (its chip text is empty exactly when sessionElevated is false), so the ring appears and goes with it.
+test("paneHeaderModel.elevated is sessionElevated(session): a live window on a connection or the legacy record, wide or narrow, and never on a lapsed one or a viewer", () => {
+  const model = (session, over) => d.paneHeaderModel({ tab: { kind: "terminal" }, session, nowMs: NOW, boxRuntime: "runc", narrow: false, ...over });
+  const live = new Date(NOW + 23 * 60000).toISOString();
+  const lapsed = new Date(NOW - 60000).toISOString();
+  const open = { ...working, aws_connections: [conn({ elevated_until: live })] };
+  assert.equal(model(open).elevated, true);
+  assert.equal(model(open, { narrow: true }).elevated, true, "a narrow header keeps its dot, and its ring");
+  assert.equal(model({ ...working, aws: { elevated_until: live } }).elevated, true, "the legacy single record");
+  assert.equal(model(working).elevated, false);
+  assert.equal(model({ ...working, aws_connections: [conn({ elevated_until: lapsed })] }).elevated, false, "the list still carries a lapsed window");
+  assert.equal(model(null).elevated, false, "no session record");
+  assert.equal(d.paneHeaderModel({ tab: { kind: "viewer", path: "/a/b.md" }, session: open, nowMs: NOW, boxRuntime: "", narrow: false }).elevated, false, "a viewer has no dot");
+  for (const s of [open, working, { ...working, aws: { elevated_until: live } }]) {
+    assert.equal(model(s).elevated, d.sessionElevated(s, NOW), "the same predicate as the sidebar row dot");
+  }
+});
+
+test("the header's rebuild key moves when the dot's ring does (a window opens or lapses)", () => {
+  const live = new Date(NOW + 23 * 60000).toISOString();
+  const open = { ...working, aws_connections: [conn({ elevated_until: live })] };
+  assert.notEqual(d.headerSyncKey("api", open, NOW), d.headerSyncKey("api", working, NOW), "opened");
+  assert.notEqual(d.headerSyncKey("api", open, NOW), d.headerSyncKey("api", open, NOW + 25 * 60000), "lapsed by the clock");
+});
+
 test("a read credential chip is neutral, even for a production connection", () => {
   const s = { ...working, aws_connections: [conn({ prod: true })] };
   const m = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });

@@ -928,7 +928,8 @@ class Cell {
     const a = headerDot(m, t);
     if (a) {
       const dot = el("span");
-      dot.className = a.cls + " ph-dot";
+      // An open write window rings it in red, as the sidebar row's dot (the kit's .dot.is-elevated, M6.4).
+      dot.className = a.cls + " ph-dot" + (m.elevated ? " is-elevated" : "");
       // Narrow: the connection state (see .ph-st below) joins the title.
       const st = this._narrow && t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" ? t.status() : "";
       const title = [a.title, st].filter(Boolean).join(" \u00B7 ");

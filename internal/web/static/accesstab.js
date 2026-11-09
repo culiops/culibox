@@ -80,7 +80,9 @@ function accBound(s) {
 
 // accLoad: read the broker status (and the egress line of an unbound box) for
 // sid. At most once per ACCESS_REFRESH_MS unless forced. A failed read keeps what
-// was there: only a 200 or a 204 replaces it.
+// was there: only a 200 or a 204 replaces it. It returns the read's promise, which
+// settles once the answer is stored and the Access view repainted (elevbanner.js
+// re-syncs the panes then), and undefined when no read was started.
 function accLoad(sid, force) {
   let d = accData.get(sid);
   if (!d) { d = { aws: null, egress: null, at: 0, inflight: false, loaded: false, failed: false }; accData.set(sid, d); }
@@ -89,7 +91,7 @@ function accLoad(sid, force) {
   if (!s) return;
   d.inflight = true;
   const get = (tail) => fetch("/api/sessions/" + encodeURIComponent(sid) + tail).then(accReadReply, () => undefined);
-  (async () => {
+  return (async () => {
     let r = { ok: false };
     try {
       let aws = null;

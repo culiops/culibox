@@ -258,6 +258,61 @@ test("an elevated connection row shows \"write (elevated)\" in red and no Drop; 
   assert.strictEqual(drops(pane).length, 1, "still one after the view repaints");
 });
 
+// G3-D1 end to end, with the page's real accLoad and elevbanner.js: a window that ends elsewhere leaves the list
+// first, the cached status still says open, and the banner goes when the forced read lands, not a poll later.
+test("accLoad answers once the read is stored, so the banner of an early-ended window goes when it lands (G3-D1)", async () => {
+  const p = page();
+  const { box, doc } = p;
+  const s = open(23);
+  const live = () => status({ approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until: s.aws_connections[0].elevated_until } });
+  const over = () => status({ approvals: [granted(), { ts: Date.now(), action: "dropped", name: "culipulse-prod", reason: "" }], elevation: { active: false, name: "culipulse-prod" } });
+  let reply = live();
+  const urls = [];
+  box.fetch = async (url) => { urls.push(url); return /\/aws$/.test(url) ? { status: 200, json: async () => reply } : { status: 204 }; };
+  const bar = doc.createElement("div");
+  bar.className = "cell-bar";
+  const pane = doc.createElement("div");
+  pane.append(bar);
+  const cell = { bar, el: pane };
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+
+  box.lastSessions = [s];
+  cell.syncElev();
+  await tick();
+  assert.ok(cell._elev, "the window is open: a banner");
+  assert.strictEqual(urls.filter((u) => /\/aws$/.test(u)).length, 1, "one forced read for the new window");
+
+  // Dropped elsewhere: the next list has no window; the cached status is still the old one.
+  reply = over();
+  box.lastSessions = [claudeBox()];
+  cell.syncElev();
+  assert.ok(cell._elev, "until the read lands the cached status keeps the banner (the lag this fixes)");
+  await tick();
+  assert.strictEqual(cell._elev, null, "the forced read landed: the banner went with no further sync");
+  assert.strictEqual(urls.filter((u) => /\/aws$/.test(u)).length, 2, "one read for the change, none for the re-sync");
+});
+
+test("accLoad returns a promise that settles after the status is stored and the Access view repainted", async () => {
+  const { box, lex } = page();
+  box.lastSessions = [open(12)];
+  let painted = 0;
+  lex("accViews").set("s1", () => { painted++; });
+  box.fetch = async (url) => (/\/aws$/.test(url) ? { status: 200, json: async () => status() } : { status: 204 });
+  const r = box.accLoad("s1", true);
+  assert.strictEqual(typeof r.then, "function");
+  assert.strictEqual(lex("accData").get("s1").inflight, true);
+  await r;
+  const d = lex("accData").get("s1");
+  assert.strictEqual(d.inflight, false);
+  assert.strictEqual(d.loaded, true);
+  assert.strictEqual(painted, 1, "the view repaints before the promise settles");
+  const again = box.accLoad("s1", true);
+  assert.strictEqual(typeof again.then, "function", "a forced read after one has settled starts another");
+  assert.strictEqual(box.accLoad("s1", true), undefined, "a read while one is in flight is dropped");
+  await again;
+});
+
 test("a window with plenty of time left offers no row action at all (Extend appears under 20 minutes)", async () => {
   const { host } = await mount(open(23), status({ approvals: [granted()] }));
   assert.deepStrictEqual(buttons(host.querySelector(".ac-conn")).map((b) => b.textContent), []);

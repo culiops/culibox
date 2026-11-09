@@ -479,6 +479,86 @@ test("a window change asks for one forced status read, and a poll with no change
   assert.strictEqual(box.reads[3].join(":"), "s2:true");
 });
 
+// G3-D1: the list drops `elevated_until` while the cached /aws status still says active with a future `until`, so
+// the banner stays up until the forced read lands. When it lands, every pane showing that session is re-synced at
+// once (not at the next 3 s poll), and nothing asks for a second read.
+test("a window that ends early: when the forced status read lands, every pane of that session drops its banner at once, with one read (G3-D1)", async () => {
+  const { box, doc, cell, sync } = page();
+  // A pane as tabs.js builds it: syncElev() syncs it to the session its terminal tab shows (Cell.syncElev).
+  const mk = (sid) => {
+    const bar = doc.createElement("div"); bar.className = "cell-bar";
+    const el = doc.createElement("div"); el.className = "cell";
+    el.append(bar);
+    const c = { bar, el };
+    c.syncElev = () => box.paneElevSync(c, box.lastSessions.find((x) => x.id === sid) || null);
+    return c;
+  };
+  const second = mk("s1"); // another pane on the same session
+  const other = mk("s2"); // a pane on a session whose window is still open
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell, second, other];
+  const open2 = sess(23, { id: "s2" });
+  const until = iso(23);
+  const statusOf = (active) => ({ approvals: [], elevation: active ? { active: true, name: "culipulse-prod", until } : { active: false, name: "culipulse-prod" } });
+  // accLoad as the real one now behaves: it answers when the read has landed (accData updated, views repainted).
+  const landing = [];
+  let broker = true; // what the daemon says about s1's window when a read reaches it
+  box.accLoad = (sid, force) => {
+    box.reads.push([sid, force]);
+    return new Promise((resolve) => landing.push(() => {
+      if (sid === "s1") box.accData.set(sid, { aws: statusOf(broker), loaded: true, failed: false, inflight: false });
+      resolve();
+    }));
+  };
+  const all = (...ss) => { box.lastSessions = ss; box.paneElevSync(cell, ss[0]); box.paneElevSync(second, ss[0]); box.paneElevSync(other, open2); };
+  box.accData.set("s1", { aws: statusOf(true), loaded: true, failed: false, inflight: false });
+
+  all(sess(23), open2);
+  assert.ok(cell._elev && second._elev && other._elev, "all three panes show a banner");
+  assert.strictEqual(box.reads.length, 2, "one read for s1's new window, one for s2's");
+  landing.splice(0).forEach((f) => f());
+  await tick();
+
+  // The window ends elsewhere: the list no longer carries it, the cached status still does.
+  broker = false;
+  all(sess(null), open2);
+  assert.ok(cell._elev && second._elev, "the cached status keeps both banners up until the read lands");
+  assert.strictEqual(box.reads.length, 3, "the change asks for one forced read of s1");
+  assert.strictEqual(box.reads[2].join(":"), "s1:true");
+  landing.splice(0).forEach((f) => f());
+  await tick();
+  assert.strictEqual(cell._elev, null, "the pane that asked is re-synced when the read lands, with no further poll");
+  assert.strictEqual(second._elev, null, "and so is the other pane of the same session");
+  assert.ok(other._elev, "a pane on another session is left alone");
+  assert.strictEqual(box.reads.length, 3, "the re-sync asks for no second read");
+});
+
+test("a forced read that lands with the broker still saying the window is open keeps the banner, in place; a session gone by then loses it", async () => {
+  const { box, cell, sync } = page();
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  const until = iso(23);
+  const active = { approvals: [], elevation: { active: true, name: "culipulse-prod", until } };
+  box.accData.set("s1", { aws: active, loaded: true, failed: false, inflight: false });
+  let land = null;
+  box.accLoad = (sid, force) => { box.reads.push([sid, force]); return new Promise((r) => { land = r; }); };
+  sync(sess(23));
+  const node = cell._elev;
+  assert.ok(node);
+  sync(sess(null)); // the list dropped it; the cached status still says open
+  assert.ok(cell._elev === node);
+  land();
+  await tick();
+  assert.ok(cell._elev === node, "the status still says open: the same banner, not rebuilt");
+  assert.strictEqual(box.reads.length, 2);
+  // A session that left the list before its read landed has no banner to keep.
+  sync(sess(23, { aws_connections: [conn({ elevated_until: until })] }));
+  box.lastSessions = [];
+  land();
+  await tick();
+  assert.strictEqual(cell._elev, null);
+});
+
 test("a window that lapses by the clock between two polls is a change to none", () => {
   const { box } = page();
   const w = (ms) => ({ id: "s1", aws_connections: [conn({ elevated_until: new Date(ms).toISOString() })] });
@@ -599,4 +679,40 @@ test("the sidebar row's dot gets the kit ring, and with the 'viewed elsewhere' o
   assert.ok(both, "one combined rule");
   assert.match(both, /outline: (0|none)/, "the outline is drawn as a ring of the same shadow");
   assert.match(both, /box-shadow:[^;]*var\(--red\)[^;]*var\(--fg\)/, "red ring inside, the viewer's ring outside");
+});
+
+// Gate 4 (DIFF.md section 3): the elevated cues beside the views were left in their pre-Plan-6 look. The frame (M6.4) draws
+// the header and sidebar write chips as the kit's .chip-write, the header dot with the kit ring, and the footer count regular.
+const KIT_CHIP_WRITE = "color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold);";
+
+test("the header write chip is the kit .chip-write: red tint fill, a 45% ring, mono 600; its overflow and shrink rules stay (G4-H1)", () => {
+  assert.strictEqual(rule(".ph-chip.write"), KIT_CHIP_WRITE);
+  // Kit recipe (digest C5): rgba(240,106,106,.45) written as the kit writes it, no rgb(... / ...) and no hex.
+  assert.doesNotMatch(rule(".ph-chip.write"), /#[0-9a-f]{3,8}\b|rgb\([^)]*\/|var\(--raise\)/i);
+  // The text and the minute tick are untouched: the same chip text, ellipsized at 260px, giving way after the meta.
+  assert.match(rule(".ph-chip"), /max-width: 260px; overflow: hidden; text-overflow: ellipsis;/);
+  assert.strictEqual(rule(".ph-chip.cloud, .ph-chip.write"), "flex: 0 10000 auto; min-width: 7ch;");
+  assert.doesNotMatch(rule(".ph-chip.write"), /overflow|text-overflow|flex|min-width|max-width/);
+});
+
+test("the sidebar row's write chip is the same kit .chip-write recipe (G4-H2)", () => {
+  assert.strictEqual(rule(".dchip.write"), KIT_CHIP_WRITE);
+  assert.match(rule(".dchip"), /font: 500 var\(--t-xs\)\/18px var\(--font-ui\)/, "the base chip is untouched; only the write one changes");
+});
+
+test("the header dot's ring has room: the left column pads 4px and takes it back with a margin, only while its dot is elevated (G4-D1)", () => {
+  // .ph-main clips its overflow, and the dot is its first item: without room the ring's left 3.5px would be cut off.
+  assert.match(css, /\.ph-main \{[^}]*overflow: hidden;/, "the clip that the room is for");
+  assert.strictEqual(rule(".ph-main:has(> .ph-dot.is-elevated)"), "padding-left: 4px; margin-left: -4px;");
+  assert.strictEqual(rule(".dot.is-elevated"), "box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red);", "the ring is the kit's, untouched");
+  assert.doesNotMatch(css, /\.ph-dot[^{]*\{[^}]*box-shadow/, "no header rule of its own draws or overrides the ring");
+});
+
+test("the footer's elevated count is red at regular weight, as the frame's span.c-red.tnum (G4-F1)", () => {
+  assert.strictEqual(rule("#side-elevated.hot"), "color: var(--red); font-weight: var(--w-regular);");
+});
+
+test("none of the elevated cues is styled in app.css, so the phone is untouched (G4-H1, H2, F1)", () => {
+  const app = read("app.css");
+  for (const sel of [/\.ph-chip/, /\.dchip/, /#side-elevated/, /\.ph-dot/, /\.ph-main/, /\.chip-write/]) assert.doesNotMatch(app, sel);
 });

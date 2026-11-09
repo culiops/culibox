@@ -605,7 +605,7 @@
   .side-stats:not(:has(> :not([hidden]))) { display: none; }
   #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
   #side-elevated[hidden] { display: none; }
-  #side-elevated.hot { color: var(--red); font-weight: 600; }
+  #side-elevated.hot { color: var(--red); font-weight: var(--w-regular); }
   /* F77 (#174): "Store locks in 42 m", painted only in the store's last hour (paintSideStore, store.js).
      Its own row above the links, neutral: 12px --muted. Not amber (nothing is blocked yet), no icon, no link;
      hidden it takes no row and so no 8px gap. */
@@ -697,7 +697,8 @@
   /* The tier is a machine word: the kit's .chip-box / .chip-host (mono, 400). */
   .dchip.box, .dchip.host { font-family: var(--font-mono); font-weight: var(--w-regular); }
   .dchip.host { box-shadow: inset 0 0 0 1px var(--faint); }
-  .dchip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  /* The kit's .chip-write, as the pane header's write chip. */
+  .dchip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   #sessions .drow:hover .dchip.box { background: var(--line); }
   /* The ⋯ takes no room until the row is hovered or something in it is
      focused; it stays tabbable so a keyboard user reaches it. Its look is the kit's .btn .btn-ghost
@@ -756,6 +757,9 @@
   .cell-bar[hidden] { display: none; }
   .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
   .ph-main .ph-dot { flex: none; }
+  /* The dot is the first item of a column that clips its overflow, and its elevated ring (the kit's .dot.is-elevated, 3.5px out)
+     would lose its left side there. While the dot is elevated the column pads 4px and takes it back with a margin: nothing moves. */
+  .ph-main:has(> .ph-dot.is-elevated) { padding-left: 4px; margin-left: -4px; }
   .ph-name {
     /* Everything beside the name shrinks 10^4 to 10^6 times faster (the meta, then the long
        chips), so its share of a deficit is under the 1/64px layout unit: at 1000x the name
@@ -783,7 +787,8 @@
   }
   .ph-chip.cloud, .ph-chip.write { flex: 0 10000 auto; min-width: 7ch; }
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
-  .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  /* The kit's .chip-write (M6.4: red tint, a 45% ring, mono 600): the same recipe as the sidebar row's .dchip.write. */
+  .ph-chip.write { color: var(--red); background: var(--red-tint); box-shadow: inset 0 0 0 1px rgba(240,106,106,.45); font-family: var(--font-mono); font-weight: var(--w-semibold); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
   /* The meta, `haiku-4.5 · ctx 35% · $3.12` (F13): the kit's .ph-meta look (mono, --t-xs,
      --muted), one line after the chips. It gives way before the name does, and gives way in

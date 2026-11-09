@@ -180,6 +180,33 @@ test("a narrow pane is dot, name and ONE chip: no meta, no model, no ctx, no cos
   assert.strictEqual(h.byClass("ph-dot").length, 1);
 });
 
+// G4-D1 (M6.4): the header's dot is `dot dot-run is-elevated` while the session has a live write window: the kit's red
+// ring (desktop.css .dot.is-elevated), the same class the sidebar row's dot takes. The phone's header is never built here.
+const live = (min) => new Date(Date.now() + min * 60000 + 30000).toISOString();
+const elevatedSession = (until) => ({
+  id: "s1", name: "agent-box", activity: "working", runtime: "box", cost_usd: 3.12,
+  aws_connections: [{ name: "culipulse-prod", label: "culipulse-prod", account_id: "402100009917", role_arn: "arn:aws:iam::402100009917:role/agent-ops-read", elevated_until: until }],
+});
+
+test("the header dot wears is-elevated while the session has a live write window, beside the write chip, and not otherwise (G4-D1)", () => {
+  const on = header({ session: elevatedSession(live(23)) });
+  const [dot] = on.byClass("ph-dot");
+  assert.ok(dot, "the header has its dot");
+  assert.deepStrictEqual(dot.className.split(/\s+/).filter((c) => c !== "dot" && c !== "working").sort(), ["is-elevated", "ph-dot"], "the activity classes stay, ph-dot stays, the ring class is added");
+  assert.ok(on.byClass("ph-chip").some((c) => c.classList.contains("write")), "the write chip is up too");
+  const off = header();
+  assert.ok(!off.byClass("ph-dot")[0].classList.contains("is-elevated"), "no window, no ring");
+  assert.ok(!header({ session: elevatedSession(new Date(Date.now() - 60000).toISOString()) }).byClass("ph-dot")[0].classList.contains("is-elevated"), "a lapsed window the list still carries: no ring");
+  assert.ok(header({ session: elevatedSession(live(23)), narrow: true }).byClass("ph-dot")[0].classList.contains("is-elevated"), "a narrow header too");
+  assert.strictEqual(header({ files: true }).byClass("ph-dot").length, 0, "a pane of files has no dot to ring");
+});
+
+test("the header is rebuilt when the window opens or closes, so the ring follows it (the sync key moves)", () => {
+  const key = (session) => header({ session }).cell._hdrKey;
+  assert.notStrictEqual(key(elevatedSession(live(23))), key(elevatedSession(undefined)), "opened");
+  assert.notStrictEqual(key(elevatedSession(live(23))), key(elevatedSession(new Date(Date.now() - 60000).toISOString())), "closed");
+});
+
 test("a terminal pane's tabs are Terminal, Activity, Access; Files is a button after the separator, before + Shell", () => {
   const h = header();
   const tabs = h.byClass("ph-tab");

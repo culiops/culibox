@@ -26,7 +26,8 @@
 // catches up on the next poll), so a second press cannot send a second DELETE.
 //
 // accesstab.js's globals it leans on: accData (the cached /aws status, which holds
-// the reason), accLoad, accDrop, accBusy, accViews.
+// the reason), accLoad (which returns a promise that settles once the read is stored),
+// accDrop, accBusy, accViews.
 
 // Per session id: the signature of its live write window the last time a status
 // read was asked for it (absent = none). See elevWatch.
@@ -57,7 +58,18 @@ function elevWatch(s) {
   const d = accData.get(s.id);
   if (d && d.inflight) return;
   if (sig) ELEV_SEEN.set(s.id, sig); else ELEV_SEEN.delete(s.id);
-  accLoad(s.id, true);
+  // The read answers (accLoad returns its promise) once the status is stored: re-sync the panes of this session
+  // then, not at the next poll. A read that was refused answers nothing, and the re-sync is then a no-op.
+  Promise.resolve(accLoad(s.id, true)).then(() => elevResync(s.id), () => {});
+}
+
+// elevResync: re-sync every pane that shows a banner for session `sid` (Cell.syncElev finds the session the pane's
+// terminal shows now, so a pane that moved on is synced to its own). The list says a window is over before the
+// cached status does, and liveWindowConn falls back to that status; this is the moment the status has caught up.
+// It asks for no read of its own: the window signature already matches. `cells` is tabs.js's list of panes.
+function elevResync(sid) {
+  if (typeof cells === "undefined" || !Array.isArray(cells)) return;
+  for (const c of cells) if (c._elev && c._elev._eb.sid === sid && typeof c.syncElev === "function") c.syncElev();
 }
 
 // elevPrune: forget the sessions that left the list, as accPrune does, so ELEV_SEEN
@@ -189,5 +201,5 @@ function paneElevSync(cell, s) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { paneElevSync, elevWatch };
+  module.exports = { paneElevSync, elevWatch, elevResync };
 }

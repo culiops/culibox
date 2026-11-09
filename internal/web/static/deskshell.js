@@ -282,18 +282,21 @@ function modelLabel(id) {
 // ctx says what the percentage is.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, modelTitle: null, ctx: null, cost: null };
+    return { dot: null, elevated: false, name: deskBaseName(tab.path || tab.name), chips: [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
   const dot = s ? deskDot(s) : null;
+  // The dot's red ring (the kit's .dot.is-elevated, as the sidebar row's dot): tabs.js adds the class while a window is open.
+  // The header's rebuild key (headerSyncKey) moves with the same predicate, through the write chip's text.
+  const elevated = sessionElevated(s, nowMs);
   const chips = [];
   const cont = s ? deskContainmentChip(s, boxRuntime) : null;
   if (cont) chips.push(cont);
   // Only an open write window is red; a read credential is neutral, and
   // whether it is production stays in the title.
   const parts = s ? deskDep("awsBadgeParts")(s, nowMs) : null;
-  if (sessionElevated(s, nowMs)) {
+  if (elevated) {
     chips.push(deskWriteChip(s, nowMs, parts ? parts.title : "AWS write window open"));
   } else if (parts) {
     chips.push({ text: parts.label, tone: "cloud", title: parts.title });
@@ -302,11 +305,11 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, modelTitle: null, ctx: null, cost: null };
+    return { dot, elevated, name, chips: w ? [w] : cont ? [cont] : [], model: null, modelTitle: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
-    dot, name, chips,
+    dot, elevated, name, chips,
     model: u ? modelLabel(u.model) : null,
     modelTitle: u && u.model ? String(u.model) : null,
     ctx: u && typeof u.pct === "number" ? "ctx " + u.pct + "%" : null,
