@@ -258,9 +258,10 @@ test("an elevated connection row shows \"write (elevated)\" in red and no Drop; 
   assert.strictEqual(drops(pane).length, 1, "still one after the view repaints");
 });
 
-// G3-D1 end to end, with the page's real accLoad and elevbanner.js: a window that ends elsewhere leaves the list
-// first, the cached status still says open, and the banner goes when the forced read lands, not a poll later.
-test("accLoad answers once the read is stored, so the banner of an early-ended window goes when it lands (G3-D1)", async () => {
+// G3-D1 / I1 end to end, with the page's real accLoad and elevbanner.js: a window that ends elsewhere leaves the list
+// first, the cached status still says open, and the banner (drawn from the list alone) goes at that sync; the forced
+// read that lands later re-syncs the panes and asks for nothing more.
+test("accLoad answers once the read is stored, so an early-ended window's banner is already gone and the read lands quietly (G3-D1, I1)", async () => {
   const p = page();
   const { box, doc } = p;
   const s = open(23);
@@ -287,10 +288,64 @@ test("accLoad answers once the read is stored, so the banner of an early-ended w
   reply = over();
   box.lastSessions = [claudeBox()];
   cell.syncElev();
-  assert.ok(cell._elev, "until the read lands the cached status keeps the banner (the lag this fixes)");
+  assert.strictEqual(cell._elev, null, "the banner goes at the sync that drops the window: the cached status keeps nothing up");
   await tick();
-  assert.strictEqual(cell._elev, null, "the forced read landed: the banner went with no further sync");
+  assert.strictEqual(cell._elev, null, "and the forced read landing changes nothing");
   assert.strictEqual(urls.filter((u) => /\/aws$/.test(u)).length, 2, "one read for the change, none for the re-sync");
+});
+
+// I1, the failure path with the page's real accLoad: the follow-up read answers 500, accLoadDone keeps the old status
+// (which says open), and no later poll asks again. The banner must already be gone.
+test("a window that ends elsewhere while the real accLoad's follow-up read fails: no stale banner (I1)", async () => {
+  const p = page();
+  const { box, doc } = p;
+  const s = open(23);
+  let fail = false;
+  box.fetch = async (url) => /\/aws$/.test(url)
+    ? (fail ? { status: 500 } : { status: 200, json: async () => status({ approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until: s.aws_connections[0].elevated_until } }) })
+    : { status: 204 };
+  const bar = doc.createElement("div");
+  bar.className = "cell-bar";
+  const pane = doc.createElement("div");
+  pane.append(bar);
+  const cell = { bar, el: pane };
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  box.lastSessions = [s];
+  cell.syncElev();
+  await tick();
+  assert.match(cell._elev.children[1].textContent, /“rotate KMS key”$/, "the first read landed: the reason");
+  fail = true;
+  box.lastSessions = [claudeBox()]; // dropped elsewhere
+  cell.syncElev();
+  assert.strictEqual(cell._elev, null, "gone at that sync");
+  await tick();
+  assert.strictEqual(p.lex("accData").get("s1").failed, true, "the follow-up read failed and kept the stale status");
+  assert.strictEqual(p.lex("accData").get("s1").aws.elevation.active, true);
+  for (let i = 0; i < 4; i++) { cell.syncElev(); await tick(); }
+  assert.strictEqual(cell._elev, null, "no later poll brings it back");
+});
+
+// F5 with the page's real accPrune: elevbanner's poll forgets what an Access view's update() would have.
+test("a banner poll forgets the cached status of a session that left the list, with no Access view mounted (F5)", () => {
+  const { box, doc, lex } = page();
+  const data = lex("accData");
+  const entry = () => ({ aws: null, egress: null, at: Date.now(), inflight: false, loaded: true, failed: false });
+  data.set("gone", entry());
+  data.set("s1", entry());
+  lex("accDrafts").set("gone", { minutes: 30 });
+  const bar = doc.createElement("div");
+  bar.className = "cell-bar";
+  const cell = { bar, el: doc.createElement("div") };
+  cell.el.append(bar);
+  box.lastSessions = [];
+  box.paneElevSync(cell, null);
+  assert.strictEqual(data.has("gone"), true, "the page before its first poll forgets nothing");
+  box.lastSessions = [claudeBox()];
+  box.paneElevSync(cell, claudeBox());
+  assert.strictEqual(data.has("gone"), false, "a session that left has no cached status");
+  assert.strictEqual(lex("accDrafts").has("gone"), false, "nor draft");
+  assert.strictEqual(data.has("s1"), true, "a listed session keeps it");
 });
 
 test("accLoad returns a promise that settles after the status is stored and the Access view repainted", async () => {

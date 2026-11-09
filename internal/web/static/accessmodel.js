@@ -126,18 +126,23 @@ function accNewest(list, keep) {
 
 // elevBanner: the session's one open write window as the red banner every pane
 // draws, or null (no window, or `until` is not in the future: a lapsed window
-// never reads "0 min left"). The window comes from the list entry (fresh each
-// poll), falling back to the cached /aws status between a grant and the next
-// poll. The reason comes only from a loaded approval of that same connection:
-// before the status loads, after a failed read, or with a blank reason there is
-// no reason segment at all. `detail` is the span text the banner draws after the
-// connection name; `key` changes exactly when something drawn does. `nowMs` is the real
-// clock when a caller leaves it out, so a new caller cannot get a banner that never shows.
+// never reads "0 min left"). Whether a window is open, on which connection and
+// until when come from the session LIST alone (the entry is fresh each poll, and
+// a legacy inline binding's window rides on it too: accConns carries
+// `s.aws.elevated_until`): the same predicate the header chip, row ring, rail ring
+// and footer use, so no cue can say "write" after another says "none". The cached
+// /aws status is never asked about that (it is older than the list after a window
+// ends elsewhere, and a failed read keeps it); it supplies the REASON only, from a
+// loaded approval of that same connection: before the status loads, after a failed
+// read, or with a blank reason there is no reason segment at all. `detail` is the
+// span text the banner draws after the connection name; `key` changes exactly when
+// something drawn does. `nowMs` is the real clock when a caller leaves it out, so a
+// new caller cannot get a banner that never shows.
 function elevBanner(s, aws, nowMs = Date.now()) {
   const hhmm = accDep("hhmm", "./sessionrow.js");
   const minutesLeft = accDep("minutesLeft", "./sessionrow.js");
   const conns = accConns(s || {});
-  const w = accDep("liveWindowConn", "./sessionrow.js")(conns, aws, nowMs);
+  const w = accDep("liveWindowConn", "./sessionrow.js")(conns, null, nowMs);
   if (!w) return null;
   const mins = minutesLeft(w.until, nowMs);
   const wc = conns.find((c) => c.name === w.name);

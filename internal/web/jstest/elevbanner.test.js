@@ -38,7 +38,14 @@ function page() {
     phone: false, lastSessions: [],
     mobileActive: () => box.phone,
     accData: new Map(), accBusy: new Set(), accViews: new Map(),
-    reads: [], drops: [], drawer: 0,
+    reads: [], drops: [], drawer: 0, prunes: 0,
+    // accesstab.js's accPrune (the real one is exercised in accesstab.test.js): forget the cached statuses of sessions that left.
+    accPrune: () => {
+      box.prunes++;
+      if (!box.lastSessions.length) return;
+      const live = new Set(box.lastSessions.map((x) => x.id));
+      for (const id of [...box.accData.keys()]) if (!live.has(id)) box.accData.delete(id);
+    },
     accLoad: (sid, force) => { box.reads.push([sid, force]); },
     positionDrawer: () => { box.drawer++; },
     // The real accDrop's shape: busy at once with a repaint; the request stays in flight until the test calls
@@ -479,10 +486,11 @@ test("a window change asks for one forced status read, and a poll with no change
   assert.strictEqual(box.reads[3].join(":"), "s2:true");
 });
 
-// G3-D1: the list drops `elevated_until` while the cached /aws status still says active with a future `until`, so
-// the banner stays up until the forced read lands. When it lands, every pane showing that session is re-synced at
-// once (not at the next 3 s poll), and nothing asks for a second read.
-test("a window that ends early: when the forced status read lands, every pane of that session drops its banner at once, with one read (G3-D1)", async () => {
+// G3-D1 / I1: the list drops `elevated_until` while the cached /aws status still says active with a future `until`. The
+// banner is drawn from the list alone, so every pane of the session drops it at THAT sync, as the header chip, row ring,
+// rail ring and footer do; the forced read is still asked once (for the Access row's lapse line), and when it lands it
+// re-syncs the panes and asks for no second read.
+test("a window that ends early: every pane of that session drops its banner at the very sync the list drops the window, with one read (G3-D1, I1)", async () => {
   const { box, doc, cell, sync } = page();
   // A pane as tabs.js builds it: syncElev() syncs it to the session its terminal tab shows (Cell.syncElev).
   const mk = (sid) => {
@@ -522,18 +530,20 @@ test("a window that ends early: when the forced status read lands, every pane of
   // The window ends elsewhere: the list no longer carries it, the cached status still does.
   broker = false;
   all(sess(null), open2);
-  assert.ok(cell._elev && second._elev, "the cached status keeps both banners up until the read lands");
+  assert.strictEqual(cell._elev, null, "the pane's banner leaves at that sync, not when the read lands");
+  assert.strictEqual(second._elev, null, "and so does the other pane of the same session");
+  assert.ok(other._elev, "a pane on another session is left alone");
   assert.strictEqual(box.reads.length, 3, "the change asks for one forced read of s1");
   assert.strictEqual(box.reads[2].join(":"), "s1:true");
   landing.splice(0).forEach((f) => f());
   await tick();
-  assert.strictEqual(cell._elev, null, "the pane that asked is re-synced when the read lands, with no further poll");
-  assert.strictEqual(second._elev, null, "and so is the other pane of the same session");
-  assert.ok(other._elev, "a pane on another session is left alone");
+  assert.strictEqual(cell._elev, null);
+  assert.strictEqual(second._elev, null);
+  assert.ok(other._elev);
   assert.strictEqual(box.reads.length, 3, "the re-sync asks for no second read");
 });
 
-test("a forced read that lands with the broker still saying the window is open keeps the banner, in place; a session gone by then loses it", async () => {
+test("a forced read that lands with the broker still saying the window is open does not bring the banner back; a session gone by then has none (I1)", async () => {
   const { box, cell, sync } = page();
   cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
   box.cells = [cell];
@@ -543,20 +553,152 @@ test("a forced read that lands with the broker still saying the window is open k
   let land = null;
   box.accLoad = (sid, force) => { box.reads.push([sid, force]); return new Promise((r) => { land = r; }); };
   sync(sess(23));
-  const node = cell._elev;
-  assert.ok(node);
+  assert.ok(cell._elev);
   sync(sess(null)); // the list dropped it; the cached status still says open
-  assert.ok(cell._elev === node);
+  assert.strictEqual(cell._elev, null, "the list is the source: the status's `active` keeps nothing up");
   land();
   await tick();
-  assert.ok(cell._elev === node, "the status still says open: the same banner, not rebuilt");
+  assert.strictEqual(cell._elev, null, "a read that lands with the status still open brings nothing back either");
   assert.strictEqual(box.reads.length, 2);
   // A session that left the list before its read landed has no banner to keep.
   sync(sess(23, { aws_connections: [conn({ elevated_until: until })] }));
+  assert.ok(cell._elev);
   box.lastSessions = [];
   land();
   await tick();
   assert.strictEqual(cell._elev, null);
+});
+
+// I1, the failure path: the window ends elsewhere and the one follow-up read FAILS (a failed read keeps the old status,
+// which still says open). Nothing re-asks: ELEV_SEEN already matches "". The banner must not wait for anything.
+test("a window that ends elsewhere while the follow-up status read fails: the banner is gone at the sync the list drops the window, and stays gone (I1)", async () => {
+  const { box, doc, cell, sync } = page();
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  const until = iso(23);
+  const stale = { approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until } };
+  box.accData.set("s1", { aws: stale, loaded: true, failed: false, inflight: false });
+  let fail = null;
+  // accLoadDone's failed path: the read is over, the old data stays, failed is set.
+  box.accLoad = (sid, force) => {
+    box.reads.push([sid, force]);
+    const d = box.accData.get(sid);
+    d.inflight = true;
+    return new Promise((r) => { fail = () => { Object.assign(d, { inflight: false, failed: true }); r(); }; });
+  };
+  sync(sess(23));
+  assert.ok(cell._elev);
+  assert.match(cell._elev.children[1].textContent, /“rotate KMS key”$/);
+  sync(sess(null)); // dropped from the phone, another tab or an API token
+  assert.strictEqual(cell._elev, null, "gone at the same sync the list drops elevated_until, exactly as the chip, rings and footer");
+  fail();
+  await tick();
+  assert.strictEqual(cell._elev, null, "and the failed read changes nothing");
+  for (let i = 0; i < 5; i++) { sync(sess(null)); await tick(); }
+  assert.strictEqual(cell._elev, null, "no later poll brings it back");
+  assert.strictEqual(box.reads.length, 2, "one read for the open, one for the change; no per-poll reads");
+  assert.deepStrictEqual(kids(cell), ["cell-bar", "needstrip", "cell-body"]);
+  // The next window is a new banner with a live button.
+  sync(sess(40));
+  const btn = cell._elev.children[3];
+  assert.strictEqual(btn.textContent, "Drop now");
+  assert.strictEqual(btn.attrs["aria-disabled"], undefined);
+  btn.click();
+  assert.deepStrictEqual(box.drops, ["s1"]);
+});
+
+test("Drop now never sits inert on Dropping… when the window ended elsewhere and the status read failed (I1)", async () => {
+  const { box, doc, cell, sync } = page();
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  box.accData.set("s1", { aws: { approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until: iso(23) } }, loaded: true, failed: false, inflight: false });
+  box.accLoad = (sid, force) => { box.reads.push([sid, force]); const d = box.accData.get(sid); d.failed = true; return Promise.resolve(); };
+  sync(sess(23));
+  assert.notStrictEqual(cell._elev._eb.wsig, "", "a banner that is up always has a live window behind it");
+  cell._elev.children[3].click(); // pressed on the poll's last view of the window
+  box.finish(true); // the DELETE answered 200 (a no-op: it was already over)
+  await tick();
+  sync(sess(null)); // the list says it is over; the status read failed, so the cached status still says open
+  assert.strictEqual(cell._elev, null, "there is no stale banner for the press to strand on");
+  await tick();
+  sync(sess(null));
+  assert.strictEqual(cell._elev, null);
+  // A later window gets a fresh button, never the earlier press's "Dropping…".
+  sync(sess(30));
+  assert.strictEqual(cell._elev.children[3].textContent, "Drop now");
+  assert.strictEqual(cell._elev.children[3].attrs["aria-disabled"], undefined);
+  assert.strictEqual(cell._elev._eb.pressed, false);
+  // A banner up on the list's window never has an empty window signature, on any sync.
+  for (const min of [23, 22, 21]) { sync(sess(min)); assert.notStrictEqual(cell._elev._eb.wsig, ""); }
+});
+
+test("after a Grant the list gains the window before the status is read: the banner shows with no reason, and gains it when the read lands (I1)", async () => {
+  const { box, cell, sync } = page();
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  let land = null;
+  box.accLoad = (sid, force) => { box.reads.push([sid, force]); return new Promise((r) => { land = r; }); };
+  sync(sess(null));
+  assert.ok(!cell._elev);
+  assert.deepStrictEqual(box.reads, []);
+  // accGrant's own refreshSessions(): the list has the window, the status has not been read yet.
+  sync(sess(30));
+  assert.ok(cell._elev, "the banner shows at once, on the list alone");
+  assert.deepStrictEqual(box.reads, [["s1", true]], "and one forced read is asked for the reason");
+  const node = cell._elev;
+  const span = node.children[1];
+  assert.match(span.textContent, /^until \d\d:\d\d · 30 min left$/, "no reason yet, and no empty quotes");
+  // The read lands with the grant's own reason.
+  box.accData.set("s1", { aws: { approvals: [granted({ reason: "rotate KMS key" })], elevation: { active: true, name: "culipulse-prod", until: iso(30) } }, loaded: true, failed: false, inflight: false });
+  land();
+  await tick();
+  assert.ok(cell._elev === node, "painted in place");
+  assert.match(span.textContent, /^until \d\d:\d\d · 30 min left · “rotate KMS key”$/, "the reason arrives with the read, with no further poll");
+  assert.strictEqual(box.reads.length, 1);
+});
+
+// F2: a rejected read is not swallowed: the panes are re-synced just as when it lands, and the error is reported once.
+test("a status read that rejects re-syncs the panes and reports the error once, not silently (F2)", async () => {
+  const { box, cell, sync } = page();
+  const errs = [];
+  box.console = { error: (...a) => errs.push(a) };
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  const boom = new Error("view repaint threw");
+  box.accLoad = (sid, force) => { box.reads.push([sid, force]); return Promise.reject(boom); };
+  sync(sess(23));
+  assert.ok(cell._elev);
+  box.lastSessions = []; // the session left before the read answered: the re-sync is what removes its banner
+  await tick();
+  assert.strictEqual(cell._elev, null, "the rejection branch re-syncs as the fulfilled one does");
+  assert.strictEqual(errs.length, 1, "reported once");
+  assert.ok(errs[0].some((x) => x === boom), "with the error itself");
+  // The fulfilled branch reports nothing.
+  const ok = page();
+  const quiet = [];
+  ok.box.console = { error: (...a) => quiet.push(a) };
+  ok.box.accLoad = (sid, force) => { ok.box.reads.push([sid, force]); return Promise.resolve(); };
+  ok.sync(sess(23));
+  await tick();
+  assert.deepStrictEqual(quiet, []);
+});
+
+// F5: the cached statuses elevWatch creates are forgotten with the session, with or without an Access view mounted.
+test("a poll forgets the cached status of a session that left the list, with no Access view mounted (F5)", () => {
+  const { box, cell, sync } = page();
+  box.accData.set("gone", { aws: { approvals: [] }, loaded: true, failed: false, inflight: false });
+  box.accData.set("s1", { aws: { approvals: [] }, loaded: true, failed: false, inflight: false });
+  sync(sess(23));
+  assert.strictEqual(box.prunes > 0, true, "elevPrune asks accPrune");
+  assert.strictEqual(box.accData.has("gone"), false, "the status of a session that left is dropped");
+  assert.strictEqual(box.accData.has("s1"), true, "a session still listed keeps its status");
+  // The same empty-list guard as ELEV_SEEN's: the page before its first poll forgets nothing.
+  box.accData.set("late", { aws: null, loaded: false, failed: false, inflight: false });
+  const before = box.prunes;
+  box.lastSessions = [];
+  box.paneElevSync(cell, null);
+  assert.strictEqual(box.prunes, before, "an empty list prunes nothing");
+  assert.strictEqual(box.accData.has("late"), true);
 });
 
 test("a window that lapses by the clock between two polls is a change to none", () => {
@@ -664,6 +806,30 @@ test("the kit's .elev, .elev strong and .ph-spacer are in the kit fence, verbati
   for (const d of ["min-width: 0", "overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) assert.ok(text.includes(d), d);
   assert.doesNotMatch(text, /flex:/, "no flex shorthand: it would override .ph-spacer's grow");
   assert.match(rule(".elev .btn"), /flex: none/);
+});
+
+// M3: gate O8 measured the connection name getting 99 of 471 px in a 491 px pane while the detail kept 265. The account
+// that has write is the more important text, so the detail gives way first; only a very long name ellipsizes.
+test("in a narrow pane the detail span gives way before the connection name; a very long name still ellipsizes at 60% (M3)", () => {
+  const strong = rule(".elev > strong");
+  assert.ok(strong, "the connection name has its own rule");
+  assert.match(strong, /flex-shrink: 0/, "the name does not shrink with the span");
+  assert.match(strong, /max-width: 60%/, "but never takes more than 60% of the banner");
+  assert.doesNotMatch(strong, /flex:/);
+  // Its ellipsis comes from the shared text rule (overflow hidden, ellipsis, nowrap), which it still matches.
+  const text = rule(".elev > strong, .elev > span:not(.ph-spacer)");
+  for (const d of ["overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) assert.ok(text.includes(d), d);
+  assert.strictEqual(rule(".elev > span:not(.ph-spacer)"), null, "the span has no rule that would stop it shrinking");
+  // The title keeps the full name when the text is cut.
+  const { cell, sync } = page();
+  sync(sess(23, { aws_connections: [conn({ name: "a-very-long-connection-name-for-a-narrow-pane", elevated_until: iso(23) })] }));
+  assert.strictEqual(cell._elev.children[0].title, "Write access to a-very-long-connection-name-for-a-narrow-pane");
+  // Desktop only: the rule sits in desktop.css's one @media (min-width: 701px) block, and app.css has none of it.
+  const full = read("desktop.css");
+  const at = full.indexOf(".elev > strong { flex-shrink: 0");
+  assert.ok(at > full.indexOf("@media (min-width: 701px)"), "inside the desktop block");
+  assert.strictEqual((full.match(/@media \(min-width: 701px\)/g) || []).length, 1);
+  assert.doesNotMatch(read("app.css"), /\.elev(?![\w-])/);
 });
 
 test("the old Access-view banner rules are gone", () => {

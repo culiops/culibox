@@ -8,9 +8,12 @@
 // "Drop now". Desktop only: it is never created while mobileActive(), and the
 // crossing to a phone width takes it out in the same sync.
 //
-// The model is accessmodel.js's elevBanner; this file draws it. It is re-synced
-// from Cell.syncNeeds / Cell.repaintReply (tabs.js), i.e. on the 3 s session
-// poll, with no timer of its own. The element is built once per pane and then
+// The model is accessmodel.js's elevBanner; this file draws it. Whether a window is
+// open, where and until when come from the session list alone, as for the header
+// chip, the row and rail rings and the footer; the cached /aws status only adds the
+// reason, so a read that failed, or is still on its way, can never keep the banner up
+// or hide it. It is re-synced from Cell.syncNeeds / Cell.repaintReply (tabs.js), i.e.
+// on the 3 s session poll, with no timer of its own. The element is built once per pane and then
 // painted in place: its text nodes are touched only when something visible moved
 // (the model's `key`), because it is role=status and a screen reader would
 // otherwise say it again on every poll, and a rebuilt Drop now would lose focus.
@@ -50,7 +53,9 @@ function elevWindowSig(s, nowMs) {
 // both come from that status, and nothing else re-reads it while another view is
 // up. A session that never had a window costs nothing, and polls of an unchanged
 // window cost nothing. accLoad drops a forced read while one is in flight, so a
-// change that lands then is not recorded and is asked again on the next poll.
+// change that lands then is not recorded and is asked again on the next poll. A read
+// that fails is not asked again: the banner does not depend on it (only its reason
+// does), and the next change of the window asks afresh.
 function elevWatch(s) {
   if (!s || !s.id) return;
   const sig = elevWindowSig(s, Date.now());
@@ -59,26 +64,35 @@ function elevWatch(s) {
   if (d && d.inflight) return;
   if (sig) ELEV_SEEN.set(s.id, sig); else ELEV_SEEN.delete(s.id);
   // The read answers (accLoad returns its promise) once the status is stored: re-sync the panes of this session
-  // then, not at the next poll. A read that was refused answers nothing, and the re-sync is then a no-op.
-  Promise.resolve(accLoad(s.id, true)).then(() => elevResync(s.id), () => {});
+  // then, not at the next poll, so the reason appears with it. A read that was refused answers nothing, and the
+  // re-sync is then a no-op. A read that rejected (a view's repaint threw after the status was stored) is reported
+  // once, as tabs.js reports a broken pane view, and the panes are re-synced all the same.
+  Promise.resolve(accLoad(s.id, true)).then(() => elevResync(s.id), (err) => {
+    console.error("write access status read:", err);
+    elevResync(s.id);
+  });
 }
 
 // elevResync: re-sync every pane that shows a banner for session `sid` (Cell.syncElev finds the session the pane's
-// terminal shows now, so a pane that moved on is synced to its own). The list says a window is over before the
-// cached status does, and liveWindowConn falls back to that status; this is the moment the status has caught up.
-// It asks for no read of its own: the window signature already matches. `cells` is tabs.js's list of panes.
+// terminal shows now, so a pane that moved on is synced to its own). The banner's window is the list's, so this is
+// the moment the status has caught up: the reason of a new window appears, and a pane whose session has left the
+// list drops its banner. It asks for no read of its own: the window signature already matches. `cells` is tabs.js's
+// list of panes.
 function elevResync(sid) {
   if (typeof cells === "undefined" || !Array.isArray(cells)) return;
   for (const c of cells) if (c._elev && c._elev._eb.sid === sid && typeof c.syncElev === "function") c.syncElev();
 }
 
-// elevPrune: forget the sessions that left the list, as accPrune does, so ELEV_SEEN
-// holds no entry for a session that closed with a window open. An empty list is
+// elevPrune: forget the sessions that left the list, so ELEV_SEEN holds no entry for a
+// session that closed with a window open, and neither does accData, whose entries
+// elevWatch creates for sessions no Access view ever mounted (accPrune, which an
+// Access view's update() also runs, and which has the same guard). An empty list is
 // the page before its first poll, not "everything is gone".
 function elevPrune() {
   if (!lastSessions || !lastSessions.length) return;
   const live = new Set(lastSessions.map((x) => x.id));
   for (const id of [...ELEV_SEEN.keys()]) if (!live.has(id)) ELEV_SEEN.delete(id);
+  accPrune();
 }
 
 // ebFocusPane: where the keyboard goes when the banner is removed with focus on
@@ -188,7 +202,9 @@ function paneElevSync(cell, s) {
   if (!s) { ebRemove(cell); return; }
   elevWatch(s);
   const d = accData.get(s.id);
-  const m = elevBanner(s, d ? d.aws : null, Date.now());
+  // One clock for the model and the signature: a banner that is up has a live window behind it, never "".
+  const now = Date.now();
+  const m = elevBanner(s, d ? d.aws : null, now);
   if (!m) { ebRemove(cell); return; }
   let el = cell._elev;
   let placed = false;
@@ -196,7 +212,7 @@ function paneElevSync(cell, s) {
   // Directly under the header, so ahead of the ask strip (Cell.syncStrip inserts
   // its strip after this element).
   if (!el.parentNode) { cell.bar.after(el); placed = true; }
-  ebPaint(el, m, s.id, accBusy.has(s.id), elevWindowSig(s, Date.now()));
+  ebPaint(el, m, s.id, accBusy.has(s.id), elevWindowSig(s, now));
   if (placed && typeof positionDrawer === "function") positionDrawer();
 }
 

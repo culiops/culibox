@@ -500,6 +500,9 @@
      name, a 200-character reason). The text parts ellipsize (their full text is in the title); the spacer keeps
      its grow, which is why this sets no flex; Drop now never shrinks, and the banner never scrolls sideways. */
   .elev > strong, .elev > span:not(.ph-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The detail gives way first: the account that has write is the more important text, so the name keeps its width up to
+     60% of the banner (a very long name still ellipsizes, its title holds the whole name) and the span takes the cut. */
+  .elev > strong { flex-shrink: 0; max-width: 60%; }
   /* Drop now sits on the frame's 20px line (primitives.css's legacy `.btn` font shorthand leaves `normal`, a pixel low). It is
      this surface's own, not the kit .btn's: a kit-wide line would change Settings' button heights. */
   .elev .btn { flex: none; line-height: var(--lh-md); }

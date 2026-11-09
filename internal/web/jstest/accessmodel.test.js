@@ -379,13 +379,32 @@ test("elevBanner: null once the window lapsed, and with no binding", () => {
   assert.strictEqual(elevBanner(sess({ aws_connections: undefined }), null, NOW), null);
   assert.strictEqual(elevBanner({}, null, NOW), null);
   assert.strictEqual(elevBanner(undefined, undefined, NOW), null);
-  // The status fallback (between a grant and the next poll) lapses the same way.
-  const el = (min) => status({ elevation: { active: true, name: "culipulse-prod", until: iso(min), reason: "rotate KMS key" } });
+});
+
+// I1 (final review): whether a window is open, on which connection and until when is the session LIST's alone, the
+// same predicate the header chip, row ring, rail ring and footer use. The cached /aws status can be older than the
+// list (a failed read keeps it), so it never opens a banner and never keeps one up; it only supplies the reason.
+test("elevBanner: the window comes from the list alone: a status that still says active opens no banner (I1)", () => {
+  const el = (min) => status({ approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until: iso(min), reason: "rotate KMS key" } });
+  assert.strictEqual(elevBanner(sess(), el(5), NOW), null, "the list carries no window: no banner, whatever the status says");
   assert.strictEqual(elevBanner(sess(), el(-1), NOW), null);
-  assert.strictEqual(elevBanner(sess(), el(0), NOW), null);
-  const b = elevBanner(sess(), el(5), NOW);
-  assert.strictEqual(b.conn, "culipulse-prod");
-  assert.strictEqual(b.leftText, "5 min left");
+  assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: undefined })] }), el(23), NOW), null);
+  // The window ended elsewhere: the list dropped it, the cached status (a failed read keeps it) did not.
+  const was = open(23);
+  assert.ok(elevBanner(was, el(23), NOW), "while the list has the window it is there");
+  assert.strictEqual(elevBanner(sess({ aws_connections: was.aws_connections.map((c) => Object.assign({}, c, { elevated_until: undefined })) }), el(23), NOW), null, "and gone the moment the list drops it");
+  // A list window the status disagrees with (its own `until` differs, or it names another connection) is the list's.
+  const b = elevBanner(open(23), el(5), NOW);
+  assert.strictEqual(b.minsLeft, 23, "the clock is the list's elevated_until, not the status's until");
+  assert.strictEqual(elevBanner(open(23), status({ elevation: { active: true, name: "other", until: iso(5) } }), NOW).conn, "culipulse-prod");
+});
+
+test("elevBanner: the status still supplies the reason of the list's window", () => {
+  const aws = status({ approvals: [granted({ reason: "from the status" })], elevation: { active: false, name: "culipulse-prod" } });
+  const b = elevBanner(open(23), aws, NOW);
+  assert.strictEqual(b.reason, "from the status");
+  assert.strictEqual(b.detail, "until " + hhmm(iso(23)) + " · 23 min left · “from the status”");
+  assert.strictEqual(elevBanner(open(23), null, NOW).reason, "", "no status yet: no reason, but the banner is up");
 });
 
 test("elevBanner: a legacy inline binding is named by its label", () => {
@@ -399,6 +418,18 @@ test("elevBanner: a legacy inline binding is named by its label", () => {
   assert.strictEqual(elevBanner(inline(), status({ approvals: [Object.assign({}, named, { name: "culipulse-prod" })] }), NOW).reason, "", "a named connection's grant is not this binding's");
   assert.strictEqual(elevBanner(inline({ label: "" }), null, NOW).conn, "aws");
   assert.strictEqual(elevBanner(inline(), null, NOW).detail, "until " + hhmm(iso(23)) + " · 23 min left");
+});
+
+// The list expresses a legacy binding's window itself (AWSInfo.elevated_until, filled by List like a connection's), and
+// accConns carries it into the one entry, so the list-only rule needs no legacy fallback on the status.
+test("elevBanner: a legacy inline binding's window is the list's too: dropped from the list, gone, whatever the status says (I1)", () => {
+  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "402100009917", role_arn: BASE, prod: false,
+    elevate: { role_arn: WRITE, max_minutes: 30 }, elevated_until: iso(23) }, aws) });
+  const stale = status({ approvals: [{ ts: NOW - 60000, action: "granted", minutes: 30, reason: "load test" }],
+    elevation: { active: true, name: "", until: iso(23) } });
+  assert.strictEqual(elevBanner(inline(), stale, NOW).conn, "sandbox");
+  assert.strictEqual(elevBanner(inline({ elevated_until: undefined }), stale, NOW), null);
+  assert.strictEqual(elevBanner(inline({ elevated_until: iso(-1) }), stale, NOW), null);
 });
 
 test("access row: an elevated connection offers no Drop", () => {
