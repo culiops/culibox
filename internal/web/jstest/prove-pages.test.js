@@ -2799,26 +2799,54 @@ test("the kit's seg items and Esc hint sit on the 20px line", () => {
 });
 
 // B1 (Gate 4 of plan 6, #176): Scan, Elevate…, Extend, Drop now and Load older drew one pixel below the frame's. primitives.css's
-// legacy `.btn { font: 400 12px ... }` resets line-height to `normal`, and the kit's `.btn` never set it, so every .btn label sat
-// on the font's own line, not on the kit's 20px one. The fix is the kit rule's, for every .btn (as Plan 5 did for .seg-item and
-// .btn .kbd-hint). A single-line .btn cannot grow from it: the 20px line plus the 1px borders is 22px, under the 24px (.btn-sm)
-// and 28px floors, so only a .btn with its own vertical padding or a second line can change height: in Settings, the Credentials
-// tab's padded .btn (5px 11px), "+ new profile" (.plist-foot, 9px 0) and the two rules that let a .btn wrap (.cstrip, .fs-card).
-test("the kit's .btn sits on the 20px line, in the kit fence, and the box floors stay 28px and 24px", () => {
-  assert.strictEqual(decls(".btn").get("line-height"), "var(--lh-md)");
-  assert.strictEqual(decls(".btn").get("min-height"), "var(--h-ctl)", "the 28px floor is unchanged");
-  assert.strictEqual(decls(".btn").get("border"), "1px solid transparent", "so the 20px line plus both borders is 22px, under every floor");
-  assert.strictEqual(decls(".btn-sm").get("min-height"), "var(--h-sm)", "the 24px small button is unchanged");
-  assert.strictEqual(decls(".btn-sm").get("line-height"), undefined, "no per-size line: the one kit rule serves both");
-  assert.strictEqual(decls(":root").get("--lh-md"), "20px");
+// legacy `.btn { font: 400 12px ... }` resets line-height to `normal`, so a label sat on the font's own line, not the frame's 20px
+// one. A kit-wide `.btn { line-height: var(--lh-md) }` was tried and reversed: it grew some Settings buttons (the Credentials
+// tab's padded .btn, "+ new profile", a wrapping .btn), and Settings is not this plan's. The line is set on Plan 6's own surfaces
+// only: the banner (.elev .btn), the Activity view (.act-wrap, .act-plain) and the Access view (.ac-wrap). The kit .btn is as it was.
+const VIEW_BTNS = [".elev .btn", ".ac-wrap .btn", ".act-wrap .btn", ".act-plain .btn"];
+test("only the banner, Activity and Access buttons sit on the 20px line; the kit .btn and every other page keep theirs", () => {
+  for (const sel of VIEW_BTNS) assert.strictEqual(decls(sel).get("line-height"), "var(--lh-md)", sel + " is on the 20px line");
+  // The kit .btn (and its sizes) set no line: that is what moved Settings' boxes.
+  for (const sel of [".btn", ".btn-sm", ".btn-lg", ".btn-icon", ".btn-primary", ".btn-ghost", ".btn-danger", ".btn-yes"]) {
+    assert.strictEqual(decls(sel).get("line-height"), undefined, sel + " sets no line of its own");
+  }
   const raw = read("desktop.css");
   const fence = raw.slice(raw.indexOf("/* === kit primitives"), raw.indexOf("/* === end kit primitives === */"));
-  const rule = parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(".btn"));
-  assert.ok(rule, ".btn is a kit rule, inside the fence");
-  assert.strictEqual(rule.decls.get("line-height"), "var(--lh-md)", "and the line is set there, not on a page");
-  assert.ok(![...rule.decls.values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v)), ".btn has no hex");
-  // The .btn contexts that already set their own line (specificity above the kit's) keep it, so their boxes do not move.
-  for (const sel of [".empst .btn", "dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn", "#store-banner .btn"]) {
-    assert.strictEqual(decls(sel).get("line-height"), "normal", sel + " keeps its own line");
+  const kit = parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(".btn"));
+  assert.ok(kit && !kit.decls.has("line-height"), "the kit .btn rule, inside the fence, has no line-height");
+  assert.strictEqual(kit.decls.get("min-height"), "var(--h-ctl)");
+  assert.strictEqual(decls(".btn-sm").get("min-height"), "var(--h-sm)");
+  // No rule in the whole sheet that is a bare .btn selector (any kit button, on any page) sets a line.
+  const bare = BASE_RULES.filter((r) => r.decls.has("line-height") && parts(r.selector).some((x) => /^\.btn[\w.:()-]*$/.test(x)));
+  assert.deepStrictEqual(bare.map((r) => r.selector), [], "no unscoped .btn rule sets line-height");
+  // Every other rule that gives a .btn a line is one of the view's own, or an older context's that already set it itself.
+  const scoped = BASE_RULES.filter((r) => r.decls.has("line-height") && parts(r.selector).some((x) => /(^|[\s>])\.btn[\w.:()\[\]="-]*$/.test(x))).flatMap((r) => parts(r.selector).filter((x) => /\.btn/.test(x)));
+  for (const sel of scoped) {
+    assert.ok(VIEW_BTNS.includes(sel) || /^(\.empst \.btn|dialog:not\(\.as-page\):not\(\[box-\]\):not\(\.sheet-dialog\) (\.dhd )?\.btn(\.gh)?|#store-banner \.btn|#bug-modal \.dhd \.btn\.gh\[data-close="bug-modal"\]|\.btn \.kbd-hint)$/.test(sel), "unexpected .btn line rule: " + sel);
+  }
+  // The root rules are in the views' own blocks: inside the fence only the banner's, which is the kit sheet's own addition.
+  assert.ok(fence.includes(".elev .btn {") && !fence.includes(".ac-wrap") && !fence.includes(".act-wrap"));
+  assert.ok(![...VIEW_BTNS].some((sel) => [...decls(sel).values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v))), "no hex");
+});
+
+// A scoped button cannot change box height: the 20px line plus the two 1px borders is 22px, under the 24px (.btn-sm) and 28px
+// (.btn) floors, and no rule inside the four roots gives a .btn vertical padding, a height or a second line. Drop now, Scan, Load
+// older, Elevate… and Extend are .btn-sm; Cancel, Grant, Enable replies, the reply's send and the SSO card's buttons are .btn.
+test("the scoped buttons keep their boxes: 22px of line and border under the 24px and 28px floors, nothing else sized inside the roots", () => {
+  const LH = 20;
+  const border = decls(".btn").get("border");
+  assert.strictEqual(border, "1px solid transparent");
+  assert.ok(LH + 2 <= 24, "a .btn-sm is 24px with the 20px line");
+  assert.ok(LH + 2 <= 28, "a .btn is 28px with the 20px line");
+  assert.strictEqual(decls(":root").get("--lh-md"), LH + "px");
+  assert.strictEqual(decls(".btn").get("padding"), "0 12px", "no vertical padding on the kit .btn");
+  assert.strictEqual(decls(".btn-sm").get("padding"), "0 8px", "or the small one");
+  assert.strictEqual(decls(".btn").get("white-space"), "nowrap", "a label never takes a second line");
+  const roots = [".elev ", ".ac-wrap ", ".act-wrap ", ".act-plain "];
+  const inside = BASE_RULES.flatMap((r) => parts(r.selector).filter((x) => roots.some((q) => x.startsWith(q)) && /\.btn\b/.test(x)).map((x) => [x, r]));
+  assert.ok(inside.length >= 4, "the four scoped rules are among them");
+  for (const [sel, r] of inside) {
+    const props = [...r.decls.keys()].filter((k) => !["flex", "line-height"].includes(k));
+    assert.deepStrictEqual(props, [], sel + " sets only the line (and the banner's flex): no padding, height or wrap");
   }
 });

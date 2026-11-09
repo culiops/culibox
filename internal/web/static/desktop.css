@@ -196,13 +196,11 @@
 
   /* --- buttons -------------------------------------------------------------- */
   /* min-height where the kit says height: a legacy .btn that wraps (the store strip's "Create the
-     encrypted store" at a 701px window) grows to two lines instead of clipping. The label sits on the
-     kit's 20px line (the frame's .ab root hands it down): primitives.css's legacy `font:` shorthand
-     reset it to `normal`, which drew every label a pixel low. */
+     encrypted store" at a 701px window) grows to two lines instead of clipping. */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     min-height: var(--h-ctl); padding: 0 12px; border-radius: var(--r-ctl); border: 1px solid transparent;
-    background: var(--raise); color: var(--fg); font-size: var(--t-md); line-height: var(--lh-md); font-weight: var(--w-medium);
+    background: var(--raise); color: var(--fg); font-size: var(--t-md); font-weight: var(--w-medium);
     white-space: nowrap; cursor: pointer; text-decoration: none;
   }
   .btn:hover { background: var(--line); }
@@ -502,7 +500,9 @@
      name, a 200-character reason). The text parts ellipsize (their full text is in the title); the spacer keeps
      its grow, which is why this sets no flex; Drop now never shrinks, and the banner never scrolls sideways. */
   .elev > strong, .elev > span:not(.ph-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .elev .btn { flex: none; }
+  /* Drop now sits on the frame's 20px line (primitives.css's legacy `.btn` font shorthand leaves `normal`, a pixel low). It is
+     this surface's own, not the kit .btn's: a kit-wide line would change Settings' button heights. */
+  .elev .btn { flex: none; line-height: var(--lh-md); }
 
   /* An author display beats the UA's [hidden] { display: none }: without these a .btn whose
      hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
@@ -1392,6 +1392,9 @@
      `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
   .ac-wrap { line-height: var(--lh-md); }
   .ac-wrap :where(h2, p) { margin: 0; }
+  /* The view's buttons (Elevate…, Extend, Cancel, Grant, the SSO card's) sit on that line too: the legacy `.btn` font shorthand
+     resets it to normal, a pixel below the frame's label. Only this view: no other page's button changes size. */
+  .ac-wrap .btn { line-height: var(--lh-md); }
   /* §D1 .m6-view + .m6-stack: a column of cards 16px apart inside 20px 24px. The slots the script fills own no box, so
      a card that is not drawn (a host session has only Containment) leaves no 16px gap. */
   .ac-wrap { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; padding: var(--sp-5) var(--sp-6); }
@@ -1472,6 +1475,9 @@
      `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
   .act-wrap, .act-plain { line-height: var(--lh-md); }
   .act-wrap :where(h2, p), .act-plain :where(h2, p) { margin: 0; }
+  /* Scan, Load older, Enable replies and the reply's send sit on that line too (the legacy `.btn` font shorthand resets it
+     to normal, a pixel below the frame's label). Only this view: no other page's button changes size. */
+  .act-wrap .btn, .act-plain .btn { line-height: var(--lh-md); }
   /* M6.1: the main column and the 320px side column (§B2), 24px apart inside the view's 20px 24px padding, the side
      column as tall as its cards (it does not stretch). Under 1100px of pane the side column stacks below. */
   .act-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); align-items: start; padding: var(--sp-5) var(--sp-6); }
