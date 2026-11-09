@@ -196,11 +196,13 @@
 
   /* --- buttons -------------------------------------------------------------- */
   /* min-height where the kit says height: a legacy .btn that wraps (the store strip's "Create the
-     encrypted store" at a 701px window) grows to two lines instead of clipping. */
+     encrypted store" at a 701px window) grows to two lines instead of clipping. The label sits on the
+     kit's 20px line (the frame's .ab root hands it down): primitives.css's legacy `font:` shorthand
+     reset it to `normal`, which drew every label a pixel low. */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     min-height: var(--h-ctl); padding: 0 12px; border-radius: var(--r-ctl); border: 1px solid transparent;
-    background: var(--raise); color: var(--fg); font-size: var(--t-md); font-weight: var(--w-medium);
+    background: var(--raise); color: var(--fg); font-size: var(--t-md); line-height: var(--lh-md); font-weight: var(--w-medium);
     white-space: nowrap; cursor: pointer; text-decoration: none;
   }
   .btn:hover { background: var(--line); }

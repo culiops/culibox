@@ -2797,3 +2797,28 @@ test("the kit's seg items and Esc hint sit on the 20px line", () => {
   const inFence = (sel) => parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(sel));
   for (const sel of [".seg > .seg-item", ".btn .kbd-hint"]) assert.ok(![...inFence(sel).decls.values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v)), sel + " has no hex");
 });
+
+// B1 (Gate 4 of plan 6, #176): Scan, Elevate…, Extend, Drop now and Load older drew one pixel below the frame's. primitives.css's
+// legacy `.btn { font: 400 12px ... }` resets line-height to `normal`, and the kit's `.btn` never set it, so every .btn label sat
+// on the font's own line, not on the kit's 20px one. The fix is the kit rule's, for every .btn (as Plan 5 did for .seg-item and
+// .btn .kbd-hint). A single-line .btn cannot grow from it: the 20px line plus the 1px borders is 22px, under the 24px (.btn-sm)
+// and 28px floors, so only a .btn with its own vertical padding or a second line can change height: in Settings, the Credentials
+// tab's padded .btn (5px 11px), "+ new profile" (.plist-foot, 9px 0) and the two rules that let a .btn wrap (.cstrip, .fs-card).
+test("the kit's .btn sits on the 20px line, in the kit fence, and the box floors stay 28px and 24px", () => {
+  assert.strictEqual(decls(".btn").get("line-height"), "var(--lh-md)");
+  assert.strictEqual(decls(".btn").get("min-height"), "var(--h-ctl)", "the 28px floor is unchanged");
+  assert.strictEqual(decls(".btn").get("border"), "1px solid transparent", "so the 20px line plus both borders is 22px, under every floor");
+  assert.strictEqual(decls(".btn-sm").get("min-height"), "var(--h-sm)", "the 24px small button is unchanged");
+  assert.strictEqual(decls(".btn-sm").get("line-height"), undefined, "no per-size line: the one kit rule serves both");
+  assert.strictEqual(decls(":root").get("--lh-md"), "20px");
+  const raw = read("desktop.css");
+  const fence = raw.slice(raw.indexOf("/* === kit primitives"), raw.indexOf("/* === end kit primitives === */"));
+  const rule = parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(".btn"));
+  assert.ok(rule, ".btn is a kit rule, inside the fence");
+  assert.strictEqual(rule.decls.get("line-height"), "var(--lh-md)", "and the line is set there, not on a page");
+  assert.ok(![...rule.decls.values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v)), ".btn has no hex");
+  // The .btn contexts that already set their own line (specificity above the kit's) keep it, so their boxes do not move.
+  for (const sel of [".empst .btn", "dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn", "#store-banner .btn"]) {
+    assert.strictEqual(decls(sel).get("line-height"), "normal", sel + " keeps its own line");
+  }
+});
