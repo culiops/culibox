@@ -3364,7 +3364,6 @@ function rowLocal(s) {
 //             user closed the "updated" banner on (it comes back for a different version)
 // A 401 is signed out at once; a network failure counts as offline only after SYS_OFFLINE_MS without an
 // OK poll (nmOffline), so one blip never flickers the title or the banner.
-const SYS_PAUSE_MS = 30000;
 const sys = { lastOkAt: null, failSince: null, signedOut: false, hiddenSince: null, paused: false,
   bootVersion: null, version: null, dismissedVersion: "" };
 function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; sys.paused = false; }
@@ -3393,15 +3392,12 @@ function sysSeeVersion(v) {
 // A tab hidden SYS_PAUSE_MS or longer shows "Paused while this tab was hidden" on return until a poll lands
 // (the browser throttles background timers, so what the list shows is old). The poll is started at once.
 document.addEventListener("visibilitychange", () => {
-  const now = Date.now();
-  if (document.hidden) { if (sys.hiddenSince == null) sys.hiddenSince = now; return; }
-  const was = sys.hiddenSince;
-  sys.hiddenSince = null;
-  if (was != null && now - was >= SYS_PAUSE_MS) {
-    sys.paused = true;
-    if (typeof sysBannerSync === "function") sysBannerSync();
-    refreshSessions();
-  }
+  const step = sysVisibilityStep(sys, document.hidden, Date.now()); // the 30 s rule is notifymodel.js's (R20)
+  sys.hiddenSince = step.hiddenSince;
+  sys.paused = step.paused;
+  if (!step.poll) return;
+  if (typeof sysBannerSync === "function") sysBannerSync();
+  refreshSessions();
 });
 
 // signalAttention pushes the blocked/done state to the tab title and favicon: the part of the

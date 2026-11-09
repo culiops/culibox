@@ -11,6 +11,7 @@ const { Node, Text } = require("./fakedom.js");
 
 const read = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
 const T = 9000000;
+const nm = require("../static/notifymodel.js");
 
 function page(sysOver, over) {
   const doc = { activeElement: null, hidden: false };
@@ -18,9 +19,10 @@ function page(sysOver, over) {
   doc.createTextNode = (t) => new Text(t);
   const slot = doc.createElement("div"); slot.hidden = true;
   const list = doc.createElement("ul");
+  const rail = doc.createElement("nav");
   const box = Object.assign({
     document: doc, window: { innerWidth: 1280, location: { href: "", reload() { box.calls.reload++; } } }, console, Date, Math,
-    els: { "sys-banner-slot": slot, sessions: list }, calls: { retry: 0, reload: 0, rail: 0, toggle: 0 }, phone: false,
+    els: { "sys-banner-slot": slot, sessions: list, rail48: rail }, calls: { retry: 0, reload: 0, rail: 0, toggle: 0 }, phone: false,
     now: T,
     sys: Object.assign({ lastOkAt: T - 1000, failSince: null, signedOut: false, hiddenSince: null, paused: false,
       bootVersion: "v0.24.2", version: "v0.24.2", dismissedVersion: "" }, sysOver || {}),
@@ -37,7 +39,7 @@ function page(sysOver, over) {
   // Date.now follows box.now so the clock is fake
   vm.runInContext("Date = { now: () => now, parse: globalThis.__parse };", Object.assign(ctx, { __parse: Date.parse }));
   for (const f of ["notifymodel.js", "sysbanner.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
-  return { box, doc, slot, list };
+  return { box, doc, slot, list, rail };
 }
 const texts = (n) => n.textContent;
 
@@ -165,8 +167,43 @@ test("app.js: the version is first seen in initEnv and compared on the 30 s tick
   assert.match(app, /const m = await api\("\/api\/meta"\);\n\s+sysSeeVersion\(m && m\.version\);/);
 });
 test("app.js: a tab hidden 30 s or more pauses on return and polls at once; the signal repaints the banner", () => {
-  assert.match(app, /const SYS_PAUSE_MS = 30000;/);
   assert.match(app, /document\.addEventListener\("visibilitychange"/);
-  assert.match(app, /now - was >= SYS_PAUSE_MS\) \{\n\s+sys\.paused = true;[\s\S]*?refreshSessions\(\);/);
+  assert.match(app, /const step = sysVisibilityStep\(sys, document\.hidden, Date\.now\(\)\);[\s\S]*?if \(!step\.poll\) return;[\s\S]*?refreshSessions\(\);/);
   assert.match(app, /faviconIcon = st\.icon;\n\s+\}\n\s+if \(typeof sysBannerSync === "function"\) sysBannerSync\(\);/);
+});
+
+test("rail: #rail48 wears sess-stale with the list and loses it when the poll lands", () => {
+  const { box, rail, list } = page({ lastOkAt: T - 14000, failSince: T - 11000 });
+  box.sysBannerSync();
+  assert.strictEqual(rail.classList.contains("sess-stale"), true);
+  assert.strictEqual(list.classList.contains("sess-stale"), true);
+  box.sys.failSince = null; box.sys.lastOkAt = T;
+  box.sysBannerSync();
+  assert.strictEqual(rail.classList.contains("sess-stale"), false);
+  const u = page({ version: "v9" });
+  u.box.sysBannerSync();
+  assert.strictEqual(u.rail.classList.contains("sess-stale"), false, "an update does not stale the rail");
+  const ph = page({ signedOut: true }, { phone: true });
+  ph.box.sysBannerSync();
+  assert.strictEqual(ph.rail.classList.contains("sess-stale"), false);
+});
+
+test("sysVisibilityStep: hidden records when; 29.9 s away does not pause, 30 s does and asks for a poll", () => {
+  const s0 = { hiddenSince: null, paused: false };
+  const h = nm.sysVisibilityStep(s0, true, 1000);
+  assert.deepStrictEqual(h, { hiddenSince: 1000, paused: false, poll: false });
+  assert.strictEqual(nm.sysVisibilityStep({ hiddenSince: 1000, paused: false }, true, 5000).hiddenSince, 1000, "a repeat keeps the first time");
+  assert.deepStrictEqual(nm.sysVisibilityStep({ hiddenSince: 1000, paused: false }, false, 1000 + 29900), { hiddenSince: null, paused: false, poll: false });
+  assert.deepStrictEqual(nm.sysVisibilityStep({ hiddenSince: 1000, paused: false }, false, 1000 + 30000), { hiddenSince: null, paused: true, poll: true });
+  assert.deepStrictEqual(nm.sysVisibilityStep({ hiddenSince: null, paused: false }, false, 5), { hiddenSince: null, paused: false, poll: false });
+});
+
+test("paused clears on the next OK poll (sysPollOk) and the banner follows", () => {
+  assert.match(app, /function sysPollOk\(\) \{[^}]*sys\.paused = false;/);
+  const { box, slot } = page({ paused: true });
+  box.sysBannerSync();
+  assert.strictEqual(slot.hidden, false);
+  box.sys.paused = false; // what sysPollOk does
+  box.sysBannerSync();
+  assert.strictEqual(slot.hidden, true);
 });

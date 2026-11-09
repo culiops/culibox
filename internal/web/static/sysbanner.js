@@ -87,7 +87,11 @@ function sysBannerSync() {
   if (!slot) return;
   const model = sysBannerCurrent();
   const list = document.getElementById("sessions");
-  if (list) list.classList.toggle("sess-stale", !!(model && model.stale));
+  const stale = !!(model && model.stale);
+  if (list) list.classList.toggle("sess-stale", stale);
+  // The collapsed rail's dots go stale with the list (R17): same class, same toggle.
+  const rail = document.getElementById("rail48");
+  if (rail) rail.classList.toggle("sess-stale", stale);
   const key = model ? model.key : null;
   if (key !== sysBannerPaintedKey) {
     sysBannerPaintedKey = key;

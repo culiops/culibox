@@ -691,6 +691,9 @@
   #sessions.sess-stale .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
   #sessions.sess-stale .dot.is-elevated { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red); }
   #sessions.sess-stale .dot.is-elevated.watching { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red), 0 0 0 4.5px var(--panel), 0 0 0 6.5px var(--fg); }
+  /* The collapsed rail is the same list in dots: hollow while stale, the write ring kept (R17, R9). */
+  #rail48.sess-stale .ri .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  #rail48.sess-stale .ri.is-elevated .dot { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--red); }
   #sessions.sess-stale .grp-label.is-needs { color: var(--muted); }
   #sessions.sess-stale .drow .nm { color: var(--muted); }
   #sessions.sess-stale .drow .sub.amber { color: var(--muted); }

@@ -335,6 +335,18 @@ function sysBannerModel(sys, now, fmt) {
   return null;
 }
 
+// sysVisibilityStep(sys, hidden, now) -> { hiddenSince, paused, poll }: the tab-visibility rule (R20). Hidden
+// records when; coming back after SYS_PAUSE_MS or more (30 s exactly counts) sets paused and asks for a poll at
+// once. paused is cleared elsewhere, by the next OK poll (sysPollOk). Pure: the caller assigns the result.
+const SYS_PAUSE_MS = 30000;
+function sysVisibilityStep(sys, hidden, now) {
+  const since = sys && sys.hiddenSince != null ? sys.hiddenSince : null;
+  const paused = !!(sys && sys.paused);
+  if (hidden) return { hiddenSince: since != null ? since : now, paused, poll: false };
+  if (since != null && now - since >= SYS_PAUSE_MS) return { hiddenSince: null, paused: true, poll: true };
+  return { hiddenSince: null, paused, poll: false };
+}
+
 // railMarkerModel: the collapsed rail has room for ONE marker (R19), for the first banner in the sidebar's
 // display order: the system banner if there is one, else the store's. Its title is the banner's title (the
 // button's accessible name and tooltip). Neutral for a system banner, amber for the store (a blocked cause).
@@ -542,6 +554,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS, sysBannerModel, railMarkerModel,
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS, sysBannerModel, railMarkerModel, sysVisibilityStep, SYS_PAUSE_MS,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }
