@@ -3717,7 +3717,29 @@ function initNotifyToggle(refused) {
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
 // yet). An empty array is the former.
-async function refreshSessions() {
+//
+// Plan 7 final review I2: the fetch has a deadline (SESSIONS_DEADLINE_MS, under the 12 s offline rule) so a
+// half-open connection becomes a recorded failed poll instead of hanging forever, and only one is in flight.
+// refreshSessions() keeps its contract (the promise resolves after a list fetched NOW): with none pending it
+// starts one; with one pending (it may predate the caller's change) it returns ONE shared follow-up that runs
+// when the pending one settles. The 3 s tick (sessionsTick) just skips while one is pending.
+const SESSIONS_DEADLINE_MS = 10000;
+let sessionsInflight = null;
+let sessionsFollow = null;
+function sessionsStart() {
+  const p = refreshSessionsRun().finally(() => { if (sessionsInflight === p) sessionsInflight = null; });
+  sessionsInflight = p;
+  return p;
+}
+function refreshSessions() {
+  if (!sessionsInflight) return sessionsStart();
+  if (!sessionsFollow) {
+    sessionsFollow = sessionsInflight.catch(() => {}).then(() => { sessionsFollow = null; return sessionsStart(); });
+  }
+  return sessionsFollow;
+}
+function sessionsTick() { if (!sessionsInflight) refreshSessions(); }
+async function refreshSessionsRun() {
   const ul = $("sessions");
   // holdList: an in-progress inline rename or a focused peek reply is a live
   // <input> INSIDE this list, and rebuilding the list removes that node from
@@ -3751,7 +3773,7 @@ async function refreshSessions() {
   // must not tear down the form mid-keystroke.
   const holdList = () => editing || replyFocused || storeUnlockFocused();
   let sessions;
-  try { sessions = await api("/api/sessions"); }
+  try { sessions = await api("/api/sessions", { signal: deadlineSignal(SESSIONS_DEADLINE_MS) }); }
   catch (e) {
     // R27: on the desktop, once a list has loaded, a failed poll keeps the last-known rows (the banner says "the list
     // below is from then"; sess-stale marks them). Before the first list, and always on the phone, the "Error: ..." line.
@@ -7134,7 +7156,7 @@ fontPrefs.applyCssVars();
 initSettings();
 initNotifyToggle();
 initStore();
-setInterval(refreshSessions, 3000);
+setInterval(sessionsTick, 3000);
 // U8: crossing the mobile breakpoint (rotate, resize, devtools) changes which
 // panes/screens are even in the DOM — mobileshell's own screen classes react
 // immediately via CSS, but the sidebar's last-painted rows do not repaint

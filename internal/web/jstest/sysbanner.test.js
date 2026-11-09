@@ -211,19 +211,19 @@ test("paused clears on the next OK poll (sysPollOk) and the banner follows", () 
 
 // --- R27: refreshSessions' failure path (the real function, lifted) ---------------------------------------
 function liftFn(name) {
-  const at = app.indexOf((name === "refreshSessions" ? "async function " : "function ") + name + "(");
+  const at = app.indexOf((name === "refreshSessionsRun" ? "async function " : "function ") + name + "(");
   assert.ok(at >= 0, name);
   return app.slice(at, app.indexOf("\n}\n", at) + 2);
 }
 function failing(over, sysOver) {
   const p = page(Object.assign({ lastOkAt: T - 20000, failSince: T - 17000 }, sysOver || {}), Object.assign({
-    $: (id) => p.box.els[id] || null, sessionsLoaded: false, editing: false, replyFocused: false, storeUnlockFocused: () => false,
+    deadlineSignal: () => undefined, SESSIONS_DEADLINE_MS: 10000, $: (id) => p.box.els[id] || null, sessionsLoaded: false, editing: false, replyFocused: false, storeUnlockFocused: () => false,
     api: () => Promise.reject(Object.assign(new Error("Failed to fetch"), {})),
     signalAttention: () => { p.box.sysBannerSync(); },
   }, over || {}));
   const row = p.doc.createElement("li"); row.className = "drow"; row.textContent = "gap-sh2";
   p.list.replaceChildren(row);
-  p.box.run(liftFn("emptyLi") + liftFn("sysPollFailed") + liftFn("refreshSessions"));
+  p.box.run(liftFn("emptyLi") + liftFn("sysPollFailed") + liftFn("refreshSessionsRun") + "var refreshSessions = refreshSessionsRun;");
   return Object.assign(p, { row });
 }
 test("R27: desktop + loaded + fetch rejects -> the last-known rows stay, marked sess-stale once offline", async () => {
