@@ -377,6 +377,21 @@ function anYTicks(max, withZero) {
 // left whose 38px label box right-aligns the y labels, 16px bars. Used only when anIsPage(); the phone's chart keeps its own.
 const AN_PAGE_CHART = { plotH: 150, gutter: 44, labelBox: 38, bar: 16, xLabelGap: 6 };
 
+// anXLabels: the date labels of the page's cost chart, as { slot, text } in slot order, one per `every` slots from the first. In date
+// mode (a window of at most 120 days) the slots are the window's days, so a day with no cost is labelled like any other and each
+// label says its own slot's date (MM-DD): the labels fall on a regular grid, as the frame's do. In index mode (a very wide window,
+// where slots are only the days that have a bar) the bars are the slots, as the phone's chart labels them.
+function anXLabels(lay, from, every) {
+  const out = [];
+  if (lay.dateMode) {
+    const t0 = Date.parse(from + "T00:00:00Z");
+    for (let s = 0; s < lay.slots; s += every) out.push({ slot: s, text: new Date(t0 + s * 86400000).toISOString().slice(5, 10) });
+  } else {
+    for (const b of lay.bars) if (b.slot % every === 0) out.push({ slot: b.slot, text: b.day.slice(5) });
+  }
+  return out;
+}
+
 // anLegendItems: a legend's entries, a name and a colour per model, coloured by its place in `colorModels` (the canonical list;
 // `models` itself when none is given) so a legend of only some models wears the colours the bars have.
 function anLegendItems(models, colorModels) {
@@ -392,7 +407,7 @@ if (typeof module !== "undefined" && module.exports) {
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
     anCountText, anSessionKpis,
     anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
-    anYTicks, AN_PAGE_CHART, anLegendItems,
+    anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };
 }
 
@@ -684,9 +699,9 @@ function anControls() {
 // Static nodes: nothing here rebuilds them, so the control a click came from keeps focus.
 
 // anSyncPageControls: bring them up to date with AN: aria-pressed on the view and range items, Custom… and Compare
-// (Custom… mirrors the phone's `.on`: lit by an applied custom range, not by the row being open), the Custom row's hidden,
-// and the description's window (the loaded data's, else the requested one). The row's dates default to the window when
-// the row opens. A no-op unless the dialog is the page.
+// (Custom… mirrors the phone's `.on`: lit by an applied custom range, not by the row being open), the Custom row's hidden, and the
+// description's window (the requested one, so a pressed range is named while it loads and if its load fails). The row's dates
+// default to the window when the row opens. A no-op unless the dialog is the page.
 function anSyncPageControls() {
   if (!anIsPage()) return;
   const dlg = document.getElementById("analytics-modal");
@@ -706,11 +721,7 @@ function anSyncPageControls() {
     row.hidden = !open;
   }
   const desc = dlg.querySelector("#an-pdesc");
-  if (desc) {
-    const d = AN.data;
-    const from = d ? d.from : AN.from, to = d ? d.to : AN.to;
-    desc.textContent = "Spend read from Claude Code transcripts" + (from && to ? ` · ${from} → ${to} (UTC)` : "");
-  }
+  if (desc) desc.textContent = "Spend read from Claude Code transcripts" + (AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
 }
 
 // anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
@@ -939,11 +950,15 @@ function anTools(root) {
 // of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
 // Models, Projects and Tools have no frame: they carry today's content in those parts (plan call 13).
 
+// anPageHint: a section caption on the page. The phone's two captions end in " · window", a word that pointed at the date range
+// beside it; the page's head names the window, so the word goes.
+function anPageHint(hint) { return hint.replace(/ · window$/, ""); }
+
 // anModelsPage: the per-model table in a card, then the two share cards under "Why $ ≠ token count".
 function anModelsPage(root) {
   const d = AN.data;
   const fold = anModelFold(d.byModel);
-  const sec = anPSection(AN_COPY.models.title, AN_COPY.models.hint);
+  const sec = anPSection(AN_COPY.models.title, anPageHint(AN_COPY.models.hint));
   const tbl = el("table", "an-table");
   tbl.appendChild(anHead(...AN_TABLES.models));
   for (const x of fold.rows) {
@@ -976,7 +991,7 @@ function anModelsPage(root) {
 // anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
 function anProjectsPage(root) {
   const d = AN.data;
-  const sec = anPSection(AN_COPY.projects.title, AN_COPY.projects.hint);
+  const sec = anPSection(AN_COPY.projects.title, anPageHint(AN_COPY.projects.hint));
   const card = anCard();
   const body = anCardBody(card);
   const pb = anProjectBars(d.byProject, d.models);
@@ -1177,10 +1192,21 @@ function anDowOverlay() {
   const page = anIsPage(), left = page ? AN_PAGE_CHART.gutter : pad;
   const max = Math.max(1, ...d.map((x) => Math.max(x.cur, x.prev)));
   const svg = anSvg(W, H);
-  for (let i = 0; i <= 2; i++) {
-    const y = pad + (H - 2 * pad) * i / 2;
-    svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
-    svg.appendChild(page ? anText(AN_PAGE_CHART.labelBox, y + 4, usd(max * (1 - i / 2)), "end") : anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+  if (page) {
+    // The cost chart's scale (anYTicks): the peak and its thirds labelled, each on its own gridline, and the baseline drawn but never
+    // labelled "$0.00".
+    for (const t of anYTicks(max, false)) {
+      const y = pad + (H - 2 * pad) * (1 - t.frac);
+      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
+      svg.appendChild(anText(AN_PAGE_CHART.labelBox, y + 4, t.text, "end"));
+    }
+    svg.appendChild(anLine(left, H - pad, W - 6, H - pad, "var(--rule)", 0.5));
+  } else {
+    for (let i = 0; i <= 2; i++) {
+      const y = pad + (H - 2 * pad) * i / 2;
+      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
+      svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+    }
   }
   const xs = (i) => left + i * ((W - left - pad) / 6);
   const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
@@ -1395,12 +1421,12 @@ function anChartLabel(agg, from, to) {
 // the y labels, the peak and its thirds, right-align at the gutter's `labelBox` edge, centred on their gridline, with no label on the
 // baseline; a bar is `bar` wide (narrower in a crowded window) centred in its slot, its segments stacked cost-ascending with 1px
 // between them, 1px at least (a day's cost is never drawn as nothing, and a segment with no cost is not drawn); the date labels sit
-// `xLabelGap` under the plot, every round(slots/12) slots and never so close that two touch. The scale is the raw peak: a window with
-// no cost has no labels, not a "$0.00" (the phone floors it at 1). The svg overflows visibly and keeps TOP px above the plot for the
-// top label, which is centred on the plot's first line.
+// `xLabelGap` under the plot, on every round(slots/12)-th slot of the window (a day with no cost too), never so close that two touch
+// and never past the svg's edge. The scale is the raw peak: a window with no cost has no y labels, not a "$0.00" (the phone floors it
+// at 1). The svg overflows visibly and keeps TOP px above the plot for the top label, which is centred on the plot's first line.
 function anPageChart(agg, lay, slots, from, to, fitW) {
   const C = AN_PAGE_CHART;
-  const TOP = 8, GAP = 1, LABEL_H = 16, DATE_W = 44;
+  const TOP = 8, GAP = 1, LABEL_H = 16, DATE_W = 44, LABEL_W = 34; // LABEL_W: an upper estimate of an 11px "MM-DD" (about 30px)
   const W = fitW ? Math.max(slots * 8 + C.gutter, fitW) : Math.max(slots * 22, 720);
   const H = TOP + C.plotH + C.xLabelGap + LABEL_H;
   const slotW = (W - C.gutter) / slots;
@@ -1432,7 +1458,17 @@ function anPageChart(agg, lay, slots, from, to, fitW) {
       r.appendChild(anTitle(b.day + " · " + shortModel(m) + " " + usd(c)));
       svg.appendChild(r);
     });
-    if (b.slot % labelEvery === 0) svg.appendChild(anText(C.gutter + (b.slot + 0.5) * slotW, bottom + C.xLabelGap + 12, b.day.slice(5), "middle"));
+  }
+  // The date labels sit on the window's slots (anXLabels), not only the ones with a bar. A label centred on the last slot would
+  // pass the svg's right edge and be clipped, so it ends at the edge instead; one that would then touch its neighbour is left out.
+  let prevRight = -Infinity;
+  for (const l of anXLabels(lay, from, labelEvery)) {
+    const cx = C.gutter + (l.slot + 0.5) * slotW;
+    const atEdge = cx + LABEL_W / 2 > W;
+    const left = atEdge ? W - LABEL_W : cx - LABEL_W / 2;
+    if (left < prevRight + 2) continue;
+    prevRight = left + LABEL_W;
+    svg.appendChild(anText(atEdge ? W : cx, bottom + C.xLabelGap + 12, l.text, atEdge ? "end" : "middle"));
   }
   const wrap = anWrapSvg(svg);
   wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day

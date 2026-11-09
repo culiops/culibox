@@ -851,16 +851,16 @@ test("the Time cell keeps its text and holds the date as one run, so a narrow ca
   assert.strictEqual(run("auRow({ kind: \"credential\", what: \"x\", outcome: \"minted\" }, {})").elements[0].textContent, "");
 });
 
-// Gate 3 D1 (toolbar half): a seg cannot wrap, so a toolbar narrower than its widest seg lets the seg run past the page.
-test("the Audit toolbar tightens their seg items when narrower than the widest seg, so 701px never scrolls sideways", () => {
+// Gate 3 D1 (toolbar half) and D4: a seg cannot wrap, so a toolbar narrower than its widest seg lets the seg run past the page.
+test("both pages' toolbars tighten their seg items when narrower than the widest seg, so 701px never scrolls sideways", () => {
   const shared = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools") && r.decls.has("container-type"));
   assert.strictEqual(shared.length, 1);
-  assert.deepStrictEqual(parts(shared[0].selector), [AU + " > .toolbar.au-tools"], "the rule makes Audit's toolbar a container");
+  assert.deepStrictEqual(parts(shared[0].selector), [AU + " > .toolbar.au-tools", ANP + " > .toolbar.an-ptools"], "the same rule makes Audit's toolbar and Analytics' a container (not the Custom range row)");
   assert.strictEqual(shared[0].decls.get("container-type"), "inline-size");
   assert.strictEqual(shared[0].decls.get("container-name"), "page-tools");
   const narrow = CONTAINER_RULES.filter((r) => r.at.includes("@container page-tools (max-width: 388px)"));
   assert.strictEqual(narrow.length, 1);
-  assert.deepStrictEqual(parts(narrow[0].selector), [AU + " > .toolbar .seg > .seg-item"]);
+  assert.deepStrictEqual(parts(narrow[0].selector), [AU + " > .toolbar .seg > .seg-item", ANP + " > .toolbar .seg > .seg-item"]);
   assert.deepStrictEqual([...narrow[0].decls], [["padding", "0 var(--sp-1)"]], "10px a side becomes the kit's 4px, nothing else");
   assert.strictEqual(decls(".seg > .seg-item").get("padding"), "0 10px", "the kit's own padding is what the query takes 6px a side from");
   // The Kind seg is 389px (5 items: text 277 + 20 a side each + gaps and padding 12); under the query it is 389 - 5 * 12 = 329.
@@ -869,8 +869,12 @@ test("the Audit toolbar tightens their seg items when narrower than the widest s
 });
 
 // Gate 4 L1: the pages' text sits on the frame's 20px line.
-test("the Audit page's text sits on the kit's 20px line, not the body's 19.5px", () => {
+test("the Audit and Analytics pages' text sits on the kit's 20px line, not the body's 19.5px", () => {
   assert.strictEqual(decls(AU).get("line-height"), "var(--lh-md)", "inherited by every cell, the Session select and the buttons");
+  assert.strictEqual(decls("#page-host > #analytics-modal.as-page").get("line-height"), "var(--lh-md)", "and by Analytics' tables, bands and legends");
+  const root = BASE_RULES.filter((r) => parts(r.selector).includes(AU) && r.decls.has("line-height"));
+  assert.strictEqual(root.length, 1, "one rule");
+  assert.deepStrictEqual(parts(root[0].selector), [AU, "#page-host > #analytics-modal.as-page"], "for both pages, so they cannot drift");
   assert.strictEqual(decls(":root").get("--lh-md"), "20px");
   // Cells that wrapped already set it, and the type utilities set their own: the page rule only reaches one-line text.
   assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("line-height"), "var(--lh-md)");
@@ -1204,9 +1208,12 @@ test("page controls are updated in place", () => {
   run('AN.customOpen = false; anSyncPageControls();');
   assert.strictEqual(nodes.custom.hidden, true);
 
-  // The description follows the window that loaded, like the page-only append it replaces (the summary's own from and to).
+  // The description names the window that was asked for (AN.from, AN.to), whatever window the body last loaded: a pressed range
+  // must not read as the one before it while it loads, or after its load failed (Gate 3 D9).
   run('AN.data = { from: "2026-10-01", to: "2026-10-30", costByDay: { days: [] } }; anSyncPageControls();');
-  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-01 → 2026-10-30 (UTC)");
+  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-09 → 2026-11-07 (UTC)", "AN's window, not the loaded data's");
+  run('AN.from = "2026-10-05"; AN.to = "2026-11-01"; anSyncPageControls();');
+  assert.strictEqual(el("an-pdesc").textContent, "Spend read from Claude Code transcripts · 2026-10-05 → 2026-11-01 (UTC)", "follows AN at once");
   same();
   // Nothing is ever built or removed by the sync: the head and the toolbar keep their children.
   assert.strictEqual(nodes.head.elements.length, 2);
@@ -1226,6 +1233,32 @@ function fnBody(src, name) {
   }
   throw new Error("unbalanced braces in " + name);
 }
+
+test("the head names the window a range press asked for while it loads and after its load failed", async () => {
+  const { run, el, page, ctx } = analyticsEnv();
+  page(true);
+  run("anWirePage();");
+  run('AN.from = "2026-10-09"; AN.to = "2026-11-07"; AN.data = { from: AN.from, to: AN.to, costByDay: { days: [] } };');
+  const desc = () => el("an-pdesc").textContent;
+  // A load that has not answered yet: the 7d window is in the head already, the body says Loading….
+  let release;
+  ctx.api = () => new Promise((r) => { release = r; });
+  el("an-prange").onclick({ target: el("an-prange").elements[0] });
+  const seven = `${run("AN.from")} → ${run("AN.to")}`;
+  assert.notStrictEqual(seven, "2026-10-09 → 2026-11-07");
+  assert.strictEqual(desc(), `Spend read from Claude Code transcripts · ${seven} (UTC)`, "the window being loaded, not the one before it");
+  assert.strictEqual(el("analytics-body").textContent, "Loading…");
+  release({});
+  await settle();
+  // A load that fails: the body says so and the head still names the pressed window, not the last loaded one.
+  ctx.api = () => Promise.reject(new Error("down"));
+  el("an-prange").onclick({ target: el("an-prange").elements[2] });
+  const ninety = `${run("AN.from")} → ${run("AN.to")}`;
+  await settle();
+  assert.strictEqual(el("analytics-body").textContent, "Could not load analytics.");
+  assert.strictEqual(desc(), `Spend read from Claude Code transcripts · ${ninety} (UTC)`);
+  assert.notStrictEqual(ninety, seven);
+});
 
 test("a phone modal's page nodes are never touched: anSyncPageControls is a no-op unless the dialog is the page", () => {
   const { run, el, page } = analyticsEnv();
@@ -1926,7 +1959,7 @@ test("Models, Projects and Tools on the page: cards, kit tables and section titl
 
   const models = view(env, "anModels");
   assert.deepStrictEqual(models.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
-  assert.deepStrictEqual(head(models.elements[0]), [["h2", "section-title", "Per-model breakdown"], ["span", "t-sm muted", "Cost, volume & efficiency · window"]]);
+  assert.deepStrictEqual(head(models.elements[0]), [["h2", "section-title", "Per-model breakdown"], ["span", "t-sm muted", "Cost, volume & efficiency"]]);
   const m = tableOf(cards(models.elements[0])[0]);
   assert.deepStrictEqual(m.head.map((t) => t.textContent), ["Model", "Cost", "% cost", "Tokens", "Prompts", "Out/prompt", "Cache-read"]);
   assert.deepStrictEqual(m.rows.map((r) => r.map((c) => c.textContent)), [
@@ -1944,7 +1977,7 @@ test("Models, Projects and Tools on the page: cards, kit tables and section titl
 
   const projects = view(env, "anProjects");
   assert.deepStrictEqual(projects.elements.map((n) => n.tag + "." + n.className), ["section.an-psec", "section.an-psec"]);
-  assert.deepStrictEqual(head(projects.elements[0]), [["h2", "section-title", "Cost by project"], ["span", "t-sm muted", "Bar split shows the model mix inside each project · window"]]);
+  assert.deepStrictEqual(head(projects.elements[0]), [["h2", "section-title", "Cost by project"], ["span", "t-sm muted", "Bar split shows the model mix inside each project"]]);
   assert.deepStrictEqual(head(projects.elements[1]), [["h2", "section-title", "Detail"]]);
   const p = tableOf(cards(projects.elements[1])[0]);
   assert.deepStrictEqual(p.head.map((t) => t.textContent), ["Project", "Cost", "Tokens", "Prompts"]);
@@ -2078,7 +2111,9 @@ test("the page and the phone say the same thing: figures, colours, caps and word
     const [ph, pg] = both(fn);
     assert.ok(ph.titles.length >= 1, fn);
     assert.deepStrictEqual(pg.titles, ph.titles, fn + ": section titles");
-    assert.deepStrictEqual(pg.hints, ph.hints, fn + ": captions");
+    // The window is in the page's head, so the phone's " · window" (a word that pointed at the date range beside it) is not on the page.
+    assert.deepStrictEqual(pg.hints, ph.hints.map((h) => h.replace(/ · window$/, "")), fn + ": captions, without the dangling window");
+    assert.ok(!pg.hints.some((h) => /·\s*window\s*$/.test(h)), fn + ": no dangling separator on the page");
     assert.deepStrictEqual(pg.cardTitles, ph.cardTitles, fn + ": card titles");
     assert.deepStrictEqual(pg.bars, ph.bars, fn + ": bars (names, values, widths, colours)");
     assert.deepStrictEqual(pg.tables.map(lower), ph.tables.map(lower), fn + ": table rows (the page capitalises the heads)");
@@ -2235,9 +2270,10 @@ test("the page chart's data shapes: none, one day, one model, unpriced only, a n
     assert.ok(!texts.some((t) => /NaN|\$0\.00/.test(t.textContent)), "no NaN or $0.00 label");
     return { svg, texts, yl: texts.filter((t) => t.attrs["text-anchor"] === "end"), rects: nodesOf(svg, "rect"), lines: nodesOf(svg, "line") };
   };
-  // An empty window draws the plot's baseline and nothing else: no scale, no label.
+  // An empty window draws the plot's baseline and the window's dates under it, and nothing else: no scale, no y label, no bar.
   let s = shape([], "2026-10-09", "2026-11-07", 1054);
-  assert.deepStrictEqual([s.texts.length, s.rects.length, s.lines.length], [0, 0, 1]);
+  assert.deepStrictEqual([s.yl.length, s.rects.length, s.lines.length], [0, 0, 1]);
+  assert.deepStrictEqual(s.texts.map((t) => t.textContent), ["10-09", "10-12", "10-15", "10-18", "10-21", "10-24", "10-27", "10-30", "11-02", "11-05"], "the dates of the window's slots, bars or none (Gate 4 X1)");
   // Only unpriced models: max is 0, so no y labels and no bars, however many days.
   s = shape([ROW({ day: "2026-10-10", model: "<synthetic>", prompts: 3 }), ROW({ day: "2026-10-11", model: "", prompts: 2 })], "2026-10-09", "2026-11-07", 1054);
   assert.deepStrictEqual([s.yl.length, s.rects.length, s.lines.length], [0, 0, 1], "an all-unpriced page window draws no y labels");
@@ -2266,6 +2302,61 @@ test("the page chart's data shapes: none, one day, one model, unpriced only, a n
   for (let i = 0; i < 200; i++) wide.push(ROW({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), model: "claude-opus-5-5", costUsd: 1 + (i % 9) }));
   s = shape(wide, "2026-01-01", "2026-07-19", 1054);
   assert.strictEqual(num(s.svg.attrs.width), Math.max(200 * 8 + C.gutter, 1054), "8px a slot plus the gutter, wider than the card: the wrapper scrolls");
+});
+
+// Gate 4 X1 (= Gate 3 D6): the date labels sit on every round(slots/12)-th slot of the window, from the first, whether or not that
+// day has a bar; each says its own slot's date.
+test("the page chart labels every Nth slot of the window, a day with no cost included", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const C = { ...env.run("AN_PAGE_CHART") };
+  const sparse = [0, 6, 12, 21, 24, 27].map((slot) => ROW({ day: new Date(Date.UTC(2026, 9, 11 + slot)).toISOString().slice(0, 10), model: "claude-opus-5-5", costUsd: 10 + slot }));
+  const svg = drawChart(env, sparse, "2026-10-11", "2026-11-09", 1054).elements[0];
+  const xl = nodesOf(svg, "text").filter((t) => t.attrs["text-anchor"] === "middle");
+  assert.deepStrictEqual(xl.map((t) => t.textContent), ["10-11", "10-14", "10-17", "10-20", "10-23", "10-26", "10-29", "11-01", "11-04", "11-07"], "10 labels at a pitch of 3 slots, not the 6 that had a bar");
+  const slotW = (1054 - C.gutter) / 30;
+  xl.forEach((t, k) => assert.ok(Math.abs(num(t.attrs.x) - (C.gutter + k * 3 * slotW + slotW / 2)) < 0.01, t.textContent + " is centred on slot " + k * 3));
+  assert.strictEqual(nodesOf(svg, "rect").length, 6, "only the six days that cost anything are drawn");
+  assert.deepStrictEqual(collisions(svg), []);
+  // An empty window has its dates too, under the baseline.
+  const empty = drawChart(env, [], "2026-10-09", "2026-10-15", 1054).elements[0];
+  assert.deepStrictEqual(nodesOf(empty, "text").map((t) => t.textContent), ["10-09", "10-10", "10-11", "10-12", "10-13", "10-14", "10-15"], "7 slots of 143px: every slot is labelled");
+  // A very wide window is index mode: the labels follow the bars, as before.
+  const wide = [];
+  for (let i = 0; i < 200; i++) wide.push(ROW({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), model: "claude-opus-5-5", costUsd: 1 + (i % 9) }));
+  const idx = drawChart(env, wide, "2026-01-01", "2026-07-19", 1054).elements[0];
+  const il = nodesOf(idx, "text").filter((t) => t.attrs["text-anchor"] !== "end");
+  assert.strictEqual(il[0].textContent, "01-01");
+  assert.ok(il.length >= 8 && il.length <= 20, "about one label in sixteen bars: " + il.length);
+});
+
+// Gate 3 D5: a label centred on the last slot poked 13px past the svg and was clipped ("11-(") on a 97-day window.
+test("every x label of the page chart stays inside the svg, and none touches its neighbour", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  const rows = [];
+  for (let i = 0; i < 97; i += 4) rows.push(ROW({ day: new Date(Date.UTC(2026, 7, 5 + i)).toISOString().slice(0, 10), model: "claude-opus-5-5", costUsd: 5 + (i % 11) }));
+  rows.push(ROW({ day: "2026-11-09", model: "claude-opus-5-5", costUsd: 12 }));
+  for (const W of [1054, 887, 700, 420]) {
+    const svg = drawChart(env, rows, "2026-08-05", "2026-11-09", W).elements[0];
+    const width = num(svg.attrs.width);
+    const xl = nodesOf(svg, "text").filter((t) => t.attrs["text-anchor"] !== "end" || num(t.attrs.y) > 150);
+    assert.ok(xl.length >= 2, "W " + W + ": labels drawn");
+    for (const t of xl) {
+      const b = textBox(t);
+      assert.ok(b.l >= 0 && b.r <= width, "W " + W + ": " + t.textContent + " spans " + b.l.toFixed(1) + ".." + b.r.toFixed(1) + " of " + width);
+    }
+    assert.deepStrictEqual(collisions(svg), [], "W " + W);
+  }
+  // The label of the window's last day is still there, ending at the svg's right edge.
+  const svg = drawChart(env, rows, "2026-08-05", "2026-11-09", 1054).elements[0];
+  const last = nodesOf(svg, "text").find((t) => t.textContent === "11-09");
+  assert.ok(last, "11-09 is labelled");
+  assert.strictEqual(last.attrs["text-anchor"], "end");
+  assert.strictEqual(num(last.attrs.x), 1054);
+  // A window whose last slot is not a label slot keeps its centred labels.
+  const mid = drawChart(env, rows.slice(0, 5), "2026-08-05", "2026-11-08", 1054).elements[0];
+  assert.ok(nodesOf(mid, "text").filter((t) => /^\d\d-\d\d$/.test(t.textContent)).every((t) => t.attrs["text-anchor"] === "middle"));
 });
 
 test("the phone's chart keeps its geometry: 170px, a 24px pad, four y labels with $0.00 at x = 2, 9px axis text", () => {
@@ -2577,9 +2668,37 @@ test("the Compare block on the page: kit KPI tiles with their delta lines, the s
   assert.ok(dow, "the day-of-week chart is drawn");
   assert.deepStrictEqual(collisions(dow), []);
   assert.deepStrictEqual(nodesOf(dow, "text").filter((t) => t.attrs["text-anchor"] === "end").map((t) => t.attrs.x), ["38", "38", "38"], "y labels end in the same 38px box");
-  assert.deepStrictEqual(nodesOf(dow, "line").map((l) => l.attrs.x1), ["44", "44", "44"], "the plot starts at the gutter, not under the labels");
+  assert.deepStrictEqual(nodesOf(dow, "line").map((l) => l.attrs.x1), ["44", "44", "44", "44"], "the plot starts at the gutter, not under the labels; four gridlines, as the cost chart's");
   assert.ok(nodesOf(dow, "circle").every((c) => num(c.attrs.cx) >= 44), "and so does the first point");
   assert.deepStrictEqual(badNumbers(dow), []);
+});
+
+// Gate 3 D7: the cost chart labels the peak and its thirds and never the baseline; the day-of-week chart beside it still printed "$0.00".
+test("the day-of-week chart on the page labels the peak and its thirds like the cost chart, never a $0.00 baseline", () => {
+  const env = analyticsEnv();
+  env.page(true);
+  withCompare(env);
+  const root = view(env, "anOverview");
+  const dow = nodesOf(root, "svg").find((n) => n.attrs.viewBox === "0 0 380 150");
+  const yl = nodesOf(dow, "text").filter((t) => t.attrs["text-anchor"] === "end");
+  // CMP.dow peaks at 181 (Sunday's current: 6 * 30 + 1).
+  assert.deepStrictEqual(yl.map((t) => t.textContent), ["$181", "$121", "$60.33"], "anYTicks(max, false): the peak, 2/3 and 1/3");
+  assert.ok(!nodesOf(dow, "text").some((t) => /\$0\.00/.test(t.textContent)), "no $0.00");
+  // Each label is centred on a gridline of its own (an 11px digit is 8px tall: its baseline is 4px under the centre) and the baseline
+  // is the fourth line, unlabelled.
+  const lines = nodesOf(dow, "line").map((l) => num(l.attrs.y1));
+  assert.strictEqual(lines.length, 4);
+  yl.forEach((t, k) => assert.ok(Math.abs(num(t.attrs.y) - 4 - lines[k]) <= 0.5, t.textContent + " sits on its gridline"));
+  const H = 150, pad = 26;
+  assert.strictEqual(lines[3], H - pad, "the baseline is the plot's bottom");
+  assert.strictEqual(lines[0], pad, "the peak is the plot's top: the lines go through the points' scale");
+  assert.deepStrictEqual(collisions(dow), []);
+  assert.deepStrictEqual(badNumbers(dow), []);
+  // The scale is floored at 1 as before, so a window with no cost still prints a scale, not NaN.
+  env.run("AN.data.cmp = Object.assign({}, CMP, { dow: CMP.dow.map((d) => ({ day: d.day, cur: 0, prev: 0 })) });");
+  const flat = nodesOf(view(env, "anOverview"), "svg").find((n) => n.attrs.viewBox === "0 0 380 150");
+  assert.deepStrictEqual(nodesOf(flat, "text").filter((t) => t.attrs["text-anchor"] === "end").map((t) => t.textContent), ["$1.00", "$0.67", "$0.33"]);
+  assert.deepStrictEqual(badNumbers(flat), []);
 });
 
 test("the Compare block on the phone is unchanged: its KPI grid, boxed note and 9px axis", () => {
@@ -2635,4 +2754,28 @@ test("a KPI row too narrow for 120px tiles wraps onto more rows, on both pages, 
   // Outside a container there is no wrap rule: the kit's row, tiles and hairline are the wide layout.
   assert.ok(!BASE_RULES.some((r) => parts(r.selector).some((x) => x.startsWith(AU + " .kpi-row") || x.startsWith(ANP + " .kpi-row"))), "the wrap lives in the query alone");
   assert.strictEqual(decls(".kpi + .kpi").get("box-shadow"), "inset 1px 0 0 var(--line)");
+});
+
+// D3: "Cost over time" broke to one to three characters a line when the legend was long (701, 760, 1280 with eight models).
+test("a card head keeps its title and caption whole and wraps the legend onto a line of its own", () => {
+  assert.strictEqual(decls(ANP + " .an-card .card-head").get("flex-wrap"), "wrap", "the head wraps");
+  const keep = decls(ANP + " .an-card .card-head > :is(h2, h3, .muted)");
+  assert.strictEqual(keep.get("flex"), "none", "the title and its caption never shrink");
+  assert.strictEqual(keep.get("white-space"), "nowrap", "or wrap");
+  const title = decls(ANP + " .an-card .card-head > :is(h2, h3)");
+  assert.strictEqual(title.get("margin"), "0");
+  assert.strictEqual(title.get("overflow-wrap"), undefined, "no `anywhere` to break a title a character at a time");
+  assert.strictEqual(title.get("min-width"), undefined);
+  // The legend wraps its own items, with a row gap, instead of pushing the title: it is the one child that may shrink.
+  const lg = decls(ANP + " .an-plegend");
+  assert.strictEqual(lg.get("flex-wrap"), "wrap");
+  assert.strictEqual(lg.get("gap"), "var(--sp-1) var(--sp-4)");
+  assert.strictEqual(lg.get("min-width"), "0");
+  assert.strictEqual(lg.get("flex"), undefined, "so it takes its own width and the head wraps it when that does not fit beside the title");
+  // The head's own children: title, caption, spacer, legend (the spacer pushes the legend right when they share a row).
+  const env = analyticsEnv();
+  env.page(true);
+  overviewWindow(env);
+  const head = view(env, "anOverview").elements[1].elements[0].elements[0];
+  assert.deepStrictEqual(head.elements.map(sigOf), ["h2.t-md w-600", "span.t-sm muted", "span.grow", "div.an-plegend"]);
 });

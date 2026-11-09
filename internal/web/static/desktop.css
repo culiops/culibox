@@ -2336,7 +2336,8 @@
 
   /* The frame's page text sits on the kit's 20px line (--lh-md), which every cell, the Session select and the buttons inherit; the
      product's body is 14px / 1.5, which would make it 19.5px at 13px and draw one-line text one pixel high. */
-  #page-host > #audit-page.as-page { line-height: var(--lh-md); }
+  #page-host > #audit-page.as-page,
+  #page-host > #analytics-modal.as-page { line-height: var(--lh-md); }
 
   /* The head and the toolbar stay put; everything from the KPI row down scrolls (the plan's call 9). The Analytics page wears the
      same two rules (M3.1 and M3.2 draw the same head and toolbar as M3.3): one list each, so the pages cannot drift. The toolbar
@@ -2349,9 +2350,11 @@
   /* A seg cannot wrap, and the Kind seg is 389px wide (the View seg 375px): in a window under 750px the toolbar is narrower than that and
      the seg would run past the page and scroll it sideways. Each toolbar answers its own width: its seg items give up 6px of padding
      a side, which brings the widest seg to 329px, inside the 340px the page has at 701px. */
-  #page-host > #audit-page.as-page > .toolbar.au-tools { container-name: page-tools; container-type: inline-size; }
+  #page-host > #audit-page.as-page > .toolbar.au-tools,
+  #page-host > #analytics-modal.as-page > .toolbar.an-ptools { container-name: page-tools; container-type: inline-size; }
   @container page-tools (max-width: 388px) {
-    #page-host > #audit-page.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
+    #page-host > #audit-page.as-page > .toolbar .seg > .seg-item,
+    #page-host > #analytics-modal.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
   }
   #page-host > #audit-page.as-page #au-session { flex: none; width: 180px; }
 
@@ -2487,7 +2490,12 @@
   #page-host > #analytics-modal.as-page .an-psec-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-width: 0; }
   /* A card is --panel at --r-card with no outline (§C8 .card). Its name is ours: app.css's `.card` is the phone's amber session card. */
   #page-host > #analytics-modal.as-page .an-card { background: var(--panel); border-radius: var(--r-card); min-width: 0; }
-  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  /* A card's head holds a title, a caption and (the cost chart) a legend: the title and its caption keep their one line at their own width
+     and the head wraps, so a long legend goes to a line of its own (and wraps its items) instead of crushing "Cost over time" to a
+     character a line. */
+  #page-host > #analytics-modal.as-page .an-card .card-head { flex-wrap: wrap; }
+  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; }
+  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3, .muted) { flex: none; white-space: nowrap; }
   #page-host > #analytics-modal.as-page .an-card-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
   /* A table's card clips its row hover to the 8px corners (the frame's inline overflow: hidden). */
   #page-host > #analytics-modal.as-page .an-card > .an-tablewrap { border-radius: var(--r-card); }

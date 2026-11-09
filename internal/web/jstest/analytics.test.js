@@ -8,7 +8,7 @@ const {
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
   daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
   anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
-  anYTicks, AN_PAGE_CHART, anLegendItems,
+  anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -394,4 +394,30 @@ test("anLegendItems: a name and a colour per model, coloured by its place in the
   // A priced-only legend keeps the colours the bars have.
   assert.deepStrictEqual(anLegendItems(["claude-haiku-5-5"], all), [{ name: "haiku-5-5", color: "var(--an-3)" }]);
   assert.deepStrictEqual(anLegendItems([]), []);
+});
+
+test("anXLabels: in date mode every every-th slot of the window is labelled with its own date, a day with no cost included", () => {
+  // 2026-10-11 .. 2026-11-09 is 30 slots; only six days cost anything (the gate's sparse 30d window), so the bars alone would label 6.
+  const days = [0, 6, 12, 21, 24, 27].map((slot) => ({ day: new Date(Date.UTC(2026, 9, 11 + slot)).toISOString().slice(0, 10), segs: {}, cost: 1 }));
+  const lay = stackedLayout(days, "2026-10-11", "2026-11-09");
+  assert.deepStrictEqual(lay.bars.map((b) => b.slot), [0, 6, 12, 21, 24, 27]);
+  const labels = anXLabels(lay, "2026-10-11", 3);
+  assert.deepStrictEqual(labels.map((l) => l.slot), [0, 3, 6, 9, 12, 15, 18, 21, 24, 27], "every 3rd slot from the first (round(30 / 12) = 3, the frame's pitch)");
+  assert.deepStrictEqual(labels.map((l) => l.text), ["10-11", "10-14", "10-17", "10-20", "10-23", "10-26", "10-29", "11-01", "11-04", "11-07"], "each slot's own date, across a month end");
+  // A one-day window: its one slot. A pitch of 1 labels every slot.
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-09"), "2026-10-09", 1), [{ slot: 0, text: "10-09" }]);
+  assert.strictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-15"), "2026-10-09", 1).length, 7);
+  // An empty window still has its slots (the chart draws the baseline and the dates under it).
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-15"), "2026-10-09", 3).map((l) => l.text), ["10-09", "10-12", "10-15"]);
+});
+
+test("anXLabels: a very wide window is index mode, where the slots are the bars, as the phone's chart labels them", () => {
+  const days = [];
+  for (let i = 0; i < 40; i++) days.push({ day: new Date(Date.UTC(2026, 0, 1 + i * 3)).toISOString().slice(0, 10), segs: {}, cost: 1 });
+  const lay = stackedLayout(days, "2000-01-01", "2026-08-07");
+  assert.strictEqual(lay.dateMode, false);
+  const labels = anXLabels(lay, "2000-01-01", 10);
+  assert.deepStrictEqual(labels.map((l) => l.slot), [0, 10, 20, 30]);
+  assert.deepStrictEqual(labels.map((l) => l.text), [days[0], days[10], days[20], days[30]].map((d) => d.day.slice(5)));
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2000-01-01", "2026-08-07"), "2000-01-01", 10), []);
 });
