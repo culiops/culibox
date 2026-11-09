@@ -1719,8 +1719,9 @@ function lift(name) {
   return src.slice(at, src.indexOf("\n}\n", at) + 2);
 }
 const NOTIFY_ON = "When this tab is not focused: blocked on you or done. This browser only.";
+const NOTIFY_C = "When this tab is not focused. This browser only.";   // (c): on and granted; the class rows name the classes
 const NOTIFY_ASK = " Your browser asks for permission when you turn it on.";
-function makeNotifyDom({ secure = true, perm = "default", origin = "https://box.example", wanted = false, prompt = "granted" } = {}) {
+function makeNotifyDom({ secure = true, perm = "default", origin = "https://box.example", wanted = false, prompt = "granted", phone = false } = {}) {
   const el = (tag, id, cls) => { const n = new FNode(tag); if (id) n.id = id; if (cls) n.className = cls; return n; };
   const root = el("div");
   const row = root.appendChild(el("div", "fsrow-alerts", "fsrow card-row"));
@@ -1736,11 +1737,16 @@ function makeNotifyDom({ secure = true, perm = "default", origin = "https://box.
   };
   ctx.$ = (id) => ctx.document.getElementById(id);
   if (perm !== "unsupported") {
-    ctx.Notification = { permission: perm, requestPermission: async () => { if (prompt !== "default") ctx.Notification.permission = prompt; return prompt; } };
+    ctx.shown = [];
+    ctx.Notification = function Notification(title, opts) { ctx.shown.push({ title, opts }); };
+    ctx.Notification.permission = perm;
+    ctx.Notification.requestPermission = async () => { if (prompt !== "default") ctx.Notification.permission = prompt; return prompt; };
   }
+  if (phone) ctx.mobileActive = () => true;
   vm.createContext(ctx);
   new vm.Script(read("attention.js"), { filename: "attention.js" }).runInContext(ctx);
-  for (const fn of ["notifyPerm", "notifyMono", "paintNotifyWhy", "initNotifyToggle"]) new vm.Script(lift(fn), { filename: "app.js:" + fn }).runInContext(ctx);
+  new vm.Script(read("notifymodel.js"), { filename: "notifymodel.js" }).runInContext(ctx);
+  for (const fn of ["drawerDesktop", "notifyPerm", "notifyMono", "paintNotifyWhy", "notifyPrefRow", "paintNotifyMore", "initNotifyToggle"]) new vm.Script(lift(fn), { filename: "app.js:" + fn }).runInContext(ctx);
   return { ctx, root, row, cb, why, store };
 }
 const monos = (n) => withCls(n, "mono").map((m) => m.textContent);
@@ -1824,7 +1830,7 @@ test("Check again reads the permission again: unblocked, the switch is usable an
   withCls(why, "btn")[0].click();
   assert.strictEqual(cb.disabled, false);
   assert.strictEqual(cb.checked, true);
-  assert.strictEqual(why.textContent, NOTIFY_ON);
+  assert.strictEqual(why.textContent, NOTIFY_C);
   assert.strictEqual(withCls(why, "btn").length, 0);
   assert.strictEqual(FNode.focused, cb, "the press's button is gone: the switch it unlocked takes the focus");
   assert.strictEqual(store.get("agent-box:notify"), "1");
@@ -1843,7 +1849,7 @@ test("available and on (granted and opted in): the same line without the ask, so
   const { ctx, cb, why } = makeNotifyDom({ perm: "granted", wanted: true });
   ctx.initNotifyToggle();
   assert.deepStrictEqual([cb.disabled, cb.checked], [false, true]);
-  assert.strictEqual(why.textContent, NOTIFY_ON);
+  assert.strictEqual(why.textContent, NOTIFY_C);
 });
 
 test("permission granted but the switch off: the helper does not promise a prompt that will not come", () => {
@@ -1873,7 +1879,7 @@ test("turning it on: granted repaints the helper as on; a prompt left unanswered
   await d.cb.onchange();
   assert.strictEqual(d.store.get("agent-box:notify"), "1");
   assert.deepStrictEqual([d.cb.checked, d.cb.disabled], [true, false]);
-  assert.strictEqual(d.why.textContent, NOTIFY_ON, "no 'You will be notified when an agent needs you…' any more");
+  assert.strictEqual(d.why.textContent, NOTIFY_C, "no 'You will be notified when an agent needs you…' any more");
   // Dismissed: the prompt closed without an answer, the permission is still "default".
   d = makeNotifyDom({ perm: "default", prompt: "default" });
   d.ctx.initNotifyToggle();
@@ -1915,6 +1921,122 @@ test("a prompt that throws is a refusal, not a crash", async () => {
   await d.cb.onchange();
   assert.strictEqual(d.cb.checked, false);
   assert.strictEqual(d.why.textContent, "Permission was not granted, so notifications stay off.");
+});
+
+// ---- Alerts block: class rows, message text, chime, Send test (M8.1 a/b/c/d; #177 Task 4) -----------------------------------
+const more = (d) => d.ctx.document.getElementById("notify-more");
+const prefRows = (d) => withCls(more(d), "notify-pref");
+const prefTitles = (d) => prefRows(d).map((r) => withCls(r, "t-md")[0].textContent);
+const prefBox = (d, name) => d.root.all((n) => n.dataset && n.dataset.pref === name)[0];
+const ALWAYS_ON = "Always on, in this tab: the title count, the amber Needs you group and the in-page chip. They can\u2019t be switched off (D10).";
+const CHIME_T = "Chime when a session is blocked on you";
+const CHIME_H = "A short sound from this tab, also in the background, once you have clicked anywhere on the page.";
+
+test("state (c), on: Blocked / Done / Ended rows, Send test, message text (off), chime (off) and the always-on note, with the approved words", () => {
+  const d = makeNotifyDom({ perm: "granted", wanted: true });
+  d.ctx.initNotifyToggle();
+  assert.strictEqual(d.cb.checked, true);
+  assert.strictEqual(d.why.textContent, "When this tab is not focused. This browser only.");
+  assert.deepStrictEqual(prefTitles(d), ["Blocked on you", "Done", "Ended", "Show the agent\u2019s message in notifications", CHIME_T]);
+  const group = withCls(more(d), "notify-classes")[0];
+  assert.strictEqual(group.getAttribute("role"), "group");
+  assert.strictEqual(group.getAttribute("aria-label"), "Notify me about");
+  assert.deepStrictEqual(withCls(group, "notify-pref").map((r) => withCls(r, "t-sm")[0].textContent), [
+    "Asks to run, AWS sign-in expired, store locked. Stays on screen until you dismiss it.",
+    "Finished its turn. Silent; 3 or more at once arrive as one, \u201c3 sessions finished\u201d.",
+    "Ended or crashed without you ending it.",
+  ]);
+  assert.strictEqual(withCls(prefRows(d)[3], "t-sm")[0].textContent,
+    "Your OS shows it on the lock screen and keeps it in its history. CuliBox hides known token shapes only, not paths, hostnames or account ids. Off: only what happened, like \u201cFinished its turn\u201d.");
+  assert.strictEqual(withCls(prefRows(d)[4], "t-sm")[0].textContent, CHIME_H);
+  assert.deepStrictEqual(["block", "done", "ended", "message", "chime"].map((n) => prefBox(d, n).checked), [true, true, true, false, false]);
+  assert.strictEqual(withCls(more(d), "notify-ff")[0].textContent, "Firefox can't re-alert a notification it is replacing, so a new ask may arrive silently there.");
+  assert.strictEqual(withCls(group, "notify-ff").length, 1, "the Firefox note sits under the Blocked row, inside the group");
+  assert.strictEqual(group.children.indexOf(withCls(group, "notify-ff")[0].parent === group ? withCls(group, "notify-ff")[0] : null), 1);
+  assert.strictEqual(withCls(more(d), "notify-note")[0].textContent, ALWAYS_ON);
+  assert.strictEqual(withCls(more(d), "btn").map((b) => b.textContent).join(), "Send test");
+  assert.strictEqual(withCls(more(d), "notify-docs").length, 0);
+});
+
+test("state (b), available and off: no class rows and no Send test, but the chime and the always-on note", () => {
+  const d = makeNotifyDom({ perm: "default" });
+  d.ctx.initNotifyToggle();
+  assert.deepStrictEqual(prefTitles(d), [CHIME_T]);
+  assert.strictEqual(withCls(more(d), "notify-classes").length, 0);
+  assert.strictEqual(withCls(more(d), "btn").length, 0);
+  assert.strictEqual(withCls(more(d), "notify-note")[0].textContent, ALWAYS_ON);
+  assert.strictEqual(d.why.textContent, NOTIFY_ON + NOTIFY_ASK);
+});
+
+test("state (a), http: the chime is the first row (the in-app fallback), the always-on note, and a link to the remote-access page", () => {
+  const d = makeNotifyDom({ secure: false, perm: "default", origin: "http://box.example:8899" });
+  d.ctx.initNotifyToggle();
+  assert.deepStrictEqual(prefTitles(d), [CHIME_T]);
+  assert.strictEqual(kids(more(d))[0].textContent.startsWith("Meanwhile, in this tab"), true, "the chime block opens the extras");
+  assert.strictEqual(withCls(more(d), "notify-pref")[0], withCls(kids(more(d))[1] || kids(more(d))[0], "notify-pref")[0] || withCls(more(d), "notify-pref")[0]);
+  const a = more(d).all((n) => n.tag === "a")[0];
+  assert.strictEqual(a.href, "https://github.com/culiops/culibox/blob/main/docs/REMOTE-ACCESS.md");
+  assert.strictEqual(a.target, "_blank");
+  assert.strictEqual(a.rel, "noopener noreferrer");
+  assert.strictEqual(withCls(more(d), "notify-note").length, 1);
+});
+
+test("state (d), denied: the chime and the always-on note under the browser steps; no class rows", () => {
+  const d = makeNotifyDom({ perm: "denied", wanted: true });
+  d.ctx.initNotifyToggle();
+  assert.deepStrictEqual(prefTitles(d), [CHIME_T]);
+  assert.strictEqual(withCls(more(d), "notify-classes").length, 0);
+  assert.strictEqual(withCls(more(d), "notify-docs").length, 0);
+});
+
+test("a click on a pref switch stores it, and the next paint reads it back", () => {
+  const d = makeNotifyDom({ perm: "granted", wanted: true });
+  d.ctx.initNotifyToggle();
+  const done = prefBox(d, "done");
+  done.checked = false; done.onchange();
+  prefBox(d, "chime").checked = true; prefBox(d, "chime").onchange();
+  prefBox(d, "message").checked = true; prefBox(d, "message").onchange();
+  assert.strictEqual(d.store.get("agent-box:notify:done"), "0");
+  assert.strictEqual(d.store.get("agent-box:notify:chime"), "1");
+  assert.strictEqual(d.store.get("agent-box:notify:message"), "1");
+  d.ctx.initNotifyToggle();
+  assert.deepStrictEqual(["block", "done", "ended", "message", "chime"].map((n) => prefBox(d, n).checked), [true, false, true, true, true]);
+  assert.strictEqual(d.ctx.readPrefs().done, false);
+  assert.strictEqual(more(d).parent, d.row, "repainting reuses one #notify-more");
+  assert.strictEqual(d.row.all((n) => n.id === "notify-more").length, 1);
+});
+
+test("Send test raises exactly one CuliBox notification (tag ab:test, body Test notification) and says so", () => {
+  const d = makeNotifyDom({ perm: "granted", wanted: true });
+  d.ctx.initNotifyToggle();
+  const btn = withCls(more(d), "btn")[0];
+  assert.strictEqual(withCls(more(d), "notify-status")[0].textContent, "");
+  btn.click();
+  assert.strictEqual(d.ctx.shown.length, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(d.ctx.shown[0])), { title: "CuliBox", opts: { body: "Test notification", tag: "ab:test" } });
+  assert.strictEqual(withCls(more(d), "notify-status")[0].textContent, "Test sent. Nothing appeared? Check this browser\u2019s notification permission in your OS settings.");
+});
+
+test("Send test when the browser refuses the notification does not claim it was sent", () => {
+  const d = makeNotifyDom({ perm: "granted", wanted: true });
+  d.ctx.initNotifyToggle();
+  d.ctx.Notification = function () { throw new Error("no"); };
+  withCls(more(d), "btn")[0].click();
+  assert.doesNotMatch(withCls(more(d), "notify-status")[0].textContent, /^Test sent/);
+  assert.notStrictEqual(withCls(more(d), "notify-status")[0].textContent, "");
+});
+
+test("on the phone none of the new elements is created (the row is hidden by app.css there, and its DOM stays as it was)", () => {
+  for (const o of [{ perm: "granted", wanted: true }, { perm: "default" }, { secure: false }, { perm: "denied" }]) {
+    const d = makeNotifyDom(Object.assign({ phone: true }, o));
+    d.ctx.initNotifyToggle();
+    assert.strictEqual(more(d), null, JSON.stringify(o));
+    assert.strictEqual(d.row.children.length, 2, "the row keeps its switch and its reason only");
+  }
+});
+
+test("the new Alerts code builds text nodes only", () => {
+  for (const fn of ["notifyPrefRow", "paintNotifyMore"]) assert.doesNotMatch(lift(fn), /innerHTML|insertAdjacentHTML|outerHTML/, fn);
 });
 
 test("initSettings draws the Shortcuts label once; app.css hides it below the breakpoint", () => {

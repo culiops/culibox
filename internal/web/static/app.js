@@ -3502,6 +3502,91 @@ function paintNotifyWhy(why, copy, onAgain) {
   }
 }
 
+// notifyPrefRow: one switch of the Alerts block (a kit .check with the title and its help under it) for the pref `name`,
+// stored through writePref (notifymodel.js) as soon as it is clicked. Text nodes only.
+function notifyPrefRow(name, prefs) {
+  const def = NOTIFY_PREF_ROWS[name];
+  const lab = document.createElement("label");
+  lab.className = "check notify-pref";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "check-box";
+  box.dataset.pref = name;
+  box.checked = !!prefs[name];
+  box.onchange = () => { writePref(name, box.checked); };
+  const txt = document.createElement("span");
+  txt.className = "opt-card-title";
+  const t = document.createElement("span");
+  t.className = "t-md";
+  t.textContent = def.title;
+  const h = document.createElement("span");
+  h.className = "t-sm muted";
+  h.textContent = def.help;
+  txt.appendChild(t);
+  txt.appendChild(h);
+  lab.appendChild(box);
+  lab.appendChild(txt);
+  return lab;
+}
+
+// paintNotifyMore draws the rest of Settings > Appearance > Alerts under the reason (#notify-more, desktop only: the phone
+// hides the row and keeps its DOM as it was). Frame M8.1: with the master on, the Blocked / Done / Ended rows (the Firefox note
+// under Blocked), Send test and its result, and the message-text switch; in every state the chime, then the always-on note.
+// On an http page (a) the chime is the first row, the only sound a background tab can make there, and the page links the
+// remote-access guide. `state` is notifyAvailability's; `on` is whether the master is on.
+function paintNotifyMore(row, state, on) {
+  let more = document.getElementById("notify-more");
+  if (!more) {
+    more = document.createElement("div");
+    more.id = "notify-more";
+    row.appendChild(more);
+  }
+  more.textContent = "";
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text) n.textContent = text;
+    return n;
+  };
+  const prefs = readPrefs();
+  if (state === "insecure") more.appendChild(el("span", "t-sm w-600", "Meanwhile, in this tab"));
+  if (state === "ready" && on) {
+    const group = el("div", "notify-classes");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Notify me about");
+    group.appendChild(notifyPrefRow("block", prefs));
+    group.appendChild(el("p", "notify-ff t-sm muted", NOTIFY_FIREFOX));
+    group.appendChild(notifyPrefRow("done", prefs));
+    group.appendChild(notifyPrefRow("ended", prefs));
+    more.appendChild(group);
+    const test = el("div", "notify-test");
+    const btn = el("button", "btn btn-sm", "Send test");
+    btn.type = "button";
+    const status = el("p", "notify-status t-sm muted");
+    status.setAttribute("role", "status");
+    btn.onclick = () => {
+      // The same builder as the real ones (notifymodel.js deliverNotes); a click on this one only closes it.
+      const note = { title: "CuliBox", body: "Test notification", tag: "ab:test", options: { tag: "ab:test" } };
+      status.textContent = deliverNotes([note], typeof Notification === "undefined" ? null : Notification, null) ? NOTIFY_TEST_SENT : NOTIFY_TEST_REFUSED;
+    };
+    test.appendChild(btn);
+    test.appendChild(status);
+    more.appendChild(test);
+    more.appendChild(notifyPrefRow("message", prefs));
+  }
+  more.appendChild(notifyPrefRow("chime", prefs));
+  more.appendChild(el("p", "notify-note t-sm muted", NOTIFY_ALWAYS_ON));
+  if (state === "insecure") {
+    const docs = el("p", "notify-docs t-sm muted", "HTTPS in front of CuliBox, or an SSH tunnel: ");
+    const a = el("a", "link", "Remote access");
+    a.href = REMOTE_ACCESS_DOC;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    docs.appendChild(a);
+    more.appendChild(docs);
+  }
+}
+
 // initNotifyToggle wires Settings → Appearance → Desktop notifications: the switch, and the reason under it that
 // says why it is off and how to turn it on (F39/F47; wording from frame M8.1, attention.js notifyRowCopy). It
 // re-reads the browser's permission on every call: Settings opening, Check again, and each answer to the prompt.
@@ -3515,6 +3600,7 @@ function initNotifyToggle(refused) {
   cb.checked = avail.enabled && notifyChecked(notifyWanted(), perm);
   const copy = notifyRowCopy(avail.state, cb.checked, window.location.origin, perm);
   if (refused && avail.state === "ready") copy.helper = "Permission was not granted, so notifications stay off.";
+  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked);
   paintNotifyWhy(why, copy, () => {
     initNotifyToggle();
     // The button that took the press was redrawn or is gone: keep the keyboard on its successor, or on the switch it unlocked.

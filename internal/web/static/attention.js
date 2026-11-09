@@ -279,11 +279,27 @@ function notifyRowCopy(state, wantedOn, origin, permission) {
     });
   }
   if (state === "ready") {
+    // (c): on and granted, the class rows below say which sessions, so the line no longer lists them (frame M8.1).
+    if (wantedOn && permission === "granted") return copy({ helper: "When this tab is not focused. This browser only." });
     const on = "When this tab is not focused: blocked on you or done. This browser only.";
     return copy({ helper: wantedOn || permission === "granted" ? on : on + " Your browser asks for permission when you turn it on." });
   }
   return copy({ helper: "This browser does not support notifications." });
 }
+
+// The Alerts block's words besides the four states (frame M8.1, founder-approved 2026-11-09), and its docs link.
+const NOTIFY_ALWAYS_ON = "Always on, in this tab: the title count, the amber Needs you group and the in-page chip. They can\u2019t be switched off (D10).";
+const NOTIFY_FIREFOX = "Firefox can't re-alert a notification it is replacing, so a new ask may arrive silently there.";
+const NOTIFY_PREF_ROWS = {
+  block: { title: "Blocked on you", help: "Asks to run, AWS sign-in expired, store locked. Stays on screen until you dismiss it." },
+  done: { title: "Done", help: "Finished its turn. Silent; 3 or more at once arrive as one, \u201c3 sessions finished\u201d." },
+  ended: { title: "Ended", help: "Ended or crashed without you ending it." },
+  message: { title: "Show the agent\u2019s message in notifications", help: "Your OS shows it on the lock screen and keeps it in its history. CuliBox hides known token shapes only, not paths, hostnames or account ids. Off: only what happened, like \u201cFinished its turn\u201d." },
+  chime: { title: "Chime when a session is blocked on you", help: "A short sound from this tab, also in the background, once you have clicked anywhere on the page." },
+};
+const NOTIFY_TEST_SENT = "Test sent. Nothing appeared? Check this browser\u2019s notification permission in your OS settings.";
+const NOTIFY_TEST_REFUSED = "The browser did not show a test notification. Check this browser\u2019s notification permission in your OS settings.";
+const REMOTE_ACCESS_DOC = "https://github.com/culiops/culibox/blob/main/docs/REMOTE-ACCESS.md";
 
 // notifyChecked: the toggle reads on only when the operator opted in AND the
 // browser still grants it (permission can be revoked behind our back).
@@ -452,6 +468,6 @@ function ssoDoneKeep(prevActivity, activity, exited) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, needsTransitions, NEEDS_REARM_MS,
-    notifyAvailability, notifyRowCopy, notifyChecked, notifyWanted, setNotifyWanted, notifyPoll,
+    notifyAvailability, notifyRowCopy, NOTIFY_PREF_ROWS, NOTIFY_ALWAYS_ON, NOTIFY_FIREFOX, REMOTE_ACCESS_DOC, notifyChecked, notifyWanted, setNotifyWanted, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }

@@ -2121,6 +2121,18 @@
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { margin: 2px 0 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); padding-left: 0; color: var(--fg); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block > * { margin: 0; }
+  /* The rest of the Alerts block (M8.1, paintNotifyMore in app.js; desktop only, the phone never builds it): under the reason, in the same two
+     columns. A column of kit .check rows (the title 13/20, its help 12/18 muted, 2px apart: the kit's .opt-card-title), 12px apart; the
+     Blocked / Done / Ended rows are 8px apart and the Firefox note sits 22px in (under the switch's words) beneath Blocked; Send test and its
+     result stack under the three rows. The always-on note and the docs link are 12/18 muted lines. */
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more { grid-column: 2 / 4; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); margin-top: var(--sp-3); min-width: 0; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more > * { max-width: 100%; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-classes { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-test { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); padding-left: 22px; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more :is(.notify-ff, .notify-status, .notify-note, .notify-docs) { margin: 0; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-ff { padding-left: 22px; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-status:empty { display: none; }
+  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-pref { cursor: pointer; }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
   /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
@@ -2137,6 +2149,7 @@
   @container (max-width: 480px) {
     #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
     #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 1; }
+    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more { grid-column: 1; overflow-wrap: anywhere; }
     #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 1; max-width: 100%; white-space: normal; }
     #page-host > #settings-modal.as-page .fs-card .stepper { max-width: 124px; min-width: 0; }
     #page-host > #settings-modal.as-page .fs-card .stepper .val { flex: 1 1 60px; min-width: 0; max-width: 60px; padding: 0; }
