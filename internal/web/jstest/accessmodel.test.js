@@ -476,6 +476,24 @@ test("access row: credentials outliving a drop are named while last_valid is in 
   assert.strictEqual(leftover(el(), inline), "", "a named elevation is not the inline binding's");
 });
 
+test("access row: a quick re-Elevate after a Drop shows the live window only, never the red leftover line beside it", () => {
+  // The cached status still says the dropped window's credentials are valid (active:false, a future last_valid),
+  // while the list entry already carries the new window: the row and the banner agree there is a window.
+  const aws = status({ approvals: [{ ts: NOW - 3 * 60000, action: "dropped", name: "culipulse-prod" }],
+    elevation: { active: false, name: "culipulse-prod", last_valid: iso(8) } });
+  assert.strictEqual(model({ session: open(23), aws }).creds.rows[0].window, null);
+  assert.strictEqual(model({ session: sess(), aws }).creds.rows[0].window.leftover, "Credentials already issued stay valid until " + hhmm(iso(8)),
+    "the same status with the window closed still names them");
+});
+
+test("elevBanner: without a clock it reads the real one, never a silent null", () => {
+  const live = sess({ aws_connections: [conn({ elevated_until: new Date(Date.now() + 23 * 60000).toISOString() })] });
+  const b = elevBanner(live, null);
+  assert.ok(b, "a window open now shows");
+  assert.match(b.leftText, /^2[23] min left$/);
+  assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: new Date(Date.now() - 60000).toISOString() })] }), null), null);
+});
+
 test("access row: after a Drop both lines can show, the leftover with it", () => {
   const ts = NOW - 2 * 60000;
   const aws = status({ approvals: [{ ts, action: "dropped", name: "culipulse-prod" }, granted({ ts: NOW - 20 * 60000 })],

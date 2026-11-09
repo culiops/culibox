@@ -131,8 +131,9 @@ function accNewest(list, keep) {
 // poll. The reason comes only from a loaded approval of that same connection:
 // before the status loads, after a failed read, or with a blank reason there is
 // no reason segment at all. `detail` is the span text the banner draws after the
-// connection name; `key` changes exactly when something drawn does.
-function elevBanner(s, aws, nowMs) {
+// connection name; `key` changes exactly when something drawn does. `nowMs` is the real
+// clock when a caller leaves it out, so a new caller cannot get a banner that never shows.
+function elevBanner(s, aws, nowMs = Date.now()) {
   const hhmm = accDep("hhmm", "./sessionrow.js");
   const minutesLeft = accDep("minutesLeft", "./sessionrow.js");
   const conns = accConns(s || {});
@@ -158,7 +159,7 @@ const ACC_WINDOW_ENDS = new Set(["expired", "ended", "dropped"]);
 const ACC_WINDOW_ACTIONS = new Set(["granted", "extended", ...ACC_WINDOW_ENDS]);
 
 // accWindowNote: the two lines a connection's row keeps once a window is over, or
-// null when there is nothing to say.
+// null when there is nothing to say (and always null while a window is open on it).
 //   ended     "Write access ended HH:MM" (a date first when not today): no window is
 //             open on this connection and its newest window approval is an
 //             expired / ended / dropped row (a later grant or extend hides it).
@@ -169,13 +170,15 @@ const ACC_WINDOW_ACTIONS = new Set(["granted", "extended", ...ACC_WINDOW_ENDS]);
 // approvals) they are empty, never a guess.
 function accWindowNote(c, aws, nowMs) {
   const hhmm = accDep("hhmm", "./sessionrow.js");
+  // A window open on this connection is the whole story (the banner and the row's "write (elevated)"): the
+  // cached status can still say the dropped window's credentials are valid after a quick re-Elevate, and a
+  // red leftover line beside a live banner would contradict it.
+  if (accDep("isElevated", "./sessionrow.js")(c, nowMs)) return null;
   let ended = "";
-  if (!accDep("isElevated", "./sessionrow.js")(c, nowMs)) {
-    const last = accNewest(aws && aws.approvals, (a) =>
-      ACC_WINDOW_ACTIONS.has(a.action) && (a.name || "") === c.conn);
-    if (last && ACC_WINDOW_ENDS.has(last.action) && Number.isFinite(Number(last.ts))) {
-      ended = "Write access ended " + accEventTime(Number(last.ts), nowMs);
-    }
+  const last = accNewest(aws && aws.approvals, (a) =>
+    ACC_WINDOW_ACTIONS.has(a.action) && (a.name || "") === c.conn);
+  if (last && ACC_WINDOW_ENDS.has(last.action) && Number.isFinite(Number(last.ts))) {
+    ended = "Write access ended " + accEventTime(Number(last.ts), nowMs);
   }
   let leftover = "";
   const e = aws && aws.elevation;
