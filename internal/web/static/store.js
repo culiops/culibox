@@ -304,10 +304,13 @@ function storeIsPhone() {
 }
 
 // storeFocusField: `Unlock…` on a strip. Opens the sidebar when it is collapsed to the rail, then focuses the
-// ONE passphrase field in the sidebar banner. False when there is no field (signed out, or no store banner).
+// ONE passphrase field in the sidebar banner; while signed out, the "Sign in again" button instead. False when
+// there is nothing to focus.
 function storeFocusField() {
   const root = document.documentElement;
   if (root && root.classList && root.classList.contains("sidebar-hidden") && typeof toggleSidebar === "function") toggleSidebar();
+  // Signed out the store banner is gone (M8.6b): Unlock… lands on the signed-out banner's Sign in again (R23).
+  if (storeLiveSignedOut() && typeof sysBannerFocusSignIn === "function") return sysBannerFocusSignIn();
   const slot = document.getElementById("store-banner-slot");
   const f = slot && slot.querySelector ? slot.querySelector(".storepass") : null;
   if (!f) return false;

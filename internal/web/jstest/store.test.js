@@ -379,6 +379,10 @@ async function storePage(opts) {
   FNode.prototype.addEventListener = FNode.prototype.addEventListener || function (t, f) { (this.handlers = this.handlers || {})[t] = f; };
   FNode.prototype.blur = FNode.prototype.blur || function () { if (this.doc.activeElement === this) this.doc.activeElement = null; };
   for (const f of ["notifymodel.js", "attention.js", "store.js", "sysbanner.js"]) new vm.Script(readStatic(f), { filename: f }).runInContext(ctx);
+  // The real card builders from app.js (a classic script that cannot be required): cut out by name.
+  const appSrc = readStatic("app.js");
+  const cut = (name) => { const m = new RegExp("function " + name + "\\s*\\(").exec(appSrc); let d = 0; for (let i = appSrc.indexOf("{", appSrc.indexOf(")", m.index)); i < appSrc.length; i++) { if (appSrc[i] === "{") d++; else if (appSrc[i] === "}" && --d === 0) return appSrc.slice(m.index, i + 1); } };
+  new vm.Script(cut("stripOpenButton") + "\n" + cut("renderNeedsBody"), { filename: "app.js(cut)" }).runInContext(ctx);
   await box.refreshStore();
   return { box, doc, els, ctx };
 }
@@ -542,4 +546,37 @@ test("T9 rail marker priority (R19): a system banner wins, else the store (amber
   // the phone has no rail marker either.
   const ph = await storePage({ phone: true });
   assert.strictEqual(ph.box.sysRailMarkerModel(), null);
+});
+
+test("T9 the REAL strip path (renderNeedsBody, inStrip) drops the repeated title and keeps Open terminal; the card keeps its title; the phone card is unchanged", async () => {
+  const p = await storePage();
+  const strip = p.box.renderNeedsBody({ id: "s1", name: "gap-sh2", need: "store_locked" }, { strip: true });
+  assert.strictEqual(strip.querySelector(".storetitle"), null);
+  assert.strictEqual(strip.querySelector(".storetxt").textContent, "Credentials from the store can\u2019t be fetched. Unlock it in the sidebar.");
+  assert.deepStrictEqual(strip.querySelectorAll(".btn").map((b) => b.textContent), ["Unlock\u2026", "Open terminal"]);
+  assert.strictEqual(strip.querySelectorAll("input").length, 0);
+  const card = p.box.renderNeedsBody({ id: "s1", name: "gap-sh2", need: "store_locked" }, {});
+  assert.strictEqual(card.querySelector(".storetitle").textContent, "Store locked");
+  // darwin through the real strip: the Keychain title stays (the label says Store locked, not the failure).
+  const d = await storePage({ state: { ...base, platform: "darwin", locked: false, unavailable: { kind: "access", reason: "r", fix: "Retry." } } });
+  const ds = d.box.renderNeedsBody({ id: "s1", name: "gap-sh2", need: "store_locked" }, { strip: true });
+  assert.strictEqual(ds.querySelector(".storetitle").textContent, "Keychain access failed");
+  assert.strictEqual(ds.querySelectorAll("input").length, 0);
+  // phone card: still title + sentence + form.
+  const ph = await storePage({ phone: true });
+  const mc = ph.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: true });
+  assert.strictEqual(mc.querySelector(".storetitle").textContent, "Store locked");
+  assert.strictEqual(mc.querySelectorAll("input").length, 1);
+});
+
+test("T9 R23: signed out, Unlock… opens a collapsed sidebar and focuses the signed-out banner's Sign in again", async () => {
+  const p = await storePage({ signedOut: true, hidden: true });
+  p.box.sysBannerSync();
+  const body = p.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: false, strip: true });
+  body.querySelector(".btn").click();
+  assert.strictEqual(p.box.calls.toggle, 1);
+  const act = p.els["sys-banner-slot"].querySelector('[data-act="signin"]');
+  assert.ok(act);
+  assert.strictEqual(act.textContent, "Sign in again");
+  assert.strictEqual(p.doc.activeElement, act);
 });

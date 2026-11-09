@@ -2547,7 +2547,7 @@ function renderNeedsBody(s, opts) {
   if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
   // A locked store: the card is the unlock form (store.js).
   if (c.unlock) {
-    const sb = renderStoreBody(s, { mobile: false });
+    const sb = renderStoreBody(s, { mobile: false, strip: inStrip });
     if (inStrip) {
       // The store card has no Open of its own; the strip always offers one.
       const sacts = document.createElement("div");

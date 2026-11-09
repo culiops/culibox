@@ -63,6 +63,7 @@ function sysBannerBuild(model) {
       b.type = "button";
       b.className = "btn btn-sm" + (a.primary ? " btn-primary" : "");
       b.appendChild(document.createTextNode(a.label));
+      b.dataset.act = a.id;
       b.onclick = () => sysBannerAct(a.id);
       acts.appendChild(b);
     }
@@ -110,6 +111,16 @@ function sysBannerSync() {
     sysBannerRailKey = rk;
     if (typeof renderRail48 === "function") renderRail48();
   }
+}
+
+// sysBannerFocusSignIn: a store strip's Unlock… while signed out (R23) has no field to reach; it lands on the
+// signed-out banner's "Sign in again" button instead. False when that banner is not drawn.
+function sysBannerFocusSignIn() {
+  const slot = document.getElementById("sys-banner-slot");
+  const b = slot && slot.querySelector ? slot.querySelector('[data-act="signin"]') : null;
+  if (!b) return false;
+  b.focus();
+  return true;
 }
 
 // The rail marker's model: the first banner in display order (the system one, else the store's, R19).
