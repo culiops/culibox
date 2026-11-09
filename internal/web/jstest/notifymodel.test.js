@@ -277,7 +277,7 @@ test("property: 200 generated asks never leak a command, a path, arguments or th
     const head = heads[rnd(heads.length)];
     const sep = rnd(2) ? " " : "";
     const withParen = rnd(2) === 1;
-    const a = withParen ? head + sep + "(ARGMARK " + "/ARGPATH)" : head + (rnd(2) ? " ARGMARK /ARGPATH" : "");
+    const a = withParen ? head + sep + "(ARGMARK " + "/ARGPATH)" : head + (head && rnd(2) ? " ARGMARK /ARGPATH" : "");
     seen[a.indexOf(" ") >= 0 ? "spaced" : "unspaced"]++;
     seen[withParen ? "paren" : "noParen"]++;
     if (a === "") seen.empty++;
