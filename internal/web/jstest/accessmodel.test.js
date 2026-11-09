@@ -264,6 +264,21 @@ test("accTone: containment refusals are neutral, errors stay red", () => {
   for (const o of ["revoked", "", undefined]) assert.strictEqual(accTone(o), "", String(o));
 });
 
+// store_unavailable: the macOS Keychain store key could not be read (broker/audit.go:57; a row outcome at broker/static.go:148
+// and broker/github.go:495). Something broke, so it is red, as Activity's "failed" already draws the same event (M1).
+test("accTone: store_unavailable is an error, red in the Access events table, like store_locked beside it (M1)", () => {
+  assert.strictEqual(accTone("store_unavailable"), "bad");
+  assert.strictEqual(accTone("store_locked"), "bad");
+  assert.strictEqual(accTone("store_unavailable_x"), "", "an exact word, not a prefix");
+  const aws = status({
+    recent: [{ time: iso(-2), provider: "aws", entry: "culipulse-prod", outcome: "store_unavailable", elevated: false }],
+    static_recent: [{ time: iso(-1), subject: "deploy-token", outcome: "store_unavailable" }],
+  });
+  const rows = model({ session: sess(), aws }).events.filter((e) => e.outcome === "store unavailable");
+  assert.strictEqual(rows.length, 2, "an AWS row and a static-token row");
+  assert.ok(rows.every((e) => e.tone === "bad"), JSON.stringify(rows.map((e) => e.tone)));
+});
+
 test("accessModel: a refused approval row has no tone", () => {
   const approvals = [
     { ts: NOW - 1000, action: "refused", name: "culipulse-prod" },

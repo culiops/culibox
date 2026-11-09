@@ -50,13 +50,15 @@ function accConns(s) {
 
 // accTone: the colour role of an outcome word. Green only for a success, red
 // only for a real error; a denial or refusal is containment working, so it is
-// neutral like anything else.
+// neutral like anything else. store_unavailable (the macOS Keychain store key
+// could not be read) is an error, as Activity's "failed" already draws it; the
+// Audit page takes its tone from here too (auditmodel.js audTone).
 const ACC_OK = new Set(["minted", "probe_minted", "fetched"]);
 function accTone(outcome) {
   const o = String(outcome || "");
   if (ACC_OK.has(o)) return "ok";
   if (o === "revoked" || o === "") return "";
-  if (/_error$|_failed$|^sso_expired$|^rate_limited$|^sts_error$|^store_locked$|^unresolved$|^not_installed$/.test(o)) return "bad";
+  if (/_error$|_failed$|^sso_expired$|^rate_limited$|^sts_error$|^store_locked$|^store_unavailable$|^unresolved$|^not_installed$/.test(o)) return "bad";
   return "";
 }
 

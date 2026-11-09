@@ -132,6 +132,18 @@ test("auditRowView: refusals are neutral, errors and live grants red", () => {
   assert.strictEqual(auditRowView(ev({ kind: "settings", outcome: "ok" }), {}).tone, "ok");
 });
 
+// store_unavailable is a real error (the macOS Keychain store key could not be read), as Activity's red "failed" and the
+// Access events table draw it; the Audit page takes its tone from the same accTone (tone only, the page's DOM is Plan 5's) (M1).
+test("auditRowView: store_unavailable is bad, and says so in words", () => {
+  for (const kind of ["credential", "store"]) {
+    const v = auditRowView(ev({ kind, outcome: "store_unavailable" }), {});
+    assert.strictEqual(v.tone, "bad", kind);
+    assert.strictEqual(v.outcome, "store unavailable", kind);
+    assert.strictEqual(v.elevated, false, kind);
+  }
+  assert.strictEqual(auditRowView(ev({ kind: "credential", outcome: "store_unavailable", count: 3 }), {}).tone, "bad");
+});
+
 test("auditRowView: sso_expired is bad (the Access view's rule, not amber)", () => {
   assert.strictEqual(auditRowView(ev({ outcome: "sso_expired" }), {}).tone, "bad");
   assert.strictEqual(auditRowView(ev({ outcome: "sso_expired" }), {}).outcome, "sso expired");
