@@ -497,12 +497,19 @@
     border-bottom: 1px solid rgba(240,106,106,.45); color: var(--fg); font-size: var(--t-sm); flex: none; }
   .elev strong { color: var(--red); font-weight: var(--w-semibold); }
   /* Added here, not in the kit: the banner stays ONE line in a narrow pane (four panes at 1280, a long connection
-     name, a 200-character reason). The text parts ellipsize (their full text is in the title); the spacer keeps
-     its grow, which is why this sets no flex; Drop now never shrinks, and the banner never scrolls sideways. */
+     name, a 200-character reason). The text parts ellipsize (their full text is in the title), Drop now never shrinks,
+     and the banner never scrolls sideways. What each part does with the room is set per part, below. */
   .elev > strong, .elev > span:not(.ph-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The detail gives way first: the account that has write is the more important text, so the name keeps its width up to
-     60% of the banner (a very long name still ellipsizes, its title holds the whole name) and the span takes the cut. */
-  .elev > strong { flex-shrink: 0; max-width: 60%; }
+  /* Under pressure the detail gives way first, then the name, and Drop now never (the account that has write is the more
+     important text). The name is capped at 60% of the banner (a very long name ellipsizes; its title holds the whole name)
+     and otherwise keeps the default flex: it is never pinned, so in a very narrow pane it shrinks too and Drop now stays
+     whole. The detail starts at nothing and GROWS into the room that the name and Drop now leave, so it is already empty
+     when the name starts to shrink, and the name's only shrink is the deficit itself. (A large flex-shrink on the detail
+     instead would still shave a fraction of a pixel off a name that fits, which gives it an ellipsis.) The kit spacer is
+     inert here, or it would share the free space with the detail and cut the detail short. */
+  .elev > strong { max-width: 60%; }
+  .elev > span:not(.ph-spacer) { flex: 1 1 0px; }
+  .elev > .ph-spacer { flex: none; }
   /* Drop now sits on the frame's 20px line (primitives.css's legacy `.btn` font shorthand leaves `normal`, a pixel low). It is
      this surface's own, not the kit .btn's: a kit-wide line would change Settings' button heights. */
   .elev .btn { flex: none; line-height: var(--lh-md); }

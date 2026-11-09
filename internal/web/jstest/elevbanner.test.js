@@ -927,36 +927,63 @@ test("the kit's .elev, .elev strong and .ph-spacer are in the kit fence, verbati
   assert.strictEqual(rule(".elev"), "display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--red-tint); border-bottom: 1px solid rgba(240,106,106,.45); color: var(--fg); font-size: var(--t-sm); flex: none;");
   assert.strictEqual(rule(".elev strong"), "color: var(--red); font-weight: var(--w-semibold);");
   assert.strictEqual(rule(".ph-spacer"), "flex: 1 1 auto;");
-  // One line in a narrow pane: the text parts ellipsize, the spacer keeps its grow, Drop now never shrinks.
+  // One line in a narrow pane: the text parts ellipsize, Drop now never shrinks. What each part does with the room is
+  // its own rule (see the M3 test below), so the shared one sets no flex at all.
   const text = rule(".elev > strong, .elev > span:not(.ph-spacer)");
   assert.ok(text, "the banner's text parts have one shared rule");
   for (const d of ["min-width: 0", "overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) assert.ok(text.includes(d), d);
-  assert.doesNotMatch(text, /flex:/, "no flex shorthand: it would override .ph-spacer's grow");
+  assert.doesNotMatch(text, /flex/, "the shared rule sets no flex: the name and the detail each have their own");
   assert.match(rule(".elev .btn"), /flex: none/);
 });
 
-// M3: gate O8 measured the connection name getting 99 of 471 px in a 491 px pane while the detail kept 265. The account
-// that has write is the more important text, so the detail gives way first; only a very long name ellipsizes.
-test("in a narrow pane the detail span gives way before the connection name; a very long name still ellipsizes at 60% (M3)", () => {
-  const strong = rule(".elev > strong");
-  assert.ok(strong, "the connection name has its own rule");
-  assert.match(strong, /flex-shrink: 0/, "the name does not shrink with the span");
-  assert.match(strong, /max-width: 60%/, "but never takes more than 60% of the banner");
-  assert.doesNotMatch(strong, /flex:/);
-  // Its ellipsis comes from the shared text rule (overflow hidden, ellipsis, nowrap), which it still matches.
+// M3 and its re-review: gate O8 measured the connection name getting 99 of 471 px in a 491 px pane while the detail kept
+// 265. The account that has write is the more important text, so under pressure the detail gives way first, then the name,
+// and Drop now never. Pinning the name (flex-shrink: 0 under a 60% cap) clipped Drop now off the pane below ~269 px, and a
+// large flex-shrink on the span would still shave a fraction of a pixel off a name that fits (and so give it an ellipsis).
+// Both are avoided by flex-basis: the detail starts at nothing and GROWS into the room that the name and Drop now leave,
+// so it is already at nothing when the name starts to shrink, and the name's only shrink is the deficit itself.
+test("in a narrow pane the banner trims its detail, then the connection name, and never cuts off Drop now (M3)", () => {
+  // The name: the default flex (it can shrink, but only once the detail is gone), capped at 60%, its ellipsis shared.
+  assert.strictEqual(rule(".elev > strong"), "max-width: 60%;", "a cap and nothing else: not pinned with flex-shrink: 0");
+  // The detail: base 0, grows into whatever is left; its min-width: 0 and ellipsis are the shared rule's.
+  assert.strictEqual(rule(".elev > span:not(.ph-spacer)"), "flex: 1 1 0px;");
+  // The banner's spacer is the kit's flex: 1 1 auto; here the detail does the filling, so the spacer must take none of the
+  // room (it would otherwise share the free space with the detail and cut the detail short).
+  assert.strictEqual(rule(".ph-spacer"), "flex: 1 1 auto;", "the kit's own rule is untouched");
+  assert.strictEqual(rule(".elev > .ph-spacer"), "flex: none;");
+  assert.strictEqual(rule(".elev .btn"), "flex: none; line-height: var(--lh-md);", "Drop now never shrinks");
   const text = rule(".elev > strong, .elev > span:not(.ph-spacer)");
-  for (const d of ["overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) assert.ok(text.includes(d), d);
-  assert.strictEqual(rule(".elev > span:not(.ph-spacer)"), null, "the span has no rule that would stop it shrinking");
-  // The title keeps the full name when the text is cut.
+  for (const d of ["min-width: 0", "overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"]) assert.ok(text.includes(d), d);
+
+  // Nothing in the banner but the detail and the name can shrink. Every child the banner builds has a rule above.
   const { cell, sync } = page();
   sync(sess(23, { aws_connections: [conn({ name: "a-very-long-connection-name-for-a-narrow-pane", elevated_until: iso(23) })] }));
+  const kids = cell._elev.children.map((c) => c.tag + (c.className ? "." + c.className.split(" ").join(".") : ""));
+  assert.deepStrictEqual(kids, ["strong", "span", "span.ph-spacer", "button.btn.btn-danger.btn-sm"]);
+  const shrinks = (decl) => {
+    const m = /flex:\s*(\S+)\s+(\S+)\s+(\S+)|flex:\s*none|flex-shrink:\s*(\S+?);/.exec(decl || "");
+    if (!m) return true; // no flex declaration: the initial flex-shrink 1
+    if (/flex:\s*none/.test(m[0])) return false;
+    return (m[2] !== undefined ? m[2] : m[4]) !== "0";
+  };
+  assert.strictEqual(shrinks(rule(".elev > strong")), true, "the name can shrink (the default)");
+  assert.strictEqual(shrinks(rule(".elev > .ph-spacer")), false, "the spacer cannot");
+  assert.strictEqual(shrinks(rule(".elev .btn")), false, "Drop now cannot");
+  // The detail has a shrink factor but no size to shrink from: its base is 0, so only the name gives way once it is empty.
+  assert.match(rule(".elev > span:not(.ph-spacer)"), /^flex: 1 1 0px;$/);
+  // Both texts carry their full text in a title for when they are cut.
   assert.strictEqual(cell._elev.children[0].title, "Write access to a-very-long-connection-name-for-a-narrow-pane");
-  // Desktop only: the rule sits in desktop.css's one @media (min-width: 701px) block, and app.css has none of it.
+  assert.strictEqual(cell._elev.children[1].title, cell._elev.children[1].textContent);
+
+  // Desktop only: every rule sits in desktop.css's one @media (min-width: 701px) block, and app.css has none of it.
   const full = read("desktop.css");
-  const at = full.indexOf(".elev > strong { flex-shrink: 0");
-  assert.ok(at > full.indexOf("@media (min-width: 701px)"), "inside the desktop block");
+  const opener = full.indexOf("@media (min-width: 701px)");
+  for (const r of [".elev > strong { max-width: 60%; }", ".elev > span:not(.ph-spacer) { flex: 1 1 0px; }", ".elev > .ph-spacer { flex: none; }"]) {
+    assert.ok(full.indexOf(r) > opener, r + " is inside the desktop block");
+  }
   assert.strictEqual((full.match(/@media \(min-width: 701px\)/g) || []).length, 1);
   assert.doesNotMatch(read("app.css"), /\.elev(?![\w-])/);
+  assert.doesNotMatch(css, /\.elev[^{]*\{[^}]*flex-shrink:\s*0/, "no pin on any banner part but through flex: none");
 });
 
 test("the old Access-view banner rules are gone", () => {
