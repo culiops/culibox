@@ -62,7 +62,7 @@ function page(boxRuntime, metaLoaded = true) {
   const ctx = vm.createContext({
     // The server sends a clone's source as an absolute path; window.HOME_DIR is what every other path on the page is
     // shortened with (fsops.js shortPath), so the touches line reads "~/…" in both places (frame M4.1).
-    document: doc, console, profiles: FIXTURES, boxRuntime, window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
+    document: doc, console, profiles: FIXTURES, boxRuntime, boxUnavailableReason: "", window: { HOME_DIR: "/home/u" }, PLIST_SEARCH_MIN: 99,
     $: (id) => els[id], notHomeLabel: () => "", notHomeTitle: () => "", openSpawnDialog: () => {},
     metaLoaded,
   });

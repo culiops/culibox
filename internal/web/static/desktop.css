@@ -1342,6 +1342,19 @@
     grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
     font-size: var(--t-sm); font-weight: 600; background: var(--raise); color: var(--muted);
   }
+  /* First run (M8.8c, DD§B10): a 560px column, gap 16, borderless 90px step cards (padding 16, number column 24,
+     column gap 16, a 20px title over 18px description lines), the sub-line 6px under the title. */
+  .empst-first { max-width: 560px; padding: 30px 0; gap: 16px; }
+  .empst-first .empst-title { line-height: var(--lh-xl); }
+  .empst-first .empst-sub { margin-top: -10px; line-height: var(--lh-md); }
+  .empst-first .empst-steps { gap: 16px; }
+  .empst-first .empst-step { grid-template-columns: 24px minmax(0, 1fr) auto; gap: 2px 16px; padding: 16px; border: 0; }
+  .empst-first .empst-t { line-height: var(--lh-md); }
+  .empst-first .empst-d { line-height: var(--lh-sm); }
+  .empst-first .empst-hint { line-height: var(--lh-sm); }
+  /* Docker not found: the server's plain reason, then the install link, under the description. */
+  .empst-why { grid-column: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .empst-reason { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
   .empst-hint { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: var(--t-sm); }
   .empst-kbd {
     font: var(--t-xs) var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;

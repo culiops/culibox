@@ -5819,7 +5819,7 @@ function emptyNoneEl(m) {
 }
 
 function emptyFirstEl() {
-  const root = emptyEl("div", "placeholder empst");
+  const root = emptyEl("div", "placeholder empst empst-first");
   root.append(
     emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
@@ -5834,12 +5834,31 @@ function emptyFirstEl() {
     return el;
   };
   const steps = emptyEl("div", "empst-steps");
-  steps.append(
-    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+  // Desktop only (the phone never shows this node; the guard keeps it so). Metadata has answered and there is no
+  // box layer: step 2 keeps its D18 copy and adds the server's plain reason (a text node), the install link and a
+  // disabled button (DD§A11, DC§9). Nothing is claimed before /api/meta answers, and an empty reason draws no line.
+  const noBox = drawerDesktop() && metaLoaded && !boxRuntime;
+  const step2 = step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
     // The same press as "+ new profile" in Settings: one profile form. A new
     // profile already opens on the box tier.
-    step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
-      () => { openSettings("manage"); $("pf-new").click(); }),
+    () => { openSettings("manage"); $("pf-new").click(); });
+  if (noBox) {
+    const btn = step2.querySelector("button");
+    btn.onclick = null;
+    // aria-disabled + title, as every desktop control that cannot act yet (setDisabledReason): the reason stays hoverable.
+    setDisabledReason(btn, true, boxUnavailableReason, true);
+    const why = emptyEl("div", "empst-why");
+    if (boxUnavailableReason) why.append(emptyEl("span", "empst-reason", boxUnavailableReason));
+    const a = emptyEl("a", "link", "How to install Docker");
+    a.href = "https://docs.docker.com/engine/install/";
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    why.append(a);
+    step2.append(why);
+  }
+  steps.append(
+    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+    step2,
     step(3, "Connect your cloud", "AWS SSO, or GitHub (an App or a token). Read-only by default; you choose where agents may write.", "Add credentials", "btn",
       () => openSettings("creds")),
   );
@@ -5860,7 +5879,7 @@ function desktopEmptyState() {
 }
 
 function emptyStateKey(m) {
-  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? "" : boxUnavailableReason, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
     return [n, p ? profileTouchLine(p, metaLoaded ? boxRuntime : undefined) : ""];
   })]);
