@@ -251,7 +251,7 @@ function notifyLocalhost(origin) {
 //   heading    the list's heading ("How to enable" on http), else ""
 //   steps      the list: {lead?, text, mono?}; `mono` names the parts of `text` that are machine text, in order
 //   checkAgain the browser can be asked again (blocked), so the row offers Check again
-// The "ended" class is left out of the helper on purpose: nothing fires on it today (UI plan 4, my call 5).
+// The helper names all three classes (frame M8.1b): Ended fires now (UI plan 7).
 function notifyRowCopy(state, wantedOn, origin, permission) {
   const copy = (o) => Object.assign({ helper: "", para: "", paraMono: [], heading: "", steps: [], checkAgain: false }, o);
   if (state === "insecure") {
@@ -281,7 +281,7 @@ function notifyRowCopy(state, wantedOn, origin, permission) {
   if (state === "ready") {
     // (c): on and granted, the class rows below say which sessions, so the line no longer lists them (frame M8.1).
     if (wantedOn && permission === "granted") return copy({ helper: "When this tab is not focused. This browser only." });
-    const on = "When this tab is not focused: blocked on you or done. This browser only.";
+    const on = "When this tab is not focused: blocked on you, done, ended. This browser only.";
     return copy({ helper: wantedOn || permission === "granted" ? on : on + " Your browser asks for permission when you turn it on." });
   }
   return copy({ helper: "This browser does not support notifications." });
@@ -298,7 +298,7 @@ const NOTIFY_PREF_ROWS = {
   chime: { title: "Chime when a session is blocked on you", help: "A short sound from this tab, also in the background, once you have clicked anywhere on the page." },
 };
 const NOTIFY_TEST_SENT = "Test sent. Nothing appeared? Check this browser\u2019s notification permission in your OS settings.";
-const NOTIFY_TEST_REFUSED = "The browser did not show a test notification. Check this browser\u2019s notification permission in your OS settings.";
+const NOTIFY_TEST_NOTHING = "Nothing appeared? Check this browser\u2019s notification permission in your OS settings.";
 const REMOTE_ACCESS_DOC = "https://github.com/culiops/culibox/blob/main/docs/REMOTE-ACCESS.md";
 
 // notifyChecked: the toggle reads on only when the operator opted in AND the

@@ -2121,18 +2121,42 @@
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { margin: 2px 0 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); padding-left: 0; color: var(--fg); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block > * { margin: 0; }
-  /* The rest of the Alerts block (M8.1, paintNotifyMore in app.js; desktop only, the phone never builds it): under the reason, in the same two
-     columns. A column of kit .check rows (the title 13/20, its help 12/18 muted, 2px apart: the kit's .opt-card-title), 12px apart; the
-     Blocked / Done / Ended rows are 8px apart and the Firefox note sits 22px in (under the switch's words) beneath Blocked; Send test and its
-     result stack under the three rows. The always-on note and the docs link are 12/18 muted lines. */
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more { grid-column: 2 / 4; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); margin-top: var(--sp-3); min-width: 0; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more > * { max-width: 100%; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-classes { display: flex; flex-direction: column; gap: var(--sp-2); }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-test { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); padding-left: 22px; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more :is(.notify-ff, .notify-status, .notify-note, .notify-docs) { margin: 0; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-ff { padding-left: 22px; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-status:empty { display: none; }
-  #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-more .notify-pref { cursor: pointer; }
+  /* The Alerts section (M8.1 `.m8-stack` + `.m8-al`, DD B6; built by notifyAlertsSection/paintNotifyMore in app.js, desktop only): its own
+     block under the size card, 12px below it. The title and the always-on note are 2px apart. The card is the kit's .card, padding 4px 20px;
+     a row is `120px minmax(0, 1fr) auto` with 24px between, 12px above and below, top-aligned, a hairline between rows, the label 1px down to
+     sit on the switch's first line. The Notifications row's middle column stacks the master, its reason (12px under), the three class rows
+     (8px apart; the Firefox note 22px in, under Blocked's words) and the result of Send test; Send test is the third column. The size card's
+     own Alerts row is hidden: its switch and reason now live in this section. Below 480px (the section is the container) a row is one column. */
+  #page-host > #settings-modal.as-page > #settings > .fs-card > #fsrow-alerts { display: none; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); container-type: inline-size; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section > .alerts-head { display: flex; flex-direction: column; gap: 2px; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section > .alerts-head > * { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card { padding: 4px 20px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; padding: var(--sp-3) 0; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #alerts-row-n { border-top: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-rows { display: contents; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-lbl { padding-top: 1px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why { margin: 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); padding-left: 0; color: var(--fg); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why.notify-block > * { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-more { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-more:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-classes { display: flex; flex-direction: column; gap: var(--sp-2); padding-left: 22px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card :is(.notify-ff, .notify-status) { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-ff { padding-left: 22px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-status:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-pref { cursor: pointer; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-act:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-act .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
+  }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
   /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
@@ -2149,7 +2173,6 @@
   @container (max-width: 480px) {
     #page-host > #settings-modal.as-page .fs-card > :is(.fsrow, p.card-row) { grid-template-columns: minmax(0, 1fr); row-gap: 8px; }
     #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > :is(.notify-opt, #notify-why) { grid-column: 1; }
-    #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-more { grid-column: 1; overflow-wrap: anywhere; }
     #page-host > #settings-modal.as-page .fs-card > p.card-row > .btn { grid-column: 1; max-width: 100%; white-space: normal; }
     #page-host > #settings-modal.as-page .fs-card .stepper { max-width: 124px; min-width: 0; }
     #page-host > #settings-modal.as-page .fs-card .stepper .val { flex: 1 1 60px; min-width: 0; max-width: 60px; padding: 0; }

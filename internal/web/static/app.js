@@ -3529,27 +3529,88 @@ function notifyPrefRow(name, prefs) {
   return lab;
 }
 
-// paintNotifyMore draws the rest of Settings > Appearance > Alerts under the reason (#notify-more, desktop only: the phone
-// hides the row and keeps its DOM as it was). Frame M8.1: with the master on, the Blocked / Done / Ended rows (the Firefox note
-// under Blocked), Send test and its result, and the message-text switch; in every state the chime, then the always-on note.
-// On an http page (a) the chime is the first row, the only sound a background tab can make there, and the page links the
-// remote-access guide. `state` is notifyAvailability's; `on` is whether the master is on.
-function paintNotifyMore(row, state, on) {
-  let more = document.getElementById("notify-more");
-  if (!more) {
-    more = document.createElement("div");
-    more.id = "notify-more";
-    row.appendChild(more);
-  }
-  more.textContent = "";
+// notifyAlertsSection builds, once, the desktop's Alerts section (frame M8.1, DD A2/B6): a title, the always-on note under it, and a card
+// of rows on a label column. The master switch and its reason (#notify-toggle's label, #notify-why) move into the Notifications row
+// (ids kept, so initNotifyToggle still finds them); what is left of the size card's Alerts row is hidden by desktop.css. Desktop only:
+// the phone hides that row and never builds this.
+function notifyAlertsSection(row, cb, why) {
+  let sec = document.getElementById("alerts-section");
+  if (sec) return sec;
+  const el = (tag, cls, text, id) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (id) n.id = id;
+    if (text) n.textContent = text;
+    return n;
+  };
+  sec = el("section", "alerts-section", "", "alerts-section");
+  const head = el("div", "alerts-head");
+  head.appendChild(el("h2", "section-title", "Alerts"));
+  head.appendChild(el("p", "notify-note t-sm muted", NOTIFY_ALWAYS_ON));
+  sec.appendChild(head);
+  const card = el("div", "card alerts-card");
+  const rowN = el("div", "alerts-row", "", "alerts-row-n");
+  rowN.appendChild(el("span", "alerts-lbl t-md w-500", "Notifications"));
+  const col = el("div", "alerts-col", "", "alerts-col");
+  const holder = cb.parentNode;
+  col.appendChild(holder && holder.classList && holder.classList.contains("notify-opt") ? holder : cb);
+  col.appendChild(why);
+  col.appendChild(el("div", "notify-more", "", "notify-more"));
+  rowN.appendChild(col);
+  rowN.appendChild(el("div", "alerts-act", "", "alerts-act"));
+  card.appendChild(rowN);
+  card.appendChild(el("div", "alerts-rest", "", "notify-rows"));
+  sec.appendChild(card);
+  const fsCard = row.parentNode;
+  if (fsCard && fsCard.parentNode) fsCard.after(sec);
+  else if (fsCard) fsCard.appendChild(sec);
+  return sec;
+}
+
+// paintNotifyMore draws the rest of the Alerts section (desktop only), repainted on every initNotifyToggle: with the master on, the
+// Blocked / Done / Ended rows (the Firefox note under Blocked) and the Send test result in the Notifications row, Send test in its
+// third column, then the Message text row; the chime row in every state ("Sound"; on an http page (a) it is the row "Meanwhile, in this
+// tab", after the how-to-enable list, the only sound a background tab can make there). `state` is notifyAvailability's, `on` is the master,
+// `copy` is notifyRowCopy's (the how-to step that names HTTPS carries the remote-access link, words unchanged).
+function paintNotifyMore(row, state, on, copy) {
+  const cb = $("notify-toggle"), why = $("notify-why");
+  const sec = notifyAlertsSection(row, cb, why);
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text) n.textContent = text;
     return n;
   };
+  const more = document.getElementById("notify-more"), act = document.getElementById("alerts-act"), rest = document.getElementById("notify-rows");
+  more.textContent = "";
+  act.textContent = "";
+  rest.textContent = "";
   const prefs = readPrefs();
-  if (state === "insecure") more.appendChild(el("span", "t-sm w-600", "Meanwhile, in this tab"));
+  const line = (label, labelCls, ...children) => {
+    const r = el("div", "alerts-row");
+    r.appendChild(el("span", labelCls, label));
+    const c = el("div", "alerts-col");
+    for (const ch of children) c.appendChild(ch);
+    r.appendChild(c);
+    r.appendChild(el("div", "alerts-act"));
+    rest.appendChild(r);
+  };
+  if (state === "insecure" && copy && copy.steps[1]) {
+    // "put HTTPS in front of CuliBox yourself" links the guide; the step's words are the copy's, split around it.
+    const PHRASE = "put HTTPS in front of CuliBox yourself";
+    const step = copy.steps[1], at = step.text.indexOf(PHRASE);
+    const body = why.all((n) => n.tag === "span" && n.className === "muted").filter((n) => n.textContent === step.text)[0];
+    if (body && at >= 0) {
+      body.textContent = "";
+      notifyMono(body, step.text.slice(0, at), []);
+      const a = el("a", "link", PHRASE);
+      a.href = REMOTE_ACCESS_DOC;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      body.appendChild(a);
+      notifyMono(body, step.text.slice(at + PHRASE.length), step.mono);
+    }
+  }
   if (state === "ready" && on) {
     const group = el("div", "notify-classes");
     group.setAttribute("role", "group");
@@ -3559,32 +3620,22 @@ function paintNotifyMore(row, state, on) {
     group.appendChild(notifyPrefRow("done", prefs));
     group.appendChild(notifyPrefRow("ended", prefs));
     more.appendChild(group);
-    const test = el("div", "notify-test");
-    const btn = el("button", "btn btn-sm", "Send test");
-    btn.type = "button";
     const status = el("p", "notify-status t-sm muted");
     status.setAttribute("role", "status");
+    more.appendChild(status);
+    const btn = el("button", "btn btn-sm", "Send test");
+    btn.type = "button";
     btn.onclick = () => {
       // The same builder as the real ones (notifymodel.js deliverNotes); a click on this one only closes it.
       const note = { title: "CuliBox", body: "Test notification", tag: "ab:test", options: { tag: "ab:test" } };
-      status.textContent = deliverNotes([note], typeof Notification === "undefined" ? null : Notification, null) ? NOTIFY_TEST_SENT : NOTIFY_TEST_REFUSED;
+      status.textContent = deliverNotes([note], typeof Notification === "undefined" ? null : Notification, null) ? NOTIFY_TEST_SENT : NOTIFY_TEST_NOTHING;
     };
-    test.appendChild(btn);
-    test.appendChild(status);
-    more.appendChild(test);
-    more.appendChild(notifyPrefRow("message", prefs));
+    act.appendChild(btn);
+    line("Message text", "alerts-lbl t-md w-500", notifyPrefRow("message", prefs));
   }
-  more.appendChild(notifyPrefRow("chime", prefs));
-  more.appendChild(el("p", "notify-note t-sm muted", NOTIFY_ALWAYS_ON));
-  if (state === "insecure") {
-    const docs = el("p", "notify-docs t-sm muted", "HTTPS in front of CuliBox, or an SSH tunnel: ");
-    const a = el("a", "link", "Remote access");
-    a.href = REMOTE_ACCESS_DOC;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    docs.appendChild(a);
-    more.appendChild(docs);
-  }
+  if (state === "insecure") line("Meanwhile, in this tab", "alerts-lbl t-sm w-600", notifyPrefRow("chime", prefs));
+  else line("Sound", "alerts-lbl t-md w-500", notifyPrefRow("chime", prefs));
+  return sec;
 }
 
 // initNotifyToggle wires Settings → Appearance → Desktop notifications: the switch, and the reason under it that
@@ -3600,13 +3651,13 @@ function initNotifyToggle(refused) {
   cb.checked = avail.enabled && notifyChecked(notifyWanted(), perm);
   const copy = notifyRowCopy(avail.state, cb.checked, window.location.origin, perm);
   if (refused && avail.state === "ready") copy.helper = "Permission was not granted, so notifications stay off.";
-  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked);
   paintNotifyWhy(why, copy, () => {
     initNotifyToggle();
     // The button that took the press was redrawn or is gone: keep the keyboard on its successor, or on the switch it unlocked.
     const next = why.querySelector(".btn") || (cb.disabled ? null : cb);
     if (next) next.focus();
   });
+  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked, copy);
   cb.onchange = async () => {
     if (!cb.checked) { setNotifyWanted(false); initNotifyToggle(); return; }
     let p = "denied";

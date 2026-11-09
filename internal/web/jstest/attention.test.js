@@ -207,13 +207,12 @@ test("notifyRowCopy, blocked in the browser: only the browser can undo it, per b
 });
 
 test("notifyRowCopy, available: one line that says what it does and that it is per browser (M8.1 b, c)", () => {
-  const on = "When this tab is not focused: blocked on you or done. This browser only.";
+  const on = "When this tab is not focused: blocked on you, done, ended. This browser only.";
   const c = notifyRowCopy("ready", true, "https://box.example");
   assert.strictEqual(c.helper, on);
   assert.deepEqual([c.para, c.heading, c.steps, c.checkAgain, c.paraMono], ["", "", [], false, []]);
-  // Off: the same line, then what turning it on does. Not "ended": that class does not fire today (my call 5).
+  // Off: the same line, then what turning it on does. All three classes are named: Ended fires now (UI plan 7, DD A3).
   assert.strictEqual(notifyRowCopy("ready", false, "https://box.example").helper, on + " Your browser asks for permission when you turn it on.");
-  assert.doesNotMatch(on, /ended/i);
   // Permission already granted and the switch off: turning it on asks nothing, so the line does not say it will.
   assert.strictEqual(notifyRowCopy("ready", false, "https://box.example", "granted").helper, on);
   assert.strictEqual(notifyRowCopy("ready", false, "https://box.example", "default").helper, on + " Your browser asks for permission when you turn it on.");
