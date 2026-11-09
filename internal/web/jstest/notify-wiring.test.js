@@ -244,6 +244,7 @@ test("restart: a restart that gets a new id is silent for the old one; a kill ma
 test("app.js: a restart request that throws clears the mark; a null /api/sessions body is not a list", () => {
   assert.match(lift("restartSessionRun"), /catch \(e\) \{ endedByMe\.delete\(s\.id\); throw e; \}/);
   const src = lift("refreshSessions");
-  assert.match(src, /if \(!Array\.isArray\(sessions\)\) return null;\n\s+lastSessions = sessions;/);
+  // R18: the poll counts as OK only after the Array check; a non-Array 200 is a failed poll (not signed out).
+  assert.match(src, /if \(!Array\.isArray\(sessions\)\) \{ sysPollFailed\(null\); signalAttention\(\); return null; \}\n\s+sysPollOk\(\);\n\s+lastSessions = sessions;/);
   assert.doesNotMatch(src, /sessions \|\| \[\]/);
 });

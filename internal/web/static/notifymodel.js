@@ -291,6 +291,60 @@ function titleState(sessions, sys, env, now) {
   return { title, icon: ring ? icon + "-ring" : icon };
 }
 
+// ---- The system banner and the rail marker (DD§A8 M8.6/6b/6c, §B1; R19) ----
+//
+// sysBannerModel(sys, now, fmt) -> null, or the ONE system banner the sidebar shows:
+//   { kind, key, title, body, dot, stale, dismiss, actions: [{id, label, primary}] }
+// sys is app.js's `sys` record (lastOkAt, failSince, signedOut, paused, bootVersion, version,
+// dismissedVersion); fmt turns a raw version into its short label (versionLabel). Priority: signed out >
+// unreachable > paused > updated. Unreachable follows nmOffline (12 s without an OK poll), signed out is
+// immediate, paused is set by the page after a hidden period and cleared by the next OK poll. Ages come from
+// the client's lastOkAt only, never a server time. `stale` says the sidebar rows are the last-known list
+// (hollow dots, muted names); an update or a pause does not stale them. `key` moves with the kind and the
+// version, not with the ticking age, so the painter can leave the DOM alone between polls.
+function nmAge(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  return Math.floor(s / 3600) + " h";
+}
+
+function sysBannerModel(sys, now, fmt) {
+  if (!sys) return null;
+  const f = typeof fmt === "function" ? fmt : (v) => v;
+  if (sys.signedOut) {
+    return { kind: "signedout", key: "sys:signedout", title: "Signed out",
+      body: "Your login expired. Sessions keep running on the server.", dot: true, stale: true, dismiss: false,
+      actions: [{ id: "signin", label: "Sign in again", primary: true }] };
+  }
+  if (nmOffline(sys, now)) {
+    const age = sys.lastOkAt != null ? " Last update " + nmAge(now - sys.lastOkAt) + " ago; the list below is from then." : "";
+    return { kind: "unreachable", key: "sys:unreachable", title: "Can\u2019t reach CuliBox",
+      body: "Retrying every 3 s." + age, dot: true, stale: true, dismiss: false,
+      actions: [{ id: "retry", label: "Retry now", primary: false }] };
+  }
+  if (sys.paused) {
+    return { kind: "paused", key: "sys:paused", title: "Paused while this tab was hidden \u00b7 updating\u2026",
+      body: "", dot: true, stale: false, dismiss: false, actions: [] };
+  }
+  if (sys.bootVersion && sys.version && sys.version !== sys.bootVersion && sys.version !== sys.dismissedVersion) {
+    return { kind: "updated", key: "sys:updated:" + sys.version, title: "CuliBox was updated to " + f(sys.version),
+      body: "This tab still runs " + f(sys.bootVersion) + ". Reload when you are not typing.", dot: false, stale: false,
+      dismiss: true, actions: [{ id: "reload", label: "Reload", primary: false }] };
+  }
+  return null;
+}
+
+// railMarkerModel: the collapsed rail has room for ONE marker (R19), for the first banner in the sidebar's
+// display order: the system banner if there is one, else the store's. Its title is the banner's title (the
+// button's accessible name and tooltip). Neutral for a system banner, amber for the store (a blocked cause).
+// storeBanner is Task 9's input: anything with a `title`, or null.
+function railMarkerModel(sysBanner, storeBanner) {
+  if (sysBanner) return { title: sysBanner.title, tone: "neutral", key: sysBanner.key };
+  if (storeBanner && storeBanner.title) return { title: storeBanner.title, tone: "amber", key: "store" };
+  return null;
+}
+
 // ---- The attention chip and the chime (DD§A6, §B3; DC§5) ----
 // attnChipModel(ordered, visibleIds, dismissedKey) -> null, or what the chip says. `ordered` is the session
 // list in the sidebar's order (the caller's, not re-sorted here); `visibleIds` the session ids on a shown
@@ -488,6 +542,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS,
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS, sysBannerModel, railMarkerModel,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }

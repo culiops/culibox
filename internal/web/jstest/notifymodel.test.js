@@ -629,3 +629,109 @@ test("nmChipText: explicit store copy, and an unknown kind has no text", () => {
   assert.equal(m.nmChipText({ kind: "wait", sessions: [sess("w")] }), null);
   assert.equal(m.nmChipText({ kind: "nope", sessions: [sess("w")] }), null);
 });
+
+// ---- sysBannerModel (Plan 7 Task 7, DD§A8 M8.6/6b/6c, R19) ----
+const S0 = 5000000; // a fake clock; ages come from sys.lastOkAt only
+function sysRec(over) {
+  return Object.assign({ lastOkAt: S0 - 1000, failSince: null, signedOut: false, hiddenSince: null, paused: false,
+    bootVersion: "v0.24.2", version: "v0.24.2", dismissedVersion: "" }, over || {});
+}
+const fmtV = (v) => v;
+
+test("sysBannerModel: nothing to say while polls succeed and the version is the boot one", () => {
+  assert.equal(m.sysBannerModel(sysRec(), S0, fmtV), null);
+  assert.equal(m.sysBannerModel(null, S0, fmtV), null);
+});
+
+test("sysBannerModel: unreachable shows nothing under 12 s, then the age from lastOkAt", () => {
+  const blip = sysRec({ lastOkAt: S0 - 11000, failSince: S0 - 8000 });
+  assert.equal(m.sysBannerModel(blip, S0, fmtV), null);
+  const b = m.sysBannerModel(sysRec({ lastOkAt: S0 - 14000, failSince: S0 - 11000 }), S0, fmtV);
+  assert.equal(b.kind, "unreachable");
+  assert.equal(b.title, "Can’t reach CuliBox");
+  assert.equal(b.body, "Retrying every 3 s. Last update 14 s ago; the list below is from then.");
+  assert.equal(b.dot, true);
+  assert.equal(b.stale, true);
+  assert.deepEqual(b.actions.map((a) => [a.id, a.label, !!a.primary]), [["retry", "Retry now", false]]);
+  assert.equal(b.dismiss, false);
+});
+
+test("sysBannerModel: the age grows with the clock and moves to minutes and hours", () => {
+  const f = (ms) => m.sysBannerModel(sysRec({ lastOkAt: S0 - ms, failSince: S0 - ms + 3000 }), S0, fmtV).body;
+  assert.match(f(75000), /Last update 1 min ago;/);
+  assert.match(f(2 * 3600 * 1000 + 5 * 60000), /Last update 2 h ago;/);
+});
+
+test("sysBannerModel: never had an OK poll -> offline from failSince, and no invented age", () => {
+  const b = m.sysBannerModel(sysRec({ lastOkAt: null, failSince: S0 - 13000 }), S0, fmtV);
+  assert.equal(b.kind, "unreachable");
+  assert.equal(b.body, "Retrying every 3 s.");
+});
+
+test("sysBannerModel: signed out is immediate, primary Sign in again, no store/retry", () => {
+  const b = m.sysBannerModel(sysRec({ signedOut: true, failSince: S0 - 100 }), S0, fmtV);
+  assert.equal(b.kind, "signedout");
+  assert.equal(b.title, "Signed out");
+  assert.equal(b.body, "Your login expired. Sessions keep running on the server.");
+  assert.equal(b.dot, true);
+  assert.equal(b.stale, true);
+  assert.deepEqual(b.actions.map((a) => [a.id, a.label, !!a.primary]), [["signin", "Sign in again", true]]);
+});
+
+test("sysBannerModel: updated when meta.version differs from the boot version; closing hides it until a different one", () => {
+  const up = sysRec({ version: "v0.25.0" });
+  const b = m.sysBannerModel(up, S0, fmtV);
+  assert.equal(b.kind, "updated");
+  assert.equal(b.title, "CuliBox was updated to v0.25.0");
+  assert.equal(b.body, "This tab still runs v0.24.2. Reload when you are not typing.");
+  assert.equal(b.dot, false);
+  assert.equal(b.stale, false);
+  assert.deepEqual(b.actions.map((a) => [a.id, a.label]), [["reload", "Reload"]]);
+  assert.equal(b.dismiss, true);
+  assert.equal(m.sysBannerModel(sysRec({ version: "v0.25.0", dismissedVersion: "v0.25.0" }), S0, fmtV), null);
+  assert.equal(m.sysBannerModel(sysRec({ version: "v0.25.1", dismissedVersion: "v0.25.0" }), S0, fmtV).kind, "updated");
+});
+
+test("sysBannerModel: an empty version never reads as an update; the label formatter is applied", () => {
+  assert.equal(m.sysBannerModel(sysRec({ version: "" }), S0, fmtV), null);
+  assert.equal(m.sysBannerModel(sysRec({ bootVersion: null, version: "v1" }), S0, fmtV), null);
+  const b = m.sysBannerModel(sysRec({ bootVersion: "a-1-gabc", version: "b-2-gdef" }), S0, (v) => v.toUpperCase());
+  assert.equal(b.title, "CuliBox was updated to B-2-GDEF");
+  assert.match(b.body, /runs A-1-GABC\./);
+});
+
+test("sysBannerModel: paused after a long hidden period until the next OK poll; rows are not staled", () => {
+  const b = m.sysBannerModel(sysRec({ paused: true }), S0, fmtV);
+  assert.equal(b.kind, "paused");
+  assert.equal(b.title, "Paused while this tab was hidden · updating…");
+  assert.equal(b.body, "");
+  assert.equal(b.dot, true);
+  assert.equal(b.stale, false);
+  assert.deepEqual(b.actions, []);
+});
+
+test("sysBannerModel: priority signed out > unreachable > paused > updated", () => {
+  const all = { signedOut: true, lastOkAt: S0 - 20000, failSince: S0 - 17000, paused: true, version: "v9" };
+  assert.equal(m.sysBannerModel(sysRec(all), S0, fmtV).kind, "signedout");
+  assert.equal(m.sysBannerModel(sysRec(Object.assign({}, all, { signedOut: false })), S0, fmtV).kind, "unreachable");
+  assert.equal(m.sysBannerModel(sysRec(Object.assign({}, all, { signedOut: false, failSince: null })), S0, fmtV).kind, "paused");
+  assert.equal(m.sysBannerModel(sysRec({ version: "v9" }), S0, fmtV).kind, "updated");
+});
+
+test("sysBannerModel: key is stable while the age ticks inside one kind but moves with the kind", () => {
+  const a = m.sysBannerModel(sysRec({ lastOkAt: S0 - 14000, failSince: S0 - 11000 }), S0, fmtV);
+  const b = m.sysBannerModel(sysRec({ lastOkAt: S0 - 14000, failSince: S0 - 11000 }), S0 + 3000, fmtV);
+  assert.equal(a.key, b.key);
+  assert.notEqual(a.body, b.body);
+  assert.notEqual(a.key, m.sysBannerModel(sysRec({ signedOut: true }), S0, fmtV).key);
+});
+
+test("railMarkerModel: one marker for the first banner (system, else store); neutral for system, amber for store", () => {
+  const sysB = m.sysBannerModel(sysRec({ signedOut: true }), S0, fmtV);
+  const mk = m.railMarkerModel(sysB, { title: "Secret store locked" });
+  assert.deepEqual(mk, { title: "Signed out", tone: "neutral", key: "sys:signedout" });
+  const st = m.railMarkerModel(null, { title: "Secret store locked" });
+  assert.deepEqual(st, { title: "Secret store locked", tone: "amber", key: "store" });
+  assert.equal(m.railMarkerModel(null, null), null);
+  assert.equal(m.railMarkerModel(null, undefined), null);
+});

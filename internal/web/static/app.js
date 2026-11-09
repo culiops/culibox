@@ -3,6 +3,7 @@
 // --- fetch helpers -----------------------------------------------------------
 async function api(path, opts) {
   const res = await fetch(path, opts);
+  if (res.status === 401) sysNoteSignedOut(); // any call: the login is gone (Plan 7, R5)
   if (!res.ok) {
     let msg = res.statusText;
     let code = "";
@@ -600,7 +601,10 @@ function renderRail48() {
   if (!rail) return;
   // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
   const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId(), mac: IS_MAC });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|");
+  // The one system-banner marker above the list (Plan 7 R19); null on a phone or with no banner.
+  const marker = typeof sysRailMarkerModel === "function" ? sysRailMarkerModel() : null;
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|")
+    + (marker ? "|m:" + marker.key + ":" + marker.title : "");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
@@ -634,7 +638,7 @@ function renderRail48() {
   // sidebar's «), the primary +, the session dots, then the quota bars at the foot;
   // renderRateLimits fills the bars. Re-parked on every rebuild because
   // replaceChildren drops them.
-  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), mid, railMeters());
+  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), ...(marker ? [sysRailMarkerEl(marker)] : []), mid, railMeters());
   paintRailMeters();
 }
 
@@ -3349,20 +3353,56 @@ function rowLocal(s) {
   };
 }
 
-// sys: the client's view of the sessions poll, read by the title and favicon (Plan 7 adds more
-// fields here: hiddenSince, bootVersion).
+// sys: the client's view of the sessions poll and of the build this tab runs, read by the title and
+// favicon (titleState) and by the sidebar banner (sysBannerModel, drawn by sysbanner.js).
 //   lastOkAt  ms of the last OK /api/sessions poll (null before the first)
 //   failSince ms of the first failure of the current run (null while polls succeed)
-//   signedOut true once a poll answered 401
-// A 401 is signed out at once; a network failure counts as offline only after
-// SYS_OFFLINE_MS without an OK poll (titleState), so one blip never flickers the title.
-const sys = { lastOkAt: null, failSince: null, signedOut: false };
-function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; }
+//   signedOut true once any api() call answered 401; the next OK session poll clears it
+//   hiddenSince ms when the tab went hidden (null while visible)
+//   paused    true when the tab became visible after SYS_PAUSE_MS hidden, until the next OK poll
+//   bootVersion the first meta.version this tab saw; version the latest; dismissedVersion the one the
+//             user closed the "updated" banner on (it comes back for a different version)
+// A 401 is signed out at once; a network failure counts as offline only after SYS_OFFLINE_MS without an
+// OK poll (nmOffline), so one blip never flickers the title or the banner.
+const SYS_PAUSE_MS = 30000;
+const sys = { lastOkAt: null, failSince: null, signedOut: false, hiddenSince: null, paused: false,
+  bootVersion: null, version: null, dismissedVersion: "" };
+function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; sys.paused = false; }
 function sysPollFailed(e) {
   const now = Date.now();
   if (sys.failSince == null) sys.failSince = now;
   if (e && e.status === 401) sys.signedOut = true;
 }
+// A 401 on any call. api() can run before this file reaches `sys` (a const), so a not-yet-built record is a no-op.
+function sysNoteSignedOut() {
+  try {
+    if (sys.signedOut) return;
+    sys.signedOut = true;
+    if (typeof sysBannerSync === "function") sysBannerSync();
+    signalAttention();
+  } catch (_) { /* before the record exists */ }
+}
+// sysSeeVersion: meta.version from initEnv and from the 30 s tick. The first one seen is the build this tab
+// runs; a different one later is an update (the banner), never an automatic reload.
+function sysSeeVersion(v) {
+  if (!v || typeof v !== "string") return;
+  if (sys.bootVersion == null) sys.bootVersion = v;
+  sys.version = v;
+  if (typeof sysBannerSync === "function") sysBannerSync();
+}
+// A tab hidden SYS_PAUSE_MS or longer shows "Paused while this tab was hidden" on return until a poll lands
+// (the browser throttles background timers, so what the list shows is old). The poll is started at once.
+document.addEventListener("visibilitychange", () => {
+  const now = Date.now();
+  if (document.hidden) { if (sys.hiddenSince == null) sys.hiddenSince = now; return; }
+  const was = sys.hiddenSince;
+  sys.hiddenSince = null;
+  if (was != null && now - was >= SYS_PAUSE_MS) {
+    sys.paused = true;
+    if (typeof sysBannerSync === "function") sysBannerSync();
+    refreshSessions();
+  }
+});
 
 // signalAttention pushes the blocked/done state to the tab title and favicon: the part of the
 // signal you see without looking at the page (titleState, notifymodel.js). Runs on every
@@ -3380,6 +3420,7 @@ function signalAttention() {
     if (link) link.href = faviconSvg(st.icon);
     faviconIcon = st.icon;
   }
+  if (typeof sysBannerSync === "function") sysBannerSync();
 }
 
 // notifyTransitions turns one successful /api/sessions poll into OS notifications (#177): the pure
@@ -3713,9 +3754,10 @@ async function refreshSessions() {
     signalAttention();
     return null;
   }
-  sysPollOk();
   // A null/odd body is not a list: keep the last real one and announce nothing (an empty list would end everything).
-  if (!Array.isArray(sessions)) return null;
+  // It is a failed poll for the offline escalation (R18), not a sign-out: a 200 with a frozen list must not read as live.
+  if (!Array.isArray(sessions)) { sysPollFailed(null); signalAttention(); return null; }
+  sysPollOk();
   lastSessions = sessions;
   sessionsLoaded = true;
   noteReturns(lastSessions);
@@ -6992,6 +7034,7 @@ initMobileShell();
     refreshSessions(); // re-render rows now that the tier label is known
     if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
+    sysSeeVersion(meta && meta.version);
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
     if (ver && vl) { ver.textContent = vl; ver.title = "CuliBox " + meta.version; ver.hidden = false; }
     const sideVer = $("side-version");
@@ -7074,6 +7117,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try {
     const m = await api("/api/meta");
+    sysSeeVersion(m && m.version); // a different build than this tab booted with -> the "updated" banner
     globalThis.repliesEnabled = !!(m && m.replies === true);
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
