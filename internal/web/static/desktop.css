@@ -1019,6 +1019,10 @@
   .cell { background: var(--bg); }
   .pane-term { box-sizing: content-box; padding: 6px 10px; background: var(--term-bg); }
 
+  /* F6 region cycle (#177): the kit focus ring (--focus, 2px accent) on the region that took focus, drawn inside the
+     region because some are full-bleed. It leaves with the focus. */
+  .region-focus { outline: var(--focus); outline-offset: -2px; }
+
   /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
   .cell.focus:not(.drop-hot) { outline: none; }
   .cell.focus::before {

@@ -69,6 +69,16 @@ const SHORTCUTS = [
   { id: "session.nextNeeds", label: "Next that needs you", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ mod: true, shift: true, code: "KeyJ" }],
     allow: scAllow(1, 0, 0, 0, 1) },
+  // F6 / Shift+F6 (#177 call 12, frame M8.8): cycle sidebar -> pane header + strip -> terminal -> drawer. One bound row:
+  // shiftAny, and the binding reads e.shiftKey for the direction. Dispatched in the capture phase, so xterm (which
+  // would send ESC[17~) never sees it. Allowed in the terminal, the editor and a field (else F6 would trap there) and
+  // on a page; not over a modal dialog. Whether a browser lets a page cancel F6 is measured, and a Mac row (Fn key).
+  { id: "ui.regionNext", label: "Next region: sidebar, pane, terminal, files", group: "Sessions & panes", scope: "global", status: "bound",
+    chords: [{ code: "F6", shiftAny: true }],
+    allow: scAllow(1, 1, 1, 0, 1) },
+  // The reverse direction is the same chord with Shift; this row only tells the dialog so (the frame draws two rows).
+  { id: "ui.regionPrev", label: "Previous region", group: "Sessions & panes", scope: "global", status: "help-only",
+    chords: [], text: { mac: "⇧+F6", other: "Shift+F6" } },
   { id: "shell.below", label: "+ Shell below", group: "Sessions & panes", scope: "global", status: "bound",
     chords: [{ ctrl: true, shift: true, code: "Backquote" }],
     allow: scAllow(1, 0, 0, 0, 0) },

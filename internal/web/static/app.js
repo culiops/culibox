@@ -1382,7 +1382,9 @@ function showShortcuts() {
     });
   }
   // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
-  const rows = helpRows(IS_MAC).filter((r) => r.label !== scEntry("session.nextNeeds").label);
+  // The F6 region cycle has no regions to walk on a phone either.
+  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev"].map((id) => scEntry(id).label);
+  const rows = helpRows(IS_MAC).filter((r) => !desktopOnly.includes(r.label));
   return askDialog({
     title: "Keyboard shortcuts",
     body: helpTextStacked(rows, tierRuntimeLabel(boxRuntime)),
@@ -7200,6 +7202,103 @@ bindShortcut("session.nextNeeds", (e, ctx) => {
   if (ctx.mobile) return false;
   if (e.repeat) return true;
   return goNextNeedsYou();
+});
+
+// F6 / Shift+F6 (#177 call 12): the region cycle, sidebar (or the rail) -> the focused pane's header + strip -> its
+// terminal -> the drawer. regioncycle.js owns the order and the step; this collects which regions are on screen,
+// moves focus and paints the kit ring (the one :focus-visible ring, 2px --accent) on the region. It is bound in the
+// capture-phase dispatcher above, so xterm never gets the key (it would send ESC[17~).
+let regionRing = null; // the element wearing .region-focus now
+
+function regionShown(el) {
+  return !!(el && el.isConnected && !el.hidden && el.getClientRects().length > 0);
+}
+
+// regionEls: the element of each region that is on screen right now (absent = not shown).
+function regionEls() {
+  const out = {};
+  const cell = focusedCell;
+  const rail = $("rail48");
+  if (regionShown($("sidebar"))) out.sidebar = $("sidebar");
+  else if (regionShown(rail)) out.rail = rail;
+  const page = typeof pageNow !== "undefined" && pageNow ? pageNow.dlg : null;
+  if (page && regionShown(page)) out.page = page;
+  else if (cellVisible(cell)) {
+    if (regionShown(cell.bar)) out.header = cell.bar;
+    if (cellTerminal(cell)) out.terminal = cell.body;
+  }
+  if (regionShown($("drawer"))) out.drawer = $("drawer");
+  return out;
+}
+
+// regionHolding: the region that has focus, or null. The strip and the write banner belong to the header.
+function regionHolding(els) {
+  const ae = document.activeElement;
+  if (!ae) return null;
+  const cell = focusedCell;
+  const header = [cell && cell.bar, cell && cell._elev, cell && cell._strip];
+  for (const k of ["drawer", "page", "sidebar", "rail"]) if (els[k] && els[k].contains(ae)) return k;
+  if (els.header && header.some((x) => x && x.contains(ae))) return "header";
+  if (els.terminal && els.terminal.contains(ae)) return "terminal";
+  return null;
+}
+
+const REGION_FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// regionFocus: put focus in region `name` and ring the part of it that took focus.
+function regionFocus(name, els) {
+  const cell = focusedCell;
+  let target = null;
+  let ring = els[name];
+  if (name === "sidebar") {
+    target = document.querySelector("#sessions .srow.sel .nm") || document.querySelector("#sessions .srow .nm") || $("side-new");
+  } else if (name === "rail") {
+    target = els.rail.querySelector(".ri.on") || els.rail.querySelector(".ri");
+  } else if (name === "header") {
+    // The ask strip is the part of the header with something to answer; otherwise the first tab or control.
+    const strip = regionShown(cell._strip) ? cell._strip : null;
+    target = (strip && strip.querySelector(REGION_FOCUSABLE)) || els.header.querySelector(REGION_FOCUSABLE);
+    if (target && strip && strip.contains(target)) ring = strip;
+  } else if (name === "terminal") {
+    const tab = cell.view !== "terminal" ? null : focusedTerminal() || cellTerminal(cell);
+    if (tab && tab.term) { tab.term.focus(); target = document.activeElement; }
+    else if (cell._viewHost) { cell._viewHost.focus({ preventScroll: true }); target = document.activeElement; }
+  } else if (name === "drawer") {
+    target = $("drawer-tree").querySelector('.ft-node[tabindex="0"]') || $("drawer-x");
+  } else if (name === "page") {
+    target = els.page.querySelector(REGION_FOCUSABLE);
+    if (!target) { els.page.tabIndex = -1; target = els.page; }
+  }
+  if (!target) return false;
+  if (target !== document.activeElement) target.focus();
+  regionRingOn(ring);
+  return true;
+}
+
+function regionRingOn(el) {
+  if (regionRing) regionRing.classList.remove("region-focus");
+  regionRing = el || null;
+  if (regionRing) regionRing.classList.add("region-focus");
+}
+
+// The ring is the keyboard-focus cue for a region, so it goes when focus leaves that region.
+document.addEventListener("focusin", (e) => {
+  if (regionRing && !regionRing.contains(e.target)) regionRingOn(null);
+}, true);
+
+function cycleRegion(back) {
+  const els = regionEls();
+  const order = regionOrder({ sidebar: !!els.sidebar, rail: !!els.rail, header: !!els.header, terminal: !!els.terminal, drawer: !!els.drawer, page: !!els.page });
+  const to = regionStep(order, regionHolding(els), back);
+  if (!to) return false;
+  return regionFocus(to, els);
+}
+
+// Desktop only: a phone has no regions. A held key repeats: swallow it, or it would spin round the page.
+bindShortcut("ui.regionNext", (e, ctx) => {
+  if (ctx.mobile) return false;
+  if (e.repeat) return true;
+  return cycleRegion(!!e.shiftKey);
 });
 
 // Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused
