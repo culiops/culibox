@@ -358,6 +358,17 @@ function endedLive(map, now) {
   return out;
 }
 
+// endedClearRestarted(map, restarted, sessions): a restart mark outlives the restart only until a
+// successful poll sees that id live again; then the mark goes, so a later crash still notifies.
+// `restarted` is the Set of ids whose restart request succeeded. Kill marks are never touched.
+function endedClearRestarted(map, restarted, sessions) {
+  if (!restarted || !Array.isArray(sessions)) return;
+  for (const id of Array.from(restarted)) {
+    const s = sessions.find((x) => x.id === id);
+    if (s && !nmIsEnded(s)) { restarted.delete(id); if (map) map.delete(id); }
+  }
+}
+
 // ---- Delivery: notes -> OS notifications ----
 // deliverNotes(notes, NotificationCtor, onOpen) builds one notification per note. A note's click
 // calls onOpen(note) (the page focuses the window and opens note.sid, or shows the sidebar for a
@@ -380,5 +391,5 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, faviconSvg, SYS_OFFLINE_MS,
-    NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, deliverNotes };
+    NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }

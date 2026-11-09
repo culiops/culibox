@@ -152,7 +152,7 @@ test("how work comes home: the table row is host-aware and no longer names the C
 
 test("the sessions poll hands the list to noteReturns, which only applies returnNews", () => {
   const poll = body(app, "refreshSessions");
-  assert.match(poll, /lastSessions = sessions \|\| \[\];\s*sessionsLoaded = true;\s*noteReturns\(lastSessions\)/);
+  assert.match(poll, /lastSessions = sessions;\s*sessionsLoaded = true;\s*noteReturns\(lastSessions\)/);
   const b = body(app, "noteReturns");
   assert.match(b, /returnNews\(/);
   assert.match(b, /refreshProfilesQuiet\(\)/);

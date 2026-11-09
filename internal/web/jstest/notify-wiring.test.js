@@ -109,7 +109,7 @@ function page(over) {
   vm.createContext(ctx);
   new vm.Script(read("attention.js"), { filename: "attention.js" }).runInContext(ctx);
   new vm.Script(read("notifymodel.js"), { filename: "notifymodel.js" }).runInContext(ctx);
-  new vm.Script("let notifyPrev = null; const endedByMe = new Map();\n" + lift("notifyOpen") + lift("notifyTransitions"), { filename: "app.js:notify" }).runInContext(ctx);
+  new vm.Script("let notifyPrev = null; const endedByMe = new Map(); const restartedByMe = new Set();\n" + lift("notifyOpen") + lift("notifyTransitions"), { filename: "app.js:notify" }).runInContext(ctx);
   return { ctx, made: f.made, calls, store };
 }
 const tick = (p, list) => { p.ctx.lastSessions = list; vm.runInContext("notifyTransitions()", p.ctx); };
@@ -197,4 +197,53 @@ test("app.js wiring: killSession and restartSession mark endedByMe; no innerHTML
   assert.match(lift("restartSessionRun"), /endedMark\(endedByMe, s\.id/);
   for (const fn of ["notifyOpen", "notifyTransitions"]) assert.doesNotMatch(lift(fn), /innerHTML/);
   assert.doesNotMatch(app, /\bnotifyBody\(/);
+});
+
+test("click: an SSO cause note and a store note open the first affected session under its own name, never \"CuliBox\"", () => {
+  const p = page();
+  tick(p, [sess("a"), sess("b")]);
+  tick(p, [sso("a"), sso("b")]);
+  assert.strictEqual(p.made[0].title, "CuliBox");
+  p.made[0].onclick();
+  assert.deepStrictEqual(p.calls.opened, [["a", "n-a"]]);
+  const q = page();
+  const lock = (id) => sess(id, { activity: "waiting", need: "store_locked", attention: "block" });
+  tick(q, [sess("x")]);
+  tick(q, [lock("x")]);
+  const store = q.made.find((n) => n.options.tag === "ab:store");
+  assert.ok(store, "a store note");
+  store.onclick();
+  assert.deepStrictEqual(q.calls.opened, [["x", "n-x"]]);
+});
+
+test("restart: the mark holds until a poll sees the id live again, then a real crash still notifies Ended", () => {
+  const p = page();
+  tick(p, [sess("a")]);
+  vm.runInContext('endedMark(endedByMe, "a", Date.now()); restartedByMe.add("a")', p.ctx);
+  tick(p, [sess("a")]); // restarted and live again: the mark is dropped
+  assert.strictEqual(vm.runInContext("endedByMe.has('a') || restartedByMe.has('a')", p.ctx), false);
+  tick(p, [sess("a", { activity: "crashed" })]);
+  assert.deepStrictEqual(p.made.map((n) => n.options.tag), ["ab:a:end"]);
+});
+
+test("restart: a restart that gets a new id is silent for the old one; a kill mark is never cleared by a poll", () => {
+  const p = page();
+  tick(p, [sess("a"), sess("k")]);
+  vm.runInContext('endedMark(endedByMe, "a", Date.now()); restartedByMe.add("a"); endedMark(endedByMe, "k", Date.now())', p.ctx);
+  tick(p, [sess("k")]);
+  tick(p, []);
+  assert.strictEqual(p.made.length, 0);
+  const q = page();
+  tick(q, [sess("k")]);
+  vm.runInContext('endedMark(endedByMe, "k", Date.now())', q.ctx);
+  tick(q, [sess("k")]); // still listed while the DELETE is in flight
+  tick(q, [sess("k", { exited: true })]);
+  assert.strictEqual(q.made.length, 0);
+});
+
+test("app.js: a restart request that throws clears the mark; a null /api/sessions body is not a list", () => {
+  assert.match(lift("restartSessionRun"), /catch \(e\) \{ endedByMe\.delete\(s\.id\); throw e; \}/);
+  const src = lift("refreshSessions");
+  assert.match(src, /if \(!Array\.isArray\(sessions\)\) return null;\n\s+lastSessions = sessions;/);
+  assert.doesNotMatch(src, /sessions \|\| \[\]/);
 });

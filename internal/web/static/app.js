@@ -1857,7 +1857,9 @@ async function restartSession(s, trigger) {
 
 async function restartSessionRun(s) {
   endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
-  const res = await postSessionAction(s.id, "restart");
+  let res;
+  try { res = await postSessionAction(s.id, "restart"); }
+  catch (e) { endedByMe.delete(s.id); throw e; }
   if (!res.ok) {
     endedByMe.delete(s.id);
     let msg = "", code = "";
@@ -1871,6 +1873,7 @@ async function restartSessionRun(s) {
     await refreshSessions();
     return;
   }
+  restartedByMe.add(s.id); // the mark ends when a poll sees this id live again
   const ns = await res.json();
   const wasDocked = !!dockHolding(s.id) && !mobileActive(window.innerWidth); // a docked shell comes back docked
   closeTerminal(s.id);
@@ -3397,10 +3400,14 @@ let sessionsLoaded = false;
 // endedByMe: session ids this client ended or restarted (id -> ms), so its own End never
 // announces "Ended". Kept 10 min per id (endedLive prunes).
 const endedByMe = new Map();
+// restartedByMe: ids whose restart succeeded; their endedByMe mark ends once a poll sees them live.
+const restartedByMe = new Set();
 function notifyOpen(note) {
   try { window.focus(); } catch (_) {}
   if (note.sid) {
-    openTerminal(note.sid, note.title);
+    // The title of a cause note can be "CuliBox": the tab is named after the session.
+    const sess = (lastSessions || []).find((s) => s.id === note.sid);
+    openTerminal(note.sid, (sess && sess.name) || note.sid);
   } else if (document.documentElement.classList.contains("sidebar-hidden")) {
     toggleSidebar(); // a batch has no one session: show the list
   }
@@ -3413,6 +3420,7 @@ function notifyTransitions() {
     now, focused: document.hasFocus(), prefs, endedByMe: endedLive(endedByMe, now),
   });
   notifyPrev = st.next;
+  endedClearRestarted(endedByMe, restartedByMe, lastSessions);
   if (!st.notes.length) return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   deliverNotes(st.notes, Notification, notifyOpen);
@@ -3568,7 +3576,9 @@ async function refreshSessions() {
     return null;
   }
   sysPollOk();
-  lastSessions = sessions || [];
+  // A null/odd body is not a list: keep the last real one and announce nothing (an empty list would end everything).
+  if (!Array.isArray(sessions)) return null;
+  lastSessions = sessions;
   sessionsLoaded = true;
   noteReturns(lastSessions);
   refreshEmptyState();
