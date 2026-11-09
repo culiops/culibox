@@ -220,7 +220,7 @@
   .btn-lg { min-height: var(--h-lg); padding: 0 14px; }
   .btn-icon { width: var(--h-ctl); padding: 0; }
   .btn-icon.btn-sm { width: var(--h-sm); }
-  .btn .kbd-hint { font-family: var(--font-mono); font-size: var(--t-xs); opacity: .75; font-weight: var(--w-regular); }
+  .btn .kbd-hint { font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-md); opacity: .75; font-weight: var(--w-regular); }
   /* A toggle (Files, + Shell) pressed: raise and a faint inset ring, never a tab look. */
   .btn[aria-pressed="true"], .btn.is-pressed { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
   /* Disabled: #169's dimmed look above; here only the hover keeps the resting fill. */
@@ -244,7 +244,7 @@
   }
   .seg > .seg-item {
     height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip);
-    background: transparent; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium);
+    background: transparent; color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-md); font-weight: var(--w-medium);
     cursor: pointer; font-variant-numeric: tabular-nums;
   }
   .seg > .seg-item:hover { color: var(--fg); background: var(--hover); }

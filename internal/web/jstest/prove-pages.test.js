@@ -2779,3 +2779,19 @@ test("a card head keeps its title and caption whole and wraps the legend onto a 
   const head = view(env, "anOverview").elements[1].elements[0].elements[0];
   assert.deepStrictEqual(head.elements.map(sigOf), ["h2.t-md w-600", "span.t-sm muted", "span.grow", "div.an-plegend"]);
 });
+
+// L2 and L3 (Gate 4): the frame's seg labels and "Esc" hint are on the kit's 20px line; the kit's `.seg button` reset the first to
+// `normal` and the hint's own font rule left the second there, so both drew one pixel low.
+test("the kit's seg items and Esc hint sit on the 20px line", () => {
+  assert.strictEqual(decls(".seg > .seg-item").get("line-height"), "var(--lh-md)");
+  assert.strictEqual(decls(".seg > .seg-item").get("height"), "var(--h-sm)", "the 24px item the 20px line is centred in is unchanged");
+  assert.strictEqual(decls(".btn .kbd-hint").get("line-height"), "var(--lh-md)");
+  assert.strictEqual(decls(".btn .kbd-hint").get("font-size"), "var(--t-xs)", "the hint's 11px mono is unchanged");
+  assert.strictEqual(decls(":root").get("--lh-md"), "20px");
+  // Both are kit rules: inside the fence, with no page prefix and no hex.
+  const raw = read("desktop.css");
+  const fence = raw.slice(raw.indexOf("/* === kit primitives"), raw.indexOf("/* === end kit primitives === */"));
+  for (const sel of [".seg > .seg-item {", ".btn .kbd-hint {"]) assert.ok(fence.includes(sel), sel + " is in the kit fence");
+  const inFence = (sel) => parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(sel));
+  for (const sel of [".seg > .seg-item", ".btn .kbd-hint"]) assert.ok(![...inFence(sel).decls.values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v)), sel + " has no hex");
+});
