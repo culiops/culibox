@@ -12,11 +12,13 @@
 // open, where and until when come from the session list alone, as for the header
 // chip, the row and rail rings and the footer; the cached /aws status only adds the
 // reason, so a read that failed, or is still on its way, can never keep the banner up
-// or hide it. It is re-synced from Cell.syncNeeds / Cell.repaintReply (tabs.js), i.e.
-// on the 3 s session poll, with no timer of its own. The element is built once per pane and then
-// painted in place: its text nodes are touched only when something visible moved
-// (the model's `key`), because it is role=status and a screen reader would
-// otherwise say it again on every poll, and a rebuilt Drop now would lose focus.
+// or hide it, and only for the window that status was last read for (ELEV_READ), so a
+// failed read never leaves the previous window's reason on a new one. It is re-synced
+// from Cell.syncNeeds / Cell.repaintReply (tabs.js), i.e. on the 3 s session poll, with
+// no timer of its own. The element is built once per pane and then painted in place:
+// its text nodes are touched only when something visible moved (the model's `key`),
+// because it is role=status and a screen reader would otherwise say it again on every
+// poll, and a rebuilt Drop now would lose focus.
 // Every string goes in through textContent.
 //
 // Drop now is never `disabled`: a focused button that becomes disabled loses focus
@@ -35,6 +37,12 @@
 // Per session id: the signature of its live write window the last time a status
 // read was asked for it (absent = none). See elevWatch.
 const ELEV_SEEN = new Map();
+
+// Per session id: the signature of its live write window that the last status read, one that elevWatch asked for and
+// that landed OK, was asked for. The banner's reason comes from the cached status, and that status can be older than
+// the list (a failed read keeps the previous one, whose newest grant is the PREVIOUS window's), so the reason is
+// drawn only while the list's window signature is exactly this one. See paneElevSync.
+const ELEV_READ = new Map();
 
 // elevWindowSig: the session's live write windows as one string, "" with none.
 // Live means `until` is still ahead (isElevated), so a window the list still
@@ -62,12 +70,20 @@ function elevWatch(s) {
   if (sig === (ELEV_SEEN.get(s.id) || "")) return;
   const d = accData.get(s.id);
   if (d && d.inflight) return;
-  if (sig) ELEV_SEEN.set(s.id, sig); else ELEV_SEEN.delete(s.id);
+  if (sig) ELEV_SEEN.set(s.id, sig); else { ELEV_SEEN.delete(s.id); ELEV_READ.delete(s.id); }
   // The read answers (accLoad returns its promise) once the status is stored: re-sync the panes of this session
   // then, not at the next poll, so the reason appears with it. A read that was refused answers nothing, and the
   // re-sync is then a no-op. A read that rejected (a view's repaint threw after the status was stored) is reported
   // once, as tabs.js reports a broken pane view, and the panes are re-synced all the same.
-  Promise.resolve(accLoad(s.id, true)).then(() => elevResync(s.id), (err) => {
+  // Only a read that was made (a promise) and ended OK (accLoadDone leaves `failed` false) vouches for the cached
+  // status as this window's: a refused read, a failed one and a rejected one leave the record as it was, and the
+  // banner then draws no reason until a read lands for the window.
+  const read = accLoad(s.id, true);
+  Promise.resolve(read).then(() => {
+    const d = accData.get(s.id);
+    if (sig && read && typeof read.then === "function" && d && !d.failed) ELEV_READ.set(s.id, sig);
+    elevResync(s.id);
+  }, (err) => {
     console.error("write access status read:", err);
     elevResync(s.id);
   });
@@ -83,7 +99,7 @@ function elevResync(sid) {
   for (const c of cells) if (c._elev && c._elev._eb.sid === sid && typeof c.syncElev === "function") c.syncElev();
 }
 
-// elevPrune: forget the sessions that left the list, so ELEV_SEEN holds no entry for a
+// elevPrune: forget the sessions that left the list, so ELEV_SEEN and ELEV_READ hold no entry for a
 // session that closed with a window open, and neither does accData, whose entries
 // elevWatch creates for sessions no Access view ever mounted (accPrune, which an
 // Access view's update() also runs, and which has the same guard). An empty list is
@@ -92,6 +108,7 @@ function elevPrune() {
   if (!lastSessions || !lastSessions.length) return;
   const live = new Set(lastSessions.map((x) => x.id));
   for (const id of [...ELEV_SEEN.keys()]) if (!live.has(id)) ELEV_SEEN.delete(id);
+  for (const id of [...ELEV_READ.keys()]) if (!live.has(id)) ELEV_READ.delete(id);
   accPrune();
 }
 
@@ -204,7 +221,11 @@ function paneElevSync(cell, s) {
   const d = accData.get(s.id);
   // One clock for the model and the signature: a banner that is up has a live window behind it, never "".
   const now = Date.now();
-  const m = elevBanner(s, d ? d.aws : null, now);
+  const wsig = elevWindowSig(s, now);
+  // The reason is the status's only when the last read that landed was asked for THIS window (ELEV_READ): after a
+  // window change, and after a read that failed, the status still holds the previous window's approvals, and the
+  // banner shows no reason (as before the status loads) rather than the wrong one.
+  const m = elevBanner(s, d && wsig && ELEV_READ.get(s.id) === wsig ? d.aws : null, now);
   if (!m) { ebRemove(cell); return; }
   let el = cell._elev;
   let placed = false;
@@ -212,7 +233,7 @@ function paneElevSync(cell, s) {
   // Directly under the header, so ahead of the ask strip (Cell.syncStrip inserts
   // its strip after this element).
   if (!el.parentNode) { cell.bar.after(el); placed = true; }
-  ebPaint(el, m, s.id, accBusy.has(s.id), elevWindowSig(s, now));
+  ebPaint(el, m, s.id, accBusy.has(s.id), wsig);
   if (placed && typeof positionDrawer === "function") positionDrawer();
 }
 

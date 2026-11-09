@@ -63,6 +63,7 @@ function page() {
   };
   box.globalThis = box;
   const ctx = vm.createContext(box);
+  box.lex = (name) => vm.runInContext(name, ctx); // a script-scope const (ELEV_READ), as accesstab.test.js does
   for (const f of ["sessionrow.js", "accessmodel.js", "elevbanner.js"]) {
     new vm.Script(read(f), { filename: f }).runInContext(ctx);
   }
@@ -81,7 +82,13 @@ const tick = () => new Promise((r) => setImmediate(r));
 // What Chromium does a couple of frames after the focused control becomes :disabled (focus fixup): focus
 // falls to <body>. An aria-disabled control keeps it. Call after anything that could have disabled a button.
 const settle = (doc) => { const a = doc.activeElement; if (a && a.disabled) doc.activeElement = doc.body; };
-const loaded = (box, sid, approvals) => box.accData.set(sid, { aws: { approvals }, loaded: true, failed: false, inflight: false });
+// A status read that landed OK for session `s`'s current window: its approvals stored, and elevbanner.js's record of the
+// window signature that read was for (what elevWatch writes when the read it asked for lands).
+const stamp = (box, s) => box.lex("ELEV_READ").set(s.id, box.elevWindowSig(s, Date.now()));
+const loaded = (box, s, approvals) => {
+  box.accData.set(s.id, { aws: { approvals }, loaded: true, failed: false, inflight: false });
+  stamp(box, s);
+};
 
 test("an open window puts one .elev[role=status] right after .cell-bar and before the ask strip", () => {
   const { cell, sync } = page();
@@ -104,8 +111,8 @@ test("a pane with no ask strip puts the banner right under the header", () => {
 
 test("banner text is strong \"Write access to culipulse-prod\" + span detail, and \"Drop now\" is a .btn.btn-danger.btn-sm", () => {
   const { box, cell, sync } = page();
-  loaded(box, "s1", [granted()]);
   const s = sess(23);
+  loaded(box, s, [granted()]);
   sync(s);
   const [strong, span, gap, btn] = cell._elev.children;
   assert.strictEqual(cell._elev.children.length, 4);
@@ -125,30 +132,37 @@ test("banner text is strong \"Write access to culipulse-prod\" + span detail, an
 
 test("before the status loads, and after a failed read: no reason segment and no empty quotes", () => {
   const { box, cell, sync } = page();
-  sync(sess(23));
+  const w = sess(23);
+  sync(w);
   const span = () => cell._elev.children[1];
   assert.doesNotMatch(span().textContent, /“|”| · $/);
   assert.match(span().textContent, /^until \d\d:\d\d · 23 min left$/);
   box.accData.set("s1", { aws: null, loaded: false, failed: true, inflight: false });
-  sync(sess(23));
+  sync(w);
   assert.match(span().textContent, /^until \d\d:\d\d · 23 min left$/);
-  loaded(box, "s1", [granted({ reason: "   " })]);
-  sync(sess(23));
+  loaded(box, w, [granted({ reason: "   " })]);
+  sync(w);
   assert.doesNotMatch(span().textContent, /“|”/, "a blank reason is no reason");
 });
 
 test("the reason arriving, and the minutes moving, repaint in place", () => {
   const { box, cell, sync } = page();
-  sync(sess(23));
+  const w = sess(23); // one window: its `until` never moves, the clock does
+  const t0 = Date.now();
+  sync(w);
   const node = cell._elev;
   const [strong, span, gap, btn] = node.children;
-  loaded(box, "s1", [granted()]);
-  sync(sess(23));
+  loaded(box, w, [granted()]);
+  sync(w);
   assert.match(span.textContent, /“rotate KMS key”$/);
-  sync(sess(15));
+  const clock = (min) => { box.Date = class extends Date { static now() { return t0 + min * MIN; } }; };
+  clock(8);
+  sync(w);
   assert.match(span.textContent, / · 15 min left · “rotate KMS key” · new credentials from the base role$/);
-  sync(sess(0));
+  clock(22.6);
+  sync(w);
   assert.match(span.textContent, /<1 min left/);
+  assert.match(span.textContent, /“rotate KMS key”/, "the same window keeps its reason as the minutes go");
   assert.ok(cell._elev === node && node.children[0] === strong && node.children[1] === span && node.children[2] === gap && node.children[3] === btn,
     "the same nodes throughout");
 });
@@ -403,8 +417,8 @@ test("Drop now repaints this pane and the Access view, which is told the repaint
 
 test("the banner keeps its nodes when nothing visible changed: same key, no replaceChildren, the button keeps focus", () => {
   const { box, doc, cell, sync } = page();
-  loaded(box, "s1", [granted()]);
   const first = sess(23);
+  loaded(box, first, [granted()]);
   sync(first);
   const node = cell._elev;
   const parts = [...node.children];
@@ -420,7 +434,7 @@ test("the banner keeps its nodes when nothing visible changed: same key, no repl
   assert.ok(cell._elev === node && node.children.every((c, i) => c === parts[i]));
   assert.strictEqual(doc.activeElement, parts[3], "focus stays on Drop now");
   // A visible change touches only what changed.
-  loaded(box, "s1", [granted({ reason: "second reason" })]);
+  loaded(box, first, [granted({ reason: "second reason" })]);
   sync(first);
   assert.strictEqual(writes, 1, "only the detail span");
   assert.match(parts[1].textContent, /“second reason”$/);
@@ -578,6 +592,8 @@ test("a window that ends elsewhere while the follow-up status read fails: the ba
   const until = iso(23);
   const stale = { approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until } };
   box.accData.set("s1", { aws: stale, loaded: true, failed: false, inflight: false });
+  const first = sess(23);
+  stamp(box, first);
   let fail = null;
   // accLoadDone's failed path: the read is over, the old data stays, failed is set.
   box.accLoad = (sid, force) => {
@@ -586,7 +602,7 @@ test("a window that ends elsewhere while the follow-up status read fails: the ba
     d.inflight = true;
     return new Promise((r) => { fail = () => { Object.assign(d, { inflight: false, failed: true }); r(); }; });
   };
-  sync(sess(23));
+  sync(first);
   assert.ok(cell._elev);
   assert.match(cell._elev.children[1].textContent, /“rotate KMS key”$/);
   sync(sess(null)); // dropped from the phone, another tab or an API token
@@ -655,6 +671,117 @@ test("after a Grant the list gains the window before the status is read: the ban
   assert.ok(cell._elev === node, "painted in place");
   assert.match(span.textContent, /^until \d\d:\d\d · 30 min left · “rotate KMS key”$/, "the reason arrives with the read, with no further poll");
   assert.strictEqual(box.reads.length, 1);
+});
+
+// I1, the stale reason: the cached status keeps the previous window's approvals when a read fails, and the newest
+// granted/extended approval of the connection is the previous window's. The banner shows a reason only when the last
+// status read that landed was asked for the CURRENT window (ELEV_READ holds that read's window signature, elevWatch
+// writes it when the read lands OK); otherwise it shows none, as before the status loads.
+// A stand-in accLoad with the real one's contract: a promise that settles once the read is over; on OK the status is
+// stored, on a failure the old status is kept and `failed` is set (accLoadDone).
+function readerPage() {
+  const p = page();
+  const { box, cell } = p;
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  const r = { mode: "ok", approvals: [], land: null };
+  box.accLoad = (sid, force) => {
+    box.reads.push([sid, force]);
+    const d = box.accData.get(sid) || { aws: null, loaded: false, failed: false, inflight: false };
+    box.accData.set(sid, d);
+    d.inflight = true;
+    return new Promise((resolve) => {
+      r.land = () => {
+        if (r.mode === "ok") Object.assign(d, { aws: { approvals: r.approvals }, loaded: true, failed: false });
+        else Object.assign(d, { failed: true });
+        d.inflight = false;
+        resolve();
+      };
+    });
+  };
+  r.span = () => cell._elev.children[1].textContent;
+  return Object.assign(p, { r });
+}
+
+test("a new window opens elsewhere and its status read fails: no reason, never the previous window's; a later window change whose read lands brings the new reason (I1)", async () => {
+  const { box, cell, sync, r } = readerPage();
+  r.approvals = [granted({ ts: Date.now() - 3 * MIN, reason: "first window" })];
+  const w1 = sess(23);
+  sync(w1);
+  assert.doesNotMatch(r.span(), /“/, "no read has landed yet: no reason");
+  r.land();
+  await tick();
+  assert.match(r.span(), /“first window”$/, "the read landed for this window: its reason");
+  sync(sess(null)); // the window ends
+  assert.ok(!cell._elev);
+  r.land(); // the read asked for the change to none
+  await tick();
+
+  // A new window opens elsewhere; the one read asked for it fails and keeps the old status, whose newest grant is the first window's.
+  r.mode = "fail";
+  const w2 = sess(30);
+  sync(w2);
+  assert.ok(cell._elev);
+  assert.doesNotMatch(r.span(), /“/, "no reason while that read is on its way");
+  r.land();
+  await tick();
+  assert.strictEqual(box.accData.get("s1").failed, true);
+  assert.strictEqual(box.accData.get("s1").aws.approvals[0].reason, "first window", "the stale status is still cached");
+  for (let i = 0; i < 3; i++) { sync(w2); await tick(); }
+  assert.doesNotMatch(r.span(), /“|first window/, "the failed read leaves no reason, and no poll shows the old one");
+  assert.match(r.span(), /^until \d\d:\d\d · 30 min left$/);
+
+  // The window changes again (an extension); its read lands.
+  r.mode = "ok";
+  r.approvals = [granted({ ts: Date.now() - 3 * MIN, reason: "first window" }), granted({ ts: Date.now(), action: "extended", reason: "second window" })];
+  const w3 = sess(60);
+  sync(w3);
+  assert.doesNotMatch(r.span(), /“/, "the signature moved: the cached status (still the first window's) is not asked about the reason");
+  r.land();
+  await tick();
+  assert.match(r.span(), /“second window”$/, "the read landed for this window: the new reason");
+  sync(w3);
+  assert.match(r.span(), /“second window”$/);
+});
+
+test("the reason shows only while the last landed read was for the window the list carries now (I1)", () => {
+  const { box, cell, sync } = page();
+  const w = sess(23);
+  loaded(box, w, [granted({ reason: "for this window" })]);
+  sync(w);
+  assert.match(cell._elev.children[1].textContent, /“for this window”$/);
+  const extended = sess(40); // another window signature: extended or re-opened elsewhere
+  sync(extended);
+  assert.doesNotMatch(cell._elev.children[1].textContent, /“/, "the read was for the old window");
+  stamp(box, extended); // a read landed for the new one
+  sync(extended);
+  assert.match(cell._elev.children[1].textContent, /“for this window”$/);
+});
+
+test("a read accLoad refused, or one that rejected, does not vouch for the cached status (I1)", async () => {
+  // Refused: it answers nothing (the session is not in its list, say), so the old data is no read of this window.
+  const a = page();
+  a.box.accData.set("s1", { aws: { approvals: [granted({ reason: "an older window" })] }, loaded: true, failed: false, inflight: false });
+  a.sync(sess(23));
+  assert.deepStrictEqual(a.box.reads, [["s1", true]]);
+  await tick();
+  a.sync(sess(23));
+  assert.doesNotMatch(a.cell._elev.children[1].textContent, /“/);
+  // Rejected: the status may be stored, but the read did not answer cleanly, so no reason either.
+  const b = page();
+  b.box.console = { error() {} };
+  b.cell.syncElev = () => b.box.paneElevSync(b.cell, b.box.lastSessions.find((x) => x.id === "s1") || null);
+  b.box.cells = [b.cell];
+  b.box.accLoad = (sid, force) => {
+    b.box.reads.push([sid, force]);
+    b.box.accData.set(sid, { aws: { approvals: [granted({ reason: "from a read that rejected" })] }, loaded: true, failed: false, inflight: false });
+    return Promise.reject(new Error("view threw"));
+  };
+  const w = sess(23);
+  b.sync(w);
+  await tick();
+  b.sync(w);
+  assert.doesNotMatch(b.cell._elev.children[1].textContent, /“/);
 });
 
 // F2: a rejected read is not swallowed: the panes are re-synced just as when it lands, and the error is reported once.

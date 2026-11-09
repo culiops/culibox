@@ -326,6 +326,51 @@ test("a window that ends elsewhere while the real accLoad's follow-up read fails
   assert.strictEqual(cell._elev, null, "no later poll brings it back");
 });
 
+// I1, the stale reason, with the page's real accLoad: a new window opens elsewhere and its read answers 500, accLoadDone
+// keeps the previous window's approvals, and the banner must not draw that window's reason for this one.
+test("a new window opens elsewhere and the real accLoad's read fails: the banner has no reason, not the previous window's; a later read for a changed window brings the new one (I1)", async () => {
+  const p = page();
+  const { box, doc } = p;
+  const approvals = { list: [granted({ ts: Date.now() - 5 * MIN, reason: "first window" })] };
+  let fail = false;
+  box.fetch = async (url) => /\/aws$/.test(url)
+    ? (fail ? { status: 500 } : { status: 200, json: async () => status({ approvals: approvals.list }) })
+    : { status: 204 };
+  const bar = doc.createElement("div");
+  bar.className = "cell-bar";
+  const pane = doc.createElement("div");
+  pane.append(bar);
+  const cell = { bar, el: pane };
+  cell.syncElev = () => box.paneElevSync(cell, box.lastSessions.find((x) => x.id === "s1") || null);
+  box.cells = [cell];
+  const span = () => cell._elev.children[1].textContent;
+  const at = (s) => { box.lastSessions = [s]; cell.syncElev(); };
+
+  at(open(23));
+  await tick();
+  assert.match(span(), /“first window”$/, "the first window's read landed: its reason");
+  at(claudeBox());
+  await tick();
+  assert.ok(!cell._elev);
+
+  fail = true; // the next window's read fails and keeps the first window's status
+  const second = open(30);
+  at(second);
+  await tick();
+  assert.strictEqual(p.lex("accData").get("s1").failed, true);
+  assert.strictEqual(p.lex("accData").get("s1").aws.approvals[0].reason, "first window");
+  assert.ok(cell._elev, "the window is the list's: the banner is up");
+  assert.doesNotMatch(span(), /“|first window/, "but with no reason: the old one is not this window's");
+  for (let i = 0; i < 3; i++) { at(second); await tick(); }
+  assert.doesNotMatch(span(), /“/);
+
+  fail = false; // extended elsewhere: a new signature, and this read lands
+  approvals.list = [granted({ ts: Date.now() - 5 * MIN, reason: "first window" }), granted({ ts: Date.now(), action: "extended", reason: "second window" })];
+  at(open(60));
+  await tick();
+  assert.match(span(), /“second window”$/);
+});
+
 // F5 with the page's real accPrune: elevbanner's poll forgets what an Access view's update() would have.
 test("a banner poll forgets the cached status of a session that left the list, with no Access view mounted (F5)", () => {
   const { box, doc, lex } = page();
@@ -334,6 +379,8 @@ test("a banner poll forgets the cached status of a session that left the list, w
   data.set("gone", entry());
   data.set("s1", entry());
   lex("accDrafts").set("gone", { minutes: 30 });
+  lex("ELEV_READ").set("gone", "culipulse-prod@2099-01-01T10:00:00Z");
+  lex("ELEV_READ").set("s1", "culipulse-prod@2099-01-01T10:00:00Z");
   const bar = doc.createElement("div");
   bar.className = "cell-bar";
   const cell = { bar, el: doc.createElement("div") };
@@ -345,6 +392,8 @@ test("a banner poll forgets the cached status of a session that left the list, w
   box.paneElevSync(cell, claudeBox());
   assert.strictEqual(data.has("gone"), false, "a session that left has no cached status");
   assert.strictEqual(lex("accDrafts").has("gone"), false, "nor draft");
+  assert.strictEqual(lex("ELEV_READ").has("gone"), false, "nor the record of the window its read was for");
+  assert.strictEqual(lex("ELEV_READ").has("s1"), true);
   assert.strictEqual(data.has("s1"), true, "a listed session keeps it");
 });
 
