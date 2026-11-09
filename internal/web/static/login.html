@@ -56,7 +56,26 @@
     .signing { display: none; margin: 0; padding: 24px 0; text-align: center; color: var(--muted); font-size: 14px; }
     html.token-mode .signing { display: block; }
     html.token-mode .card > :not(.signing) { display: none; }
+    /* M8.8b (#177): the wrong-credential line under the field, a spinner beside "Signing in…". Off here, on
+       in the desktop block below, so the phone page keeps the pixels it had. */
+    .field-error, .signing .spin { display: none; }
     [hidden] { display: none; }
+    @media (min-width: 701px) {
+      /* Label: the kit's .field-label (12px, 500, fg). */
+      label { font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-medium); color: var(--fg); }
+      /* Input border at rest is --faint (kit G12; a border, not text); red when the last guess was wrong. */
+      input[type=password] { display: block; border-color: var(--faint); }
+      input[type=password].is-invalid { border-color: var(--red); }
+      /* Checking: the field dims with the button (it stays readOnly, not disabled, so it is submitted). */
+      input[type=password].is-disabled { opacity: .65; cursor: progress; }
+      /* The error moves under the field; the boxed block above the form is the phone's. */
+      #err { display: none; }
+      .field-error { display: block; margin: 6px 0 0; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--red); }
+      .field-error[hidden] { display: none; }
+      /* Token link: the kit .spin (from desktop.css) beside the line. */
+      html.token-mode .signing { display: flex; align-items: center; justify-content: center; gap: 8px; }
+      .signing .spin { display: inline-block; }
+    }
   </style>
   <script>
     // A /login#token=<token> link auto-submits, and the fragment never reaches the
@@ -71,7 +90,7 @@
   <main class="card">
     <h1>CuliBox</h1>
     <p class="sub">Sign in to manage your agent sessions on this box.</p>
-    <p class="signing" id="signing">Signing in…</p>
+    <p class="signing" id="signing"><span class="spin" aria-hidden="true"></span>Signing in…</p>
     <p class="notice" id="expired" hidden>Your login expired, sign in again.</p>
     <div class="err" id="err" hidden>Wrong password or token.</div>
     <form method="POST" action="/login">
@@ -81,6 +100,7 @@
       <input type="text" name="username" value="agent-box" autocomplete="username" hidden>
       <label for="password">Password or login token</label>
       <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+      <p class="field-error" id="err-field" hidden>Wrong password or token.</p>
       <button type="submit">Log in</button>
     </form>
   </main>
@@ -100,6 +120,11 @@
       const q = new URLSearchParams(location.search);
       if (q.get("e") === "1") {
         document.getElementById("err").hidden = false;
+        // Desktop draws the error under the field (the block above is the phone's).
+        document.getElementById("err-field").hidden = false;
+        pw.classList.add("is-invalid");
+        pw.setAttribute("aria-invalid", "true");
+        pw.setAttribute("aria-describedby", "err-field");
       } else if (q.get("reason") === "expired") {
         document.getElementById("expired").hidden = false;
       }
@@ -114,6 +139,12 @@
         btn.disabled = true;
         btn.setAttribute("aria-busy", "true");
         pw.readOnly = true;
+        pw.classList.add("is-disabled");
+      });
+      // The red border is about the old guess: typing a new one clears it.
+      pw.addEventListener("input", function () {
+        pw.classList.remove("is-invalid");
+        pw.removeAttribute("aria-invalid");
       });
       // Back after a submit can restore this page from the back/forward cache exactly as
       // it was left: busy, or hidden behind "Signing in…", with the password (or the
@@ -126,6 +157,7 @@
         btn.disabled = false;
         btn.removeAttribute("aria-busy");
         pw.readOnly = false;
+        pw.classList.remove("is-disabled");
         pw.value = "";
         document.documentElement.classList.remove("token-mode");
       });
