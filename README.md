@@ -139,6 +139,7 @@ The full model and every known limit: [docs/SECURITY.md](docs/SECURITY.md).
 | [AWS agent role](docs/aws/agent-role/README.md) | The Terraform for the IAM role the broker assumes. |
 | [Store](docs/STORE.md) | The encrypted value store and its commands. |
 | [Security model](docs/SECURITY.md) | What is protected, how, and the known limits. |
+| [Remote access](docs/REMOTE-ACCESS.md) | Reaching CuliBox from another machine, and why notifications need HTTPS or localhost. |
 | [macOS](docs/MACOS.md) | Install, the colima-based boxed tier, rotating credentials. |
 | [Docker](docs/DOCKER.md) | Running CuliBox itself in a container, and keeping sessions across restarts. |
 
