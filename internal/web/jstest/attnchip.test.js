@@ -332,3 +332,43 @@ test("chime: chimeTransitions plays once per new blocked cause and not when the 
   box.chimeTransitions();
   assert.strictEqual(log.osc.length, 2, "pref off: nothing plays");
 });
+
+test("chip: dismissed {A,B}, A unblocks (chip shows B), A asks again: the chip shows at both steps", () => {
+  const { box, doc } = page();
+  const idle = (id) => ({ id, name: "n-" + id, activity: "working" });
+  box.lastSessions = [ask("a"), ask("b")];
+  box.attnChipSync();
+  chipEl(doc).querySelector(".btn-icon").onclick({});
+  assert.strictEqual(host(doc).hidden, true);
+  box.lastSessions = [idle("a"), ask("b")];
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, false, "step 2");
+  box.lastSessions = [ask("a"), ask("b")];
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, false, "step 3");
+});
+
+test("chip: dismissed, then every cause on screen, then back off screen: the chip shows again", () => {
+  const { box, doc } = page();
+  box.lastSessions = [ask("a"), ask("b")];
+  box.attnChipSync();
+  chipEl(doc).querySelector(".btn-icon").onclick({});
+  box.lastSessions = [ask("a")];
+  box.visible = new Set(["a"]);
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, true);
+  box.lastSessions = [ask("a"), ask("b")];
+  box.visible = new Set();
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, false);
+});
+
+test("chip: a generic wait starting does not bring a dismissed chip back", () => {
+  const { box, doc } = page();
+  box.lastSessions = [ask("a")];
+  box.attnChipSync();
+  chipEl(doc).querySelector(".btn-icon").onclick({});
+  box.lastSessions = [ask("a"), { id: "w", name: "n-w", activity: "waiting", need: "input", attention: "block" }];
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, true);
+});

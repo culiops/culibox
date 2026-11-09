@@ -103,8 +103,9 @@ function attnChipHide() {
 function attnChipSync(place) {
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) { attnChipHide(); return; }
   const order = jumpOrder(lastSessions, false);
-  // A dismissal belongs to the causes it hid: once none is blocked, a later ask shows the chip again.
-  if (attnDismissed && !blockedCauses(order).length) attnDismissed = "";
+  // A dismissal belongs to the exact set of causes it hid: whenever the set differs (a cause left, even while the
+  // chip is not due), it is forgotten, so the same ask coming back shows the chip again.
+  if (attnDismissed && attnDismissed !== chipDismissKey(order)) attnDismissed = "";
   const m = chipModel(order, visibleSessionIds(), attnDismissed);
   attnModel = m;
   if (!m) { attnChipHide(); return; }

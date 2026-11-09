@@ -307,7 +307,8 @@ function nmChipText(c) {
       return c.sessions.length > 1
         ? { name: "", rest: "AWS sign-in expired \u00b7 " + c.sessions.length + " sessions" }
         : { name, rest: " needs AWS sign-in" };
-    default: return { name: "", rest: "Secret store locked \u00b7 " + nmPlural(c.sessions.length, "session", "sessions") };
+    case "store": return { name: "", rest: "Secret store locked \u00b7 " + nmPlural(c.sessions.length, "session", "sessions") };
+    default: return null; // no designed copy (a generic wait, R13): no chip
   }
 }
 
@@ -315,12 +316,23 @@ function nmOffScreen(c, visibleIds) {
   return !c.sessions.some((s) => nmInSet(visibleIds, s.id));
 }
 
+// Only a cause with chip copy is eligible (ask, SSO, store); a generic wait (R13) is neither named, counted in +N,
+// nor part of the dismiss key, so starting one never brings back a closed chip.
+function nmChipCauses(ordered) {
+  return blockedCauses(ordered).filter((c) => nmChipText(c) !== null);
+}
+
+// chipDismissKey: the sorted keys of the chip-eligible blocked causes. The caller clears a stored dismissal
+// whenever this differs from it, on every sync, even when no chip is due (all causes on screen, or none).
+function chipDismissKey(ordered) {
+  return nmChipCauses(ordered).map((c) => c.key).sort().join("|");
+}
+
 function chipModel(ordered, visibleIds, dismissedKey) {
-  const causes = blockedCauses(ordered);
-  // A generic wait has no chip copy (R13): it is neither named nor counted in +N.
-  const off = causes.filter((c) => c.kind !== "wait" && nmOffScreen(c, visibleIds));
+  const causes = nmChipCauses(ordered);
+  const off = causes.filter((c) => nmOffScreen(c, visibleIds));
   if (!off.length) return null;
-  const dismissKey = causes.map((c) => c.key).sort().join("|");
+  const dismissKey = chipDismissKey(ordered);
   if (dismissedKey && dismissedKey === dismissKey) return null;
   const t = nmChipText(off[0]);
   const more = off.length - 1;
@@ -476,6 +488,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, chipModel, chimeStep, faviconSvg, SYS_OFFLINE_MS,
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, chipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }

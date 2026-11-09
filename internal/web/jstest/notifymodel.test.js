@@ -614,3 +614,18 @@ test("chipModel: sid is the first OFF-SCREEN session of a shared cause", () => {
   const c = m.chipModel([ask("v"), ssoS("s1", "p"), ssoS("s2", "p")], new Set(["v"]), "");
   assert.equal(c.sid, "s1");
 });
+
+test("chipDismissKey: eligible causes only, so a generic wait never changes it", () => {
+  const w = sess("w", { activity: "waiting", need: "input", attention: "block" });
+  assert.equal(m.chipDismissKey([ask("b"), ask("a")]), "ab:a:block|ab:b:block");
+  assert.equal(m.chipDismissKey([ask("b"), ask("a"), w]), "ab:a:block|ab:b:block");
+  assert.equal(m.chipDismissKey([w]), "");
+  const d = m.chipDismissKey([ask("a")]);
+  assert.equal(m.chipModel([ask("a"), w], none, d), null, "a started wait does not bring a dismissed chip back");
+});
+
+test("nmChipText: explicit store copy, and an unknown kind has no text", () => {
+  assert.equal(m.nmChipText({ kind: "store", sessions: [storeS("t1")] }).rest, "Secret store locked \u00b7 1 session");
+  assert.equal(m.nmChipText({ kind: "wait", sessions: [sess("w")] }), null);
+  assert.equal(m.nmChipText({ kind: "nope", sessions: [sess("w")] }), null);
+});
