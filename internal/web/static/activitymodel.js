@@ -11,6 +11,8 @@
 //   resp     the activity reply, its `events` being every page held (newest first)
 //   filter   one of ACTIVITY_FILTERS
 //   nowMs    the clock, passed in so the model is a pure function
+//   failed   the last read of the reply failed (activitytab.js's load state); only
+//            read while no reply has arrived, to say so instead of "no events yet"
 //
 // Classic script: nothing here touches the DOM or the network, and every helper
 // tolerates a field of the wrong type (the reply is the daemon's, but a box agent
@@ -149,9 +151,38 @@ function actRow(e, nowMs) {
   };
 }
 
-// actRunning: the "running" tile: 35s / 41m / 1h 12m.
+// actRunning: the "Session age" tile: 35s / 41m / 1h 12m / 11d 13h. The server's
+// running_s is whole seconds since the session was created, the same instant
+// Access and the steer rail count from (startedText).
 function actRunning(sec) {
   return actAge(actNum(sec) || 0);
+}
+
+// ACT_DASH: what a figure reads before the first reply. U+2014, never a fake 0.
+const ACT_DASH = "—";
+
+// actEmpty: the plain block a session with no transcript gets in place of tiles
+// (M6.2). The reply of a non-Claude session only ever carries credential and
+// approval rows, so "no credential events" is a real finding only once it is read.
+//   name  s.name, else the id; the agent clause drops when the profile is unnamed
+//   meta  Session age, then how many credential events the rows hold
+function actEmpty(s, r, sum, events, failed) {
+  const name = actStr(s.name) || actStr(s.id) || "This session";
+  const agent = actStr(s.agent);
+  const tail = " If this session uses a credential, the event still appears here.";
+  const age = "Session age " + (r ? actRunning(sum.running_s) : ACT_DASH);
+  let meta = age;
+  if (r) {
+    const n = events.filter((e) => e.kind === "credential").length;
+    meta += " · " + (n === 0 ? "no credential events yet" : n === 1 ? "1 credential event" : n + " credential events");
+  } else if (failed) {
+    meta += " · could not read credential events";
+  }
+  return {
+    title: "Activity is for Claude sessions",
+    body: (agent ? name + " runs " + agent + ", so there is no transcript to show." : name + " has no transcript to show.") + tail,
+    meta,
+  };
 }
 
 // actFiles: the files changed, with their +a −d text.
@@ -200,24 +231,26 @@ function activityModel(inp) {
     rows.push(actRow(e, nowMs));
   });
 
+  // The kit's five tiles, from the reply's summary and dashes until it arrives. A
+  // session with no transcript has none: it gets the one plain block instead.
+  const dash = !r;
   const tiles = claude
     ? [
-      { n: actNum(sum.tool_calls) || 0, label: "tool calls" },
-      { n: actNum(sum.files_changed) || 0, label: "files changed" },
-      { n: actNum(sum.credentials) || 0, label: "credentials" },
-      { n: s.need ? 1 : 0, label: "waiting for you" },
-      { n: actRunning(sum.running_s), label: "running" },
+      { n: dash ? ACT_DASH : actNum(sum.tool_calls) || 0, label: "Tool calls" },
+      { n: dash ? ACT_DASH : actNum(sum.files_changed) || 0, label: "Files changed" },
+      { n: dash ? ACT_DASH : actNum(sum.credentials) || 0, label: "Credentials" },
+      { n: dash ? ACT_DASH : s.need ? 1 : 0, label: "Waiting for you" },
+      { n: dash ? ACT_DASH : actRunning(sum.running_s), label: "Session age" },
     ]
-    : [
-      { n: actNum(sum.credentials) || 0, label: "credentials" },
-      { n: actRunning(sum.running_s), label: "running" },
-    ];
+    : [];
 
   return {
     tiles,
     rows,
     files: claude ? actFiles(r && r.files) : [],
     notClaude: !claude,
+    empty: s && !claude ? actEmpty(s, r, sum, events, i.failed === true) : null,
+    loaded: !!r,
     partial: !!(r && r.partial),
     more: !!(r && r.more),
     ask: asking,

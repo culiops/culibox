@@ -2,8 +2,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { fmtDuration } = require("../static/duration.js");
-const { actAge, outcomeText } = require("../static/activitymodel.js");
+const { actAge, outcomeText, activityModel } = require("../static/activitymodel.js");
 const { startedText } = require("../static/steerrail.js");
+const { accessModel } = require("../static/accessmodel.js");
 
 // F25: one formatter for "how long". Seconds under a minute, minutes under an
 // hour, hours and minutes under 48h, then days and hours. The day unit starts at
@@ -56,4 +57,28 @@ test("startedText reads days from 48h, hours and minutes before that", () => {
   assert.strictEqual(startedText(created, t0 + 30 * 3600_000), clock + " · 30h 0m ago");
   assert.strictEqual(startedText(created, t0 + 59_000), clock + " · just now");
   assert.strictEqual(startedText(created, t0 + 60_000), clock + " · 1m ago");
+});
+
+// F25 across surfaces: the Activity "Session age" tile, the Access "started" line
+// and the steer rail's started line are one number written one way. Under a minute
+// the two "started" lines read "just now" on purpose (startedText: a clock a few
+// seconds behind the daemon must never read "-1m ago"), while the tile, which is
+// the server's own running_s, keeps counting seconds.
+test("session age reads the same on Activity, Access and the steer rail", () => {
+  const NOW = Date.parse("2026-11-09T12:00:00Z");
+  const secs = [35, 41 * 60, 72 * 60, 47 * 3600 + 59 * 60, 48 * 3600, 11 * 86400 + 13 * 3600];
+  for (const sec of secs) {
+    const created = new Date(NOW - sec * 1000).toISOString();
+    const want = fmtDuration(sec);
+    const tile = activityModel({
+      session: { id: "s1", claude: true }, resp: { events: [], summary: { running_s: sec } }, filter: "all", nowMs: NOW,
+    }).tiles.find((t) => t.label === "Session age");
+    assert.strictEqual(tile.n, want, "Activity tile at " + sec + "s");
+    const access = accessModel({ session: { id: "s1", created }, nowMs: NOW }).containment.started;
+    const rail = startedText(created, NOW);
+    const tail = sec < 60 ? "just now" : want + " ago";
+    assert.ok(access.endsWith(" \u00b7 " + tail), "Access at " + sec + "s: " + access);
+    assert.ok(rail.endsWith(" \u00b7 " + tail), "rail at " + sec + "s: " + rail);
+    assert.strictEqual(access, rail, "Access and the rail agree at " + sec + "s");
+  }
 });

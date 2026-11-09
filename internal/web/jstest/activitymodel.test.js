@@ -189,21 +189,41 @@ test("the ask row shows under every filter; other rows follow the filter", () =>
   assert.deepStrictEqual(kinds("bogus"), kinds("all")); // an unknown filter is All
 });
 
-test("tiles: tool calls, files changed, credentials, waiting for you, running", () => {
+const KIT_TILES = ["Tool calls", "Files changed", "Credentials", "Waiting for you", "Session age"];
+
+test("tiles are the kit's five, sentence case, Session age last", () => {
   const m = model({ session: sess({ need: "ask", ask: "x" }), resp: resp() });
-  assert.deepStrictEqual(m.tiles, [
-    { n: 38, label: "tool calls" },
-    { n: 3, label: "files changed" },
-    { n: 12, label: "credentials" },
-    { n: 1, label: "waiting for you" },
-    { n: "41m", label: "running" },
+  assert.deepStrictEqual([...m.tiles], [
+    { n: 38, label: "Tool calls" },
+    { n: 3, label: "Files changed" },
+    { n: 12, label: "Credentials" },
+    { n: 1, label: "Waiting for you" },
+    { n: "41m", label: "Session age" },
   ]);
+  assert.deepStrictEqual(m.tiles.map((t) => t.label), KIT_TILES);
+  assert.strictEqual(m.empty, null); // a Claude session never gets the empty block
   const quiet = model({ session: sess(), resp: resp({ summary: { tool_calls: 0, files_changed: 0, credentials: 0, running_s: 35 } }) });
   assert.deepStrictEqual(quiet.tiles.map((t) => t.n), [0, 0, 0, 0, "35s"]);
   const long = model({ session: sess(), resp: resp({ summary: { tool_calls: 1, files_changed: 0, credentials: 0, running_s: 4320 } }) });
   assert.strictEqual(long.tiles[4].n, "1h 12m");
+  const days = model({ session: sess(), resp: resp({ summary: { tool_calls: 1, files_changed: 0, credentials: 0, running_s: 11 * 86400 + 13 * 3600 } }) });
+  assert.strictEqual(days.tiles[4].n, "11d 13h");
   // An sso need also waits for you.
   assert.strictEqual(model({ session: sess({ need: "sso" }), resp: resp() }).tiles[3].n, 1);
+});
+
+test("tiles read — until the first reply", () => {
+  const m = model({ session: sess(), resp: null });
+  assert.deepStrictEqual(m.tiles.map((t) => t.label), KIT_TILES);
+  assert.deepStrictEqual(m.tiles.map((t) => t.n), ["—", "—", "—", "—", "—"]);
+  assert.strictEqual(m.tiles[0].n, "\u2014"); // U+2014, never a fake 0
+  assert.strictEqual(m.loaded, false);
+  // A session that needs you still reads — until the reply: no number is drawn before data.
+  assert.deepStrictEqual(model({ session: sess({ need: "ask" }), resp: undefined }).tiles.map((t) => t.n), ["—", "—", "—", "—", "—"]);
+  // The first reply replaces every dash, and the model says it is loaded.
+  const got = model({ session: sess(), resp: resp() });
+  assert.strictEqual(got.loaded, true);
+  assert.ok(got.tiles.every((t) => t.n !== "—"));
 });
 
 test("files changed carry a +a −d text", () => {
@@ -228,8 +248,95 @@ test("a session that is not Claude: credential rows only, no tool rows, nothing 
   assert.strictEqual(m.notClaude, true);
   assert.deepStrictEqual(m.rows.map((r) => r.kind), ["Credential", "Approval"]);
   assert.strictEqual(m.ask, false);
-  assert.deepStrictEqual(m.tiles.map((t) => t.label), ["credentials", "running"]);
   assert.strictEqual(model({ session: sess({ claude: false }), resp: null }).notClaude, true);
+});
+
+test("a non-Claude session has no tiles and the M6.2 empty block", () => {
+  const m = model({
+    session: sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false }),
+    resp: resp({ claude: false, events: [], summary: { tool_calls: 0, files_changed: 0, credentials: 0, running_s: 11 * 86400 + 13 * 3600 } }),
+  });
+  assert.deepStrictEqual([...m.tiles], []);
+  assert.deepStrictEqual({ ...m.empty }, {
+    title: "Activity is for Claude sessions",
+    body: "audit-shell runs bash, so there is no transcript to show. If this session uses a credential, the event still appears here.",
+    meta: "Session age 11d 13h \u00b7 no credential events yet",
+  });
+  assert.strictEqual(m.empty.meta, "Session age 11d 13h · no credential events yet");
+  assert.strictEqual(m.notClaude, true);
+  assert.strictEqual(m.loaded, true);
+  assert.deepStrictEqual(m.rows, []);
+
+  // The name falls back to the id; an empty agent drops the "runs X" clause.
+  const noName = model({ session: sess({ id: "s9", name: "", agent: "bash", claude: false }), resp: resp({ claude: false }) });
+  assert.strictEqual(noName.empty.body, "s9 runs bash, so there is no transcript to show. If this session uses a credential, the event still appears here.");
+  const noAgent = model({ session: sess({ id: "s9", name: "audit-shell", agent: "", claude: false }), resp: resp({ claude: false }) });
+  assert.strictEqual(noAgent.empty.body, "audit-shell has no transcript to show. If this session uses a credential, the event still appears here.");
+  const noAgentField = model({ session: sess({ id: "s9", name: "audit-shell", claude: false }), resp: resp({ claude: false }) });
+  assert.strictEqual(noAgentField.empty.body, noAgent.empty.body);
+});
+
+test("a non-Claude session: before the first reply the age reads —, and a failed read says so", () => {
+  const s = sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false });
+  const before = model({ session: s, resp: null });
+  assert.strictEqual(before.empty.meta, "Session age —");
+  assert.strictEqual(before.loaded, false);
+  assert.deepStrictEqual([...before.tiles], []);
+  const failed = model({ session: s, resp: null, failed: true });
+  assert.strictEqual(failed.empty.meta, "Session age — \u00b7 could not read credential events");
+  assert.strictEqual(failed.loaded, false);
+  // A reply that arrived wins over an older failure flag: the count is real data.
+  const stale = model({ session: s, resp: resp({ claude: false, events: [] }), failed: true });
+  assert.strictEqual(stale.empty.meta, "Session age 41m · no credential events yet");
+  // No session at all: nothing to say, so no block.
+  assert.strictEqual(activityModel({}).empty, null);
+});
+
+test("a non-Claude session with two credential events counts them and keeps the rows", () => {
+  const events = [
+    ev({ ts: at("14:32:51"), kind: "credential", tool: undefined, detail: "aws culipulse-prod", state: "minted" }),
+    ev({ ts: at("14:20:00"), kind: "approval", tool: undefined, detail: "granted 15 min", state: "granted" }),
+    ev({ ts: at("14:10:00"), kind: "credential", tool: undefined, detail: "aws culipulse-prod", state: "refused" }),
+    ev({ ts: at("14:05:00"), tool: "Bash", detail: "stray" }),
+  ];
+  const s = sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false });
+  const m = model({ session: s, resp: resp({ claude: false, events, summary: { tool_calls: 0, files_changed: 0, credentials: 1, running_s: 90 } }) });
+  assert.strictEqual(m.empty.meta, "Session age 1m \u00b7 2 credential events");
+  assert.deepStrictEqual(m.rows.map((r) => r.kind), ["Credential", "Approval", "Credential"]);
+  assert.deepStrictEqual([...m.tiles], []);
+  // Exactly one is singular (controller ruling P2); the count ignores the filter and approvals.
+  const one = model({ session: s, filter: "you", resp: resp({ claude: false, events: [events[0], events[1]] }) });
+  assert.strictEqual(one.empty.meta, "Session age 41m \u00b7 1 credential event");
+  const none = model({ session: s, resp: resp({ claude: false, events: [events[1]] }) });
+  assert.strictEqual(none.empty.meta, "Session age 41m \u00b7 no credential events yet");
+});
+
+test("filters map to real kinds", () => {
+  const kind = (over) => filterKind(ev(over));
+  assert.strictEqual(kind({ tool: "Bash" }), "commands");
+  for (const t of ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob"]) assert.strictEqual(kind({ tool: t }), "files", t);
+  assert.strictEqual(kind({ tool: "WebFetch" }), "other");
+  assert.strictEqual(kind({ kind: "you", tool: undefined }), "you");
+  assert.strictEqual(kind({ kind: "clear", tool: undefined }), "you");
+  assert.strictEqual(kind({ kind: "credential", tool: undefined }), "cloud");
+  assert.strictEqual(kind({ kind: "approval", tool: undefined }), "cloud");
+  // The Kind column names each real kind: the tool, Credential, Approval, You, Cleared, Asks to run.
+  const events = [
+    ev({ tool: "Bash" }), ev({ tool: "Read" }), ev({ tool: "Edit" }), ev({ tool: "Write" }), ev({ tool: "MultiEdit" }),
+    ev({ tool: "NotebookEdit" }), ev({ tool: "Grep" }), ev({ tool: "Glob" }), ev({ tool: "WebFetch" }),
+    ev({ kind: "credential", tool: undefined }), ev({ kind: "approval", tool: undefined }),
+    ev({ kind: "you", tool: undefined }), ev({ kind: "clear", tool: undefined }),
+  ];
+  const m = model({ session: sess({ need: "ask", ask: "x" }), resp: resp({ events }) });
+  assert.deepStrictEqual(m.rows.map((r) => r.kind), [
+    "Asks to run", "Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob", "WebFetch",
+    "Credential", "Approval", "You", "Cleared",
+  ]);
+});
+
+test("credential failed reads \"failed\" in red", () => {
+  const m = model({ session: sess(), resp: resp({ events: [ev({ kind: "credential", tool: undefined, detail: "aws culipulse-prod", state: "failed" })] }) });
+  assert.deepStrictEqual({ ...m.rows[0].outcome }, { text: "failed", tone: "err" });
 });
 
 test("partial and more are carried through; the model tolerates nothing loaded", () => {
@@ -241,7 +348,7 @@ test("partial and more are carried through; the model tolerates nothing loaded",
   assert.strictEqual(empty.notClaude, true); // no session: nothing to claim
   const noResp = model({ session: sess(), resp: null });
   assert.deepStrictEqual(noResp.rows, []);
-  assert.deepStrictEqual(noResp.tiles.map((t) => t.n), [0, 0, 0, 0, "0s"]);
+  assert.deepStrictEqual(noResp.tiles.map((t) => t.n), ["—", "—", "—", "—", "—"]);
 });
 
 test("a server field of the wrong type never throws", () => {
