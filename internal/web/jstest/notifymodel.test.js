@@ -418,7 +418,10 @@ test("titleState: the write ring follows any open write window, on every dot", (
   assert.equal(m.titleState([w()], SYS_OK, "PROD", T0).icon, "normal-ring");
   assert.equal(m.titleState([sess("w", { aws_connections: lapsed }), ask("a")], SYS_OK, "", T0).icon, "amber");
   assert.equal(m.titleState([w()], SYS_OK, "", T0).title, "CuliBox", "the ring adds nothing to the title");
-  assert.equal(m.titleState([w(), ask("a")], { lastOkAt: T0, failSince: T0, signedOut: true }, "", T0).icon, "offline", "no ring while offline");
+  const out = { lastOkAt: T0 - 5000, failSince: T0 - 4000, signedOut: true };
+  assert.deepEqual(m.titleState([w(), ask("a")], out, "PROD", T0), { title: "Offline · [PROD] CuliBox", icon: "offline-ring" }, "R9: ring round the hollow dot while the last-known window is open");
+  assert.equal(m.titleState([w(), ask("a")], out, "", T0 + 600000).icon, "offline", "no ring after the deadline");
+  assert.equal(m.titleState([ask("a")], out, "", T0).icon, "offline");
 });
 
 test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
@@ -427,7 +430,7 @@ test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
     assert.ok(u.startsWith("data:image/svg+xml,"), k);
     return decodeURIComponent(u.slice("data:image/svg+xml,".length));
   };
-  for (const k of ["normal", "amber", "neutral", "offline", "normal-ring", "amber-ring", "neutral-ring"]) {
+  for (const k of ["normal", "amber", "neutral", "offline", "offline-ring", "normal-ring", "amber-ring", "neutral-ring"]) {
     const svg = dec(k);
     assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="16" height="16" viewBox="0 0 16 16">/, k);
     assert.ok(svg.includes('<rect width="16" height="16" rx="3.5" style="fill:#0d0f12;stroke:#23282f"/>'), k);
@@ -447,6 +450,8 @@ test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
   assert.ok(off.includes("stroke:#8b939e") && !off.includes("#6ea8fe"), "the frame goes muted offline");
   const ring = '<circle cx="11.5" cy="6" r="3.9" style="fill:none;stroke:#f06a6a;stroke-width:1.3"/>';
   assert.ok(dec("amber-ring").includes(ring));
+  const offRing = dec("offline-ring");
+  assert.ok(offRing.includes('<circle cx="11.5" cy="6" r="2" style="fill:none;stroke:#8b939e;stroke-width:1.4"/>' + ring), "ring last, concentric with the hollow dot");
   assert.ok(dec("neutral-ring").includes(ring));
   assert.ok(dec("amber-ring").indexOf(ring) > dec("amber-ring").indexOf("#f5b94a"), "the ring is drawn last");
   // the ring around the normal dot is centred on that dot (8,8 absolute = 6,6 in the group)

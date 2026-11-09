@@ -91,12 +91,12 @@ test("the runtime favicon states keep the mark's geometry and the kit palette", 
   const dec = (k) => decodeURIComponent(nm.faviconSvg(k).slice("data:image/svg+xml,".length));
   const dOf = (svg) => svg.match(/<path\b[^>]*\sd="([^"]+)"/)[1];
   assert.strictEqual(dOf(dec("normal")), glyph(favicon).d, "normal is favicon.svg's door");
-  for (const k of ["amber", "neutral", "offline", "amber-ring", "neutral-ring"]) {
+  for (const k of ["amber", "neutral", "offline", "offline-ring", "amber-ring", "neutral-ring"]) {
     assert.strictEqual(dOf(dec(k)), glyph(faviconNeeds).d, k + " is favicon-needs.svg's open door");
   }
   const hex = (svg) => new Set((svg.match(/#[0-9a-f]{6}\b/g) || []));
   const kit = new Set(["#0d0f12", "#23282f", "#6ea8fe", "#4ccf8a", "#f5b94a", "#8b939e", "#f06a6a"]);
-  for (const k of ["normal", "amber", "neutral", "offline", "normal-ring", "amber-ring", "neutral-ring"]) {
+  for (const k of ["normal", "amber", "neutral", "offline", "offline-ring", "normal-ring", "amber-ring", "neutral-ring"]) {
     for (const c of hex(dec(k))) assert.ok(kit.has(c), k + " uses " + c + ", not a kit colour");
   }
   assert.ok(!dec("amber").includes("#f06a6a") && dec("amber-ring").includes("#f06a6a"), "red only for the write ring");

@@ -224,7 +224,7 @@ function notifyStep(prev, sessions, ctx) {
 // titleState(sessions, sys, env, now) -> { title, icon }
 //   sys   { lastOkAt, failSince, signedOut }: the client's view of the sessions poll (app.js `sys`)
 //   env   the instance's env label ("PROD"), "" for none
-//   icon  "normal" | "amber" | "neutral" | "offline", plus "-ring" (not offline) while a write window is open
+//   icon  "normal" | "amber" | "neutral" | "offline", plus "-ring" while a write window is open
 // The title carries the number and the check, the icon has no digit. Blocked causes are counted
 // by cause (the store once, each sign-in source once), never by session; a finished turn gives
 // "✓N" only when nothing is blocked. Offline drops the stale count: a 401 at once, a network
@@ -247,7 +247,12 @@ function nmWindowOpen(s, now) {
 
 function titleState(sessions, sys, env, now) {
   const base = (env ? "[" + env + "] " : "") + "CuliBox";
-  if (nmOffline(sys, now)) return { title: "Offline · " + base, icon: "offline" };
+  if (nmOffline(sys, now)) {
+    // The last-known list (the last OK poll): a write window still open on it keeps its ring
+    // around the hollow dot; once its deadline passes the ring goes (R9).
+    const open = (Array.isArray(sessions) ? sessions : []).some((s) => s && !s.exited && s.status !== "exited" && nmWindowOpen(s, now));
+    return { title: "Offline \u00b7 " + base, icon: open ? "offline-ring" : "offline" };
+  }
   const blocked = new Set();
   let done = 0, ring = false;
   for (const s of Array.isArray(sessions) ? sessions : []) {
@@ -286,7 +291,7 @@ function faviconSvg(icon) {
   if (kind === "amber") inner = favPath(FAV_OPEN, "#6ea8fe") + favDot("#f5b94a") + (ring ? favRing(11.5) : "");
   else if (kind === "neutral") inner = favPath(FAV_OPEN, "#6ea8fe") + favDot("#8b939e") + (ring ? favRing(11.5) : "");
   else if (kind === "offline") {
-    inner = favPath(FAV_OPEN, "#8b939e") + '<circle cx="11.5" cy="6" r="2" style="fill:none;stroke:#8b939e;stroke-width:1.4"/>';
+    inner = favPath(FAV_OPEN, "#8b939e") + '<circle cx="11.5" cy="6" r="2" style="fill:none;stroke:#8b939e;stroke-width:1.4"/>' + (ring ? favRing(11.5) : "");
   } else {
     // The frames draw no ring on the normal dot: centred on that dot (8,8 absolute), the one
     // place a ring can sit without leaving the badge corner empty.
