@@ -4,7 +4,7 @@
 // main area while a session is blocked on you and sits on no visible pane (a pane that shows it has its own
 // strip; Done never gets a chip). It names the first such cause in the sidebar's order, adds " · +N" for the
 // others, and has two controls: Go (opens the named session; the hint is the next-needs chord) and a close that hides the chip
-// until the set of blocked causes changes. The model is notifymodel.js's chipModel; this file draws it.
+// until the set of blocked causes changes. The model is notifymodel.js's attnChipModel; this file draws it.
 //
 // Desktop only: nothing is created while mobileActive(), and crossing to a phone width hides it. It is a
 // floating status, not a toast: it never uses the toast slot. Its host is fixed over the main area, centred
@@ -106,7 +106,7 @@ function attnChipSync(place) {
   // A dismissal belongs to the exact set of causes it hid: whenever the set differs (a cause left, even while the
   // chip is not due), it is forgotten, so the same ask coming back shows the chip again.
   if (attnDismissed && attnDismissed !== chipDismissKey(order)) attnDismissed = "";
-  const m = chipModel(order, visibleSessionIds(), attnDismissed);
+  const m = attnChipModel(order, visibleSessionIds(), attnDismissed);
   attnModel = m;
   if (!m) { attnChipHide(); return; }
   if (!attnHost) { attnHost = attnChipBuild(); attnChipObserve(); }

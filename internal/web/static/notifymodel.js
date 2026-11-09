@@ -292,7 +292,7 @@ function titleState(sessions, sys, env, now) {
 }
 
 // ---- The attention chip and the chime (DD§A6, §B3; DC§5) ----
-// chipModel(ordered, visibleIds, dismissedKey) -> null, or what the chip says. `ordered` is the session
+// attnChipModel(ordered, visibleIds, dismissedKey) -> null, or what the chip says. `ordered` is the session
 // list in the sidebar's order (the caller's, not re-sorted here); `visibleIds` the session ids on a shown
 // pane (Set or array; empty while a page hides the grid). A cause is off-screen when none of its sessions
 // is visible. The chip names the first off-screen cause and counts the others as "+N". Done never shows.
@@ -328,7 +328,7 @@ function chipDismissKey(ordered) {
   return nmChipCauses(ordered).map((c) => c.key).sort().join("|");
 }
 
-function chipModel(ordered, visibleIds, dismissedKey) {
+function attnChipModel(ordered, visibleIds, dismissedKey) {
   const causes = nmChipCauses(ordered);
   const off = causes.filter((c) => nmOffScreen(c, visibleIds));
   if (!off.length) return null;
@@ -488,6 +488,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, chipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS,
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, attnChipModel, chipDismissKey, nmChipText, chimeStep, faviconSvg, SYS_OFFLINE_MS,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }

@@ -460,7 +460,7 @@ test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
   assert.equal(m.faviconSvg("nope"), m.faviconSvg("normal"), "an unknown key falls back to normal");
 });
 
-// ---- Task 5: blockedCauses / chipModel / chimeStep (DD§A6, §B3; DC§5) ----
+// ---- Task 5: blockedCauses / attnChipModel / chimeStep (DD§A6, §B3; DC§5) ----
 function ssoS(id, src, name) { return sess(id, { name: name || "n-" + id, activity: "waiting", need: "sso", attention: "block", aws_connections: [{ sso_expired: src }] }); }
 function storeS(id) { return sess(id, { activity: "waiting", need: "store_locked", attention: "block" }); }
 const none = new Set();
@@ -480,8 +480,8 @@ test("blockedCauses and titleState count the same causes", () => {
   assert.equal(m.titleState(list, null, "", T0).title, "(" + n + ") CuliBox");
 });
 
-test("chipModel: a blocked ask that is on no visible pane gives the chip text", () => {
-  const c = m.chipModel([ask("a", "Bash(rm -rf /tmp/x)")], none, "");
+test("attnChipModel: a blocked ask that is on no visible pane gives the chip text", () => {
+  const c = m.attnChipModel([ask("a", "Bash(rm -rf /tmp/x)")], none, "");
   assert.equal(c.name, "n-a");
   assert.equal(c.rest, " wants to run Bash");
   assert.equal(c.text, "n-a wants to run Bash");
@@ -490,70 +490,70 @@ test("chipModel: a blocked ask that is on no visible pane gives the chip text", 
   assert.ok(!/rm|\/tmp/.test(c.text), "never the command");
 });
 
-test("chipModel: the session on a visible pane gives none; a Set or an array both work", () => {
-  assert.equal(m.chipModel([ask("a")], new Set(["a"]), ""), null);
-  assert.equal(m.chipModel([ask("a")], ["a"], ""), null);
+test("attnChipModel: the session on a visible pane gives none; a Set or an array both work", () => {
+  assert.equal(m.attnChipModel([ask("a")], new Set(["a"]), ""), null);
+  assert.equal(m.attnChipModel([ask("a")], ["a"], ""), null);
 });
 
-test("chipModel: Done never gets a chip", () => {
-  assert.equal(m.chipModel([doneS("d")], none, ""), null);
-  assert.equal(m.chipModel([], none, ""), null);
-  assert.equal(m.chipModel(null, none, ""), null);
+test("attnChipModel: Done never gets a chip", () => {
+  assert.equal(m.attnChipModel([doneS("d")], none, ""), null);
+  assert.equal(m.attnChipModel([], none, ""), null);
+  assert.equal(m.attnChipModel(null, none, ""), null);
 });
 
-test("chipModel: SSO and store copy, singular and plural", () => {
-  assert.equal(m.chipModel([ssoS("s1", "p", "gap-sh2")], none, "").text, "gap-sh2 needs AWS sign-in");
-  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").text, "AWS sign-in expired · 2 sessions");
-  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], none, "").text, "Secret store locked · 2 sessions");
-  assert.equal(m.chipModel([storeS("t1")], none, "").text, "Secret store locked · 1 session");
+test("attnChipModel: SSO and store copy, singular and plural", () => {
+  assert.equal(m.attnChipModel([ssoS("s1", "p", "gap-sh2")], none, "").text, "gap-sh2 needs AWS sign-in");
+  assert.equal(m.attnChipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").text, "AWS sign-in expired · 2 sessions");
+  assert.equal(m.attnChipModel([storeS("t1"), storeS("t2")], none, "").text, "Secret store locked · 2 sessions");
+  assert.equal(m.attnChipModel([storeS("t1")], none, "").text, "Secret store locked · 1 session");
 });
 
-test("chipModel: a shared cause is off-screen only when none of its sessions is visible", () => {
-  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], new Set(["t2"]), ""), null);
-  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], new Set(["s1"]), ""), null);
-  assert.ok(m.chipModel([storeS("t1"), storeS("t2")], new Set(["zz"]), ""));
+test("attnChipModel: a shared cause is off-screen only when none of its sessions is visible", () => {
+  assert.equal(m.attnChipModel([storeS("t1"), storeS("t2")], new Set(["t2"]), ""), null);
+  assert.equal(m.attnChipModel([ssoS("s1", "p"), ssoS("s2", "p")], new Set(["s1"]), ""), null);
+  assert.ok(m.attnChipModel([storeS("t1"), storeS("t2")], new Set(["zz"]), ""));
 });
 
-test("chipModel: names the first off-screen cause in the given order and counts the rest as +N", () => {
+test("attnChipModel: names the first off-screen cause in the given order and counts the rest as +N", () => {
   const list = [ask("v"), storeS("t1"), ask("a"), ssoS("s1", "p")];
-  const c = m.chipModel(list, new Set(["v"]), "");
+  const c = m.attnChipModel(list, new Set(["v"]), "");
   assert.equal(c.name, "", "the store is first off-screen: a shared cause has no session name");
   assert.equal(c.text, "Secret store locked · 1 session · +2");
   assert.equal(c.more, 2);
-  const c2 = m.chipModel([ask("b"), ask("a")], none, "");
+  const c2 = m.attnChipModel([ask("b"), ask("a")], none, "");
   assert.equal(c2.text, "n-b wants to run Bash · +1");
   assert.equal(c2.rest, " wants to run Bash · +1");
 });
 
-test("chipModel: a visible blocked session is not counted in +N", () => {
-  const c = m.chipModel([ask("a"), ask("v"), ask("b")], new Set(["v"]), "");
+test("attnChipModel: a visible blocked session is not counted in +N", () => {
+  const c = m.attnChipModel([ask("a"), ask("v"), ask("b")], new Set(["v"]), "");
   assert.equal(c.more, 1);
 });
 
-test("chipModel: dismissed key = the sorted blocked cause keys; hides until that set changes", () => {
+test("attnChipModel: dismissed key = the sorted blocked cause keys; hides until that set changes", () => {
   const list = [ask("b"), ask("a")];
-  const c = m.chipModel(list, none, "");
+  const c = m.attnChipModel(list, none, "");
   assert.equal(c.dismissKey, "ab:a:block|ab:b:block");
-  assert.equal(m.chipModel(list, none, c.dismissKey), null);
-  assert.equal(m.chipModel(list.slice().reverse(), none, c.dismissKey), null, "order does not matter");
-  assert.ok(m.chipModel([ask("a"), ask("b"), ask("c")], none, c.dismissKey), "a new cause shows it again");
-  assert.ok(m.chipModel([ask("a")], none, c.dismissKey), "so does a changed set");
+  assert.equal(m.attnChipModel(list, none, c.dismissKey), null);
+  assert.equal(m.attnChipModel(list.slice().reverse(), none, c.dismissKey), null, "order does not matter");
+  assert.ok(m.attnChipModel([ask("a"), ask("b"), ask("c")], none, c.dismissKey), "a new cause shows it again");
+  assert.ok(m.attnChipModel([ask("a")], none, c.dismissKey), "so does a changed set");
 });
 
-test("chipModel: key changes with the text, so an unchanged chip is not repainted", () => {
-  const a = m.chipModel([ask("a")], none, ""), a2 = m.chipModel([ask("a")], none, "");
+test("attnChipModel: key changes with the text, so an unchanged chip is not repainted", () => {
+  const a = m.attnChipModel([ask("a")], none, ""), a2 = m.attnChipModel([ask("a")], none, "");
   assert.equal(a.key, a2.key);
-  assert.notEqual(a.key, m.chipModel([ask("a"), ask("b")], none, "").key);
+  assert.notEqual(a.key, m.attnChipModel([ask("a"), ask("b")], none, "").key);
 });
 
-test("chipModel: a generic wait gets no chip and is not counted in +N, but still counts in the title; an odd ask never leaks", () => {
+test("attnChipModel: a generic wait gets no chip and is not counted in +N, but still counts in the title; an odd ask never leaks", () => {
   const w = sess("w", { name: "gap-sh2", activity: "waiting", need: "input", attention: "block" });
-  assert.equal(m.chipModel([w], none, ""), null);
-  const c = m.chipModel([w, ask("a"), sess("w2", { activity: "waiting", need: "input", attention: "block" })], none, "");
+  assert.equal(m.attnChipModel([w], none, ""), null);
+  const c = m.attnChipModel([w, ask("a"), sess("w2", { activity: "waiting", need: "input", attention: "block" })], none, "");
   assert.equal(c.more, 0);
   assert.equal(c.text, "n-a wants to run Bash");
   assert.equal(m.titleState([w], null, "", T0).title, "(1) CuliBox");
-  assert.equal(m.chipModel([ask("a", "rm -rf /etc/shadow (x)")], none, "").text, "n-a wants to run a tool");
+  assert.equal(m.attnChipModel([ask("a", "rm -rf /etc/shadow (x)")], none, "").text, "n-a wants to run a tool");
 });
 
 // chimeStep: the pure decision behind the blocked blip
@@ -608,10 +608,10 @@ test("chimeStep: a PTY blip that returns within the re-arm window stays silent",
   assert.equal(late.play, true);
 });
 
-test("chipModel: sid is the first OFF-SCREEN session of a shared cause", () => {
-  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], new Set(["t1"]), ""), null, "one visible: on screen");
-  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").sid, "s1");
-  const c = m.chipModel([ask("v"), ssoS("s1", "p"), ssoS("s2", "p")], new Set(["v"]), "");
+test("attnChipModel: sid is the first OFF-SCREEN session of a shared cause", () => {
+  assert.equal(m.attnChipModel([storeS("t1"), storeS("t2")], new Set(["t1"]), ""), null, "one visible: on screen");
+  assert.equal(m.attnChipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").sid, "s1");
+  const c = m.attnChipModel([ask("v"), ssoS("s1", "p"), ssoS("s2", "p")], new Set(["v"]), "");
   assert.equal(c.sid, "s1");
 });
 
@@ -621,7 +621,7 @@ test("chipDismissKey: eligible causes only, so a generic wait never changes it",
   assert.equal(m.chipDismissKey([ask("b"), ask("a"), w]), "ab:a:block|ab:b:block");
   assert.equal(m.chipDismissKey([w]), "");
   const d = m.chipDismissKey([ask("a")]);
-  assert.equal(m.chipModel([ask("a"), w], none, d), null, "a started wait does not bring a dismissed chip back");
+  assert.equal(m.attnChipModel([ask("a"), w], none, d), null, "a started wait does not bring a dismissed chip back");
 });
 
 test("nmChipText: explicit store copy, and an unknown kind has no text", () => {
