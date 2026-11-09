@@ -63,8 +63,9 @@ test("auditRowView: an elevation granted by you is bad (the write rule) and elev
   assert.strictEqual(v.reason, "restart worker");
 });
 
-test("auditRowView: extended and refused elevations are bad, a dropped one is neutral", () => {
-  for (const o of ["extended", "refused"]) assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: o }), {}).tone, "bad");
+test("auditRowView: an extended elevation is bad, a refused or dropped one is neutral", () => {
+  assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: "extended" }), {}).tone, "bad");
+  assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: "refused" }), {}).tone, "");
   const v = auditRowView(ev({ kind: "elevation", outcome: "dropped_early", actor: "you" }), {});
   assert.strictEqual(v.tone, "");
   assert.strictEqual(v.outcome, "dropped early · you");
@@ -72,7 +73,7 @@ test("auditRowView: extended and refused elevations are bad, a dropped one is ne
 
 // The red row (UI plan 5, #175; digest-design §B9): one write elevation is red, and a write elevation is a live
 // grant, so granted and extended. A refused, dropped, expired or ended elevation opened nothing: no tint, no red
-// Kind. The outcome tones above are Plan 6's and stay as they are (a refused elevation's Outcome is still red).
+// Kind. Plan 6 (#176) made the Outcome tone follow: only a granted or extended elevation is red, a refused one is neutral.
 test("auditRowView: elevated is a granted or extended elevation, nothing else", () => {
   for (const o of ["granted", "extended"]) {
     assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: o }), {}).elevated, true, o);
@@ -89,28 +90,58 @@ test("auditRowView: elevated is a granted or extended elevation, nothing else", 
   assert.strictEqual(auditRowView(null, {}).elevated, false);
 });
 
-test("auditRowView: a refused elevation is not tinted but its Outcome tone is still bad (Plan 6 owns the tones)", () => {
+test("auditRowView: a refused elevation is not tinted and its Outcome is neutral (containment working)", () => {
   const v = auditRowView(ev({ kind: "elevation", outcome: "refused", actor: "you" }), {});
   assert.strictEqual(v.elevated, false);
-  assert.strictEqual(v.tone, "bad");
+  assert.strictEqual(v.tone, "");
   assert.strictEqual(v.outcome, "refused · you");
 });
 
-test("auditRowView: egress denied x4 is bad and carries its count; allowed is ok", () => {
+test("auditRowView: egress denied x4 is neutral and carries its count; allowed is ok", () => {
   const d = auditRowView(ev({ kind: "egress", what: "pypi.org:443", outcome: "denied", count: 4 }), {});
   assert.strictEqual(d.kind, "Egress");
   assert.strictEqual(d.outcome, "denied ×4");
-  assert.strictEqual(d.tone, "bad");
+  assert.strictEqual(d.tone, "");
   const a = auditRowView(ev({ kind: "egress", outcome: "allowed", count: 1 }), {});
   assert.strictEqual(a.outcome, "allowed");
   assert.strictEqual(a.tone, "ok");
 });
 
-test("auditRowView: every egress failure word is bad", () => {
-  for (const o of ["denied", "private_addr", "bad_auth", "bad_method", "dial_error", "failed"]) {
-    assert.strictEqual(auditRowView(ev({ kind: "egress", outcome: o }), {}).tone, "bad", o);
+test("auditRowView: refusals are neutral, errors and live grants red", () => {
+  // Egress: a denied tunnel is the allowlist working; a failed dial is an error.
+  for (const o of ["denied", "private_addr", "bad_auth", "bad_method"]) {
+    const v = auditRowView(ev({ kind: "egress", outcome: o }), {});
+    assert.notStrictEqual(v.tone, "bad", o);
+    assert.strictEqual(v.tone, "", o);
+  }
+  for (const o of ["dial_error", "failed"]) assert.strictEqual(auditRowView(ev({ kind: "egress", outcome: o }), {}).tone, "bad", o);
+  // Credentials: every denial is neutral, every error is red.
+  for (const o of ["denied_token", "denied_session", "denied_not_read_only", "denied_box", "denied_scope"]) {
+    assert.strictEqual(auditRowView(ev({ kind: "credential", outcome: o }), {}).tone, "", o);
+  }
+  for (const o of ["sts_error", "scope_error", "github_error", "rate_limited", "sso_expired", "store_locked", "unresolved", "not_installed"]) {
+    assert.strictEqual(auditRowView(ev({ kind: "credential", outcome: o }), {}).tone, "bad", o);
+  }
+  // Elevation: a refusal is neutral; only a grant that opened or was extended is red, and elevated.
+  assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: "refused" }), {}).tone, "");
+  for (const o of ["granted", "extended"]) {
+    const v = auditRowView(ev({ kind: "elevation", outcome: o }), {});
+    assert.strictEqual(v.tone, "bad", o);
+    assert.strictEqual(v.elevated, true, o);
   }
   assert.strictEqual(auditRowView(ev({ kind: "settings", outcome: "ok" }), {}).tone, "ok");
+});
+
+// store_unavailable is a real error (the macOS Keychain store key could not be read), as Activity's red "failed" and the
+// Access events table draw it; the Audit page takes its tone from the same accTone (tone only, the page's DOM is Plan 5's) (M1).
+test("auditRowView: store_unavailable is bad, and says so in words", () => {
+  for (const kind of ["credential", "store"]) {
+    const v = auditRowView(ev({ kind, outcome: "store_unavailable" }), {});
+    assert.strictEqual(v.tone, "bad", kind);
+    assert.strictEqual(v.outcome, "store unavailable", kind);
+    assert.strictEqual(v.elevated, false, kind);
+  }
+  assert.strictEqual(auditRowView(ev({ kind: "credential", outcome: "store_unavailable", count: 3 }), {}).tone, "bad");
 });
 
 test("auditRowView: sso_expired is bad (the Access view's rule, not amber)", () => {

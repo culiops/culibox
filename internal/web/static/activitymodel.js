@@ -11,6 +11,8 @@
 //   resp     the activity reply, its `events` being every page held (newest first)
 //   filter   one of ACTIVITY_FILTERS
 //   nowMs    the clock, passed in so the model is a pure function
+//   failed   the last read of the reply failed (activitytab.js's load state); only
+//            read while no reply has arrived, to say so instead of "no events yet"
 //
 // Classic script: nothing here touches the DOM or the network, and every helper
 // tolerates a field of the wrong type (the reply is the daemon's, but a box agent
@@ -86,15 +88,17 @@ function outcomeText(e, nowMs) {
 }
 
 // actTone: the colour role of an outcome (D23). Amber is the ask only; red is an
-// error, a refusal or a write window; green is a success; tone "add" (a diff)
-// is neutral text in the view; everything else is neutral.
+// error (a tool error, a failed credential) or a write window that opened or was
+// extended; green is a success; tone "add" (a diff) is neutral text in the view.
+// A refusal (a credential or an approval) is containment working: neutral, like
+// everything else.
 function actTone(e) {
   if (!e || typeof e !== "object") return "muted";
   const st = actStr(e.state);
   switch (e.kind) {
     case "ask": return "amber";
-    case "credential": return st === "minted" ? "ok" : st === "refused" ? "err" : "muted";
-    case "approval": return st === "granted" || st === "extended" || st === "refused" ? "err" : "muted";
+    case "credential": return st === "minted" ? "ok" : st === "failed" ? "err" : "muted";
+    case "approval": return st === "granted" || st === "extended" ? "err" : "muted";
     case "tool":
       if (st === "error") return "err";
       if (st === "pending") return "muted";
@@ -147,9 +151,48 @@ function actRow(e, nowMs) {
   };
 }
 
-// actRunning: the "running" tile: 35s / 41m / 1h 12m.
+// ACT_DASH: what a figure reads when there is nothing true to show: before the
+// first reply, or when the server cannot tell. U+2014, never a fake 0.
+const ACT_DASH = "—";
+
+// actRunning: the "Session age" tile and line: 35s / 41m / 1h 12m / 11d 13h. It is
+// the reply's running_s in whole seconds. A live session: time since it started,
+// the instant Access and the steer rail count from (startedText). An exited one:
+// start to its newest event, because the registry keeps no end time. The server
+// sends 0 when it cannot tell (an exited session with no events, or no creation
+// time), and a missing or wrong-typed field is the same unknown, so both read a
+// dash, never "0s".
 function actRunning(sec) {
-  return actAge(actNum(sec) || 0);
+  const n = actNum(sec);
+  return n !== null && n >= 1 ? actAge(n) : ACT_DASH;
+}
+
+// actEmpty: the plain block a session with no transcript gets in place of tiles
+// (M6.2). The reply of a non-Claude session only ever carries credential and
+// approval rows, so "no credential events" is a real finding only once it is read.
+//   name  s.name, else the id; the agent clause drops when the profile is unnamed
+//   meta  Session age, then how many credential events there are: the larger of the
+//         rows held and the server's total (summary.credentials counts minted and
+//         fetched over the whole session, unpaged; refused and failed rows are
+//         events it does not count). A partial reply (an audit read failed) with
+//         nothing found says it could not read them, never "none yet".
+function actEmpty(s, r, sum, events, failed) {
+  const name = actStr(s.name) || actStr(s.id);
+  const agent = actStr(s.agent);
+  const tail = " If this session uses a credential, the event still appears here.";
+  let meta = "Session age " + (r ? actRunning(sum.running_s) : ACT_DASH);
+  if (r) {
+    const n = Math.max(events.filter((e) => e.kind === "credential").length, actNum(sum.credentials) || 0);
+    if (n === 0 && r.partial) meta += " · could not read credential events";
+    else meta += " · " + (n === 0 ? "no credential events yet" : n === 1 ? "1 credential event" : n + " credential events");
+  } else if (failed) {
+    meta += " · could not read credential events";
+  }
+  return {
+    title: "Activity is for Claude sessions",
+    body: (agent ? name + " runs " + agent + ", so there is no transcript to show." : name + " has no transcript to show.") + tail,
+    meta,
+  };
 }
 
 // actFiles: the files changed, with their +a −d text.
@@ -198,24 +241,26 @@ function activityModel(inp) {
     rows.push(actRow(e, nowMs));
   });
 
+  // The kit's five tiles, from the reply's summary and dashes until it arrives. A
+  // session with no transcript has none: it gets the one plain block instead.
+  const dash = !r;
   const tiles = claude
     ? [
-      { n: actNum(sum.tool_calls) || 0, label: "tool calls" },
-      { n: actNum(sum.files_changed) || 0, label: "files changed" },
-      { n: actNum(sum.credentials) || 0, label: "credentials" },
-      { n: s.need ? 1 : 0, label: "waiting for you" },
-      { n: actRunning(sum.running_s), label: "running" },
+      { n: dash ? ACT_DASH : actNum(sum.tool_calls) || 0, label: "Tool calls" },
+      { n: dash ? ACT_DASH : actNum(sum.files_changed) || 0, label: "Files changed" },
+      { n: dash ? ACT_DASH : actNum(sum.credentials) || 0, label: "Credentials" },
+      { n: dash ? ACT_DASH : s.need ? 1 : 0, label: "Waiting for you" },
+      { n: dash ? ACT_DASH : actRunning(sum.running_s), label: "Session age" },
     ]
-    : [
-      { n: actNum(sum.credentials) || 0, label: "credentials" },
-      { n: actRunning(sum.running_s), label: "running" },
-    ];
+    : [];
 
   return {
     tiles,
     rows,
     files: claude ? actFiles(r && r.files) : [],
     notClaude: !claude,
+    empty: s && !claude ? actEmpty(s, r, sum, events, i.failed === true) : null,
+    loaded: !!r,
     partial: !!(r && r.partial),
     more: !!(r && r.more),
     ask: asking,
@@ -224,6 +269,7 @@ function activityModel(inp) {
 
 // actContext: the context bar's line. pct is the server's verdict when present
 // (it omits it when the window is unknown), else used / max; null when neither.
+// text is the bar's accessible name; label is the card's "61% of 200k".
 function actContext(u) {
   if (!u || typeof u !== "object") return null;
   const used = actNum(u.contextTokens) || 0;
@@ -235,7 +281,7 @@ function actContext(u) {
   let of = "";
   if (max >= 1e6) of = " of " + String(Number((max / 1e6).toFixed(1))) + "M";
   else if (max >= 1000) of = " of " + Math.round(max / 1000) + "k";
-  return { pct, width: pct + "%", text: "context " + pct + "%" + of };
+  return { pct, width: pct + "%", text: "context " + pct + "%" + of, label: pct + "%" + of };
 }
 
 // ACT_TOOL_ROWS: how many tools the Context by tool list shows.

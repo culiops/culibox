@@ -444,8 +444,8 @@ test("an elevated row is tr.is-elevated with a red Kind cell", () => {
   assert.strictEqual(extended.className, "is-elevated");
   assert.strictEqual(cells(extended)[2][0], "au-kind au-bad");
 
-  // An elevation that opened nothing is a plain row: no tint, a muted Kind. A refused one keeps its red Outcome
-  // (the tones are Plan 6's), a dropped one is muted.
+  // An elevation that opened nothing is a plain row: no tint, a muted Kind. A refused one is containment working
+  // (UI plan 6, #176), so its Outcome is neutral like a dropped one's.
   for (const outcome of ["dropped", "expired", "ended"]) {
     const tr = row({ ...base, outcome, actor: "you" });
     assert.strictEqual(tr.className, "", outcome + ": no tint");
@@ -453,15 +453,17 @@ test("an elevated row is tr.is-elevated with a red Kind cell", () => {
   }
   const refused = row({ ...base, outcome: "refused", actor: "you" });
   assert.strictEqual(refused.className, "");
-  assert.deepStrictEqual(cells(refused).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out au-bad"], "refused: not tinted, Outcome still red until Plan 6");
+  assert.deepStrictEqual(cells(refused).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out"], "refused: not tinted, Outcome neutral");
 
   // Other rows: the Outcome keeps its tone class from auditRowView.
   const minted = row({ ts: 1_760_000_000, kind: "credential", what: "aws sandbox", outcome: "minted" });
   assert.strictEqual(minted.className, "");
   assert.deepStrictEqual(cells(minted).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out au-ok"]);
   const denied = row({ ts: 1_760_000_000, kind: "egress", what: "pypi.org:443", outcome: "denied", count: 3 });
-  assert.strictEqual(cells(denied)[4][0], "au-out au-bad");
+  assert.strictEqual(cells(denied)[4][0], "au-out");
   assert.strictEqual(cells(denied)[4][1], "denied ×3");
+  const dialError = row({ ts: 1_760_000_000, kind: "egress", what: "pypi.org:443", outcome: "dial_error" });
+  assert.strictEqual(cells(dialError)[4][0], "au-out au-bad");
   const created = row({ ts: 1_760_000_000, kind: "settings", what: "token e2e created", outcome: "created", actor: "you" });
   assert.strictEqual(cells(created)[4][0], "au-out");
 });
@@ -2794,4 +2796,57 @@ test("the kit's seg items and Esc hint sit on the 20px line", () => {
   for (const sel of [".seg > .seg-item {", ".btn .kbd-hint {"]) assert.ok(fence.includes(sel), sel + " is in the kit fence");
   const inFence = (sel) => parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(sel));
   for (const sel of [".seg > .seg-item", ".btn .kbd-hint"]) assert.ok(![...inFence(sel).decls.values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v)), sel + " has no hex");
+});
+
+// B1 (Gate 4 of plan 6, #176): Scan, Elevate…, Extend, Drop now and Load older drew one pixel below the frame's. primitives.css's
+// legacy `.btn { font: 400 12px ... }` resets line-height to `normal`, so a label sat on the font's own line, not the frame's 20px
+// one. A kit-wide `.btn { line-height: var(--lh-md) }` was tried and reversed: it grew some Settings buttons (the Credentials
+// tab's padded .btn, "+ new profile", a wrapping .btn), and Settings is not this plan's. The line is set on Plan 6's own surfaces
+// only: the banner (.elev .btn), the Activity view (.act-wrap, .act-plain) and the Access view (.ac-wrap). The kit .btn is as it was.
+const VIEW_BTNS = [".elev .btn", ".ac-wrap .btn", ".act-wrap .btn", ".act-plain .btn"];
+test("only the banner, Activity and Access buttons sit on the 20px line; the kit .btn and every other page keep theirs", () => {
+  for (const sel of VIEW_BTNS) assert.strictEqual(decls(sel).get("line-height"), "var(--lh-md)", sel + " is on the 20px line");
+  // The kit .btn (and its sizes) set no line: that is what moved Settings' boxes.
+  for (const sel of [".btn", ".btn-sm", ".btn-lg", ".btn-icon", ".btn-primary", ".btn-ghost", ".btn-danger", ".btn-yes"]) {
+    assert.strictEqual(decls(sel).get("line-height"), undefined, sel + " sets no line of its own");
+  }
+  const raw = read("desktop.css");
+  const fence = raw.slice(raw.indexOf("/* === kit primitives"), raw.indexOf("/* === end kit primitives === */"));
+  const kit = parseRules(stripComments(fence)).find((r) => parts(r.selector).includes(".btn"));
+  assert.ok(kit && !kit.decls.has("line-height"), "the kit .btn rule, inside the fence, has no line-height");
+  assert.strictEqual(kit.decls.get("min-height"), "var(--h-ctl)");
+  assert.strictEqual(decls(".btn-sm").get("min-height"), "var(--h-sm)");
+  // No rule in the whole sheet that is a bare .btn selector (any kit button, on any page) sets a line.
+  const bare = BASE_RULES.filter((r) => r.decls.has("line-height") && parts(r.selector).some((x) => /^\.btn[\w.:()-]*$/.test(x)));
+  assert.deepStrictEqual(bare.map((r) => r.selector), [], "no unscoped .btn rule sets line-height");
+  // Every other rule that gives a .btn a line is one of the view's own, or an older context's that already set it itself.
+  const scoped = BASE_RULES.filter((r) => r.decls.has("line-height") && parts(r.selector).some((x) => /(^|[\s>])\.btn[\w.:()\[\]="-]*$/.test(x))).flatMap((r) => parts(r.selector).filter((x) => /\.btn/.test(x)));
+  for (const sel of scoped) {
+    assert.ok(VIEW_BTNS.includes(sel) || /^(\.empst \.btn|dialog:not\(\.as-page\):not\(\[box-\]\):not\(\.sheet-dialog\) (\.dhd )?\.btn(\.gh)?|#store-banner \.btn|#bug-modal \.dhd \.btn\.gh\[data-close="bug-modal"\]|\.btn \.kbd-hint)$/.test(sel), "unexpected .btn line rule: " + sel);
+  }
+  // The root rules are in the views' own blocks: inside the fence only the banner's, which is the kit sheet's own addition.
+  assert.ok(fence.includes(".elev .btn {") && !fence.includes(".ac-wrap") && !fence.includes(".act-wrap"));
+  assert.ok(![...VIEW_BTNS].some((sel) => [...decls(sel).values()].some((v) => /#[0-9a-f]{3,8}\b/i.test(v))), "no hex");
+});
+
+// A scoped button cannot change box height: the 20px line plus the two 1px borders is 22px, under the 24px (.btn-sm) and 28px
+// (.btn) floors, and no rule inside the four roots gives a .btn vertical padding, a height or a second line. Drop now, Scan, Load
+// older, Elevate… and Extend are .btn-sm; Cancel, Grant, Enable replies, the reply's send and the SSO card's buttons are .btn.
+test("the scoped buttons keep their boxes: 22px of line and border under the 24px and 28px floors, nothing else sized inside the roots", () => {
+  const LH = 20;
+  const border = decls(".btn").get("border");
+  assert.strictEqual(border, "1px solid transparent");
+  assert.ok(LH + 2 <= 24, "a .btn-sm is 24px with the 20px line");
+  assert.ok(LH + 2 <= 28, "a .btn is 28px with the 20px line");
+  assert.strictEqual(decls(":root").get("--lh-md"), LH + "px");
+  assert.strictEqual(decls(".btn").get("padding"), "0 12px", "no vertical padding on the kit .btn");
+  assert.strictEqual(decls(".btn-sm").get("padding"), "0 8px", "or the small one");
+  assert.strictEqual(decls(".btn").get("white-space"), "nowrap", "a label never takes a second line");
+  const roots = [".elev ", ".ac-wrap ", ".act-wrap ", ".act-plain "];
+  const inside = BASE_RULES.flatMap((r) => parts(r.selector).filter((x) => roots.some((q) => x.startsWith(q)) && /\.btn\b/.test(x)).map((x) => [x, r]));
+  assert.ok(inside.length >= 4, "the four scoped rules are among them");
+  for (const [sel, r] of inside) {
+    const props = [...r.decls.keys()].filter((k) => !["flex", "line-height"].includes(k));
+    assert.deepStrictEqual(props, [], sel + " sets only the line (and the banner's flex): no padding, height or wrap");
+  }
 });

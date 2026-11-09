@@ -91,7 +91,6 @@ const THIN_ALLOW = [
   [".dock-tab:focus-visible", INSET + "the dock bar's tabs row is overflow: hidden"],
   [".dock-add:focus-visible", INSET + "the dock bar's tabs row is overflow: hidden"],
   [".dock-ic:focus-visible", INSET + "the dock bar's icon buttons sit at the bar's edge"],
-  [".act-row:focus-visible", INSET + "a row spanning the activity list's full width, inside its scroll container"],
   [".vt-mi:focus-visible", INSET + "a menu row: the menu is a popover with 4px padding"],
   [".ft-node:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],
   [".ft-node.ft-sel:focus-visible", INSET + "a tree row spans the full width of the #filetree scroll container, which clips an outside ring"],

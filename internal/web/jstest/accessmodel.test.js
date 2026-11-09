@@ -2,7 +2,8 @@
 // accessmodel.js: the Access view's pure model (spec 5.7) and the grant form's gate.
 const test = require("node:test");
 const assert = require("node:assert");
-const { accessModel, grantFormState, ACCESS_EVENTS } = require("../static/accessmodel.js");
+const { accessModel, grantFormState, accTone, accEventTime, elevBanner, ACCESS_EVENTS } = require("../static/accessmodel.js");
+const { hhmm } = require("../static/sessionrow.js");
 
 const NOW = Date.parse("2026-10-27T15:19:00Z");
 const iso = (minFromNow) => new Date(NOW + minFromNow * 60000).toISOString();
@@ -27,7 +28,6 @@ const model = (o) => accessModel(Object.assign({ nowMs: NOW, meta: { box_runtime
 test("a session with no AWS binding (204): containment only, no rows, no throw", () => {
   const m = model({ session: sess({ aws_connections: undefined }), aws: null });
   assert.deepStrictEqual(m.creds.rows, []);
-  assert.strictEqual(m.banner, null);
   assert.deepStrictEqual(m.events, []);
   assert.strictEqual(m.containment.tier, "box");
   assert.strictEqual(m.containment.workspace, "/home/u/culipulse");
@@ -39,7 +39,6 @@ test("nothing at all loaded: still a model, never a throw", () => {
   assert.strictEqual(m.containment.tier, "host");
   assert.deepStrictEqual(m.creds.rows, []);
   assert.deepStrictEqual(m.events, []);
-  assert.strictEqual(m.banner, null);
 });
 
 test("a + Shell session: tier and workspace, a host tier reads as host", () => {
@@ -48,7 +47,6 @@ test("a + Shell session: tier and workspace, a host tier reads as host", () => {
   assert.strictEqual(m.containment.workspace, "/w");
   assert.strictEqual(m.containment.runtime, "");
   assert.deepStrictEqual(m.creds.rows, []);
-  assert.strictEqual(m.banner, null);
 });
 
 test("an unknown runtime is host, never box (fail loud)", () => {
@@ -105,7 +103,6 @@ test("read connection: one row, Elevate offered, SSO unknown, last credential ti
   assert.match(r.sub, /agent-investigate/);
   assert.match(r.last, /^\d\d:\d\d$/);
   assert.match(m.creds.head, /^12 mints · last \d\d:\d\d$/);
-  assert.strictEqual(m.banner, null);
 });
 
 test("a connection without a write role offers no action and no grant panel", () => {
@@ -114,31 +111,36 @@ test("a connection without a write role offers no action and no grant panel", ()
   assert.strictEqual(r.grant, null);
 });
 
-test("elevated session: red banner with minutes left, Extend + Drop near the end of the window", () => {
+test("elevated session: red banner with minutes left, Extend (and no row Drop) near the end of the window", () => {
   const s = sess({ aws_connections: [conn({ elevated_until: iso(12) })] });
   const ap = [{ ts: NOW - 60000, action: "granted", minutes: 30, until: NOW + 12 * 60000, reason: "restart stuck worker", name: "culipulse-prod" }];
-  const m = model({ session: s, aws: status({ approvals: ap }) });
-  assert.strictEqual(m.banner.conn, "culipulse-prod");
-  assert.strictEqual(m.banner.minsLeft, 12);
-  assert.match(m.banner.untilText, /^\d\d:\d\d$/);
-  assert.strictEqual(m.banner.reason, "restart stuck worker");
-  assert.strictEqual(m.banner.newCreds, true, "under 16 min the broker mints no more write credentials");
+  const aws = status({ approvals: ap });
+  const m = model({ session: s, aws });
+  const banner = elevBanner(s, aws, NOW);
+  assert.strictEqual(banner.conn, "culipulse-prod");
+  assert.strictEqual(banner.minsLeft, 12);
+  assert.match(banner.untilText, /^\d\d:\d\d$/);
+  assert.strictEqual(banner.reason, "restart stuck worker");
+  assert.strictEqual(banner.newCreds, true, "under 16 min the broker mints no more write credentials");
   const r = m.creds.rows[0];
   assert.strictEqual(r.scope, "write (elevated)");
-  assert.deepStrictEqual(r.actions, ["extend", "drop"]);
+  assert.deepStrictEqual(r.actions, ["extend"], "the pane's banner carries the one Drop");
 });
 
-test("elevated with plenty of time left: Drop only (the rail's own Extend rule)", () => {
-  const m = model({ session: sess({ aws_connections: [conn({ elevated_until: iso(23) })] }), aws: status() });
-  assert.strictEqual(m.banner.minsLeft, 23);
-  assert.strictEqual(m.banner.newCreds, false);
-  assert.strictEqual(m.banner.reason, "");
-  assert.deepStrictEqual(m.creds.rows[0].actions, ["drop"]);
+test("elevated with plenty of time left: no row action (the rail's own Extend rule; Drop lives on the banner)", () => {
+  const s = sess({ aws_connections: [conn({ elevated_until: iso(23) })] });
+  const m = model({ session: s, aws: status() });
+  const banner = elevBanner(s, status(), NOW);
+  assert.strictEqual(banner.minsLeft, 23);
+  assert.strictEqual(banner.newCreds, false);
+  assert.strictEqual(banner.reason, "");
+  assert.deepStrictEqual(m.creds.rows[0].actions, []);
 });
 
 test("a lapsed window is not a banner", () => {
-  const m = model({ session: sess({ aws_connections: [conn({ elevated_until: iso(-1) })] }), aws: status() });
-  assert.strictEqual(m.banner, null);
+  const s = sess({ aws_connections: [conn({ elevated_until: iso(-1) })] });
+  const m = model({ session: s, aws: status() });
+  assert.strictEqual(elevBanner(s, status(), NOW), null);
   assert.strictEqual(m.creds.rows[0].scope, "read");
 });
 
@@ -250,16 +252,53 @@ test("events: aws row names its connection, an inline binding names its role; el
   assert.deepStrictEqual([ev[1].subject, ev[1].outcome, ev[1].tone], ["agent-investigate", "sso expired", "bad"]);
 });
 
+// A denial or a refusal is containment working: neutral text. Red is for something that broke (UI plan 6, E6).
+test("accTone: containment refusals are neutral, errors stay red", () => {
+  for (const o of ["denied_scope", "denied_box", "denied_token", "denied_session", "denied_not_read_only", "refused"]) {
+    assert.strictEqual(accTone(o), "", o);
+  }
+  for (const o of ["sts_error", "scope_error", "github_error", "revoke_failed", "probe_failed", "rate_limited", "sso_expired", "store_locked", "unresolved", "not_installed"]) {
+    assert.strictEqual(accTone(o), "bad", o);
+  }
+  for (const o of ["minted", "probe_minted", "fetched"]) assert.strictEqual(accTone(o), "ok", o);
+  for (const o of ["revoked", "", undefined]) assert.strictEqual(accTone(o), "", String(o));
+});
+
+// store_unavailable: the macOS Keychain store key could not be read (broker/audit.go:57; a row outcome at broker/static.go:148
+// and broker/github.go:495). Something broke, so it is red, as Activity's "failed" already draws the same event (M1).
+test("accTone: store_unavailable is an error, red in the Access events table, like store_locked beside it (M1)", () => {
+  assert.strictEqual(accTone("store_unavailable"), "bad");
+  assert.strictEqual(accTone("store_locked"), "bad");
+  assert.strictEqual(accTone("store_unavailable_x"), "", "an exact word, not a prefix");
+  const aws = status({
+    recent: [{ time: iso(-2), provider: "aws", entry: "culipulse-prod", outcome: "store_unavailable", elevated: false }],
+    static_recent: [{ time: iso(-1), subject: "deploy-token", outcome: "store_unavailable" }],
+  });
+  const rows = model({ session: sess(), aws }).events.filter((e) => e.outcome === "store unavailable");
+  assert.strictEqual(rows.length, 2, "an AWS row and a static-token row");
+  assert.ok(rows.every((e) => e.tone === "bad"), JSON.stringify(rows.map((e) => e.tone)));
+});
+
+test("accessModel: a refused approval row has no tone", () => {
+  const approvals = [
+    { ts: NOW - 1000, action: "refused", name: "culipulse-prod" },
+    { ts: NOW - 2000, action: "granted", minutes: 30, name: "culipulse-prod" },
+  ];
+  const ev = model({ session: sess(), aws: status({ approvals }) }).events;
+  assert.deepStrictEqual([ev[0].subject, ev[0].tone], ["refused on culipulse-prod", ""]);
+  assert.strictEqual(ev[1].tone, "", "an approval row never carries a tone of its own");
+});
+
 test("events: an approval reads as a decision by you, its reason kept as detail", () => {
   const approvals = [{ ts: NOW - 1000, action: "granted", minutes: 30, reason: "restart stuck worker deployment", name: "culipulse-prod" }];
   const e = model({ session: sess(), aws: status({ approvals }) }).events[0];
   assert.strictEqual(e.provider, "approval");
-  assert.strictEqual(e.subject, "granted 30 min · culipulse-prod");
+  assert.strictEqual(e.subject, "granted 30 min on culipulse-prod");
   assert.strictEqual(e.outcome, "you (browser)");
   assert.strictEqual(e.detail, "restart stuck worker deployment");
   const x = model({ session: sess(), aws: status({ approvals: [{ ts: NOW, action: "expired", name: "c" }] }) }).events[0];
   assert.strictEqual(x.outcome, "");
-  assert.strictEqual(x.subject, "expired · c");
+  assert.strictEqual(x.subject, "expired on c");
 });
 
 test("events: absent approvals are unavailable, not none; the other rows still show", () => {
@@ -274,6 +313,289 @@ test("hostile strings stay plain data: nothing is interpreted or throws", () => 
     aws: status({ recent: [{ provider: "github", subject: "<script>", outcome: "minted", time: "garbage" }], approvals: [{ ts: "x", action: "granted" }] }) });
   assert.strictEqual(m.creds.rows[0].name, "<img onerror=x>");
   assert.ok(Array.isArray(m.events));
+});
+
+// --- the write window: one banner model, the lapse and leftover lines (UI plan 6) ---
+
+const granted = (over) => Object.assign({ ts: NOW - 60000, action: "granted", minutes: 30, name: "culipulse-prod", reason: "rotate KMS key" }, over);
+const open = (min, over) => sess({ aws_connections: [conn(Object.assign({ elevated_until: iso(min) }, over))] });
+
+test("elevBanner: an open window names the connection, the clock, minutes left and the reason", () => {
+  const aws = status({ approvals: [granted()] });
+  const b = elevBanner(open(23), aws, NOW);
+  assert.strictEqual(b.conn, "culipulse-prod");
+  assert.strictEqual(b.untilText, hhmm(iso(23)));
+  assert.strictEqual(b.minsLeft, 23);
+  assert.strictEqual(b.leftText, "23 min left");
+  assert.strictEqual(b.reason, "rotate KMS key");
+  assert.strictEqual(b.newCreds, false);
+  assert.strictEqual(b.detail, "until " + hhmm(iso(23)) + " · 23 min left · “rotate KMS key”");
+  assert.strictEqual(typeof b.key, "string");
+  // The Access view carries no banner of its own: the pane's banner (elevbanner.js) is the only one.
+  assert.strictEqual("banner" in model({ session: open(23), aws }), false);
+});
+
+test("elevBanner: the reason is this connection's own newest grant, never another connection's", () => {
+  const aws = status({ approvals: [ // deliberately not newest-first
+    granted({ ts: NOW - 900000, reason: "first reason" }),
+    granted({ name: "other", reason: "someone else's reason" }),
+    granted({ ts: NOW - 120000, action: "extended", reason: "still rotating" }),
+  ] });
+  assert.strictEqual(elevBanner(open(23), aws, NOW).reason, "still rotating");
+  assert.strictEqual(elevBanner(open(23), status({ approvals: [granted({ name: "other" })] }), NOW).reason, "");
+});
+
+test("elevBanner: no reason before the status loads, and no empty quotes after a failed read", () => {
+  const b = elevBanner(open(23), null, NOW);
+  assert.ok(b.detail.endsWith("23 min left"), b.detail);
+  assert.ok(!b.detail.includes("“") && !b.detail.includes("”"), b.detail);
+  assert.strictEqual(b.reason, "");
+  // A failed read leaves aws null or undefined; a reply without approvals, with an empty
+  // reason, or with a blank one says nothing either.
+  for (const aws of [undefined, {}, status(), status({ approvals: [] }),
+    status({ approvals: [granted({ reason: "" })] }), status({ approvals: [granted({ reason: undefined })] }),
+    status({ approvals: [granted({ reason: "   " })] })]) {
+    const x = elevBanner(open(23), aws, NOW);
+    assert.strictEqual(x.detail, "until " + hhmm(iso(23)) + " · 23 min left", JSON.stringify(aws));
+  }
+});
+
+test("elevBanner: under a minute reads <1 min left; under 16 min adds the base-role tail", () => {
+  const soon = new Date(NOW + 30000).toISOString();
+  const b = elevBanner(sess({ aws_connections: [conn({ elevated_until: soon })] }), null, NOW);
+  assert.strictEqual(b.minsLeft, 0);
+  assert.strictEqual(b.leftText, "<1 min left");
+  assert.strictEqual(b.newCreds, true);
+  assert.strictEqual(b.detail, "until " + hhmm(soon) + " · <1 min left · new credentials from the base role");
+  const t = (min) => elevBanner(open(min), status({ approvals: [granted()] }), NOW);
+  assert.strictEqual(t(15).detail, "until " + hhmm(iso(15)) + " · 15 min left · “rotate KMS key” · new credentials from the base role");
+  assert.strictEqual(t(15).newCreds, true);
+  assert.strictEqual(t(16).newCreds, false, "16 min is the broker's minimum: no tail from there up");
+  assert.ok(!t(16).detail.includes("base role"));
+  assert.strictEqual(t(1).leftText, "1 min left");
+});
+
+test("elevBanner: key follows exactly what is drawn", () => {
+  const aws = status({ approvals: [granted()] });
+  const a = elevBanner(open(23), aws, NOW);
+  // 23 min 30 s left: seconds inside the minute change nothing visible, the next minute does.
+  const half = sess({ aws_connections: [conn({ elevated_until: new Date(NOW + 23.5 * 60000).toISOString() })] });
+  assert.strictEqual(elevBanner(half, aws, NOW + 20000).key, elevBanner(half, aws, NOW).key);
+  assert.notStrictEqual(elevBanner(half, aws, NOW + 40000).key, elevBanner(half, aws, NOW).key, "the next minute repaints");
+  assert.notStrictEqual(elevBanner(open(23), status({ approvals: [granted({ reason: "other" })] }), NOW).key, a.key);
+  assert.notStrictEqual(elevBanner(open(23), null, NOW).key, a.key, "the reason arriving repaints");
+  assert.notStrictEqual(elevBanner(open(23, { name: "z", label: "z" }), aws, NOW).key, a.key);
+});
+
+test("elevBanner: null once the window lapsed, and with no binding", () => {
+  assert.strictEqual(elevBanner(open(-1), null, NOW), null);
+  assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: new Date(NOW).toISOString() })] }), null, NOW), null, "until == now is over: no 0 min left");
+  assert.strictEqual(elevBanner(sess(), status(), NOW), null);
+  assert.strictEqual(elevBanner(sess({ aws_connections: undefined }), null, NOW), null);
+  assert.strictEqual(elevBanner({}, null, NOW), null);
+  assert.strictEqual(elevBanner(undefined, undefined, NOW), null);
+});
+
+// I1 (final review): whether a window is open, on which connection and until when is the session LIST's alone, the
+// same predicate the header chip, row ring, rail ring and footer use. The cached /aws status can be older than the
+// list (a failed read keeps it), so it never opens a banner and never keeps one up; it only supplies the reason.
+test("elevBanner: the window comes from the list alone: a status that still says active opens no banner (I1)", () => {
+  const el = (min) => status({ approvals: [granted()], elevation: { active: true, name: "culipulse-prod", until: iso(min), reason: "rotate KMS key" } });
+  assert.strictEqual(elevBanner(sess(), el(5), NOW), null, "the list carries no window: no banner, whatever the status says");
+  assert.strictEqual(elevBanner(sess(), el(-1), NOW), null);
+  assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: undefined })] }), el(23), NOW), null);
+  // The window ended elsewhere: the list dropped it, the cached status (a failed read keeps it) did not.
+  const was = open(23);
+  assert.ok(elevBanner(was, el(23), NOW), "while the list has the window it is there");
+  assert.strictEqual(elevBanner(sess({ aws_connections: was.aws_connections.map((c) => Object.assign({}, c, { elevated_until: undefined })) }), el(23), NOW), null, "and gone the moment the list drops it");
+  // A list window the status disagrees with (its own `until` differs, or it names another connection) is the list's.
+  const b = elevBanner(open(23), el(5), NOW);
+  assert.strictEqual(b.minsLeft, 23, "the clock is the list's elevated_until, not the status's until");
+  assert.strictEqual(elevBanner(open(23), status({ elevation: { active: true, name: "other", until: iso(5) } }), NOW).conn, "culipulse-prod");
+});
+
+test("elevBanner: the status still supplies the reason of the list's window", () => {
+  const aws = status({ approvals: [granted({ reason: "from the status" })], elevation: { active: false, name: "culipulse-prod" } });
+  const b = elevBanner(open(23), aws, NOW);
+  assert.strictEqual(b.reason, "from the status");
+  assert.strictEqual(b.detail, "until " + hhmm(iso(23)) + " · 23 min left · “from the status”");
+  assert.strictEqual(elevBanner(open(23), null, NOW).reason, "", "no status yet: no reason, but the banner is up");
+});
+
+test("elevBanner: a legacy inline binding is named by its label", () => {
+  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "402100009917", role_arn: BASE, prod: false,
+    elevate: { role_arn: WRITE, max_minutes: 30 }, elevated_until: iso(23) }, aws) });
+  const named = { ts: NOW - 60000, action: "granted", minutes: 30, reason: "load test" };
+  const b = elevBanner(inline(), status({ approvals: [named] }), NOW);
+  assert.strictEqual(b.conn, "sandbox");
+  assert.strictEqual(b.reason, "load test", "an unnamed approval belongs to the inline binding");
+  assert.strictEqual(b.detail, "until " + hhmm(iso(23)) + " · 23 min left · “load test”");
+  assert.strictEqual(elevBanner(inline(), status({ approvals: [Object.assign({}, named, { name: "culipulse-prod" })] }), NOW).reason, "", "a named connection's grant is not this binding's");
+  assert.strictEqual(elevBanner(inline({ label: "" }), null, NOW).conn, "aws");
+  assert.strictEqual(elevBanner(inline(), null, NOW).detail, "until " + hhmm(iso(23)) + " · 23 min left");
+});
+
+// The list expresses a legacy binding's window itself (AWSInfo.elevated_until, filled by List like a connection's), and
+// accConns carries it into the one entry, so the list-only rule needs no legacy fallback on the status.
+test("elevBanner: a legacy inline binding's window is the list's too: dropped from the list, gone, whatever the status says (I1)", () => {
+  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "402100009917", role_arn: BASE, prod: false,
+    elevate: { role_arn: WRITE, max_minutes: 30 }, elevated_until: iso(23) }, aws) });
+  const stale = status({ approvals: [{ ts: NOW - 60000, action: "granted", minutes: 30, reason: "load test" }],
+    elevation: { active: true, name: "", until: iso(23) } });
+  assert.strictEqual(elevBanner(inline(), stale, NOW).conn, "sandbox");
+  assert.strictEqual(elevBanner(inline({ elevated_until: undefined }), stale, NOW), null);
+  assert.strictEqual(elevBanner(inline({ elevated_until: iso(-1) }), stale, NOW), null);
+});
+
+test("access row: an elevated connection offers no Drop", () => {
+  const acts = (s) => model({ session: s, aws: status() }).creds.rows[0].actions;
+  assert.deepStrictEqual(acts(open(19)), ["extend"]);
+  assert.deepStrictEqual(acts(open(23)), []);
+  assert.deepStrictEqual(acts(sess()), ["elevate"]);
+  for (const min of [1, 12, 19, 23, 59]) assert.ok(!acts(open(min)).includes("drop"), String(min));
+});
+
+test("access row: a lapsed window leaves \"Write access ended HH:MM\"", () => {
+  const ts = NOW - 10 * 60000;
+  for (const action of ["expired", "ended", "dropped"]) {
+    const approvals = [{ ts, action, name: "culipulse-prod" }, granted({ ts: NOW - 40 * 60000 })];
+    const w = model({ session: sess(), aws: status({ approvals }) }).creds.rows[0].window;
+    assert.strictEqual(w.ended, "Write access ended " + accEventTime(ts, NOW), action);
+    assert.strictEqual(w.leftover, "", action);
+  }
+  // Newest wins whatever the array order, and a refusal or sign-in row is not a window event.
+  const mixed = [granted({ ts: NOW - 40 * 60000 }), { ts: NOW - 2 * 60000, action: "refused", name: "culipulse-prod" },
+    { ts, action: "expired", name: "culipulse-prod" }, { ts: NOW - 20 * 60000, action: "sso_login_ok" }];
+  assert.strictEqual(model({ session: sess(), aws: status({ approvals: mixed }) }).creds.rows[0].window.ended, "Write access ended " + accEventTime(ts, NOW));
+  // An earlier day carries its date, like the events table.
+  const old = NOW - 26 * 3600000;
+  assert.strictEqual(model({ session: sess(), aws: status({ approvals: [{ ts: old, action: "expired", name: "culipulse-prod" }] }) }).creds.rows[0].window.ended,
+    "Write access ended " + accEventTime(old, NOW));
+  assert.match(accEventTime(old, NOW), /^\d+ [A-Z][a-z]{2} \d\d:\d\d$/);
+});
+
+test("access row: no note without a lapse, while a window is open, or before the status loads", () => {
+  assert.strictEqual(model({ session: sess(), aws: status({ approvals: [] }) }).creds.rows[0].window, null);
+  assert.strictEqual(model({ session: sess(), aws: status() }).creds.rows[0].window, null, "approvals absent: unavailable, not none");
+  assert.strictEqual(model({ session: sess(), aws: null }).creds.rows[0].window, null);
+  const stale = status({ approvals: [{ ts: NOW - 10 * 60000, action: "expired", name: "culipulse-prod" }] });
+  assert.strictEqual(model({ session: open(23), aws: stale }).creds.rows[0].window, null, "an open window is not 'ended'");
+  // GitHub and token rows carry no window.
+  const rows = model({ session: sess({ github: { owners: ["culiops"], repos: 1 }, tokens: [{ name: "sentry" }] }), aws: status() }).creds.rows;
+  assert.deepStrictEqual(rows.slice(1).map((r) => r.window), [null, null]);
+});
+
+test("access row: a later grant hides the ended line, and another connection's end does not show here", () => {
+  const regrant = [{ ts: NOW - 40 * 60000, action: "expired", name: "culipulse-prod" }, granted({ ts: NOW - 5 * 60000 })];
+  assert.strictEqual(model({ session: sess(), aws: status({ approvals: regrant }) }).creds.rows[0].window, null);
+  const extended = [{ ts: NOW - 40 * 60000, action: "dropped", name: "culipulse-prod" }, granted({ ts: NOW - 5 * 60000, action: "extended" })];
+  assert.strictEqual(model({ session: sess(), aws: status({ approvals: extended }) }).creds.rows[0].window, null);
+  const a = conn({ name: "a", prod: false }), b = conn({ name: "b", prod: false });
+  const ended = status({ connections: [], approvals: [{ ts: NOW - 10 * 60000, action: "expired", name: "a" }] });
+  const rows = model({ session: sess({ aws_connections: [a, b] }), aws: ended }).creds.rows;
+  assert.match(rows.find((r) => r.name === "a").window.ended, /^Write access ended /);
+  assert.strictEqual(rows.find((r) => r.name === "b").window, null);
+  // A nameless approval is the inline binding's; it does not end a named connection's window.
+  const nameless = status({ approvals: [{ ts: NOW - 10 * 60000, action: "expired" }] });
+  assert.strictEqual(model({ session: sess(), aws: nameless }).creds.rows[0].window, null);
+  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "402100009917", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
+  assert.match(model({ session: inline, aws: nameless }).creds.rows[0].window.ended, /^Write access ended /);
+});
+
+test("access row: credentials outliving a drop are named while last_valid is in the future", () => {
+  const leftover = (elevation, s) => {
+    const r = model({ session: s || sess(), aws: status({ elevation }) }).creds.rows[0];
+    return r.window ? r.window.leftover : "";
+  };
+  const el = (over) => Object.assign({ active: false, name: "culipulse-prod", last_valid: iso(8) }, over);
+  assert.strictEqual(leftover(el()), "Credentials already issued stay valid until " + hhmm(iso(8)));
+  assert.strictEqual(leftover(el({ last_valid: iso(-1) })), "", "past last_valid: nothing left to say");
+  assert.strictEqual(leftover(el({ last_valid: new Date(NOW).toISOString() })), "");
+  assert.strictEqual(leftover(el({ name: "other" })), "", "another connection's credentials");
+  assert.strictEqual(leftover(el({ name: undefined })), "", "a nameless elevation is the inline binding's only");
+  assert.strictEqual(leftover(el({ active: true })), "", "an open window has its own banner");
+  assert.strictEqual(leftover(el({ last_valid: undefined })), "");
+  assert.strictEqual(leftover(el({ last_valid: "0001-01-01T00:00:00Z" })), "", "the zero time is never");
+  assert.strictEqual(leftover(undefined), "");
+  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "402100009917", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
+  assert.strictEqual(leftover(el({ name: undefined }), inline), "Credentials already issued stay valid until " + hhmm(iso(8)));
+  assert.strictEqual(leftover(el(), inline), "", "a named elevation is not the inline binding's");
+});
+
+test("access row: a quick re-Elevate after a Drop shows the live window only, never the red leftover line beside it", () => {
+  // The cached status still says the dropped window's credentials are valid (active:false, a future last_valid),
+  // while the list entry already carries the new window: the row and the banner agree there is a window.
+  const aws = status({ approvals: [{ ts: NOW - 3 * 60000, action: "dropped", name: "culipulse-prod" }],
+    elevation: { active: false, name: "culipulse-prod", last_valid: iso(8) } });
+  assert.strictEqual(model({ session: open(23), aws }).creds.rows[0].window, null);
+  assert.strictEqual(model({ session: sess(), aws }).creds.rows[0].window.leftover, "Credentials already issued stay valid until " + hhmm(iso(8)),
+    "the same status with the window closed still names them");
+});
+
+test("elevBanner: without a clock it reads the real one, never a silent null", () => {
+  const live = sess({ aws_connections: [conn({ elevated_until: new Date(Date.now() + 23 * 60000).toISOString() })] });
+  const b = elevBanner(live, null);
+  assert.ok(b, "a window open now shows");
+  assert.match(b.leftText, /^2[23] min left$/);
+  assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: new Date(Date.now() - 60000).toISOString() })] }), null), null);
+});
+
+test("access row: the leftover line is per connection: a window open on B does not hide A's issued credentials", () => {
+  const a = conn({ name: "a", label: "a", prod: false });
+  const b = conn({ name: "b", label: "b", prod: false, elevated_until: iso(23) });
+  const aws = status({ connections: [], elevation: { active: false, name: "a", last_valid: iso(8) } });
+  const rows = model({ session: sess({ aws_connections: [a, b] }), aws }).creds.rows;
+  const ra = rows.find((r) => r.name === "a");
+  const rb = rows.find((r) => r.name === "b");
+  assert.strictEqual(ra.window.leftover, "Credentials already issued stay valid until " + hhmm(iso(8)), "true: they were issued on a, and a's window is over");
+  assert.strictEqual(rb.window, null, "b has its own live window and says nothing");
+  assert.strictEqual(rb.scope, "write (elevated)");
+});
+
+test("access row: after a Drop both lines can show, the leftover with it", () => {
+  const ts = NOW - 2 * 60000;
+  const aws = status({ approvals: [{ ts, action: "dropped", name: "culipulse-prod" }, granted({ ts: NOW - 20 * 60000 })],
+    elevation: { active: false, name: "culipulse-prod", last_valid: iso(8) } });
+  const r = model({ session: sess(), aws }).creds.rows[0];
+  assert.deepStrictEqual({ ...r.window }, { ended: "Write access ended " + accEventTime(ts, NOW),
+    leftover: "Credentials already issued stay valid until " + hhmm(iso(8)) });
+  assert.deepStrictEqual(r.actions, ["elevate"], "a closed window offers Elevate again");
+});
+
+test("events: the elevated mint and the granted approval are tinted; Elevated reads yes/no, blank for approvals; the approval subject is \"granted 30 min on culipulse-prod\"", () => {
+  const recent = [
+    { provider: "", entry: "culipulse-prod", outcome: "minted", time: iso(-1), elevated: true },
+    { provider: "", entry: "culipulse-prod", outcome: "minted", time: iso(-2), elevated: false },
+    { provider: "github", subject: "culiops", outcome: "minted", time: iso(-3) },
+    { provider: "aws", entry: "culipulse-prod", outcome: "denied_scope", time: iso(-4) },
+  ];
+  const static_recent = [{ provider: "static", subject: "sentry", outcome: "fetched", time: iso(-5) }];
+  const approvals = [
+    granted({ ts: NOW - 6 * 60000 }),
+    granted({ ts: NOW - 7 * 60000, action: "extended", minutes: 15 }),
+    { ts: NOW - 8 * 60000, action: "expired", name: "culipulse-prod" },
+    { ts: NOW - 9 * 60000, action: "dropped", name: "culipulse-prod" },
+    { ts: NOW - 10 * 60000, action: "ended", name: "culipulse-prod" },
+    { ts: NOW - 11 * 60000, action: "refused", name: "culipulse-prod" },
+    { ts: NOW - 12 * 60000, action: "sso_login_ok" },
+  ];
+  const ev = model({ session: sess({ tokens: [{ name: "sentry" }] }), aws: status({ recent, static_recent, approvals }) }).events;
+  const by = (n) => ev[n];
+  assert.deepStrictEqual([by(0).tint, by(0).elevatedText], [true, "yes"], "the elevated mint");
+  assert.deepStrictEqual([by(1).tint, by(1).elevatedText], [false, "no"]);
+  assert.deepStrictEqual([by(2).tint, by(2).elevatedText], [false, "no"], "github");
+  assert.deepStrictEqual([by(3).tint, by(3).elevatedText], [false, "no"], "a refused mint");
+  assert.deepStrictEqual([by(4).tint, by(4).elevatedText], [false, "no"], "a static token");
+  const ap = ev.filter((e) => e.provider === "approval");
+  assert.deepStrictEqual(ap.map((e) => e.tint), [true, true, false, false, false, false, false], "granted and extended only");
+  assert.ok(ap.every((e) => e.elevatedText === ""), "approval rows leave Elevated blank");
+  assert.strictEqual(ap[0].subject, "granted 30 min on culipulse-prod");
+  assert.strictEqual(ap[0].detail, "rotate KMS key", "the reason stays a separate part");
+  assert.strictEqual(ap[1].subject, "extended 15 min on culipulse-prod");
+  assert.strictEqual(ap[2].subject, "expired on culipulse-prod");
+  assert.strictEqual(ap[5].subject, "refused on culipulse-prod");
+  assert.strictEqual(ap[6].subject, "sign-in ok", "no connection, no ' on '");
+  assert.ok(ev.every((e) => typeof e.tint === "boolean"));
 });
 
 // --- grantFormState -----------------------------------------------------------
