@@ -548,6 +548,25 @@ test("headerSyncKey moves with the name and with cost_usd, and not with anything
   assert.equal(d.headerSyncKey("api", null), d.headerSyncKey("api", null));
 });
 
+test("headerSyncKey changes when the write chip's minutes change", () => {
+  const at = (min) => ({ ...working, aws_connections: [{ name: "culipulse-prod", label: "culipulse-prod", elevated_until: new Date(NOW + min * 60000 + 30000).toISOString() }] });
+  const s = at(23);
+  const k = d.headerSyncKey("api", s, NOW);
+  assert.equal(d.headerSyncKey("api", s, NOW + 20000), k, "same minute: no repaint per poll");
+  assert.notEqual(d.headerSyncKey("api", s, NOW + 60000), k, "the chip said 23m and now says 22m");
+  assert.notEqual(d.headerSyncKey("api", s, NOW + 22 * 60000 + 10000), k, "<1m");
+  assert.notEqual(d.headerSyncKey("api", s, NOW + 25 * 60000), k, "the window lapsed: the chip is gone");
+  assert.notEqual(d.headerSyncKey("api", { ...working }, NOW), k, "a window opened where there was none");
+  assert.equal(d.headerSyncKey("api", { ...working }, NOW), d.headerSyncKey("api", { ...working }, NOW + 3600000), "no window: time does not matter");
+  // The key follows the very chip the header draws.
+  const chip = (now) => d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: now, boxRuntime: "runc", narrow: false }).chips.find((c) => c.tone === "write");
+  assert.equal(chip(NOW).text, "aws culipulse-prod · WRITE · 23m");
+  assert.equal(chip(NOW + 60000).text, "aws culipulse-prod · WRITE · 22m");
+  // A caller that leaves the clock out gets the real one, never a silently chipless key.
+  const live = { ...working, aws_connections: [{ name: "x", elevated_until: new Date(Date.now() + 600000).toISOString() }] };
+  assert.notEqual(d.headerSyncKey("api", live), d.headerSyncKey("api", { ...working }));
+});
+
 // paneTabs: the pane header's tabs, in order, each with the label its button
 // shows and the icon it shows instead of the label in a narrow pane (#13).
 test("paneTabs lists the three views of a pane with a session, each with its own icon; Files is the toggle after them (G6)", () => {

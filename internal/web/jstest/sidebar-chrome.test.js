@@ -56,10 +56,13 @@ class El {
 function paintElevated(n) {
   const el = new El("span");
   el.hidden = false; el.text = "stale";
-  const ctx = { $: () => el, elevatedCount: () => n, lastSessions: [], Date };
+  const document = { createElement: (t) => new El(t), createTextNode: (t) => ({ textContent: t }) };
+  const ctx = { $: () => el, elevatedCount: () => n, lastSessions: [], Date, document };
   vm.runInNewContext(fn(app, "paintSideElevated") + "\npaintSideElevated();", ctx);
   return el;
 }
+// What the footer reads: its children's text, in order.
+const footText = (el) => el.children.map((c) => c.textContent).join("");
 
 test("0 elevated is hidden, not shown as a count that says nothing", () => {
   const el = paintElevated(0);
@@ -71,11 +74,17 @@ test("N elevated shows in the red look while any session has a write window open
   for (const n of [1, 3]) {
     const el = paintElevated(n);
     assert.equal(el.hidden, false);
-    assert.equal(el.textContent, n + " elevated");
+    assert.equal(footText(el), "● " + n + " elevated", "as M6.4 draws it: ● then the count");
     assert.equal(el.classList.contains("hot"), true);
+    // The ● is decoration: a screen reader says "N elevated" and not "black circle".
+    const [dot] = el.children;
+    assert.equal(dot.tag, "span");
+    assert.equal(dot.attrs["aria-hidden"], "true");
+    assert.equal(dot.textContent, "●");
   }
   const back = paintElevated(0); // a lapsed window clears on the next poll
   assert.equal(back.hidden, true);
+  assert.equal(footText(back), "", "nothing left to read, not even the dot");
 });
 
 // ---- F32: the quota row at 100% says "limit reached" (desktop sidebar only) -----------------------

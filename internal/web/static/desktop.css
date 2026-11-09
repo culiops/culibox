@@ -489,11 +489,23 @@
     box-shadow: inset 0 0 0 2px var(--line); border: 2px solid transparent; border-top-color: var(--muted);
   }
 
+  /* --- pane header spacer and the elevated banner (§C8, §C9: D17) ------------ */
+  /* .ph-spacer is not in the product's own header rules (.cell-bar has its own); only the banner wears it. */
+  .ph-spacer { flex: 1 1 auto; }
+  .elev { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--red-tint);
+    border-bottom: 1px solid rgba(240,106,106,.45); color: var(--fg); font-size: var(--t-sm); flex: none; }
+  .elev strong { color: var(--red); font-weight: var(--w-semibold); }
+  /* Added here, not in the kit: the banner stays ONE line in a narrow pane (four panes at 1280, a long connection
+     name, a 200-character reason). The text parts ellipsize (their full text is in the title); the spacer keeps
+     its grow, which is why this sets no flex; Drop now never shrinks, and the banner never scrolls sideways. */
+  .elev > strong, .elev > span:not(.ph-spacer) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .elev .btn { flex: none; }
+
   /* An author display beats the UA's [hidden] { display: none }: without these a .btn whose
      hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
      legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
-    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin)[hidden],
+    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev)[hidden],
   .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item, > .menu-row)[hidden], .field:has(> .field-label)[hidden],
   .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
   /* === end kit primitives === */
@@ -633,7 +645,7 @@
   .ri.add { width: var(--h-sm); height: var(--h-sm); margin: 2px 0 8px; border-radius: var(--r-chip); font: 600 var(--t-xl) var(--font-ui); color: var(--on-fill); background: var(--accent); }
   .ri.add:hover { background: var(--accent-hover); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
-  .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
+  .ri.is-elevated .dot { box-shadow: 0 0 0 2px var(--red); }
   .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
   .rail-meters[hidden] { display: none; }
   .rm { display: block; position: relative; height: 3px; border-radius: 2px; background: var(--line); }
@@ -667,6 +679,10 @@
   }
   #sessions .drow.sel.inpane::before { background: var(--accent); }
   #sessions .drow .dot { margin-top: 6px; }
+  /* Write window open AND the session viewed elsewhere: the kit's red ring (.dot.is-elevated) and the viewer's outline
+     (primitives.css .dot.watching) both take the dot's edge, and the outline would paint over the ring. One shadow list
+     draws the red ring inside and the viewer's 2px foreground ring outside it; the outline is dropped. */
+  .dot.is-elevated.watching { outline: 0; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red), 0 0 0 4.5px var(--panel), 0 0 0 6.5px var(--fg); }
   #sessions .drow .sname { gap: 6px; font-size: var(--t-md); line-height: var(--lh-md); }
   #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
   #sessions .drow:not(.nested) .nm { font-weight: var(--w-medium); line-height: var(--lh-md); }
@@ -1362,7 +1378,6 @@
      green = status only. Containment is neutral text. */
   .ac-wrap { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 18px; min-width: 0; }
   .ac-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); min-width: 0; overflow: hidden; }
-  .ac-card.elevated { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
   .ac-head { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; }
   .ac-title { font: 600 var(--t-md) var(--font-ui); color: var(--fg); }
   .ac-meta { margin-left: auto; color: var(--muted); font-size: var(--t-sm); text-align: right; }
@@ -1384,15 +1399,6 @@
   .ac-note { padding: 0 14px 8px; color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
   .ac-note.err { color: var(--danger); }
 
-  /* The open write window: a red band across the top of the credentials card. */
-  .ac-banner {
-    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-    background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--fg);
-  }
-  .ac-banner strong { color: var(--danger); font-weight: 600; }
-  .ac-btxt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-  .ac-dropnow { flex: none; border-color: var(--danger); color: var(--danger); border-radius: var(--r-ctl); }
-
   .ac-rowblk { border-top: 1px solid var(--line); }
   .ac-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; padding: 10px 14px; }
   .ac-row > .ac-id { flex: 1.5 1 220px; min-width: 0; }
@@ -1405,9 +1411,9 @@
   }
   .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
   /* Grant is the kit primary (it was an accent outline, F11): the secondary fill skips it. */
-  .ac-acts .btn, .ac-pbtns .btn, .ac-dropnow { border-radius: var(--r-ctl); padding: 4px 10px; }
-  .ac-acts .btn:where(:not(.pri)), .ac-pbtns .btn:where(:not(.pri)), .ac-dropnow { background: var(--raise); border-color: var(--line); }
-  .ac-acts .btn.dgr, .ac-dropnow { border-color: var(--danger); color: var(--danger); }
+  .ac-acts .btn, .ac-pbtns .btn { border-radius: var(--r-ctl); padding: 4px 10px; }
+  .ac-acts .btn:where(:not(.pri)), .ac-pbtns .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
+  .ac-acts .btn.dgr { border-color: var(--danger); color: var(--danger); }
   .ac-sso { padding: 0 14px 10px; }
   .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 10px 12px; }
 

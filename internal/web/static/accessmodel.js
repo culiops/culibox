@@ -300,9 +300,6 @@ function accessModel(o) {
       actions: [], window: null, grant: null, hostWarning: [], base: "", baseWarn: false, baseTitle: "", stat: "" });
   }
 
-  // The open write window, if any: the one banner model every pane draws.
-  const banner = elevBanner(s, aws, now);
-
   // The SSO card hangs under the connection a Sign in press would target, while
   // a connection's sign-in is expired or a flow is running.
   let ssoFor = "";
@@ -321,7 +318,6 @@ function accessModel(o) {
   const lastMint = st && accValidTime(st.last_mint) ? hhmm(st.last_mint) : "";
   return {
     containment,
-    banner,
     creds: {
       head: mints === null ? "" : mints + (mints === 1 ? " mint" : " mints") + (lastMint ? " · last " + lastMint : ""),
       rows,

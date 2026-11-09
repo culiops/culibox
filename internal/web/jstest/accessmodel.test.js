@@ -28,7 +28,6 @@ const model = (o) => accessModel(Object.assign({ nowMs: NOW, meta: { box_runtime
 test("a session with no AWS binding (204): containment only, no rows, no throw", () => {
   const m = model({ session: sess({ aws_connections: undefined }), aws: null });
   assert.deepStrictEqual(m.creds.rows, []);
-  assert.strictEqual(m.banner, null);
   assert.deepStrictEqual(m.events, []);
   assert.strictEqual(m.containment.tier, "box");
   assert.strictEqual(m.containment.workspace, "/home/u/culipulse");
@@ -40,7 +39,6 @@ test("nothing at all loaded: still a model, never a throw", () => {
   assert.strictEqual(m.containment.tier, "host");
   assert.deepStrictEqual(m.creds.rows, []);
   assert.deepStrictEqual(m.events, []);
-  assert.strictEqual(m.banner, null);
 });
 
 test("a + Shell session: tier and workspace, a host tier reads as host", () => {
@@ -49,7 +47,6 @@ test("a + Shell session: tier and workspace, a host tier reads as host", () => {
   assert.strictEqual(m.containment.workspace, "/w");
   assert.strictEqual(m.containment.runtime, "");
   assert.deepStrictEqual(m.creds.rows, []);
-  assert.strictEqual(m.banner, null);
 });
 
 test("an unknown runtime is host, never box (fail loud)", () => {
@@ -106,7 +103,6 @@ test("read connection: one row, Elevate offered, SSO unknown, last credential ti
   assert.match(r.sub, /agent-investigate/);
   assert.match(r.last, /^\d\d:\d\d$/);
   assert.match(m.creds.head, /^12 mints · last \d\d:\d\d$/);
-  assert.strictEqual(m.banner, null);
 });
 
 test("a connection without a write role offers no action and no grant panel", () => {
@@ -118,28 +114,33 @@ test("a connection without a write role offers no action and no grant panel", ()
 test("elevated session: red banner with minutes left, Extend (and no row Drop) near the end of the window", () => {
   const s = sess({ aws_connections: [conn({ elevated_until: iso(12) })] });
   const ap = [{ ts: NOW - 60000, action: "granted", minutes: 30, until: NOW + 12 * 60000, reason: "restart stuck worker", name: "culipulse-prod" }];
-  const m = model({ session: s, aws: status({ approvals: ap }) });
-  assert.strictEqual(m.banner.conn, "culipulse-prod");
-  assert.strictEqual(m.banner.minsLeft, 12);
-  assert.match(m.banner.untilText, /^\d\d:\d\d$/);
-  assert.strictEqual(m.banner.reason, "restart stuck worker");
-  assert.strictEqual(m.banner.newCreds, true, "under 16 min the broker mints no more write credentials");
+  const aws = status({ approvals: ap });
+  const m = model({ session: s, aws });
+  const banner = elevBanner(s, aws, NOW);
+  assert.strictEqual(banner.conn, "culipulse-prod");
+  assert.strictEqual(banner.minsLeft, 12);
+  assert.match(banner.untilText, /^\d\d:\d\d$/);
+  assert.strictEqual(banner.reason, "restart stuck worker");
+  assert.strictEqual(banner.newCreds, true, "under 16 min the broker mints no more write credentials");
   const r = m.creds.rows[0];
   assert.strictEqual(r.scope, "write (elevated)");
   assert.deepStrictEqual(r.actions, ["extend"], "the pane's banner carries the one Drop");
 });
 
 test("elevated with plenty of time left: no row action (the rail's own Extend rule; Drop lives on the banner)", () => {
-  const m = model({ session: sess({ aws_connections: [conn({ elevated_until: iso(23) })] }), aws: status() });
-  assert.strictEqual(m.banner.minsLeft, 23);
-  assert.strictEqual(m.banner.newCreds, false);
-  assert.strictEqual(m.banner.reason, "");
+  const s = sess({ aws_connections: [conn({ elevated_until: iso(23) })] });
+  const m = model({ session: s, aws: status() });
+  const banner = elevBanner(s, status(), NOW);
+  assert.strictEqual(banner.minsLeft, 23);
+  assert.strictEqual(banner.newCreds, false);
+  assert.strictEqual(banner.reason, "");
   assert.deepStrictEqual(m.creds.rows[0].actions, []);
 });
 
 test("a lapsed window is not a banner", () => {
-  const m = model({ session: sess({ aws_connections: [conn({ elevated_until: iso(-1) })] }), aws: status() });
-  assert.strictEqual(m.banner, null);
+  const s = sess({ aws_connections: [conn({ elevated_until: iso(-1) })] });
+  const m = model({ session: s, aws: status() });
+  assert.strictEqual(elevBanner(s, status(), NOW), null);
   assert.strictEqual(m.creds.rows[0].scope, "read");
 });
 
@@ -315,9 +316,8 @@ test("elevBanner: an open window names the connection, the clock, minutes left a
   assert.strictEqual(b.newCreds, false);
   assert.strictEqual(b.detail, "until " + hhmm(iso(23)) + " · 23 min left · “rotate KMS key”");
   assert.strictEqual(typeof b.key, "string");
-  // The Access view reads the very same model, so the two cannot drift.
-  const m = model({ session: open(23), aws });
-  assert.deepStrictEqual({ ...m.banner }, { ...b });
+  // The Access view carries no banner of its own: the pane's banner (elevbanner.js) is the only one.
+  assert.strictEqual("banner" in model({ session: open(23), aws }), false);
 });
 
 test("elevBanner: the reason is this connection's own newest grant, never another connection's", () => {

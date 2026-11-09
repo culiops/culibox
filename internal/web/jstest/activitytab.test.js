@@ -10,44 +10,7 @@ const vm = require("node:vm");
 
 const STATIC = path.join(__dirname, "..", "static");
 
-class Text { constructor(t) { this.text = t; this.parent = null; } get textContent() { return this.text; } set textContent(v) { this.text = String(v); } }
-class Node {
-  constructor(tag, doc) {
-    this.tag = tag; this.doc = doc; this.children = []; this.parent = null; this.own = "";
-    this.className = ""; this.attrs = {}; this.style = {}; this.dataset = {}; this.hidden = false; this.disabled = false;
-    this.isConnected = true; this.tabIndex = -1;
-    const self = this;
-    this.classList = {
-      toggle(c, on) {
-        const set = new Set(self.className.split(/\s+/).filter(Boolean));
-        if (on === undefined ? !set.has(c) : on) set.add(c); else set.delete(c);
-        self.className = [...set].join(" ");
-      },
-      contains: (c) => self.className.split(/\s+/).includes(c),
-    };
-  }
-  get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
-  set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
-  get firstChild() { return this.children[0] || null; }
-  setAttribute(k, v) { this.attrs[k] = String(v); }
-  appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
-  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
-  remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
-  focus() { this.doc.activeElement = this; }
-  click() { if (this.onclick) this.onclick({ target: this }); }
-  all(sel, out) {
-    for (const c of this.children) {
-      if (!(c instanceof Node)) continue;
-      const hit = sel[0] === "." ? c.className.split(/\s+/).includes(sel.slice(1)) : c.tag === sel;
-      if (hit) out.push(c);
-      c.all(sel, out);
-    }
-    return out;
-  }
-  querySelectorAll(sel) { return this.all(sel, []); }
-  querySelector(sel) { return this.all(sel, [])[0] || null; }
-}
+const { Node, Text } = require("./fakedom.js");
 
 // One page: scripts run as classic scripts in a shared global scope, like the browser.
 function page() {

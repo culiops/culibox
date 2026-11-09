@@ -182,24 +182,6 @@ function accContainment(c, s) {
   return card;
 }
 
-function accBanner(b, sid, repaint) {
-  if (!b) return null;
-  const bar = accEl("div", "ac-banner");
-  bar.setAttribute("role", "status");
-  bar.appendChild(accEl("strong", "", "WRITE access"));
-  const txt = "on " + b.conn + " until " + b.untilText + " (" + b.minsLeft + " min left)" +
-    (b.reason ? " · reason: “" + b.reason + "”" : "") +
-    (b.newCreds ? " · new credentials from the base role" : "");
-  bar.appendChild(accEl("span", "ac-btxt", txt));
-  const drop = accEl("button", "btn ac-dropnow", "Drop now");
-  drop.type = "button";
-  drop.disabled = accBusy.has(sid);
-  drop.classList.toggle("off", drop.disabled);
-  drop.onclick = () => accDrop(sid, repaint);
-  bar.appendChild(drop);
-  return bar;
-}
-
 function accRowBlock(r, ctx) {
   const { sid, repaint, rowByName } = ctx;
   const blk = accEl("div", "ac-rowblk");
@@ -392,7 +374,6 @@ function accPanel(r, d, ctx) {
 function accCreds(m, s, ctx) {
   const { sid } = ctx;
   const card = accEl("section", "ac-card");
-  card.appendChild(accEl("div", "ac-bslot")); // the write banner: repainted on its own (mountAccess)
   card.appendChild(accCardHead("Cloud credentials", m.creds.head));
   const d = accDrafts.get(sid);
   for (const r of m.creds.rows) {
@@ -460,8 +441,7 @@ function mountAccess(host, sid0) {
   const ctx = { sid, focusReason: false, repaint: null, rowByName: (name) => (model ? model.creds.rows.find((r) => r.name === name) : null) };
   const wrap = accEl("div", "ac-wrap");
   const slots = { cont: accEl("div"), creds: accEl("div"), events: accEl("div") };
-  const keys = { cont: "", creds: "", events: "", banner: "" };
-  let bslot = null;
+  const keys = { cont: "", creds: "", events: "" };
   wrap.append(slots.cont, slots.creds, slots.events);
   host.replaceChildren(wrap);
 
@@ -477,7 +457,6 @@ function mountAccess(host, sid0) {
     const s = lastSessions.find((x) => x.id === sid);
     if (!s) {
       keys.cont = keys.creds = keys.events = "";
-      bslot = null;
       put(slots.cont, accEl("div", "ac-empty", "This session is no longer listed."));
       put(slots.creds, null);
       put(slots.events, null);
@@ -506,28 +485,14 @@ function mountAccess(host, sid0) {
     const k2 = JSON.stringify([model.creds, sso, s.need === "sso", accDrafts.get(sid) ? accDrafts.get(sid).conn : "",
       accBusy.has(sid), accErrs.get(sid) || ""]);
     if (!hasCreds) {
-      if (keys.creds !== "-") { keys.creds = "-"; bslot = null; put(slots.creds, null); }
+      if (keys.creds !== "-") { keys.creds = "-"; put(slots.creds, null); }
     } else if ((force || k2 !== keys.creds) && (force || !typing())) {
       keys.creds = k2;
-      const card = accCreds(model, s, ctx);
-      bslot = card.firstChild;
-      keys.banner = "";
-      put(slots.creds, card);
+      put(slots.creds, accCreds(model, s, ctx));
       if (ctx.focusReason) {
         ctx.focusReason = false;
         const f = host.querySelector('[data-ac="reason"]');
         if (f) f.focus();
-      }
-    }
-    // The write banner repaints on its own: its countdown moves each minute
-    // while the section under it (and a grant panel's fields) hold still.
-    if (bslot) {
-      const kb = JSON.stringify([model.banner, accBusy.has(sid)]);
-      if (kb !== keys.banner) {
-        keys.banner = kb;
-        const bar = accBanner(model.banner, sid, paint);
-        bslot.replaceChildren(...(bar ? [bar] : []));
-        slots.creds.firstChild.classList.toggle("elevated", !!bar);
       }
     }
 

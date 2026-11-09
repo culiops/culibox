@@ -253,9 +253,13 @@ function fmtSessionCost(n) {
 // other signal, e.g. on an idle session). The cost is formatted here, not taken
 // from paneHeaderModel, so a narrow pane (which hides it) does not look stale.
 // The attention word is in it too: a turn that finishes turns the header's dot
-// from amber to neutral, with no other signal in the key.
-function headerSyncKey(name, session) {
-  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null, session ? deskDep("attentionClass")(session) : ""]);
+// from amber to neutral, with no other signal in the key. So is the write chip's
+// text ("aws culipulse-prod · WRITE · 23m"): its minutes move with the clock, not
+// with any field of the session, so the key takes `nowMs` (the real clock when a
+// caller leaves it out) and the header repaints each minute, never per poll.
+function headerSyncKey(name, session, nowMs = Date.now()) {
+  const write = session && sessionElevated(session, nowMs) ? deskWriteChip(session, nowMs, "").text : "";
+  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null, session ? deskDep("attentionClass")(session) : "", write]);
 }
 
 // modelLabel: a model id as the pane header shows it, `haiku-4.5` (F13). Analytics'
