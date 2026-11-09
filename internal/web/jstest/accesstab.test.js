@@ -608,14 +608,82 @@ test("Full history in Audit keeps focus when the events card is rebuilt under it
   assert.ok(doc.activeElement === after, "the keyboard went with it, not to <body>");
 });
 
-test("when the control the keyboard was on is gone, it goes to the view, not <body>", async () => {
-  const { doc, host } = await mount(claudeBox(), status());
+// G3-D3: fill() used to give the keyboard back by the button's POSITION among the section's buttons, so with three
+// connections Cancel on the first landed on the third's Elevate…, and Cancel on the others fell to the view host. It is
+// the control's identity now (its connection and its action), and a closed panel's Cancel goes to its own row's Elevate….
+const THREE = () => claudeBox({ aws_connections: [conn(), conn({ name: "culipulse-dev", label: "culipulse-dev", prod: false }), conn({ name: "culipulse-stage", label: "culipulse-stage", prod: false })] });
+const THREE_STATUS = () => status({ connections: ["culipulse-prod", "culipulse-dev", "culipulse-stage"].map((name) => ({ name, stats: { mints: 1, last_mint: ago(5) } })) });
+const ownerOf = (n) => {
+  let b = n;
+  while (b && !classes(b).includes("ac-blk")) b = b.parent;
+  return b ? b.querySelector(".ac-name").children[0].textContent : null;
+};
+
+test("Cancel on any of three connections gives the keyboard to THAT connection's Elevate…, not another's and not the view (G3-D3)", async () => {
+  for (const name of ["culipulse-prod", "culipulse-dev", "culipulse-stage"]) {
+    const { doc, host } = await mount(THREE(), THREE_STATUS());
+    const elevates = () => buttons(host).filter((b) => b.textContent === "Elevate…");
+    assert.strictEqual(elevates().length, 3);
+    elevates().find((b) => ownerOf(b) === name).click();
+    const panel = host.querySelector(".ac-panel");
+    assert.ok(panel && ownerOf(panel) === name, "the panel opened under " + name);
+    const cancel = btn(panel, "Cancel");
+    cancel.focus();
+    cancel.click();
+    assert.strictEqual(host.querySelector(".ac-panel"), null, "the panel closed");
+    const a = doc.activeElement;
+    assert.ok(a && a !== host, name + ": focus is not on the view host");
+    assert.strictEqual(a.textContent, "Elevate…", name + ": it is an Elevate…");
+    assert.strictEqual(ownerOf(a), name, "and it is " + name + "'s");
+    assert.ok(elevates().includes(a), "a button of the rebuilt section, not a stale node");
+  }
+});
+
+test("Cancel on the one connection goes to its Elevate…, and an open window's Extend is where Cancel returns on an extending row", async () => {
+  const one = await mount(claudeBox(), status());
+  btn(one.host, "Elevate…").click();
+  btn(one.host, "Cancel").focus();
+  btn(one.host, "Cancel").click();
+  assert.ok(one.doc.activeElement === btn(one.host, "Elevate…"), "the seeded single connection too (it used to fall to the view host)");
+  const ext = await mount(open(12), status({ approvals: [granted()] }));
+  btn(ext.host, "Extend").click();
+  btn(ext.host, "Cancel").focus();
+  btn(ext.host, "Cancel").click();
+  assert.ok(ext.doc.activeElement === btn(ext.host, "Extend"), "an Extend row gets its Extend back");
+});
+
+test("a repaint keeps the keyboard on the same control of the same connection, among three of them (G3-D3)", async () => {
+  const { doc, host, handle, lex } = await mount(THREE(), THREE_STATUS());
+  const on = (name) => buttons(host).filter((b) => b.textContent === "Elevate…").find((b) => ownerOf(b) === name);
+  for (const name of ["culipulse-stage", "culipulse-dev", "culipulse-prod"]) {
+    on(name).focus();
+    lex("accBusy").add("s1");
+    handle.update();
+    lex("accBusy").delete("s1");
+    handle.update();
+    assert.ok(doc.activeElement === on(name), name + ": still on its own Elevate…");
+  }
+  // A panel's own buttons are identified the same way: the window choices and Grant keep the keyboard on themselves.
+  on("culipulse-dev").click();
+  const panel = () => host.querySelector(".ac-panel");
+  const seg = () => buttons(panel()).filter((b) => /min$/.test(b.textContent));
+  assert.ok(seg().length >= 2, "the panel offers windows");
+  seg()[1].focus();
+  const label = seg()[1].textContent;
+  lex("accBusy").add("s1");
+  handle.update();
+  assert.strictEqual(doc.activeElement.textContent, label, "the window choice keeps the keyboard when the section is rebuilt");
+  assert.strictEqual(ownerOf(doc.activeElement), "culipulse-dev");
+  lex("accBusy").delete("s1");
+});
+
+test("when the control the keyboard was on is gone and its row is too, it goes to the view, not <body>", async () => {
+  const { box, doc, host, handle } = await mount(claudeBox(), status());
   btn(host, "Elevate…").click();
-  const cancel = btn(host, "Cancel");
-  assert.ok(cancel);
-  cancel.focus();
-  cancel.click();
-  assert.strictEqual(host.querySelector(".ac-panel"), null, "the panel closed");
+  btn(host, "Cancel").focus();
+  box.lastSessions = []; // the session leaves the list: no panel, no row, no Elevate…
+  handle.update();
+  assert.strictEqual(host.querySelector(".ac-panel"), null);
   assert.ok(doc.activeElement === host, "focus is on the view host (tabindex -1)");
 });
 

@@ -24,7 +24,7 @@
 // A button the keyboard may be on is never [disabled] (a focused button that turns
 // disabled drops focus to <body>): while a request is out it is aria-disabled and
 // its click handler refuses, and a rebuilt section hands the keyboard back to the
-// control it held.
+// control it held, found by its identity (accKey: the connection and the action).
 
 // ACCESS_REFRESH_MS: how often the broker status is re-read while the view is up
 // (not every poll). A grant, a drop and a sign-in re-read it at once.
@@ -49,6 +49,14 @@ function accFill(el, content) {
   if (typeof content === "string") { el.textContent = content; return el; }
   for (const n of content) el.appendChild(typeof n === "string" ? document.createTextNode(n) : n);
   return el;
+}
+
+// accKey: mark a button with what it IS, a connection (or none) and an action, so a rebuilt section can hand the keyboard
+// back to the same control however the buttons around it moved (fill below). Not a field: typing() reads data-ac only.
+function accKey(btn, conn, act) {
+  btn.dataset.acConn = conn || "";
+  btn.dataset.acAct = act;
+  return btn;
 }
 
 // accCell: a small label over a value, one column of a card row (§A3: span.t-sm.muted over span.t-md). The value is
@@ -214,8 +222,8 @@ function accContainment(c, s) {
 
 // accBtn: a row button. While the session has a request out it is aria-disabled and refuses the press; it is never
 // [disabled], which would drop the keyboard to <body>. `why` is the reason it cannot act, in its title.
-function accBtn(text, off, why, fn, sid) {
-  const b = accEl("button", "btn btn-sm", text);
+function accBtn(text, off, why, fn, sid, conn, act) {
+  const b = accKey(accEl("button", "btn btn-sm", text), conn, act);
   b.type = "button";
   if (off) {
     b.setAttribute("aria-disabled", "true");
@@ -275,8 +283,8 @@ function accRowBlock(r, ctx) {
     repaint(true);
   };
   const g = r.grant;
-  if (r.actions.includes("elevate")) acts.appendChild(accBtn("Elevate…", busy || !!(g && g.blockedText), g && g.blockedText, openPanel, sid));
-  if (r.actions.includes("extend")) acts.appendChild(accBtn("Extend", busy, "", openPanel, sid));
+  if (r.actions.includes("elevate")) acts.appendChild(accBtn("Elevate…", busy || !!(g && g.blockedText), g && g.blockedText, openPanel, sid, r.name, "elevate"));
+  if (r.actions.includes("extend")) acts.appendChild(accBtn("Extend", busy, "", openPanel, sid, r.name, "extend"));
   row.appendChild(acts);
   blk.appendChild(row);
 
@@ -319,7 +327,7 @@ function accPanel(r, d, ctx) {
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "Window");
   const segBtns = g.windows.map((w) => {
-    const b = accEl("button", "seg-item", w + " min");
+    const b = accKey(accEl("button", "seg-item", w + " min"), r.name, "window-" + w);
     b.type = "button";
     b.onclick = () => { d.minutes = w; sync(); };
     seg.appendChild(b);
@@ -386,11 +394,11 @@ function accPanel(r, d, ctx) {
   // may be on either, and a disabled button would drop it to <body>. Cancel refuses a press while busy; Grant's
   // refusal is accGrant's own (it re-checks the form and the busy set).
   const btns = accEl("div", "ac-pbtns");
-  const cancel = accEl("button", "btn", "Cancel");
+  const cancel = accKey(accEl("button", "btn", "Cancel"), r.name, "cancel");
   cancel.type = "button";
   if (accBusy.has(sid)) cancel.setAttribute("aria-disabled", "true");
   cancel.onclick = () => { if (accBusy.has(sid)) return; accDrafts.delete(sid); accErrs.delete(sid); repaint(true); };
-  const grant = accEl("button", "btn btn-primary");
+  const grant = accKey(accEl("button", "btn btn-primary"), r.name, "grant");
   grant.type = "button";
   const doGrant = () => accGrant(sid, rowByName(r.name), repaint);
   grant.onclick = doGrant;
@@ -478,7 +486,7 @@ function accEventRow(e, nowMs) {
 
 function accEventsCard(m, d, nowMs, sid) {
   const card = accEl("section", "card ac-events");
-  const full = accEl("button", "link t-sm", "Full history in Audit");
+  const full = accKey(accEl("button", "link t-sm", "Full history in Audit"), "", "audit");
   full.type = "button";
   full.onclick = () => openAudit({ session: sid });
   card.appendChild(accCardHead("Recent credential events", accEl("span", "t-sm muted", "Last " + ACCESS_EVENTS + " ·"), full));
@@ -525,17 +533,26 @@ function mountAccess(host, sid0) {
     const a = document.activeElement;
     return !!a && host.contains(a) && !!a.dataset && !!a.dataset.ac;
   };
-  // fill: rebuild a section, and give the control the keyboard was in back to the same one in the new content: a
-  // button by its place among the section's buttons, a grant field by its data-ac. If it is gone (a closed panel's
-  // Cancel), the keyboard goes to the view, never to <body>.
+  // fill: rebuild a section, and give the control the keyboard was in back to the same one in the new content, by what
+  // it is and not by where it sat: a grant field by its data-ac, a button by its connection and action (accKey). A
+  // button of the SSO card (app.js's, so it has no key) is found by its place among the section's unkeyed buttons. A
+  // control that is gone goes to its connection's own Elevate… or Extend (a closed panel's Cancel lands on its row's
+  // action), and failing that to the view, never to <body> and never to another connection's button.
+  const keyed = (b) => !!b.dataset && b.dataset.acAct !== undefined;
   const fill = (slot, node) => {
     const a = document.activeElement;
     const held = !!a && slot.contains(a);
     const field = held && a.dataset ? a.dataset.ac || "" : "";
-    const at = held && !field ? [...slot.querySelectorAll("button")].indexOf(a) : -1;
+    const id = held && !field && keyed(a) ? { conn: a.dataset.acConn || "", act: a.dataset.acAct } : null;
+    const at = held && !field && !id ? [...slot.querySelectorAll("button")].filter((b) => !keyed(b)).indexOf(a) : -1;
     slot.replaceChildren(...(node ? [node] : []));
     if (!held) return;
-    const next = field ? slot.querySelector('[data-ac="' + field + '"]') : at >= 0 ? [...slot.querySelectorAll("button")][at] : null;
+    const buttons = [...slot.querySelectorAll("button")];
+    const find = (conn, act) => buttons.find((b) => keyed(b) && (b.dataset.acConn || "") === conn && b.dataset.acAct === act);
+    let next = null;
+    if (field) next = slot.querySelector('[data-ac="' + field + '"]');
+    else if (id) next = find(id.conn, id.act) || (id.conn ? find(id.conn, "elevate") || find(id.conn, "extend") : null);
+    else if (at >= 0) next = buttons.filter((b) => !keyed(b))[at];
     (next || host).focus({ preventScroll: true });
   };
 
