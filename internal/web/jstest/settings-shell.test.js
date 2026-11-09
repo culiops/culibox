@@ -2088,6 +2088,22 @@ test("on the phone nothing is built or moved: the row keeps its switch and its r
   }
 });
 
+test("production code uses no fake-only DOM helper: FNode's .all() does not exist on a real Element (fix round 2, C1)", () => {
+  for (const f of ["app.js", "attention.js", "notifymodel.js"]) {
+    const src = read(f).replace(/Promise\.all\(/g, "");
+    assert.doesNotMatch(src, /\.all\(/, f + " calls .all(): use querySelector / querySelectorAll");
+  }
+});
+
+test("the size card's p.hint stays hidden on the desktop page (C2): display none, in the desktop block", () => {
+  const css = read("desktop.css");
+  const i = css.indexOf("#page-host > #settings-modal.as-page > #settings > .fs-card > .hint,");
+  assert.ok(i > 0);
+  const rule = css.slice(i, css.indexOf("}", i) + 1);
+  assert.match(rule, /\{ display: none; \}$/);
+  assert.ok(css.indexOf("@media (min-width: 701px)") < i, "after the opening of the single desktop block, which is the only top-level @media");
+});
+
 test("the new Alerts code builds text nodes only", () => {
   for (const fn of ["notifyPrefRow", "notifyAlertsSection", "paintNotifyMore"]) assert.doesNotMatch(lift(fn), /innerHTML|insertAdjacentHTML|outerHTML/, fn);
 });

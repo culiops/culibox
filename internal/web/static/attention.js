@@ -299,6 +299,7 @@ const NOTIFY_PREF_ROWS = {
 };
 const NOTIFY_TEST_SENT = "Test sent. Nothing appeared? Check this browser\u2019s notification permission in your OS settings.";
 const NOTIFY_TEST_NOTHING = "Nothing appeared? Check this browser\u2019s notification permission in your OS settings.";
+const REMOTE_ACCESS_PHRASE = "put HTTPS in front of CuliBox yourself";   // words of the (a) how-to step that carry the link
 const REMOTE_ACCESS_DOC = "https://github.com/culiops/culibox/blob/main/docs/REMOTE-ACCESS.md";
 
 // notifyChecked: the toggle reads on only when the operator opted in AND the
@@ -468,6 +469,6 @@ function ssoDoneKeep(prevActivity, activity, exited) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, needsTransitions, NEEDS_REARM_MS,
-    notifyAvailability, notifyRowCopy, NOTIFY_PREF_ROWS, NOTIFY_ALWAYS_ON, NOTIFY_FIREFOX, REMOTE_ACCESS_DOC, notifyChecked, notifyWanted, setNotifyWanted, notifyPoll,
+    notifyAvailability, notifyRowCopy, NOTIFY_PREF_ROWS, NOTIFY_ALWAYS_ON, NOTIFY_FIREFOX, REMOTE_ACCESS_DOC, REMOTE_ACCESS_PHRASE, notifyChecked, notifyWanted, setNotifyWanted, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }

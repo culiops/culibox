@@ -3451,7 +3451,7 @@ function notifyMono(parent, text, mono) {
 // paintNotifyWhy fills the Alerts row's reason (#notify-why) from notifyRowCopy (attention.js): one line under the
 // switch, or, for a state with a way out, a paragraph, the steps (under a heading when the copy has one) and, when
 // the browser can be asked again, Check again (`onAgain`). Frame M8.1.
-function paintNotifyWhy(why, copy, onAgain) {
+function paintNotifyWhy(why, copy, onAgain, link) {
   why.textContent = "";
   if (!copy.para) {
     why.classList.remove("notify-block");
@@ -3477,7 +3477,20 @@ function paintNotifyWhy(why, copy, onAgain) {
       li.appendChild(document.createTextNode(" "));
     }
     const body = el("span", "muted");
-    notifyMono(body, step.text, step.mono);
+    // `link` (desktop only): the words of the step that name HTTPS are the remote-access guide's link; the step's text is unchanged.
+    const at = link ? step.text.indexOf(link.phrase) : -1;
+    if (at >= 0) {
+      notifyMono(body, step.text.slice(0, at), []);
+      const a = el("a", "link");
+      a.textContent = link.phrase;
+      a.href = link.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      body.appendChild(a);
+      notifyMono(body, step.text.slice(at + link.phrase.length), step.mono);   // the machine text of this step follows the phrase
+    } else {
+      notifyMono(body, step.text, step.mono);
+    }
     li.appendChild(body);
     list.appendChild(li);
   }
@@ -3570,9 +3583,9 @@ function notifyAlertsSection(row, cb, why) {
 // paintNotifyMore draws the rest of the Alerts section (desktop only), repainted on every initNotifyToggle: with the master on, the
 // Blocked / Done / Ended rows (the Firefox note under Blocked) and the Send test result in the Notifications row, Send test in its
 // third column, then the Message text row; the chime row in every state ("Sound"; on an http page (a) it is the row "Meanwhile, in this
-// tab", after the how-to-enable list, the only sound a background tab can make there). `state` is notifyAvailability's, `on` is the master,
-// `copy` is notifyRowCopy's (the how-to step that names HTTPS carries the remote-access link, words unchanged).
-function paintNotifyMore(row, state, on, copy) {
+// tab", after the how-to-enable list, the only sound a background tab can make there). `state` is notifyAvailability's, `on` is the master.
+// (The remote-access link is built with the how-to step itself, by paintNotifyWhy.)
+function paintNotifyMore(row, state, on) {
   const cb = $("notify-toggle"), why = $("notify-why");
   const sec = notifyAlertsSection(row, cb, why);
   const el = (tag, cls, text) => {
@@ -3595,22 +3608,6 @@ function paintNotifyMore(row, state, on, copy) {
     r.appendChild(el("div", "alerts-act"));
     rest.appendChild(r);
   };
-  if (state === "insecure" && copy && copy.steps[1]) {
-    // "put HTTPS in front of CuliBox yourself" links the guide; the step's words are the copy's, split around it.
-    const PHRASE = "put HTTPS in front of CuliBox yourself";
-    const step = copy.steps[1], at = step.text.indexOf(PHRASE);
-    const body = why.all((n) => n.tag === "span" && n.className === "muted").filter((n) => n.textContent === step.text)[0];
-    if (body && at >= 0) {
-      body.textContent = "";
-      notifyMono(body, step.text.slice(0, at), []);
-      const a = el("a", "link", PHRASE);
-      a.href = REMOTE_ACCESS_DOC;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      body.appendChild(a);
-      notifyMono(body, step.text.slice(at + PHRASE.length), step.mono);
-    }
-  }
   if (state === "ready" && on) {
     const group = el("div", "notify-classes");
     group.setAttribute("role", "group");
@@ -3656,8 +3653,8 @@ function initNotifyToggle(refused) {
     // The button that took the press was redrawn or is gone: keep the keyboard on its successor, or on the switch it unlocked.
     const next = why.querySelector(".btn") || (cb.disabled ? null : cb);
     if (next) next.focus();
-  });
-  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked, copy);
+  }, drawerDesktop() ? { phrase: REMOTE_ACCESS_PHRASE, href: REMOTE_ACCESS_DOC } : null);
+  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked);
   cb.onchange = async () => {
     if (!cb.checked) { setNotifyWanted(false); initNotifyToggle(); return; }
     let p = "denied";
