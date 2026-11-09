@@ -341,3 +341,205 @@ test("the sidebar footer has div#side-store[hidden] on its own row, between the 
   assert.ok(foot2.indexOf('id="side-store"') > foot2.indexOf('class="side-stats"'), "below the cost / elevated row");
   assert.ok(foot2.indexOf('id="side-store"') < foot2.indexOf('class="side-links"'), "above the links");
 });
+
+// --- Plan 7 Task 9 (#177): the store, one form (DD§A9, §B5, DC§7; R6, R19) ----------------------------
+// The real store.js, notifymodel.js, attention.js and sysbanner.js in one vm context (one shared page scope,
+// as in the browser) over fakedom. Fixtures use made-up names.
+const vm = require("node:vm");
+const { Node: FNode, Text: FText } = require("./fakedom.js");
+const readStatic = (f) => fs.readFileSync(path.join(__dirname, "..", "static", f), "utf8");
+
+async function storePage(opts) {
+  const o = Object.assign({ phone: false, signedOut: false, hidden: false, state: { ...base }, sessions: [{ id: "s1", need: "store_locked" }, { id: "s2", need: "store_locked" }] }, opts || {});
+  const doc = { activeElement: null };
+  doc.createElement = (t) => new FNode(t, doc);
+  doc.createTextNode = (t) => new FText(t);
+  doc.documentElement = new FNode("html", doc);
+  if (o.hidden) doc.documentElement.className = "sidebar-hidden";
+  const els = {};
+  for (const id of ["store-banner-slot", "store-banner", "sys-banner-slot", "sessions", "rail48"]) { els[id] = new FNode("div", doc); els[id].hidden = true; }
+  doc.getElementById = (id) => els[id] || null;
+  const box = {
+    document: doc, window: { innerWidth: o.phone ? 390 : 1280, location: { reload() {} } }, console, Date, Math, JSON, Promise, setImmediate,
+    mobileActive: () => box.phone, phone: o.phone,
+    sys: { lastOkAt: Date.now(), failSince: null, signedOut: o.signedOut, hiddenSince: null, paused: false, bootVersion: "v1", version: "v1", dismissedVersion: "" },
+    lastSessions: o.sessions, versionLabel: (v) => v, refreshSessions() {}, renderRail48() {},
+    calls: { toggle: 0, signedOut: 0, fetched: [] },
+    fetch: async (url, init) => {
+      box.calls.fetched.push(url);
+      if (url === "/api/store") return { ok: true, status: 200, json: async () => box.state };
+      return box.unlockResp;
+    },
+    state: o.state,
+  };
+  box.toggleSidebar = () => { box.calls.toggle++; doc.documentElement.className = ""; };
+  box.sysNoteSignedOut = () => { box.calls.signedOut++; box.sys.signedOut = true; };
+  box.globalThis = box;
+  const ctx = vm.createContext(box);
+  FNode.prototype.addEventListener = FNode.prototype.addEventListener || function (t, f) { (this.handlers = this.handlers || {})[t] = f; };
+  FNode.prototype.blur = FNode.prototype.blur || function () { if (this.doc.activeElement === this) this.doc.activeElement = null; };
+  for (const f of ["notifymodel.js", "attention.js", "store.js", "sysbanner.js"]) new vm.Script(readStatic(f), { filename: f }).runInContext(ctx);
+  await box.refreshStore();
+  return { box, doc, els, ctx };
+}
+const sidebarForm = (page) => {
+  const slot = page.els["store-banner-slot"];
+  return { slot, field: slot.querySelector(".storepass"), btn: slot.querySelector(".btn-primary"), err: slot.querySelector(".storeerr") };
+};
+const submitKit = async (page, status, body) => {
+  const { field, btn } = sidebarForm(page);
+  page.box.unlockResp = resp(status, body);
+  field.value = "pass-phrase-xyz";
+  btn.handlers.click({ stopPropagation() {} });
+  await flush(); await flush();
+};
+
+test("T9 desktop: a locked store paints ONE amber banner with ONE field in the sidebar slot; the full-width banner stays empty", async () => {
+  const p = await storePage();
+  const { slot, field, btn } = sidebarForm(p);
+  assert.strictEqual(slot.hidden, false);
+  const b = slot.children[0];
+  assert.strictEqual(b.className, "banner is-needs");
+  assert.strictEqual(b.querySelector(".banner-title").textContent, "Store locked");
+  assert.strictEqual(b.querySelector(".dot").className, "dot dot-needs");
+  assert.strictEqual(b.querySelector("p").textContent, "2 sessions can’t fetch credentials from the store.");
+  assert.strictEqual(slot.querySelectorAll("input").length, 1);
+  assert.strictEqual(field.attrs.placeholder === undefined ? field.placeholder : field.attrs.placeholder, "Store passphrase");
+  assert.strictEqual(btn.textContent, "Unlock");
+  assert.doesNotMatch(slot.textContent, /Stays unlocked/);
+  assert.strictEqual(p.els["store-banner"].hidden, true);
+  assert.strictEqual(p.els["store-banner"].children.length, 0);
+});
+
+test("T9 desktop: the session card strip is the frame sentence + Unlock…, with no field", async () => {
+  const p = await storePage();
+  const body = p.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: false, strip: true });
+  assert.strictEqual(body.querySelectorAll("input").length, 0);
+  assert.strictEqual(body.querySelector(".storetxt").textContent, "Credentials from the store can’t be fetched. Unlock it in the sidebar.");
+  const go = body.querySelector(".btn");
+  assert.strictEqual(go.textContent, "Unlock…");
+  assert.strictEqual(go.title, "Focus the passphrase field in the sidebar");
+  assert.strictEqual(body.querySelector(".storetitle"), null, "the strip label already says Store locked");
+  const card = p.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: false });
+  assert.strictEqual(card.querySelector(".storetitle").textContent, "Store locked");
+});
+
+test("T9 Unlock… focuses the field, and opens the sidebar first when it is collapsed to the rail", async () => {
+  const p = await storePage({ hidden: true });
+  const body = p.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: false, strip: true });
+  body.querySelector(".btn").click();
+  assert.strictEqual(p.box.calls.toggle, 1);
+  assert.strictEqual(p.doc.activeElement, sidebarForm(p).field);
+  const open = await storePage();
+  open.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: false, strip: true }).querySelector(".btn").click();
+  assert.strictEqual(open.box.calls.toggle, 0);
+  assert.strictEqual(open.doc.activeElement, sidebarForm(open).field);
+});
+
+test("T9 wrong passphrase: red .field-error under the field and .is-invalid on it", async () => {
+  const p = await storePage();
+  await submitKit(p, 401, '{"error":"wrong passphrase"}');
+  const { slot, field, err } = sidebarForm(p);
+  assert.strictEqual(err.textContent, "Wrong passphrase.");
+  assert.ok(err.classList.contains("field-error"));
+  assert.ok(field.classList.contains("is-invalid"));
+  assert.strictEqual(field.attrs["aria-invalid"], "true");
+  const form = slot.querySelector(".storeform");
+  assert.ok(form.children.indexOf(err) === form.children.indexOf(field) + 1, "the error sits right under the field");
+  assert.strictEqual(field.disabled, false);
+  assert.strictEqual(field.value, "");
+});
+
+test("T9 429: a muted line, not red, and the field is not marked invalid", async () => {
+  const p = await storePage();
+  await submitKit(p, 429, '{"error":"too many wrong passphrases — try again in 5 minutes"}');
+  const { field, err } = sidebarForm(p);
+  assert.match(err.textContent, /try again in 5 minutes/);
+  assert.ok(err.classList.contains("muted") && err.classList.contains("t-sm"));
+  assert.ok(!err.classList.contains("field-error"));
+  assert.ok(!field.classList.contains("is-invalid"));
+});
+
+test("T9 401 (signed out): no wording of its own and no Reload button; it defers to the signed-out banner via sys", async () => {
+  const p = await storePage();
+  await submitKit(p, 401, "unauthorized");
+  const { slot, err } = sidebarForm(p);
+  assert.strictEqual(err.textContent, "");
+  assert.strictEqual(slot.querySelectorAll(".btn").length, 1, "Unlock only, no Reload");
+  assert.doesNotMatch(slot.textContent, /Signed out|reload/i);
+  assert.strictEqual(p.box.calls.signedOut, 1);
+});
+
+test("T9 darwin (R6): no field anywhere; the card names the Keychain failure from storeState.unavailable; no banner", async () => {
+  const un = { kind: "access", reason: "the login keychain is locked", fix: "Unlock the login keychain, then retry." };
+  const p = await storePage({ state: { ...base, platform: "darwin", locked: false, unavailable: un } });
+  assert.strictEqual(p.els["store-banner-slot"].hidden, true);
+  assert.strictEqual(p.els["store-banner-slot"].children.length, 0);
+  for (const need of ["store_locked", "ask"]) {
+    const body = p.box.renderStoreBody({ id: "s1", need }, { mobile: false, strip: true });
+    assert.strictEqual(body.querySelectorAll("input").length, 0);
+    assert.strictEqual(body.querySelector(".storetitle").textContent, "Keychain access failed");
+    assert.strictEqual(body.querySelector(".storetxt").textContent, "Unlock the login keychain, then retry.");
+    assert.doesNotMatch(body.textContent, /passphrase|Unlock…/i);
+  }
+});
+
+test("T9 phone is unchanged: the full-width banner with its form, the card with its form, no sidebar banner", async () => {
+  const p = await storePage({ phone: true });
+  assert.strictEqual(p.els["store-banner-slot"].hidden, true);
+  assert.strictEqual(p.els["store-banner-slot"].children.length, 0);
+  const el = p.els["store-banner"];
+  assert.strictEqual(el.hidden, false);
+  assert.strictEqual(el.children[0].className, "storebanner-msg");
+  assert.strictEqual(el.children[0].textContent, "Store locked — tokens from the store can't be used");
+  const f = el.querySelector(".storepass");
+  assert.strictEqual(f.className, "fld storepass");
+  assert.strictEqual(el.querySelector(".btn").className, "btn pri");
+  assert.strictEqual(el.querySelector(".storeerr").className, "dlg-err storeerr");
+  const form = el.querySelector(".storeform");
+  assert.deepStrictEqual(form.children.map((c) => c.tag), ["input", "button", "div"], "field, button, error: the legacy order");
+  const card = p.box.renderStoreBody({ id: "s1", need: "store_locked" }, { mobile: true });
+  assert.strictEqual(card.className, "storecard mstorecard");
+  assert.strictEqual(card.querySelector(".storetitle").textContent, "Store locked");
+  assert.strictEqual(card.querySelectorAll("input").length, 1);
+});
+
+test("T9 signed out hides the store banner (M8.6b); the strip sentence stays; coming back brings the banner back", async () => {
+  const p = await storePage({ signedOut: true });
+  assert.strictEqual(p.els["store-banner-slot"].hidden, true);
+  assert.strictEqual(p.els["store-banner-slot"].children.length, 0);
+  assert.strictEqual(p.box.renderStoreBody({ id: "s1" }, { mobile: false, strip: true }).querySelectorAll("input").length, 0);
+  p.box.sys.signedOut = false;
+  p.box.paintStoreBanner();
+  assert.strictEqual(p.els["store-banner-slot"].hidden, false);
+  assert.strictEqual(p.els["store-banner-slot"].querySelectorAll("input").length, 1);
+});
+
+test("T9 a repaint keeps the field being typed into; only the count moves", async () => {
+  const p = await storePage();
+  const f1 = sidebarForm(p).field;
+  p.box.lastSessions = [{ id: "s1", need: "store_locked" }];
+  p.box.paintStoreBanner();
+  assert.strictEqual(sidebarForm(p).field, f1);
+  assert.strictEqual(p.els["store-banner-slot"].querySelector("p").textContent, "1 session can’t fetch credentials from the store.");
+});
+
+test("T9 rail marker priority (R19): a system banner wins, else the store (amber), else none; one marker", async () => {
+  const p = await storePage();
+  const m = p.box.sysRailMarkerModel();
+  assert.deepStrictEqual({ t: m.title, tone: m.tone, key: m.key }, { t: "Store locked", tone: "amber", key: "store" });
+  // can't reach CuliBox is a system banner: it takes the single marker, neutral.
+  p.box.sys.lastOkAt = Date.now() - 20000; p.box.sys.failSince = Date.now() - 15000;
+  const s = p.box.sysRailMarkerModel();
+  assert.strictEqual(s.tone, "neutral");
+  assert.notStrictEqual(s.key, "store");
+  // signed out: system banner again, and the store has gone from the sidebar.
+  const q = await storePage({ signedOut: true });
+  assert.strictEqual(q.box.sysRailMarkerModel().tone, "neutral");
+  // an unlocked store and a healthy poll: no marker.
+  const r = await storePage({ state: { ...base, locked: false } });
+  assert.strictEqual(r.box.sysRailMarkerModel(), null);
+  // the phone has no rail marker either.
+  const ph = await storePage({ phone: true });
+  assert.strictEqual(ph.box.sysRailMarkerModel(), null);
+});

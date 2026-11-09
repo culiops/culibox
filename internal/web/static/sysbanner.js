@@ -2,8 +2,8 @@
 
 // The system banner (UI plan 7, #177; DD§A8 M8.6/6b/6c, §B1): at most ONE banner at the top of the sidebar, under
 // #side-top, for the first of signed out, can't reach, paused, updated (R19). What it says and when is
-// sysBannerModel (notifymodel.js, pure); this file only paints it. The store banner (Task 9) has its own slot
-// below this one and signed out hides it; nothing of it is drawn here.
+// sysBannerModel (notifymodel.js, pure); this file only paints it. The store banner (store.js, Task 9) has its own
+// slot below this one and signed out hides it; sysBannerSync only asks it to repaint and gives the rail its input.
 //
 // Desktop only: nothing is built while mobileActive(); crossing to a phone width clears it. The banner is built
 // once per kind (the model's key) and only its body text moves between polls (the age), so a screen reader
@@ -101,17 +101,20 @@ function sysBannerSync() {
   } else if (model && sysBannerBody && sysBannerBody.textContent !== model.body) {
     sysBannerBody.textContent = model.body;
   }
-  // The rail's marker follows the same model (and, later, the store's); renderRail48 skips an unchanged rail.
-  const rk = key;
+  // The rail's marker follows the same model, then the store's; renderRail48 skips an unchanged rail.
+  // The store banner (own slot below, Task 9) repaints on the same beats: a poll moves its count, a 401 hides it.
+  if (typeof paintStoreBanner === "function") paintStoreBanner();
+  const sr = typeof storeRailBanner === "function" ? storeRailBanner() : null;
+  const rk = (key || "") + "|" + (sr ? "store" : "");
   if (rk !== sysBannerRailKey) {
     sysBannerRailKey = rk;
     if (typeof renderRail48 === "function") renderRail48();
   }
 }
 
-// The rail marker's model: the first banner in display order (the system one; the store banner is Task 9's input).
+// The rail marker's model: the first banner in display order (the system one, else the store's, R19).
 function sysRailMarkerModel() {
-  return railMarkerModel(sysBannerCurrent(), null);
+  return railMarkerModel(sysBannerCurrent(), typeof storeRailBanner === "function" ? storeRailBanner() : null);
 }
 
 function sysRailMarkerEl(marker) {

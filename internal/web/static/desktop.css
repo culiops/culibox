@@ -695,6 +695,14 @@
   /* The slot sits under #side-top and above the list; empty it is [hidden]. The store banner gets its own slot below (Task 9). */
   #sys-banner-slot { flex: none; }
   #sys-banner-slot[hidden] { display: none; }
+  #store-banner-slot { flex: none; }
+  #store-banner-slot[hidden] { display: none; }
+  /* The store banner's one form (DD§A9 M8.7): the field, its error under it, then Unlock; stacked in the 290 px column. */
+  #store-banner-slot .storeslot { display: block; }
+  #store-banner-slot .storeform { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+  #store-banner-slot .storepass { flex: none; width: 100%; }
+  #store-banner-slot .storeerr:empty { display: none; }
+  #store-banner-slot .storeform .btn { align-self: flex-start; }
   /* Can't reach / signed out (M8.6, M8.6b): the rows are the last-known list. Groups and order stay; every dot is hollow, the
      names are --muted (the frame's .m8-stale), and the amber goes: the Needs you label and an ask's sub-line read as neutral. A
      write window still open keeps its red ring around the hollow dot (R9). Muted text, not opacity, so it stays above 4.5:1. */
