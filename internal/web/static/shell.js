@@ -216,6 +216,7 @@ function toastSync() {
   if (toastHover || toastFocus) toastStack.pause(now);
   else toastStack.resume(now);
   renderToasts();
+  toastPlace(); // the slot a strip must fall in is the stack's own height, which just changed (R28)
   // The render may have removed the focused toast (its Undo or ×, by keyboard).
   // Chrome fires focusout from inside remove(); Firefox and Safari fire nothing
   // and just move focus to the body. So look again: focus that left with its
@@ -235,6 +236,21 @@ function toastSync() {
     toastStack.expire(Date.now());
     toastChanged();
   }, Math.max(0, at - now));
+}
+
+// toastPlace: the stack's top edge (Plan 7 call 10). Desktop only; the phone slot is not this element. The stack is
+// 420px at most and 16px (--sp-4) from the right, so that x-range is checked against every ask strip and write
+// banner whose top falls in the stack's own slot (R28); toaststack.js's toastStackTop does the arithmetic. Called where a strip or banner appears, leaves or
+// moves (positionDrawer, which the grid's ResizeObserver also drives), never per poll. No strip: the CSS's 48.
+function toastPlace() {
+  const host = document.getElementById("toasts");
+  if (!host) return;
+  if (!toastStacked()) { host.style.top = ""; return; }
+  if (typeof document.querySelectorAll !== "function") return; // a page host without layout (the jstest fakes)
+  const right = window.innerWidth - 16;
+  const rects = Array.from(document.querySelectorAll(".needstrip, .elev"), (n) => n.getBoundingClientRect());
+  const top = toastStackTop({ left: right - 420, right }, rects, host.offsetHeight);
+  host.style.top = top === 48 ? "" : top + "px";
 }
 
 // toastHost: #toasts, with its pause listeners wired on first use. mouseenter and

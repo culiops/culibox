@@ -308,12 +308,12 @@ function baseUnverifiedReason(a) {
 // baseScope: what the base role can do, as {state, text, title}. A clean result
 // is "no broad writes found", never a claim of read-only: the probe lists a
 // short fixed set of broad write actions and does not see scoped grants.
-function baseScope(a) {
+function baseScope(a, desktop) {
   const state = baseState(a);
   if (state === SSO_DIRECT) {
     const h = Number(a.hours) > 0 ? " \u00b7 up to " + Math.ceil(Number(a.hours)) + " h" : "";
     return { state, text: "read-only gate passed" + h + " \u00b7 " + SSO_DIRECT_LABEL,
-      title: "the permission set passed the read-only gate at spawn \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
+      title: "the permission set passed the read-only gate at " + (desktop ? "start" : "spawn") + " \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
   }
   const at = hhmm(a && a.base_checked_at);
   const checked = at ? "checked " + at + " \u00b7 " : "";
@@ -449,14 +449,14 @@ function awsSig(s, nowMs = Date.now()) {
 // After a drop, credentials already issued may outlive the grant: say until when.
 // With no window the row is the base role's measured access (baseScope), and a
 // base role that can write is drawn as the dashed amber chip.
-function scopeRow(a, st, nowMs) {
+function scopeRow(a, st, nowMs, desktop) {
   if (isElevated(a, nowMs)) {
     const m = minutesLeft(a.elevated_until, nowMs);
     let v = "write · until " + hhmm(a.elevated_until) + " (" + m + " min)";
     if (m < NEW_CRED_MIN) v += " · new credentials from the base role";
     return { k: "scope", v: v, chip: "bdg aws write", wrap: true };
   }
-  const b = baseScope(a);
+  const b = baseScope(a, desktop);
   const row = { k: "scope", v: b.text, title: b.title };
   if (b.state === "writes") { row.chip = "bdg aws rolew"; row.wrap = true; }
   if (b.state === "unverified") row.wrap = true;
@@ -475,14 +475,14 @@ function scopeRow(a, st, nowMs) {
 // identifiers wrap; the scope is its own row; production is a row of its own
 // drawn as the red chip, so no label length can push it out of view. While
 // elevated, the role row names the write role in use.
-function awsRailRows(s, st, nowMs = Date.now()) {
+function awsRailRows(s, st, nowMs = Date.now(), desktop = false) {
   const a = s && s.aws;
   if (!a) return [];
   const elevated = isElevated(a, nowMs);
   const rows = [
     { k: "aws", v: a.label ? a.label + " · " + a.account_id : String(a.account_id), wrap: true },
     { k: "role", v: roleText(a, elevated && a.elevate ? a.elevate.role_arn : a.role_arn), wrap: true },
-    scopeRow(a, st, nowMs),
+    scopeRow(a, st, nowMs, desktop),
   ];
   if (a.prod) rows.push({ k: "prod", v: "production", chip: "bdg aws prod" });
   return rows;
@@ -551,7 +551,7 @@ function connStatLine(stats, nowMs) {
 // `k`/`v` make every row comparable for the rail's repaint key: v carries all
 // that the block draws. Elevation and the SSO flag come from the list entry
 // (fresh each poll); only the counters come from the /aws status `st`.
-function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
+function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false, desktop = false) {
   const cs = connList(s).slice().sort((a, b) => (b.prod ? 1 : 0) - (a.prod ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   const byName = new Map((st && Array.isArray(st.connections) ? st.connections : []).map((c) => [c.name, c]));
   const blocks = cs.map((c) => {
@@ -563,7 +563,7 @@ function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
     const detail = [c.label, c.account_id, roleText(c, live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
     const { stat, err } = connStatLine((byName.get(c.name) || {}).stats, nowMs);
     // While a window is open the base role is not what the session holds.
-    const b = live ? null : baseScope(c);
+    const b = live ? null : baseScope(c, desktop);
     const base = b ? b.text : "";
     const baseTitle = b ? b.title : "";
     const baseWarn = !!b && b.state === "writes";

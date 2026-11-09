@@ -233,6 +233,7 @@ class Cell {
     }
     if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); } // tree and rail follow the focused tab
     if (typeof syncSelectedRow === "function") syncSelectedRow();
+    if (typeof attnChipSync === "function") attnChipSync(true); // a pane now shows another session
     scheduleSaveLayout();
   }
 
@@ -1004,7 +1005,7 @@ class Cell {
     if (m.cost) {
       const cost = el("span", m.cost);
       cost.className = "ph-cost";
-      cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
+      cost.title = "Session cost (all conversations since start, as Analytics counts it)";
       units.push(["mi-cost", cost]);
     }
     if (units.length) {
@@ -1813,6 +1814,20 @@ function currentMaximized() {
   return isMobile ? null : maximized;
 }
 
+// visibleSessionIds: the ids of the sessions on a pane that is on screen right now: the terminal of each
+// shown cell (only the maximized one while a pane is maximized). An open page (Settings, Analytics, Audit)
+// hides the grid, so then no session is visible. The attention chip and the chime use it (#177).
+function visibleSessionIds() {
+  const out = new Set();
+  if (typeof currentPage === "function" && currentPage()) return out;
+  const max = currentMaximized();
+  for (const c of max ? [max] : cells) {
+    const t = cellTerminal(c);
+    if (t && t.id) out.add(t.id);
+  }
+  return out;
+}
+
 function renderGrid() {
   const grid = document.getElementById("grid");
   const max = currentMaximized();
@@ -1830,6 +1845,7 @@ function renderGrid() {
   requestAnimationFrame(fitAll);
   // The desktop drawer hangs below the focused pane's header, which just moved.
   if (typeof positionDrawer === "function") positionDrawer();
+  if (typeof attnChipSync === "function") attnChipSync(true); // which sessions are on a pane changed
 }
 
 function fitAll() {

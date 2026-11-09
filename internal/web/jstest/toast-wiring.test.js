@@ -625,6 +625,7 @@ async function runKill({ fail } = {}) {
   const ctx = vm.createContext({
     lastSessions: [{ id: "s1", name: "docs" }],
     killing: new Set(),
+    endedByMe: new Map(), endedMark: (m, id, t) => m.set(id, t),
     refreshSessions: async () => {},
     api: async () => { if (fail) throw fail; },
     pendingToast: (text) => { results.push(["pending", text]); return (r) => results.push(["done", r]); },

@@ -269,7 +269,7 @@ function confirmKillEnv(width, sessions, answer, profiles) {
     profiles: profiles || [],
     mobileActive: (w) => Number(w) <= 700,
     askChoice: async (o) => { asked.push(o); return answer; },
-    killSession: async (id) => { killed.push(id); },
+    killSessions: async (ids) => { killed.push(...ids); },
     Promise, Array,
   };
   const ctx = vm.createContext(box);

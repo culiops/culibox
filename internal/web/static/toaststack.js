@@ -223,6 +223,27 @@ function toastFailText(what, err) {
   return { text: "Could not " + what + (named ? ": " + msg : "."), detail: detail };
 }
 
+// toastStackTop: where the desktop stack's top edge goes (px). Today it is fixed at 48, under the pane
+// header, which lets it cover an ask strip's Yes/No/Open terminal or a write banner's Drop now in the right
+// pane. `range` is the stack's x-extent {left, right}; `rects` are the bounding rects of every .needstrip and
+// .elev. With no strip over the stack the answer is exactly 48 (the M8.5 frame, pixel for pixel); with one it
+// is the lowest overlapping strip's bottom + 8, i.e. max(48, bottom) + 8; a strip that ends at or above 48 is not
+// under the stack, so it moves nothing. Pure.
+// Final review R28: only a strip the stack would actually cover counts: one whose top lies within the stack's own
+// slot, from 48 down through `height` (the stack's rendered height; no toast = 0 = nothing to cover). A strip in a
+// lower pane overlaps the stack's x-range but is far below it, so it leaves the stack at 48.
+const TOAST_STACK_TOP = 48;
+const TOAST_STACK_GAP = 8;
+function toastStackTop(range, rects, height) {
+  const slotEnd = TOAST_STACK_TOP + (Number.isFinite(height) && height > 0 ? height : 0);
+  let bottom = null;
+  for (const r of Array.isArray(rects) ? rects : []) {
+    if (!r || !(r.left < range.right && r.right > range.left) || !(r.bottom > TOAST_STACK_TOP) || !(r.top < slotEnd)) continue; // NaN, or a strip that ends above the stack: nothing to clear
+    if (bottom === null || r.bottom > bottom) bottom = r.bottom;
+  }
+  return bottom === null ? TOAST_STACK_TOP : Math.max(TOAST_STACK_TOP, bottom) + TOAST_STACK_GAP;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createToastStack, toastFailText };
+  module.exports = { createToastStack, toastFailText, toastStackTop };
 }

@@ -217,7 +217,7 @@ function accRow(c, o) {
   const gp = acts.elevate || acts.extend
     ? (legacy ? grantPanel(c.elevate ? c : null, aws) : grantPanel(null, aws, conns, c.name, nowMs))
     : null;
-  const b = live ? null : baseScope(c);
+  const b = live ? null : baseScope(c, o.desktop);
   const t = stats ? accValidTime(stats.last_mint) : null;
   // An sso_direct binding without a role name shows the mode label instead of an
   // empty "role ".
@@ -284,7 +284,7 @@ function accessModel(o) {
   const rows = conns.slice()
     .sort((a, b) => (b.prod ? 1 : 0) - (a.prod ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map((c) => accRow(c, {
-      aws, conns, nowMs: now, legacy, hostWarning: host,
+      aws, conns, nowMs: now, legacy, hostWarning: host, desktop: x.desktop === true,
       stats: legacy ? (aws && aws.stats) || null : (byName.get(c.name) || {}).stats || null,
     }));
 

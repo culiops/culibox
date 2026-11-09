@@ -19,9 +19,9 @@ const bodyScripts = scriptsOf(bodyHtml);
 // The markup is the source of the page's fixed strings: the fake elements start from it, so a
 // reworded line in login.html is what these tests read, not a copy of it kept here.
 const tagOf = (id) => {
-  const m = new RegExp("<(\\w+)([^>]*\\bid=\"" + id + "\"[^>]*)>([^<]*)</\\1>").exec(bodyHtml);
+  const m = new RegExp("<(\\w+)([^>]*\\bid=\"" + id + "\"[^>]*)>((?:[^<]|<span[^>]*></span>)*)</\\1>").exec(bodyHtml);
   assert.ok(m, "login.html has no #" + id);
-  return { attrs: m[2], text: m[3] };
+  return { attrs: m[2], text: m[3].replace(/<span[^>]*><\/span>/g, "") };
 };
 
 class El {
@@ -36,6 +36,12 @@ class El {
     this._text = init ? init.text : "";
     this._listeners = {};
     this.submitted = 0;
+    this._cls = new Set();
+    this.classList = {
+      add: (c) => { this._log.push([this.name, "+class", c]); this._cls.add(c); },
+      remove: (c) => { this._log.push([this.name, "-class", c]); this._cls.delete(c); },
+      contains: (c) => this._cls.has(c),
+    };
   }
   get hidden() { return this._hidden; }
   set hidden(v) { this._log.push([this.name, "hidden", v]); this._hidden = !!v; }
@@ -65,6 +71,7 @@ function load({ search = "", hash = "", headOnly = false } = {}) {
   const el = {
     err: new El("err", log, tagOf("err")),
     expired: new El("expired", log, tagOf("expired")),
+    "err-field": new El("err-field", log, tagOf("err-field")),
     signing: new El("signing", log, tagOf("signing")),
     password: new El("password", log),
   };
@@ -128,10 +135,69 @@ test("the card's fixed copy", () => {
   assert.strictEqual(tagOf("signing").text, "Signing in…");
 });
 
-test("the expired line sits above the field label, the error line above the form", () => {
+// Rewritten on purpose (UI plan 7, task 12, M8.8b): the wrong-credential line used to sit in a
+// boxed block ABOVE the form only. On desktop it now sits UNDER the field; the phone keeps the
+// block above the form, so both exist and the script shows both for ?e=1.
+test("the expired line sits above the field label; the error is under the field (desktop) and above the form (phone)", () => {
   const at = (s) => bodyHtml.indexOf(s);
   assert.ok(at('id="expired"') > 0 && at('id="expired"') < at("<label"), "expired line is above the label");
-  assert.ok(at('id="err"') < at("<form"), "error line is above the form (today's place)");
+  assert.ok(at('id="err"') < at("<form"), "the phone's error block stays above the form");
+  assert.ok(at('id="err-field"') > at('id="password"') && at('id="err-field"') < at("<button"), "the desktop error is under the field, above the button");
+  assert.match(tagOf("err-field").attrs, /\bhidden\b/, "starts hidden");
+  assert.match(tagOf("err-field").attrs, /class="field-error"/);
+  assert.strictEqual(tagOf("err-field").text, "Wrong password or token.");
+});
+
+test("?e=1 shows the error under the field too, marks the field invalid, and nothing else does", () => {
+  const p = load({ search: "?e=1" });
+  assert.strictEqual(p.el["err-field"].hidden, false);
+  assert.strictEqual(p.el.password.classList.contains("is-invalid"), true);
+  assert.strictEqual(p.el.password.getAttribute("aria-invalid"), "true");
+  assert.strictEqual(p.el.password.getAttribute("aria-describedby"), "err-field");
+  for (const search of ["", "?reason=expired", "?e=0"]) {
+    const q = load({ search });
+    assert.strictEqual(q.el["err-field"].hidden, true, search);
+    assert.strictEqual(q.el.password.classList.contains("is-invalid"), false, search);
+    assert.strictEqual(q.el.password.getAttribute("aria-invalid"), null, search);
+  }
+});
+
+test("typing after a wrong guess clears the red border (the error is about the old value)", () => {
+  const p = load({ search: "?e=1" });
+  p.el.password.dispatch("input");
+  assert.strictEqual(p.el.password.classList.contains("is-invalid"), false);
+  assert.strictEqual(p.el.password.getAttribute("aria-invalid"), null);
+});
+
+test("checking: the field dims (is-disabled) and Back restores it", () => {
+  const p = load();
+  p.form.dispatch("submit");
+  assert.strictEqual(p.el.password.classList.contains("is-disabled"), true);
+  p.pageshow(true);
+  assert.strictEqual(p.el.password.classList.contains("is-disabled"), false);
+});
+
+test("token mode shows a kit .spin beside 'Signing in…'", () => {
+  assert.match(bodyHtml, /<p class="signing" id="signing"><span class="spin" aria-hidden="true"><\/span>Signing in…<\/p>/);
+});
+
+test("the M8.8b look is desktop-only: every visual rule sits in one min-width: 701px block", () => {
+  const style = [...headHtml.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+  const i = style.indexOf("@media (min-width: 701px)");
+  assert.ok(i > 0, "a desktop media block");
+  const block = style.slice(i);
+  assert.match(block, /label\s*\{[^}]*font-weight:\s*var\(--w-medium\)[^}]*\}/, "label weight");
+  assert.match(block, /label\s*\{[^}]*font-size:\s*var\(--t-sm\)/, "label size");
+  assert.match(block, /label\s*\{[^}]*color:\s*var\(--fg\)/, "label colour");
+  assert.match(block, /input\[type=password\]\s*\{[^}]*border-color:\s*var\(--faint\)/, "--faint border");
+  assert.match(block, /\.is-invalid\s*\{[^}]*border-color:\s*var\(--red\)/, "red border");
+  assert.match(block, /\.is-disabled\s*\{[^}]*opacity/, "dimmed while checking");
+  assert.match(block, /#err\s*\{[^}]*display:\s*none/, "the phone's block is hidden on desktop");
+  assert.match(block, /\.field-error\s*\{[^}]*color:\s*var\(--red\)/);
+  assert.doesNotMatch(block, /font-weight:\s*(7|8|9)\d\d|font-weight:\s*bold/, "weight <= 600");
+  const outside = style.slice(0, i);
+  assert.match(outside, /\.field-error,\s*\.signing \.spin\s*\{[^}]*display:\s*none/, "the under-field error and the spinner are off by default (phone unchanged)");
+  assert.doesNotMatch(outside, /--faint|--red\b/, "phone rules do not use the desktop colours");
 });
 
 test("?e=1 shows the wrong-credential line", () => {

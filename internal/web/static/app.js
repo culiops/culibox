@@ -3,6 +3,7 @@
 // --- fetch helpers -----------------------------------------------------------
 async function api(path, opts) {
   const res = await fetch(path, opts);
+  if (res.status === 401) sysNoteSignedOut(); // any call: the login is gone (Plan 7, R5)
   if (!res.ok) {
     let msg = res.statusText;
     let code = "";
@@ -363,6 +364,7 @@ function drawerTabClosed(id) {
 // right of the grid. The width is CSS (default min(960px, 62% of the grid), or the dragged share); it
 // needs the grid's px.
 function positionDrawer() {
+  if (typeof toastPlace === "function") toastPlace(); // the toast stack clears the same strips (Plan 7 call 10)
   const dr = $("drawer");
   if (!dr || dr.hidden) return;
   const lay = $("layout");
@@ -600,7 +602,10 @@ function renderRail48() {
   if (!rail) return;
   // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
   const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId(), mac: IS_MAC });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|");
+  // The one system-banner marker above the list (Plan 7 R19); null on a phone or with no banner.
+  const marker = typeof sysRailMarkerModel === "function" ? sysRailMarkerModel() : null;
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || "", i.dot ? i.dot.cls : ""].join(":")).join("|")
+    + (marker ? "|m:" + marker.key + ":" + marker.title : "");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
@@ -634,7 +639,7 @@ function renderRail48() {
   // sidebar's «), the primary +, the session dots, then the quota bars at the foot;
   // renderRateLimits fills the bars. Re-parked on every rebuild because
   // replaceChildren drops them.
-  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), mid, railMeters());
+  rail.replaceChildren(railLogo(), mk(items[0]), mk(items[items.length - 1]), ...(marker ? [sysRailMarkerEl(marker)] : []), mid, railMeters());
   paintRailMeters();
 }
 
@@ -1378,7 +1383,9 @@ function showShortcuts() {
     });
   }
   // Next that needs you works where the sidebar groups are, so the phone's dialog does not list it.
-  const rows = helpRows(IS_MAC).filter((r) => r.label !== scEntry("session.nextNeeds").label);
+  // The F6 region cycle has no regions to walk on a phone either.
+  const desktopOnly = ["session.nextNeeds", "ui.regionNext", "ui.regionPrev"].map((id) => scEntry(id).label);
+  const rows = helpRows(IS_MAC).filter((r) => !desktopOnly.includes(r.label));
   return askDialog({
     title: "Keyboard shortcuts",
     body: helpTextStacked(rows, tierRuntimeLabel(boxRuntime)),
@@ -1856,8 +1863,12 @@ async function restartSession(s, trigger) {
 }
 
 async function restartSessionRun(s) {
-  const res = await postSessionAction(s.id, "restart");
+  endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
+  let res;
+  try { res = await postSessionAction(s.id, "restart"); }
+  catch (e) { endedByMe.delete(s.id); throw e; }
   if (!res.ok) {
+    endedByMe.delete(s.id);
     let msg = "", code = "";
     try { const b = (await res.json()) || {}; msg = b.error || ""; code = b.code || ""; } catch (_) {}
     // 423 = the store is locked: its message names the way out, and the banner
@@ -1869,6 +1880,7 @@ async function restartSessionRun(s) {
     await refreshSessions();
     return;
   }
+  restartedByMe.add(s.id); // the mark ends when a poll sees this id live again
   const ns = await res.json();
   const wasDocked = !!dockHolding(s.id) && !mobileActive(window.innerWidth); // a docked shell comes back docked
   closeTerminal(s.id);
@@ -2538,7 +2550,7 @@ function renderNeedsBody(s, opts) {
   if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
   // A locked store: the card is the unlock form (store.js).
   if (c.unlock) {
-    const sb = renderStoreBody(s, { mobile: false });
+    const sb = renderStoreBody(s, { mobile: false, strip: inStrip });
     if (inStrip) {
       // The store card has no Open of its own; the strip always offers one.
       const sacts = document.createElement("div");
@@ -3344,55 +3356,119 @@ function rowLocal(s) {
   };
 }
 
-// signalAttention pushes the waiting count to the tab title and favicon — the
-// part of the signal you see without looking at the page. Runs on every
-// successful poll, AND from initEnv's title refresh (which can land before
-// the first session poll ever resolves) — so it touches title/favicon only.
-// Notifications are gated on an actual session list and live in
-// notifyTransitions, called separately by refreshSessions. The favicon href
-// is swapped only when the state flips, so a steady state costs no icon reload.
-let faviconNeeds = null;
+// sys: the client's view of the sessions poll and of the build this tab runs, read by the title and
+// favicon (titleState) and by the sidebar banner (sysBannerModel, drawn by sysbanner.js).
+//   lastOkAt  ms of the last OK /api/sessions poll (null before the first)
+//   failSince ms of the first failure of the current run (null while polls succeed)
+//   signedOut true once any api() call answered 401; the next OK session poll clears it
+//   hiddenSince ms when the tab went hidden (null while visible)
+//   paused    true when the tab became visible after SYS_PAUSE_MS hidden, until the next OK poll
+//   bootVersion the first meta.version this tab saw; version the latest; dismissedVersion the one the
+//             user closed the "updated" banner on (it comes back for a different version)
+// A 401 is signed out at once; a network failure counts as offline only after SYS_OFFLINE_MS without an
+// OK poll (nmOffline), so one blip never flickers the title or the banner.
+const sys = { lastOkAt: null, failSince: null, signedOut: false, hiddenSince: null, paused: false,
+  bootVersion: null, version: null, dismissedVersion: "" };
+function sysPollOk() {
+  const wasSignedOut = sys.signedOut;
+  sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; sys.paused = false;
+  // Panes parked by the signed-out state reconnect now (Plan 7 Task 8): the flag is the one thing that stopped them.
+  if (wasSignedOut && typeof eachTerminal === "function") eachTerminal((t) => { if (t.resumeAfterSignIn) t.resumeAfterSignIn(); });
+}
+function sysPollFailed(e) {
+  const now = Date.now();
+  if (sys.failSince == null) sys.failSince = now;
+  if (e && e.status === 401) sys.signedOut = true;
+}
+// A 401 on any call. api() can run before this file reaches `sys` (a const), so a not-yet-built record is a no-op.
+function sysNoteSignedOut() {
+  try {
+    if (sys.signedOut) return;
+    sys.signedOut = true;
+    if (typeof sysBannerSync === "function") sysBannerSync();
+    signalAttention();
+  } catch (_) { /* before the record exists */ }
+}
+// sysSeeVersion: meta.version from initEnv and from the 30 s tick. The first one seen is the build this tab
+// runs; a different one later is an update (the banner), never an automatic reload.
+function sysSeeVersion(v) {
+  if (!v || typeof v !== "string") return;
+  if (sys.bootVersion == null) sys.bootVersion = v;
+  sys.version = v;
+  if (typeof sysBannerSync === "function") sysBannerSync();
+}
+// A tab hidden SYS_PAUSE_MS or longer shows "Paused while this tab was hidden" on return until a poll lands
+// (the browser throttles background timers, so what the list shows is old). The poll is started at once.
+document.addEventListener("visibilitychange", () => {
+  const step = sysVisibilityStep(sys, document.hidden, Date.now()); // the 30 s rule is notifymodel.js's (R20)
+  sys.hiddenSince = step.hiddenSince;
+  sys.paused = step.paused;
+  if (!step.poll) return;
+  if (typeof sysBannerSync === "function") sysBannerSync();
+  refreshSessions();
+});
+
+// signalAttention pushes the blocked/done state to the tab title and favicon: the part of the
+// signal you see without looking at the page (titleState, notifymodel.js). Runs on every
+// session poll, successful or not (a failed one moves sys), AND from initEnv's title refresh
+// (which can land before the first poll resolves), so it touches title/favicon only.
+// Notifications are gated on an actual session list and live in notifyTransitions, called
+// separately by refreshSessions. The favicon href (a data: URI, because static icons sit
+// behind auth) is swapped only when the icon state changes, so a steady state costs no reload.
+let faviconIcon = null;
 function signalAttention() {
-  const n = waitingCount();
-  const t = attentionTitle(n, window.__envLabel || "");
-  if (document.title !== t) document.title = t;
-  const needs = n > 0;
-  if (needs !== faviconNeeds) {
+  const st = titleState(lastSessions, sys, window.__envLabel || "", Date.now());
+  if (document.title !== st.title) document.title = st.title;
+  if (st.icon !== faviconIcon) {
     const link = $("favicon");
-    if (link) link.href = faviconHref(n);
-    faviconNeeds = needs;
+    if (link) link.href = faviconSvg(st.icon);
+    faviconIcon = st.icon;
   }
+  if (typeof sysBannerSync === "function") sysBannerSync();
 }
 
-// notifyTransitions raises one OS notification per session that just started
-// needing you — only when opted in, still granted, and this tab is not
-// focused. tag = session id, so two tabs of this origin show it once.
-// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this
-// can lag up to ~60 s; no push channel is built for it.
+// notifyTransitions turns one successful /api/sessions poll into OS notifications (#177): the pure
+// rule table (notifyStep, notifymodel.js) says what to announce, this part only reads the world
+// (prefs, focus, permission, the ids this client ended) and builds the notifications. State
+// advances on every call, so a switch turned on later never replays old events. Quiet when the
+// master switch is off, the tab is focused, or the browser has not granted permission.
+// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this can lag up to
+// ~60 s; no push channel is built for it.
 //
-// Called ONLY from refreshSessions, after a successful /api/sessions fetch —
-// never from signalAttention/initEnv's title refresh and never on a fetch
-// error path. `lastSessions` starts as `[]` before the first real fetch, and
-// initEnv's title refresh can run before that fetch resolves; if this ran
-// there too it would seed attnPrev to an empty Set off that placeholder, and
-// every already-waiting session would look like a fresh transition and fire
-// once the real list landed. `sessionsLoaded` (flipped true only by that
-// success path) plus the pure notifyPoll gate is what needsTransitions relies
-// on to tell a not-yet-real empty list from a real "zero sessions" one.
-let attnPrev = null;
+// Called ONLY from refreshSessions, after a successful /api/sessions fetch, never from
+// signalAttention/initEnv's title refresh and never on a fetch error path (a failed fetch must
+// not announce "Ended"). `lastSessions` starts as `[]` before the first real fetch; the
+// `sessionsLoaded` gate keeps that placeholder from seeding the state, and the first real poll
+// only seeds (prev null).
+let notifyPrev = null;
 let sessionsLoaded = false;
-function notifyTransitions() {
-  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions, Date.now());
-  attnPrev = t.next;
-  if (!t.fired.length || !notifyWanted()) return;
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  if (document.hasFocus()) return;
-  for (const s of t.fired) {
-    try {
-      const n = new Notification(s.name || s.id, { body: notifyBody(s), tag: s.id });
-      n.onclick = () => { window.focus(); openTerminal(s.id, s.name); n.close(); };
-    } catch (_) { /* a browser that refuses at construction time: stay silent */ }
+// endedByMe: session ids this client ended or restarted (id -> ms), so its own End never
+// announces "Ended". Kept 10 min per id (endedLive prunes).
+const endedByMe = new Map();
+// restartedByMe: ids whose restart succeeded; their endedByMe mark ends once a poll sees them live.
+const restartedByMe = new Set();
+function notifyOpen(note) {
+  try { window.focus(); } catch (_) {}
+  if (note.sid) {
+    // The title of a cause note can be "CuliBox": the tab is named after the session.
+    const sess = (lastSessions || []).find((s) => s.id === note.sid);
+    openTerminal(note.sid, (sess && sess.name) || note.sid);
+  } else if (document.documentElement.classList.contains("sidebar-hidden")) {
+    toggleSidebar(); // a batch has no one session: show the list
   }
+}
+function notifyTransitions() {
+  if (!sessionsLoaded || !Array.isArray(lastSessions)) return;
+  const now = Date.now();
+  const prefs = Object.assign(readPrefs(), { master: notifyWanted() });
+  const st = notifyStep(notifyPrev, lastSessions, {
+    now, focused: document.hasFocus(), prefs, endedByMe: endedLive(endedByMe, now),
+  });
+  notifyPrev = st.next;
+  endedClearRestarted(endedByMe, restartedByMe, lastSessions);
+  if (!st.notes.length) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  deliverNotes(st.notes, Notification, notifyOpen);
 }
 
 // notifyPerm: what the browser says about notifications ("unsupported" when it has no Notification at all).
@@ -3420,7 +3496,7 @@ function notifyMono(parent, text, mono) {
 // paintNotifyWhy fills the Alerts row's reason (#notify-why) from notifyRowCopy (attention.js): one line under the
 // switch, or, for a state with a way out, a paragraph, the steps (under a heading when the copy has one) and, when
 // the browser can be asked again, Check again (`onAgain`). Frame M8.1.
-function paintNotifyWhy(why, copy, onAgain) {
+function paintNotifyWhy(why, copy, onAgain, link) {
   why.textContent = "";
   if (!copy.para) {
     why.classList.remove("notify-block");
@@ -3446,7 +3522,20 @@ function paintNotifyWhy(why, copy, onAgain) {
       li.appendChild(document.createTextNode(" "));
     }
     const body = el("span", "muted");
-    notifyMono(body, step.text, step.mono);
+    // `link` (desktop only): the words of the step that name HTTPS are the remote-access guide's link; the step's text is unchanged.
+    const at = link ? step.text.indexOf(link.phrase) : -1;
+    if (at >= 0) {
+      notifyMono(body, step.text.slice(0, at), []);
+      const a = el("a", "link");
+      a.textContent = link.phrase;
+      a.href = link.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      body.appendChild(a);
+      notifyMono(body, step.text.slice(at + link.phrase.length), step.mono);   // the machine text of this step follows the phrase
+    } else {
+      notifyMono(body, step.text, step.mono);
+    }
     li.appendChild(body);
     list.appendChild(li);
   }
@@ -3471,6 +3560,130 @@ function paintNotifyWhy(why, copy, onAgain) {
   }
 }
 
+// notifyPrefRow: one switch of the Alerts block (a kit .check with the title and its help under it) for the pref `name`,
+// stored through writePref (notifymodel.js) as soon as it is clicked. Text nodes only.
+function notifyPrefRow(name, prefs) {
+  const def = NOTIFY_PREF_ROWS[name];
+  const lab = document.createElement("label");
+  lab.className = "check notify-pref";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "check-box";
+  box.dataset.pref = name;
+  box.checked = !!prefs[name];
+  box.onchange = () => {
+    writePref(name, box.checked);
+    // The switch click is itself a user gesture: it may create or resume the audio context now, so the first blip is not lost.
+    if (name === "chime" && typeof chimeGesture === "function") { if (box.checked) chimeGesture(); else chimeSync(false); }
+  };
+  const txt = document.createElement("span");
+  txt.className = "opt-card-title";
+  const t = document.createElement("span");
+  t.className = "t-md";
+  t.textContent = def.title;
+  const h = document.createElement("span");
+  h.className = "t-sm muted";
+  h.textContent = def.help;
+  txt.appendChild(t);
+  txt.appendChild(h);
+  lab.appendChild(box);
+  lab.appendChild(txt);
+  return lab;
+}
+
+// notifyAlertsSection builds, once, the desktop's Alerts section (frame M8.1, DD A2/B6): a title, the always-on note under it, and a card
+// of rows on a label column. The master switch and its reason (#notify-toggle's label, #notify-why) move into the Notifications row
+// (ids kept, so initNotifyToggle still finds them); what is left of the size card's Alerts row is hidden by desktop.css. Desktop only:
+// the phone hides that row and never builds this.
+function notifyAlertsSection(row, cb, why) {
+  let sec = document.getElementById("alerts-section");
+  if (sec) return sec;
+  const el = (tag, cls, text, id) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (id) n.id = id;
+    if (text) n.textContent = text;
+    return n;
+  };
+  sec = el("section", "alerts-section", "", "alerts-section");
+  const head = el("div", "alerts-head");
+  head.appendChild(el("h2", "section-title", "Alerts"));
+  head.appendChild(el("p", "notify-note t-sm muted", NOTIFY_ALWAYS_ON));
+  sec.appendChild(head);
+  const card = el("div", "card alerts-card");
+  const rowN = el("div", "alerts-row", "", "alerts-row-n");
+  rowN.appendChild(el("span", "alerts-lbl t-md w-500", "Notifications"));
+  const col = el("div", "alerts-col", "", "alerts-col");
+  const holder = cb.parentNode;
+  col.appendChild(holder && holder.classList && holder.classList.contains("notify-opt") ? holder : cb);
+  col.appendChild(why);
+  col.appendChild(el("div", "notify-more", "", "notify-more"));
+  rowN.appendChild(col);
+  rowN.appendChild(el("div", "alerts-act", "", "alerts-act"));
+  card.appendChild(rowN);
+  card.appendChild(el("div", "alerts-rest", "", "notify-rows"));
+  sec.appendChild(card);
+  const fsCard = row.parentNode;
+  if (fsCard && fsCard.parentNode) fsCard.after(sec);
+  else if (fsCard) fsCard.appendChild(sec);
+  return sec;
+}
+
+// paintNotifyMore draws the rest of the Alerts section (desktop only), repainted on every initNotifyToggle: with the master on, the
+// Blocked / Done / Ended rows (the Firefox note under Blocked) and the Send test result in the Notifications row, Send test in its
+// third column, then the Message text row; the chime row in every state ("Sound"; on an http page (a) it is the row "Meanwhile, in this
+// tab", after the how-to-enable list, the only sound a background tab can make there). `state` is notifyAvailability's, `on` is the master.
+// (The remote-access link is built with the how-to step itself, by paintNotifyWhy.)
+function paintNotifyMore(row, state, on) {
+  const cb = $("notify-toggle"), why = $("notify-why");
+  const sec = notifyAlertsSection(row, cb, why);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text) n.textContent = text;
+    return n;
+  };
+  const more = document.getElementById("notify-more"), act = document.getElementById("alerts-act"), rest = document.getElementById("notify-rows");
+  more.textContent = "";
+  act.textContent = "";
+  rest.textContent = "";
+  const prefs = readPrefs();
+  const line = (label, labelCls, ...children) => {
+    const r = el("div", "alerts-row");
+    r.appendChild(el("span", labelCls, label));
+    const c = el("div", "alerts-col");
+    for (const ch of children) c.appendChild(ch);
+    r.appendChild(c);
+    r.appendChild(el("div", "alerts-act"));
+    rest.appendChild(r);
+  };
+  if (state === "ready" && on) {
+    const group = el("div", "notify-classes");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Notify me about");
+    group.appendChild(notifyPrefRow("block", prefs));
+    group.appendChild(el("p", "notify-ff t-sm muted", NOTIFY_FIREFOX));
+    group.appendChild(notifyPrefRow("done", prefs));
+    group.appendChild(notifyPrefRow("ended", prefs));
+    more.appendChild(group);
+    const status = el("p", "notify-status t-sm muted");
+    status.setAttribute("role", "status");
+    more.appendChild(status);
+    const btn = el("button", "btn btn-sm", "Send test");
+    btn.type = "button";
+    btn.onclick = () => {
+      // The same builder as the real ones (notifymodel.js deliverNotes); a click on this one only closes it.
+      const note = { title: "CuliBox", body: "Test notification", tag: "ab:test", options: { tag: "ab:test" } };
+      status.textContent = deliverNotes([note], typeof Notification === "undefined" ? null : Notification, null) ? NOTIFY_TEST_SENT : NOTIFY_TEST_NOTHING;
+    };
+    act.appendChild(btn);
+    line("Message text", "alerts-lbl t-md w-500", notifyPrefRow("message", prefs));
+  }
+  if (state === "insecure") line("Meanwhile, in this tab", "alerts-lbl t-sm w-600", notifyPrefRow("chime", prefs));
+  else line("Sound", "alerts-lbl t-md w-500", notifyPrefRow("chime", prefs));
+  return sec;
+}
+
 // initNotifyToggle wires Settings → Appearance → Desktop notifications: the switch, and the reason under it that
 // says why it is off and how to turn it on (F39/F47; wording from frame M8.1, attention.js notifyRowCopy). It
 // re-reads the browser's permission on every call: Settings opening, Check again, and each answer to the prompt.
@@ -3489,7 +3702,8 @@ function initNotifyToggle(refused) {
     // The button that took the press was redrawn or is gone: keep the keyboard on its successor, or on the switch it unlocked.
     const next = why.querySelector(".btn") || (cb.disabled ? null : cb);
     if (next) next.focus();
-  });
+  }, drawerDesktop() ? { phrase: REMOTE_ACCESS_PHRASE, href: REMOTE_ACCESS_DOC } : null);
+  if (drawerDesktop()) paintNotifyMore($("fsrow-alerts"), avail.state, cb.checked);
   cb.onchange = async () => {
     if (!cb.checked) { setNotifyWanted(false); initNotifyToggle(); return; }
     let p = "denied";
@@ -3503,7 +3717,29 @@ function initNotifyToggle(refused) {
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
 // yet). An empty array is the former.
-async function refreshSessions() {
+//
+// Plan 7 final review I2: the fetch has a deadline (SESSIONS_DEADLINE_MS, under the 12 s offline rule) so a
+// half-open connection becomes a recorded failed poll instead of hanging forever, and only one is in flight.
+// refreshSessions() keeps its contract (the promise resolves after a list fetched NOW): with none pending it
+// starts one; with one pending (it may predate the caller's change) it returns ONE shared follow-up that runs
+// when the pending one settles. The 3 s tick (sessionsTick) just skips while one is pending.
+const SESSIONS_DEADLINE_MS = 10000;
+let sessionsInflight = null;
+let sessionsFollow = null;
+function sessionsStart() {
+  const p = refreshSessionsRun().finally(() => { if (sessionsInflight === p) sessionsInflight = null; });
+  sessionsInflight = p;
+  return p;
+}
+function refreshSessions() {
+  if (!sessionsInflight) return sessionsStart();
+  if (!sessionsFollow) {
+    sessionsFollow = sessionsInflight.catch(() => {}).then(() => { sessionsFollow = null; return sessionsStart(); });
+  }
+  return sessionsFollow;
+}
+function sessionsTick() { if (!sessionsInflight) refreshSessions(); }
+async function refreshSessionsRun() {
   const ul = $("sessions");
   // holdList: an in-progress inline rename or a focused peek reply is a live
   // <input> INSIDE this list, and rebuilding the list removes that node from
@@ -3537,12 +3773,21 @@ async function refreshSessions() {
   // must not tear down the form mid-keystroke.
   const holdList = () => editing || replyFocused || storeUnlockFocused();
   let sessions;
-  try { sessions = await api("/api/sessions"); }
+  try { sessions = await api("/api/sessions", { signal: deadlineSignal(SESSIONS_DEADLINE_MS) }); }
   catch (e) {
-    if (!holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
+    // R27: on the desktop, once a list has loaded, a failed poll keeps the last-known rows (the banner says "the list
+    // below is from then"; sess-stale marks them). Before the first list, and always on the phone, the "Error: ..." line.
+    const keepRows = sessionsLoaded && !mobileActive(window.innerWidth);
+    if (!keepRows && !holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
+    sysPollFailed(e);
+    signalAttention();
     return null;
   }
-  lastSessions = sessions || [];
+  // A null/odd body is not a list: keep the last real one and announce nothing (an empty list would end everything).
+  // It is a failed poll for the offline escalation (R18), not a sign-out: a 200 with a frozen list must not read as live.
+  if (!Array.isArray(sessions)) { sysPollFailed(null); signalAttention(); return null; }
+  sysPollOk();
+  lastSessions = sessions;
   sessionsLoaded = true;
   noteReturns(lastSessions);
   refreshEmptyState();
@@ -3569,6 +3814,8 @@ async function refreshSessions() {
   pruneReplyFlash();
   signalAttention();
   notifyTransitions();
+  if (sessionsLoaded && Array.isArray(lastSessions)) chimeTransitions();
+  attnChipSync();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.
@@ -4780,7 +5027,7 @@ function renderPfNotHome(name) {
     }
     const fix = document.createElement("span");
     fix.className = "pf-nh-fix mut";
-    fix.textContent = notHomeFix(name, nh.base, b);
+    fix.textContent = notHomeFix(name, nh.base, b, !mobileActive(window.innerWidth));
     row.appendChild(fix);
     rows.push(row);
   }
@@ -5328,7 +5575,7 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
   }
   return s;
@@ -5598,7 +5845,7 @@ function emptyNoneEl(m) {
 }
 
 function emptyFirstEl() {
-  const root = emptyEl("div", "placeholder empst");
+  const root = emptyEl("div", "placeholder empst empst-first");
   root.append(
     emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
@@ -5613,12 +5860,31 @@ function emptyFirstEl() {
     return el;
   };
   const steps = emptyEl("div", "empst-steps");
-  steps.append(
-    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+  // Desktop only (the phone never shows this node; the guard keeps it so). Metadata has answered and there is no
+  // box layer: step 2 keeps its D18 copy and adds the server's plain reason (a text node), the install link and a
+  // disabled button (DD§A11, DC§9). Nothing is claimed before /api/meta answers, and an empty reason draws no line.
+  const noBox = drawerDesktop() && metaLoaded && !boxRuntime;
+  const step2 = step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
     // The same press as "+ new profile" in Settings: one profile form. A new
     // profile already opens on the box tier.
-    step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
-      () => { openSettings("manage"); $("pf-new").click(); }),
+    () => { openSettings("manage"); $("pf-new").click(); });
+  if (noBox) {
+    const btn = step2.querySelector("button");
+    btn.onclick = null;
+    // aria-disabled + title, as every desktop control that cannot act yet (setDisabledReason): the reason stays hoverable.
+    setDisabledReason(btn, true, boxUnavailableReason, true);
+    const why = emptyEl("div", "empst-why");
+    if (boxUnavailableReason) why.append(emptyEl("span", "empst-reason", boxUnavailableReason));
+    const a = emptyEl("a", "link", "How to install Docker");
+    a.href = "https://docs.docker.com/engine/install/";
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    why.append(a);
+    step2.append(why);
+  }
+  steps.append(
+    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+    step2,
     step(3, "Connect your cloud", "AWS SSO, or GitHub (an App or a token). Read-only by default; you choose where agents may write.", "Add credentials", "btn",
       () => openSettings("creds")),
   );
@@ -5639,7 +5905,7 @@ function desktopEmptyState() {
 }
 
 function emptyStateKey(m) {
-  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, boxRuntime ? "" : boxUnavailableReason, m.profiles.map((n) => {
     const p = profiles.find((x) => x.name === n);
     return [n, p ? profileTouchLine(p, metaLoaded ? boxRuntime : undefined) : ""];
   })]);
@@ -6463,12 +6729,42 @@ async function confirmKill(id, name) {
   // "End session only" leaves the shells running as top-level rows (the parent
   // is gone, so nothing nests them any more).
   const ids = killIdsFor(outcome, id, shells);
-  for (const sid of ids) await killSession(sid);
+  await killSessions(ids);
 }
 
-async function killSession(id) {
+// killSessions: End both (R25). On the desktop, two or more ids share ONE pending toast, "Ending <name> and
+// shell 1…", which becomes "Ended <name> and shell 1" naming only what ended; a failed id keeps today's error
+// toast. Every step is killSession's: `batch` only swaps its own toast for a collector. Each id is marked
+// ended-by-me up front, so the poll that lands while the parent's DELETE is still running cannot announce
+// "Ended" for a shell this tab is also ending. The phone keeps one toast per session.
+async function killSessions(ids) {
+  if (ids.length < 2 || mobileActive(window.innerWidth)) { for (const sid of ids) await killSession(sid); return; }
+  const labels = new Map(ids.map((sid) => {
+    const s = (lastSessions || []).find((x) => x.id === sid);
+    return [sid, (s ? shellLabel(s, lastSessions) : "") || sid];
+  }));
+  const now = Date.now();
+  for (const sid of ids) if (!killing.has(sid)) endedMark(endedByMe, sid, now);
+  const done = pendingToast("Ending " + shellEndList(ids.map((sid) => labels.get(sid))) + "…");
+  const items = [];
+  const batch = { collect: (sid) => (result) => items.push({ sid, result }) };
+  for (const sid of ids) await killSession(sid, batch);
+  const ok = items.filter((i) => !i.result.opts.error);
+  const bad = items.filter((i) => i.result.opts.error);
+  if (ok.length) {
+    done({ msg: "Ended " + shellEndList(ok.map((i) => labels.get(i.sid))), opts: { desktopOnly: true } });
+  } else if (bad.length) {
+    done(bad.shift().result);
+  } else {
+    done(); // every id was already being ended: nothing to say
+  }
+  for (const i of bad) showToast(i.result.msg, i.result.opts);
+}
+
+async function killSession(id, batch) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
+  endedMark(endedByMe, id, Date.now()); // the poll that sees it gone must not announce "Ended"
   // A boxed session's docker stop can take seconds: a toast covers the wait
   // after the pending delay. It starts here, at the click, so the 300ms clock
   // is not spent on the re-render below. done(result) (in finally) turns it
@@ -6477,7 +6773,7 @@ async function killSession(id) {
   // gets "End failed: <raw>" only, since the row leaving says it ended.
   const sess = (lastSessions || []).find((s) => s.id === id);
   const name = (sess && (sess.name || sess.id)) || id;
-  const done = pendingToast("Ending " + name + "…");
+  const done = batch ? batch.collect(id) : pendingToast("Ending " + name + "…");
   let failure = null;
   let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
@@ -6492,6 +6788,7 @@ async function killSession(id) {
   }
   if (failure) {
     killing.delete(id);
+    endedByMe.delete(id); // it is still running: a later end is not ours
     await refreshSessions();
     return;
   }
@@ -6687,6 +6984,11 @@ function initSettings() {
 
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", fitAll);
+// The desktop's empty grid says "Start"; index.html keeps the phone's "Spawn" (founder call 1, Plan 7).
+{
+  const ph = document.querySelector("#grid > .placeholder");
+  if (ph && !mobileActive(window.innerWidth)) ph.textContent = "Start or open a session. Panes appear here.";
+}
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
@@ -6814,6 +7116,7 @@ initMobileShell();
     refreshSessions(); // re-render rows now that the tier label is known
     if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
+    sysSeeVersion(meta && meta.version);
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
     if (ver && vl) { ver.textContent = vl; ver.title = "CuliBox " + meta.version; ver.hidden = false; }
     const sideVer = $("side-version");
@@ -6853,7 +7156,7 @@ fontPrefs.applyCssVars();
 initSettings();
 initNotifyToggle();
 initStore();
-setInterval(refreshSessions, 3000);
+setInterval(sessionsTick, 3000);
 // U8: crossing the mobile breakpoint (rotate, resize, devtools) changes which
 // panes/screens are even in the DOM — mobileshell's own screen classes react
 // immediately via CSS, but the sidebar's last-painted rows do not repaint
@@ -6896,6 +7199,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try {
     const m = await api("/api/meta");
+    sysSeeVersion(m && m.version); // a different build than this tab booted with -> the "updated" banner
     globalThis.repliesEnabled = !!(m && m.replies === true);
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
@@ -6977,6 +7281,103 @@ bindShortcut("session.nextNeeds", (e, ctx) => {
   if (ctx.mobile) return false;
   if (e.repeat) return true;
   return goNextNeedsYou();
+});
+
+// F6 / Shift+F6 (#177 call 12): the region cycle, sidebar (or the rail) -> the focused pane's header + strip -> its
+// terminal -> the drawer. regioncycle.js owns the order and the step; this collects which regions are on screen,
+// moves focus and paints the kit ring (the one :focus-visible ring, 2px --accent) on the region. It is bound in the
+// capture-phase dispatcher above, so xterm never gets the key (it would send ESC[17~).
+let regionRing = null; // the element wearing .region-focus now
+
+function regionShown(el) {
+  return !!(el && el.isConnected && !el.hidden && el.getClientRects().length > 0);
+}
+
+// regionEls: the element of each region that is on screen right now (absent = not shown).
+function regionEls() {
+  const out = {};
+  const cell = focusedCell;
+  const rail = $("rail48");
+  if (regionShown($("sidebar"))) out.sidebar = $("sidebar");
+  else if (regionShown(rail)) out.rail = rail;
+  const page = typeof pageNow !== "undefined" && pageNow ? pageNow.dlg : null;
+  if (page && regionShown(page)) out.page = page;
+  else if (cellVisible(cell)) {
+    if (regionShown(cell.bar)) out.header = cell.bar;
+    if (cellTerminal(cell)) out.terminal = cell.body;
+  }
+  if (regionShown($("drawer"))) out.drawer = $("drawer");
+  return out;
+}
+
+// regionHolding: the region that has focus, or null. The strip and the write banner belong to the header.
+function regionHolding(els) {
+  const ae = document.activeElement;
+  if (!ae) return null;
+  const cell = focusedCell;
+  const header = [cell && cell.bar, cell && cell._elev, cell && cell._strip];
+  for (const k of ["drawer", "page", "sidebar", "rail"]) if (els[k] && els[k].contains(ae)) return k;
+  if (els.header && header.some((x) => x && x.contains(ae))) return "header";
+  if (els.terminal && els.terminal.contains(ae)) return "terminal";
+  return null;
+}
+
+const REGION_FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// regionFocus: put focus in region `name` and ring the part of it that took focus.
+function regionFocus(name, els) {
+  const cell = focusedCell;
+  let target = null;
+  let ring = els[name];
+  if (name === "sidebar") {
+    target = document.querySelector("#sessions .srow.sel .nm") || document.querySelector("#sessions .srow .nm") || $("side-new");
+  } else if (name === "rail") {
+    target = els.rail.querySelector(".ri.on") || els.rail.querySelector(".ri");
+  } else if (name === "header") {
+    // The ask strip is the part of the header with something to answer; otherwise the first tab or control.
+    const strip = regionShown(cell._strip) ? cell._strip : null;
+    target = (strip && strip.querySelector(REGION_FOCUSABLE)) || els.header.querySelector(REGION_FOCUSABLE);
+    if (target && strip && strip.contains(target)) ring = strip;
+  } else if (name === "terminal") {
+    const tab = cell.view !== "terminal" ? null : focusedTerminal() || cellTerminal(cell);
+    if (tab && tab.term) { tab.term.focus(); target = document.activeElement; }
+    else if (cell._viewHost) { cell._viewHost.focus({ preventScroll: true }); target = document.activeElement; }
+  } else if (name === "drawer") {
+    target = $("drawer-tree").querySelector('.ft-node[tabindex="0"]') || $("drawer-x");
+  } else if (name === "page") {
+    target = els.page.querySelector(REGION_FOCUSABLE);
+    if (!target) { els.page.tabIndex = -1; target = els.page; }
+  }
+  if (!target) return false;
+  if (target !== document.activeElement) target.focus();
+  regionRingOn(ring);
+  return true;
+}
+
+function regionRingOn(el) {
+  if (regionRing) regionRing.classList.remove("region-focus");
+  regionRing = el || null;
+  if (regionRing) regionRing.classList.add("region-focus");
+}
+
+// The ring is the keyboard-focus cue for a region, so it goes when focus leaves that region.
+document.addEventListener("focusin", (e) => {
+  if (regionRing && !regionRing.contains(e.target)) regionRingOn(null);
+}, true);
+
+function cycleRegion(back) {
+  const els = regionEls();
+  const order = regionOrder({ sidebar: !!els.sidebar, rail: !!els.rail, header: !!els.header, terminal: !!els.terminal, drawer: !!els.drawer, page: !!els.page });
+  const to = regionStep(order, regionHolding(els), back);
+  if (!to) return false;
+  return regionFocus(to, els);
+}
+
+// Desktop only: a phone has no regions. A held key repeats: swallow it, or it would spin round the page.
+bindShortcut("ui.regionNext", (e, ctx) => {
+  if (ctx.mobile) return false;
+  if (e.repeat) return true;
+  return cycleRegion(!!e.shiftKey);
 });
 
 // Ctrl+Shift+` -> + Shell below, in the focused window. With no visible focused

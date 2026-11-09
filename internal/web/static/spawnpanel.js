@@ -208,6 +208,7 @@ function renderSpawnReach() {
     meta: { aws_connections: awscEntries, static_tokens: stEntries },
     creds: spawnCreds,
     bundleImports,
+    desktop: !mobileActive(window.innerWidth), // "starting" on the desktop, the phone's "spawn" otherwise
   });
   paintReachRows(box, rows, { title: "This agent will be able to" });
 }

@@ -191,7 +191,11 @@ function bashCommand(ask) {
 // caller passes it as opts.takenOver; "detached" is the record's activity.
 function deskConnState(s, opts) {
   if (opts && opts.takenOver) return "taken-over";
-  return s && s.activity === "detached" ? "detached" : "";
+  if (!s) return "";
+  if (s.activity === "detached") return "detached";
+  // M8.6c: the row says what the pane bar says. "crashed" only when the server says so (host-tier exit).
+  if (s.activity === "crashed") return "crashed";
+  return s.exited ? "ended" : "";
 }
 
 // deskDot: the activity dot (class + title) on every desktop surface that draws

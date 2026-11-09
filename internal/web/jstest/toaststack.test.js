@@ -482,3 +482,55 @@ test("toastFailText: a status that is not a number is ignored", () => {
   const err = Object.assign(new Error("boom"), { status: "409" });
   assert.deepStrictEqual(toastFailText("stop", err), { text: "Could not stop.", detail: "boom" });
 });
+
+// Task 13 (call 10): the stack's top clears an ask strip or write banner that sits under it.
+const { toastStackTop } = require("../static/toaststack.js");
+const RANGE = { left: 860, right: 1264 };
+
+test("toastStackTop: no strip leaves today's 48 exactly (M8.5 pixel-identical)", () => {
+  assert.strictEqual(toastStackTop(RANGE, []), 48);
+  assert.strictEqual(toastStackTop(RANGE, undefined), 48);
+});
+
+test("toastStackTop: a strip over the stack's x-range pushes it to the strip's bottom + 8", () => {
+  assert.strictEqual(toastStackTop(RANGE, [{ left: 640, right: 1280, top: 80, bottom: 120 }], 200), 128);
+});
+
+test("toastStackTop: the lowest overlapping strip wins; a strip beside the stack is ignored", () => {
+  const rects = [
+    { left: 0, right: 640, top: 48, bottom: 300 }, // left pane: right edge short of the stack
+    { left: 640, right: 1280, top: 48, bottom: 96 },
+    { left: 700, right: 1280, top: 100, bottom: 150 }, // an elev banner and a strip: both count
+  ];
+  assert.strictEqual(toastStackTop(RANGE, rects, 200), 158);
+  assert.strictEqual(toastStackTop(RANGE, [rects[0]]), 48);
+});
+
+test("toastStackTop: a strip that only touches the range's edge does not overlap; a strip above 48 keeps 48", () => {
+  assert.strictEqual(toastStackTop(RANGE, [{ left: 0, right: 860, top: 48, bottom: 200 }]), 48);
+  assert.strictEqual(toastStackTop(RANGE, [{ left: 640, right: 1280, top: 10, bottom: 30 }]), 48);
+});
+
+test("toastStackTop: junk rects are skipped", () => {
+  assert.strictEqual(toastStackTop(RANGE, [null, {}, { left: NaN, right: 1280, top: 50, bottom: 99 }]), 48);
+});
+
+test("toastStackTop (R28): a strip in a lower pane, below the stack's slot, leaves the stack at 48", () => {
+  const lower = { left: 640, right: 1280, top: 460, bottom: 520 }; // bottom-right pane of a 2x2 grid
+  assert.strictEqual(toastStackTop(RANGE, [lower], 200), 48);
+  assert.strictEqual(toastStackTop(RANGE, [lower]), 48, "no height known: nothing to cover");
+});
+
+test("toastStackTop (R28): the top-right strip clears the stack; a lower-pane strip alongside it changes nothing", () => {
+  const top = { left: 640, right: 1280, top: 48, bottom: 100 };
+  const lower = { left: 640, right: 1280, top: 460, bottom: 520 };
+  assert.strictEqual(toastStackTop(RANGE, [top, lower], 200), 108, "strip bottom + 8, no overlap");
+  assert.strictEqual(toastStackTop(RANGE, [lower, top], 200), 108);
+  assert.strictEqual(toastStackTop(RANGE, [top], 0), 48, "an empty stack covers nothing");
+});
+
+test("toastStackTop (R28): the slot is the stack's own height: a taller stack reaches a strip a shorter one clears", () => {
+  const mid = { left: 640, right: 1280, top: 300, bottom: 350 };
+  assert.strictEqual(toastStackTop(RANGE, [mid], 200), 48);
+  assert.strictEqual(toastStackTop(RANGE, [mid], 400), 358);
+});

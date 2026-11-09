@@ -174,6 +174,9 @@ const R1 = {
   "palette.open": [1, 1, 0, 1, 1], "palette.open.alt": [1, 1, 0, 1, 1], "help.open": [1, 1, 1, 0, 1],
   "sidebar.toggle": [1, 0, 0, 0, 1], "files.toggle": [1, 0, 0, 0, 1], "session.jump": [1, 0, 0, 0, 1],
   "session.nextNeeds": [1, 0, 0, 0, 1],
+  // F6 (#177 call 12): terminal 1, editor 1, input 1, dialog 0, page 1. The way out of xterm must work from the terminal, and
+  // from the editor and a field, which would otherwise trap it; a modal dialog keeps its own focus.
+  "ui.regionNext": [1, 1, 1, 0, 1],
   "shell.below": [1, 0, 0, 0, 0], "files.goto": [0, 1, 1, 0, 0],
   "zoom.in": [1, 0, 0, 0, 0], "zoom.out": [1, 0, 0, 0, 0], "zoom.reset": [1, 0, 0, 0, 0],
 };
@@ -203,6 +206,7 @@ test("R1 table: every global bound shortcut admits exactly the contexts the tabl
 const TERMINAL_OK = new Set([
   "session.jump", // Ctrl+3..8 send Esc ^\ ^] ^^ ^_ DEL: accepted; Ctrl+1/2/9/0 send nothing
   "zoom.in", "zoom.out", "zoom.reset", // Ctrl+= - 0 send nothing in xterm
+  "ui.regionNext", // F6 would be ESC[17~ in xterm: it is dispatched in the capture phase, so the terminal never sees it
   "help.open", // Ctrl+/ sends nothing in the vendored xterm (upstream maps 0x1F: upgrade hazard)
   "term.paste", // Ctrl+V is the browser paste: documented trade-off
 ]);
@@ -386,7 +390,9 @@ test("helpTextStacked: no line is wider than the 44 characters a 390 px dialog f
   // face is 7.22 px per character, so 44 characters fit. The longest is the
   // indented "Select text when the agent holds the mouse" (2 + 42 = 44).
   for (const mac of [true, false]) {
-    for (const l of SC.helpTextStacked(SC.helpRows(mac), "sysbox").split("\n")) {
+    // The rows the phone's dialog actually shows: the F6 row's frame label is wider, and the phone has no regions.
+    const rows = SC.helpRows(mac).filter((r) => !DESKTOP_ONLY_LABELS.includes(r.label));
+    for (const l of SC.helpTextStacked(rows, "sysbox").split("\n")) {
       assert.ok(l.length <= 44, JSON.stringify(l) + " is " + l.length + " chars");
     }
   }
@@ -540,6 +546,57 @@ test("session.nextNeeds: the chord dispatches on a terminal and on the page, not
     // Without Shift it is not ours (Ctrl+J is the terminal's newline).
     assert.strictEqual(SC.shortcutFor(ev("KeyJ", "j", { ctrl: !mac, meta: mac }), mac, NONE), null);
   }
+});
+
+// Rows the phone's text leaves out: they work where the desktop's sidebar, panes and drawer are.
+const DESKTOP_ONLY_LABELS = ["Next that needs you", "Next region: sidebar, pane, terminal, files", "Previous region"];
+
+// ---- F6 / Shift+F6 (#177, plan call 12, frame M8.8) ------------------------------------------------------------------------------------
+
+test("ui.regionNext: F6 and Shift+F6 are one bound row; Shift reverses and is read by the binding", () => {
+  const e = entry("ui.regionNext");
+  assert.strictEqual(e.status, "bound");
+  assert.strictEqual(e.scope, "global");
+  assert.strictEqual(e.group, "Sessions & panes");
+  assert.strictEqual(e.label, "Next region: sidebar, pane, terminal, files");
+  assert.deepStrictEqual(e.chords, [{ code: "F6", shiftAny: true }]);
+  for (const mac of [false, true]) {
+    assert.strictEqual(SC.shortcutFor(ev("F6", "F6"), mac, NONE), "ui.regionNext", "F6 mac=" + mac);
+    assert.strictEqual(SC.shortcutFor(ev("F6", "F6", { shift: true }), mac, NONE), "ui.regionNext", "Shift+F6 mac=" + mac);
+    // Any other modifier is not ours (Ctrl+F6 is the browser's / the app's, Alt+F6 the window manager's).
+    for (const m of [{ ctrl: true }, { meta: true }, { alt: true }]) {
+      assert.strictEqual(SC.shortcutFor(ev("F6", "F6", m), mac, NONE), null, JSON.stringify(m));
+    }
+  }
+});
+
+test("ui.regionNext: the allow flags map to scAllow's order (terminal, editor, input, dialog, page)", () => {
+  assert.deepStrictEqual(entry("ui.regionNext").allow, { terminal: true, editor: true, input: true, dialog: false, page: true });
+  const f6 = () => ev("F6", "F6");
+  for (const k of ["inTerminal", "inEditor", "inInput", "pageOpen"]) assert.strictEqual(SC.shortcutFor(f6(), false, ctxWith(k)), "ui.regionNext", k);
+  assert.strictEqual(SC.shortcutFor(f6(), false, ctxWith("dialogOpen")), null, "a modal dialog keeps its focus");
+});
+
+test("ui.regionNext: the help rows say F6 and Shift+F6 in the frame's words, in the dialog's Sessions & panes group", () => {
+  for (const mac of [false, true]) {
+    const rows = SC.helpRows(mac);
+    assert.strictEqual(rows.find((r) => r.label === "Next region: sidebar, pane, terminal, files").keys, "F6");
+    assert.strictEqual(rows.find((r) => r.label === "Previous region").keys, mac ? "⇧+F6" : "Shift+F6");
+    const grid = SC.helpGrid(mac);
+    assert.deepStrictEqual(gridRow(grid, "Next region: sidebar, pane, terminal, files").alts, [kbd("F6")]);
+    assert.deepStrictEqual(gridRow(grid, "Previous region").alts, [mac ? kbd("⇧", "F6") : kbd("Shift", "F6")]);
+    const g = grid.flat().find((x) => x.group === "Sessions & panes");
+    assert.ok(g.rows.some((r) => r.label === "Previous region"));
+  }
+  assert.strictEqual(SC.shortcutHint("ui.regionNext", false), "F6");
+});
+
+test("ui.regionNext: bound in app.js, and the phone's dialog filters both region rows", () => {
+  const src = readStatic("app.js");
+  assert.match(src, /bindShortcut\("ui\.regionNext"/);
+  const body = fnSrc(src, "showShortcuts");
+  assert.match(body, /ui\.regionNext/);
+  assert.match(body, /ui\.regionPrev/);
 });
 
 // ---- F29 (#173 Task 5, frame M5.3): the Keyboard shortcuts dialog as two columns of key chips ----------------------------------
@@ -739,7 +796,7 @@ test("showShortcuts on the desktop: the key grid, no footer, no Close button, no
 test("showShortcuts on the phone is what it was: stacked text, no Next that needs you, the Runtime line and Close", async () => {
   const { ctx, asked } = showShortcutsEnv(390);
   await ctx.showShortcuts();
-  const rows = SC.helpRows(false).filter((r) => r.label !== "Next that needs you");
+  const rows = SC.helpRows(false).filter((r) => !DESKTOP_ONLY_LABELS.includes(r.label));
   assert.strictEqual(
     JSON.stringify(asked[0]),
     JSON.stringify({ title: "Keyboard shortcuts", body: SC.helpTextStacked(rows, "tier:sysbox"), confirmLabel: "Close", info: true }),
@@ -747,6 +804,7 @@ test("showShortcuts on the phone is what it was: stacked text, no Next that need
   assert.ok(asked[0].body.endsWith("\n\nRuntime: tier:sysbox"));
   assert.ok(asked[0].body.includes("New session: spawn"));
   assert.ok(!asked[0].body.includes("Next that needs you"));
+  assert.ok(!/region|F6/i.test(asked[0].body), "the phone has no regions to cycle");
 });
 
 test("showShortcuts source: the desktop branch passes footless and cls keys, the phone's keeps the stacked text and the Runtime label", () => {

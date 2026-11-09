@@ -444,9 +444,9 @@
   .toast-text { flex: 1 1 auto; min-width: 0; }
   .toast .dot { margin-right: 2px; }
   .toast.is-error { background: var(--red-tint); border-color: rgba(240,106,106,.45); }
-  /* Warn is the clone-needs-you toast, so it takes the amber role's surface (the kit's needs-you
-     fill: .chip-needs, the ask strip); the border stays --line, as on M8's amber attention chip. */
-  .toast.is-warn { background: var(--amber-tint); }
+  /* Warn (the clone-needs-you toast) is neutral: amber is locked to "blocked" (#184), so it keeps the
+     base toast's --raise surface and --line border. Only the error toast takes a colour (red). */
+  .toast.is-warn { background: var(--raise); border-color: var(--line); }
   /* Stack entry parts (M8.5): the muted "paused" label while the pointer is over the stack, and
      the one action, a ghost button. Undo is the accent action (M7.5); Copy details stays muted. */
   .toast-paused { flex: none; font-size: var(--t-xs); color: var(--muted); }
@@ -484,6 +484,38 @@
   .opt-card { padding: 10px 12px; border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
   .opt-card.is-on, .opt-card:has(> input:checked) { background: var(--raise); }
   .opt-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  /* Attention chip (M8.4, DD§B3): a blocked session that sits on no visible pane. Amber fill, a --line border (not amber),
+     a pop shadow; 32 tall, nowrap. Its host (#attn-chip-host, below) places it. */
+  .attn-chip {
+    display: inline-flex; align-items: center; gap: var(--sp-2); height: var(--h-lg); padding: 0 var(--sp-1) 0 var(--sp-3);
+    border-radius: var(--r-card); background: var(--amber-tint); border: 1px solid var(--line); box-shadow: var(--e-pop);
+    color: var(--fg); font-size: var(--t-md); white-space: nowrap;
+  }
+  /* Banner (M8.6/6b/6c/7, DD§B1): a block at the top of the sidebar, one per state. Connection and update banners sit on
+     --bg with a --line ring; .is-needs (the store variant) is the amber tint with no ring. The title is 12/18 at 600, the
+     body is the caller's .t-sm.muted, the actions a row of .btn-sm. */
+  .banner {
+    display: flex; flex-direction: column; gap: 6px; margin: 0 var(--sp-2) var(--sp-2); padding: 10px var(--sp-3);
+    border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .banner.is-needs { background: var(--amber-tint); box-shadow: none; }
+  .banner > p { margin: 0; }
+  .banner-title {
+    display: flex; align-items: center; gap: var(--sp-2); min-width: 0; color: var(--fg);
+    font-size: var(--t-sm); line-height: var(--lh-sm); font-weight: var(--w-semibold);
+  }
+  .banner.is-needs .banner-title { color: var(--amber); }
+  .banner-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+  /* Pane bar (M8.6/6b/6c, DD§B2): the strip under a pane header that names a lost connection, a sign-out, a detach, a
+     takeover or an ended session. Neutral: the --panel fill and a --line rule, 12/18 --fg text, btn-sm buttons; it is the ask
+     strip's geometry (41 tall, a bar with no button too) on the panel instead of the amber tint. A leading .dot is the only
+     colour (the crashed dot is red); an ended bar has no fill of its own. */
+  .pane-bar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-height: 41px; box-sizing: border-box; flex: none;
+    background: var(--panel); border-bottom: 1px solid var(--line); color: var(--fg);
+    font-size: var(--t-sm); line-height: var(--lh-sm);
+  }
+  .pane-bar-msg { flex: 1 1 auto; min-width: 0; }
   /* Pending spinner (M8 .m8-spin), drawn still. */
   .spin {
     display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
@@ -518,7 +550,7 @@
      hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
      legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
-    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev)[hidden],
+    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev, .attn-chip, .banner, .banner-title, .banner-acts, .pane-bar)[hidden],
   .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item, > .menu-row)[hidden], .field:has(> .field-label)[hidden],
   .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
   /* === end kit primitives === */
@@ -659,6 +691,33 @@
   .ri.add:hover { background: var(--accent-hover); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
   .ri.is-elevated .dot { box-shadow: 0 0 0 2px var(--red); }
+  /* --- the system banner's slot, the stale list and the rail marker (Plan 7 Task 7, DD§A8, §B1; R17, R19) --- */
+  /* The slot sits under #side-top and above the list; empty it is [hidden]. The store banner gets its own slot below (Task 9). */
+  #sys-banner-slot { flex: none; }
+  #sys-banner-slot[hidden] { display: none; }
+  #store-banner-slot { flex: none; }
+  #store-banner-slot[hidden] { display: none; }
+  /* The store banner's one form (DD§A9 M8.7): the field, its error under it, then Unlock; stacked in the 290 px column. */
+  #store-banner-slot .storeslot { display: block; }
+  #store-banner-slot .storeform { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+  #store-banner-slot .storepass { flex: none; width: 100%; }
+  #store-banner-slot .storeerr:empty { display: none; }
+  #store-banner-slot .storeform .btn { align-self: flex-start; }
+  /* Can't reach / signed out (M8.6, M8.6b): the rows are the last-known list. Groups and order stay; every dot is hollow, the
+     names are --muted (the frame's .m8-stale), and the amber goes: the Needs you label and an ask's sub-line read as neutral. A
+     write window still open keeps its red ring around the hollow dot (R9). Muted text, not opacity, so it stays above 4.5:1. */
+  #sessions.sess-stale .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  #sessions.sess-stale .dot.is-elevated { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red); }
+  #sessions.sess-stale .dot.is-elevated.watching { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--panel), 0 0 0 3.5px var(--red), 0 0 0 4.5px var(--panel), 0 0 0 6.5px var(--fg); }
+  /* The collapsed rail is the same list in dots: hollow while stale, the write ring kept (R17, R9). */
+  #rail48.sess-stale .ri .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  #rail48.sess-stale .ri.is-elevated .dot { box-shadow: inset 0 0 0 1.5px var(--muted), 0 0 0 2px var(--red); }
+  #sessions.sess-stale .grp-label.is-needs { color: var(--muted); }
+  #sessions.sess-stale .drow .nm { color: var(--muted); }
+  #sessions.sess-stale .drow .sub.amber { color: var(--muted); }
+  /* The rail's one banner marker (not drawn by the frames; listed as not designed): a 32px .ri with a hollow dot, or the amber
+     dot for the store. Its accessible name and tooltip are the banner's title. */
+  .ri.ri-banner { display: flex; flex: none; align-items: center; justify-content: center; }
   .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
   .rail-meters[hidden] { display: none; }
   .rm { display: block; position: relative; height: 3px; border-radius: 2px; background: var(--line); }
@@ -959,6 +1018,10 @@
      a padding too big and the last row ran into the dock or the cell edge. */
   .cell { background: var(--bg); }
   .pane-term { box-sizing: content-box; padding: 6px 10px; background: var(--term-bg); }
+
+  /* F6 region cycle (#177): the kit focus ring (--focus, 2px accent) on the region that took focus, drawn inside the
+     region because some are full-bleed. It leaves with the focus. */
+  .region-focus { outline: var(--focus); outline-offset: -2px; }
 
   /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
   .cell.focus:not(.drop-hot) { outline: none; }
@@ -1279,6 +1342,19 @@
     grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
     font-size: var(--t-sm); font-weight: 600; background: var(--raise); color: var(--muted);
   }
+  /* First run (M8.8c, DD§B10): a 560px column, gap 16, borderless 90px step cards (padding 16, number column 24,
+     column gap 16, a 20px title over 18px description lines), the sub-line 6px under the title. */
+  .empst-first { max-width: 560px; padding: 30px 0; gap: 16px; }
+  .empst-first .empst-title { line-height: var(--lh-xl); }
+  .empst-first .empst-sub { margin-top: -10px; line-height: var(--lh-md); }
+  .empst-first .empst-steps { gap: 16px; }
+  .empst-first .empst-step { grid-template-columns: 24px minmax(0, 1fr) auto; gap: 2px 16px; padding: 16px; border: 0; }
+  .empst-first .empst-t { line-height: var(--lh-md); }
+  .empst-first .empst-d { line-height: var(--lh-sm); }
+  .empst-first .empst-hint { line-height: var(--lh-sm); }
+  /* Docker not found: the server's plain reason, then the install link, under the description. */
+  .empst-why { grid-column: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; font-size: var(--t-sm); line-height: var(--lh-sm); }
+  .empst-reason { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
   .empst-hint { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: var(--t-sm); }
   .empst-kbd {
     font: var(--t-xs) var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;
@@ -2121,6 +2197,42 @@
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why { margin: 2px 0 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); padding-left: 0; color: var(--fg); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts > #notify-why.notify-block > * { margin: 0; }
+  /* The Alerts section (M8.1 `.m8-stack` + `.m8-al`, DD B6; built by notifyAlertsSection/paintNotifyMore in app.js, desktop only): its own
+     block under the size card, 12px below it. The title and the always-on note are 2px apart. The card is the kit's .card, padding 4px 20px;
+     a row is `120px minmax(0, 1fr) auto` with 24px between, 12px above and below, top-aligned, a hairline between rows, the label 1px down to
+     sit on the switch's first line. The Notifications row's middle column stacks the master, its reason (12px under), the three class rows
+     (8px apart; the Firefox note 22px in, under Blocked's words) and the result of Send test; Send test is the third column. The size card's
+     own Alerts row is hidden: its switch and reason now live in this section. Below 480px (the section is the container) a row is one column. */
+  #page-host > #settings-modal.as-page > #settings > .fs-card > #fsrow-alerts { display: none; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-3); container-type: inline-size; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section > .alerts-head { display: flex; flex-direction: column; gap: 2px; }
+  #page-host > #settings-modal.as-page > #settings > .alerts-section > .alerts-head > * { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card { padding: 4px 20px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; column-gap: 24px; align-items: start; padding: var(--sp-3) 0; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #alerts-row-n { border-top: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-rows { display: contents; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-lbl { padding-top: 1px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why { margin: 0; padding-left: 22px; font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why.notify-block { display: flex; flex-direction: column; gap: var(--sp-3); padding-left: 0; color: var(--fg); overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why.notify-block > * { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-col > #notify-why:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-why .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-more { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .btn:where(:not(.pri)):hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > #settings .alerts-card #notify-more:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-classes { display: flex; flex-direction: column; gap: var(--sp-2); padding-left: 22px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card :is(.notify-ff, .notify-status) { margin: 0; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-ff { padding-left: 22px; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-status:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .notify-pref { cursor: pointer; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-act:empty { display: none; }
+  #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-act .btn.btn-sm { padding: 0 8px; border-radius: var(--r-chip); font-size: var(--t-sm); }
+  @container (max-width: 480px) {
+    #page-host > #settings-modal.as-page > #settings .alerts-card .alerts-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
+  }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-how { display: flex; flex-direction: column; gap: var(--sp-2); }
   #page-host > #settings-modal.as-page .fs-card > #fsrow-alerts #notify-why .notify-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; }
   /* Check again and Keyboard shortcuts are the kit's buttons: the panel's `.btn` rule (0 12px, --t-md, --r-ctl, the raise fill) is id-weighted, so
@@ -2824,6 +2936,11 @@
     pointer-events: none;
   }
   #toasts > .toast { pointer-events: auto; }
+  /* The attention chip's host (attnchip.js sets left/width/top from the area it centres over): fixed, above the panes and
+     below the toast stack, letting clicks through everywhere but the chip. Never the toast slot. */
+  #attn-chip-host { position: fixed; z-index: 20; display: flex; justify-content: center; pointer-events: none; }
+  #attn-chip-host[hidden] { display: none; }
+  #attn-chip-host > .attn-chip { pointer-events: auto; }
 
   /* Store-locked banner: a --panel strip. It is only ever shown while the store is
      locked and blocks spawns, so the one amber use is the leading dot and the message. */

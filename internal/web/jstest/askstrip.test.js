@@ -398,7 +398,7 @@ test("F65: a session that left the list takes its leftover line with it", () => 
   p.box.lastSessions = [TURN];
   p.box.pruneReplyFlash();
   assert.deepStrictEqual([...p.box.replyFlash.keys()], ["s1"]);
-  assert.match(fnSrc(read("app.js"), "refreshSessions"), /pruneReplyFlash\(\);/);
+  assert.match(fnSrc(read("app.js"), "refreshSessionsRun"), /pruneReplyFlash\(\);/);
 });
 
 test("F65: a second tap while one is in flight sends nothing more", async () => {
@@ -494,7 +494,7 @@ test("F63: the toast sites keep their exact call, each followed by the mark; the
   assert.strictEqual((signIn.match(/markSSODone\(id\);/g) || []).length, 1);
   assert.match(app, /const SSO_DONE_TOAST = "Signed in\. The agent's next AWS call works\. Tell it to retry if it stopped\.";/);
   // refreshSessions sweeps the kept lines right after pruneSSO, before the panes repaint.
-  const poll = fnSrc(app, "refreshSessions");
+  const poll = fnSrc(app, "refreshSessionsRun");
   assert.ok(poll.indexOf("pruneSSO();") >= 0 && poll.indexOf("pruneSSODone();") > poll.indexOf("pruneSSO();"));
   assert.ok(poll.indexOf("pruneSSODone();") < poll.indexOf("c.repaintReply()"));
 });

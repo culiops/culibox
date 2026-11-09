@@ -2829,6 +2829,8 @@
          toggle can actually work) is untouched — this is CSS-only, inside
          the existing mobile block, and does not touch #fsrow-filetree above. */
       #fsrow-alerts, #notify-why { display: none; }
+      /* A desktop window narrowed below the breakpoint after the Alerts section was built (desktop only, never built on a phone). */
+      #alerts-section { display: none; }
       /* M10: Containment/Base environment/Model/Effort all render as a .seg
          (renderPfRuntime/renderPfOptions) sized to its content on desktop,
          where it sits beside a label in a half-width column; the mobile

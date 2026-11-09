@@ -97,6 +97,7 @@ const THIN_ALLOW = [
   ["#page-host > #settings-modal.as-page #pf-navlist .pfv-ni:focus-visible", INSET + "a nav row of the settings page's left list"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-seg button:focus-visible", INSET + "a segmented button: the group's border is the edge"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-opt:focus-visible", INSET + "a menu row of the profile page's option list"],
+  [".region-focus", INSET + "the F6 region cycle rings a whole region (sidebar, pane header, terminal body, drawer, page), several of them full-bleed in an overflow-clipped parent"],
   [".sp-item:focus-visible", INSET + "rows in a 2px-padded scroller (#sp-rows); an outset ring would be clipped"],
 ];
 const allowed = new Set(THIN_ALLOW.map(([s]) => s));

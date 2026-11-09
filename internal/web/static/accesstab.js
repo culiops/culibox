@@ -571,7 +571,7 @@ function mountAccess(host, sid0) {
     const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
     const now = Date.now();
     model = accessModel({ session: s, aws: d && d.aws, egress: d && d.egress,
-      meta: { box_runtime: typeof boxRuntime === "string" ? boxRuntime : "" }, usage, nowMs: now });
+      meta: { box_runtime: typeof boxRuntime === "string" ? boxRuntime : "" }, usage, nowMs: now, desktop: true }); // pane views are desktop-only
     ctx.sid = sid;
     ctx.repaint = paint;
 
