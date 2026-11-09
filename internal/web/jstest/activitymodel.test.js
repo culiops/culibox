@@ -276,6 +276,15 @@ test("a non-Claude session has no tiles and the M6.2 empty block", () => {
   assert.strictEqual(noAgentField.empty.body, noAgent.empty.body);
 });
 
+// ncResp: a non-Claude reply whose server-side credential total is 0 unless a test says otherwise.
+const ncResp = (events, over) => resp({
+  claude: false, events,
+  summary: Object.assign({ tool_calls: 0, files_changed: 0, credentials: 0, running_s: 41 * 60 }, over),
+});
+const credRow = (state) => ev({ kind: "credential", tool: undefined, detail: "aws culipulse-prod", state });
+const apprRow = (state) => ev({ kind: "approval", tool: undefined, detail: "granted 15 min", state });
+const NC = sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false });
+
 test("a non-Claude session: before the first reply the age reads —, and a failed read says so", () => {
   const s = sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false });
   const before = model({ session: s, resp: null });
@@ -286,7 +295,7 @@ test("a non-Claude session: before the first reply the age reads —, and a fail
   assert.strictEqual(failed.empty.meta, "Session age — \u00b7 could not read credential events");
   assert.strictEqual(failed.loaded, false);
   // A reply that arrived wins over an older failure flag: the count is real data.
-  const stale = model({ session: s, resp: resp({ claude: false, events: [] }), failed: true });
+  const stale = model({ session: s, resp: ncResp([]), failed: true });
   assert.strictEqual(stale.empty.meta, "Session age 41m · no credential events yet");
   // No session at all: nothing to say, so no block.
   assert.strictEqual(activityModel({}).empty, null);
@@ -305,10 +314,72 @@ test("a non-Claude session with two credential events counts them and keeps the 
   assert.deepStrictEqual(m.rows.map((r) => r.kind), ["Credential", "Approval", "Credential"]);
   assert.deepStrictEqual([...m.tiles], []);
   // Exactly one is singular (controller ruling P2); the count ignores the filter and approvals.
-  const one = model({ session: s, filter: "you", resp: resp({ claude: false, events: [events[0], events[1]] }) });
+  const one = model({ session: s, filter: "you", resp: ncResp([events[0], events[1]]) });
   assert.strictEqual(one.empty.meta, "Session age 41m \u00b7 1 credential event");
-  const none = model({ session: s, resp: resp({ claude: false, events: [events[1]] }) });
+  const none = model({ session: s, resp: ncResp([events[1]]) });
   assert.strictEqual(none.empty.meta, "Session age 41m \u00b7 no credential events yet");
+});
+
+test("a partial reply with no credential events says the read failed, never \"no credential events yet\"", () => {
+  // partial is the server's "an audit read failed" (activity_api.go): HTTP 200, so `failed` never fires.
+  const partial = model({ session: NC, resp: resp({ claude: false, events: [], partial: true, summary: { credentials: 0, running_s: 41 * 60 } }) });
+  assert.strictEqual(partial.empty.meta, "Session age 41m \u00b7 could not read credential events");
+  // The same through the transport flag alone, and both together.
+  assert.strictEqual(model({ session: NC, resp: null, failed: true }).empty.meta, "Session age \u2014 \u00b7 could not read credential events");
+  assert.strictEqual(model({ session: NC, resp: ncResp([]), failed: true }).empty.meta, "Session age 41m \u00b7 no credential events yet");
+  // Approval rows are not credential events: still nothing known about credentials.
+  const apprOnly = model({ session: NC, resp: Object.assign(ncResp([apprRow("granted")]), { partial: true }) });
+  assert.strictEqual(apprOnly.empty.meta, "Session age 41m \u00b7 could not read credential events");
+  // A partial reply that did find credential events counts them: that count is real, if possibly low.
+  const found = model({ session: NC, resp: Object.assign(ncResp([credRow("minted")]), { partial: true }) });
+  assert.strictEqual(found.empty.meta, "Session age 41m \u00b7 1 credential event");
+  const fromTotal = model({ session: NC, resp: Object.assign(ncResp([], { credentials: 3 }), { partial: true }) });
+  assert.strictEqual(fromTotal.empty.meta, "Session age 41m \u00b7 3 credential events");
+  // A whole reply with none is the real "none yet".
+  assert.strictEqual(model({ session: NC, resp: ncResp([]) }).empty.meta, "Session age 41m \u00b7 no credential events yet");
+});
+
+test("the credential count never falls below the server's unpaged total, nor below the rows held", () => {
+  // The page holds mostly approvals; the server counted 5 minted over the whole session.
+  const paged = model({ session: NC, resp: Object.assign(ncResp([apprRow("granted"), apprRow("expired"), credRow("minted")], { credentials: 5 }), { more: true }) });
+  assert.strictEqual(paged.empty.meta, "Session age 41m \u00b7 5 credential events");
+  assert.deepStrictEqual(paged.rows.map((r) => r.kind), ["Approval", "Approval", "Credential"]);
+  // The server total is 1 (minted only); refused and failed rows are credential events too.
+  const rows = [credRow("minted"), credRow("refused"), credRow("failed")];
+  assert.strictEqual(model({ session: NC, resp: ncResp(rows, { credentials: 1 }) }).empty.meta, "Session age 41m \u00b7 3 credential events");
+  // Equal: no double counting of the same rows.
+  assert.strictEqual(model({ session: NC, resp: ncResp([credRow("minted")], { credentials: 1 }) }).empty.meta, "Session age 41m \u00b7 1 credential event");
+  // A total of 1 with no row held is still one event, singular.
+  assert.strictEqual(model({ session: NC, resp: ncResp([], { credentials: 1 }) }).empty.meta, "Session age 41m \u00b7 1 credential event");
+  // Junk in the total is no total.
+  assert.strictEqual(model({ session: NC, resp: ncResp([], { credentials: "9" }) }).empty.meta, "Session age 41m \u00b7 no credential events yet");
+});
+
+test("a session age of 0 is the server's unknown and reads \u2014, never 0s", () => {
+  // The server sends running_s 0 for an exited session with no events (and no creation time).
+  const zero = model({ session: NC, resp: ncResp([], { running_s: 0 }) });
+  assert.strictEqual(zero.empty.meta, "Session age \u2014 \u00b7 no credential events yet");
+  assert.strictEqual(model({ session: NC, resp: ncResp([credRow("minted")], { running_s: 0 }) }).empty.meta, "Session age \u2014 \u00b7 1 credential event");
+  assert.strictEqual(model({ session: NC, resp: Object.assign(ncResp([], { running_s: 0 }), { partial: true }) }).empty.meta, "Session age \u2014 \u00b7 could not read credential events");
+  // Missing or wrong-typed is unknown too.
+  for (const running_s of [undefined, null, "41", NaN, -3]) {
+    assert.strictEqual(model({ session: NC, resp: ncResp([], { running_s }) }).empty.meta, "Session age \u2014 \u00b7 no credential events yet", String(running_s));
+  }
+  // The tile agrees with the line.
+  const tile = (running_s) => model({ session: sess(), resp: resp({ summary: { tool_calls: 4, files_changed: 1, credentials: 2, running_s } }) }).tiles[4];
+  assert.deepStrictEqual({ ...tile(0) }, { n: "\u2014", label: "Session age" });
+  assert.strictEqual(tile(undefined).n, "\u2014");
+  assert.strictEqual(tile(1).n, "1s");
+  assert.strictEqual(tile(35).n, "35s");
+  // A reply with no summary at all has no age either; the counts keep their existing 0.
+  const bare = model({ session: sess(), resp: { claude: true, events: [], summary: null } });
+  assert.strictEqual(bare.tiles[4].n, "\u2014");
+});
+
+test("the empty block names the session by name, then id, and never invents a name", () => {
+  assert.ok(model({ session: sess({ id: "s9", name: "", agent: "bash", claude: false }), resp: null }).empty.body.startsWith("s9 runs bash,"));
+  assert.ok(model({ session: sess({ id: "s9", name: "audit-shell", agent: "bash", claude: false }), resp: null }).empty.body.startsWith("audit-shell runs bash,"));
+  assert.doesNotMatch(model({ session: sess({ id: "s9", name: "", agent: "", claude: false }), resp: null }).empty.body, /This session/);
 });
 
 test("filters map to real kinds", () => {

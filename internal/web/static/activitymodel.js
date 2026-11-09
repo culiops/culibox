@@ -151,30 +151,40 @@ function actRow(e, nowMs) {
   };
 }
 
-// actRunning: the "Session age" tile: 35s / 41m / 1h 12m / 11d 13h. The server's
-// running_s is whole seconds since the session was created, the same instant
-// Access and the steer rail count from (startedText).
-function actRunning(sec) {
-  return actAge(actNum(sec) || 0);
-}
-
-// ACT_DASH: what a figure reads before the first reply. U+2014, never a fake 0.
+// ACT_DASH: what a figure reads when there is nothing true to show: before the
+// first reply, or when the server cannot tell. U+2014, never a fake 0.
 const ACT_DASH = "—";
+
+// actRunning: the "Session age" tile and line: 35s / 41m / 1h 12m / 11d 13h. It is
+// the reply's running_s in whole seconds. A live session: time since it started,
+// the instant Access and the steer rail count from (startedText). An exited one:
+// start to its newest event, because the registry keeps no end time. The server
+// sends 0 when it cannot tell (an exited session with no events, or no creation
+// time), and a missing or wrong-typed field is the same unknown, so both read a
+// dash, never "0s".
+function actRunning(sec) {
+  const n = actNum(sec);
+  return n !== null && n >= 1 ? actAge(n) : ACT_DASH;
+}
 
 // actEmpty: the plain block a session with no transcript gets in place of tiles
 // (M6.2). The reply of a non-Claude session only ever carries credential and
 // approval rows, so "no credential events" is a real finding only once it is read.
 //   name  s.name, else the id; the agent clause drops when the profile is unnamed
-//   meta  Session age, then how many credential events the rows hold
+//   meta  Session age, then how many credential events there are: the larger of the
+//         rows held and the server's total (summary.credentials counts minted and
+//         fetched over the whole session, unpaged; refused and failed rows are
+//         events it does not count). A partial reply (an audit read failed) with
+//         nothing found says it could not read them, never "none yet".
 function actEmpty(s, r, sum, events, failed) {
-  const name = actStr(s.name) || actStr(s.id) || "This session";
+  const name = actStr(s.name) || actStr(s.id);
   const agent = actStr(s.agent);
   const tail = " If this session uses a credential, the event still appears here.";
-  const age = "Session age " + (r ? actRunning(sum.running_s) : ACT_DASH);
-  let meta = age;
+  let meta = "Session age " + (r ? actRunning(sum.running_s) : ACT_DASH);
   if (r) {
-    const n = events.filter((e) => e.kind === "credential").length;
-    meta += " · " + (n === 0 ? "no credential events yet" : n === 1 ? "1 credential event" : n + " credential events");
+    const n = Math.max(events.filter((e) => e.kind === "credential").length, actNum(sum.credentials) || 0);
+    if (n === 0 && r.partial) meta += " · could not read credential events";
+    else meta += " · " + (n === 0 ? "no credential events yet" : n === 1 ? "1 credential event" : n + " credential events");
   } else if (failed) {
     meta += " · could not read credential events";
   }
