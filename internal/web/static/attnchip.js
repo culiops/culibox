@@ -3,7 +3,7 @@
 // The attention chip (UI plan 7, #177; DD§A6, §B3): a small amber status that floats over the top of the
 // main area while a session is blocked on you and sits on no visible pane (a pane that shows it has its own
 // strip; Done never gets a chip). It names the first such cause in the sidebar's order, adds " · +N" for the
-// others, and has two controls: Go (goNextNeedsYou, with the registry's chord) and a close that hides the chip
+// others, and has two controls: Go (opens the named session; the hint is the next-needs chord) and a close that hides the chip
 // until the set of blocked causes changes. The model is notifymodel.js's chipModel; this file draws it.
 //
 // Desktop only: nothing is created while mobileActive(), and crossing to a phone width hides it. It is a
@@ -48,7 +48,12 @@ function attnChipBuild() {
   const hint = document.createElement("span");
   hint.className = "kbd-hint";
   go.appendChild(hint);
-  go.onclick = () => { goNextNeedsYou(); };
+  go.onclick = () => {
+    // The session the chip names (the first off-screen one of a shared cause), not the next in the cycle.
+    if (!attnModel) return;
+    const sess = (lastSessions || []).find((x) => x.id === attnModel.sid);
+    openTerminal(attnModel.sid, (sess && sess.name) || attnModel.sid);
+  };
   const x = document.createElement("button");
   x.type = "button";
   x.className = "btn btn-ghost btn-icon btn-sm";
@@ -92,18 +97,25 @@ function attnChipHide() {
   if (attnHost && !attnHost.hidden) attnHost.hidden = true;
 }
 
-function attnChipSync() {
+// attnChipSync(place): `place` is true from the hooks that can move the area (grid repaint, pane switch, page
+// open/close); the poll leaves it off, so a steady chip costs no layout read. It is also placed when it becomes
+// shown or its key changes.
+function attnChipSync(place) {
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) { attnChipHide(); return; }
-  const m = chipModel(jumpOrder(lastSessions, false), visibleSessionIds(), attnDismissed);
+  const order = jumpOrder(lastSessions, false);
+  // A dismissal belongs to the causes it hid: once none is blocked, a later ask shows the chip again.
+  if (attnDismissed && !blockedCauses(order).length) attnDismissed = "";
+  const m = chipModel(order, visibleSessionIds(), attnDismissed);
   attnModel = m;
   if (!m) { attnChipHide(); return; }
   if (!attnHost) { attnHost = attnChipBuild(); attnChipObserve(); }
+  const changed = m.key !== attnPaintedKey || attnHost.hidden;
   if (m.key !== attnPaintedKey) {
     attnParts.name.textContent = m.name;
     attnParts.rest.textContent = m.rest;
     attnParts.hint.textContent = shortcutHint("session.nextNeeds", IS_MAC);
     attnPaintedKey = m.key;
   }
-  attnChipPlace();
+  if (place || changed) attnChipPlace();
   if (attnHost.hidden) attnHost.hidden = false;
 }

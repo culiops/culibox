@@ -248,7 +248,8 @@ function nmWindowOpen(s, now) {
 // blockedCauses: the distinct blocked causes in a session list, in the order the list is given (the
 // sidebar's order, for the chip): one per asking or waiting session, one per AWS sign-in source, one for the
 // secret store. Done and exited sessions contribute none. Shared by the tab title (its count) and the
-// attention chip, so the two can never disagree. Each cause: { key, kind, sessions, pty }.
+// attention chip, so the two agree, with two exceptions: a generic "wait" cause counts in the title but gets no
+// chip (R13: it has no designed copy), and nested shells are not in the chip's sidebar-ordered list. Each cause: { key, kind, sessions, pty }.
 function blockedCauses(sessions) {
   const out = [];
   const by = new Map();
@@ -306,8 +307,7 @@ function nmChipText(c) {
       return c.sessions.length > 1
         ? { name: "", rest: "AWS sign-in expired \u00b7 " + c.sessions.length + " sessions" }
         : { name, rest: " needs AWS sign-in" };
-    case "store": return { name: "", rest: "Secret store locked \u00b7 " + nmPlural(c.sessions.length, "session", "sessions") };
-    default: return { name, rest: " is waiting for you" };
+    default: return { name: "", rest: "Secret store locked \u00b7 " + nmPlural(c.sessions.length, "session", "sessions") };
   }
 }
 
@@ -317,14 +317,15 @@ function nmOffScreen(c, visibleIds) {
 
 function chipModel(ordered, visibleIds, dismissedKey) {
   const causes = blockedCauses(ordered);
-  const off = causes.filter((c) => nmOffScreen(c, visibleIds));
+  // A generic wait has no chip copy (R13): it is neither named nor counted in +N.
+  const off = causes.filter((c) => c.kind !== "wait" && nmOffScreen(c, visibleIds));
   if (!off.length) return null;
   const dismissKey = causes.map((c) => c.key).sort().join("|");
   if (dismissedKey && dismissedKey === dismissKey) return null;
   const t = nmChipText(off[0]);
   const more = off.length - 1;
   const rest = t.rest + (more ? " \u00b7 +" + more : "");
-  return { name: t.name, rest, text: t.name + rest, more, key: t.name + "\u0001" + rest, dismissKey, sid: off[0].sessions[0].id };
+  return { name: t.name, rest, text: t.name + rest, more, key: t.name + "\u0001" + rest, dismissKey, sid: off[0].sessions.find((x) => !nmInSet(visibleIds, x.id)).id };
 }
 
 // chimeStep(prev, causes, visibleIds, ctx) -> { next, play }: the pure decision behind the optional blip

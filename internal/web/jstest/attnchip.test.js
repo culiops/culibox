@@ -66,14 +66,14 @@ function page(over) {
   doc.removeEventListener = (type, fn) => { const i = listeners.findIndex((l) => l.type === type && l.fn === fn); if (i >= 0) listeners.splice(i, 1); };
   const grid = doc.createElement("main"); grid.getBoundingClientRect = () => ({ left: 290, top: 0, width: 800, height: 700 });
   const pageHost = doc.createElement("div"); pageHost.getBoundingClientRect = () => ({ left: 290, top: 0, width: 1000, height: 700 });
-  const calls = { go: 0, played: [] };
+  const calls = { opened: [] };
   const box = Object.assign({
     document: doc, window: { innerWidth: 1280 }, console, Date, JSON, Map, Set, Math, Promise,
     els: { grid, "page-host": pageHost }, calls, phone: false, visible: new Set(), lastSessions: [], pageOpen: false,
     mobileActive: () => box.phone,
     jumpOrder: (list) => list,
     visibleSessionIds: () => box.visible,
-    goNextNeedsYou: () => { calls.go++; return true; },
+    openTerminal: (id, name) => { calls.opened.push([id, name]); },
     shortcutHint: (id) => (id === "session.nextNeeds" ? "Ctrl+Shift+J" : ""),
     IS_MAC: false,
   }, over || {});
@@ -157,12 +157,53 @@ test("chip: repainted only when its model changes (text nodes untouched on an eq
   assert.ok(before);
 });
 
-test("chip: Go runs goNextNeedsYou", () => {
+test("chip: Go opens the session the chip names, not the next in the cycle", () => {
   const { box, doc, calls } = page();
+  box.lastSessions = [ask("a"), ask("b"), ask("c")];
+  box.visible = new Set(["b"]);
+  box.attnChipSync();
+  assert.match(chipEl(doc).textContent, /^n-a wants to run Bash \u00b7 \+1/);
+  chipEl(doc).querySelector(".btn").onclick({});
+  assert.deepStrictEqual(calls.opened, [["a", "n-a"]]);
+});
+
+test("chip: Go on a store cause opens its first off-screen session", () => {
+  const { box, doc, calls } = page();
+  const st = (id) => ({ id, name: "n-" + id, activity: "waiting", need: "store_locked", attention: "block" });
+  box.lastSessions = [st("t1"), st("t2")];
+  box.visible = new Set();
+  box.attnChipSync();
+  chipEl(doc).querySelector(".btn").onclick({});
+  assert.deepStrictEqual(calls.opened, [["t1", "n-t1"]]);
+});
+
+test("chip: a dismissal does not outlive its causes", () => {
+  const { box, doc } = page();
   box.lastSessions = [ask("a")];
   box.attnChipSync();
-  chipEl(doc).querySelector(".btn").onclick({ preventDefault() {} });
-  assert.strictEqual(calls.go, 1);
+  chipEl(doc).querySelector(".btn-icon").onclick({});
+  assert.strictEqual(host(doc).hidden, true);
+  box.lastSessions = [{ id: "a", name: "n-a", activity: "working" }];
+  box.attnChipSync();
+  box.lastSessions = [ask("a")];
+  box.attnChipSync();
+  assert.strictEqual(host(doc).hidden, false, "the same ask again shows the chip");
+});
+
+test("chip: two polls with an unchanged model place the chip once; the hooks place it again", () => {
+  const { box, doc, grid } = page();
+  let reads = 0;
+  grid.getBoundingClientRect = () => { reads++; return { left: 290, top: 0, width: 800, height: 700 }; };
+  box.lastSessions = [ask("a")];
+  box.attnChipSync();
+  const first = reads;
+  assert.ok(first >= 1);
+  box.attnChipSync();
+  box.attnChipSync();
+  assert.strictEqual(reads, first, "polls read no layout");
+  box.attnChipSync(true);
+  assert.strictEqual(reads, first + 1, "a hook places it");
+  assert.ok(doc);
 });
 
 test("chip: the X hides it until the set of blocked causes changes", () => {
@@ -185,7 +226,7 @@ test("chip: centred over #grid at top 44, or over #page-host when a page is open
   assert.deepStrictEqual([host(doc).style.left, host(doc).style.width, host(doc).style.top], ["290px", "800px", "44px"]);
   doc.body.classList.toggle("page-open", true);
   box.visible = new Set();
-  box.attnChipSync();
+  box.attnChipSync(true); // openPage's hook
   assert.deepStrictEqual([host(doc).style.left, host(doc).style.width, host(doc).style.top], ["290px", "1000px", "44px"]);
   assert.ok(grid && pageHost);
 });

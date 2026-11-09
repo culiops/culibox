@@ -546,9 +546,13 @@ test("chipModel: key changes with the text, so an unchanged chip is not repainte
   assert.notEqual(a.key, m.chipModel([ask("a"), ask("b")], none, "").key);
 });
 
-test("chipModel: a generic wait (no ask text) still has a chip, and an odd ask never leaks", () => {
+test("chipModel: a generic wait gets no chip and is not counted in +N, but still counts in the title; an odd ask never leaks", () => {
   const w = sess("w", { name: "gap-sh2", activity: "waiting", need: "input", attention: "block" });
-  assert.equal(m.chipModel([w], none, "").text, "gap-sh2 is waiting for you");
+  assert.equal(m.chipModel([w], none, ""), null);
+  const c = m.chipModel([w, ask("a"), sess("w2", { activity: "waiting", need: "input", attention: "block" })], none, "");
+  assert.equal(c.more, 0);
+  assert.equal(c.text, "n-a wants to run Bash");
+  assert.equal(m.titleState([w], null, "", T0).title, "(1) CuliBox");
   assert.equal(m.chipModel([ask("a", "rm -rf /etc/shadow (x)")], none, "").text, "n-a wants to run a tool");
 });
 
@@ -602,4 +606,11 @@ test("chimeStep: a PTY blip that returns within the re-arm window stays silent",
   assert.equal(back.play, false);
   const late = m.chimeStep(gone.next, m.blockedCauses([pty("a")]), none, chOn({ now: T0 + 3000 + NEEDS_REARM_MS }));
   assert.equal(late.play, true);
+});
+
+test("chipModel: sid is the first OFF-SCREEN session of a shared cause", () => {
+  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], new Set(["t1"]), ""), null, "one visible: on screen");
+  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").sid, "s1");
+  const c = m.chipModel([ask("v"), ssoS("s1", "p"), ssoS("s2", "p")], new Set(["v"]), "");
+  assert.equal(c.sid, "s1");
 });

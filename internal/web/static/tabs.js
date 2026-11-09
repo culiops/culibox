@@ -233,7 +233,7 @@ class Cell {
     }
     if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); } // tree and rail follow the focused tab
     if (typeof syncSelectedRow === "function") syncSelectedRow();
-    if (typeof attnChipSync === "function") attnChipSync(); // a pane now shows another session
+    if (typeof attnChipSync === "function") attnChipSync(true); // a pane now shows another session
     scheduleSaveLayout();
   }
 
@@ -1845,7 +1845,7 @@ function renderGrid() {
   requestAnimationFrame(fitAll);
   // The desktop drawer hangs below the focused pane's header, which just moved.
   if (typeof positionDrawer === "function") positionDrawer();
-  if (typeof attnChipSync === "function") attnChipSync(); // which sessions are on a pane changed
+  if (typeof attnChipSync === "function") attnChipSync(true); // which sessions are on a pane changed
 }
 
 function fitAll() {
