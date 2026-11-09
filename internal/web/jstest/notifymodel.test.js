@@ -348,3 +348,109 @@ test("missing prefs default to the shipped defaults (master, block, done, ended 
   const r = m.notifyStep(seed.next, [doneS("a", "S")], { now: T0, focused: false });
   assert.equal(r.notes[0].body, "Finished its turn");
 });
+
+// ---- Task 2: titleState / faviconSvg (DD§F, DC§2) ----
+const SYS_OK = { lastOkAt: T0, failSince: null, signedOut: false };
+const iso = (ms) => new Date(ms).toISOString();
+function conn(name, over) { return Object.assign({ name }, over || {}); }
+
+test("titleState: nothing blocked or done gives the plain title and the normal icon", () => {
+  assert.deepEqual(m.titleState([sess("a"), sess("b")], SYS_OK, "", T0), { title: "CuliBox", icon: "normal" });
+  assert.deepEqual(m.titleState([], SYS_OK, "PROD", T0), { title: "[PROD] CuliBox", icon: "normal" });
+  assert.deepEqual(m.titleState(null, null, "DEV", T0), { title: "[DEV] CuliBox", icon: "normal" });
+});
+
+test("titleState: (N) counts blocked causes, the store once however many sessions wait on it", () => {
+  const st = (id) => sess(id, { activity: "waiting", need: "store_locked", attention: "block" });
+  const r = m.titleState([ask("a"), st("b"), st("c"), st("d")], SYS_OK, "DEV", T0);
+  assert.deepEqual(r, { title: "(2) [DEV] CuliBox", icon: "amber" });
+});
+
+test("titleState: two sessions on one SSO source are one cause; two sources are two", () => {
+  const sso = (id, src) => sess(id, { activity: "waiting", attention: "block", aws_connections: [conn("c", { sso_expired: src })] });
+  assert.equal(m.titleState([sso("a", "culipulse-prod"), sso("b", "culipulse-prod")], SYS_OK, "", T0).title, "(1) CuliBox");
+  assert.equal(m.titleState([sso("a", "culipulse-prod"), sso("b", "gap-sh2")], SYS_OK, "", T0).title, "(2) CuliBox");
+});
+
+test("titleState: a finished turn gives a check mark and the neutral icon, not (N)", () => {
+  const r = m.titleState([doneS("a"), doneS("b"), doneS("c"), sess("d")], SYS_OK, "", T0);
+  assert.deepEqual(r, { title: "✓3 CuliBox", icon: "neutral" });
+});
+
+test("titleState: a blocked cause outranks done and done sessions are not added to (N)", () => {
+  const r = m.titleState([ask("a"), doneS("b"), doneS("c")], SYS_OK, "", T0);
+  assert.deepEqual(r, { title: "(1) CuliBox", icon: "amber" });
+});
+
+test("titleState: exited sessions with a leftover need are not counted", () => {
+  const gone = [
+    sess("a", { status: "exited", need: "sso", activity: "waiting" }),
+    sess("b", { exited: true, need: "store_locked", activity: "waiting" }),
+    sess("c", { status: "exited", need: "ask", ask: "Bash(x)", activity: "waiting", attention: "block" }),
+    sess("d", { status: "exited", need: "turn", activity: "waiting", attention: "done" }),
+  ];
+  assert.deepEqual(m.titleState(gone, SYS_OK, "", T0), { title: "CuliBox", icon: "normal" });
+});
+
+test("titleState: signed out is Offline at once and the stale count is dropped", () => {
+  const r = m.titleState([ask("a")], { lastOkAt: T0 - 1, failSince: T0, signedOut: true }, "PROD", T0);
+  assert.deepEqual(r, { title: "Offline · [PROD] CuliBox", icon: "offline" });
+});
+
+test("titleState: a network failure is Offline only after 12 s without an OK poll", () => {
+  const sys = (failAt) => ({ lastOkAt: T0, failSince: failAt, signedOut: false });
+  assert.equal(m.SYS_OFFLINE_MS, 12000);
+  assert.equal(m.titleState([ask("a")], sys(T0 + 3000), "", T0 + 9000).title, "(1) CuliBox", "one blip never flickers");
+  assert.equal(m.titleState([ask("a")], sys(T0 + 3000), "", T0 + 11999).title, "(1) CuliBox");
+  assert.deepEqual(m.titleState([ask("a")], sys(T0 + 3000), "", T0 + 12000), { title: "Offline · CuliBox", icon: "offline" });
+  // never had an OK poll: counted from the first failure
+  const never = { lastOkAt: null, failSince: T0, signedOut: false };
+  assert.equal(m.titleState([], never, "", T0 + 11000).title, "CuliBox");
+  assert.equal(m.titleState([], never, "", T0 + 12000).title, "Offline · CuliBox");
+});
+
+test("titleState: the write ring follows any open write window, on every dot", () => {
+  const live = [conn("c", { elevated_until: iso(T0 + 600000) })];
+  const lapsed = [conn("c", { elevated_until: iso(T0 - 1) })];
+  const w = (over) => sess("w", Object.assign({ aws_connections: live }, over));
+  assert.equal(m.titleState([w(), ask("a")], SYS_OK, "", T0).icon, "amber-ring");
+  assert.equal(m.titleState([w(), doneS("b")], SYS_OK, "", T0).icon, "neutral-ring");
+  assert.equal(m.titleState([w()], SYS_OK, "PROD", T0).icon, "normal-ring");
+  assert.equal(m.titleState([sess("w", { aws_connections: lapsed }), ask("a")], SYS_OK, "", T0).icon, "amber");
+  assert.equal(m.titleState([w()], SYS_OK, "", T0).title, "CuliBox", "the ring adds nothing to the title");
+  assert.equal(m.titleState([w(), ask("a")], { lastOkAt: T0, failSince: T0, signedOut: true }, "", T0).icon, "offline", "no ring while offline");
+});
+
+test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
+  const dec = (k) => {
+    const u = m.faviconSvg(k);
+    assert.ok(u.startsWith("data:image/svg+xml,"), k);
+    return decodeURIComponent(u.slice("data:image/svg+xml,".length));
+  };
+  for (const k of ["normal", "amber", "neutral", "offline", "normal-ring", "amber-ring", "neutral-ring"]) {
+    const svg = dec(k);
+    assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="16" height="16" viewBox="0 0 16 16">/, k);
+    assert.ok(svg.includes('<rect width="16" height="16" rx="3.5" style="fill:#0d0f12;stroke:#23282f"/>'), k);
+    assert.doesNotMatch(svg, /var\(--/, "a standalone SVG cannot read page variables");
+    assert.doesNotMatch(svg, /<script|on\w+=/i);
+  }
+  const n = dec("normal");
+  assert.ok(n.includes('d="M11 5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V7"'));
+  assert.ok(n.includes('<rect x="4" y="4" width="4" height="4" rx="2" style="fill:#4ccf8a"/>'));
+  assert.ok(n.includes("stroke:#6ea8fe"));
+  const badge = 'd="M11 3.5V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V8.5"';
+  assert.ok(dec("amber").includes(badge));
+  assert.ok(dec("amber").includes('<rect x="9" y="3.5" width="5" height="5" rx="2.5" style="fill:#f5b94a"/>'));
+  assert.ok(dec("neutral").includes('<rect x="9" y="3.5" width="5" height="5" rx="2.5" style="fill:#8b939e"/>'));
+  const off = dec("offline");
+  assert.ok(off.includes('<circle cx="11.5" cy="6" r="2" style="fill:none;stroke:#8b939e;stroke-width:1.4"/>'));
+  assert.ok(off.includes("stroke:#8b939e") && !off.includes("#6ea8fe"), "the frame goes muted offline");
+  const ring = '<circle cx="11.5" cy="6" r="3.9" style="fill:none;stroke:#f06a6a;stroke-width:1.3"/>';
+  assert.ok(dec("amber-ring").includes(ring));
+  assert.ok(dec("neutral-ring").includes(ring));
+  assert.ok(dec("amber-ring").indexOf(ring) > dec("amber-ring").indexOf("#f5b94a"), "the ring is drawn last");
+  // the ring around the normal dot is centred on that dot (8,8 absolute = 6,6 in the group)
+  assert.ok(dec("normal-ring").includes('<circle cx="6" cy="6" r="3.9" style="fill:none;stroke:#f06a6a;stroke-width:1.3"/>'));
+  assert.ok(!dec("amber").includes("#f06a6a"));
+  assert.equal(m.faviconSvg("nope"), m.faviconSvg("normal"), "an unknown key falls back to normal");
+});

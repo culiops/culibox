@@ -172,16 +172,7 @@ function maskHint(text) {
     : "";
 }
 
-// attentionTitle: the tab title. The waiting count goes FIRST so it survives a
-// tab strip that truncates from the right.
-function attentionTitle(n, env) {
-  return (n > 0 ? "(" + n + ") " : "") + (env ? "[" + env + "] " : "") + "CuliBox";
-}
-
-// faviconHref: the amber-dot icon while anything needs you.
-function faviconHref(n) {
-  return n > 0 ? "/favicon-needs.svg" : "/favicon.svg";
-}
+// The tab title and favicon are titleState/faviconSvg in notifymodel.js (#177).
 
 // NEEDS_REARM_MS: how long a session must stop needing you before needing you
 // again is a NEW waiting period (and a new notification). A false "working"
@@ -480,7 +471,7 @@ function ssoDoneKeep(prevActivity, activity, exited) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS,
+  module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, needsTransitions, NEEDS_REARM_MS,
     notifyAvailability, notifyRowCopy, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }

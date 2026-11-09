@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyRowCopy, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
+const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyRowCopy, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -41,16 +41,17 @@ test("non-claude waiting card offers Open only", () => {
     { text: "Waiting for input.", ask: false, reply: false, enableReplies: false });
 });
 
-test("attentionTitle prefixes the waiting count only when there is one", () => {
-  assert.strictEqual(attentionTitle(0, "DEV"), "[DEV] CuliBox");
-  assert.strictEqual(attentionTitle(2, "DEV"), "(2) [DEV] CuliBox");
-  assert.strictEqual(attentionTitle(1, ""), "(1) CuliBox");
-  assert.strictEqual(attentionTitle(0, ""), "CuliBox");
-});
-
-test("faviconHref flips to the amber-dot icon while anything needs you", () => {
-  assert.strictEqual(faviconHref(0), "/favicon.svg");
-  assert.strictEqual(faviconHref(3), "/favicon-needs.svg");
+// The title and favicon are functions of a state now (notifymodel.js titleState/faviconSvg, #177);
+// the full table is in notifymodel.test.js. These pin the two numbers the old (N) helper got
+// wrong: a finished turn is not "(N)", and a sign-in source is one cause.
+const nm = require("../static/notifymodel.js");
+test("the title counts blocked causes with (N) and a finished turn with a check mark", () => {
+  const sys = { lastOkAt: 1, failSince: null, signedOut: false };
+  const ask = { id: "a", activity: "waiting", need: "ask", ask: "Bash(x)" };
+  const turn = { id: "t", activity: "waiting", need: "turn" };
+  assert.strictEqual(nm.titleState([], sys, "DEV", 2).title, "[DEV] CuliBox");
+  assert.strictEqual(nm.titleState([ask, turn], sys, "DEV", 2).title, "(1) [DEV] CuliBox");
+  assert.strictEqual(nm.titleState([turn], sys, "", 2).title, "\u27131 CuliBox");
 });
 
 const W = (id) => ({ id, activity: "waiting" });

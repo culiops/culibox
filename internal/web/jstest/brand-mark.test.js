@@ -82,3 +82,25 @@ test("the needs-you icon is the same mark in its needs state", () => {
     assert.ok(palette.includes(c), c + " is not one of " + palette.join(" "));
   }
 });
+
+// Plan 7 (#177, DD§F2): the runtime icons are data: URIs built in notifymodel.js, because a
+// static /favicon-*.svg is behind auth and cannot load exactly when "Offline" shows. They
+// must stay the same mark in the kit palette.
+test("the runtime favicon states keep the mark's geometry and the kit palette", () => {
+  const nm = require("../static/notifymodel.js");
+  const dec = (k) => decodeURIComponent(nm.faviconSvg(k).slice("data:image/svg+xml,".length));
+  const dOf = (svg) => svg.match(/<path\b[^>]*\sd="([^"]+)"/)[1];
+  assert.strictEqual(dOf(dec("normal")), glyph(favicon).d, "normal is favicon.svg's door");
+  for (const k of ["amber", "neutral", "offline", "amber-ring", "neutral-ring"]) {
+    assert.strictEqual(dOf(dec(k)), glyph(faviconNeeds).d, k + " is favicon-needs.svg's open door");
+  }
+  const hex = (svg) => new Set((svg.match(/#[0-9a-f]{6}\b/g) || []));
+  const kit = new Set(["#0d0f12", "#23282f", "#6ea8fe", "#4ccf8a", "#f5b94a", "#8b939e", "#f06a6a"]);
+  for (const k of ["normal", "amber", "neutral", "offline", "normal-ring", "amber-ring", "neutral-ring"]) {
+    for (const c of hex(dec(k))) assert.ok(kit.has(c), k + " uses " + c + ", not a kit colour");
+  }
+  assert.ok(!dec("amber").includes("#f06a6a") && dec("amber-ring").includes("#f06a6a"), "red only for the write ring");
+  const index = read("index.html");
+  assert.ok(index.includes('<script src="/notifymodel.js"></script>'), "index.html loads notifymodel.js");
+  assert.ok(index.indexOf("/notifymodel.js") < index.indexOf("/app.js"), "before app.js");
+});

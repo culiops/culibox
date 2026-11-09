@@ -3344,23 +3344,36 @@ function rowLocal(s) {
   };
 }
 
-// signalAttention pushes the waiting count to the tab title and favicon — the
-// part of the signal you see without looking at the page. Runs on every
-// successful poll, AND from initEnv's title refresh (which can land before
-// the first session poll ever resolves) — so it touches title/favicon only.
-// Notifications are gated on an actual session list and live in
-// notifyTransitions, called separately by refreshSessions. The favicon href
-// is swapped only when the state flips, so a steady state costs no icon reload.
-let faviconNeeds = null;
+// sys: the client's view of the sessions poll, read by the title and favicon (Plan 7 adds more
+// fields here: hiddenSince, bootVersion).
+//   lastOkAt  ms of the last OK /api/sessions poll (null before the first)
+//   failSince ms of the first failure of the current run (null while polls succeed)
+//   signedOut true once a poll answered 401
+// A 401 is signed out at once; a network failure counts as offline only after
+// SYS_OFFLINE_MS without an OK poll (titleState), so one blip never flickers the title.
+const sys = { lastOkAt: null, failSince: null, signedOut: false };
+function sysPollOk() { sys.lastOkAt = Date.now(); sys.failSince = null; sys.signedOut = false; }
+function sysPollFailed(e) {
+  const now = Date.now();
+  if (sys.failSince == null) sys.failSince = now;
+  if (e && e.status === 401) sys.signedOut = true;
+}
+
+// signalAttention pushes the blocked/done state to the tab title and favicon: the part of the
+// signal you see without looking at the page (titleState, notifymodel.js). Runs on every
+// session poll, successful or not (a failed one moves sys), AND from initEnv's title refresh
+// (which can land before the first poll resolves), so it touches title/favicon only.
+// Notifications are gated on an actual session list and live in notifyTransitions, called
+// separately by refreshSessions. The favicon href (a data: URI, because static icons sit
+// behind auth) is swapped only when the icon state changes, so a steady state costs no reload.
+let faviconIcon = null;
 function signalAttention() {
-  const n = waitingCount();
-  const t = attentionTitle(n, window.__envLabel || "");
-  if (document.title !== t) document.title = t;
-  const needs = n > 0;
-  if (needs !== faviconNeeds) {
+  const st = titleState(lastSessions, sys, window.__envLabel || "", Date.now());
+  if (document.title !== st.title) document.title = st.title;
+  if (st.icon !== faviconIcon) {
     const link = $("favicon");
-    if (link) link.href = faviconHref(n);
-    faviconNeeds = needs;
+    if (link) link.href = faviconSvg(st.icon);
+    faviconIcon = st.icon;
   }
 }
 
@@ -3540,8 +3553,11 @@ async function refreshSessions() {
   try { sessions = await api("/api/sessions"); }
   catch (e) {
     if (!holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
+    sysPollFailed(e);
+    signalAttention();
     return null;
   }
+  sysPollOk();
   lastSessions = sessions || [];
   sessionsLoaded = true;
   noteReturns(lastSessions);
