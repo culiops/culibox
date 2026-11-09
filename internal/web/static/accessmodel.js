@@ -49,13 +49,14 @@ function accConns(s) {
 }
 
 // accTone: the colour role of an outcome word. Green only for a success, red
-// only for a failure or refusal; anything else is neutral.
+// only for a real error; a denial or refusal is containment working, so it is
+// neutral like anything else.
 const ACC_OK = new Set(["minted", "probe_minted", "fetched"]);
 function accTone(outcome) {
   const o = String(outcome || "");
   if (ACC_OK.has(o)) return "ok";
   if (o === "revoked" || o === "") return "";
-  if (/^denied_|_error$|_failed$|^sso_expired$|^rate_limited$|^sts_error$|^store_locked$|^unresolved$|^not_installed$|^refused$/.test(o)) return "bad";
+  if (/_error$|_failed$|^sso_expired$|^rate_limited$|^sts_error$|^store_locked$|^unresolved$|^not_installed$/.test(o)) return "bad";
   return "";
 }
 
@@ -88,7 +89,7 @@ function accEventRows(aws) {
     const mins = (act === "granted" || act === "extended") && Number(a.minutes) > 0 ? " " + Number(a.minutes) + " min" : "";
     const human = act === "granted" || act === "extended" || act === "dropped";
     push({ ts: Number(a.ts), provider: "approval", subject: label + mins + (a.name ? " · " + a.name : ""),
-      outcome: human ? "you (browser)" : "", tone: act === "refused" ? "bad" : "", elevated: false, detail: String(a.reason || "") });
+      outcome: human ? "you (browser)" : "", tone: "", elevated: false, detail: String(a.reason || "") });
   }
   out.sort((a, b) => b.ts - a.ts);
   return out.slice(0, ACCESS_EVENTS);

@@ -86,15 +86,17 @@ function outcomeText(e, nowMs) {
 }
 
 // actTone: the colour role of an outcome (D23). Amber is the ask only; red is an
-// error, a refusal or a write window; green is a success; tone "add" (a diff)
-// is neutral text in the view; everything else is neutral.
+// error (a tool error, a failed credential) or a write window that opened or was
+// extended; green is a success; tone "add" (a diff) is neutral text in the view.
+// A refusal (a credential or an approval) is containment working: neutral, like
+// everything else.
 function actTone(e) {
   if (!e || typeof e !== "object") return "muted";
   const st = actStr(e.state);
   switch (e.kind) {
     case "ask": return "amber";
-    case "credential": return st === "minted" ? "ok" : st === "refused" ? "err" : "muted";
-    case "approval": return st === "granted" || st === "extended" || st === "refused" ? "err" : "muted";
+    case "credential": return st === "minted" ? "ok" : st === "failed" ? "err" : "muted";
+    case "approval": return st === "granted" || st === "extended" ? "err" : "muted";
     case "tool":
       if (st === "error") return "err";
       if (st === "pending") return "muted";

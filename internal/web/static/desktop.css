@@ -369,7 +369,7 @@
   .kpi + .kpi { box-shadow: inset 1px 0 0 var(--line); }
   .kpi-value { font-size: var(--t-kpi); line-height: var(--lh-kpi); font-weight: var(--w-semibold); font-variant-numeric: tabular-nums; color: var(--fg); }
   .kpi-label { font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
-  .kpi-value.is-bad { color: var(--red); } /* refused or write elevations > 0 only */
+  .kpi-value.is-bad { color: var(--red); } /* write elevations > 0 only: a refusal is containment working, never red */
 
   /* --- table ---------------------------------------------------------------- */
   .tbl { width: 100%; border-collapse: collapse; font-size: var(--t-md); color: var(--fg); }
@@ -1438,8 +1438,8 @@
   .ac-evs .ac-sub { font-family: var(--font-ui); }
 
   /* --- Activity view (spec 5.8; ea-3.png) ------------------------------------ */
-  /* Colour roles: amber = the pending ask only, red = error / refusal / write
-     window, green = status (ok, minted, live). A +a −d diff is neutral. The pane's width, not the
+  /* Colour roles: amber = the pending ask only, red = error / write
+     window (a refusal is containment working: neutral), green = status (ok, minted, live). A +a −d diff is neutral. The pane's width, not the
      window's, decides where the right column goes: .pane-view is the container. */
   .pane-view[data-view="activity"] { container-type: inline-size; }
   .act-wrap { display: flex; flex-direction: column; min-width: 0; }

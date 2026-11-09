@@ -95,18 +95,37 @@ test("rows are newest-first as given, with local time, kind, detail and a tone",
   assert.ok(m.rows.every((r) => typeof r.key === "string" && r.key));
 });
 
-test("tones: diffs are add, refusals and write grants are err, ends are muted, pending is muted", () => {
+test("actTone: a refusal is muted, a failure and a write grant are red", () => {
+  const tone = (e) => model({ session: sess(), resp: resp({ events: [e] }) }).rows[0].outcome.tone;
+  const cred = (state) => ev({ kind: "credential", tool: undefined, state });
+  const appr = (state) => ev({ kind: "approval", tool: undefined, state });
+  assert.strictEqual(tone(cred("minted")), "ok");
+  assert.strictEqual(tone(cred("refused")), "muted");
+  assert.strictEqual(tone(cred("failed")), "err");
+  assert.strictEqual(tone(cred("")), "muted");
+  assert.strictEqual(tone(cred("whatever")), "muted");
+  assert.strictEqual(tone(appr("refused")), "muted");
+  for (const st of ["granted", "extended"]) assert.strictEqual(tone(appr(st)), "err", st);
+  for (const st of ["expired", "dropped", "ended"]) assert.strictEqual(tone(appr(st)), "muted", st);
+  assert.strictEqual(tone(ev({ state: "error", exit: 1 })), "err");
+  assert.strictEqual(tone(ev({ tool: "Edit", add: 18, del: 0 })), "add");
+  assert.strictEqual(tone(ev({ state: "pending" })), "muted");
+});
+
+test("tones: diffs are add, a refusal and an end are muted, a failure and a write grant are err", () => {
   const m = model({
     session: sess(),
     resp: resp({ events: [
       ev({ tool: "Edit", add: 18, del: 0 }),
       ev({ kind: "credential", tool: undefined, state: "refused" }),
+      ev({ kind: "credential", tool: undefined, state: "failed" }),
       ev({ kind: "approval", tool: undefined, state: "granted" }),
       ev({ kind: "approval", tool: undefined, state: "expired" }),
       ev({ state: "pending" }),
     ] }),
   });
-  assert.deepStrictEqual(m.rows.map((r) => r.outcome.tone), ["add", "err", "err", "muted", "muted"]);
+  assert.deepStrictEqual(m.rows.map((r) => r.outcome.tone), ["add", "muted", "err", "err", "muted", "muted"]);
+  assert.strictEqual(m.rows[2].outcome.text, "failed");
 });
 
 test("the current ask is the top amber row, only when need is ask", () => {

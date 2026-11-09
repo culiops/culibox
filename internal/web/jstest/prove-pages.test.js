@@ -444,8 +444,8 @@ test("an elevated row is tr.is-elevated with a red Kind cell", () => {
   assert.strictEqual(extended.className, "is-elevated");
   assert.strictEqual(cells(extended)[2][0], "au-kind au-bad");
 
-  // An elevation that opened nothing is a plain row: no tint, a muted Kind. A refused one keeps its red Outcome
-  // (the tones are Plan 6's), a dropped one is muted.
+  // An elevation that opened nothing is a plain row: no tint, a muted Kind. A refused one is containment working
+  // (UI plan 6, #176), so its Outcome is neutral like a dropped one's.
   for (const outcome of ["dropped", "expired", "ended"]) {
     const tr = row({ ...base, outcome, actor: "you" });
     assert.strictEqual(tr.className, "", outcome + ": no tint");
@@ -453,15 +453,17 @@ test("an elevated row is tr.is-elevated with a red Kind cell", () => {
   }
   const refused = row({ ...base, outcome: "refused", actor: "you" });
   assert.strictEqual(refused.className, "");
-  assert.deepStrictEqual(cells(refused).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out au-bad"], "refused: not tinted, Outcome still red until Plan 6");
+  assert.deepStrictEqual(cells(refused).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out"], "refused: not tinted, Outcome neutral");
 
   // Other rows: the Outcome keeps its tone class from auditRowView.
   const minted = row({ ts: 1_760_000_000, kind: "credential", what: "aws sandbox", outcome: "minted" });
   assert.strictEqual(minted.className, "");
   assert.deepStrictEqual(cells(minted).map((x) => x[0]), ["au-time", "au-sess", "au-kind", "au-what", "au-out au-ok"]);
   const denied = row({ ts: 1_760_000_000, kind: "egress", what: "pypi.org:443", outcome: "denied", count: 3 });
-  assert.strictEqual(cells(denied)[4][0], "au-out au-bad");
+  assert.strictEqual(cells(denied)[4][0], "au-out");
   assert.strictEqual(cells(denied)[4][1], "denied ×3");
+  const dialError = row({ ts: 1_760_000_000, kind: "egress", what: "pypi.org:443", outcome: "dial_error" });
+  assert.strictEqual(cells(dialError)[4][0], "au-out au-bad");
   const created = row({ ts: 1_760_000_000, kind: "settings", what: "token e2e created", outcome: "created", actor: "you" });
   assert.strictEqual(cells(created)[4][0], "au-out");
 });

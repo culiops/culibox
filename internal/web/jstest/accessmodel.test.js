@@ -2,7 +2,7 @@
 // accessmodel.js: the Access view's pure model (spec 5.7) and the grant form's gate.
 const test = require("node:test");
 const assert = require("node:assert");
-const { accessModel, grantFormState, ACCESS_EVENTS } = require("../static/accessmodel.js");
+const { accessModel, grantFormState, accTone, ACCESS_EVENTS } = require("../static/accessmodel.js");
 
 const NOW = Date.parse("2026-10-27T15:19:00Z");
 const iso = (minFromNow) => new Date(NOW + minFromNow * 60000).toISOString();
@@ -248,6 +248,28 @@ test("events: aws row names its connection, an inline binding names its role; el
   const ev = model({ session: sess(), aws: status({ recent }) }).events;
   assert.deepStrictEqual([ev[0].provider, ev[0].subject, ev[0].outcome, ev[0].elevated, ev[0].tone], ["aws", "culipulse-prod", "minted", true, "ok"]);
   assert.deepStrictEqual([ev[1].subject, ev[1].outcome, ev[1].tone], ["agent-investigate", "sso expired", "bad"]);
+});
+
+// A denial or a refusal is containment working: neutral text. Red is for something that broke (UI plan 6, E6).
+test("accTone: containment refusals are neutral, errors stay red", () => {
+  for (const o of ["denied_scope", "denied_box", "denied_token", "denied_session", "denied_not_read_only", "refused"]) {
+    assert.strictEqual(accTone(o), "", o);
+  }
+  for (const o of ["sts_error", "scope_error", "github_error", "revoke_failed", "probe_failed", "rate_limited", "sso_expired", "store_locked", "unresolved", "not_installed"]) {
+    assert.strictEqual(accTone(o), "bad", o);
+  }
+  for (const o of ["minted", "probe_minted", "fetched"]) assert.strictEqual(accTone(o), "ok", o);
+  for (const o of ["revoked", "", undefined]) assert.strictEqual(accTone(o), "", String(o));
+});
+
+test("accessModel: a refused approval row has no tone", () => {
+  const approvals = [
+    { ts: NOW - 1000, action: "refused", name: "culipulse-prod" },
+    { ts: NOW - 2000, action: "granted", minutes: 30, name: "culipulse-prod" },
+  ];
+  const ev = model({ session: sess(), aws: status({ approvals }) }).events;
+  assert.deepStrictEqual([ev[0].subject, ev[0].tone], ["refused · culipulse-prod", ""]);
+  assert.strictEqual(ev[1].tone, "", "an approval row never carries a tone of its own");
 });
 
 test("events: an approval reads as a decision by you, its reason kept as detail", () => {
