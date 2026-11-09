@@ -44,18 +44,13 @@ function notifyClassOf(s) {
   return nmDep("attentionClass")(s);
 }
 
-// askTool: the tool name of an ask, never its arguments. Text up to the first "(", trimmed,
-// capped; with no "(" only a leading word shaped like a tool name; else "a tool".
+// askTool: the tool name of an ask, never a command, path or arguments. The text before the first
+// "(" (or the leading word when there is none), trimmed, must look like a tool name; else "a tool".
 function askTool(ask) {
   const a = typeof ask === "string" ? ask : "";
   const cut = a.indexOf("(");
-  let t;
-  if (cut >= 0) t = a.slice(0, cut).trim();
-  else {
-    const w = a.trim().split(/\s+/)[0] || "";
-    t = /^[A-Za-z][\w.-]*$/.test(w) ? w : "";
-  }
-  return t ? t.slice(0, NOTIFY_TOOL_MAX).trim() : "a tool";
+  const t = cut >= 0 ? a.slice(0, cut).trim() : (a.trim().split(/\s+/)[0] || "");
+  return /^[A-Za-z][\w.-]*$/.test(t) ? t.slice(0, NOTIFY_TOOL_MAX) : "a tool";
 }
 
 function nmSSOSources(s) {
@@ -123,10 +118,12 @@ function nmInSet(c, id) {
 }
 
 function notifyStep(prev, sessions, ctx) {
+  // A failed fetch hands over no list: nothing changed, so nothing ended (R8a).
+  if (!Array.isArray(sessions)) return { next: prev, notes: [] };
   const c = ctx || {};
   const prefs = Object.assign({}, NOTIFY_PREF_DEFAULTS, c.prefs || {});
   const now = typeof c.now === "number" ? c.now : 0;
-  const list = Array.isArray(sessions) ? sessions : [];
+  const list = sessions;
   const rearm = nmDep("NEEDS_REARM_MS");
 
   // This poll's causes, grouped by key.
@@ -163,6 +160,9 @@ function notifyStep(prev, sessions, ctx) {
     for (const k of gone) next.away.set(k, now);
     for (const [k, t] of prev.away) if (!causes.has(k) && !next.away.has(k)) next.away.set(k, t);
   }
+
+  // Re-arm entries past the window can no longer suppress anything: drop them (R8b).
+  for (const [k, t] of next.away) if (now - t >= rearm) next.away.delete(k);
 
   // Ended: live -> exited/crashed, or vanished, unless this client ended or restarted it.
   const ended = [];

@@ -248,6 +248,9 @@ test("a blocked session with no ask and no cause field gets a generic body, neve
 test("askTool", () => {
   assert.equal(m.askTool("Bash(rm -rf /)"), "Bash");
   assert.equal(m.askTool("  mcp__x__y (arg)"), "mcp__x__y");
+  assert.equal(m.askTool("rm -rf /etc/shadow (x)"), "a tool");
+  assert.equal(m.askTool("/usr/bin/curl(x)"), "a tool");
+  assert.equal(m.askTool("Bash (rm)"), "Bash");
   assert.equal(m.askTool("WebFetch"), "WebFetch");
   assert.equal(m.askTool("Read some/path"), "Read");
   assert.equal(m.askTool("/etc/passwd please"), "a tool");
@@ -257,35 +260,60 @@ test("askTool", () => {
   assert.equal(m.askTool("x".repeat(100) + "(y)").length, 40);
 });
 
-test("property: 200 generated asks never leak text after '(' or the summary", () => {
-  let seed = 12345;
-  const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
-  const words = ["Bash", "Read", "WebFetch", "rm", "-rf", "/etc/shadow", "SECRETARG", "curl", "x.y-z", "mcp__a__b"];
+test("property: 200 generated asks never leak a command, a path, arguments or the summary", () => {
+  // mulberry32: exact 32-bit arithmetic.
+  let st = 0x9e3779b9;
+  const rnd = (n) => {
+    st = (st + 0x6d2b79f5) | 0;
+    let x = Math.imul(st ^ (st >>> 15), 1 | st);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return (((x ^ (x >>> 14)) >>> 0) % n);
+  };
   const SUMMARY = "SUMMARYTEXT-do-not-show";
   const on = Object.assign({}, ON, { message: true });
+  const heads = ["Bash", "Read", "mcp__a__b", "rm -rf", "/etc/CMDPATH", "curl CMDWORD", "x.y-z", "", "/CMDPREFIX do"];
+  const seen = { spaced: 0, unspaced: 0, paren: 0, noParen: 0, empty: 0 };
   for (let i = 0; i < 200; i++) {
-    const kind = i % 4;
-    const head = Array.from({ length: rnd(3) }, () => words[rnd(words.length)]).join(rnd(2) ? " " : "");
-    let a;
-    if (kind === 0) a = "";
-    else if (kind === 1) a = head;
-    else a = head + "(" + words[rnd(words.length)] + " " + words[rnd(words.length)] + ")";
+    const head = heads[rnd(heads.length)];
+    const sep = rnd(2) ? " " : "";
+    const withParen = rnd(2) === 1;
+    const a = withParen ? head + sep + "(ARGMARK " + "/ARGPATH)" : head + (rnd(2) ? " ARGMARK /ARGPATH" : "");
+    seen[a.indexOf(" ") >= 0 ? "spaced" : "unspaced"]++;
+    seen[withParen ? "paren" : "noParen"]++;
+    if (a === "") seen.empty++;
     const s = ask("a", a);
     s.summary = SUMMARY;
     for (const p of [ON, on]) {
       const body = run([sess("a")], [s], { prefs: p }).notes[0].body;
-      const cut = a.indexOf("(");
-      if (cut >= 0) {
-        const after = a.slice(cut);
-        assert.ok(!body.includes(after), JSON.stringify([a, body]));
-        assert.ok(!body.includes("SECRETARG") || a.slice(0, cut).includes("SECRETARG"), JSON.stringify([a, body]));
+      assert.match(body, /^Wants to run (a tool|[A-Za-z][\w.-]*)$/, JSON.stringify([a, body]));
+      for (const bad of ["ARGMARK", "ARGPATH", "CMDPATH", "CMDWORD", "CMDPREFIX", SUMMARY, "(", "/", "-rf"]) {
+        assert.ok(!body.includes(bad), JSON.stringify([a, body, bad]));
       }
-      assert.ok(!body.includes(SUMMARY), JSON.stringify([a, body]));
-      assert.ok(!body.includes("("), JSON.stringify([a, body]));
-      if (a === "") assert.equal(body, "Wants to run a tool");
-      assert.match(body, /^Wants to run /);
     }
   }
+  assert.ok(seen.spaced > 20 && seen.unspaced > 20 && seen.paren > 20 && seen.noParen > 20, JSON.stringify(seen));
+  assert.equal(m.notifyStep(null, [ask("a", "")], ctx()).notes.length, 0);
+  assert.equal(run([sess("a")], [ask("a", "")]).notes[0].body, "Wants to run a tool");
+});
+
+test("a failed fetch (no list) changes nothing and ends nothing (R8a)", () => {
+  const seed = m.notifyStep(null, [sess("a"), ask("b")], ctx());
+  for (const bad of [undefined, null, {}]) {
+    const r = m.notifyStep(seed.next, bad, ctx());
+    assert.equal(r.next, seed.next);
+    assert.deepEqual(r.notes, []);
+  }
+  assert.equal(m.notifyStep(null, undefined, ctx()).next, null);
+});
+
+test("re-arm entries older than the window are pruned each step (R8b)", () => {
+  const blocked = ask("a");
+  let r = run([blocked], [sess("a")], { now: T0 }, { now: T0 });
+  assert.ok(r.next.away.has("ab:a:block"));
+  r = m.notifyStep(r.next, [sess("a")], ctx({ now: T0 + NEEDS_REARM_MS - 1 }));
+  assert.ok(r.next.away.has("ab:a:block"));
+  r = m.notifyStep(r.next, [sess("a")], ctx({ now: T0 + NEEDS_REARM_MS }));
+  assert.equal(r.next.away.size, 0);
 });
 
 test("the summary appears only for Done with the message setting on", () => {
