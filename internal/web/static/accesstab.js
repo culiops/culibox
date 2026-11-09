@@ -250,7 +250,8 @@ function accRowBlock(r, ctx) {
   const time = (t) => (t ? tone("tnum", t) : "—");
   if (r.kind === "aws") {
     row.appendChild(accCell("Scope", r.scope === "read" ? r.scope : tone("c-red w-500", r.scope)));
-    row.appendChild(accCell("SSO", r.sso === "valid" ? tone("c-ok", r.sso) : r.sso === "expired" ? tone("c-amber", r.sso) : r.sso || "—"));
+    // An expired sign-in is an error (the broker's sso_expired), so it is red; amber is only for an agent blocked on the user.
+    row.appendChild(accCell("SSO", r.sso === "valid" ? tone("c-ok", r.sso) : r.sso === "expired" ? tone("c-red", r.sso) : r.sso || "—"));
     row.appendChild(accCell("Last credential", time(r.last)));
   } else {
     row.appendChild(accCell("Scope", r.scope || "—"));

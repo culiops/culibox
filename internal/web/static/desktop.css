@@ -1378,8 +1378,8 @@
   /* Drawn from the M6 frames on the kit's own classes (.card, .card-head, .chip, .btn, .link, .tbl, .seg, .input): only
      the layout is page-local, the frames' m6- rules re-prefixed ac- (digest §D). Colour roles: red = write / prod / error
      only (PROD, "write (elevated)", the leftover-credentials line, a mint made under a write window and its tint, a broker
-     error), green = status (valid, ok, minted), amber = an SSO sign-in the operator has to redo; a refusal is containment
-     working, so it is muted. The pane's width, not the window's, decides when the rows stack: .pane-view is the container. */
+     error, an expired SSO sign-in), green = status (valid, ok, minted), amber is not used here (it is for an agent blocked on
+     the user); a refusal is containment working, so it is muted. The pane's width, not the window's, decides when the rows stack: .pane-view is the container. */
   .pane-view[data-view="access"] { container-type: inline-size; }
   /* §B9: the frames inherit a 20px line from the kit's .ab root and a margin-free h2 and p from its reset. .pane-view's
      `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */

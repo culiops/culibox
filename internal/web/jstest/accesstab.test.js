@@ -298,17 +298,30 @@ test("the lapse alone is one muted line; an open window or a plain session has n
   assert.strictEqual(plain.host.querySelector(".ac-note"), null);
 });
 
-test("SSO expired: the cell says so in amber and the sign-in card hangs under its connection", async () => {
+test("SSO expired: the cell says so in red (an error, never amber) and the sign-in card hangs under its connection", async () => {
   const s = claudeBox({ need: "sso", aws_connections: [conn({ sso_expired: true })] });
   const { host } = await mount(s, status({ sso: { sources: [{ expired: true, names: ["culipulse-prod"] }] } }));
   const row = host.querySelector(".ac-conn");
   const val = row.children[2].children[1].children[0];
   assert.strictEqual(val.textContent, "expired");
-  assert.ok(has(val, "c-amber"), "needs the operator: amber (the product's own tone, kept)");
+  assert.ok(has(val, "c-red"), "sso_expired is in the plan's error class");
+  assert.ok(!has(val, "c-amber"), "amber is only for an agent blocked on the user (F21)");
   const blk = host.querySelector(".ac-blk");
   const sso = blk.querySelector(".ac-sso");
   assert.ok(sso && sso.querySelector(".ssocard"), "the card is renderSSOBody's");
   assert.ok(blk.children.indexOf(sso) > blk.children.indexOf(row));
+});
+
+test("a sign-in status that is neither valid nor expired stays neutral text, and nothing in the Access view is amber", async () => {
+  // The model names only valid / expired / unknown ("" for static keys or a status not read yet); an unknown one is a dash.
+  const { host } = await mount(claudeBox({ aws_connections: [conn()] }), status({ sso: { sources: [] } }));
+  const sso = host.querySelector(".ac-conn").children[2];
+  assert.strictEqual(sso.children[0].textContent, "SSO");
+  assert.strictEqual(sso.children[1].textContent, "—");
+  assert.strictEqual(sso.children[1].children.length, 0, "plain fg text, no tone span");
+  const src = read("accesstab.js").replace(/\/\/.*$/gm, "");
+  assert.doesNotMatch(src, /amber/, "the view applies no amber class");
+  assert.doesNotMatch(accessCss(), /amber/, "and its rules name none");
 });
 
 test("a broker error on a connection is one red line under its row", async () => {
@@ -506,6 +519,27 @@ test("an Elevate… the row cannot offer (another connection holds the window) s
   assert.strictEqual(b.title, "Drop culipulse-prod first");
 });
 
+test("the reason a blocked Elevate… gives is the model's own sentence, verbatim, and the view writes none of its own", async () => {
+  // Credentials issued for culipulse-prod before a Drop are still valid: the server's conn_blocked sentence names why the
+  // other connection cannot be elevated yet. Both sentences already ship (elevation.js grantPanel, shown in the grant panel).
+  const sentence = "Credentials already issued for culipulse-prod are still valid; wait until they expire.";
+  const s = claudeBox({ aws_connections: [conn(), conn({ name: "culipulse-dev", label: "culipulse-dev", prod: false })] });
+  const aws = status({
+    connections: [{ name: "culipulse-prod", stats: { mints: 1, last_mint: ago(5) } }, { name: "culipulse-dev", stats: { mints: 0 } }],
+    elevation: { active: false, name: "culipulse-prod", last_valid: iso(10) },
+    elevate: { host_sessions: [], conn_blocked: { "culipulse-dev": sentence } },
+  });
+  const { host } = await mount(s, aws);
+  const rowOf = (name) => host.querySelectorAll(".ac-conn").find((r) => r.children[0].querySelector(".ac-name").children[0].textContent === name);
+  const dev = btn(rowOf("culipulse-dev"), "Elevate…");
+  assert.strictEqual(dev.getAttribute("aria-disabled"), "true");
+  assert.strictEqual(dev.title, sentence);
+  const prod = btn(rowOf("culipulse-prod"), "Elevate…");
+  assert.strictEqual(prod.getAttribute("aria-disabled"), null, "the connection the credentials came from is not blocked by them");
+  assert.ok(!prod.title, "and gives no reason");
+  assert.doesNotMatch(read("accesstab.js").replace(/\/\/.*$/gm, ""), /Drop [^"\n]*first|"[^"\n]* first"/, "no wording of its own: it comes from grantPanel");
+});
+
 test("Full history in Audit keeps focus when the events card is rebuilt under it", async () => {
   const { doc, host, handle, lex } = await mount(open(12), eventsStatus());
   const before = btn(host, "Full history in Audit");
@@ -675,6 +709,30 @@ test("the source: no [disabled] on a view button, no row Drop, no markup parsing
   for (const old of ["ac-card", "ac-head", "ac-title", "ac-meta", "ac-lab", "ac-val", "ac-rowblk", "ac-evrow", "ac-evhead", "ac-link", "ac-ok", "ac-bad", "ac-write", "ac-need"]) {
     assert.ok(!new RegExp("[\"' ]" + old + "[\"' ]").test(src), old + " is gone");
   }
+});
+
+test("Full history in Audit is a bare kit .link: no UA button chrome, the 2px ring kept, and the head leaves room for the ring", async () => {
+  const strip = (c) => c.replace(/\/\*[\s\S]*?\*\//g, "");
+  const { host } = await mount(open(12), eventsStatus());
+  const full = btn(host, "Full history in Audit");
+  assert.ok(has(full, "link", "t-sm") && full.tag === "button" && full.type === "button");
+  // The kit's .link resets the button's own chrome, and nothing the view adds puts any of it back.
+  const kit = /\.link \{([^}]*)\}/.exec(strip(read("desktop.css")));
+  assert.ok(kit, "the kit .link rule");
+  for (const d of [/background:\s*none/, /border:\s*0/, /padding:\s*0/, /color:\s*var\(--accent\)/]) assert.match(kit[1], d);
+  assert.match(strip(read("desktop.css")), /:where\(\.btn, \.seg-item, \.nav-item, \.menu-item, \.link, \.input\) \{ font: inherit; \}/, "and the font is the line's, not the button default");
+  assert.doesNotMatch(accessCss(), /\.link/, "no Access rule restyles it");
+  // The ring: primitives.css gives every :focus-visible 2px at offset 2 (desktop.css sets the width and offset), and no
+  // rule anywhere takes it off a .link.
+  assert.match(strip(read("primitives.css")), /:focus-visible \{ outline: var\(--focus\); outline-offset: var\(--focus-off\); \}/);
+  assert.match(strip(read("desktop.css")), /--focus-w: 2px; --focus-off: 2px;/);
+  for (const f of ["primitives.css", "app.css", "desktop.css"]) {
+    for (const m of strip(read(f)).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/\.link(?![\w-])/.test(m[1])) assert.doesNotMatch(m[2], /outline|box-shadow:\s*none/, f + ": " + m[1].trim() + " leaves the ring alone");
+    }
+  }
+  // The ring sits 2px out at offset 2 (4px beyond the button); the card head's 12px / 16px padding keeps it inside the card.
+  assert.match(strip(read("desktop.css")), /\.card-head \{[^}]*padding:\s*var\(--sp-3\) var\(--sp-4\)/);
 });
 
 // Every class the view puts on screen is defined by a stylesheet (classnames.test.js cannot see a class that goes
