@@ -459,3 +459,147 @@ test("faviconSvg: a data: URI per state, kit hex, DD§F2 geometry", () => {
   assert.ok(!dec("amber").includes("#f06a6a"));
   assert.equal(m.faviconSvg("nope"), m.faviconSvg("normal"), "an unknown key falls back to normal");
 });
+
+// ---- Task 5: blockedCauses / chipModel / chimeStep (DD§A6, §B3; DC§5) ----
+function ssoS(id, src, name) { return sess(id, { name: name || "n-" + id, activity: "waiting", need: "sso", attention: "block", aws_connections: [{ sso_expired: src }] }); }
+function storeS(id) { return sess(id, { activity: "waiting", need: "store_locked", attention: "block" }); }
+const none = new Set();
+
+test("blockedCauses: one per cause in the order given, no done, no exited, shared causes once", () => {
+  const list = [doneS("d"), ask("a"), sess("x", { exited: true, activity: "waiting", need: "ask", ask: "Bash(x)", attention: "block" }), ssoS("s1", "p"), ssoS("s2", "p"), storeS("t1"), storeS("t2")];
+  const cs = m.blockedCauses(list);
+  assert.deepEqual(cs.map((c) => c.key), ["ab:a:block", "ab:sso:p", "ab:store"]);
+  assert.deepEqual(cs.map((c) => c.kind), ["ask", "sso", "store"]);
+  assert.deepEqual(cs[1].sessions.map((s) => s.id), ["s1", "s2"]);
+  assert.deepEqual(m.blockedCauses(null), []);
+});
+
+test("blockedCauses and titleState count the same causes", () => {
+  const list = [ask("a"), ssoS("s1", "p"), ssoS("s2", "p"), storeS("t1"), storeS("t2"), doneS("d")];
+  const n = m.blockedCauses(list).length;
+  assert.equal(m.titleState(list, null, "", T0).title, "(" + n + ") CuliBox");
+});
+
+test("chipModel: a blocked ask that is on no visible pane gives the chip text", () => {
+  const c = m.chipModel([ask("a", "Bash(rm -rf /tmp/x)")], none, "");
+  assert.equal(c.name, "n-a");
+  assert.equal(c.rest, " wants to run Bash");
+  assert.equal(c.text, "n-a wants to run Bash");
+  assert.equal(c.more, 0);
+  assert.equal(c.sid, "a");
+  assert.ok(!/rm|\/tmp/.test(c.text), "never the command");
+});
+
+test("chipModel: the session on a visible pane gives none; a Set or an array both work", () => {
+  assert.equal(m.chipModel([ask("a")], new Set(["a"]), ""), null);
+  assert.equal(m.chipModel([ask("a")], ["a"], ""), null);
+});
+
+test("chipModel: Done never gets a chip", () => {
+  assert.equal(m.chipModel([doneS("d")], none, ""), null);
+  assert.equal(m.chipModel([], none, ""), null);
+  assert.equal(m.chipModel(null, none, ""), null);
+});
+
+test("chipModel: SSO and store copy, singular and plural", () => {
+  assert.equal(m.chipModel([ssoS("s1", "p", "gap-sh2")], none, "").text, "gap-sh2 needs AWS sign-in");
+  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], none, "").text, "AWS sign-in expired · 2 sessions");
+  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], none, "").text, "Secret store locked · 2 sessions");
+  assert.equal(m.chipModel([storeS("t1")], none, "").text, "Secret store locked · 1 session");
+});
+
+test("chipModel: a shared cause is off-screen only when none of its sessions is visible", () => {
+  assert.equal(m.chipModel([storeS("t1"), storeS("t2")], new Set(["t2"]), ""), null);
+  assert.equal(m.chipModel([ssoS("s1", "p"), ssoS("s2", "p")], new Set(["s1"]), ""), null);
+  assert.ok(m.chipModel([storeS("t1"), storeS("t2")], new Set(["zz"]), ""));
+});
+
+test("chipModel: names the first off-screen cause in the given order and counts the rest as +N", () => {
+  const list = [ask("v"), storeS("t1"), ask("a"), ssoS("s1", "p")];
+  const c = m.chipModel(list, new Set(["v"]), "");
+  assert.equal(c.name, "", "the store is first off-screen: a shared cause has no session name");
+  assert.equal(c.text, "Secret store locked · 1 session · +2");
+  assert.equal(c.more, 2);
+  const c2 = m.chipModel([ask("b"), ask("a")], none, "");
+  assert.equal(c2.text, "n-b wants to run Bash · +1");
+  assert.equal(c2.rest, " wants to run Bash · +1");
+});
+
+test("chipModel: a visible blocked session is not counted in +N", () => {
+  const c = m.chipModel([ask("a"), ask("v"), ask("b")], new Set(["v"]), "");
+  assert.equal(c.more, 1);
+});
+
+test("chipModel: dismissed key = the sorted blocked cause keys; hides until that set changes", () => {
+  const list = [ask("b"), ask("a")];
+  const c = m.chipModel(list, none, "");
+  assert.equal(c.dismissKey, "ab:a:block|ab:b:block");
+  assert.equal(m.chipModel(list, none, c.dismissKey), null);
+  assert.equal(m.chipModel(list.slice().reverse(), none, c.dismissKey), null, "order does not matter");
+  assert.ok(m.chipModel([ask("a"), ask("b"), ask("c")], none, c.dismissKey), "a new cause shows it again");
+  assert.ok(m.chipModel([ask("a")], none, c.dismissKey), "so does a changed set");
+});
+
+test("chipModel: key changes with the text, so an unchanged chip is not repainted", () => {
+  const a = m.chipModel([ask("a")], none, ""), a2 = m.chipModel([ask("a")], none, "");
+  assert.equal(a.key, a2.key);
+  assert.notEqual(a.key, m.chipModel([ask("a"), ask("b")], none, "").key);
+});
+
+test("chipModel: a generic wait (no ask text) still has a chip, and an odd ask never leaks", () => {
+  const w = sess("w", { name: "gap-sh2", activity: "waiting", need: "input", attention: "block" });
+  assert.equal(m.chipModel([w], none, "").text, "gap-sh2 is waiting for you");
+  assert.equal(m.chipModel([ask("a", "rm -rf /etc/shadow (x)")], none, "").text, "n-a wants to run a tool");
+});
+
+// chimeStep: the pure decision behind the blocked blip
+const chOn = (over) => Object.assign({ now: T0, focused: true, on: true }, over || {});
+test("chimeStep: first call only seeds", () => {
+  const r = m.chimeStep(null, m.blockedCauses([ask("a")]), none, chOn());
+  assert.equal(r.play, false);
+  assert.deepEqual([...r.next.keys], ["ab:a:block"]);
+});
+
+test("chimeStep: plays once per new cause, never again while it stays", () => {
+  const seed = m.chimeStep(null, [], none, chOn()).next;
+  const r1 = m.chimeStep(seed, m.blockedCauses([ask("a")]), none, chOn());
+  assert.equal(r1.play, true);
+  const r2 = m.chimeStep(r1.next, m.blockedCauses([ask("a")]), none, chOn());
+  assert.equal(r2.play, false);
+  const r3 = m.chimeStep(r2.next, m.blockedCauses([ask("a"), ask("b")]), none, chOn());
+  assert.equal(r3.play, true, "a second new cause");
+});
+
+test("chimeStep: silent when the pref is off, and turning it on later does not replay", () => {
+  const seed = m.chimeStep(null, [], none, chOn()).next;
+  const off = m.chimeStep(seed, m.blockedCauses([ask("a")]), none, chOn({ on: false }));
+  assert.equal(off.play, false);
+  const on = m.chimeStep(off.next, m.blockedCauses([ask("a")]), none, chOn());
+  assert.equal(on.play, false);
+});
+
+test("chimeStep: a cause on a visible pane stays silent in a focused tab, and plays in an unfocused one", () => {
+  const seed = m.chimeStep(null, [], none, chOn()).next;
+  const cs = m.blockedCauses([ask("a")]);
+  assert.equal(m.chimeStep(seed, cs, new Set(["a"]), chOn({ focused: true })).play, false);
+  assert.equal(m.chimeStep(seed, cs, new Set(["a"]), chOn({ focused: false })).play, true);
+  assert.equal(m.chimeStep(seed, cs, none, chOn({ focused: true })).play, true, "off-screen plays while focused");
+});
+
+test("chimeStep: a store cause shared by a visible and a hidden session is on screen", () => {
+  const seed = m.chimeStep(null, [], none, chOn()).next;
+  const cs = m.blockedCauses([storeS("t1"), storeS("t2")]);
+  assert.equal(m.chimeStep(seed, cs, new Set(["t1"]), chOn()).play, false);
+});
+
+test("chimeStep: a PTY blip that returns within the re-arm window stays silent", () => {
+  const pty = (id) => Object.assign(ask(id), { activity_source: "pty" });
+  const seed = m.chimeStep(null, [], none, chOn()).next;
+  const r1 = m.chimeStep(seed, m.blockedCauses([pty("a")]), none, chOn({ now: T0 }));
+  assert.equal(r1.play, true);
+  const gone = m.chimeStep(r1.next, [], none, chOn({ now: T0 + 3000 }));
+  const back = m.chimeStep(gone.next, m.blockedCauses([pty("a")]), none, chOn({ now: T0 + 6000 }));
+  assert.equal(back.play, false);
+  const late = m.chimeStep(gone.next, m.blockedCauses([pty("a")]), none, chOn({ now: T0 + 3000 + NEEDS_REARM_MS }));
+  assert.equal(late.play, true);
+});

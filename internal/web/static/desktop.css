@@ -484,6 +484,13 @@
   .opt-card { padding: 10px 12px; border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
   .opt-card.is-on, .opt-card:has(> input:checked) { background: var(--raise); }
   .opt-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  /* Attention chip (M8.4, DD§B3): a blocked session that sits on no visible pane. Amber fill, a --line border (not amber),
+     a pop shadow; 32 tall, nowrap. Its host (#attn-chip-host, below) places it. */
+  .attn-chip {
+    display: inline-flex; align-items: center; gap: var(--sp-2); height: var(--h-lg); padding: 0 var(--sp-1) 0 var(--sp-3);
+    border-radius: var(--r-card); background: var(--amber-tint); border: 1px solid var(--line); box-shadow: var(--e-pop);
+    color: var(--fg); font-size: var(--t-md); white-space: nowrap;
+  }
   /* Pending spinner (M8 .m8-spin), drawn still. */
   .spin {
     display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
@@ -518,7 +525,7 @@
      hidden attribute is toggled (the footer and form buttons) would show. .dot is left out: the
      legacy dot was already inline-block. */
   :is(.btn, .chip, .kbd, .check, .page-head, .page-head-text, .page-actions, .nav-item, .card-head, .kpi-row, .kpi,
-    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev)[hidden],
+    .menu-item, .menu-icon, .tip, .dlg, .toast, .toolbar, .empty-state, .fold, .opt-card-title, .spin, .elev, .attn-chip)[hidden],
   .seg:has(> .seg-item)[hidden], .menu:has(> .menu-item, > .menu-row)[hidden], .field:has(> .field-label)[hidden],
   .dlg > .dlg-head[hidden], .dlg > .dlg-body[hidden], .dlg > .dlg-foot[hidden] { display: none; }
   /* === end kit primitives === */
@@ -2860,6 +2867,11 @@
     pointer-events: none;
   }
   #toasts > .toast { pointer-events: auto; }
+  /* The attention chip's host (attnchip.js sets left/width/top from the area it centres over): fixed, above the panes and
+     below the toast stack, letting clicks through everywhere but the chip. Never the toast slot. */
+  #attn-chip-host { position: fixed; z-index: 20; display: flex; justify-content: center; pointer-events: none; }
+  #attn-chip-host[hidden] { display: none; }
+  #attn-chip-host > .attn-chip { pointer-events: auto; }
 
   /* Store-locked banner: a --panel strip. It is only ever shown while the store is
      locked and blocks spawns, so the one amber use is the leading dot and the message. */

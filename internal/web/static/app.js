@@ -3526,7 +3526,11 @@ function notifyPrefRow(name, prefs) {
   box.className = "check-box";
   box.dataset.pref = name;
   box.checked = !!prefs[name];
-  box.onchange = () => { writePref(name, box.checked); };
+  box.onchange = () => {
+    writePref(name, box.checked);
+    // The switch click is itself a user gesture: it may create or resume the audio context now, so the first blip is not lost.
+    if (name === "chime" && typeof chimeGesture === "function") { if (box.checked) chimeGesture(); else chimeSync(false); }
+  };
   const txt = document.createElement("span");
   txt.className = "opt-card-title";
   const t = document.createElement("span");
@@ -3739,6 +3743,8 @@ async function refreshSessions() {
   pruneReplyFlash();
   signalAttention();
   notifyTransitions();
+  if (sessionsLoaded && Array.isArray(lastSessions)) chimeTransitions();
+  attnChipSync();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.

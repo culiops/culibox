@@ -245,6 +245,30 @@ function nmWindowOpen(s, now) {
   return Array.isArray(s.aws_connections) && s.aws_connections.some(open);
 }
 
+// blockedCauses: the distinct blocked causes in a session list, in the order the list is given (the
+// sidebar's order, for the chip): one per asking or waiting session, one per AWS sign-in source, one for the
+// secret store. Done and exited sessions contribute none. Shared by the tab title (its count) and the
+// attention chip, so the two can never disagree. Each cause: { key, kind, sessions, pty }.
+function blockedCauses(sessions) {
+  const out = [];
+  const by = new Map();
+  for (const s of Array.isArray(sessions) ? sessions : []) {
+    if (!s || s.exited || s.status === "exited") continue;
+    for (const key of causeKeys(s)) {
+      if (/:done$/.test(key)) continue;
+      let c = by.get(key);
+      if (!c) {
+        c = { key, kind: nmCauseKind(key, s), sessions: [], pty: false };
+        by.set(key, c);
+        out.push(c);
+      }
+      c.sessions.push(s);
+      if ((c.kind === "ask" || c.kind === "wait") && s.activity_source === "pty") c.pty = true;
+    }
+  }
+  return out;
+}
+
 function titleState(sessions, sys, env, now) {
   const base = (env ? "[" + env + "] " : "") + "CuliBox";
   if (nmOffline(sys, now)) {
@@ -253,20 +277,81 @@ function titleState(sessions, sys, env, now) {
     const open = (Array.isArray(sessions) ? sessions : []).some((s) => s && !s.exited && s.status !== "exited" && nmWindowOpen(s, now));
     return { title: "Offline \u00b7 " + base, icon: open ? "offline-ring" : "offline" };
   }
-  const blocked = new Set();
+  const blocked = blockedCauses(sessions);
   let done = 0, ring = false;
   for (const s of Array.isArray(sessions) ? sessions : []) {
     if (!s || s.exited || s.status === "exited") continue;
     if (nmWindowOpen(s, now)) ring = true;
-    for (const k of causeKeys(s)) {
-      if (/:done$/.test(k)) done++;
-      else blocked.add(k);
-    }
+    for (const k of causeKeys(s)) if (/:done$/.test(k)) done++;
   }
   let title = base, icon = "normal";
-  if (blocked.size) { title = "(" + blocked.size + ") " + base; icon = "amber"; }
+  if (blocked.length) { title = "(" + blocked.length + ") " + base; icon = "amber"; }
   else if (done) { title = "\u2713" + done + " " + base; icon = "neutral"; }
   return { title, icon: ring ? icon + "-ring" : icon };
+}
+
+// ---- The attention chip and the chime (DD§A6, §B3; DC§5) ----
+// chipModel(ordered, visibleIds, dismissedKey) -> null, or what the chip says. `ordered` is the session
+// list in the sidebar's order (the caller's, not re-sorted here); `visibleIds` the session ids on a shown
+// pane (Set or array; empty while a page hides the grid). A cause is off-screen when none of its sessions
+// is visible. The chip names the first off-screen cause and counts the others as "+N". Done never shows.
+// dismissKey is the sorted key set of ALL blocked causes: the chip stays hidden for the key the user
+// closed it on and returns when the set changes.
+function nmChipText(c) {
+  const s = c.sessions[0];
+  const name = s.name || s.id;
+  switch (c.kind) {
+    case "ask": return { name, rest: " wants to run " + askTool(s.ask) };
+    case "sso":
+      return c.sessions.length > 1
+        ? { name: "", rest: "AWS sign-in expired \u00b7 " + c.sessions.length + " sessions" }
+        : { name, rest: " needs AWS sign-in" };
+    case "store": return { name: "", rest: "Secret store locked \u00b7 " + nmPlural(c.sessions.length, "session", "sessions") };
+    default: return { name, rest: " is waiting for you" };
+  }
+}
+
+function nmOffScreen(c, visibleIds) {
+  return !c.sessions.some((s) => nmInSet(visibleIds, s.id));
+}
+
+function chipModel(ordered, visibleIds, dismissedKey) {
+  const causes = blockedCauses(ordered);
+  const off = causes.filter((c) => nmOffScreen(c, visibleIds));
+  if (!off.length) return null;
+  const dismissKey = causes.map((c) => c.key).sort().join("|");
+  if (dismissedKey && dismissedKey === dismissKey) return null;
+  const t = nmChipText(off[0]);
+  const more = off.length - 1;
+  const rest = t.rest + (more ? " \u00b7 +" + more : "");
+  return { name: t.name, rest, text: t.name + rest, more, key: t.name + "\u0001" + rest, dismissKey, sid: off[0].sessions[0].id };
+}
+
+// chimeStep(prev, causes, visibleIds, ctx) -> { next, play }: the pure decision behind the optional blip
+// for Blocked. `causes` is blockedCauses(list); ctx = { now, focused, on }. A cause that is new since the
+// last call is chime-worthy when its session is on no visible pane OR the tab is unfocused. With `on`
+// false nothing plays, but the state still advances, so switching the chime on later never replays old
+// causes. The first call (prev null) only seeds. A PTY-silence cause that comes back within the re-arm
+// window is a blip, not a new cause (the same rule as notifyStep).
+function chimeStep(prev, causes, visibleIds, ctx) {
+  const c = ctx || {};
+  const now = typeof c.now === "number" ? c.now : 0;
+  const rearm = nmDep("NEEDS_REARM_MS");
+  const list = Array.isArray(causes) ? causes : [];
+  const keys = new Set(list.map((x) => x.key));
+  const away = new Map();
+  let play = false;
+  if (prev) {
+    for (const k of prev.keys) if (!keys.has(k)) away.set(k, now);
+    for (const [k, t] of prev.away) if (!keys.has(k) && !away.has(k) && now - t < rearm) away.set(k, t);
+    for (const cz of list) {
+      if (prev.keys.has(cz.key)) continue;
+      const left = prev.away.get(cz.key);
+      if (cz.pty && left !== undefined && now - left < rearm) continue;
+      if (c.on && (!c.focused || nmOffScreen(cz, visibleIds))) play = true;
+    }
+  }
+  return { next: { keys, away }, play };
 }
 
 // faviconSvg(icon) -> a data:image/svg+xml URI. Static favicons sit behind auth (E6), so each
@@ -390,6 +475,6 @@ function deliverNotes(notes, NotificationCtor, onOpen) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, faviconSvg, SYS_OFFLINE_MS,
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, blockedCauses, chipModel, chimeStep, faviconSvg, SYS_OFFLINE_MS,
     NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, endedClearRestarted, deliverNotes };
 }
