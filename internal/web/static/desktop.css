@@ -2334,6 +2334,10 @@
   .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
   .ac-link:hover { text-decoration: underline; }
 
+  /* The frame's page text sits on the kit's 20px line (--lh-md), which every cell, the Session select and the buttons inherit; the
+     product's body is 14px / 1.5, which would make it 19.5px at 13px and draw one-line text one pixel high. */
+  #page-host > #audit-page.as-page { line-height: var(--lh-md); }
+
   /* The head and the toolbar stay put; everything from the KPI row down scrolls (the plan's call 9). The Analytics page wears the
      same two rules (M3.1 and M3.2 draw the same head and toolbar as M3.3): one list each, so the pages cannot drift. The toolbar
      wraps, so a narrow window never scrolls sideways; Analytics' Custom range row is the second .toolbar of its page. */
@@ -2342,6 +2346,13 @@
   #page-host > #audit-page.as-page > .toolbar.au-tools,
   #page-host > #analytics-modal.as-page > .toolbar.an-ptools,
   #page-host > #analytics-modal.as-page > .toolbar.an-pcustom { flex-wrap: wrap; padding: 0 var(--sp-8) var(--sp-4); }
+  /* A seg cannot wrap, and the Kind seg is 389px wide (the View seg 375px): in a window under 750px the toolbar is narrower than that and
+     the seg would run past the page and scroll it sideways. Each toolbar answers its own width: its seg items give up 6px of padding
+     a side, which brings the widest seg to 329px, inside the 340px the page has at 701px. */
+  #page-host > #audit-page.as-page > .toolbar.au-tools { container-name: page-tools; container-type: inline-size; }
+  @container page-tools (max-width: 388px) {
+    #page-host > #audit-page.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
+  }
   #page-host > #audit-page.as-page #au-session { flex: none; width: 180px; }
 
   #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); }
@@ -2368,6 +2379,22 @@
     #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
     #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: auto; }
   }
+  /* Under 480px of card (a window of 840px or less) even that is too much: the columns' own minimums (a 107px one-line Time, 12px
+     of padding either side of five columns) left What 54px at 701px and the table 53px wider than its card. So Time, Session, Kind and
+     Outcome are held to their narrowest (1%: a column never gets less than its content's minimum) and What takes everything else;
+     the Time cell wraps at its space (date over time) and every cell gives up 4px of side padding (the kit's --sp-2 for --sp-3).
+     Kind still stays on one line. The table then fits the card down to the 340px a 701px window leaves it, and What keeps about
+     130px at 760px; measured, this packs the rows tighter than the content-sized columns do below 480px and looser above it. */
+  @container au-card (max-width: 479px) {
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: 1%; }
+    #page-host > #audit-page.as-page .au-tbl :is(th, td) { padding-left: var(--sp-2); padding-right: var(--sp-2); }
+    #page-host > #audit-page.as-page .au-tbl td.au-time { white-space: normal; }
+  }
+  /* The Time cell's date is one run (auTimeCell), so the narrow card's wrap falls at the space and not at the hyphen. */
+  #page-host > #audit-page.as-page .au-tbl .au-nb { white-space: nowrap; }
   /* Session, What and Outcome wrap instead of clipping (the frame's .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
   #page-host > #audit-page.as-page .au-tbl td.au-sess,
   #page-host > #audit-page.as-page .au-tbl td.au-what,

@@ -351,12 +351,17 @@ function findId(root, id) {
 // auditEnv: accessmodel.js, auditmodel.js and auditpage.js, in their page order, in a context whose document is the real
 // Audit dialog markup. `run` evaluates a snippet in it (the scripts' top-level consts are visible to it).
 function auditEnv() {
+  focused = null;
   const dlg = fromParsed(auditTree());
+  const body = new El("body");
+  const inPage = (n) => { for (let x = n; x; x = x.parent) if (x === dlg) return true; return false; };
   const document = {
     getElementById: (id) => findId(dlg, id),
     querySelectorAll: (sel) => queryAll(dlg, sel),
     createElement: (tag) => new El(tag),
     createTextNode: (t) => new TextNode(t),
+    body,
+    get activeElement() { return focused && inPage(focused) ? focused : body; },
   };
   const ctx = { document, window: { innerWidth: 1440 }, lastSessions: [], console, AbortController, fetch: async () => ({}) };
   vm.createContext(ctx);
@@ -589,6 +594,86 @@ test("Show more is hidden unless the reply has a next page, and the page script 
   assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(stripJsComments(read("auditpage.js"))));
 });
 
+// Gate 3 D8: Show more pressed by keyboard loads the last page and hides itself, and a hidden control cannot keep focus:
+// it fell to <body>. The footer's count ("Showing N of N") takes it instead, so the keyboard user hears where they are.
+test("Show more hiding while it has focus hands focus to the footer count; elsewhere nothing moves", () => {
+  const { run, el } = auditEnv();
+  const more = el("au-more"), count = el("au-count");
+  assert.strictEqual(count.attrs.tabindex, "-1", "the count takes focus by script only: it is not a tab stop");
+  assert.strictEqual(byId(auditTree(), "au-count").attrs.tabindex, "-1", "...in the markup, not set by the script");
+  const active = () => run("document.activeElement");
+  run('auData.listState = "ok"; auData.total = 147; auData.events = new Array(100).fill({}); auData.next = "17.2.9"; auPaintFoot();');
+  assert.strictEqual(more.hidden, false);
+
+  // Show more stays (another page follows): focus stays on it, the count is not touched.
+  more.focus();
+  run("auPaintFoot();");
+  assert.strictEqual(active(), more, "no change while Show more stays");
+  // The last page arrives: it hides, and the count has focus.
+  run('auData.events = new Array(147).fill({}); auData.next = ""; auPaintFoot();');
+  assert.strictEqual(more.hidden, true);
+  assert.strictEqual(active(), count, "focus moves to the count");
+  assert.strictEqual(count.textContent, "Showing 147 of 147 · newest first", "which now says where the user is");
+
+  // Focus somewhere else (a Kind item, say) is never stolen when Show more hides.
+  run('auData.next = "17.2.9"; auPaintFoot();');
+  const kind = el("au-filters").elements[1];
+  kind.focus();
+  run('auData.next = ""; auPaintFoot();');
+  assert.strictEqual(active(), kind, "focus the user moved on stays where they put it");
+  // And with focus on nothing in the page, nothing is pulled in.
+  run('auData.next = "17.2.9"; auPaintFoot();');
+  focused = null;
+  run('auData.next = ""; auPaintFoot();');
+  assert.strictEqual(active(), run("document.body"), "no focus before, none after");
+});
+
+// What Chromium really does (measured on the review instance, Gate fix wave): the button is disabled while the page loads, and that
+// already drops focus to <body>, so at the moment the last page hides it nothing is focused. Pressing it remembers the focus.
+test("Show more pressed by keyboard: focus lost to the load goes to the count, or back to Show more when more pages follow", () => {
+  const { run, el, ctx } = auditEnv();
+  ctx.fetch = () => new Promise(() => {}); // the load never answers: the test plays its reply
+  const more = el("au-more"), count = el("au-count");
+  const active = () => run("document.activeElement");
+  const press = () => {
+    run('auData.listState = "ok"; auData.events = new Array(100).fill({}); auData.total = 300; auData.next = "17.2.9"; auPaintFoot();');
+    more.focus();
+    more.listeners.click[0]();
+    assert.strictEqual(more.disabled, true, "disabled for the load");
+    focused = null; // the browser's focus fixup
+    assert.strictEqual(active(), run("document.body"));
+  };
+  // The last page arrives: Show more hides and the count has focus.
+  press();
+  run('auData.events = new Array(147).fill({}); auData.total = 147; auData.next = ""; auData.listState = "ok"; auPaintFoot();');
+  assert.strictEqual(more.hidden, true);
+  assert.strictEqual(active(), count);
+  // Another page follows: the button comes back enabled and takes its focus back.
+  press();
+  run('auData.events = new Array(200).fill({}); auData.next = "17.2.8"; auData.listState = "ok"; auPaintFoot();');
+  assert.strictEqual(more.hidden, false);
+  assert.strictEqual(more.disabled, false);
+  assert.strictEqual(active(), more, "still the control the keyboard user was on");
+  // Painting while it loads, or the summary's paint, never moves anything.
+  press();
+  run('auPaintFoot();');
+  assert.strictEqual(active(), run("document.body"), "no focus is given while the page loads");
+  // The user moved on while it loaded (a Kind item): their focus stays, and the next pages are no longer theirs to hand back.
+  const kind = el("au-filters").elements[2];
+  kind.focus();
+  run('auData.next = ""; auData.listState = "ok"; auPaintFoot();');
+  assert.strictEqual(active(), kind);
+  run('auData.next = "x"; auPaintFoot();');
+  focused = null;
+  run('auData.next = ""; auPaintFoot();');
+  assert.strictEqual(active(), run("document.body"), "the press was answered once; a later hide does not pull focus");
+  // A new filter, range or session forgets a press in flight.
+  press();
+  run("auReload(false);");
+  run('auData.listState = "ok"; auData.next = "z"; auPaintFoot();');
+  assert.strictEqual(active(), run("document.body"));
+});
+
 // --- Audit: the CSS ----------------------------------------------------------------------------------------------
 
 test("no rule styles the old Audit page: #au-filters button.on, .au-kpi, .au-elev, .dhd", () => {
@@ -692,8 +777,8 @@ test("the Audit table is fixed at 116/150/112/auto/150, and only the Time cell i
   const w = (n) => decls(AU + " .au-tbl th:nth-child(" + n + ")").get("width");
   assert.deepStrictEqual([1, 2, 3, 4, 5].map(w), ["116px", "150px", "112px", undefined, "150px"], "§B9: Time, Session, Kind, What (auto), Outcome");
   // One table style: the kit's. The page does not restyle the heads (no uppercase, no 600) or the cell height.
-  const heads = RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU) && /\bth\b/.test(s) && !/nth-child/.test(s)));
-  assert.deepStrictEqual(heads.map((r) => r.selector), []);
+  const heads = BASE_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU) && /\bth\b/.test(s) && !/nth-child/.test(s)));
+  assert.deepStrictEqual(heads.map((r) => r.selector), [], "(the narrow card's tighter cell padding is the one container rule that names th)");
   assert.strictEqual(decls(".tbl th").get("font-size"), "var(--t-sm)");
   assert.strictEqual(decls(".tbl th").get("text-transform"), undefined);
   // Time: sans, muted, tabular (not the mono 12px it was).
@@ -716,24 +801,80 @@ test("a card too narrow for the fixed columns sizes them to content, in a contai
   assert.strictEqual(card.get("overflow"), "hidden", "still clips the row tint to the corners where there is room");
   const fixed = [1, 2, 3, 5].reduce((n, i) => n + parseInt(decls(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), 10), 0);
   assert.strictEqual(fixed, 528);
-  // One @container, on the card, below the fixed columns plus ~240px for What.
+  // Two @containers, both on the card: the first below the fixed columns plus ~240px for What, the second (the narrow tier) below.
   const queries = [...new Set(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU + " .au-tbl"))).flatMap((r) => r.at.filter((a) => a.startsWith("@container"))))];
-  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)"]);
+  assert.deepStrictEqual(queries, ["@container au-card (max-width: 769px)", "@container au-card (max-width: 479px)"]);
   const max = Number(/max-width:\s*(\d+)px/.exec(queries[0])[1]);
   assert.ok(max + 1 >= fixed + 240, "What keeps about 240px (" + (max + 1 - fixed) + "px)");
   assert.ok(max + 1 <= fixed + 260, "and the fixed layout is not given up sooner than that");
-  const inside = (sel) => decls(sel, CONTAINER_RULES);
+  const tier = (q) => CONTAINER_RULES.filter((r) => r.at.includes("@container au-card (max-width: " + q + "px)"));
+  const inside = (sel, q = 769) => decls(sel, tier(q));
   assert.strictEqual(inside(AU + " .au-tbl").get("table-layout"), "auto");
   for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")").get("width"), "auto", "th " + i);
   // Nothing else changes in the narrow card: What stays the one column with no width of its own, and the wrap cells keep
   // wrapping (the base rules above are not repeated or undone here).
-  assert.deepStrictEqual(CONTAINER_RULES.filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
+  assert.deepStrictEqual(tier(769).filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
     ["table-layout", "width"]);
+
+  // Under 480px of card (a window of 840px or less) the columns' own minimums still overran it (Gate 3 D1: What 54px at 701px, the
+  // table 53px wider than its card, Outcome cut). Time, Session, Kind and Outcome are held to their narrowest (1%: a column never
+  // gets less than its content's minimum) so What, the one column with no width of its own, takes the rest.
+  for (const i of [1, 2, 3, 5]) assert.strictEqual(inside(AU + " .au-tbl th:nth-child(" + i + ")", 479).get("width"), "1%", "narrow th " + i);
+  assert.strictEqual(inside(AU + " .au-tbl th:nth-child(4)", 479).get("width"), undefined, "What takes the rest");
+  // The cells give up 4px of side padding (the kit's --sp-2 for --sp-3), heads and cells alike, and the Time cell wraps at its space.
+  const pad = inside(AU + " .au-tbl :is(th, td)", 479);
+  assert.strictEqual(pad.get("padding-left"), "var(--sp-2)");
+  assert.strictEqual(pad.get("padding-right"), "var(--sp-2)");
+  assert.strictEqual(pad.get("padding-top"), undefined, "the wrap cells' 6px above and below stay");
+  assert.strictEqual(inside(AU + " .au-tbl td.au-time", 479).get("white-space"), "normal", "date over time, not one line of 107px");
+  assert.strictEqual(decls(AU + " .au-tbl .au-nb").get("white-space"), "nowrap", "...at the space only: the date is one run, a hyphen would be a break of its own");
+  assert.strictEqual(inside(AU + " .au-tbl td.au-time").get("white-space"), undefined, "wider than that the time stays one line");
+  // Kind stays on one line: nothing in either tier lets it wrap (the kit's td is nowrap and no rule undoes it).
+  assert.strictEqual(inside(AU + " .au-tbl td.au-kind", 479).get("white-space"), undefined);
+  assert.strictEqual(decls(".tbl td").get("white-space"), "nowrap");
+  assert.deepStrictEqual(tier(479).filter((r) => parts(r.selector).some((s) => s.startsWith(AU))).flatMap((r) => [...r.decls.keys()]).sort(),
+    ["padding-left", "padding-right", "white-space", "width"]);
   assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("white-space"), "normal");
   assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("overflow-wrap"), "anywhere");
   // The base rules come first: a container rule has the same weight as the base one it undoes, so the later one wins.
   const src = stripComments(read("desktop.css"));
   assert.ok(src.indexOf("@container au-card") > src.indexOf(AU + " .au-tbl th:nth-child(5) { width: 150px; }"));
+});
+
+test("the Time cell keeps its text and holds the date as one run, so a narrow card wraps it at the space", () => {
+  const { run } = auditEnv();
+  const td = run("auRow({ ts: 1_760_000_000, kind: \"credential\", what: \"aws sandbox\", outcome: \"minted\" }, {})").elements[0];
+  assert.strictEqual(td.className, "au-time");
+  assert.match(td.textContent, /^\d\d-\d\d \d\d:\d\d$/, "the text is MM-DD HH:MM, as ever");
+  assert.deepStrictEqual(td.elements.map((n) => [n.tag, n.className, /^\d\d-\d\d$/.test(n.textContent)]), [["span", "au-nb", true]], "the date alone is the unbreakable run");
+  // No timestamp: the cell is empty text, not a crash.
+  assert.strictEqual(run("auRow({ kind: \"credential\", what: \"x\", outcome: \"minted\" }, {})").elements[0].textContent, "");
+});
+
+// Gate 3 D1 (toolbar half): a seg cannot wrap, so a toolbar narrower than its widest seg lets the seg run past the page.
+test("the Audit toolbar tightens their seg items when narrower than the widest seg, so 701px never scrolls sideways", () => {
+  const shared = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools") && r.decls.has("container-type"));
+  assert.strictEqual(shared.length, 1);
+  assert.deepStrictEqual(parts(shared[0].selector), [AU + " > .toolbar.au-tools"], "the rule makes Audit's toolbar a container");
+  assert.strictEqual(shared[0].decls.get("container-type"), "inline-size");
+  assert.strictEqual(shared[0].decls.get("container-name"), "page-tools");
+  const narrow = CONTAINER_RULES.filter((r) => r.at.includes("@container page-tools (max-width: 388px)"));
+  assert.strictEqual(narrow.length, 1);
+  assert.deepStrictEqual(parts(narrow[0].selector), [AU + " > .toolbar .seg > .seg-item"]);
+  assert.deepStrictEqual([...narrow[0].decls], [["padding", "0 var(--sp-1)"]], "10px a side becomes the kit's 4px, nothing else");
+  assert.strictEqual(decls(".seg > .seg-item").get("padding"), "0 10px", "the kit's own padding is what the query takes 6px a side from");
+  // The Kind seg is 389px (5 items: text 277 + 20 a side each + gaps and padding 12); under the query it is 389 - 5 * 12 = 329.
+  // The page is 404px at 701 (the window less the sidebar's 290px and its 7px edge) and the toolbar's content 340px.
+  assert.ok(329 <= 404 - 64 && 389 > 404 - 64, "329px fits the 340px a 701px window leaves; 389px does not");
+});
+
+// Gate 4 L1: the pages' text sits on the frame's 20px line.
+test("the Audit page's text sits on the kit's 20px line, not the body's 19.5px", () => {
+  assert.strictEqual(decls(AU).get("line-height"), "var(--lh-md)", "inherited by every cell, the Session select and the buttons");
+  assert.strictEqual(decls(":root").get("--lh-md"), "20px");
+  // Cells that wrapped already set it, and the type utilities set their own: the page rule only reaches one-line text.
+  assert.strictEqual(decls(AU + " .au-tbl td.au-what").get("line-height"), "var(--lh-md)");
+  assert.strictEqual(decls(".t-sm").get("line-height"), "var(--lh-sm)");
 });
 
 test("What and Session wrap, never clip: normal white-space, anywhere, 20px lines, 6px above and below", () => {
@@ -1373,7 +1514,7 @@ test("Analytics and Audit set their head and toolbar in one shared rule each", (
   assert.ok(parts(head[0].selector).includes(ANP + " > .page-head"), "the same rule sets the Analytics head");
   assert.strictEqual(head[0].decls.get("padding"), "var(--sp-6) var(--sp-8) var(--sp-3)", "§B1: 24px 32px 12px, not the kit's 20px");
   assert.strictEqual(head[0].decls.get("flex"), "none", "the head stays put");
-  const tools = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools"));
+  const tools = BASE_RULES.filter((r) => parts(r.selector).includes(AU + " > .toolbar.au-tools") && r.decls.has("padding"));
   assert.strictEqual(tools.length, 1);
   assert.deepStrictEqual(parts(tools[0].selector), [AU + " > .toolbar.au-tools", ANP + " > .toolbar.an-ptools", ANP + " > .toolbar.an-pcustom"], "the same rule sets Audit's toolbar and both Analytics rows");
   assert.strictEqual(tools[0].decls.get("padding"), "0 var(--sp-8) var(--sp-4)", "§B2: 0 32px 16px");

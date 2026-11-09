@@ -12,6 +12,7 @@ const AUDIT_PAGE_ID = "audit-page";
 // the nowS the first page was read with, so the range does not slide under it.
 const auState = { range: "7d", filter: "", session: "", before: "", nowS: 0 };
 const auData = { summary: null, events: [], total: 0, next: "", listState: "idle", moreFailed: false };
+let auMoreHeld = false; // Show more was pressed with focus on it, and the load that follows has not finished (auPaintFoot)
 let auListCtl = null; // the one list request in flight
 let auSumCtl = null;  // the one summary request in flight
 
@@ -93,6 +94,16 @@ function auWhatCell(ev, v) {
   return td;
 }
 
+// auTimeCell: "MM-DD HH:MM". In a narrow card the cell wraps (desktop.css) and a hyphen is a break opportunity of its own, so the date
+// is one unbreakable run: the cell wraps at its space only, date over time, never "11-" over "08". The text is unchanged.
+function auTimeCell(time) {
+  const td = auText("td", "au-time");
+  const i = time.indexOf(" ");
+  if (i < 0) { td.textContent = time; return td; }
+  td.append(auText("span", "au-nb", time.slice(0, i)), document.createTextNode(time.slice(i)));
+  return td;
+}
+
 function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
@@ -101,7 +112,7 @@ function auRow(ev, names) {
   if (v.elevated) tr.className = "is-elevated";
   const what = auWhatCell(ev, v);
   tr.append(
-    auText("td", "au-time", v.time),
+    auTimeCell(v.time),
     auText("td", "au-sess", v.session),
     auText("td", v.elevated ? "au-kind au-bad" : "au-kind", v.kind),
     what,
@@ -142,8 +153,19 @@ function auPaintFoot() {
       : auData.listState === "ok" ? auditFootText(auData.events.length, auData.total) : "";
   }
   if (more) {
+    const held = auMoreHeld || document.activeElement === more;
     more.hidden = !auData.next;
     more.disabled = auData.listState === "loading";
+    // Show more has focus when it is pressed, and loses it twice over: the browser drops focus to <body> the moment the button
+    // is disabled for the load, and the last page hides it. When the load is over the focus it had goes on: back to Show more if
+    // it is still there, else to the count ("Showing N of N", tabindex -1 in the markup), so a keyboard user is never left on
+    // <body> and is told where they are. Focus that has gone anywhere else is not touched.
+    if (held && auData.listState !== "loading") {
+      auMoreHeld = false;
+      const a = document.activeElement;
+      const to = more.hidden ? count : more;
+      if (to && (!a || a === document.body || a === more)) to.focus();
+    }
   }
   if (policy) {
     const days = auData.summary && Number.isFinite(auData.summary.retention_days) ? auData.summary.retention_days : null;
@@ -219,6 +241,7 @@ async function auLoadList(append) {
 
 // auReload: a new filter, range or session: back to the top.
 function auReload(withSummary) {
+  auMoreHeld = false;
   auState.nowS = Math.floor(Date.now() / 1000);
   auPaintControls();
   if (withSummary) auLoadSummary();
@@ -271,7 +294,11 @@ function initAuditPage() {
     auReload(false);
   });
   const more = auEl("au-more");
-  if (more) more.addEventListener("click", () => { if (auData.next) auLoadList(true); });
+  if (more) more.addEventListener("click", () => {
+    if (!auData.next) return;
+    auMoreHeld = document.activeElement === more;
+    auLoadList(true);
+  });
   const csv = auEl("au-csv");
   // The download reads href after this handler, so a page left open for hours
   // still exports up to now.
