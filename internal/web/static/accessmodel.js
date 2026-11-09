@@ -75,12 +75,14 @@ function accEventRows(aws) {
     const github = r.provider === "github";
     push({ ts: Date.parse(r.time), provider: github ? "github" : "aws",
       subject: String(github ? r.subject || "" : r.entry || roleName(r.role_arn) || ""),
-      outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: !!r.elevated, detail: "" });
+      outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: !!r.elevated, detail: "",
+      tint: !!r.elevated, elevatedText: r.elevated ? "yes" : "no" });
   }
   for (const r of aws && Array.isArray(aws.static_recent) ? aws.static_recent : []) {
     if (!r) continue;
     push({ ts: Date.parse(r.time), provider: "token", subject: String(r.subject || r.entry || ""),
-      outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: false, detail: "" });
+      outcome: accOutcomeText(r.outcome), tone: accTone(r.outcome), elevated: false, detail: "",
+      tint: false, elevatedText: "no" });
   }
   for (const a of aws && Array.isArray(aws.approvals) ? aws.approvals : []) {
     if (!a) continue;
@@ -88,8 +90,11 @@ function accEventRows(aws) {
     const label = act === "sso_login_ok" ? "sign-in ok" : act === "sso_login_failed" ? "sign-in failed" : act;
     const mins = (act === "granted" || act === "extended") && Number(a.minutes) > 0 ? " " + Number(a.minutes) + " min" : "";
     const human = act === "granted" || act === "extended" || act === "dropped";
-    push({ ts: Number(a.ts), provider: "approval", subject: label + mins + (a.name ? " · " + a.name : ""),
-      outcome: human ? "you (browser)" : "", tone: "", elevated: false, detail: String(a.reason || "") });
+    // Only a granted or extended window is write access (red); the Elevated column
+    // is for credentials, so an approval row leaves it blank.
+    push({ ts: Number(a.ts), provider: "approval", subject: label + mins + (a.name ? " on " + a.name : ""),
+      outcome: human ? "you (browser)" : "", tone: "", elevated: false, detail: String(a.reason || ""),
+      tint: act === "granted" || act === "extended", elevatedText: "" });
   }
   out.sort((a, b) => b.ts - a.ts);
   return out.slice(0, ACCESS_EVENTS);
@@ -103,6 +108,82 @@ function accSSO(c, aws) {
   if (c.sso_expired) return "expired";
   const srcs = aws && aws.sso && Array.isArray(aws.sso.sources) ? aws.sso.sources : [];
   return srcs.some((src) => src && src.expired === false && Array.isArray(src.names) && src.names.includes(c.name)) ? "valid" : "";
+}
+
+// accNewest: the entry of `list` that satisfies `keep` with the greatest ts (the
+// first of equals, which is the newer in the broker's newest-first order), or
+// null. A row without a usable ts still counts, as the oldest.
+function accNewest(list, keep) {
+  let best = null;
+  let bestTs = -Infinity;
+  for (const a of Array.isArray(list) ? list : []) {
+    if (!a || !keep(a)) continue;
+    const ts = Number.isFinite(Number(a.ts)) ? Number(a.ts) : -Infinity;
+    if (best === null || ts > bestTs) { best = a; bestTs = ts; }
+  }
+  return best;
+}
+
+// elevBanner: the session's one open write window as the red banner every pane
+// draws, or null (no window, or `until` is not in the future: a lapsed window
+// never reads "0 min left"). The window comes from the list entry (fresh each
+// poll), falling back to the cached /aws status between a grant and the next
+// poll. The reason comes only from a loaded approval of that same connection:
+// before the status loads, after a failed read, or with a blank reason there is
+// no reason segment at all. `detail` is the span text the banner draws after the
+// connection name; `key` changes exactly when something drawn does.
+function elevBanner(s, aws, nowMs) {
+  const hhmm = accDep("hhmm", "./sessionrow.js");
+  const minutesLeft = accDep("minutesLeft", "./sessionrow.js");
+  const conns = accConns(s || {});
+  const w = accDep("liveWindowConn", "./sessionrow.js")(conns, aws, nowMs);
+  if (!w) return null;
+  const mins = minutesLeft(w.until, nowMs);
+  const wc = conns.find((c) => c.name === w.name);
+  const want = wc ? wc.conn : w.name;
+  const ap = accNewest(aws && aws.approvals, (a) => (a.action === "granted" || a.action === "extended") && (a.name || "") === want);
+  const reason = ap ? String(ap.reason || "").trim() : "";
+  const untilText = hhmm(w.until);
+  const leftText = mins < 1 ? "<1 min left" : mins + " min left";
+  const newCreds = mins < accNewCredMin();
+  const detail = "until " + untilText + " · " + leftText + (reason ? " · “" + reason + "”" : "") +
+    (newCreds ? " · new credentials from the base role" : "");
+  return { conn: w.name, untilText, minsLeft: mins, leftText, reason, newCreds, detail,
+    key: JSON.stringify({ conn: w.name, untilText, leftText, reason, newCreds }) };
+}
+
+// The approval actions that open, extend or close a write window. The newest of
+// them on a connection says whether its window is over (ACC_WINDOW_ENDS).
+const ACC_WINDOW_ENDS = new Set(["expired", "ended", "dropped"]);
+const ACC_WINDOW_ACTIONS = new Set(["granted", "extended", ...ACC_WINDOW_ENDS]);
+
+// accWindowNote: the two lines a connection's row keeps once a window is over, or
+// null when there is nothing to say.
+//   ended     "Write access ended HH:MM" (a date first when not today): no window is
+//             open on this connection and its newest window approval is an
+//             expired / ended / dropped row (a later grant or extend hides it).
+//   leftover  "Credentials already issued stay valid until HH:MM": the status's
+//             elevation view is inactive, names this connection (a nameless one is
+//             the legacy inline binding's, conn "") and its last_valid is ahead.
+// Both come from the loaded /aws status, so before it loads (or when it carries no
+// approvals) they are empty, never a guess.
+function accWindowNote(c, aws, nowMs) {
+  const hhmm = accDep("hhmm", "./sessionrow.js");
+  let ended = "";
+  if (!accDep("isElevated", "./sessionrow.js")(c, nowMs)) {
+    const last = accNewest(aws && aws.approvals, (a) =>
+      ACC_WINDOW_ACTIONS.has(a.action) && (a.name || "") === c.conn);
+    if (last && ACC_WINDOW_ENDS.has(last.action) && Number.isFinite(Number(last.ts))) {
+      ended = "Write access ended " + accEventTime(Number(last.ts), nowMs);
+    }
+  }
+  let leftover = "";
+  const e = aws && aws.elevation;
+  const valid = e ? accValidTime(e.last_valid) : null;
+  if (e && e.active === false && (e.name || "") === c.conn && valid !== null && valid > nowMs) {
+    leftover = "Credentials already issued stay valid until " + hhmm(e.last_valid);
+  }
+  return ended || leftover ? { ended, leftover } : null;
 }
 
 // accRow: one AWS connection's row.
@@ -120,7 +201,7 @@ function accRow(c, o) {
   const list = [];
   if (acts.elevate) list.push("elevate");
   if (acts.extend) list.push("extend");
-  if (acts.drop) list.push("drop");
+  // No row Drop: the pane's one Drop is the banner's.
   const gp = acts.elevate || acts.extend
     ? (legacy ? grantPanel(c.elevate ? c : null, aws) : grantPanel(null, aws, conns, c.name, nowMs))
     : null;
@@ -138,6 +219,7 @@ function accRow(c, o) {
     sso: accSSO(c, aws),
     last: stats ? (t ? hhmm(stats.last_mint) : "never") : "",
     actions: list,
+    window: accWindowNote(c, aws, nowMs),
     grant: gp ? {
       windows: gp.windows, needLabel: gp.needLabel, label: gp.label, role: gp.role, allowIAM: gp.allowIAM,
       blocked: gp.blocked, blockedText: gp.blockedText || "", extend: !!acts.extend && !acts.elevate,
@@ -157,7 +239,6 @@ function accessModel(o) {
   const u = x.usage || {};
   const meta = x.meta || {};
   const hhmm = accDep("hhmm", "./sessionrow.js");
-  const minutesLeft = accDep("minutesLeft", "./sessionrow.js");
 
   // Fail loud: only an explicit box tier reads as contained.
   const tier = s.runtime === "box" ? "box" : "host";
@@ -204,7 +285,7 @@ function accessModel(o) {
     rows.push({ kind: "github", name: "github", conn: "", prod: false, sub: owners.length ? "owners: " + owners.join(", ") : "",
       scope: "", sso: "", last: last && accValidTime(last.time) ? hhmm(last.time) : "",
       status: last ? (last.outcome === "minted" ? "ok" : accOutcomeText(last.outcome)) : "",
-      actions: [], grant: null, hostWarning: [], base: "", baseWarn: false, baseTitle: "", stat: "" });
+      actions: [], window: null, grant: null, hostWarning: [], base: "", baseWarn: false, baseTitle: "", stat: "" });
   }
   const sr = aws && Array.isArray(aws.static_recent) ? aws.static_recent : [];
   for (const t of Array.isArray(s.tokens) ? s.tokens : []) {
@@ -213,20 +294,11 @@ function accessModel(o) {
     rows.push({ kind: "token", name: String(t.name || ""), conn: "", prod: !!t.prod, sub: String(t.label || t.provider || "static token"),
       scope: "", sso: "", last: last && accValidTime(last.time) ? hhmm(last.time) : "",
       status: last ? (last.outcome === "fetched" ? "ok" : accOutcomeText(last.outcome)) : "",
-      actions: [], grant: null, hostWarning: [], base: "", baseWarn: false, baseTitle: "", stat: "" });
+      actions: [], window: null, grant: null, hostWarning: [], base: "", baseWarn: false, baseTitle: "", stat: "" });
   }
 
-  // The open write window, if any, for the red banner.
-  let banner = null;
-  const w = accDep("liveWindowConn", "./sessionrow.js")(conns, aws, now);
-  if (w) {
-    const mins = minutesLeft(w.until, now);
-    const wc = conns.find((c) => c.name === w.name);
-    const ap = (aws && Array.isArray(aws.approvals) ? aws.approvals : [])
-      .find((a) => a && (a.action === "granted" || a.action === "extended") && (a.name || "") === (wc ? wc.conn : w.name));
-    banner = { conn: w.name, untilText: hhmm(w.until), minsLeft: mins, reason: ap ? String(ap.reason || "") : "",
-      newCreds: mins < accNewCredMin() };
-  }
+  // The open write window, if any: the one banner model every pane draws.
+  const banner = elevBanner(s, aws, now);
 
   // The SSO card hangs under the connection a Sign in press would target, while
   // a connection's sign-in is expired or a flow is running.
@@ -312,5 +384,5 @@ function grantFormState(f) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { accessModel, grantFormState, accEventTime, accReadReply, accLoadDone, accTone, ACCESS_EVENTS };
+  module.exports = { accessModel, elevBanner, grantFormState, accEventTime, accReadReply, accLoadDone, accTone, ACCESS_EVENTS };
 }
