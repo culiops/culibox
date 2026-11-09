@@ -223,6 +223,23 @@ function toastFailText(what, err) {
   return { text: "Could not " + what + (named ? ": " + msg : "."), detail: detail };
 }
 
+// toastStackTop: where the desktop stack's top edge goes (px). Today it is fixed at 48, under the pane
+// header, which lets it cover an ask strip's Yes/No/Open terminal or a write banner's Drop now in the right
+// pane. `range` is the stack's x-extent {left, right}; `rects` are the bounding rects of every .needstrip and
+// .elev. With no strip over the stack the answer is exactly 48 (the M8.5 frame, pixel for pixel); with one it
+// is the lowest overlapping strip's bottom + 8, i.e. max(48, bottom) + 8; a strip that ends at or above 48 is not
+// under the stack, so it moves nothing. Pure.
+const TOAST_STACK_TOP = 48;
+const TOAST_STACK_GAP = 8;
+function toastStackTop(range, rects) {
+  let bottom = null;
+  for (const r of Array.isArray(rects) ? rects : []) {
+    if (!r || !(r.left < range.right && r.right > range.left) || !(r.bottom > TOAST_STACK_TOP)) continue; // NaN, or a strip that ends above the stack: nothing to clear
+    if (bottom === null || r.bottom > bottom) bottom = r.bottom;
+  }
+  return bottom === null ? TOAST_STACK_TOP : Math.max(TOAST_STACK_TOP, bottom) + TOAST_STACK_GAP;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createToastStack, toastFailText };
+  module.exports = { createToastStack, toastFailText, toastStackTop };
 }

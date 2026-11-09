@@ -1005,7 +1005,7 @@ class Cell {
     if (m.cost) {
       const cost = el("span", m.cost);
       cost.className = "ph-cost";
-      cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
+      cost.title = "Session cost (all conversations since start, as Analytics counts it)";
       units.push(["mi-cost", cost]);
     }
     if (units.length) {

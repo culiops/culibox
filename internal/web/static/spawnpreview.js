@@ -277,7 +277,8 @@ function reachModel(o) {
     tokenNote: tokens.length ? SPAWN_TOKEN_NOTE : "",
     network,
     account: p.claude ? (acct && acct !== "default" ? acct : "default (~/.claude)") : "",
-    store: spawnStoreLocked(x.creds) && cloud.length ? { v: "credential store locked — unlock before spawn", tone: "warn" } : null,
+    // The desktop dialog says "starting"; the phone's words stay (Plan 7, founder call 1: `desktop` is set by the caller).
+    store: spawnStoreLocked(x.creds) && cloud.length ? { v: "credential store locked — unlock before " + (x.desktop ? "starting" : "spawn"), tone: "warn" } : null,
   };
 }
 

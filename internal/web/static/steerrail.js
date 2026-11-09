@@ -495,9 +495,10 @@ function renderSteerFacts(s) {
   // log), so a GH-only box takes its GitHub rows and egress line from the same
   // cache; the AWS rows and counters are the AWS binding's own.
   const brokerSt = awsRailCache.get(s.id);
+  const deskWords = !(typeof mobileActive === "function" && mobileActive(window.innerWidth)); // "start" on the desktop, "spawn" on the phone
   const egressRows = s.aws || hasConns(s) || s.github || (s.tokens && s.tokens.length)
-    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []),
-      ...awsConnRailRows(s, brokerSt, Date.now(), awsConnExpanded.has(s.id)),
+    ? [...awsRailRows(s, brokerSt, Date.now(), deskWords), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []),
+      ...awsConnRailRows(s, brokerSt, Date.now(), awsConnExpanded.has(s.id), deskWords),
       ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
   // The bundle's drops and the clone's refresh state ride after the egress row, and on a boxed session with

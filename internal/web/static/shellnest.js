@@ -151,6 +151,12 @@ function killIdsFor(outcome, parentId, shells) {
   return [];
 }
 
+// shellEndList: names joined as an English list for the End-both toast: "a", "a and b", "a, b and c".
+function shellEndList(labels) {
+  const l = (labels || []).map(String);
+  return l.length < 2 ? l.join("") : l.slice(0, -1).join(", ") + " and " + l[l.length - 1];
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shellChildren, isNestedShell, shellLabel, liveShellsOf, killDialogOpts, killDialogDeskOpts, killIdsFor, shellMidTrunc };
+  module.exports = { shellEndList, shellChildren, isNestedShell, shellLabel, liveShellsOf, killDialogOpts, killDialogDeskOpts, killIdsFor, shellMidTrunc };
 }

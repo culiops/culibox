@@ -364,6 +364,7 @@ function drawerTabClosed(id) {
 // right of the grid. The width is CSS (default min(960px, 62% of the grid), or the dragged share); it
 // needs the grid's px.
 function positionDrawer() {
+  if (typeof toastPlace === "function") toastPlace(); // the toast stack clears the same strips (Plan 7 call 10)
   const dr = $("drawer");
   if (!dr || dr.hidden) return;
   const lay = $("layout");
@@ -5001,7 +5002,7 @@ function renderPfNotHome(name) {
     }
     const fix = document.createElement("span");
     fix.className = "pf-nh-fix mut";
-    fix.textContent = notHomeFix(name, nh.base, b);
+    fix.textContent = notHomeFix(name, nh.base, b, !mobileActive(window.innerWidth));
     row.appendChild(fix);
     rows.push(row);
   }
@@ -5549,7 +5550,7 @@ async function spawnSession(req, opts) {
   if (opts.toast !== false) {
     // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
-    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
+    showToast((mobileActive(window.innerWidth) ? "Spawned" : "Started") + ' "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir") + toastDropsSuffix(s.bundle_drops) + toastCloneSuffix(s) + toastReturnSuffix(s),
       { undo: () => killSession(s.id), warn: cloneLevel(s.clone) === "warn" });
   }
   return s;
@@ -6703,10 +6704,39 @@ async function confirmKill(id, name) {
   // "End session only" leaves the shells running as top-level rows (the parent
   // is gone, so nothing nests them any more).
   const ids = killIdsFor(outcome, id, shells);
-  for (const sid of ids) await killSession(sid);
+  await killSessions(ids);
 }
 
-async function killSession(id) {
+// killSessions: End both (R25). On the desktop, two or more ids share ONE pending toast, "Ending <name> and
+// shell 1…", which becomes "Ended <name> and shell 1" naming only what ended; a failed id keeps today's error
+// toast. Every step is killSession's: `batch` only swaps its own toast for a collector. Each id is marked
+// ended-by-me up front, so the poll that lands while the parent's DELETE is still running cannot announce
+// "Ended" for a shell this tab is also ending. The phone keeps one toast per session.
+async function killSessions(ids) {
+  if (ids.length < 2 || mobileActive(window.innerWidth)) { for (const sid of ids) await killSession(sid); return; }
+  const labels = new Map(ids.map((sid) => {
+    const s = (lastSessions || []).find((x) => x.id === sid);
+    return [sid, (s ? shellLabel(s, lastSessions) : "") || sid];
+  }));
+  const now = Date.now();
+  for (const sid of ids) if (!killing.has(sid)) endedMark(endedByMe, sid, now);
+  const done = pendingToast("Ending " + shellEndList(ids.map((sid) => labels.get(sid))) + "…");
+  const items = [];
+  const batch = { collect: (sid) => (result) => items.push({ sid, result }) };
+  for (const sid of ids) await killSession(sid, batch);
+  const ok = items.filter((i) => !i.result.opts.error);
+  const bad = items.filter((i) => i.result.opts.error);
+  if (ok.length) {
+    done({ msg: "Ended " + shellEndList(ok.map((i) => labels.get(i.sid))), opts: { desktopOnly: true } });
+  } else if (bad.length) {
+    done(bad.shift().result);
+  } else {
+    done(); // every id was already being ended: nothing to say
+  }
+  for (const i of bad) showToast(i.result.msg, i.result.opts);
+}
+
+async function killSession(id, batch) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
   endedMark(endedByMe, id, Date.now()); // the poll that sees it gone must not announce "Ended"
@@ -6718,7 +6748,7 @@ async function killSession(id) {
   // gets "End failed: <raw>" only, since the row leaving says it ended.
   const sess = (lastSessions || []).find((s) => s.id === id);
   const name = (sess && (sess.name || sess.id)) || id;
-  const done = pendingToast("Ending " + name + "…");
+  const done = batch ? batch.collect(id) : pendingToast("Ending " + name + "…");
   let failure = null;
   let result = { msg: "Ended " + name, opts: { desktopOnly: true } };
   try {
@@ -6929,6 +6959,11 @@ function initSettings() {
 
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", fitAll);
+// The desktop's empty grid says "Start"; index.html keeps the phone's "Spawn" (founder call 1, Plan 7).
+{
+  const ph = document.querySelector("#grid > .placeholder");
+  if (ph && !mobileActive(window.innerWidth)) ph.textContent = "Start or open a session. Panes appear here.";
+}
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);

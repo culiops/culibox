@@ -237,6 +237,20 @@ function toastSync() {
   }, Math.max(0, at - now));
 }
 
+// toastPlace: the stack's top edge (Plan 7 call 10). Desktop only; the phone slot is not this element. The stack is
+// 420px at most and 16px (--sp-4) from the right, so that x-range is checked against every ask strip and write
+// banner; toaststack.js's toastStackTop does the arithmetic. Called where a strip or banner appears, leaves or
+// moves (positionDrawer, which the grid's ResizeObserver also drives), never per poll. No strip: the CSS's 48.
+function toastPlace() {
+  const host = document.getElementById("toasts");
+  if (!host) return;
+  if (!toastStacked()) { host.style.top = ""; return; }
+  const right = window.innerWidth - 16;
+  const rects = Array.from(document.querySelectorAll(".needstrip, .elev"), (n) => n.getBoundingClientRect());
+  const top = toastStackTop({ left: right - 420, right }, rects);
+  host.style.top = top === 48 ? "" : top + "px";
+}
+
 // toastHost: #toasts, with its pause listeners wired on first use. mouseenter and
 // mouseleave fire on the container for its toasts (the container itself takes no
 // pointer). The document's mouseover catches the pointer leaving after the toast
