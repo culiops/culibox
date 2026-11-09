@@ -108,7 +108,7 @@ function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
   // The red row is the kit's tr.is-elevated: a granted or extended write elevation. Its Kind is red too; the Outcome
-  // takes its own tone from auditRowView (a refused elevation's is red as well, until Plan 6).
+  // takes its own tone from auditRowView (only a granted or extended elevation is red; a refused one is neutral).
   if (v.elevated) tr.className = "is-elevated";
   const what = auWhatCell(ev, v);
   tr.append(
