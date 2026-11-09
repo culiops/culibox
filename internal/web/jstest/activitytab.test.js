@@ -12,13 +12,20 @@ const STATIC = path.join(__dirname, "..", "static");
 
 const { Node, Text } = require("./fakedom.js");
 
+// The page's Date, with "now" fixed (see NOW below); every other Date behaves as usual.
+class PinnedDate extends Date {
+  constructor(...a) { if (a.length === 0) super(PINNED_NOW); else super(...a); }
+  static now() { return PINNED_NOW; }
+}
+const PINNED_NOW = new Date(2026, 10, 9, 12, 0, 0).getTime();
+
 // One page: scripts run as classic scripts in a shared global scope, like the browser.
 function page() {
   const doc = { activeElement: null, hidden: false };
   doc.createElement = (t) => new Node(t, doc);
   doc.createTextNode = (t) => new Text(t);
   const box = {
-    document: doc, window: { getSelection: () => null }, console, AbortController, Promise, JSON, Date,
+    document: doc, window: { getSelection: () => null }, console, AbortController, Promise, JSON, Date: PinnedDate,
     lastSessions: [], paneViewRenderers: {}, replyFocused: false, replyDraft: null, repliesEnabled: true,
     composers: [],
     fetch: async () => ({ status: 200, json: async () => ({ claude: true, events: [], more: false, files: [], summary: {} }) }),
@@ -122,7 +129,9 @@ test("the New session dialog fits the viewport and keeps its action row pinned",
 
 // ---- the view on the kit (M6.1, M6.2; #176) ---------------------------------------------------------
 // Fixtures use made-up ids and names. Times are relative to now, so a row reads as today's clock.
-const NOW = Date.now();
+// A fixed mid-day instant, and the page's clock pinned to it (PinnedDate above): rows up to 90 s old must stay on the same
+// day as "now", or the HH:MM:SS assert flakes within 90 s of local midnight (the model compares each row's day with the clock's).
+const NOW = PINNED_NOW;
 const ago = (s) => NOW - s * 1000;
 const okFetch = (reply) => async () => ({ status: 200, json: async () => reply });
 const REPLY = (over) => Object.assign({
@@ -239,6 +248,48 @@ test('"Live · newest first", and "Could not refresh · newest first" when stale
   assert.ok(!classes(live.querySelector(".dot")).includes("dot-run"), "a stale read is not a green dot");
   assert.ok(classes(live.querySelector(".dot")).includes("dot-idle"));
   assert.ok(host.querySelector(".act-filter") && host.querySelector(".act-live") === live, "the bar was not rebuilt");
+});
+
+// G3-D5: a failure before anything loaded used to keep the green dot and "Live", beside a table that said it could not read.
+test("a first read that failed is not Live: the bar says Could not refresh with the muted dot, and recovers when a read lands (G3-D5)", async () => {
+  const p = page();
+  p.box.fetch = async () => ({ status: 500 });
+  p.box.lastSessions = [claude("s1")];
+  const handle = p.box.paneViewRenderers.activity(p.host, "s1");
+  await tick();
+  const live = p.host.querySelector(".act-live");
+  assert.ok(live);
+  assert.match(p.host.querySelector("table.tbl.act-tbl").textContent, /Could not read the activity\./, "the table already says it could not read");
+  assert.strictEqual(live.textContent, "Could not refresh · newest first", "the shipped stale label, no new copy");
+  assert.ok(classes(live.querySelector(".dot")).includes("dot-idle"), "the muted dot");
+  assert.ok(!classes(live.querySelector(".dot")).includes("dot-run"), "never the green one");
+  p.box.fetch = okFetch(REPLY());
+  handle.update();
+  await tick();
+  assert.strictEqual(live.textContent, "Live · newest first");
+  assert.ok(classes(live.querySelector(".dot")).includes("dot-run"));
+  assert.ok(p.host.querySelector(".act-live") === live, "the bar was not rebuilt");
+});
+
+// Task 5 minor: an MCP tool's kind (`mcp__server__tool`) is far wider than the 80px Kind cell and ellipsizes there.
+test("the Kind cell carries the full kind in its title, so an ellipsized MCP tool name can be read", async () => {
+  const kind = "mcp__culipulse__describe_alarms";
+  const reply = REPLY({ events: [
+    { ts: ago(10), kind: "tool", tool: kind, detail: "api-p99", state: "ok" },
+    { ts: ago(20), kind: "tool", tool: "Edit", detail: "infra/alarms.tf", state: "ok", add: 1, del: 0 },
+    { ts: ago(30), kind: "you", detail: "go on" },
+    { ts: ago(40), kind: "credential", detail: "aws culipulse-prod", state: "minted" },
+  ] });
+  const { host } = await claudeView(null, null, reply);
+  const rows = rowsOf(host);
+  assert.strictEqual(rows.length, 4);
+  for (const tr of rows) {
+    const k = cellsOf(tr)[1];
+    assert.ok(k.title, "every Kind cell has a title: " + k.textContent);
+    assert.strictEqual(k.title, k.textContent, "the title is the kind, whole");
+  }
+  assert.strictEqual(cellsOf(rows[0])[1].title, kind);
+  assert.strictEqual(rows[0].title, "api-p99", "the row's own title (the detail) is kept");
 });
 
 test("events are a table.tbl with Time / Kind / Detail / Outcome heads and no row is a button", async () => {

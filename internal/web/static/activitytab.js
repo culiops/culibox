@@ -176,7 +176,10 @@ function actRowEl(r) {
   const you = r.cls === "you" && r.kind === "You";
   const cleared = r.cls === "you" && !you;
   tr.appendChild(actEl("td", "sub tnum", r.time));
-  tr.appendChild(actEl("td", you ? "w-500" : r.cls === "ask" ? "c-amber" : "sub", r.kind));
+  // The Kind cell is 80px and ellipsizes: an MCP tool is `mcp__server__tool`, so the whole kind rides in its title.
+  const kind = actEl("td", you ? "w-500" : r.cls === "ask" ? "c-amber" : "sub", r.kind);
+  kind.title = r.kind;
+  tr.appendChild(kind);
   const det = actEl("td", "act-det");
   det.appendChild(actEl("span", you ? "w-500" : cleared ? "muted" : "mono t-sm", r.detail));
   tr.appendChild(det);
@@ -432,8 +435,9 @@ function mountActivity(host, sid0) {
     }
     // The pressed look is aria-pressed alone: the kit's .seg-item[aria-pressed="true"] draws it.
     for (const [f, b] of bar.pills) b.setAttribute("aria-pressed", f === st.filter ? "true" : "false");
-    // Only the dot is green, and only while the read is current.
-    const stale = st.failed && st.loaded;
+    // Only the dot is green, and only while the read is current: a read that failed is not, whether or not an earlier
+    // one landed (the table says "Could not read the activity." for one that never did).
+    const stale = st.failed;
     bar.dot.className = stale ? "dot dot-idle" : "dot dot-run";
     bar.liveTxt.textContent = stale ? "Could not refresh · newest first" : "Live · newest first";
   }
