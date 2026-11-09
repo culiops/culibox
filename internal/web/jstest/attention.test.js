@@ -5,7 +5,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyRowCopy, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
+const { notifyBodyFor } = require("../static/notifymodel.js");
+const { needsYou, attentionClass, sessionDot, tabNeedWhy, needLabel, cardContent, needsTransitions, NEEDS_REARM_MS, notifyAvailability, notifyRowCopy, notifyChecked, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -251,19 +252,9 @@ test("notifyChecked is false unless permission is granted", () => {
   assert.strictEqual(notifyChecked(false, "granted"), false);
 });
 
-test("notifyBody: an ask shows the tool NAME only, never the command", () => {
-  // The full command must never reach OS notification history.
-  assert.strictEqual(notifyBody({ need: "ask", ask: "Bash(rm -rf build)", summary: "x" }), "asks: Bash");
-  assert.strictEqual(notifyBody({ need: "ask", ask: "WebFetch" }), "asks: WebFetch"); // no "(" — whole ask text
-  assert.strictEqual(notifyBody({ need: "ask", ask: "", summary: "fallback" }), "asks: fallback");
-  assert.strictEqual(notifyBody({ need: "ask" }), "Waiting for you");
-});
-
-test("notifyBody: a turn (or unknown need) keeps the full summary", () => {
-  assert.strictEqual(notifyBody({ need: "turn", ask: "Bash(ls)", summary: "done" }), "done");
-  assert.strictEqual(notifyBody({ summary: "done" }), "done");
-  assert.strictEqual(notifyBody({}), "Waiting for you");
-});
+// notifyBody is retired (R3): notifymodel.js notifyBodyFor/askTool own the body, and
+// notifymodel.test.js pins it (an ask never leaks the summary or a whole ask; Done shows no summary
+// unless the message pref is on).
 
 test("notifyPoll: a call before the first successful list does not seed prevIds", () => {
   // Simulates initEnv's title refresh firing before /api/sessions has ever
@@ -416,7 +407,7 @@ test("maskHint names a display mask only when something was masked", () => {
 });
 
 test("a masked ask reaches the notification as the tool name only", () => {
-  assert.strictEqual(notifyBody({ need: "ask", ask: "Bash(echo [masked:aws-key-id])" }), "asks: Bash");
+  assert.strictEqual(notifyBodyFor({ kind: "ask", sessions: [{ ask: "Bash(echo [masked:aws-key-id])" }] }, {}), "Wants to run Bash");
   assert.strictEqual(cardContent({ need: "ask", ask: "Bash(echo [masked:aws-key-id])" }).text, "Bash(echo [masked:aws-key-id])");
 });
 
@@ -435,7 +426,7 @@ test("an SSO need: needs you, labelled, its own card, its own notification text"
   assert.strictEqual(needLabel(s), "AWS sign-in");
   assert.deepStrictEqual(cardContent(s), { text: "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.",
     sso: true, ask: false, reply: false, enableReplies: false });
-  assert.strictEqual(notifyBody(s), "AWS sign-in expired");
+  assert.doesNotMatch(notifyBodyFor({ kind: "sso", sessions: [s] }, {}), /example-sso/, "the profile is never in the body");
   const first = needsTransitions(null, [s], 0);
   assert.deepStrictEqual([...first.next.ids], ["aws-1"]);
   const t = needsTransitions(seeded(), [s], 3000);

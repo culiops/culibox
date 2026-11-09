@@ -35,7 +35,7 @@ function nmDep(name) {
   return require("./attention.js")[name];
 }
 
-const NOTIFY_PREF_DEFAULTS = { master: true, block: true, done: true, ended: true, message: false };
+const NOTIFY_PREF_DEFAULTS = { master: true, block: true, done: true, ended: true, message: false, chime: false };
 const NOTIFY_BATCH_MIN = 3;
 const NOTIFY_TOOL_MAX = 40;
 
@@ -302,6 +302,83 @@ function faviconSvg(icon) {
   return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
+// ---- Prefs (localStorage; Task 4 draws the UI, Task 5 the chime) ----
+// The master switch is the older attention.js NOTIFY_KEY mechanism (notifyWanted); the rest are
+// one key each. Every access is guarded: with storage unavailable or a key missing the default
+// stands (block, done, ended on; message and chime off).
+const NOTIFY_PREFS = {
+  block: "agent-box:notify:block",
+  done: "agent-box:notify:done",
+  ended: "agent-box:notify:ended",
+  message: "agent-box:notify:message",
+  chime: "agent-box:notify:chime",
+};
+function nmStore() {
+  try { return typeof localStorage !== "undefined" ? localStorage : null; } catch (_) { return null; }
+}
+// readPrefs() -> {block, done, ended, message, chime}; "1" is on, "0" is off, anything else is the default.
+function readPrefs() {
+  const out = {};
+  const st = nmStore();
+  for (const name of Object.keys(NOTIFY_PREFS)) {
+    out[name] = NOTIFY_PREF_DEFAULTS[name];
+    try {
+      const v = st ? st.getItem(NOTIFY_PREFS[name]) : null;
+      if (v === "1") out[name] = true;
+      else if (v === "0") out[name] = false;
+    } catch (_) { /* default stands */ }
+  }
+  return out;
+}
+// writePref(name, value) -> true when stored. An unknown name is refused.
+function writePref(name, value) {
+  if (!Object.prototype.hasOwnProperty.call(NOTIFY_PREFS, name)) return false;
+  const st = nmStore();
+  try {
+    if (!st) return false;
+    st.setItem(NOTIFY_PREFS[name], value ? "1" : "0");
+    return true;
+  } catch (_) { return false; }
+}
+
+// ---- endedByMe: ids this client ended or restarted, kept 10 min each ----
+const ENDED_BY_ME_MS = 10 * 60 * 1000;
+// endedMark(map, id, now): record that this client ended `id` (a Map of id -> ms).
+function endedMark(map, id, now) {
+  if (map && id) map.set(id, now);
+}
+// endedLive(map, now) -> ids still inside the window; prunes the older ones from the map.
+function endedLive(map, now) {
+  const out = [];
+  if (!map) return out;
+  for (const [id, t] of Array.from(map)) {
+    if (now - t >= ENDED_BY_ME_MS) map.delete(id);
+    else out.push(id);
+  }
+  return out;
+}
+
+// ---- Delivery: notes -> OS notifications ----
+// deliverNotes(notes, NotificationCtor, onOpen) builds one notification per note. A note's click
+// calls onOpen(note) (the page focuses the window and opens note.sid, or shows the sidebar for a
+// batch) and closes it. A browser that refuses at construction time stays silent. Returns the
+// number built.
+function deliverNotes(notes, NotificationCtor, onOpen) {
+  let n = 0;
+  if (typeof NotificationCtor !== "function") return n;
+  for (const note of notes || []) {
+    try {
+      const o = new NotificationCtor(note.title, Object.assign({ body: note.body }, note.options));
+      o.onclick = () => {
+        try { if (onOpen) onOpen(note); } finally { try { o.close(); } catch (_) {} }
+      };
+      n++;
+    } catch (_) { /* stay silent */ }
+  }
+  return n;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, faviconSvg, SYS_OFFLINE_MS };
+  module.exports = { notifyClassOf, causeKeys, notifyStep, notifyBodyFor, askTool, NOTIFY_PREF_DEFAULTS, titleState, faviconSvg, SYS_OFFLINE_MS,
+    NOTIFY_PREFS, readPrefs, writePref, ENDED_BY_ME_MS, endedMark, endedLive, deliverNotes };
 }

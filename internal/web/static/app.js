@@ -1856,8 +1856,10 @@ async function restartSession(s, trigger) {
 }
 
 async function restartSessionRun(s) {
+  endedMark(endedByMe, s.id, Date.now()); // the old session leaves on purpose
   const res = await postSessionAction(s.id, "restart");
   if (!res.ok) {
+    endedByMe.delete(s.id);
     let msg = "", code = "";
     try { const b = (await res.json()) || {}; msg = b.error || ""; code = b.code || ""; } catch (_) {}
     // 423 = the store is locked: its message names the way out, and the banner
@@ -3377,35 +3379,43 @@ function signalAttention() {
   }
 }
 
-// notifyTransitions raises one OS notification per session that just started
-// needing you — only when opted in, still granted, and this tab is not
-// focused. tag = session id, so two tabs of this origin show it once.
-// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this
-// can lag up to ~60 s; no push channel is built for it.
+// notifyTransitions turns one successful /api/sessions poll into OS notifications (#177): the pure
+// rule table (notifyStep, notifymodel.js) says what to announce, this part only reads the world
+// (prefs, focus, permission, the ids this client ended) and builds the notifications. State
+// advances on every call, so a switch turned on later never replays old events. Quiet when the
+// master switch is off, the tab is focused, or the browser has not granted permission.
+// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this can lag up to
+// ~60 s; no push channel is built for it.
 //
-// Called ONLY from refreshSessions, after a successful /api/sessions fetch —
-// never from signalAttention/initEnv's title refresh and never on a fetch
-// error path. `lastSessions` starts as `[]` before the first real fetch, and
-// initEnv's title refresh can run before that fetch resolves; if this ran
-// there too it would seed attnPrev to an empty Set off that placeholder, and
-// every already-waiting session would look like a fresh transition and fire
-// once the real list landed. `sessionsLoaded` (flipped true only by that
-// success path) plus the pure notifyPoll gate is what needsTransitions relies
-// on to tell a not-yet-real empty list from a real "zero sessions" one.
-let attnPrev = null;
+// Called ONLY from refreshSessions, after a successful /api/sessions fetch, never from
+// signalAttention/initEnv's title refresh and never on a fetch error path (a failed fetch must
+// not announce "Ended"). `lastSessions` starts as `[]` before the first real fetch; the
+// `sessionsLoaded` gate keeps that placeholder from seeding the state, and the first real poll
+// only seeds (prev null).
+let notifyPrev = null;
 let sessionsLoaded = false;
-function notifyTransitions() {
-  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions, Date.now());
-  attnPrev = t.next;
-  if (!t.fired.length || !notifyWanted()) return;
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  if (document.hasFocus()) return;
-  for (const s of t.fired) {
-    try {
-      const n = new Notification(s.name || s.id, { body: notifyBody(s), tag: s.id });
-      n.onclick = () => { window.focus(); openTerminal(s.id, s.name); n.close(); };
-    } catch (_) { /* a browser that refuses at construction time: stay silent */ }
+// endedByMe: session ids this client ended or restarted (id -> ms), so its own End never
+// announces "Ended". Kept 10 min per id (endedLive prunes).
+const endedByMe = new Map();
+function notifyOpen(note) {
+  try { window.focus(); } catch (_) {}
+  if (note.sid) {
+    openTerminal(note.sid, note.title);
+  } else if (document.documentElement.classList.contains("sidebar-hidden")) {
+    toggleSidebar(); // a batch has no one session: show the list
   }
+}
+function notifyTransitions() {
+  if (!sessionsLoaded || !Array.isArray(lastSessions)) return;
+  const now = Date.now();
+  const prefs = Object.assign(readPrefs(), { master: notifyWanted() });
+  const st = notifyStep(notifyPrev, lastSessions, {
+    now, focused: document.hasFocus(), prefs, endedByMe: endedLive(endedByMe, now),
+  });
+  notifyPrev = st.next;
+  if (!st.notes.length) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  deliverNotes(st.notes, Notification, notifyOpen);
 }
 
 // notifyPerm: what the browser says about notifications ("unsupported" when it has no Notification at all).
@@ -6485,6 +6495,7 @@ async function confirmKill(id, name) {
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
+  endedMark(endedByMe, id, Date.now()); // the poll that sees it gone must not announce "Ended"
   // A boxed session's docker stop can take seconds: a toast covers the wait
   // after the pending delay. It starts here, at the click, so the 300ms clock
   // is not spent on the re-render below. done(result) (in finally) turns it
@@ -6508,6 +6519,7 @@ async function killSession(id) {
   }
   if (failure) {
     killing.delete(id);
+    endedByMe.delete(id); // it is still running: a later end is not ours
     await refreshSessions();
     return;
   }

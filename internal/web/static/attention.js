@@ -299,26 +299,6 @@ function setNotifyWanted(v) {
   try { if (v) localStorage.setItem(NOTIFY_KEY, "1"); else localStorage.removeItem(NOTIFY_KEY); } catch (_) {}
 }
 
-// notifyBody: the OS notification body text. For an "ask" (a pending tool
-// call), this is the tool NAME ONLY — "asks: Bash", never the full command —
-// derived from the ask text up to its first "(". An OS keeps notification
-// history outside this app's own access controls, and a shell command in
-// that history (a path, a secret-looking argument, an rm target) is a token
-// leak the operator did not choose to make. `turn` (and anything without a
-// known need) keeps the one-line summary, unchanged.
-function notifyBody(s) {
-  const v = s || {};
-  // No profile, no command: OS notification history is outside our access control.
-  if (v.need === "sso") return "AWS sign-in expired";
-  if (v.need === "ask") {
-    const ask = v.ask || v.summary || "";
-    if (!ask) return "Waiting for you";
-    const i = ask.indexOf("(");
-    return "asks: " + (i === -1 ? ask : ask.slice(0, i));
-  }
-  return v.summary || "Waiting for you";
-}
-
 // notifyPoll gates needsTransitions on `loaded`: true only once a real
 // /api/sessions fetch has actually succeeded at least once. Before that,
 // `lastSessions` in app.js is just the empty placeholder it starts as —
@@ -472,6 +452,6 @@ function ssoDoneKeep(prevActivity, activity, exited) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needsYou, attentionClass, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, plainSummary, cardContent, needsTransitions, NEEDS_REARM_MS,
-    notifyAvailability, notifyRowCopy, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
+    notifyAvailability, notifyRowCopy, notifyChecked, notifyWanted, setNotifyWanted, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint, ssoDoneKeep };
 }
