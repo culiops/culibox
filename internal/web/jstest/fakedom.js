@@ -2,16 +2,22 @@
 // fakedom.js: the hand-written fake DOM the pane-view tests share (the repo has no jsdom). Just enough
 // of Node and Text for the code under test: children, class and attribute bookkeeping, focus, click,
 // after / remove / contains, and a querySelector over compound selectors (tag, .class, [attr], [attr="v"])
-// and descendant chains of them. One page's scripts and `document` are the test's own: see page() in
-// activitytab.test.js and elevbanner.test.js.
+// and descendant chains of them. A dataset write is mirrored to its data-* attribute, so [data-x="v"] finds
+// it. One page's scripts and `document` are the test's own: see page() in activitytab.test.js,
+// elevbanner.test.js and accesstab.test.js.
 
 class Text { constructor(t) { this.text = t; this.parent = null; } get textContent() { return this.text; } set textContent(v) { this.text = String(v); } }
 class Node {
   constructor(tag, doc) {
     this.tag = tag; this.doc = doc; this.children = []; this.parent = null; this.own = "";
-    this.className = ""; this.attrs = {}; this.style = {}; this.dataset = {}; this.hidden = false; this.disabled = false;
+    this.className = ""; this.attrs = {}; this.style = {}; this.hidden = false; this.disabled = false;
     this.isConnected = true; this.tabIndex = -1;
     const self = this;
+    // dataset.x = "v" is the attribute data-x, as in a browser, so a [data-x="v"] selector finds it.
+    this.dataset = new Proxy({}, {
+      set(t, k, v) { t[k] = String(v); self.attrs["data-" + String(k).replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())] = String(v); return true; },
+      deleteProperty(t, k) { delete t[k]; delete self.attrs["data-" + String(k).replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())]; return true; },
+    });
     this.classList = {
       toggle(c, on) {
         const set = new Set(self.className.split(/\s+/).filter(Boolean));

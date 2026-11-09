@@ -307,15 +307,16 @@
   .input::placeholder { color: var(--muted); }
   .input:hover { border-color: var(--muted); }
   /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that sets its own border still
-     wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`,
-     `.ac-pcol .fld` keep --line until their plans adopt the kit .input (the Audit page's Session select and the Analytics page's date fields have). */
+     wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`
+     keeps --line until its plan adopts the kit .input (the Audit page's Session select, the Analytics page's date fields and the Access
+     view's grant panel have). */
   .fld { border-color: var(--faint); }
   .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
   /* F70: every text field, whatever its class, shows keyboard focus as the field focus above (accent border + 1px
      accent shadow = 2px of accent) and not as the ring: input except the types drawn as boxes or buttons, select and
      textarea. Checkboxes, radios and every button keep the ring. The terminal's and the editor's textareas are the
-     pane ring's (D26). Weight 0,3,2: above every field rule with one or two classes (.fld, .input, .ac-pcol .fld,
+     pane ring's (D26). Weight 0,3,2: above every field rule with one or two classes (.fld, .input,
      .stepper .val), so a page's own border colour does not hide it. A page rule with an id, or with four or more
      classes (dialog .fld is 0,4,1), still wins, so each has a focus rule of its own beside it (desktop-focus.test.js
      lists them). */
@@ -1373,75 +1374,85 @@
   .CodeMirror.cm-s-default .cm-bracket { color: #a8b0ba; }
   .CodeMirror.cm-s-default .cm-link { color: var(--accent); }
   .CodeMirror.cm-s-default .cm-error { color: var(--danger); }
-  /* --- Access view (spec 5.7; sa-1.png, sa-2.png) ---------------------------- */
-  /* Colour roles: red = write / prod / error only, amber = needs-you only,
-     green = status only. Containment is neutral text. */
-  .ac-wrap { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 18px; min-width: 0; }
-  .ac-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); min-width: 0; overflow: hidden; }
-  .ac-head { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; }
-  .ac-title { font: 600 var(--t-md) var(--font-ui); color: var(--fg); }
-  .ac-meta { margin-left: auto; color: var(--muted); font-size: var(--t-sm); text-align: right; }
-  .ac-lab { font-size: var(--t-xs); color: var(--muted); }
-  .ac-val { margin-top: 3px; color: var(--fg); overflow-wrap: anywhere; }
-  .ac-sub { margin-top: 2px; color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
-  .ac-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid var(--line); }
-  .ac-cols .ac-cell { padding: 10px 14px; box-shadow: -1px 0 0 var(--line); }
-  .ac-tier.host { display: inline-block; padding: 0 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--faint); }
-  .ac-kvs { border-top: 1px solid var(--line); padding: 6px 14px; }
-  .ac-kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 4px 0; }
-  .ac-kvv { min-width: 0; overflow-wrap: anywhere; }
-  .ac-cloneline { color: var(--muted); font-size: var(--t-sm); }
-  .ac-cloneline.warn { color: var(--fg); font-weight: 600; }
-  .ac-ok { color: var(--ok); }
-  .ac-bad, .ac-write { color: var(--danger); }
-  .ac-need { color: var(--amber); }
-  .ac-empty { padding: 14px; color: var(--muted); }
-  .ac-note { padding: 0 14px 8px; color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
-  .ac-note.err { color: var(--danger); }
+  /* --- Access view (M6.3, M6.4; #176) ----------------------------------------- */
+  /* Drawn from the M6 frames on the kit's own classes (.card, .card-head, .chip, .btn, .link, .tbl, .seg, .input): only
+     the layout is page-local, the frames' m6- rules re-prefixed ac- (digest §D). Colour roles: red = write / prod / error
+     only (PROD, "write (elevated)", the leftover-credentials line, a mint made under a write window and its tint, a broker
+     error), green = status (valid, ok, minted), amber = an SSO sign-in the operator has to redo; a refusal is containment
+     working, so it is muted. The pane's width, not the window's, decides when the rows stack: .pane-view is the container. */
+  .pane-view[data-view="access"] { container-type: inline-size; }
+  /* §B9: the frames inherit a 20px line from the kit's .ab root and a margin-free h2 and p from its reset. .pane-view's
+     `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
+  .ac-wrap { line-height: var(--lh-md); }
+  .ac-wrap :where(h2, p) { margin: 0; }
+  /* §D1 .m6-view + .m6-stack: a column of cards 16px apart inside 20px 24px. The slots the script fills own no box, so
+     a card that is not drawn (a host session has only Containment) leaves no 16px gap. */
+  .ac-wrap { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; padding: var(--sp-5) var(--sp-6); }
+  .ac-wrap > div { display: contents; }
+  .ac-empty { padding: var(--sp-6) var(--sp-4); color: var(--muted); }
 
-  .ac-rowblk { border-top: 1px solid var(--line); }
-  .ac-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; padding: 10px 14px; }
-  .ac-row > .ac-id { flex: 1.5 1 220px; min-width: 0; }
-  .ac-row > .ac-cell { flex: 1 1 110px; min-width: 0; }
-  .ac-nameline { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .ac-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ac-prod {
-    flex: none; font: 600 var(--t-xs)/16px var(--font-ui); letter-spacing: .04em; padding: 0 5px;
-    color: var(--danger); border: 1px solid var(--danger); border-radius: var(--r-chip);
-  }
-  .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
-  /* Grant is the kit primary (it was an accent outline, F11): the secondary fill skips it. */
-  .ac-acts .btn, .ac-pbtns .btn { border-radius: var(--r-ctl); padding: 4px 10px; }
-  .ac-acts .btn:where(:not(.pri)), .ac-pbtns .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
-  .ac-acts .btn.dgr { border-color: var(--danger); color: var(--danger); }
-  .ac-sso { padding: 0 14px 10px; }
-  .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 10px 12px; }
+  /* Containment (§B6): four cells of equal width with a hairline between them (the Tier cell's 18px chip makes its row 65px,
+     not 64), then a 140px label column for Started and Model. A value that is long (a path, a network line) wraps. */
+  .ac-cells { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ac-cell { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-3) var(--sp-4); min-width: 0; overflow-wrap: anywhere; }
+  .ac-cell + .ac-cell { border-left: 1px solid var(--line); }
+  .ac-kvs { display: grid; grid-template-columns: 140px minmax(0, 1fr); row-gap: var(--sp-1); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 
-  /* The inline grant panel. */
-  .ac-panel { display: flex; flex-direction: column; gap: 10px; margin: 0 14px 12px; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); }
-  .ac-plead { overflow-wrap: anywhere; }
-  .ac-pfields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-  .ac-pcol { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .ac-pcol.grow { flex: 1 1 200px; }
-  .ac-pcol .fld { width: 100%; box-sizing: border-box; border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); }
-  .ac-panel .seg { border-radius: var(--r-ctl); border-color: var(--line); overflow: hidden; }
-  .ac-prole { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
-  .ac-hint { color: var(--muted); font-size: var(--t-sm); }
+  /* Cloud credentials (§B6): one grid per connection, 2fr then three 1fr and a 160px cell the buttons sit at the right of. Its
+     cells are the Containment cell without the padding (and with its hairline: the frame measures the 1px at Scope, SSO and
+     Last credential). A block is a row and what hangs under it (the note lines, the sign-in card, the grant panel); a rule
+     separates blocks. The note is pulled 8px up into the row's bottom padding. */
+  .ac-blk + .ac-blk { border-top: 1px solid var(--line); }
+  .ac-conn { display: grid; grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)) 160px; align-items: center; column-gap: var(--sp-4); padding: var(--sp-3) var(--sp-4); }
+  .ac-conn > .ac-cell { padding: 0; }
+  .ac-name { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+  .ac-name > .chip { flex: none; }
+  .ac-acts { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+  .ac-connnote { padding: 0 var(--sp-4) var(--sp-3); margin-top: calc(-1 * var(--sp-2)); }
+  /* Not drawn: what happened to the account's write access, under the sub-line. It is the only place the lapse and the
+     credentials still alive are said, so it wraps instead of ellipsizing like the sub-line above it. */
+  .ac-note { white-space: normal; overflow-wrap: anywhere; }
+  .ac-sso { padding: 0 var(--sp-4) var(--sp-3); }
+  .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: var(--sp-3); }
+
+  /* The inline grant panel (not drawn: its parts are the kit's). A box under the row, inset to the row's 16px sides. */
+  .ac-panel { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0 var(--sp-4) var(--sp-3); padding: var(--sp-3); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); overflow-wrap: anywhere; }
+  .ac-pfields { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: flex-end; }
+  .ac-pcol { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+  .ac-pgrow { flex: 1 1 200px; }
   .ac-hint:empty { display: none; }
-  .ac-err { color: var(--danger); overflow-wrap: anywhere; }
-  .ac-err[hidden] { display: none; }
-  .ac-warn { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-size: var(--t-sm); overflow-wrap: anywhere; }
-  .ac-warn ul { margin: 4px 0 0; padding-left: 16px; }
-  .ac-pbtns { display: flex; justify-content: flex-end; gap: 8px; }
+  .ac-err { color: var(--red); }
+  .ac-warn { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-size: var(--t-sm); }
+  .ac-warn ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-4); }
+  .ac-pbtns { display: flex; justify-content: flex-end; gap: var(--sp-2); }
 
-  /* Recent credential events. */
-  .ac-ev { border-top: 1px solid var(--line); overflow-x: auto; }
-  .ac-evrow { display: grid; grid-template-columns: 90px 80px minmax(160px, 1fr) 150px 70px; min-width: 520px; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--line); align-items: stretch; }
-  .ac-evrow:first-child { border-top: 0; }
-  .ac-evhead { padding-top: 8px; padding-bottom: 8px; text-transform: uppercase; letter-spacing: var(--track-caps); }
-  .ac-evt { font-variant-numeric: tabular-nums; }
-  .ac-evs { min-width: 0; overflow-wrap: anywhere; }
-  .ac-evs .ac-sub { font-family: var(--font-ui); }
+  /* Recent credential events (§B6): the card clips the row tint to its corners; fixed columns of 120, 112, 160 and 96px, the
+     Subject takes the rest and wraps, 6px above and below its text. Every other cell keeps the kit's 32px row. The kit's
+     `.tbl tbody tr:hover` (0,2,2) out-weighs `.tbl tr.is-elevated` (0,2,1), so a tinted row names its tint again on hover. */
+  .ac-events { overflow: hidden; }
+  .ac-tbl { table-layout: fixed; }
+  .ac-tbl th:nth-child(1) { width: 120px; }
+  .ac-tbl th:nth-child(2) { width: 112px; }
+  .ac-tbl th:nth-child(4) { width: 160px; }
+  .ac-tbl th:nth-child(5) { width: 96px; }
+  .ac-tbl td.ac-subj { white-space: normal; overflow-wrap: anywhere; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
+  .ac-tbl tbody tr.is-elevated:hover { background: var(--red-tint); }
+
+  /* A narrow pane (four panes at 1280px). Not drawn: the 2fr + 3 x 1fr + 160px row wants about 760px, so under 800px the
+     name takes a row of its own over the three cells and the buttons, Containment is two cells wide, and the table stops
+     fixing its columns and scrolls inside its card instead of crushing Subject. After the base rules, which it overrides. */
+  @container (max-width: 799px) {
+    .ac-cells { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ac-cells > .ac-cell:nth-child(odd) { border-left: 0; }
+    .ac-cells > .ac-cell:nth-child(n+3) { border-top: 1px solid var(--line); }
+    .ac-conn { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; row-gap: var(--sp-2); }
+    .ac-conn > .ac-cell:first-child { grid-column: 1 / -1; }
+    .ac-conn > .ac-cell:nth-child(2) { border-left: 0; }
+    .ac-events { overflow-x: auto; }
+    .ac-tbl { table-layout: auto; }
+    .ac-tbl th:nth-child(1), .ac-tbl th:nth-child(2), .ac-tbl th:nth-child(4), .ac-tbl th:nth-child(5) { width: auto; }
+    .ac-tbl td.ac-subj { min-width: 160px; }
+  }
 
   /* --- Activity view (M6.1, M6.2; #176) --------------------------------------- */
   /* Drawn from the M6 frames on the kit's own classes (.kpi-row, .seg, .card, .tbl, .btn, .meter, .dot, .empty-state):
@@ -2333,9 +2344,6 @@
      elevation (its tint and its Kind), the Outcome tones from auditRowView and the Write elevations KPI when above
      zero; green is status words only; amber is not used here. Prefixed #page-host > #audit-page.as-page so these
      outrank the dialog's own rules. */
-  .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
-  .ac-link:hover { text-decoration: underline; }
-
   /* The frame's page text sits on the kit's 20px line (--lh-md), which every cell, the Session select and the buttons inherit; the
      product's body is 14px / 1.5, which would make it 19.5px at 13px and draw one-line text one pixel high. */
   #page-host > #audit-page.as-page,

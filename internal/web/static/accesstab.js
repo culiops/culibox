@@ -1,17 +1,30 @@
 "use strict";
 
 // The Access view (desktop pane view, spec 5.7): what the pane's agent session
-// may touch. Containment, cloud credentials with Elevate / Extend / Drop and the
-// SSO sign-in card, and the last credential events. The model is accessmodel.js;
+// may touch. Containment, cloud credentials with Elevate / Extend and the SSO
+// sign-in card, and the last credential events. The model is accessmodel.js;
 // this file draws it. Every server- and operator-supplied string (a connection
 // name, a label, a reason, a path, an error) goes in through textContent, and
 // the SSO card is app.js renderSSOBody's.
+//
+// It is drawn from the M6 frames (M6.3 read, M6.4 elevated) on the kit's own
+// classes (.card, .card-head, .chip, .btn, .link, .tbl, .seg, .input); desktop.css
+// has only the layout. The view carries no Drop: the pane's one Drop now is the
+// banner's (elevbanner.js), which reads accData, accLoad, accDrop, accBusy and
+// accViews from here. While a window is open the connection row says
+// "write (elevated)" and offers Extend near the end; once it is over the row keeps
+// "Write access ended HH:MM" and, while write credentials already issued are
+// still valid, says until when.
 //
 // The host is volatile (a tab close or dock change re-attaches it) and the poll
 // repaints every 3 s, so nothing the operator types lives in the DOM alone: the
 // grant panel's draft is in accDrafts, per session, and survives both a repaint
 // and a remount. A section repaints only when its signature changes, and the
 // credentials section does not repaint at all while one of its fields has focus.
+// A button the keyboard may be on is never [disabled] (a focused button that turns
+// disabled drops focus to <body>): while a request is out it is aria-disabled and
+// its click handler refuses, and a rebuilt section hands the keyboard back to the
+// control it held.
 
 // ACCESS_REFRESH_MS: how often the broker status is re-read while the view is up
 // (not every poll). A grant, a drop and a sign-in re-read it at once.
@@ -31,20 +44,30 @@ function accEl(tag, cls, text) {
   return e;
 }
 
-// accCell: a small label over a value, one column of a card row.
-function accCell(label, value, valCls, title) {
+// accFill: put `content` (a string, or a list of nodes and strings) into `el`.
+function accFill(el, content) {
+  if (typeof content === "string") { el.textContent = content; return el; }
+  for (const n of content) el.appendChild(typeof n === "string" ? document.createTextNode(n) : n);
+  return el;
+}
+
+// accCell: a small label over a value, one column of a card row (§A3: span.t-sm.muted over span.t-md). The value is
+// text or a list of nodes (a chip, a tone span); `title` rides on the value.
+function accCell(label, content, title) {
   const c = accEl("div", "ac-cell");
-  c.appendChild(accEl("div", "ac-lab", label));
-  const v = accEl("div", "ac-val" + (valCls ? " " + valCls : ""), value);
+  c.appendChild(accEl("span", "t-sm muted", label));
+  const v = accFill(accEl("span", "t-md"), content);
   if (title) v.title = title;
   c.appendChild(v);
   return c;
 }
 
-function accCardHead(title, meta) {
-  const h = accEl("div", "ac-head");
-  h.appendChild(accEl("span", "ac-title", title));
-  if (meta) h.appendChild(accEl("span", "ac-meta", meta));
+// accCardHead: h2, the spacer, then whatever sits at the right end (§A3).
+function accCardHead(title, ...rest) {
+  const h = accEl("div", "card-head");
+  h.appendChild(accEl("h2", "t-md w-600", title));
+  h.appendChild(accEl("span", "ph-spacer"));
+  for (const n of rest) if (n) h.appendChild(n);
   return h;
 }
 
@@ -144,83 +167,101 @@ async function accDrop(sid, repaint) {
 // --- sections --------------------------------------------------------------------
 
 function accContainment(c, s) {
-  const card = accEl("section", "ac-card");
-  card.appendChild(accCardHead("Containment", c.tier + (c.runtime ? " · " + c.runtime : "")));
-  const cols = accEl("div", "ac-cols");
+  const card = accEl("section", "card ac-cont");
+  card.appendChild(accCardHead("Containment", accEl("span", "mono t-sm muted", c.tier + (c.runtime ? " · " + c.runtime : ""))));
+  const cells = accEl("div", "ac-cells");
+  const host = c.tier === "host";
   const badge = typeof tierBadge === "function" ? tierBadge(s, typeof boxRuntime === "string" ? boxRuntime : "") : null;
-  const tier = accCell("Tier", c.tier, "ac-tier" + (c.tier === "host" ? " host" : ""), badge ? badge.title : "");
-  if (c.tier === "host") tier.appendChild(accEl("div", "ac-sub", "not contained"));
-  cols.appendChild(tier);
-  cols.appendChild(accCell("Workspace", c.workspace ? shortPath(c.workspace) : "—", "mono", c.workspace));
+  const chip = accEl("span", "chip chip-fg " + (host ? "chip-host" : "chip-box"), c.tier);
+  if (badge) chip.title = badge.title;
+  const tier = accCell("Tier", [chip]);
+  if (host) tier.appendChild(accEl("span", "t-sm muted", "not contained"));
+  cells.appendChild(tier);
+  cells.appendChild(accCell("Workspace", c.workspace ? [accEl("span", "mono t-sm", shortPath(c.workspace))] : "—", c.workspace));
   const n = c.network;
   const net = !n.mode ? "no egress control"
     : n.mode === "open" ? "open · " + n.denied + " denied"
       : "allowlist · " + n.allowed + " allowed · " + n.denied + " denied";
-  cols.appendChild(accCell("Network", net, "", n.mode ? "Counted since the daemon started." : ""));
-  cols.appendChild(accCell("Agent account", c.account));
-  card.appendChild(cols);
+  cells.appendChild(accCell("Network", net, n.mode ? "Counted since the daemon started." : ""));
+  cells.appendChild(accCell("Agent account", c.account));
+  card.appendChild(cells);
 
-  // Optional rows: each shows only when the session has something to say.
-  const kv = [];
-  if (c.started) kv.push(["Started", c.started]);
-  if (c.model) kv.push(["Model", c.effort ? c.model + " · " + c.effort : c.model]);
-  else if (c.effort) kv.push(["Effort", c.effort]);
-  const rows = accEl("div", "ac-kvs");
-  const kvRow = (k, nodes) => {
-    const r = accEl("div", "ac-kv");
-    r.appendChild(accEl("div", "ac-lab", k));
-    const v = accEl("div", "ac-kvv");
-    for (const nd of nodes) v.appendChild(nd);
-    r.appendChild(v);
-    rows.appendChild(r);
+  // Label / value pairs under the cells (§A3: Started, Model). The product adds a row only when the session has
+  // something to say: effort without a model, the readable host paths, a clone's source and its warnings, what the
+  // bundle left out. A multi-line value is a block; the rest are spans.
+  const kvs = accEl("div", "ac-kvs");
+  const kv = (label, content, cls, block) => {
+    kvs.appendChild(accEl("span", "t-sm muted", label));
+    kvs.appendChild(accFill(accEl(block ? "div" : "span", "t-md" + (cls ? " " + cls : "")), content));
   };
-  for (const [k, v] of kv) kvRow(k, [accEl("div", "", v)]);
-  if (c.readable.length) kvRow("Readable host paths", c.readable.map((p) => accEl("div", "mono", p)));
+  if (c.started) kv("Started", c.started, "tnum");
+  if (c.model) kv("Model", [accEl("span", "mono t-sm", c.model)].concat(c.effort ? [" · " + c.effort] : []));
+  else if (c.effort) kv("Effort", c.effort);
+  if (c.readable.length) kv("Readable host paths", c.readable.map((p) => accEl("div", "mono t-sm", p)), "", true);
   if (c.clone) {
     const lines = [];
-    if (c.clone.of) lines.push(accEl("div", "mono", c.clone.of));
-    for (const w of c.clone.warn) lines.push(accEl("div", "ac-cloneline warn", w));
-    for (const i of c.clone.info) lines.push(accEl("div", "ac-cloneline", i));
-    kvRow("Cloned from", lines);
+    if (c.clone.of) lines.push(accEl("div", "mono t-sm", c.clone.of));
+    for (const w of c.clone.warn) lines.push(accEl("div", "t-sm w-600", w));
+    for (const i of c.clone.info) lines.push(accEl("div", "t-sm muted", i));
+    kv("Cloned from", lines, "", true);
   }
-  if (c.dropped) kvRow("Left out of the box", [accEl("div", "", c.dropped.v)]);
-  if (rows.childNodes.length) card.appendChild(rows);
+  if (c.dropped) kv("Left out of the box", c.dropped.v);
+  if (kvs.children.length) card.appendChild(kvs);
   return card;
+}
+
+// accBtn: a row button. While the session has a request out it is aria-disabled and refuses the press; it is never
+// [disabled], which would drop the keyboard to <body>. `why` is the reason it cannot act, in its title.
+function accBtn(text, off, why, fn, sid) {
+  const b = accEl("button", "btn btn-sm", text);
+  b.type = "button";
+  if (off) {
+    b.setAttribute("aria-disabled", "true");
+    if (why) b.title = why;
+  }
+  b.onclick = () => { if (!off && !accBusy.has(sid)) fn(); };
+  return b;
 }
 
 function accRowBlock(r, ctx) {
   const { sid, repaint, rowByName } = ctx;
-  const blk = accEl("div", "ac-rowblk");
-  const row = accEl("div", "ac-row");
-  const id = accEl("div", "ac-id");
-  const nm = accEl("div", "ac-nameline");
-  nm.appendChild(accEl("span", "ac-name", r.name));
-  if (r.prod) nm.appendChild(accEl("span", "ac-prod", "PROD"));
+  const blk = accEl("div", "ac-blk");
+  const row = accEl("div", "ac-conn");
+
+  // The first cell: the name (and PROD), the sub-line, then the window lines. The lines say what the account's
+  // write access did last: it ended (muted), and credentials issued before still work (red: they are write).
+  const id = accEl("div", "ac-cell");
+  const nm = accEl("span", "ac-name");
+  const name = accEl("span", "mono t-md w-500 ellipsis", r.name);
+  name.title = r.name;
+  nm.appendChild(name);
+  if (r.prod) nm.appendChild(accEl("span", "chip chip-prod", "PROD"));
   id.appendChild(nm);
-  if (r.sub) id.appendChild(accEl("div", "ac-sub", r.sub));
+  if (r.sub) {
+    const sub = accEl("span", "t-sm muted ellipsis", r.sub);
+    sub.title = r.sub;
+    id.appendChild(sub);
+  }
+  if (r.window && r.window.ended) id.appendChild(accEl("span", "ac-note t-sm muted", r.window.ended));
+  if (r.window && r.window.leftover) id.appendChild(accEl("span", "ac-note t-sm c-red", r.window.leftover));
   row.appendChild(id);
 
+  const tone = (cls, text) => [accEl("span", cls, text)];
+  const time = (t) => (t ? tone("tnum", t) : "—");
   if (r.kind === "aws") {
-    row.appendChild(accCell("Scope", r.scope, r.scope === "read" ? "" : "ac-write"));
-    const sso = accCell("SSO", r.sso || "—", r.sso === "expired" ? "ac-need" : r.sso === "valid" ? "ac-ok" : "");
-    row.appendChild(sso);
-    row.appendChild(accCell("Last credential", r.last || "—"));
+    row.appendChild(accCell("Scope", r.scope === "read" ? r.scope : tone("c-red w-500", r.scope)));
+    row.appendChild(accCell("SSO", r.sso === "valid" ? tone("c-ok", r.sso) : r.sso === "expired" ? tone("c-amber", r.sso) : r.sso || "—"));
+    row.appendChild(accCell("Last credential", time(r.last)));
   } else {
     row.appendChild(accCell("Scope", r.scope || "—"));
-    row.appendChild(accCell("Status", r.status || "—", r.status === "ok" ? "ac-ok" : ""));
-    row.appendChild(accCell(r.kind === "github" ? "Last token" : "Last fetch", r.last || "—"));
+    row.appendChild(accCell("Status", r.status === "ok" ? tone("c-ok", r.status) : r.status || "—"));
+    row.appendChild(accCell(r.kind === "github" ? "Last token" : "Last fetch", time(r.last)));
   }
 
+  // No Drop here: the pane's one Drop now is the banner's. A closed connection offers Elevate…, an open one near
+  // its end offers Extend.
   const acts = accEl("div", "ac-acts");
   const busy = accBusy.has(sid);
-  const mk = (text, cls, fn, off) => {
-    const b = accEl("button", "btn" + (cls ? " " + cls : ""), text);
-    b.type = "button";
-    b.disabled = !!off;
-    b.classList.toggle("off", !!off);
-    b.onclick = fn;
-    acts.appendChild(b);
-  };
   const openPanel = () => {
     const cur = rowByName(r.name);
     const w = cur && cur.grant ? cur.grant.windows : [];
@@ -231,19 +272,22 @@ function accRowBlock(r, ctx) {
     repaint(true);
   };
   const g = r.grant;
-  if (r.actions.includes("elevate")) mk("Elevate…", "", openPanel, busy || !!(g && g.blockedText));
-  if (r.actions.includes("extend")) mk("Extend", "", openPanel, busy);
-  if (r.actions.includes("drop")) mk("Drop", "dgr", () => accDrop(sid, repaint), busy);
+  if (r.actions.includes("elevate")) acts.appendChild(accBtn("Elevate…", busy || !!(g && g.blockedText), g && g.blockedText, openPanel, sid));
+  if (r.actions.includes("extend")) acts.appendChild(accBtn("Extend", busy, "", openPanel, sid));
   row.appendChild(acts);
   blk.appendChild(row);
 
+  // Under the row, as the frame draws the base-role note: one line each, pulled up into the row's padding.
+  const line = (cls, text, title) => {
+    const n = accEl("div", "ac-connnote");
+    const t = accEl("span", cls, text);
+    if (title) t.title = title;
+    n.appendChild(t);
+    blk.appendChild(n);
+  };
   if (r.kind === "aws") {
-    if (r.base) {
-      const n = accEl("div", "ac-note", r.base);
-      if (r.baseTitle) n.title = r.baseTitle;
-      blk.appendChild(n);
-    }
-    if (r.stat) blk.appendChild(accEl("div", "ac-note err", r.stat));
+    if (r.base) line("t-sm muted", "Base role: " + r.base, r.baseTitle);
+    if (r.stat) line("t-sm c-red", r.stat);
   }
   return blk;
 }
@@ -257,22 +301,22 @@ function accPanel(r, d, ctx) {
   box.setAttribute("role", "group");
   box.setAttribute("aria-label", (g.extend ? "Extend write access" : "Grant write access") + " · " + r.name);
 
-  const lead = accEl("div", "ac-plead");
+  const lead = accEl("p", "t-md");
   lead.append(document.createTextNode((g.extend ? "Extend write on " : "Grant write on ")));
-  lead.appendChild(accEl("strong", "", r.name));
-  lead.appendChild(document.createTextNode(" to this session. Credentials already issued stay valid until they expire."));
+  lead.appendChild(accEl("span", "mono w-500", r.name));
+  lead.append(document.createTextNode(" to this session. Credentials already issued stay valid until they expire."));
   box.appendChild(lead);
 
   if (!g.windows.includes(d.minutes)) d.minutes = g.windows[0] || 0;
   const fields = accEl("div", "ac-pfields");
 
   const wcol = accEl("div", "ac-pcol");
-  wcol.appendChild(accEl("span", "ac-lab", "Window"));
+  wcol.appendChild(accEl("span", "t-sm muted", "Window"));
   const seg = accEl("div", "seg");
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "Window");
   const segBtns = g.windows.map((w) => {
-    const b = accEl("button", "", w + " min");
+    const b = accEl("button", "seg-item", w + " min");
     b.type = "button";
     b.onclick = () => { d.minutes = w; sync(); };
     seg.appendChild(b);
@@ -281,9 +325,9 @@ function accPanel(r, d, ctx) {
   wcol.appendChild(seg);
   fields.appendChild(wcol);
 
-  const rcol = accEl("div", "ac-pcol grow");
-  const rlab = accEl("label", "ac-lab", "Reason (recorded)");
-  const reason = accEl("input", "fld");
+  const rcol = accEl("div", "ac-pcol ac-pgrow");
+  const rlab = accEl("label", "t-sm muted", "Reason (recorded)");
+  const reason = accEl("input", "input");
   reason.type = "text";
   reason.maxLength = 200;
   reason.autocomplete = "off";
@@ -297,12 +341,12 @@ function accPanel(r, d, ctx) {
 
   let typed = null;
   if (g.needLabel) {
-    const lcol = accEl("div", "ac-pcol grow");
-    const llab = accEl("label", "ac-lab");
+    const lcol = accEl("div", "ac-pcol ac-pgrow");
+    const llab = accEl("label", "t-sm muted");
     llab.append(document.createTextNode("Type "));
     llab.appendChild(accEl("span", "mono", g.label));
     llab.append(document.createTextNode(" to confirm"));
-    typed = accEl("input", "fld mono");
+    typed = accEl("input", "input mono");
     typed.type = "text";
     typed.autocomplete = "off";
     typed.spellcheck = false;
@@ -326,22 +370,24 @@ function accPanel(r, d, ctx) {
   }
   for (const why of [g.blocked, g.blockedText]) if (why) box.appendChild(accEl("div", "ac-warn", why));
   if (!g.windows.length) box.appendChild(accEl("div", "ac-warn", "This binding allows no window of 30 minutes or more."));
-  box.appendChild(accEl("div", "ac-prole", "Role: " + g.role));
+  box.appendChild(accEl("p", "t-sm muted", "Role: " + g.role));
 
-  const hint = accEl("div", "ac-hint");
+  const hint = accEl("p", "ac-hint t-sm muted");
   box.appendChild(hint);
-  const err = accEl("div", "ac-err", accErrs.get(sid) || "");
+  const err = accEl("p", "ac-err t-sm", accErrs.get(sid) || "");
   err.setAttribute("role", "alert");
   err.hidden = !err.textContent;
   box.appendChild(err);
 
+  // Both buttons are aria-disabled, never [disabled], while a request is out or the form is incomplete: the keyboard
+  // may be on either, and a disabled button would drop it to <body>. Cancel refuses a press while busy; Grant's
+  // refusal is accGrant's own (it re-checks the form and the busy set).
   const btns = accEl("div", "ac-pbtns");
   const cancel = accEl("button", "btn", "Cancel");
   cancel.type = "button";
-  cancel.disabled = accBusy.has(sid);
-  cancel.classList.toggle("off", cancel.disabled);
-  cancel.onclick = () => { accDrafts.delete(sid); accErrs.delete(sid); repaint(true); };
-  const grant = accEl("button", "btn pri");
+  if (accBusy.has(sid)) cancel.setAttribute("aria-disabled", "true");
+  cancel.onclick = () => { if (accBusy.has(sid)) return; accDrafts.delete(sid); accErrs.delete(sid); repaint(true); };
+  const grant = accEl("button", "btn btn-primary");
   grant.type = "button";
   const doGrant = () => accGrant(sid, rowByName(r.name), repaint);
   grant.onclick = doGrant;
@@ -356,21 +402,20 @@ function accPanel(r, d, ctx) {
     minutes: "Pick a window.",
   };
   // One place decides what is pressed and whether Grant is live, so the look and
-  // the real disabled attribute cannot disagree. A double click sends one
-  // request: accGrant refuses while accBusy holds the session.
+  // the real state cannot disagree. A double click sends one request: accGrant
+  // refuses while accBusy holds the session.
   function sync() {
-    for (const [w, b] of segBtns) {
-      b.classList.toggle("on", w === d.minutes);
-      b.setAttribute("aria-pressed", w === d.minutes ? "true" : "false");
-    }
-    const fs = grantFormState({ minutes: d.minutes, reason: d.reason, typed: d.typed, prod: g.needLabel, label: g.label, busy: accBusy.has(sid) });
+    for (const [w, b] of segBtns) b.setAttribute("aria-pressed", w === d.minutes ? "true" : "false");
+    const busy = accBusy.has(sid);
+    const fs = grantFormState({ minutes: d.minutes, reason: d.reason, typed: d.typed, prod: g.needLabel, label: g.label, busy });
     const ok = fs.valid && !g.blocked && !g.blockedText;
     grant.textContent = (g.extend ? "Extend" : "Grant write") + (d.minutes ? " · " + d.minutes + " min" : "");
-    grant.disabled = !ok;
-    grant.classList.toggle("off", !ok);
+    if (ok) grant.removeAttribute("aria-disabled"); else grant.setAttribute("aria-disabled", "true");
+    // At work, not closed: the kit dims aria-disabled but not aria-busy.
+    if (busy) grant.setAttribute("aria-busy", "true"); else grant.removeAttribute("aria-busy");
     hint.textContent = ok ? "" : HINTS[fs.why] || "";
   }
-  const onEnter = (e) => { if (e.key === "Enter" && !grant.disabled) { e.preventDefault(); doGrant(); } };
+  const onEnter = (e) => { if (e.key === "Enter" && grant.getAttribute("aria-disabled") !== "true") { e.preventDefault(); doGrant(); } };
   reason.onkeydown = onEnter;
   if (typed) typed.onkeydown = onEnter;
   sync();
@@ -379,15 +424,15 @@ function accPanel(r, d, ctx) {
 
 function accCreds(m, s, ctx) {
   const { sid } = ctx;
-  const card = accEl("section", "ac-card");
-  card.appendChild(accCardHead("Cloud credentials", m.creds.head));
+  const card = accEl("section", "card ac-creds");
+  card.appendChild(accCardHead("Cloud credentials", m.creds.head ? accEl("span", "t-sm muted tnum", m.creds.head) : null));
   const d = accDrafts.get(sid);
   for (const r of m.creds.rows) {
     const blk = accRowBlock(r, ctx);
     if (m.creds.ssoFor === r.name && r.kind === "aws") {
       const wrap = accEl("div", "ac-sso");
       if (s.need === "sso") wrap.appendChild(renderSSOBody(s, { bare: true }));
-      else wrap.appendChild(accEl("div", "ac-note", "AWS sign-in expired. The sign-in card appears here once the agent is no longer waiting on a prompt."));
+      else wrap.appendChild(accEl("p", "t-sm muted", "AWS sign-in expired. The sign-in card appears here once the agent is no longer waiting on a prompt."));
       blk.appendChild(wrap);
     }
     if (d && d.conn === r.name && r.grant) blk.appendChild(accPanel(r, d, ctx));
@@ -396,43 +441,64 @@ function accCreds(m, s, ctx) {
   return card;
 }
 
+// accEventRow: one credential event (§A3, §E4). The tone of an Outcome sits on a span in an unclassed cell: a mint is
+// green, a broker error red, any other word (a refusal is containment working) muted; a person's decision is plain
+// text. "yes" in Elevated is red 500, "no" plain, an approval's blank. Only the model's tint rows are tinted.
+function accEventRow(e, nowMs) {
+  const tr = accEl("tr", e.tint ? "is-elevated" : "");
+  tr.appendChild(accEl("td", "sub tnum", accEventTime(e.ts, nowMs)));
+  tr.appendChild(accEl("td", "sub", e.provider));
+  const subj = accEl("td", "ac-subj");
+  if (e.provider === "approval") {
+    // "granted 30 min on culipulse-prod": the name is the part after the first " on ", mono as everywhere else.
+    const at = e.subject.indexOf(" on ");
+    if (at >= 0) accFill(subj, [e.subject.slice(0, at + 4), accEl("span", "mono t-sm", e.subject.slice(at + 4))]);
+    else subj.textContent = e.subject;
+  } else {
+    subj.appendChild(accEl("span", "mono t-sm", e.subject));
+  }
+  if (e.detail) {
+    subj.appendChild(accEl("span", "muted", " · “" + e.detail + "”"));
+    subj.title = e.detail;
+  }
+  tr.appendChild(subj);
+  const out = accEl("td");
+  if (e.provider === "approval") out.textContent = e.outcome;
+  else if (e.outcome) out.appendChild(accEl("span", e.tone === "ok" ? "c-ok" : e.tone === "bad" ? "c-red" : "muted", e.outcome));
+  tr.appendChild(out);
+  const el = accEl("td");
+  if (e.elevatedText === "yes") el.appendChild(accEl("span", "c-red w-500", "yes"));
+  else el.textContent = e.elevatedText;
+  tr.appendChild(el);
+  return tr;
+}
+
 function accEventsCard(m, d, nowMs, sid) {
-  const card = accEl("section", "ac-card");
-  const top = accCardHead("Recent credential events", "last " + ACCESS_EVENTS + " · ");
-  const full = accEl("button", "ac-link", "full history in Audit");
+  const card = accEl("section", "card ac-events");
+  const full = accEl("button", "link t-sm", "Full history in Audit");
   full.type = "button";
-  full.addEventListener("click", () => openAudit({ session: sid }));
-  top.lastChild.appendChild(full);
-  card.appendChild(top);
+  full.onclick = () => openAudit({ session: sid });
+  card.appendChild(accCardHead("Recent credential events", accEl("span", "t-sm muted", "Last " + ACCESS_EVENTS + " ·"), full));
   if (!m.events.length) {
     const msg = d && d.failed && !d.loaded ? "Could not read the credential log." : d && d.loaded ? "No credential events yet." : "Loading…";
     card.appendChild(accEl("div", "ac-empty", msg));
     return card;
   }
-  const tbl = accEl("div", "ac-ev");
-  tbl.setAttribute("role", "table");
-  const head = accEl("div", "ac-evrow ac-evhead");
-  head.setAttribute("role", "row");
-  for (const h of ["Time", "Provider", "Subject", "Outcome", "Elevated"]) head.appendChild(accEl("div", "ac-lab", h));
-  tbl.appendChild(head);
-  for (const e of m.events) {
-    const r = accEl("div", "ac-evrow");
-    r.setAttribute("role", "row");
-    r.appendChild(accEl("div", "ac-evt", accEventTime(e.ts, nowMs)));
-    r.appendChild(accEl("div", "", e.provider));
-    const subj = accEl("div", "ac-evs mono", e.subject);
-    if (e.detail) {
-      subj.title = e.detail;
-      subj.appendChild(accEl("div", "ac-sub", e.detail));
-    }
-    r.appendChild(subj);
-    r.appendChild(accEl("div", e.tone === "ok" ? "ac-ok" : e.tone === "bad" ? "ac-bad" : "", e.outcome));
-    r.appendChild(accEl("div", e.elevated ? "ac-write" : "", e.provider === "approval" ? "" : e.elevated ? "yes" : "no"));
-    tbl.appendChild(r);
+  const table = accEl("table", "tbl ac-tbl");
+  const thead = accEl("thead");
+  const hr = accEl("tr");
+  for (const h of ["Time", "Provider", "Subject", "Outcome", "Elevated"]) {
+    const th = accEl("th", "", h);
+    th.setAttribute("scope", "col");
+    hr.appendChild(th);
   }
-  card.appendChild(tbl);
+  thead.appendChild(hr);
+  const body = accEl("tbody");
+  for (const e of m.events) body.appendChild(accEventRow(e, nowMs));
+  table.append(thead, body);
+  card.appendChild(table);
   if (d && d.loaded && !m.approvalsKnown && m.creds.rows.length) {
-    card.appendChild(accEl("div", "ac-note", "Write-window decisions are unavailable right now."));
+    card.appendChild(accEl("div", "ac-empty", "Write-window decisions are unavailable right now."));
   }
   return card;
 }
@@ -456,16 +522,28 @@ function mountAccess(host, sid0) {
     const a = document.activeElement;
     return !!a && host.contains(a) && !!a.dataset && !!a.dataset.ac;
   };
-  const put = (slot, node) => { slot.replaceChildren(...(node ? (Array.isArray(node) ? node : [node]) : [])); };
+  // fill: rebuild a section, and give the control the keyboard was in back to the same one in the new content: a
+  // button by its place among the section's buttons, a grant field by its data-ac. If it is gone (a closed panel's
+  // Cancel), the keyboard goes to the view, never to <body>.
+  const fill = (slot, node) => {
+    const a = document.activeElement;
+    const held = !!a && slot.contains(a);
+    const field = held && a.dataset ? a.dataset.ac || "" : "";
+    const at = held && !field ? [...slot.querySelectorAll("button")].indexOf(a) : -1;
+    slot.replaceChildren(...(node ? [node] : []));
+    if (!held) return;
+    const next = field ? slot.querySelector('[data-ac="' + field + '"]') : at >= 0 ? [...slot.querySelectorAll("button")][at] : null;
+    (next || host).focus({ preventScroll: true });
+  };
 
   function paint(force) {
     if (disposed) return;
     const s = lastSessions.find((x) => x.id === sid);
     if (!s) {
       keys.cont = keys.creds = keys.events = "";
-      put(slots.cont, accEl("div", "ac-empty", "This session is no longer listed."));
-      put(slots.creds, null);
-      put(slots.events, null);
+      fill(slots.cont, accEl("div", "ac-empty", "This session is no longer listed."));
+      fill(slots.creds, null);
+      fill(slots.events, null);
       return;
     }
     const d = accData.get(sid) || null;
@@ -478,7 +556,7 @@ function mountAccess(host, sid0) {
     ctx.repaint = paint;
 
     const k1 = JSON.stringify([model.containment, s.exited ? 1 : 0, s.runtime]);
-    if (force || k1 !== keys.cont) { keys.cont = k1; put(slots.cont, accContainment(model.containment, s)); }
+    if (force || k1 !== keys.cont) { keys.cont = k1; fill(slots.cont, accContainment(model.containment, s)); }
 
     // A draft whose connection can no longer be elevated is dropped.
     const dr = accDrafts.get(sid);
@@ -491,10 +569,10 @@ function mountAccess(host, sid0) {
     const k2 = JSON.stringify([model.creds, sso, s.need === "sso", accDrafts.get(sid) ? accDrafts.get(sid).conn : "",
       accBusy.has(sid), accErrs.get(sid) || ""]);
     if (!hasCreds) {
-      if (keys.creds !== "-") { keys.creds = "-"; put(slots.creds, null); }
+      if (keys.creds !== "-") { keys.creds = "-"; fill(slots.creds, null); }
     } else if ((force || k2 !== keys.creds) && (force || !typing())) {
       keys.creds = k2;
-      put(slots.creds, accCreds(model, s, ctx));
+      fill(slots.creds, accCreds(model, s, ctx));
       if (ctx.focusReason) {
         ctx.focusReason = false;
         const f = host.querySelector('[data-ac="reason"]');
@@ -504,8 +582,8 @@ function mountAccess(host, sid0) {
 
     const k3 = JSON.stringify([model.events, model.approvalsKnown, hasCreds, d ? [d.loaded, d.failed] : 0, new Date(now).getDate()]);
     if (!hasCreds && !model.events.length) {
-      if (keys.events !== "-") { keys.events = "-"; put(slots.events, null); }
-    } else if (force || k3 !== keys.events) { keys.events = k3; put(slots.events, accEventsCard(model, d, now, sid)); }
+      if (keys.events !== "-") { keys.events = "-"; fill(slots.events, null); }
+    } else if (force || k3 !== keys.events) { keys.events = k3; fill(slots.events, accEventsCard(model, d, now, sid)); }
 
     if (lastSsoFor && !model.creds.ssoFor) accLoad(sid, true); // signed in: re-read the status
     lastSsoFor = model.creds.ssoFor;
