@@ -2599,3 +2599,40 @@ test("the Compare block on the phone is unchanged: its KPI grid, boxed note and 
   const dow = nodesOf(sec, "svg").find((n) => n.attrs.viewBox === "0 0 380 150");
   assert.deepStrictEqual(nodesOf(dow, "text").filter((t) => t.attrs["text-anchor"] === "start").map((t) => t.attrs.x), ["2", "2", "2"], "the phone's y labels still start at x = 2");
 });
+
+// =====================================================================================================================
+// Gate fix wave: the narrow window (Gate 3 D2, D3) and the kit's 20px line (Gate 4 L2, L3)
+// =====================================================================================================================
+
+// D2: at 701-760px five tiles were 68-80px wide, their labels cut to five characters and the last Analytics value ($44.59, 77px)
+// spilling out of its tile.
+test("a KPI row too narrow for 120px tiles wraps onto more rows, on both pages, with a hairline at every row start", () => {
+  // Wide: the kit's one row of equal columns, untouched.
+  const kit = decls(".kpi-row");
+  assert.strictEqual(kit.get("grid-auto-flow"), "column");
+  assert.strictEqual(kit.get("grid-auto-columns"), "minmax(0, 1fr)");
+  const WRAP = "@container (max-width: 599px)";
+  const wrap = CONTAINER_RULES.filter((r) => r.at.includes(WRAP));
+  assert.strictEqual(wrap.length, 2, "one rule for the row, one for its tiles");
+  const [row, tile] = wrap;
+  assert.deepStrictEqual(parts(row.selector), [AU + " .kpi-row", ANP + " .kpi-row"], "one rule for both pages (the shared list)");
+  assert.deepStrictEqual(parts(tile.selector), [AU + " .kpi-row > .kpi", ANP + " .kpi-row > .kpi"]);
+  assert.strictEqual(row.decls.get("grid-auto-flow"), "row");
+  assert.strictEqual(row.decls.get("grid-template-columns"), "repeat(auto-fill, minmax(120px, 1fr))", "a tile is never under 120px: its 22px value and 16px sides need about that");
+  assert.strictEqual(row.decls.get("overflow"), "hidden", "the row's own edge hides the hairlines that sit on it, and keeps its 8px corners");
+  // Five tiles of 120px want 600px: the query starts one pixel under that.
+  // A left and a top hairline on every tile, drawn one pixel outside its cell, so a row start has no stray line and every row break has one.
+  assert.strictEqual(tile.decls.get("margin"), "-1px 0 0 -1px");
+  assert.strictEqual(tile.decls.get("box-shadow"), "inset 1px 0 0 var(--line), inset 0 1px 0 var(--line)");
+  assert.ok(![...row.decls.values(), ...tile.decls.values()].some((v) => /color-mix/.test(v)));
+  // The query is answered by the container the row sits in: Analytics' body (which a container already), Audit's scroller.
+  assert.strictEqual(decls(ANP + " #analytics-body").get("container-type"), "inline-size");
+  assert.strictEqual(decls(AU + " > .au-scroll").get("container-type"), "inline-size");
+  assert.strictEqual(decls(AU + " > .au-scroll").get("flex"), "1 1 0", "making it a container leaves it the scroller it was");
+  // The labels still ellipsize with their full text in title (the tiles are narrower, not taller).
+  assert.strictEqual(decls(AU + " .kpi-label").get("text-overflow"), "ellipsis");
+  assert.strictEqual(decls(ANP + " .kpi-label").get("white-space"), "nowrap");
+  // Outside a container there is no wrap rule: the kit's row, tiles and hairline are the wide layout.
+  assert.ok(!BASE_RULES.some((r) => parts(r.selector).some((x) => x.startsWith(AU + " .kpi-row") || x.startsWith(ANP + " .kpi-row"))), "the wrap lives in the query alone");
+  assert.strictEqual(decls(".kpi + .kpi").get("box-shadow"), "inset 1px 0 0 var(--line)");
+});

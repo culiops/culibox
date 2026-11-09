@@ -2355,11 +2355,24 @@
   }
   #page-host > #audit-page.as-page #au-session { flex: none; width: 180px; }
 
-  #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); }
+  /* The scroller is a container too, so its KPI row can answer the room it has (the wrap rule below). */
+  #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); container-name: au-scroll; container-type: inline-size; }
   /* A column flex scroller shrinks its children before it scrolls: none of them give way. */
   #page-host > #audit-page.as-page > .au-scroll > * { flex: none; }
   #page-host > #audit-page.as-page .kpi-label,
   #page-host > #analytics-modal.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A KPI tile is never narrower than 120px: its value (22px, "$44.59" is 77px) and its 16px sides need about that. Five tiles want
+     600px, so in a body narrower than that the row wraps onto more rows. The kit's hairline is a left line on every tile but the
+     first, which would leave a row's first tile with a line at its edge and no line between rows: here every tile has a left and a
+     top line, drawn one pixel outside its cell (the negative margin) so the row's own edge (overflow: hidden, which also keeps the
+     8px corners) hides the ones that sit on it. Both pages ask the container their KPI rows sit in: Analytics' body, and Audit's
+     scroller. */
+  @container (max-width: 599px) {
+    #page-host > #audit-page.as-page .kpi-row,
+    #page-host > #analytics-modal.as-page .kpi-row { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); overflow: hidden; }
+    #page-host > #audit-page.as-page .kpi-row > .kpi,
+    #page-host > #analytics-modal.as-page .kpi-row > .kpi { margin: -1px 0 0 -1px; box-shadow: inset 1px 0 0 var(--line), inset 0 1px 0 var(--line); }
+  }
 
   /* The table's card clips the row tint to its 8px corners (the frame's inline overflow: hidden). */
   #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; container-name: au-card; container-type: inline-size; }
