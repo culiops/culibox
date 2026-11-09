@@ -436,7 +436,9 @@ test("actTime: the clock today, the date and clock for an earlier day", () => {
 });
 
 test("actContext: the context bar line", () => {
-  assert.deepStrictEqual(actContext({ pct: 23, contextTokens: 230000, contextMax: 1000000 }), { pct: 23, width: "23%", text: "context 23% of 1M" });
+  assert.deepStrictEqual(actContext({ pct: 23, contextTokens: 230000, contextMax: 1000000 }), { pct: 23, width: "23%", text: "context 23% of 1M", label: "23% of 1M" });
+  assert.strictEqual(actContext({ pct: 61, contextTokens: 122000, contextMax: 200000 }).label, "61% of 200k");
+  assert.strictEqual(actContext({ pct: 12 }).label, "12%");
   assert.strictEqual(actContext({ pct: 40, contextTokens: 80000, contextMax: 200000 }).text, "context 40% of 200k");
   assert.strictEqual(actContext({ contextTokens: 250000, contextMax: 1000000 }).pct, 25);
   assert.strictEqual(actContext({ pct: 12 }).text, "context 12%");

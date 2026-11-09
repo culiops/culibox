@@ -269,6 +269,7 @@ function activityModel(inp) {
 
 // actContext: the context bar's line. pct is the server's verdict when present
 // (it omits it when the window is unknown), else used / max; null when neither.
+// text is the bar's accessible name; label is the card's "61% of 200k".
 function actContext(u) {
   if (!u || typeof u !== "object") return null;
   const used = actNum(u.contextTokens) || 0;
@@ -280,7 +281,7 @@ function actContext(u) {
   let of = "";
   if (max >= 1e6) of = " of " + String(Number((max / 1e6).toFixed(1))) + "M";
   else if (max >= 1000) of = " of " + Math.round(max / 1000) + "k";
-  return { pct, width: pct + "%", text: "context " + pct + "%" + of };
+  return { pct, width: pct + "%", text: "context " + pct + "%" + of, label: pct + "%" + of };
 }
 
 // ACT_TOOL_ROWS: how many tools the Context by tool list shows.

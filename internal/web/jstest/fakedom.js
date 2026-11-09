@@ -1,8 +1,9 @@
 "use strict";
 // fakedom.js: the hand-written fake DOM the pane-view tests share (the repo has no jsdom). Just enough
 // of Node and Text for the code under test: children, class and attribute bookkeeping, focus, click,
-// after / remove / contains, and a querySelector over a class or a tag name. One page's scripts and
-// `document` are the test's own: see page() in activitytab.test.js and elevbanner.test.js.
+// after / remove / contains, and a querySelector over compound selectors (tag, .class, [attr], [attr="v"])
+// and descendant chains of them. One page's scripts and `document` are the test's own: see page() in
+// activitytab.test.js and elevbanner.test.js.
 
 class Text { constructor(t) { this.text = t; this.parent = null; } get textContent() { return this.text; } set textContent(v) { this.text = String(v); } }
 class Node {
@@ -42,12 +43,34 @@ class Node {
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   focus() { this.doc.activeElement = this; }
   click() { if (this.onclick) this.onclick({ target: this }); }
-  all(sel, out) {
+  // Matches one compound selector (an optional tag, then any number of .classes and [attr] / [attr="v"] tests).
+  is(compound) {
+    const m = /^([a-z][a-z0-9]*)?((?:\.[\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i.exec(compound);
+    if (!m) return false;
+    if (m[1] && this.tag !== m[1]) return false;
+    const have = this.className.split(/\s+/);
+    for (const t of m[2].match(/\.[\w-]+|\[[^\]]+\]/g) || []) {
+      if (t[0] === ".") { if (!have.includes(t.slice(1))) return false; continue; }
+      const [k, v] = t.slice(1, -1).split("=");
+      const got = this.getAttribute(k);
+      if (got === null || (v !== undefined && got !== v.replace(/^"|"$/g, ""))) return false;
+    }
+    return true;
+  }
+  // Descendant chains ("a .b c") over compound selectors. The last compound must match this node; the
+  // rest must match ancestors, in order, below `root` (the node the query started on).
+  matches(chain, root) {
+    if (!this.is(chain[chain.length - 1])) return false;
+    let i = chain.length - 2;
+    for (let a = this.parent; i >= 0 && a && a !== root.parent; a = a.parent) if (a instanceof Node && a.is(chain[i])) i--;
+    return i < 0;
+  }
+  all(sel, out, root) {
+    const chain = sel.trim().split(/\s+/);
     for (const c of this.children) {
       if (!(c instanceof Node)) continue;
-      const hit = sel[0] === "." ? c.className.split(/\s+/).includes(sel.slice(1)) : c.tag === sel;
-      if (hit) out.push(c);
-      c.all(sel, out);
+      if (c.matches(chain, root || this)) out.push(c);
+      c.all(sel, out, root || this);
     }
     return out;
   }

@@ -1443,96 +1443,92 @@
   .ac-evs { min-width: 0; overflow-wrap: anywhere; }
   .ac-evs .ac-sub { font-family: var(--font-ui); }
 
-  /* --- Activity view (spec 5.8; ea-3.png) ------------------------------------ */
-  /* Colour roles: amber = the pending ask only, red = error / write
-     window (a refusal is containment working: neutral), green = status (ok, minted, live). A +a −d diff is neutral. The pane's width, not the
-     window's, decides where the right column goes: .pane-view is the container. */
+  /* --- Activity view (M6.1, M6.2; #176) --------------------------------------- */
+  /* Drawn from the M6 frames on the kit's own classes (.kpi-row, .seg, .card, .tbl, .btn, .meter, .dot, .empty-state):
+     only the layout is page-local, the frames' m6- rules re-prefixed act- (digest §D). Colour roles: amber = the
+     pending ask only, red = an error or a write window (a refusal is containment working: muted), green = status
+     (ok, minted, live). A +a −d diff is neutral. The pane's width, not the window's, decides where the right column
+     goes: .pane-view is the container. */
   .pane-view[data-view="activity"] { container-type: inline-size; }
-  .act-wrap { display: flex; flex-direction: column; min-width: 0; }
-  .act-main { min-width: 0; }
-  .act-side { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 18px; min-width: 0; border-top: 1px solid var(--line); }
+  /* §B9: the frames inherit a 20px line from the kit's .ab root and a margin-free h2 and p from its reset. .pane-view's
+     `font` shorthand resets line-height to normal and the browser gives h2 and p their margins, so the view sets both. */
+  .act-wrap, .act-plain { line-height: var(--lh-md); }
+  .act-wrap :where(h2, p), .act-plain :where(h2, p) { margin: 0; }
+  /* M6.1: the main column and the 320px side column (§B2), 24px apart inside the view's 20px 24px padding, the side
+     column as tall as its cards (it does not stretch). Under 1100px of pane the side column stacks below. */
+  .act-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-6); align-items: start; padding: var(--sp-5) var(--sp-6); }
   @container (min-width: 1100px) {
-    .act-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: stretch; }
-    .act-side { border-top: 0; border-left: 1px solid var(--line); padding-top: 14px; }
+    .act-wrap { grid-template-columns: minmax(0, 1fr) 320px; }
   }
-  .act-lab { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--track-caps); }
-  .act-note { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
-  .act-note[hidden] { display: none; }
-  .act-lead { padding: 14px 16px 4px; font-size: var(--t-md); }
-  .act-empty { padding: 14px 16px; color: var(--muted); }
-  .act-err { color: var(--danger); font-size: var(--t-sm); }
+  .act-main, .act-side { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; }
+  /* The slots the script fills own no box: an empty one must not add a 16px gap beside its neighbours. */
+  .act-main > div, .act-side > div, .act-plainlist > div { display: contents; }
+  .act-wrap .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .act-tiles { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
-  .act-tile { min-width: 0; }
-  .act-n { font: 600 var(--t-xl) var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
-  .act-tl { margin-top: 1px; color: var(--muted); font-size: var(--t-sm); }
-
-  .act-msg { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  .act-msgtxt { color: var(--fg); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow-y: auto; }
-  .act-msgtxt.act-quiet { color: var(--muted); font-style: italic; }
+  /* Latest message: a card of 12px 16px, the label and the text 4px apart (§B2). The reply box is the product's,
+     not the frame's: it sits 8px under the text. */
+  .act-msg { padding: var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: 4px; }
+  .act-msgtxt { overflow-wrap: anywhere; white-space: pre-wrap; max-height: calc(6 * var(--lh-md)); overflow-y: auto; }
+  .act-msgtail:empty { display: none; }
+  .act-msgtail:not(:empty) { padding-top: var(--sp-2); }
   .act-msg .rep { display: flex; gap: 6px; }
   .act-msg .rep .fld { flex: 1; min-width: 0; }
   .act-msg .peek-why { display: block; margin-top: 4px; font-size: var(--t-sm); color: var(--muted); }
   .act-msg .peek-why:empty { display: none; }
-  .act-msgtail:empty { display: none; }
 
-  .act-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; }
-  .act-pills { display: flex; flex-wrap: wrap; gap: 6px; }
-  .act-pill {
-    padding: 2px 11px; font: 500 var(--t-sm)/20px var(--font-ui); color: var(--muted); background: none;
-    border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  /* The filter bar and the Load older row (the frames' .m6-bar): the seg on the left, the live label pushed right. */
+  .act-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+  .act-filter { flex: none; }
+  .act-live { display: inline-flex; align-items: center; gap: 6px; }
+  .act-foot[hidden] { display: none; }
+
+  /* The event table (§B3): fixed columns of 88, 104 and 124px, the Detail column takes the rest and wraps, 6px above and
+     below its text. Every other cell keeps the kit's 32px row. The card clips the row tint to its 8px corners. */
+  .act-card { overflow: hidden; }
+  .act-tbl { table-layout: fixed; }
+  .act-tbl th:nth-child(1) { width: 88px; }
+  .act-tbl th:nth-child(2) { width: 104px; }
+  .act-tbl th:nth-child(4) { width: 124px; }
+  .act-tbl td.act-det { white-space: normal; overflow-wrap: anywhere; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
+  /* Not drawn, and real: a date and clock ("28 Nov 14:12", an event from an earlier day) wraps in the 88px Time column
+     instead of running over Kind (a one-line row keeps its 32px: 6 + 20 + 6), and a long tool name (an MCP tool)
+     ellipsizes in Kind instead of running into Detail. */
+  .act-tbl td:first-child { white-space: normal; height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); }
+  .act-tbl td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+  /* The pending ask is the one amber row (the frames draw none: this is the product's own, kept). The kit's row hover
+     out-weighs a bare tint, as on the Audit page's elevated rows. */
+  .act-tbl tbody tr.act-ask, .act-tbl tbody tr.act-ask:hover { background: var(--amber-tint); }
+  .act-tbl td.act-empty { height: 96px; text-align: center; white-space: normal; color: var(--muted); }
+  div.act-empty { padding: var(--sp-6) var(--sp-4); color: var(--muted); }
+
+  /* The side column's cards (§B4): the body is 12px 16px 16px, its rows 22px high 8px apart, a name column of 76px, a
+     meter between, and a 36px percent. */
+  .act-cardbody { padding: var(--sp-3) var(--sp-4) var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+  .act-cardbody > .meter { flex: none; }
+  .act-trow { display: grid; grid-template-columns: 76px minmax(0, 1fr) 36px; align-items: center; column-gap: var(--sp-3); height: 22px; }
+  .act-trow > :last-child { text-align: right; }
+  .act-frow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--sp-3); height: 22px; }
+
+  /* M6.2 (§B5): the block fills the whole view, outside the padded column, so it is centred in the area under the
+     header. A credential event the session did have adds the table under it: the block shrinks to its height and sits
+     at the top. */
+  .act-plain { display: flex; flex-direction: column; min-height: 100%; }
+  .act-plain.act-listed > .act-empty-state { flex: none; }
+  .act-plainlist { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; padding: 0 var(--sp-6) var(--sp-5); }
+  .act-plainlist[hidden] { display: none; }
+
+  /* A narrow pane (four panes at 1280px): the KPI tiles wrap as on the Audit page, and the table stops fixing its
+     columns and scrolls inside its card instead of clipping Outcome. Five 120px tiles want a 600px row, and the row is
+     the pane less the view's 24px sides: 648px, so the query starts one pixel under that (the Audit page's 599px is its
+     own container, and prove-pages.test.js pins that one's rules). After the base rules, which it overrides. */
+  @container (max-width: 647px) {
+    .act-wrap .kpi-row { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); overflow: hidden; }
+    .act-wrap .kpi-row > .kpi { margin: -1px 0 0 -1px; box-shadow: inset 1px 0 0 var(--line), inset 0 1px 0 var(--line); }
+    .act-card { overflow-x: auto; }
+    .act-tbl { table-layout: auto; }
+    .act-tbl th:nth-child(1), .act-tbl th:nth-child(2), .act-tbl th:nth-child(4) { width: auto; }
+    .act-tbl td.act-det { min-width: 160px; }
   }
-  .act-pill:hover { color: var(--fg); }
-  .act-pill.on { color: var(--fg); background: var(--raise); border-color: var(--faint); }
-  .act-row:focus-visible { outline: var(--focus); outline-offset: -2px; }
-  .act-live { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: var(--t-sm); }
-  .act-live.stale { color: var(--muted); }
-  .act-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-
-  .act-list { display: flex; flex-direction: column; }
-  .act-row {
-    display: grid; grid-template-columns: 76px 92px minmax(0, 1fr) auto; gap: 12px; align-items: baseline;
-    padding: 7px 16px; cursor: pointer; border-top: 1px solid transparent;
-  }
-  .act-row:hover { background: var(--panel); }
-  .act-row.ask { background: color-mix(in srgb, var(--amber) 9%, var(--bg)); }
-  .act-row.ask .act-kind { color: var(--amber); }
-  .act-row.you { background: var(--panel); border-top-color: var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; }
-  .act-row.you .act-kind { color: var(--accent); }
-  .act-time { color: var(--muted); font: var(--t-sm) var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .act-kind { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .act-detail { min-width: 0; font: var(--t-md) var(--font-mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .act-row.you .act-detail { font-family: var(--font-ui); font-size: var(--t-md); }
-  .act-row.open .act-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
-  .act-out { color: var(--muted); font-size: var(--t-sm); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  /* Tone classes are compounded with .act-out: a bare .act-err/.act-ok declared
-     earlier loses to .act-out's muted colour (equal specificity, later rule). */
-  .act-ok, .act-out.act-ok { color: var(--ok); }
-  .act-amber, .act-out.act-amber { color: var(--amber); }
-  .act-out.act-err { color: var(--danger); }
-  .act-muted, .act-out.act-muted { color: var(--muted); }
-  .act-add, .act-del { color: var(--muted); }
-  .act-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 16px 16px; }
-  .act-foot:empty { display: none; }
-  .act-foot .btn { border-radius: var(--r-ctl); padding: 4px 12px; }
-  .act-foot .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
-
-  .act-sec { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
-  .act-sech { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: var(--track-caps); }
-  .act-st { flex: 1; min-width: 0; }
-  .act-sech .btn { border-radius: var(--r-ctl); padding: 1px 8px; font-size: var(--t-xs); text-transform: none; letter-spacing: 0; }
-  .act-sech .btn:where(:not(.pri)) { background: var(--raise); border-color: var(--line); }
-  .act-tool { display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 34px; gap: 10px; align-items: center; font-size: var(--t-md); }
-  .act-tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .act-tbar { display: block; height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
-  .act-tbar i { display: block; height: 100%; background: var(--accent); }
-  .act-tpct { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-  .act-ctx { margin: -2px 0 12px; display: flex; flex-direction: column; gap: 5px; }
-  .act-ctxbar { height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
-  .act-ctxbar i { display: block; height: 100%; background: var(--accent); }
-  .act-file { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; font: var(--t-sm) var(--font-mono); }
-  .act-fpath { min-width: 0; overflow-wrap: anywhere; }
-  .act-fdelta { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
   /* --- New session dialog (spec 5.6) -------------------------------------- */
   /* 820px: the profile list on the left, the form and the reach box on the

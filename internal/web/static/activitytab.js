@@ -9,14 +9,20 @@
 //
 // The host is volatile (a tab close or dock change re-attaches it) and the poll
 // calls update() every 3 s, so nothing the operator did lives in the DOM alone:
-// the filter, the expanded rows, the older pages and the reply draft are in
-// actStates / replyDraft, per session, and survive a repaint and a remount. A
-// section repaints only when its signature changes.
+// the filter, the older pages and the reply draft are in actStates / replyDraft,
+// per session, and survive a repaint and a remount. A section repaints only when
+// its signature changes, and a control the operator is using (a filter item, Load
+// older, Scan) is never rebuilt under their keyboard.
+//
+// It is drawn from the M6 frames on the kit's own classes (.kpi-row, .seg, .card,
+// .tbl, .btn, .meter, .empty-state); desktop.css has only the layout. Rows are
+// not controls: a command is wrapped as the frame draws it and its title keeps
+// the whole text, so there is nothing to expand.
 
 const ACT_PAGE = 100;
 
 // Per session id, kept across remounts of the view:
-//   filter, expanded (Set of row keys), resp (the newest page, refetched each
+//   filter, resp (the newest page, refetched each
 //   poll), older (pages loaded by "Load older"), pinned, olderMore, loadingMore,
 //   olderErr, loaded / failed / inflight / at (actLoadDone), seq + ctl (the read
 //   in flight), attr ({status, data, failed}), attrAsked.
@@ -27,9 +33,9 @@ function actState(sid) {
   let st = actStates.get(sid);
   if (!st) {
     st = {
-      filter: "all", expanded: new Set(), resp: null, older: [], pinned: false, olderMore: null,
+      filter: "all", resp: null, older: [], pinned: false, olderMore: null,
       loadingMore: false, olderErr: "", loaded: false, failed: false, inflight: false, at: 0,
-      seq: 0, ctl: null, focusKey: "", attr: { status: "idle", data: null, failed: false }, attrAsked: false,
+      seq: 0, ctl: null, attr: { status: "idle", data: null, failed: false }, attrAsked: false,
     };
     actStates.set(sid, st);
   }
@@ -137,155 +143,155 @@ async function actScan(sid) {
 
 // --- sections --------------------------------------------------------------------
 
+// actTiles: the kit's KPI row, one .kpi per tile. A session with no transcript has no tiles, so no row. The
+// label ellipsizes in a narrow pane, so it carries its whole text.
 function actTiles(tiles) {
-  const wrap = actEl("div", "act-tiles");
+  const row = actEl("div", "kpi-row");
   for (const t of tiles) {
-    const c = actEl("div", "act-tile");
-    c.appendChild(actEl("div", "act-n", String(t.n)));
-    c.appendChild(actEl("div", "act-tl", t.label));
-    wrap.appendChild(c);
+    const c = actEl("div", "kpi");
+    const label = actEl("span", "kpi-label", t.label);
+    label.title = t.label;
+    c.append(actEl("span", "kpi-value", String(t.n)), label);
+    row.appendChild(c);
   }
-  return wrap;
+  return row;
 }
 
-// actOutcome: the right-aligned cell. A diff's +a −d is neutral text (green is
-// status and red is write/error only, D23); any other outcome is one word of one
-// colour role.
+// The tone class an outcome cell wears (the model's tone words). Green is status, red is an error or write
+// (a refusal is containment working: muted), amber is the ask only, and a diff's +a −d has no tone.
+const ACT_TONE_CLS = { ok: "c-ok", err: "c-red", amber: "c-amber", muted: "sub", add: "" };
+
+// actOutcome: the right-aligned cell, its text one word of one colour role.
 function actOutcome(o) {
-  const cell = actEl("div", "act-out");
-  if (o.tone === "add") {
-    const [a, d] = o.text.split(" ");
-    cell.append(actEl("span", "act-add", a), document.createTextNode(" "), actEl("span", "act-del", d || ""));
+  const tone = ACT_TONE_CLS[o.tone];
+  return actEl("td", tone ? "num " + tone : "num", o.text);
+}
+
+// actRowEl: one event as the frame draws it. Time and Kind are muted, except the You row's Kind (foreground, 500)
+// and the ask's (amber). The Detail wraps (a capped, one-line command is never cut off) in mono, except a message
+// of yours (sans) and "conversation cleared" (muted). The row is not a control and its title keeps the full text.
+function actRowEl(r) {
+  const tr = actEl("tr", r.cls === "ask" ? "act-ask" : "");
+  tr.title = r.detail;
+  const you = r.cls === "you" && r.kind === "You";
+  const cleared = r.cls === "you" && !you;
+  tr.appendChild(actEl("td", "sub tnum", r.time));
+  tr.appendChild(actEl("td", you ? "w-500" : r.cls === "ask" ? "c-amber" : "sub", r.kind));
+  const det = actEl("td", "act-det");
+  det.appendChild(actEl("span", you ? "w-500" : cleared ? "muted" : "mono t-sm", r.detail));
+  tr.appendChild(det);
+  tr.appendChild(actOutcome(r.outcome));
+  return tr;
+}
+
+// actTable: the card around the event table. With no rows its one row says why (`empty`).
+function actTable(rows, empty) {
+  const card = actEl("div", "card act-card");
+  const table = actEl("table", "tbl act-tbl");
+  const thead = actEl("thead");
+  const hr = actEl("tr");
+  for (const [text, cls] of [["Time", ""], ["Kind", ""], ["Detail", ""], ["Outcome", "num"]]) {
+    const th = actEl("th", cls, text);
+    th.setAttribute("scope", "col");
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  const body = actEl("tbody");
+  if (rows.length) {
+    for (const r of rows) body.appendChild(actRowEl(r));
   } else {
-    cell.className = "act-out act-" + o.tone;
-    cell.textContent = o.text;
+    const td = actEl("td", "act-empty", empty);
+    td.setAttribute("colspan", "4");
+    body.appendChild(actEl("tr")).appendChild(td);
   }
-  return cell;
+  table.append(thead, body);
+  card.appendChild(table);
+  return card;
 }
 
-function actRows(m, st, repaint) {
-  const list = actEl("div", "act-list");
-  for (const r of m.rows) {
-    const open = st.expanded.has(r.key);
-    const row = actEl("div", "act-row" + (r.cls ? " " + r.cls : "") + (open ? " open" : ""));
-    row.setAttribute("role", "button");
-    row.tabIndex = 0;
-    row.setAttribute("aria-expanded", open ? "true" : "false");
-    row.title = r.detail;
-    row.appendChild(actEl("div", "act-time", r.time));
-    row.appendChild(actEl("div", "act-kind", r.kind));
-    row.appendChild(actEl("div", "act-detail", r.detail));
-    row.appendChild(actOutcome(r.outcome));
-    row._key = r.key;
-    const toggle = () => {
-      if (st.expanded.has(r.key)) st.expanded.delete(r.key); else st.expanded.add(r.key);
-      if (document.activeElement === row) st.focusKey = r.key; // the repaint gives the keyboard back
-      repaint(false);
-    };
-    row.onclick = () => {
-      // Selecting text to copy is not a request to expand the row.
-      const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
-      if (sel && !sel.isCollapsed && row.contains(sel.anchorNode)) return;
-      toggle();
-    };
-    row.onkeydown = (e) => {
-      if (e.target !== row) return;
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-    };
-    list.appendChild(row);
-  }
-  return list;
-}
-
-// actEmpty: what the list says when it has no rows.
-function actEmptyText(m, st, filter) {
-  if (m.notClaude) return "No credential events yet.";
+// actEmptyText: what the table says when it has no rows.
+function actEmptyText(st, filter) {
   if (!st.loaded) return st.failed ? "Could not read the activity." : "Loading…";
   return filter === "all" ? "No activity yet." : "Nothing matches this filter.";
 }
 
-function actFoot(m, st, sid) {
-  const foot = actEl("div", "act-foot");
-  if (m.more) {
-    const b = actEl("button", "btn", st.loadingMore ? "Loading…" : "Load older");
-    b.type = "button";
-    b.disabled = st.loadingMore;
-    b.classList.toggle("off", st.loadingMore);
-    b.onclick = () => actLoadOlder(sid);
-    foot.appendChild(b);
-  }
-  if (st.olderErr) foot.appendChild(actEl("div", "act-err", st.olderErr));
-  if (m.partial) foot.appendChild(actEl("div", "act-note", "Earlier history not available."));
-  return foot;
+// actHead: a card's head, as the frame draws it: the title, a spacer, then a count, a share or a button.
+function actHead(title, tail) {
+  const head = actEl("div", "card-head");
+  head.append(actEl("h2", "t-md w-600", title), actEl("span", "ph-spacer"));
+  if (tail) head.appendChild(tail);
+  return head;
 }
 
 function actToolsCard(st, sid) {
-  const card = actEl("section", "act-sec");
-  const head = actEl("div", "act-sech");
-  head.appendChild(actEl("span", "act-st", "Context by tool"));
-  const scan = actEl("button", "btn", st.attr.status === "loading" ? "scanning…" : "scan");
+  const card = actEl("section", "card");
+  // Busy, not [disabled]: a disabled button drops the keyboard the moment it is pressed.
+  const loading = st.attr.status === "loading";
+  const scan = actEl("button", "btn btn-sm", loading ? "Scanning…" : "Scan");
   scan.type = "button";
-  scan.disabled = st.attr.status === "loading";
-  scan.classList.toggle("off", scan.disabled);
-  scan.onclick = () => actScan(sid);
-  head.appendChild(scan);
-  card.appendChild(head);
+  if (loading) { scan.setAttribute("aria-busy", "true"); scan.setAttribute("aria-disabled", "true"); }
+  scan.onclick = () => actScan(sid); // actScan ignores a press while a scan is out
+  card.appendChild(actHead("Context by tool", scan));
+  const body = actEl("div", "act-cardbody");
+  const note = (text) => body.appendChild(actEl("p", "t-sm muted", text));
   const t = actToolRows(st.attr.data);
   if (!st.attr.data) {
-    card.appendChild(actEl("div", "act-note", st.attr.status === "loading" ? "Scanning the transcript…"
-      : st.attr.failed ? "Could not scan the transcript." : "Not scanned yet."));
+    note(loading ? "Scanning the transcript…" : st.attr.failed ? "Could not scan the transcript." : "Not scanned yet.");
   } else if (!t.rows.length) {
-    card.appendChild(actEl("div", "act-note", "No tool activity recorded for this session."));
+    note("No tool activity recorded for this session.");
   } else {
     for (const r of t.rows) {
-      const row = actEl("div", "act-tool");
+      const row = actEl("div", "act-trow");
       row.title = r.name + " · " + r.calls + (r.calls === 1 ? " call" : " calls") + (r.ctx ? " · " + r.ctx + " tokens of results" : "");
-      row.appendChild(actEl("span", "act-tname", r.name));
-      const bar = actEl("span", "act-tbar");
+      const meter = actEl("span", "meter");
       const fill = actEl("i");
       fill.style.width = r.pct + "%";
-      bar.appendChild(fill);
-      row.appendChild(bar);
-      row.appendChild(actEl("span", "act-tpct", r.pct + "%"));
-      card.appendChild(row);
+      meter.appendChild(fill);
+      row.append(actEl("span", "mono t-sm ellipsis", r.name), meter, actEl("span", "t-sm tnum", r.pct + "%"));
+      body.appendChild(row);
     }
-    if (t.more) card.appendChild(actEl("div", "act-note", "and " + t.more + " more"));
-    if (st.attr.failed) card.appendChild(actEl("div", "act-note", "The last scan failed; this is the one before."));
-    card.appendChild(actEl("div", "act-note", "Share of tool-result bytes: a proxy for context pressure, not billing."));
+    if (t.more) note("and " + t.more + " more");
+    if (st.attr.failed) note("The last scan failed; this is the one before.");
+    note("Share of tool-result bytes: a proxy for context pressure, not billing.");
   }
+  card.appendChild(body);
   return card;
 }
 
 function actCtxCard(ctx) {
   if (!ctx) return null;
-  const wrap = actEl("div", "act-ctx");
-  const bar = actEl("div", "act-ctxbar");
+  const card = actEl("section", "card");
+  card.appendChild(actHead("Context", actEl("span", "t-sm muted tnum", ctx.label)));
+  const body = actEl("div", "act-cardbody");
+  const meter = actEl("span", "meter");
+  meter.setAttribute("role", "img");
+  meter.setAttribute("aria-label", ctx.text);
   const i = actEl("i");
   i.style.width = ctx.width;
-  bar.appendChild(i);
-  bar.setAttribute("role", "img");
-  bar.setAttribute("aria-label", ctx.text);
-  wrap.append(bar, actEl("div", "act-note", ctx.text));
-  return wrap;
+  meter.appendChild(i);
+  body.appendChild(meter);
+  card.appendChild(body);
+  return card;
 }
 
-function actFilesCard(files) {
-  const card = actEl("section", "act-sec");
-  card.appendChild(actEl("div", "act-sech", "Files changed"));
-  if (!files.length) {
-    card.appendChild(actEl("div", "act-note", "No files changed yet."));
-    return card;
+// actFilesCard: the files changed. Until the first reply the count is — and the body says it is loading (or that the
+// read failed), never "0" or "No files changed yet." for a list nobody has read.
+function actFilesCard(files, st) {
+  const card = actEl("section", "card");
+  card.appendChild(actHead("Files changed", actEl("span", "t-sm muted tnum", st.loaded ? String(files.length) : "—")));
+  const body = actEl("div", "act-cardbody");
+  if (!st.loaded) {
+    body.appendChild(actEl("p", "t-sm muted", st.failed ? "Could not read the activity." : "Loading…"));
+  } else if (!files.length) {
+    body.appendChild(actEl("p", "t-sm muted", "No files changed yet."));
   }
   for (const f of files) {
-    const row = actEl("div", "act-file");
+    const row = actEl("div", "act-frow");
     row.title = f.path;
-    row.appendChild(actEl("span", "act-fpath", f.path));
-    const d = actEl("span", "act-fdelta");
-    const [a, del] = f.text.split(" ");
-    d.append(actEl("span", "act-add", a), document.createTextNode(" "), actEl("span", "act-del", del));
-    row.appendChild(d);
-    card.appendChild(row);
+    row.append(actEl("span", "mono t-sm ellipsis", f.path), actEl("span", "t-sm tnum", f.text));
+    body.appendChild(row);
   }
+  card.appendChild(body);
   return card;
 }
 
@@ -299,20 +305,39 @@ function actSyncLive(live, s) {
 
 // --- the view --------------------------------------------------------------------
 
+// Two layouts, one host. A Claude session is .act-wrap: the main column (KPI row, latest message, filter bar,
+// table, Load older) beside the 320px side column (M6.1). A session with no transcript is .act-plain: one plain
+// block centred in the whole view, with no padded column around it (M6.2); a credential event it did have adds
+// the table under the block, top-aligned. The slots below move between the two, so the table is built once.
 function mountActivity(host, sid0) {
   let sid = sid0;
   let disposed = false;
   let model = null;
+  let mode = "";
   const wrap = actEl("div", "act-wrap");
   const main = actEl("div", "act-main");
   const side = actEl("div", "act-side");
-  const slots = { msg: actEl("div"), tiles: actEl("div"), bar: actEl("div"), note: actEl("div"), list: actEl("div"), foot: actEl("div"),
+  const plain = { root: actEl("div", "act-plain"), block: actEl("div", "empty-state act-empty-state"), list: actEl("div", "act-plainlist") };
+  const slots = { msg: actEl("div"), tiles: actEl("div"), bar: actEl("div"), list: actEl("div"), foot: actEl("div"),
     tools: actEl("div"), ctx: actEl("div"), files: actEl("div") };
-  const keys = { msg: "", tiles: "", note: "", list: "", foot: "", tools: "", ctx: "", files: "" };
-  main.append(slots.tiles, slots.msg, slots.bar, slots.note, slots.list, slots.foot);
-  side.append(slots.tools, slots.ctx, slots.files);
-  wrap.append(main, side);
-  host.replaceChildren(wrap);
+  const keys = { msg: "", tiles: "", list: "", foot: "", tools: "", ctx: "", files: "", empty: "" };
+  side.append(slots.ctx, slots.tools, slots.files);
+
+  // layout: put the slots where this kind of session draws them.
+  function layout(next) {
+    if (next === mode) return;
+    mode = next;
+    if (next === "plain") {
+      plain.list.replaceChildren(slots.list, slots.foot);
+      plain.root.replaceChildren(plain.block, plain.list);
+      host.replaceChildren(plain.root);
+    } else {
+      main.replaceChildren(slots.tiles, slots.msg, slots.bar, slots.list, slots.foot);
+      wrap.replaceChildren(main, side);
+      host.replaceChildren(wrap);
+    }
+  }
+  layout("claude");
 
   // The reply box. Built once around `live` (a copy of the session entry the poll
   // keeps current) and re-gated each poll, never rebuilt, so a half-typed reply
@@ -320,7 +345,14 @@ function mountActivity(host, sid0) {
   // reply box.
   const msg = { box: null, txt: null, mask: null, compSlot: null, enSlot: null, live: null, comp: null, enable: null };
   const inputOf = () => (msg.comp ? msg.comp.form.querySelector("input") : null);
-  const bar = { node: null, pills: [], live: null, liveTxt: null };
+  // The filter bar and the Load older row are built once and updated in place, so the control the
+  // operator pressed is the same node afterwards and keeps the keyboard.
+  const bar = { node: null, pills: [], dot: null, live: null, liveTxt: null };
+  const foot = { node: actEl("div", "act-bar act-foot"), more: actEl("button", "btn btn-sm", "Load older"), err: actEl("span", "t-sm c-red"), note: actEl("span", "t-sm muted") };
+  foot.more.type = "button";
+  foot.more.onclick = () => actLoadOlder(sid); // actLoadOlder ignores a press while a page is out
+  foot.node.append(foot.more, foot.err, foot.note);
+  slots.foot.appendChild(foot.node);
   const put = (slot, node) => { slot.replaceChildren(...(node ? [node] : [])); };
 
   // resetMsg: drop the latest-message block and its reply box. The box is bound to
@@ -335,10 +367,10 @@ function mountActivity(host, sid0) {
 
   function paintMsg(s) {
     if (!msg.box) {
-      msg.box = actEl("section", "act-msg");
-      msg.box.appendChild(actEl("div", "act-lab", "Latest message"));
-      msg.txt = actEl("div", "act-msgtxt");
-      msg.mask = actEl("div", "act-note");
+      msg.box = actEl("section", "card act-msg");
+      msg.box.appendChild(actEl("span", "grp-label", "Latest message"));
+      msg.txt = actEl("p", "t-md act-msgtxt");
+      msg.mask = actEl("p", "t-sm muted");
       msg.compSlot = actEl("div", "act-msgtail");
       msg.enSlot = actEl("div", "act-msgtail");
       msg.box.append(msg.txt, msg.mask, msg.compSlot, msg.enSlot);
@@ -346,7 +378,7 @@ function mountActivity(host, sid0) {
     }
     const text = s.summary || "Nothing said yet.";
     msg.txt.textContent = text;
-    msg.txt.classList.toggle("act-quiet", !s.summary);
+    msg.txt.classList.toggle("muted", !s.summary);
     const hint = typeof maskHint === "function" ? maskHint(text) : "";
     msg.mask.textContent = hint;
     msg.mask.hidden = !hint;
@@ -377,6 +409,63 @@ function mountActivity(host, sid0) {
     }
   }
 
+  // paintBar: the filter and the live label. A press or a poll only moves the pressed item and the label.
+  function paintBar(st) {
+    if (!bar.node) {
+      bar.node = actEl("div", "act-bar");
+      const seg = actEl("div", "act-filter seg");
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", "Filter");
+      bar.pills = ACTIVITY_FILTERS.map((f) => {
+        const b = actEl("button", "seg-item", f[0].toUpperCase() + f.slice(1));
+        b.type = "button";
+        b.onclick = () => { actState(sid).filter = f; paint(false); };
+        seg.appendChild(b);
+        return [f, b];
+      });
+      bar.live = actEl("span", "act-live t-sm muted");
+      bar.dot = actEl("span", "dot dot-run");
+      bar.liveTxt = document.createTextNode("");
+      bar.live.append(bar.dot, bar.liveTxt);
+      bar.node.append(seg, actEl("span", "ph-spacer"), bar.live);
+      put(slots.bar, bar.node);
+    }
+    // The pressed look is aria-pressed alone: the kit's .seg-item[aria-pressed="true"] draws it.
+    for (const [f, b] of bar.pills) b.setAttribute("aria-pressed", f === st.filter ? "true" : "false");
+    // Only the dot is green, and only while the read is current.
+    const stale = st.failed && st.loaded;
+    bar.dot.className = stale ? "dot dot-idle" : "dot dot-run";
+    bar.liveTxt.textContent = stale ? "Could not refresh · newest first" : "Live · newest first";
+  }
+
+  // paintFoot: Load older, its error and the partial-history note. The button is the same node while a page loads
+  // (aria-busy and aria-disabled, never [disabled]), so it keeps the keyboard. When the last page lands the button
+  // goes, and focus it held goes to the view, not to <body>.
+  function paintFoot(m, st) {
+    const held = document.activeElement === foot.more;
+    const busy = st.loadingMore;
+    foot.more.hidden = !m.more;
+    foot.more.textContent = busy ? "Loading…" : "Load older";
+    if (busy) { foot.more.setAttribute("aria-busy", "true"); foot.more.setAttribute("aria-disabled", "true"); }
+    else { foot.more.removeAttribute("aria-busy"); foot.more.removeAttribute("aria-disabled"); }
+    foot.err.textContent = st.olderErr;
+    foot.err.hidden = !st.olderErr;
+    foot.note.textContent = m.partial ? "Earlier history not available." : "";
+    foot.note.hidden = !m.partial;
+    foot.node.hidden = foot.more.hidden && foot.err.hidden && foot.note.hidden;
+    if (held && foot.more.hidden) host.focus({ preventScroll: true });
+  }
+
+  // keepFocus: rebuild a slot's content, and give a button the keyboard had in it (the same one by position) back.
+  function keepFocus(slot, rebuild) {
+    const was = [...slot.querySelectorAll("button")].indexOf(document.activeElement);
+    rebuild();
+    if (was >= 0) {
+      const again = [...slot.querySelectorAll("button")][was];
+      if (again) again.focus({ preventScroll: true });
+    }
+  }
+
   function paint(force) {
     if (disposed) return;
     const st = actState(sid);
@@ -384,8 +473,10 @@ function mountActivity(host, sid0) {
     if (!s) {
       for (const k of Object.keys(keys)) keys[k] = "";
       resetMsg();
-      bar.node = null; put(slots.tiles, null); put(slots.bar, null); put(slots.note, null);
-      put(slots.foot, null); put(slots.tools, null); put(slots.ctx, null); put(slots.files, null);
+      layout("claude");
+      bar.node = null; put(slots.tiles, null); put(slots.bar, null);
+      put(slots.tools, null); put(slots.ctx, null); put(slots.files, null);
+      foot.node.hidden = true;
       put(slots.list, actEl("div", "act-empty", "This session is no longer listed."));
       return;
     }
@@ -396,7 +487,7 @@ function mountActivity(host, sid0) {
       const more = st.pinned && st.olderMore !== null ? st.olderMore : st.resp.more;
       resp = Object.assign({}, st.resp, { events: st.resp.events.concat(st.older), more });
     }
-    model = activityModel({ session: s, resp, filter: st.filter, nowMs: now });
+    model = activityModel({ session: s, resp, filter: st.filter, nowMs: now, failed: st.failed });
 
     // Latest message and reply box: only a Claude session has either.
     if (model.notClaude) {
@@ -404,76 +495,52 @@ function mountActivity(host, sid0) {
     } else {
       paintMsg(s);
     }
+    layout(model.notClaude ? "plain" : "claude");
 
     const k1 = JSON.stringify(model.tiles);
-    if (force || k1 !== keys.tiles) { keys.tiles = k1; put(slots.tiles, actTiles(model.tiles)); }
+    if (force || k1 !== keys.tiles) { keys.tiles = k1; put(slots.tiles, model.tiles.length ? actTiles(model.tiles) : null); }
 
-    // The filter bar is built once; a press or a poll only moves the pressed pill
-    // and the live label, so the pill that was pressed keeps the keyboard.
     if (model.notClaude) {
       if (bar.node) { bar.node = null; put(slots.bar, null); }
     } else {
-      if (!bar.node) {
-        bar.node = actEl("div", "act-bar");
-        const pills = actEl("div", "act-pills");
-        pills.setAttribute("role", "group");
-        pills.setAttribute("aria-label", "Filter");
-        bar.pills = ACTIVITY_FILTERS.map((f) => {
-          const b = actEl("button", "act-pill", f[0].toUpperCase() + f.slice(1));
-          b.type = "button";
-          b.onclick = () => { actState(sid).filter = f; paint(false); };
-          pills.appendChild(b);
-          return [f, b];
-        });
-        bar.live = actEl("div", "act-live");
-        bar.live.appendChild(actEl("span", "act-dot"));
-        bar.liveTxt = document.createTextNode("");
-        bar.live.appendChild(bar.liveTxt);
-        bar.node.append(pills, bar.live);
-        put(slots.bar, bar.node);
-      }
-      for (const [f, b] of bar.pills) {
-        b.classList.toggle("on", f === st.filter);
-        b.setAttribute("aria-pressed", f === st.filter ? "true" : "false");
-      }
-      const stale = st.failed && st.loaded;
-      bar.live.classList.toggle("stale", stale);
-      bar.liveTxt.textContent = stale ? "could not refresh · newest first" : "live · newest first";
+      paintBar(st);
     }
 
-    const kn = JSON.stringify([model.notClaude]);
-    if (force || kn !== keys.note) {
-      keys.note = kn;
-      put(slots.note, model.notClaude ? actEl("div", "act-note act-lead", "Activity is available for Claude sessions.") : null);
+    // The plain block of a session with no transcript, and the table under it only when it has rows.
+    if (model.notClaude) {
+      const ke = JSON.stringify(model.empty);
+      if (force || ke !== keys.empty) {
+        keys.empty = ke;
+        const e = model.empty;
+        plain.block.replaceChildren(actEl("h2", "t-lg w-600", e.title), actEl("p", "t-md muted", e.body), actEl("p", "t-sm muted tnum", e.meta));
+      }
+      plain.root.classList.toggle("act-listed", model.rows.length > 0);
+      plain.list.hidden = model.rows.length === 0;
     }
 
-    const kl = JSON.stringify([model.rows, [...st.expanded].filter((k) => model.rows.some((r) => r.key === k)), st.loaded, st.failed, st.filter, model.notClaude]);
+    const kl = JSON.stringify([model.rows, st.loaded, st.failed, st.filter, model.notClaude]);
     if (force || kl !== keys.list) {
       keys.list = kl;
-      put(slots.list, model.rows.length ? actRows(model, st, paint) : actEl("div", "act-empty", actEmptyText(model, st, st.filter)));
-    }
-    if (st.focusKey) {
-      for (const el of slots.list.querySelectorAll(".act-row")) if (el._key === st.focusKey) el.focus({ preventScroll: true });
-      st.focusKey = "";
+      put(slots.list, model.rows.length ? actTable(model.rows) : model.notClaude ? null : actTable([], actEmptyText(st, st.filter)));
     }
 
     const kf = JSON.stringify([model.more, model.partial, st.loadingMore, st.olderErr]);
-    if (force || kf !== keys.foot) { keys.foot = kf; put(slots.foot, actFoot(model, st, sid)); }
+    if (force || kf !== keys.foot) { keys.foot = kf; paintFoot(model, st); }
 
     if (model.notClaude) {
       for (const k of ["tools", "ctx", "files"]) { keys[k] = ""; put(slots[k], null); }
       return;
     }
     const kt = JSON.stringify([st.attr.status, st.attr.failed, st.attr.data && actToolRows(st.attr.data)]);
-    if (force || kt !== keys.tools) { keys.tools = kt; put(slots.tools, actToolsCard(st, sid)); }
+    if (force || kt !== keys.tools) { keys.tools = kt; keepFocus(slots.tools, () => put(slots.tools, actToolsCard(st, sid))); }
 
     const tab = typeof terminalTabFor === "function" ? terminalTabFor(sid) : null;
     const ctx = actContext(tab && typeof tab.usage === "function" ? tab.usage() : null);
     const kc = JSON.stringify(ctx);
     if (force || kc !== keys.ctx) { keys.ctx = kc; put(slots.ctx, actCtxCard(ctx)); }
 
-    const kfl = JSON.stringify(model.files);
-    if (force || kfl !== keys.files) { keys.files = kfl; put(slots.files, actFilesCard(model.files)); }
+    const kfl = JSON.stringify([model.files, st.loaded, st.failed]);
+    if (force || kfl !== keys.files) { keys.files = kfl; put(slots.files, actFilesCard(model.files, st)); }
   }
 
   // First open of a Claude session's view: scan once. Later it is the scan button.
