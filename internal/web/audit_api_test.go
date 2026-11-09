@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/auditlog"
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // auditFixture is a temp audit.db seeded through the real writers, read back
@@ -237,6 +239,124 @@ func TestAuditCSVNeutralises(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, recs[1][0]); err != nil {
 		t.Fatalf("time_utc %q: %v", recs[1][0], err)
+	}
+}
+
+// everyKind seeds one row of each shape through the real writers, the last
+// being a store unlock with a ttl, and returns the exact What of each.
+func (f *auditFixture) everyKind() []string {
+	f.t.Helper()
+	at := func(i int) time.Time { return f.base.Add(time.Duration(i) * time.Second) }
+	for _, err := range []error{
+		f.b.Record(broker.Row{Time: at(1), SessionID: "s1", AccountID: "111111111111", RoleARN: "arn:aws:iam::111111111111:role/team/agent-ops-write",
+			Outcome: broker.OutcomeMinted, Elevated: true, Entry: "culipulse-prod"}),
+		f.b.Record(broker.Row{Time: at(2), SessionID: "s1", Provider: broker.ProviderGitHub, Subject: "culiops", Repos: 3, Outcome: broker.OutcomeMinted}),
+		f.b.Record(broker.Row{Time: at(3), SessionID: "s1", Provider: broker.ProviderStatic, Entry: "datadog-read", Outcome: broker.OutcomeFetched}),
+		f.b.RecordApproval(broker.ApprovalRow{Time: at(4), SessionID: "s1", Action: broker.ActionGranted, Entry: "culipulse-prod", Minutes: 30, Reason: "rotate the key", Cred: "cookie"}),
+		f.b.RecordApproval(broker.ApprovalRow{Time: at(5), Action: broker.ActionSSOLoginOK, Entry: "culipulse-prod", Cred: "cookie"}),
+		f.e.Record(egress.Row{Time: at(6), SessionID: "s1", Host: "registry.example.test", Port: 443, Outcome: egress.OutcomeAllowed}),
+		f.e.Record(egress.Row{Time: at(7), SessionID: "s1", Host: "files.example.test", Port: 443, Outcome: egress.OutcomeAllowed, BytesDown: 148 << 20}),
+		f.b.RecordCred(broker.CredEvent{Action: broker.CredCreated, Kind: "token", Name: "e2e-pat", Actor: "web"}),
+		f.b.RecordStore(secretstore.Event{Action: "value_set", Actor: "web", Detail: "e2e-pat"}),
+		f.b.RecordStore(secretstore.Event{Action: "locked", Actor: "web"}),
+		f.b.RecordStore(secretstore.Event{Action: "unlocked", Actor: "web", Detail: "ttl=168h0m0s"}),
+	} {
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	return []string{
+		"aws culipulse-prod · role agent-ops-write · elevated",
+		"github culiops · 3 repos",
+		"token datadog-read",
+		"write on culipulse-prod · 30 min",
+		"SSO sign-in culipulse-prod",
+		"registry.example.test:443",
+		"files.example.test:443 · 148 MB down",
+		"token e2e-pat created",
+		"encrypted store value set · e2e-pat",
+		"encrypted store locked",
+		"encrypted store unlocked · ttl=168h0m0s",
+	}
+}
+
+// The CSV export keeps today's What byte for byte: the plain-words ttl and the
+// parts belong to the page, not to the file.
+func TestAuditCSVWhatUnchanged(t *testing.T) {
+	f := newAuditFixture(t)
+	want := f.everyKind()
+	h, ck, _ := f.server(t)
+	rec := auditReq(h, "GET", "/api/audit.csv", ck, "")
+	if rec.Code != 200 {
+		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	recs, trailer := csvRecords(t, rec.Body.String())
+	if got := strings.Join(recs[0], ","); got != auditCSVHeader {
+		t.Fatalf("header = %q, want %q", got, auditCSVHeader)
+	}
+	if len(recs) != len(want)+1 || trailer != "" {
+		t.Fatalf("rows = %d trailer %q, want %d rows", len(recs)-1, trailer, len(want))
+	}
+	var got []string
+	for _, r := range recs[1:] {
+		got = append(got, r[3])
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("what cells\n got %q\nwant %q", got, want)
+	}
+}
+
+// /api/audit carries each row's parts: only "text" and "id" keys, id only when
+// true, and a store unlock reads its ttl in plain words.
+func TestAuditListCarriesParts(t *testing.T) {
+	f := newAuditFixture(t)
+	wantWhat := f.everyKind()
+	h, ck, _ := f.server(t)
+	rec := auditReq(h, "GET", "/api/audit", ck, "")
+	if rec.Code != 200 {
+		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	var page struct {
+		Events []struct {
+			What  string `json:"what"`
+			Parts []map[string]any
+		}
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Events) != len(wantWhat) {
+		t.Fatalf("events = %d err=%v body=%s", len(page.Events), err, rec.Body)
+	}
+	ids, unlock := 0, false
+	for _, e := range page.Events {
+		if len(e.Parts) == 0 {
+			t.Errorf("%q: no parts", e.What)
+		}
+		joined := ""
+		for _, p := range e.Parts {
+			text, ok := p["text"].(string)
+			if !ok || len(p) > 2 {
+				t.Errorf("%q: part %v, want a text and nothing but an id", e.What, p)
+			}
+			if id, has := p["id"]; len(p) == 2 && (!has || id != true) {
+				t.Errorf("%q: part %v, want id true or no id", e.What, p)
+			}
+			if p["id"] == true {
+				ids++
+			}
+			joined += text
+		}
+		if e.What == "encrypted store unlocked · ttl=168h0m0s" {
+			unlock = true
+			if joined != "encrypted store unlocked · for 7 days" {
+				t.Errorf("unlock parts join to %q", joined)
+			}
+		} else if joined != e.What {
+			t.Errorf("parts join to %q, What is %q", joined, e.What)
+		}
+	}
+	if !unlock || ids == 0 {
+		t.Errorf("unlock row seen = %v, id parts = %d", unlock, ids)
 	}
 }
 

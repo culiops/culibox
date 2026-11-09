@@ -12,6 +12,7 @@ const AUDIT_PAGE_ID = "audit-page";
 // the nowS the first page was read with, so the range does not slide under it.
 const auState = { range: "7d", filter: "", session: "", before: "", nowS: 0 };
 const auData = { summary: null, events: [], total: 0, next: "", listState: "idle", moreFailed: false };
+let auMoreHeld = false; // Show more was pressed with focus on it, and the load that follows has not finished (auPaintFoot)
 let auListCtl = null; // the one list request in flight
 let auSumCtl = null;  // the one summary request in flight
 
@@ -32,16 +33,15 @@ function auText(tag, cls, text) {
 
 // --- paint -------------------------------------------------------------------
 
+// auPaintControls: the pressed item of each switch is marked with aria-pressed alone: the kit's
+// .seg-item[aria-pressed="true"] draws it, and a legacy .on class would bring primitives.css's weight 700
+// back. The items are updated in place, never rebuilt, so the one the user clicked keeps keyboard focus.
 function auPaintControls() {
-  for (const b of document.querySelectorAll("#au-range button")) {
-    const on = b.dataset.range === auState.range;
-    b.classList.toggle("on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of document.querySelectorAll("#au-range .seg-item")) {
+    b.setAttribute("aria-pressed", b.dataset.range === auState.range ? "true" : "false");
   }
-  for (const b of document.querySelectorAll("#au-filters button[data-filter]")) {
-    const on = b.dataset.filter === auState.filter;
-    b.classList.toggle("on", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of document.querySelectorAll("#au-filters .seg-item")) {
+    b.setAttribute("aria-pressed", b.dataset.filter === auState.filter ? "true" : "false");
   }
   const csv = auEl("au-csv");
   if (csv) csv.setAttribute("href", auditCsvHref(auState, auState.nowS || Math.floor(Date.now() / 1000)));
@@ -50,9 +50,12 @@ function auPaintControls() {
 function auPaintKpis() {
   const box = auEl("au-kpis");
   if (!box) return;
+  // The kit's tile: .kpi > .kpi-value + .kpi-label. The label ellipsizes (desktop.css), so it carries its full text.
   box.replaceChildren(...auditKpis(auData.summary).map((k) => {
-    const t = auText("div", "au-kpi");
-    t.append(auText("div", "au-n", k.n), auText("div", "au-l", k.label));
+    const t = auText("div", "kpi");
+    const label = auText("span", "kpi-label", k.label);
+    label.setAttribute("title", k.label);
+    t.append(auText("span", k.bad ? "kpi-value is-bad" : "kpi-value", k.n), label);
     return t;
   }));
 }
@@ -75,14 +78,41 @@ function auPaintSessions() {
 
 const AU_TONE_CLASS = { ok: "au-ok", bad: "au-bad" };
 
+// auWhatCell: sans text, with the server's identifiers in mono (digest-design §B9): each id run is the kit's
+// span.mono.t-sm, every other run a text node, then the reason in its muted span. A run with no text draws nothing, and
+// runs that draw nothing at all fall back to the plain `what`, so a row never reads blank.
+function auWhatCell(ev, v) {
+  const td = auText("td", "au-what");
+  let drawn = false;
+  for (const r of auditWhatRuns(ev)) {
+    if (!r.text) continue;
+    drawn = true;
+    td.appendChild(r.id ? auText("span", "mono t-sm", r.text) : document.createTextNode(r.text));
+  }
+  if (!drawn && v.what) td.appendChild(document.createTextNode(v.what));
+  if (v.reason) td.appendChild(auText("span", "au-reason", " · “" + v.reason + "”"));
+  return td;
+}
+
+// auTimeCell: "MM-DD HH:MM". In a narrow card the cell wraps (desktop.css) and a hyphen is a break opportunity of its own, so the date
+// is one unbreakable run: the cell wraps at its space only, date over time, never "11-" over "08". The text is unchanged.
+function auTimeCell(time) {
+  const td = auText("td", "au-time");
+  const i = time.indexOf(" ");
+  if (i < 0) { td.textContent = time; return td; }
+  td.append(auText("span", "au-nb", time.slice(0, i)), document.createTextNode(time.slice(i)));
+  return td;
+}
+
 function auRow(ev, names) {
   const v = auditRowView(ev, names);
   const tr = document.createElement("tr");
-  if (v.elevated) tr.className = "au-elev";
-  const what = auText("td", "au-what", v.what);
-  if (v.reason) what.appendChild(auText("span", "au-reason", " · “" + v.reason + "”"));
+  // The red row is the kit's tr.is-elevated: a granted or extended write elevation. Its Kind is red too; the Outcome
+  // takes its own tone from auditRowView (a refused elevation's is red as well, until Plan 6).
+  if (v.elevated) tr.className = "is-elevated";
+  const what = auWhatCell(ev, v);
   tr.append(
-    auText("td", "au-time", v.time),
+    auTimeCell(v.time),
     auText("td", "au-sess", v.session),
     auText("td", v.elevated ? "au-kind au-bad" : "au-kind", v.kind),
     what,
@@ -123,8 +153,19 @@ function auPaintFoot() {
       : auData.listState === "ok" ? auditFootText(auData.events.length, auData.total) : "";
   }
   if (more) {
+    const held = auMoreHeld || document.activeElement === more;
     more.hidden = !auData.next;
     more.disabled = auData.listState === "loading";
+    // Show more has focus when it is pressed, and loses it twice over: the browser drops focus to <body> the moment the button
+    // is disabled for the load, and the last page hides it. When the load is over the focus it had goes on: back to Show more if
+    // it is still there, else to the count ("Showing N of N", tabindex -1 in the markup), so a keyboard user is never left on
+    // <body> and is told where they are. Focus that has gone anywhere else is not touched.
+    if (held && auData.listState !== "loading") {
+      auMoreHeld = false;
+      const a = document.activeElement;
+      const to = more.hidden ? count : more;
+      if (to && (!a || a === document.body || a === more)) to.focus();
+    }
   }
   if (policy) {
     const days = auData.summary && Number.isFinite(auData.summary.retention_days) ? auData.summary.retention_days : null;
@@ -200,6 +241,7 @@ async function auLoadList(append) {
 
 // auReload: a new filter, range or session: back to the top.
 function auReload(withSummary) {
+  auMoreHeld = false;
   auState.nowS = Math.floor(Date.now() / 1000);
   auPaintControls();
   if (withSummary) auLoadSummary();
@@ -252,7 +294,11 @@ function initAuditPage() {
     auReload(false);
   });
   const more = auEl("au-more");
-  if (more) more.addEventListener("click", () => { if (auData.next) auLoadList(true); });
+  if (more) more.addEventListener("click", () => {
+    if (!auData.next) return;
+    auMoreHeld = document.activeElement === more;
+    auLoadList(true);
+  });
   const csv = auEl("au-csv");
   // The download reads href after this handler, so a page left open for hours
   // still exports up to now.

@@ -269,17 +269,37 @@ const PAGE_FIELDS = [
   ["#sp-search:focus-visible", "the spawn dialog's profile search"],
   ["#spawn :is(select, textarea, input:not([type=checkbox]):not([type=radio])):focus-visible", "every field of the spawn dialog (#spawn input/select/textarea set an id-weighted border; #effort-slot's select is inside it)"],
   ["dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld:focus-visible", "the fields of every plain dialog (their .fld border is 0,4,1)"],
-  ["#page-host > #analytics-modal.as-page .an-date:focus", "the analytics date pickers"],
   ["#ask-modal #ask-input:focus-visible", "the ask dialog's reply field"],
   ["#store-banner .storepass:focus-visible", "the store banner's password field"],
   ["body > main.card input[type=password]:focus-visible", "the login page's password field"],
-  ["#page-host > #audit-page.as-page #au-session:focus-visible", "the audit page's session select"],
   ["#page-host > #settings-modal.as-page > .dft .fld:focus-visible", "the settings dialogs' footer fields"],
   ["#page-host > #settings-modal.as-page > #cred-drawer > #cred-drawer-body .fld:focus-visible", "the credential drawer's fields"],
   ["#page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .fld:focus-visible", "the Credentials page's add-flow fields (the drawer's own, heavier rule above wins there)"],
   ["#page-host > #settings-modal.as-page #pfv .pfv-ctl:focus-visible", "the profile page's fields"],
   ["#page-host > #settings-modal.as-page .fs-card .stepper .val:focus-visible", "the Appearance page's text-size value boxes"],
 ];
+
+// The Audit page's Session select is the kit .input (UI plan 5, #175, digest-design §B4), so the field focus above covers
+// it: its page rule sets a width and no border, and it needs no focus rule of its own.
+test("the audit page's session select is a kit .input, and no page rule gives it a border", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  assert.match(html, /<select class="input" id="au-session" aria-label="Session">/);
+  const own = parseRules(desktop).filter((r) => /#au-session/.test(r.selector));
+  assert.ok(own.length > 0, "the page sizes it");
+  for (const r of own) {
+    assert.ok(!r.decls.some(([p]) => /^border/.test(p)), r.selector + " sets a border an id-weighted focus rule would have to beat");
+    assert.ok(!/:focus/.test(r.selector), r.selector + ": the global field focus rule is the one focus look");
+  }
+});
+
+// The Analytics Custom range row's date fields are kit .input.input-sm too (UI plan 5 Task 4, a toolbar row of 28px controls),
+// so they need no focus rule of their own either: the only desktop rule that names .an-date is the bare one that answers
+// app.css's `.an-date:focus { outline: none }` (the opt-out test above requires it).
+test("the analytics page's date fields are kit .input.input-sm, and no page rule gives them a border", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  assert.strictEqual((html.match(/<input class="input input-sm an-date" type="date" aria-label="(?:From|To)">/g) || []).length, 2);
+  assert.deepStrictEqual(parseRules(desktop).filter((r) => /\.an-date/.test(r.selector)).map((r) => r.selector), [".an-date:focus"]);
+});
 
 test("fields whose page rule sets an id-weighted border get a field focus of their own (>= 2px of accent)", () => {
   for (const [sel, who] of PAGE_FIELDS) {

@@ -6,7 +6,9 @@ const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
   foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
-  daysBetween, clampRange, stackedLayout,
+  daysBetween, clampRange, stackedLayout, anCountText, anSessionKpis, projShort,
+  anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+  anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -227,4 +229,195 @@ test("modelColor: stable per model index, wraps the palette", () => {
   assert.equal(modelColor(models, "a"), modelColor(models, "a")); // stable
   assert.notEqual(modelColor(models, "a"), modelColor(models, "b"));
   assert.equal(modelColor(models, "a"), modelColor(models, "h")); // 8th wraps to 1st (7 colors)
+});
+
+// ---- the page's KPI counts and the Sessions view's three tiles (UI plan 5, #175; digest-design §A2, §A3) ----
+
+test("anCountText: thousands separators under 10,000, fmtCompact from there", () => {
+  assert.equal(anCountText(0), "0");
+  assert.equal(anCountText(1420), "1,420");
+  assert.equal(anCountText(3994), "3,994");
+  assert.equal(anCountText(9999), "9,999");
+  assert.equal(anCountText(10000), fmtCompact(10000));
+  assert.equal(anCountText(10400000000), fmtCompact(10400000000));
+  assert.equal(anCountText(10400000000), "10.4B");
+});
+
+// A made-up window: two projects, three sessions. The costliest SESSION is in acme-api (one session, $120.50) and the
+// costliest PROJECT is acme-web-frontend (two sessions, $160.14): the two tiles name different projects.
+const SESS_ROWS = [
+  { sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-30", model: "claude-opus-5-5", input: 1000, output: 200, cacheRead: 5000, cacheCreation: 0, prompts: 10, costUsd: 120 },
+  { sessionId: "3d6b98e8aaaa", project: "-home-dev-acme-api", day: "2026-10-31", model: "claude-sonnet-5-5", input: 10, output: 5, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 0.5 },
+  { sessionId: "2cf1c405bbbb", project: "-home-dev-acme-web-frontend", day: "2026-10-30", model: "claude-opus-5-5", input: 100, output: 20, cacheRead: 500, cacheCreation: 0, prompts: 4, costUsd: 90 },
+  { sessionId: "9d3dc2afcccc", project: "-home-dev-acme-web-frontend", day: "2026-10-26", model: "claude-opus-5-5", input: 1, output: 1, cacheRead: 0, cacheCreation: 0, prompts: 1, costUsd: 70.14 },
+];
+// The data the view reads, folded the way anLoad folds it (topSessions, byProject, sessionCount).
+const sessionData = (rows) => ({
+  sessionCount: distinctSessions(rows),
+  topSessions: topSessionsByCost(rows, 18),
+  byProject: foldProjects(rows, 14),
+});
+
+test("anSessionKpis: sessions in the window, the costliest session by its project, the costliest project by its cost", () => {
+  const d = sessionData(SESS_ROWS);
+  assert.equal(d.sessionCount, 3);
+  assert.deepEqual(anSessionKpis(d).map((t) => ({ value: t.value, label: t.label })), [
+    { value: "3", label: "Sessions in this window" },
+    { value: "$121", label: "Costliest session · acme-api" },
+    { value: "$160", label: "Costliest project · acme-web-frontend" },
+  ]);
+  // The values are today's formatters on today's data: usd of the top session's cost, usd of the top project's COST.
+  assert.equal(usd(d.topSessions[0].cost), "$121");
+  assert.equal(usd(d.byProject[0].cost), "$160");
+  // A window of 1,420 sessions reads 1,420, not 1k.
+  assert.equal(anSessionKpis({ ...d, sessionCount: 1420 })[0].value, "1,420");
+  assert.equal(anSessionKpis({ ...d, sessionCount: 12500 })[0].value, fmtCompact(12500));
+});
+
+test("anSessionKpis: no sessions or projects gives a dash and the plain label", () => {
+  const tiles = anSessionKpis({ sessionCount: 0, topSessions: [], byProject: [] });
+  assert.deepEqual(tiles.map((t) => ({ value: t.value, label: t.label })), [
+    { value: "0", label: "Sessions in this window" },
+    { value: "—", label: "Costliest session" },
+    { value: "—", label: "Costliest project" },
+  ]);
+  // A session or project with no name (a row with an empty project) does not leave a dangling " · " in the label.
+  const nameless = anSessionKpis({ sessionCount: 1, topSessions: [{ project: "", cost: 3 }], byProject: [{ project: "", cost: 3 }] });
+  assert.deepEqual(nameless.map((t) => t.label), ["Sessions in this window", "Costliest session", "Costliest project"]);
+  assert.deepEqual(nameless.map((t) => t.value), ["1", "$3.00", "$3.00"]);
+});
+
+// ---- the data both builders share (the phone's modal and the desktop page): one preparation, two sets of DOM ----
+
+test("anToolGroups: a group per kind in the order met, ten rows at most, the kind's colour, the accent for an unknown kind", () => {
+  const tools = [];
+  for (let i = 1; i <= 12; i++) tools.push({ kind: "skill", name: "s" + i, records: i });
+  tools.push({ kind: "mcp_server", name: "docs", records: 3 }, { kind: "plugin", name: "p", records: 0 }, { kind: "novel", name: "n", records: 2 }, { kind: "mcp_tool", name: "t", records: 1 });
+  const groups = anToolGroups(tools);
+  assert.deepEqual(groups.map((g) => g.kind), ["skill", "mcp_server", "plugin", "novel", "mcp_tool"]);
+  assert.deepEqual(groups.map((g) => g.color), ["var(--an-2)", "var(--an-3)", "var(--an-4)", "var(--accent)", "var(--an-1)"]);
+  assert.equal(groups[0].items.length, 10);
+  assert.deepEqual(groups[0].items.map((t) => t.name), ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"], "the first ten, in the order given");
+  assert.deepEqual(groups.map((g) => g.max), [10, 3, 1, 2, 1], "the longest bar in the group's own rows; never under 1");
+  assert.deepEqual(anToolGroups([]), []);
+  assert.deepEqual(anToolGroups(undefined), []);
+});
+
+test("anModelFold, anModelCells and anPct: the Models figures", () => {
+  const rows = normModels([
+    { model: "claude-opus-5-5", input: 4100, output: 200, cacheRead: 6100, cacheCreation: 0, prompts: 4, sessions: 4, costUsd: 4300 },
+    { model: "<synthetic>", prompts: 41, sessions: 3 },
+    { model: "", prompts: 27, sessions: 1 },
+  ]);
+  const f = anModelFold(rows);
+  assert.deepEqual(f.rows.map((r) => r.model), ["claude-opus-5-5", "other (unpriced)"], "zero-cost models fold into one row");
+  assert.equal(f.totalCost, 4300);
+  assert.equal(f.totalTokens, 10400);
+  assert.equal(f.maxTokens, 10400);
+  assert.equal(f.maxCost, 4300);
+  assert.deepEqual({ ...anModelCells(f.rows[0], f) }, { cost: "$4.3k", pct: "100%", tokens: "10k", prompts: "4", outPerPrompt: "50", cache: "59%" });
+  assert.deepEqual({ ...anModelCells(f.rows[1], f) }, { cost: "$0.00", pct: "0%", tokens: "0", prompts: "68", outPerPrompt: "0", cache: "0%" }, "no tokens: a 0% cache share, not NaN");
+  assert.equal(anPct(1, 3), "33%");
+  assert.equal(anPct(2, 3), "67%");
+  // Nothing priced and nothing counted: totals and maxima stay at 1, so no bar or share divides by zero.
+  const none = anModelFold([]);
+  assert.deepEqual([none.rows.length, none.totalCost, none.totalTokens, none.maxTokens, none.maxCost], [0, 1, 1, 1, 1]);
+});
+
+test("anProjectBars and anProjectRow: the stacked bars' segments (dearest model first) and the detail row", () => {
+  const byProject = foldProjects([
+    { project: "-home-dev-acme-api", model: "a", input: 10, prompts: 2, costUsd: 1 },
+    { project: "-home-dev-acme-api", model: "b", input: 5, prompts: 1, costUsd: 3 },
+    { project: "-home-dev-acme-web", model: "a", input: 1500, prompts: 7, costUsd: 2 },
+  ], 14);
+  const bars = anProjectBars(byProject, ["a", "b"]);
+  assert.equal(bars.max, 4);
+  assert.deepEqual(bars.bars.map((b) => [b.name, b.cost]), [["acme-api", 4], ["acme-web", 2]]);
+  assert.deepEqual(bars.bars[0].segs.map((g) => ({ ...g })), [
+    { v: 3, c: "var(--an-2)", t: "b $3.00" },
+    { v: 1, c: "var(--an-1)", t: "a $1.00" },
+  ]);
+  assert.deepEqual({ ...anProjectRow(byProject[1]) }, { name: "acme-web", cost: "$2.00", tokens: "2k", prompts: "7" });
+  assert.deepEqual(anProjectBars([], []).bars, []);
+  assert.equal(anProjectBars([], []).max, 1);
+});
+
+test("anSessionRow: one session's cells as text; mixed is flagged, a single model is short", () => {
+  const top = topSessionsByCost(SESS_ROWS, 18);
+  assert.deepEqual({ ...anSessionRow(top[0]) }, { sid: "3d6b98e8", day: "2026-10-31", project: "acme-api", model: "mixed", mixed: true, tokens: "6k", prompts: "11", cost: "$121" });
+  const single = anSessionRow(top.find((s) => s.sid === "2cf1c405"));
+  assert.equal(single.model, "opus-5-5");
+  assert.equal(single.mixed, false);
+});
+
+// ---- the cost chart's y labels and the legend (UI plan 5 Task 6; digest-design §A2, §B6) ----
+
+test("anYTicks: the page's three labels at the peak and its thirds, no zero label", () => {
+  const t = anYTicks(421, false);
+  assert.deepStrictEqual(t.map((x) => x.text), ["$421", "$281", "$140"], "§A2: peak, 2/3 and 1/3 of it, formatted by usd()");
+  assert.deepStrictEqual(t.map((x) => x.frac), [1, 2 / 3, 1 / 3]);
+  assert.ok(!t.some((x) => x.text === "$0.00" || x.frac === 0), "the baseline is not labelled");
+  assert.deepStrictEqual(anYTicks(12.5, false).map((x) => x.text), ["$12.50", "$8.33", "$4.17"]);
+});
+
+test("anYTicks: no scale (0, NaN, negative, missing) means no labels, never $0.00 or NaN", () => {
+  for (const bad of [0, NaN, -1, undefined, null, "x"]) {
+    assert.deepStrictEqual(anYTicks(bad, false), [], String(bad));
+    assert.deepStrictEqual(anYTicks(bad, true), [], String(bad) + " (with the zero)");
+  }
+});
+
+test("anYTicks(max, true): the phone's four labels, text for text what 'usd(max * (1 - i / 3))' printed", () => {
+  const t = anYTicks(421, true);
+  assert.deepStrictEqual(t.map((x) => x.text), ["$421", "$281", "$140", "$0.00"]);
+  assert.deepStrictEqual(t.map((x) => x.frac), [1, 2 / 3, 1 / 3, 0]);
+  // The phone drew usd(max * (1 - i / 3)) for i = 0..3 (anStackedTime on main, c47442b). 1 - 1/3 is not 2/3 to the last bit, so the
+  // thirds must not be computed any other way: the same expression, for any max, prints the same text.
+  // 1725 and 2175 are values where 'max * 2 / 3' or 'max * (2 / 3)' prints $1.1k / $1.4k and the phone printed $1.2k / $1.5k.
+  assert.deepStrictEqual(anYTicks(1725, true).map((x) => x.text), ["$1.7k", "$1.2k", "$575", "$0.00"]);
+  assert.deepStrictEqual(anYTicks(2175, false).map((x) => x.text), ["$2.2k", "$1.5k", "$725"]);
+  for (const max of [1, 1.5, 12.5, 33.33, 99.99, 100, 150, 421, 999.99, 1000, 1234.5, 1725, 2175, 9583.37, 123456.789, 0.7, 2.25, 299.97, 300.03]) {
+    assert.deepStrictEqual(anYTicks(max, true).map((x) => x.text), [0, 1, 2, 3].map((i) => usd(max * (1 - i / 3))), String(max));
+    assert.deepStrictEqual(anYTicks(max, false).map((x) => x.text), [0, 1, 2].map((i) => usd(max * (1 - i / 3))), String(max) + " (page)");
+  }
+});
+
+test("AN_PAGE_CHART is the frame's chart: 150px plot, 44px gutter with a 38px label box, 16px bars, labels 6px below", () => {
+  assert.deepStrictEqual({ ...AN_PAGE_CHART }, { plotH: 150, gutter: 44, labelBox: 38, bar: 16, xLabelGap: 6 });
+});
+
+test("anLegendItems: a name and a colour per model, coloured by its place in the canonical list", () => {
+  const all = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+  assert.deepStrictEqual(anLegendItems(all), [
+    { name: "opus-5-5", color: "var(--an-1)" }, { name: "sonnet-5-5", color: "var(--an-2)" }, { name: "haiku-5-5", color: "var(--an-3)" },
+  ]);
+  // A priced-only legend keeps the colours the bars have.
+  assert.deepStrictEqual(anLegendItems(["claude-haiku-5-5"], all), [{ name: "haiku-5-5", color: "var(--an-3)" }]);
+  assert.deepStrictEqual(anLegendItems([]), []);
+});
+
+test("anXLabels: in date mode every every-th slot of the window is labelled with its own date, a day with no cost included", () => {
+  // 2026-10-11 .. 2026-11-09 is 30 slots; only six days cost anything (the gate's sparse 30d window), so the bars alone would label 6.
+  const days = [0, 6, 12, 21, 24, 27].map((slot) => ({ day: new Date(Date.UTC(2026, 9, 11 + slot)).toISOString().slice(0, 10), segs: {}, cost: 1 }));
+  const lay = stackedLayout(days, "2026-10-11", "2026-11-09");
+  assert.deepStrictEqual(lay.bars.map((b) => b.slot), [0, 6, 12, 21, 24, 27]);
+  const labels = anXLabels(lay, "2026-10-11", 3);
+  assert.deepStrictEqual(labels.map((l) => l.slot), [0, 3, 6, 9, 12, 15, 18, 21, 24, 27], "every 3rd slot from the first (round(30 / 12) = 3, the frame's pitch)");
+  assert.deepStrictEqual(labels.map((l) => l.text), ["10-11", "10-14", "10-17", "10-20", "10-23", "10-26", "10-29", "11-01", "11-04", "11-07"], "each slot's own date, across a month end");
+  // A one-day window: its one slot. A pitch of 1 labels every slot.
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-09"), "2026-10-09", 1), [{ slot: 0, text: "10-09" }]);
+  assert.strictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-15"), "2026-10-09", 1).length, 7);
+  // An empty window still has its slots (the chart draws the baseline and the dates under it).
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2026-10-09", "2026-10-15"), "2026-10-09", 3).map((l) => l.text), ["10-09", "10-12", "10-15"]);
+});
+
+test("anXLabels: a very wide window is index mode, where the slots are the bars, as the phone's chart labels them", () => {
+  const days = [];
+  for (let i = 0; i < 40; i++) days.push({ day: new Date(Date.UTC(2026, 0, 1 + i * 3)).toISOString().slice(0, 10), segs: {}, cost: 1 });
+  const lay = stackedLayout(days, "2000-01-01", "2026-08-07");
+  assert.strictEqual(lay.dateMode, false);
+  const labels = anXLabels(lay, "2000-01-01", 10);
+  assert.deepStrictEqual(labels.map((l) => l.slot), [0, 10, 20, 30]);
+  assert.deepStrictEqual(labels.map((l) => l.text), [days[0], days[10], days[20], days[30]].map((d) => d.day.slice(5)));
+  assert.deepStrictEqual(anXLabels(stackedLayout([], "2000-01-01", "2026-08-07"), "2000-01-01", 10), []);
 });

@@ -15,9 +15,10 @@ const PAGE_IDS = ["settings-modal", "analytics-modal", "audit-page"];
 // The sidebar footer link that lights up while its page is open.
 const PAGE_LINKS = { "audit-page": "side-audit", "analytics-modal": "side-analytics", "settings-modal": "side-settings" };
 
-// What a page focuses when it opens: its selected tab, any tab, else a heading.
+// What a page focuses when it opens: its selected tab, any tab, else a heading
+// (the first one that is on screen: openPage skips what a hidden head holds).
 // Tried in this order (a single selector list would return the first match in
-// document order, and Analytics' heading precedes its tabs).
+// document order, and a page's heading may precede its tabs).
 const PAGE_FOCUS = ['[role="tab"][aria-selected="true"]', '[role="tab"]', ".dlg-tabs button", "h1, h2, h3", '[role="heading"]'];
 
 // pageModeFor: does `id` open as a page at viewport `width`? Pure.
@@ -67,8 +68,10 @@ function openPage(id) {
   host.hidden = false;
   dlg.show();
   paintPageLinks(id);
+  // The first match that is on screen: a page may hold the same kind of element in a head it hides (Analytics' .dlg-tabs
+  // buttons and legend h2 sit in the phone's .dlg-head), and focus() on a node with no boxes does nothing.
   for (const sel of PAGE_FOCUS) {
-    const f = dlg.querySelector(sel);
+    const f = Array.from(dlg.querySelectorAll(sel)).find((n) => n.getClientRects().length > 0);
     if (!f) continue;
     if (!f.matches("button, [tabindex]")) f.setAttribute("tabindex", "-1");
     f.focus({ preventScroll: true });

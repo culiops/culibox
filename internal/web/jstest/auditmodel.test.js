@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText } =
+const { auditQuery, auditCsvHref, auditRowView, auditKpis, auditFootText, auditPolicyText, auditWhatRuns } =
   require("../static/auditmodel.js");
 
 const STATIC = path.join(__dirname, "..", "static");
@@ -70,6 +70,32 @@ test("auditRowView: extended and refused elevations are bad, a dropped one is ne
   assert.strictEqual(v.outcome, "dropped early · you");
 });
 
+// The red row (UI plan 5, #175; digest-design §B9): one write elevation is red, and a write elevation is a live
+// grant, so granted and extended. A refused, dropped, expired or ended elevation opened nothing: no tint, no red
+// Kind. The outcome tones above are Plan 6's and stay as they are (a refused elevation's Outcome is still red).
+test("auditRowView: elevated is a granted or extended elevation, nothing else", () => {
+  for (const o of ["granted", "extended"]) {
+    assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: o }), {}).elevated, true, o);
+  }
+  for (const o of ["dropped", "expired", "ended", "refused", "dropped_early", ""]) {
+    assert.strictEqual(auditRowView(ev({ kind: "elevation", outcome: o }), {}).elevated, false, o);
+  }
+  // The word alone is not enough: only an elevation row is a write elevation.
+  for (const kind of ["credential", "egress", "settings", "signin", "store", "weird"]) {
+    assert.strictEqual(auditRowView(ev({ kind, outcome: "granted" }), {}).elevated, false, kind);
+    assert.strictEqual(auditRowView(ev({ kind, outcome: "extended" }), {}).elevated, false, kind);
+  }
+  assert.strictEqual(auditRowView({}, {}).elevated, false);
+  assert.strictEqual(auditRowView(null, {}).elevated, false);
+});
+
+test("auditRowView: a refused elevation is not tinted but its Outcome tone is still bad (Plan 6 owns the tones)", () => {
+  const v = auditRowView(ev({ kind: "elevation", outcome: "refused", actor: "you" }), {});
+  assert.strictEqual(v.elevated, false);
+  assert.strictEqual(v.tone, "bad");
+  assert.strictEqual(v.outcome, "refused · you");
+});
+
 test("auditRowView: egress denied x4 is bad and carries its count; allowed is ok", () => {
   const d = auditRowView(ev({ kind: "egress", what: "pypi.org:443", outcome: "denied", count: 4 }), {});
   assert.strictEqual(d.kind, "Egress");
@@ -113,11 +139,58 @@ test("auditRowView: a missing reason is an empty string, an unknown kind keeps i
   assert.strictEqual(auditRowView(ev({ kind: "weird" }), {}).kind, "weird");
 });
 
-test("auditKpis: five tiles, labelled, numbers grouped", () => {
+// auditWhatRuns (UI plan 5, digest-design §B9): the What cell's runs. The server's parts mark the identifiers; the page
+// never guesses them, and never splits `what`. Anything the parts cannot describe is one plain run equal to `what`.
+test("auditWhatRuns: the server's parts come back as runs, id true only where the server said so", () => {
+  const parts = [{ text: "aws " }, { text: "culipulse-prod", id: true }, { text: " · role " }, { text: "agent-ops-write", id: true }, { text: " · elevated", id: false }];
+  const runs = auditWhatRuns(ev({ what: "aws culipulse-prod · role agent-ops-write · elevated", parts }));
+  assert.deepStrictEqual(runs.map((r) => [r.text, r.id]), [
+    ["aws ", false], ["culipulse-prod", true], [" · role ", false], ["agent-ops-write", true], [" · elevated", false],
+  ]);
+  // id is a boolean, and only the literal true counts.
+  assert.deepStrictEqual(auditWhatRuns({ what: "x", parts: [{ text: "x", id: "yes" }, { text: "y", id: 1 }] }).map((r) => r.id), [false, false]);
+});
+
+test("auditWhatRuns: no parts, or parts the page cannot trust, is one plain run equal to what", () => {
+  const what = "encrypted store unlocked · ttl=168h0m0s";
+  const one = [{ text: what, id: false }];
+  const got = (o) => auditWhatRuns({ what, ...o }).map((r) => ({ text: r.text, id: r.id }));
+  assert.deepStrictEqual(got({}), one, "an old server sends no parts");
+  assert.deepStrictEqual(got({ parts: undefined }), one);
+  assert.deepStrictEqual(got({ parts: null }), one);
+  assert.deepStrictEqual(got({ parts: [] }), one, "an empty list");
+  assert.deepStrictEqual(got({ parts: {} }), one, "an object is not a list");
+  assert.deepStrictEqual(got({ parts: "aws" }), one);
+  assert.deepStrictEqual(got({ parts: [{ id: true }] }), one, "a part without text");
+  assert.deepStrictEqual(got({ parts: [{ text: 5 }] }), one, "a part whose text is not a string");
+  assert.deepStrictEqual(got({ parts: [{ text: "ok" }, { text: 5, id: true }] }), one, "one bad part spoils the list: no half guess");
+  assert.deepStrictEqual(got({ parts: [null] }), one);
+  assert.deepStrictEqual(got({ parts: ["aws"] }), one);
+});
+
+test("auditWhatRuns: a missing what is an empty plain run, and a missing event does not throw", () => {
+  assert.deepStrictEqual(auditWhatRuns({}).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns({ what: null }).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns(undefined).map((r) => [r.text, r.id]), [["", false]]);
+  assert.deepStrictEqual(auditWhatRuns(null).map((r) => [r.text, r.id]), [["", false]]);
+});
+
+test("auditKpis: five tiles, labelled as the frame has them, numbers grouped", () => {
   const k = auditKpis({ issued: 2180, refused: 6, elevations: 3, egress_allowed: 1234567, egress_denied: 0 });
   assert.deepStrictEqual(k.map((x) => x.label),
-    ["credentials issued", "refused", "write elevations", "egress allowed", "egress denied"]);
+    ["Credentials issued", "Refused", "Write elevations", "Egress allowed", "Egress denied"]);
   assert.deepStrictEqual(k.map((x) => x.n), ["2,180", "6", "3", "1,234,567", "0"]);
+});
+
+// Red only for write (digest-design §B5, §B9): the Write elevations value, and only above zero. Refused and Egress
+// denied are containment working, so they are never bad, whatever their count.
+test("auditKpis: only Write elevations above zero is bad", () => {
+  const bad = (s) => auditKpis(s).map((x) => x.bad === true);
+  assert.deepStrictEqual(bad({ issued: 37, refused: 2, elevations: 2, egress_allowed: 1284, egress_denied: 20 }), [false, false, true, false, false]);
+  assert.deepStrictEqual(bad({ issued: 1, refused: 9, elevations: 0, egress_allowed: 1, egress_denied: 9 }), [false, false, false, false, false]);
+  assert.deepStrictEqual(bad(null), [false, false, false, false, false]);
+  assert.deepStrictEqual(bad({}), [false, false, false, false, false]);
+  assert.strictEqual(auditKpis({ elevations: 1 })[2].bad, true);
 });
 
 test("auditKpis: a missing summary is dashes, not zeros", () => {
@@ -153,7 +226,7 @@ test("the entry points all call openAudit; the Access card links to it", () => {
 
 test("index.html carries the page markup and loads both scripts after accesstab.js", () => {
   const html = read("index.html");
-  for (const id of ["au-range", "au-csv", "au-kpis", "au-filters", "au-session", "au-table", "au-foot", "au-count", "au-more", "au-policy"]) {
+  for (const id of ["au-csv", "au-esc", "au-filters", "au-session", "au-range", "au-scroll", "au-kpis", "au-table", "au-body", "au-foot", "au-count", "au-more", "au-policy"]) {
     assert.ok(html.includes('id="' + id + '"'), id);
   }
   assert.match(html, /<dialog id="audit-page" aria-label="Audit">/);

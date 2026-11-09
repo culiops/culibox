@@ -49,11 +49,22 @@ type Event struct {
 	Kind     string `json:"kind"`
 	Session  string `json:"session,omitempty"`
 	What     string `json:"what"`             // one line, masked
+	Parts    []Part `json:"parts,omitempty"`  // What split so the page can set identifiers apart; see Part
 	Outcome  string `json:"outcome"`          // raw word: minted, granted, denied, created, ...
 	Actor    string `json:"actor,omitempty"`  // "you" for a cookie approval, "API token" for bearer, else the actor column
 	Reason   string `json:"reason,omitempty"` // elevation reason, masked
 	Count    int    `json:"count,omitempty"`  // egress: 1 + suppressed when > 1
 	Elevated bool   `json:"elevated,omitempty"`
+}
+
+// Part is one run of an Event's description. ID marks an identifier the page
+// sets in mono (a profile, entry, account, role, host:port, token, app or value
+// name). Joined, the Texts of Parts are What, except a store unlock whose ttl
+// the parts spell in plain words ("for 7 days") while What keeps "ttl=168h0m0s".
+// Parts is empty when it could not be kept faithful to What (see describe).
+type Part struct {
+	Text string `json:"text"`
+	ID   bool   `json:"id,omitempty"`
 }
 
 // Query selects one page. Filter is the HTTP ?kind= value: "" (all),

@@ -46,6 +46,9 @@ const HOOKS = new Set([
   // too: profilepage.js pfvDrawHeader calls the same builder), so the tests (settings-shell.test.js, profilepage.test.js) can find
   // it again; its whole look is the kit's .btn.btn-ghost.btn-sm, so no rule names it.
   "set-esc",
+  // The "Esc ✕" close button of the Audit and Analytics page heads (index.html, the same markup on both): a [data-close] button, so
+  // initDialogs wires it, marked so the tests (prove-pages.test.js) can find it again; its whole look is the kit's .btn.btn-ghost.
+  "page-esc",
 ]);
 
 function stripComments(css) {
