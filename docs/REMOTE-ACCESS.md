@@ -20,7 +20,7 @@ CuliBox does not change how it is served for this. It has no built-in TLS, and y
    tailscale serve --bg --https=443 http://127.0.0.1:8899
    ```
 
-   The address is then `https://<machine>.<tailnet>.ts.net`. To stop serving, repeat the command with `off` at the end.
+   The address is then `https://<machine>.<tailnet>.ts.net`. The proxy is expected to forward the browser's `Host` header (the tailnet name) rather than rewrite it; if you see "host not allowed", check the logged `Host` in step 2. To stop serving, repeat the command with `off` at the end.
 
 2. Tell CuliBox to accept that name. CuliBox refuses any request whose `Host` is not on its allowlist (a DNS-rebinding defence), so add the name, without scheme or path, to `allowed_hosts` in `config.json`:
 
@@ -46,6 +46,14 @@ No certificate, no config change, and nothing exposed. On the machine you browse
 ssh -L 8899:127.0.0.1:8899 <user>@<host>
 ```
 
-Leave it running and open `http://127.0.0.1:8899`. That is a localhost origin, so it is a secure context and notifications work. The `Host` is `127.0.0.1:8899`, which CuliBox already accepts.
+Leave it running and open `http://127.0.0.1:8899`. That is a localhost origin, so it is a secure context and notifications work. The `Host` is `127.0.0.1:8899`, which CuliBox already accepts. That holds only when the local port equals the port CuliBox binds to: CuliBox accepts the loopback names (`127.0.0.1`, `localhost`, `::1`) only on its own bind port.
 
-If local port 8899 is taken, pick another, for example `-L 9000:127.0.0.1:8899`, and open `http://127.0.0.1:9000`. Notifications are tied to the origin, so allow them again for it.
+If local port 8899 is taken, pick another, for example `-L 9000:127.0.0.1:8899`, and open `http://127.0.0.1:9000`. That `Host` (`127.0.0.1:9000`) is not accepted and is answered with "host not allowed", so add it to `allowed_hosts` first:
+
+```json
+{
+  "allowed_hosts": ["127.0.0.1:9000"]
+}
+```
+
+Restart CuliBox. Notifications are tied to the origin, so allow them again for it.
