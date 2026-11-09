@@ -359,8 +359,9 @@ function drawerTabClosed(id) {
   drawerFollowFocus();
 }
 
-// positionDrawer: below the focused pane's header (and its ask strip), over the right of the grid.
-// The width is CSS (default min(960px, 62% of the grid), or the dragged share); it needs the grid's px.
+// positionDrawer: below the focused pane's header, its write-access banner and its ask strip, over the
+// right of the grid. The width is CSS (default min(960px, 62% of the grid), or the dragged share); it
+// needs the grid's px.
 function positionDrawer() {
   const dr = $("drawer");
   if (!dr || dr.hidden) return;
@@ -371,11 +372,13 @@ function positionDrawer() {
   const gr = grid.getBoundingClientRect();
   const cell = currentMaximized() || focusedCell;
   let top = gr.top;
-  if (cell && cell.el.isConnected && !cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
-  // The pane's ask strip sits under its header and stays readable (and its
-  // buttons pressable) while a drawer is open, so the drawer starts below it.
-  if (cell && cell.el.isConnected && cell._strip && cell._strip.isConnected && cell._strip.classList.contains("needstrip")) {
-    top = cell._strip.getBoundingClientRect().bottom;
+  if (cell && cell.el.isConnected) {
+    if (!cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
+    // The pane's write banner and ask strip sit under its header and stay readable (and their
+    // buttons pressable) while a drawer is open, so the drawer starts below the lowest of the three.
+    // paneElevSync and syncStrip call this again when either one appears or leaves.
+    const under = [cell._elev, cell._strip && cell._strip.classList.contains("needstrip") ? cell._strip : null];
+    for (const n of under) if (n && n.isConnected) top = Math.max(top, n.getBoundingClientRect().bottom);
   }
   dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
   dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
@@ -603,7 +606,7 @@ function renderRail48() {
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog btn btn-ghost btn-icon btn-sm" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " is-elevated" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog btn btn-ghost btn-icon btn-sm" : "");
     b.setAttribute("aria-label", it.label);
     // A session's hover text is its bare name (the "waiting" suffix is in the
     // accessible name and the dot's colour); the toggle and add keep their label.
@@ -635,16 +638,21 @@ function renderRail48() {
   paintRailMeters();
 }
 
-// paintSideElevated: the sidebar footer's "N elevated", red while any session
-// has an AWS write window open. With none open it is not there at all: "0 elevated"
-// is a line that says nothing. A lapsed window clears on the next poll.
+// paintSideElevated: the sidebar footer's "● N elevated" (digest M6.4), red while
+// any session has an AWS write window open. With none open it is not there at all:
+// "0 elevated" is a line that says nothing. A lapsed window clears on the next
+// poll. The ● is decoration (aria-hidden), so the accessible text is "N elevated".
 function paintSideElevated() {
   const el = $("side-elevated");
   if (!el) return;
   const n = elevatedCount(lastSessions, Date.now());
   el.hidden = n === 0;
-  el.textContent = n > 0 ? n + " elevated" : "";
   el.classList.toggle("hot", n > 0);
+  if (n === 0) { el.replaceChildren(); return; }
+  const dot = document.createElement("span");
+  dot.setAttribute("aria-hidden", "true");
+  dot.textContent = "\u25CF";
+  el.replaceChildren(dot, document.createTextNode(" " + n + " elevated"));
 }
 
 // paintSideHints: the sidebar top's palette and collapse buttons name their chord, from the
@@ -2238,6 +2246,9 @@ function renderSession(s, opts) {
   // status light, and a second square beside it read as a second state.
   const elsewhere = attachedElsewhere(s, !!tab && tab.status() === "connected");
   if (elsewhere) adot.classList.add("watching");
+  // An open write window rings the dot in red (the kit's .dot.is-elevated, digest M6.4). Where
+  // "viewed elsewhere" also holds, desktop.css draws both rings. The phone's rows are never compact.
+  if (compact && sessionElevated(s, Date.now())) adot.classList.add("is-elevated");
   // A taken-over row keeps the outline (another tab holds the session) but its
   // tooltip is the connection word alone: "open in another tab" already says who.
   const viewed = elsewhere && !takenOver;

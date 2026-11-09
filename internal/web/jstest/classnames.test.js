@@ -49,6 +49,9 @@ const HOOKS = new Set([
   // The "Esc ✕" close button of the Audit and Analytics page heads (index.html, the same markup on both): a [data-close] button, so
   // initDialogs wires it, marked so the tests (prove-pages.test.js) can find it again; its whole look is the kit's .btn.btn-ghost.
   "page-esc",
+  // accesstab.js accContainment / accCreds: marks the Containment and Cloud credentials cards (section.card.ac-cont, section.card.ac-creds,
+  // M6.3) so the tests (accesstab.test.js) and the gates can find them again; the look is the kit's .card, so no rule names them.
+  "ac-cont", "ac-creds",
 ]);
 
 function stripComments(css) {

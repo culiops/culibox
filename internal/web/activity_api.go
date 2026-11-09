@@ -203,7 +203,10 @@ func credentialEvents(src ActivityAuditService, sid string, since, beforeTS int6
 
 // credentialState maps a broker outcome to a row state. Base-role probes and
 // GitHub revokes are the daemon's own housekeeping, not something the agent
-// used, so they are not rows.
+// used, so they are not rows. A denied_* outcome is a containment refusal (the
+// gate said no, which is it working: "refused"); every other outcome that did
+// not mint is something that broke ("failed"), and the view shows the two
+// differently.
 func credentialState(o broker.Outcome) (state string, show bool) {
 	switch o {
 	case broker.OutcomeMinted, broker.OutcomeFetched:
@@ -211,7 +214,10 @@ func credentialState(o broker.Outcome) (state string, show bool) {
 	case broker.OutcomeProbeMinted, broker.OutcomeProbeFailed, broker.OutcomeRevoked, broker.OutcomeRevokeFailed:
 		return "", false
 	}
-	return "refused", true
+	if strings.HasPrefix(string(o), "denied_") {
+		return "refused", true
+	}
+	return "failed", true
 }
 
 // credentialDetail is "<provider> <entry>", e.g. "aws culipulse-prod". The

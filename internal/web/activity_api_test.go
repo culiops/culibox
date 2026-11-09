@@ -393,7 +393,8 @@ func TestActivityNoSecrets(t *testing.T) {
 			t.Fatalf("response leaks %q: %s", bad, body)
 		}
 	}
-	if !strings.Contains(body, "github pat-1") || !strings.Contains(body, `"state":"refused"`) {
+	// The github_error row is a failure and the refused approval stays a refusal.
+	if !strings.Contains(body, "github pat-1") || !strings.Contains(body, `"state":"failed"`) || !strings.Contains(body, `"state":"refused"`) {
 		t.Fatalf("mapped fields missing: %s", body)
 	}
 }
@@ -418,7 +419,7 @@ func TestActivityRowSelectionAndReasonBound(t *testing.T) {
 	if evs[0]["state"] != "granted" || len([]rune(evs[0]["detail"].(string))) > 230 || strings.Contains(evs[0]["detail"].(string), "\n") {
 		t.Fatalf("reason not bounded: %v", evs[0])
 	}
-	if evs[1]["detail"] != "dropped" || evs[2]["detail"] != "aws" || evs[2]["state"] != "refused" {
+	if evs[1]["detail"] != "dropped" || evs[2]["detail"] != "aws" || evs[2]["state"] != "failed" {
 		t.Fatalf("events = %v", evs)
 	}
 }
@@ -432,5 +433,41 @@ func TestActivityWithoutBrokerKeepsTranscript(t *testing.T) {
 	sum := m["summary"].(map[string]any)
 	if len(activityEvents(t, m)) != 1 || m["partial"] != true || m["waiting_since"] != float64(42) || sum["files_changed"] != float64(1) || sum["running_s"].(float64) <= 0 {
 		t.Fatalf("body = %v", m)
+	}
+}
+
+// A denial is containment working; an error is something that broke. The
+// Activity view shows the first in neutral text and the second in red, so the
+// state must tell them apart (UI plan 6 E6).
+func TestCredentialStateSplitsRefusalFromFailure(t *testing.T) {
+	for _, tc := range []struct {
+		o     broker.Outcome
+		state string
+		show  bool
+	}{
+		{broker.OutcomeDeniedToken, "refused", true},
+		{broker.OutcomeDeniedSession, "refused", true},
+		{broker.OutcomeDeniedNotReadOnly, "refused", true},
+		{broker.OutcomeDeniedBox, "refused", true},
+		{broker.OutcomeDeniedScope, "refused", true},
+		{broker.OutcomeSTSError, "failed", true},
+		{broker.OutcomeRateLimited, "failed", true},
+		{broker.OutcomeSSOExpired, "failed", true},
+		{broker.OutcomeStoreLocked, "failed", true},
+		{broker.OutcomeUnresolved, "failed", true},
+		{broker.OutcomeNotInstalled, "failed", true},
+		{broker.OutcomeScopeError, "failed", true},
+		{broker.OutcomeGitHubError, "failed", true},
+		{broker.OutcomeMinted, "minted", true},
+		{broker.OutcomeFetched, "minted", true},
+		{broker.OutcomeProbeMinted, "", false},
+		{broker.OutcomeProbeFailed, "", false},
+		{broker.OutcomeRevoked, "", false},
+		{broker.OutcomeRevokeFailed, "", false},
+	} {
+		state, show := credentialState(tc.o)
+		if state != tc.state || show != tc.show {
+			t.Errorf("credentialState(%q) = (%q, %v), want (%q, %v)", tc.o, state, show, tc.state, tc.show)
+		}
 	}
 }

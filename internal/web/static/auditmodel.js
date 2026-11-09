@@ -12,9 +12,10 @@ const AUD_KINDS = {
   credential: "Credential", elevation: "Elevation", signin: "Sign-in",
   egress: "Egress", settings: "Settings", store: "Store",
 };
-const AUD_ELEV_BAD = new Set(["granted", "extended", "refused"]);
+const AUD_ELEV_BAD = new Set(["granted", "extended"]);
 const AUD_OK = new Set(["allowed", "ok"]);
-const AUD_BAD = new Set(["denied", "private_addr", "bad_auth", "bad_method", "dial_error", "failed"]);
+// A denied egress tunnel is the allowlist working, so it is not here: only an error is red.
+const AUD_BAD = new Set(["dial_error", "failed"]);
 // A write elevation is a live grant: one that opened or was extended. Only its row is tinted and its Kind red; a refused,
 // dropped, expired or ended elevation opened nothing (UI plan 5, digest-design §B9).
 const AUD_ELEV_LIVE = new Set(["granted", "extended"]);
@@ -55,10 +56,11 @@ function audTime(ts) {
 }
 
 // auditRowView: one table row. `names` maps a session id to its live name.
-// tone is the colour role of the Outcome: an elevation that opened, extended or
-// was refused is red; egress and settings words follow the Access view's table
-// plus the proxy's failure words; anything else is neutral. elevated is the red
-// row itself: an elevation that opened or was extended, and nothing else.
+// tone is the colour role of the Outcome: an elevation that opened or was
+// extended is red; a real error (the Access view's table plus the proxy's dial
+// failure) is red; a denial or refusal is containment working and neutral, like
+// anything else. elevated is the red row itself: an elevation that opened or was
+// extended, and nothing else.
 function auditRowView(ev, names) {
   const e = ev || {};
   const o = String(e.outcome || "");

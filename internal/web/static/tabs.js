@@ -169,6 +169,9 @@ class Cell {
     // that syncNeeds' first call happens to treat correctly.
     this._needsKey = "";
     this._strip = null;
+    // The write-access banner under the header (elevbanner.js), null with no window open
+    // and always null on a phone. Sits right after .cell-bar, so ahead of the ask strip.
+    this._elev = null;
     // Companion-shell dock (spec 5.5): shells docked below or right of this
     // pane. `dock` is shelldock.js's pure model ({placement, ids, active,
     // ratio}, null when there is none), dockTabs the live TerminalTab of each
@@ -903,11 +906,12 @@ class Cell {
     const sid = term ? term.id : null;
     if (!term) this.view = "terminal"; // a view needs the agent it describes (_syncView drops the host)
     const s = sid ? (lastSessions || []).find((x) => x.id === sid) || null : null;
+    const nowMs = Date.now();
     const m = paneHeaderModel({
-      tab: t, session: t && t.kind === "terminal" ? s : null, nowMs: Date.now(),
+      tab: t, session: t && t.kind === "terminal" ? s : null, nowMs,
       boxRuntime: typeof boxRuntime === "string" ? boxRuntime : "", narrow: this._narrow,
     });
-    this._hdrKey = headerSyncKey(m.name, s); // see syncHeaderName
+    this._hdrKey = headerSyncKey(m.name, s, nowMs); // see syncHeaderName
     // Classes are assigned as literals at each call site (not passed in), so
     // classnames.test.js can see every one of them.
     const el = (tag, text) => {
@@ -924,7 +928,8 @@ class Cell {
     const a = headerDot(m, t);
     if (a) {
       const dot = el("span");
-      dot.className = a.cls + " ph-dot";
+      // An open write window rings it in red, as the sidebar row's dot (the kit's .dot.is-elevated, M6.4).
+      dot.className = a.cls + " ph-dot" + (m.elevated ? " is-elevated" : "");
       // Narrow: the connection state (see .ph-st below) joins the title.
       const st = this._narrow && t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" ? t.status() : "";
       const title = [a.title, st].filter(Boolean).join(" \u00B7 ");
@@ -1164,6 +1169,7 @@ class Cell {
   // every render — it holds a text field, and rebuilding it under a typing
   // operator drops the caret.
   syncNeeds() {
+    this.syncElev(); // the write banner: made on desktop, and the one thing a crossing to a phone removes
     // Desktop: the ask strip under the pane header (spec 5.3), on every tab.
     if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncStrip(); return; }
     const t = this.activeTab;
@@ -1183,6 +1189,17 @@ class Cell {
       const strip = buildReplyStrip(t);
       if (strip) { this._strip = strip; this.el.appendChild(this._strip); }
     }
+  }
+
+  // syncElev: the write-access banner for the pane's SESSION (its terminal tab,
+  // even while a viewer tab is active, so it stays over Files and a docked Shell).
+  // paneElevSync (elevbanner.js) creates, updates or removes it, and removes it on
+  // a phone.
+  syncElev() {
+    if (typeof paneElevSync !== "function") return;
+    const term = cellTerminal(this);
+    const s = term ? (lastSessions || []).find((x) => x.id === term.id) || null : null;
+    paneElevSync(this, s);
   }
 
   // syncStrip paints the desktop ask strip: `div.needstrip` directly under
@@ -1232,7 +1249,7 @@ class Cell {
     this.dropStrip();
     if (model || done) {
       this._strip = buildNeedStrip(s, model, () => positionDrawer());
-      this.bar.after(this._strip);
+      (this._elev || this.bar).after(this._strip); // under the write banner, when there is one
     }
     // The drawer hangs below the strip too (positionDrawer), so it moves with it.
     if (typeof positionDrawer === "function") positionDrawer();
@@ -1265,7 +1282,7 @@ class Cell {
   repaintReply() {
     // Desktop: the poll may have changed what the strip shows (the ask, the
     // need, replies on/off); syncStrip rebuilds only when its key moved.
-    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncHeaderName(); this.syncStrip(); this.syncDockBar(); return; }
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncHeaderName(); this.syncElev(); this.syncStrip(); this.syncDockBar(); return; }
     this._strip?._paint();
   }
 
@@ -1279,7 +1296,7 @@ class Cell {
     if (!t || t.kind !== "terminal") return;
     const s = (lastSessions || []).find((x) => x.id === t.id) || null;
     const name = (s && (s.name || s.id)) || t.name || "";
-    if (headerSyncKey(name, s) !== this._hdrKey) this.renderBar();
+    if (headerSyncKey(name, s, Date.now()) !== this._hdrKey) this.renderBar();
   }
 
   dispose() {
