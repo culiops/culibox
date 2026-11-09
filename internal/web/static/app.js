@@ -3753,7 +3753,10 @@ async function refreshSessions() {
   let sessions;
   try { sessions = await api("/api/sessions"); }
   catch (e) {
-    if (!holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
+    // R27: on the desktop, once a list has loaded, a failed poll keeps the last-known rows (the banner says "the list
+    // below is from then"; sess-stale marks them). Before the first list, and always on the phone, the "Error: ..." line.
+    const keepRows = sessionsLoaded && !mobileActive(window.innerWidth);
+    if (!keepRows && !holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
     sysPollFailed(e);
     signalAttention();
     return null;

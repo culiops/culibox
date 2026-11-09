@@ -36,6 +36,7 @@ function page(sysOver, over) {
   box.document = doc;
   box.globalThis = box;
   const ctx = vm.createContext(box);
+  box.run = (src) => vm.runInContext(src, ctx);
   // Date.now follows box.now so the clock is fake
   vm.runInContext("Date = { now: () => now, parse: globalThis.__parse };", Object.assign(ctx, { __parse: Date.parse }));
   for (const f of ["notifymodel.js", "sysbanner.js"]) new vm.Script(read(f), { filename: f }).runInContext(ctx);
@@ -206,4 +207,48 @@ test("paused clears on the next OK poll (sysPollOk) and the banner follows", () 
   box.sys.paused = false; // what sysPollOk does
   box.sysBannerSync();
   assert.strictEqual(slot.hidden, true);
+});
+
+// --- R27: refreshSessions' failure path (the real function, lifted) ---------------------------------------
+function liftFn(name) {
+  const at = app.indexOf((name === "refreshSessions" ? "async function " : "function ") + name + "(");
+  assert.ok(at >= 0, name);
+  return app.slice(at, app.indexOf("\n}\n", at) + 2);
+}
+function failing(over, sysOver) {
+  const p = page(Object.assign({ lastOkAt: T - 20000, failSince: T - 17000 }, sysOver || {}), Object.assign({
+    $: (id) => p.box.els[id] || null, sessionsLoaded: false, editing: false, replyFocused: false, storeUnlockFocused: () => false,
+    api: () => Promise.reject(Object.assign(new Error("Failed to fetch"), {})),
+    signalAttention: () => { p.box.sysBannerSync(); },
+  }, over || {}));
+  const row = p.doc.createElement("li"); row.className = "drow"; row.textContent = "gap-sh2";
+  p.list.replaceChildren(row);
+  p.box.run(liftFn("emptyLi") + liftFn("sysPollFailed") + liftFn("refreshSessions"));
+  return Object.assign(p, { row });
+}
+test("R27: desktop + loaded + fetch rejects -> the last-known rows stay, marked sess-stale once offline", async () => {
+  const p = failing({ sessionsLoaded: true });
+  assert.strictEqual(await p.box.refreshSessions(), null);
+  assert.deepStrictEqual(p.list.children, [p.row]);
+  assert.strictEqual(p.list.classList.contains("sess-stale"), true);
+  assert.strictEqual(p.rail.classList.contains("sess-stale"), true);
+});
+test("R27: a real 401 keeps the rows too, signed out", async () => {
+  const p = failing({ sessionsLoaded: true, api: () => Promise.reject(Object.assign(new Error("Unauthorized"), { status: 401 })) }, { lastOkAt: T - 1000, failSince: null });
+  await p.box.refreshSessions();
+  assert.deepStrictEqual(p.list.children, [p.row]);
+  assert.strictEqual(p.box.sys.signedOut, true);
+  assert.strictEqual(p.list.classList.contains("sess-stale"), true);
+});
+test("R27: desktop before the first list -> the Error line as today", async () => {
+  const p = failing({ sessionsLoaded: false });
+  await p.box.refreshSessions();
+  assert.strictEqual(p.list.children.length, 1);
+  assert.strictEqual(p.list.children[0].textContent, "Error: Failed to fetch");
+});
+test("R27: phone -> the Error line as today, even after a list loaded", async () => {
+  const p = failing({ sessionsLoaded: true, phone: true });
+  await p.box.refreshSessions();
+  assert.strictEqual(p.list.children[0].textContent, "Error: Failed to fetch");
+  assert.strictEqual(p.list.classList.contains("sess-stale"), false);
 });
