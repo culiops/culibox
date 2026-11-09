@@ -32,22 +32,26 @@ function page() {
   const doc = { activeElement: null };
   doc.createElement = (t) => new Node(t, doc);
   doc.createTextNode = (t) => new Text(t);
+  doc.body = doc.createElement("body");
   const box = {
     document: doc, window: { innerWidth: 1280 }, console, Date, JSON, Map, Set, Math, Promise,
     phone: false, lastSessions: [],
     mobileActive: () => box.phone,
     accData: new Map(), accBusy: new Set(), accViews: new Map(),
-    reads: [], drops: [], drawer: 0, dropDone: true,
+    reads: [], drops: [], drawer: 0,
     accLoad: (sid, force) => { box.reads.push([sid, force]); },
     positionDrawer: () => { box.drawer++; },
-    // The real accDrop's shape: busy at once with a repaint, then (here at once) idle again with another.
+    // The real accDrop's shape: busy at once with a repaint; the request stays in flight until the test calls
+    // box.finish(ok), which does what accDrop's tail does (clear busy, repaint) and then resolves with true on a
+    // success, false on a failure (the toast is accDrop's, not the banner's).
     accDrop: (sid, repaint) => {
       box.drops.push(sid); // every call into accDrop, before its own busy guard
-      if (box.accBusy.has(sid)) return undefined;
+      if (box.accBusy.has(sid)) return Promise.resolve(false);
       box.accBusy.add(sid);
       repaint(true);
-      if (box.dropDone) { box.accBusy.delete(sid); repaint(true); }
-      return undefined;
+      return new Promise((resolve) => {
+        box.finish = (ok) => { box.accBusy.delete(sid); repaint(true); resolve(ok); };
+      });
     },
   };
   box.globalThis = box;
@@ -66,6 +70,10 @@ function page() {
   return { box, doc, cell, sync, bar, strip, body };
 }
 const kids = (cell) => cell.el.children.map((c) => c.className);
+const tick = () => new Promise((r) => setImmediate(r));
+// What Chromium does a couple of frames after the focused control becomes :disabled (focus fixup): focus
+// falls to <body>. An aria-disabled control keeps it. Call after anything that could have disabled a button.
+const settle = (doc) => { const a = doc.activeElement; if (a && a.disabled) doc.activeElement = doc.body; };
 const loaded = (box, sid, approvals) => box.accData.set(sid, { aws: { approvals }, loaded: true, failed: false, inflight: false });
 
 test("an open window puts one .elev[role=status] right after .cell-bar and before the ask strip", () => {
@@ -178,48 +186,212 @@ test("no banner on the phone, and crossing to the phone removes it", () => {
   assert.deepStrictEqual(kids(cell), ["cell-bar", "needstrip", "cell-body"]);
 });
 
-test("Drop now calls accDrop once and is disabled with \"Dropping…\" while accBusy has the sid", () => {
-  const { box, cell, sync } = page();
-  box.dropDone = false; // the request is in flight
+test("Drop now calls accDrop once; in flight it is inert (aria-disabled, never disabled) and says Dropping…, and keeps focus", () => {
+  const { box, doc, cell, sync } = page();
   sync(sess(23));
   const btn = cell._elev.children[3];
+  btn.focus();
   btn.click();
   assert.deepStrictEqual(box.drops, ["s1"]);
-  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(btn.disabled, false, "a disabled button drops focus to <body>: the control stays focusable");
+  assert.strictEqual(btn.attrs["aria-disabled"], "true");
   assert.strictEqual(btn.textContent, "Dropping…");
   assert.strictEqual(btn.attrs["aria-busy"], "true", "a control at work is busy, not closed (the kit does not dim it)");
+  settle(doc);
+  assert.strictEqual(doc.activeElement, btn, "still the focused control after the browser's focus fixup");
   btn.click();
   btn.click();
   assert.deepStrictEqual(box.drops, ["s1"], "a double press reaches accDrop once, so one DELETE is sent");
-  // The poll lands while it is in flight: the button keeps saying so.
+  // The poll lands while it is in flight: the button keeps saying so, and keeps its node.
   sync(sess(22));
+  settle(doc);
   assert.strictEqual(btn.textContent, "Dropping…");
   assert.strictEqual(cell._elev.children[3], btn);
-  // It fails: the toast is accDrop's, the banner stays, the button is a button again.
-  box.accBusy.delete("s1");
-  sync(sess(22));
-  assert.strictEqual(btn.disabled, false);
-  assert.strictEqual(btn.textContent, "Drop now");
-  assert.strictEqual(btn.attrs["aria-busy"], undefined);
-  assert.ok(cell._elev, "the banner stays until the list says the window is closed");
+  assert.strictEqual(doc.activeElement, btn);
 });
 
-test("Drop now repaints this pane and the Access view, which is told the repaint is forced", () => {
+test("a failed Drop makes the button a button again, with focus still on it", async () => {
+  const { box, doc, cell, sync } = page();
+  const w = sess(23);
+  sync(w);
+  const btn = cell._elev.children[3];
+  btn.focus();
+  btn.click();
+  box.finish(false); // the DELETE failed: accDrop toasted the error and cleared busy
+  await tick();
+  settle(doc);
+  assert.ok(cell._elev, "the banner stays until the list says the window is closed");
+  assert.strictEqual(btn.attrs["aria-disabled"], undefined);
+  assert.strictEqual(btn.attrs["aria-busy"], undefined);
+  assert.strictEqual(btn.textContent, "Drop now");
+  assert.strictEqual(doc.activeElement, btn);
+  btn.click();
+  assert.deepStrictEqual(box.drops, ["s1", "s1"], "and it can be pressed again");
+});
+
+test("a failed Drop gives focus back to the button when it had fallen to <body>", async () => {
+  const { box, doc, cell, sync, body } = page();
+  sync(sess(23));
+  const btn = cell._elev.children[3];
+  btn.focus();
+  btn.click();
+  doc.activeElement = doc.body;
+  box.finish(false);
+  await tick();
+  assert.strictEqual(doc.activeElement, btn);
+  // Focus the user moved somewhere else on purpose is not taken back.
+  const other = doc.createElement("input");
+  body.appendChild(other);
+  btn.click();
+  other.focus();
+  box.finish(false);
+  await tick();
+  assert.strictEqual(doc.activeElement, other);
+});
+
+test("a successful Drop keeps the button inert (Dropping…) until its window changes or leaves: a further click sends no DELETE", async () => {
+  const { box, doc, cell, sync } = page();
+  const w = sess(23);
+  sync(w);
+  const btn = cell._elev.children[3];
+  btn.focus();
+  btn.click();
+  box.finish(true); // 204: accDrop cleared busy, toasted, and asked for the list
+  await tick();
+  assert.strictEqual(box.accBusy.has("s1"), false);
+  assert.strictEqual(btn.textContent, "Dropping…", "not back to Drop now before the poll says the window is gone");
+  assert.strictEqual(btn.attrs["aria-disabled"], "true");
+  assert.strictEqual(btn.disabled, false);
+  btn.click();
+  sync(w); // a poll that still carries the window
+  btn.click();
+  assert.deepStrictEqual(box.drops, ["s1"], "one DELETE in all");
+  assert.strictEqual(btn.textContent, "Dropping…");
+  settle(doc);
+  assert.strictEqual(doc.activeElement, btn);
+  // A different window (extended or opened again from elsewhere) is a new question: Drop now is live again.
+  sync(sess(40));
+  assert.strictEqual(btn.textContent, "Drop now");
+  assert.strictEqual(btn.attrs["aria-disabled"], undefined);
+  btn.click();
+  assert.deepStrictEqual(box.drops, ["s1", "s1"]);
+});
+
+test("a successful Drop whose window then leaves: the banner goes and focus goes to the pane, not <body>", async () => {
+  const { box, doc, cell, sync } = page();
+  cell._viewHost = doc.createElement("div"); // a pane showing Access
+  cell.el.appendChild(cell._viewHost);
+  const w = sess(23);
+  sync(w);
+  cell._elev.children[3].focus();
+  cell._elev.children[3].click();
+  box.finish(true);
+  await tick();
+  settle(doc);
+  sync(sess(null)); // the poll: the window is closed
+  assert.ok(!cell._elev);
+  assert.strictEqual(doc.activeElement, cell._viewHost);
+});
+
+test("focus that already fell to <body> after a press still goes to the pane when the banner leaves; without a press it is left alone", async () => {
+  const a = page();
+  a.sync(sess(23));
+  a.cell._elev.children[3].click();
+  a.doc.activeElement = a.doc.body; // fixup, or a click on empty space
+  a.box.finish(true);
+  await tick();
+  a.sync(sess(-1));
+  assert.ok(!a.cell._elev);
+  assert.strictEqual(a.doc.activeElement, a.cell.el, "pressed, then on <body>: the pane");
+  // Never pressed: focus on <body> was not the banner's, and is not taken.
+  const b = page();
+  b.sync(sess(23));
+  b.doc.activeElement = b.doc.body;
+  b.sync(sess(-1));
+  assert.strictEqual(b.doc.activeElement, b.doc.body);
+  // Pressed, but focus is in another pane's input: not taken either.
+  const c = page();
+  const input = c.doc.createElement("input");
+  c.body.appendChild(input);
+  c.sync(sess(23));
+  c.cell._elev.children[3].click();
+  input.focus();
+  c.box.finish(true);
+  await tick();
+  c.sync(sess(-1));
+  assert.strictEqual(c.doc.activeElement, input);
+});
+
+test("a Drop that rejects leaves a button again, and does not strand the banner inert", async () => {
+  const { box, cell, sync } = page();
+  box.accDrop = () => Promise.reject(new Error("boom"));
+  sync(sess(23));
+  const btn = cell._elev.children[3];
+  btn.click();
+  await tick();
+  assert.strictEqual(btn.textContent, "Drop now");
+  assert.strictEqual(btn.attrs["aria-disabled"], undefined);
+});
+
+test("accDrop answers true only when the daemon dropped the window (the banner reads it)", async () => {
+  const toasts = [];
+  const box = { document: { createElement: () => ({}) }, console, Map, Set, Date, JSON, Promise, lastSessions: [], paneViewRenderers: {},
+    showToast: (m, o) => toasts.push([m, !!(o && o.error)]), dropToast: () => "dropped", refreshSessions: () => {}, fetch: async () => ({}) };
+  box.globalThis = box;
+  const ctx = vm.createContext(box);
+  new vm.Script(read("accessmodel.js"), { filename: "accessmodel.js" }).runInContext(ctx);
+  new vm.Script(read("accesstab.js"), { filename: "accesstab.js" }).runInContext(ctx);
+  const accBusy = vm.runInContext("accBusy", ctx); // a top-level const: not a property of the global
+  let calls = 0;
+  const repaints = [];
+  box.elevDrop = async () => { calls++; return { dropped: true }; };
+  assert.strictEqual(await box.accDrop("s1", (f) => repaints.push(f)), true);
+  assert.deepStrictEqual(repaints, [true, true]);
+  assert.strictEqual(accBusy.has("s1"), false);
+  box.elevDrop = async () => { calls++; throw new Error("nope"); };
+  assert.strictEqual(await box.accDrop("s1", () => {}), false, "a failure");
+  assert.deepStrictEqual(toasts[toasts.length - 1], ["nope", true]);
+  accBusy.add("s1");
+  assert.strictEqual(await box.accDrop("s1", () => {}), false, "refused: a request is already in flight");
+  assert.strictEqual(calls, 2, "and a refusal sent no DELETE");
+});
+
+test("busy for another reason (an Extend in flight) is inert too, but still reads Drop now and sends no Drop", () => {
+  const { box, cell, sync } = page();
+  const w = sess(23);
+  sync(w);
+  const btn = cell._elev.children[3];
+  box.accBusy.add("s1"); // accGrant's, not a Drop's
+  sync(w);
+  assert.strictEqual(btn.attrs["aria-disabled"], "true");
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, "Drop now", "Dropping… is only for a press of this button");
+  assert.strictEqual(btn.attrs["aria-busy"], undefined, "so the kit dims it as closed");
+  btn.click();
+  assert.deepStrictEqual(box.drops, []);
+  box.accBusy.delete("s1");
+  sync(w);
+  assert.strictEqual(btn.attrs["aria-disabled"], undefined);
+  btn.click();
+  assert.deepStrictEqual(box.drops, ["s1"]);
+});
+
+test("Drop now repaints this pane and the Access view, which is told the repaint is forced", async () => {
   const { box, cell, sync } = page();
   const seen = [];
   box.accViews.set("s1", (force) => seen.push(force));
-  box.dropDone = false;
   sync(sess(23));
   cell._elev.children[3].click();
   assert.deepStrictEqual(seen, [true]);
   assert.strictEqual(cell._elev.children[3].textContent, "Dropping…", "this pane's banner was re-synced by the same repaint");
-  box.dropDone = true;
-  box.accBusy.delete("s1");
-  cell._elev.children[3].click();
+  box.finish(false);
+  await tick();
   assert.strictEqual(seen.length >= 2, true);
   // No Access view mounted: nothing to repaint, no throw.
   box.accViews.clear();
   cell._elev.children[3].click();
+  box.finish(false);
+  await tick();
 });
 
 test("the banner keeps its nodes when nothing visible changed: same key, no replaceChildren, the button keeps focus", () => {
@@ -339,6 +511,29 @@ test("a pane sync with a window asks for the status read once, not once per sync
   assert.deepStrictEqual(box.reads, [["s1", true]]);
   sync(sess(-1));
   assert.strictEqual(box.reads.length, 2, "and once for the lapse");
+});
+
+test("a session that left the list is forgotten, so its window is asked about afresh if it returns; an empty list forgets nothing", () => {
+  const { box, cell, sync } = page();
+  const w = sess(23, { aws_connections: [conn({ elevated_until: "2099-01-01T10:00:00Z" })] });
+  box.lastSessions = [w];
+  box.elevWatch(w);
+  assert.strictEqual(box.reads.length, 1);
+  // The poll before the list has loaded says nothing (accPrune's own guard).
+  box.lastSessions = [];
+  box.paneElevSync(cell, null);
+  box.lastSessions = [w];
+  box.elevWatch(w);
+  assert.strictEqual(box.reads.length, 1, "an empty list is not 'gone'");
+  // s1 is gone from a real list: its entry goes.
+  const other = { id: "s2", aws_connections: [conn()] };
+  box.lastSessions = [other];
+  sync(other);
+  box.lastSessions = [w];
+  box.elevWatch(w);
+  assert.strictEqual(box.reads.length, 2, "forgotten while gone, so asked again on its return");
+  box.elevWatch(w);
+  assert.strictEqual(box.reads.length, 2);
 });
 
 test("inserting or removing the banner re-measures the Files drawer; an unchanged sync does not", () => {

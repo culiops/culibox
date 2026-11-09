@@ -494,6 +494,18 @@ test("elevBanner: without a clock it reads the real one, never a silent null", (
   assert.strictEqual(elevBanner(sess({ aws_connections: [conn({ elevated_until: new Date(Date.now() - 60000).toISOString() })] }), null), null);
 });
 
+test("access row: the leftover line is per connection: a window open on B does not hide A's issued credentials", () => {
+  const a = conn({ name: "a", label: "a", prod: false });
+  const b = conn({ name: "b", label: "b", prod: false, elevated_until: iso(23) });
+  const aws = status({ connections: [], elevation: { active: false, name: "a", last_valid: iso(8) } });
+  const rows = model({ session: sess({ aws_connections: [a, b] }), aws }).creds.rows;
+  const ra = rows.find((r) => r.name === "a");
+  const rb = rows.find((r) => r.name === "b");
+  assert.strictEqual(ra.window.leftover, "Credentials already issued stay valid until " + hhmm(iso(8)), "true: they were issued on a, and a's window is over");
+  assert.strictEqual(rb.window, null, "b has its own live window and says nothing");
+  assert.strictEqual(rb.scope, "write (elevated)");
+});
+
 test("access row: after a Drop both lines can show, the leftover with it", () => {
   const ts = NOW - 2 * 60000;
   const aws = status({ approvals: [{ ts, action: "dropped", name: "culipulse-prod" }, granted({ ts: NOW - 20 * 60000 })],

@@ -16,6 +16,15 @@
 // otherwise say it again on every poll, and a rebuilt Drop now would lose focus.
 // Every string goes in through textContent.
 //
+// Drop now is never `disabled`: a focused button that becomes disabled loses focus
+// to <body> (the browser's focus fixup), and a keyboard user pressing Enter on it
+// would be dropped out of the pane before the poll removes the banner. While a
+// request is in flight, or a Grant is, it is aria-disabled and the click handler
+// refuses, which the kit draws as the same closed look. `eb.pressed` records that
+// THIS button started a Drop: only then does it read "Dropping…", and it stays
+// inert after a success until the window changes or the banner leaves (the list
+// catches up on the next poll), so a second press cannot send a second DELETE.
+//
 // accesstab.js's globals it leans on: accData (the cached /aws status, which holds
 // the reason), accLoad, accDrop, accBusy, accViews.
 
@@ -51,6 +60,15 @@ function elevWatch(s) {
   accLoad(s.id, true);
 }
 
+// elevPrune: forget the sessions that left the list, as accPrune does, so ELEV_SEEN
+// holds no entry for a session that closed with a window open. An empty list is
+// the page before its first poll, not "everything is gone".
+function elevPrune() {
+  if (!lastSessions || !lastSessions.length) return;
+  const live = new Set(lastSessions.map((x) => x.id));
+  for (const id of [...ELEV_SEEN.keys()]) if (!live.has(id)) ELEV_SEEN.delete(id);
+}
+
 // ebFocusPane: where the keyboard goes when the banner is removed with focus on
 // it (Drop now, the one control it holds): the pane, never <body>. A pane showing
 // Activity or Access hands it to the view host, one on its terminal to the
@@ -72,7 +90,10 @@ function ebFocusPane(cell) {
 function ebRemove(cell) {
   const el = cell._elev;
   if (!el) return;
-  const held = el.contains(document.activeElement);
+  // Focus is the banner's when it is inside it, or when this banner's Drop was pressed and focus has
+  // since fallen to <body> (nothing else claimed it): either way it goes to the pane, not to <body>.
+  const a = document.activeElement;
+  const held = el.contains(a) || (el._eb.pressed && (!a || a === document.body));
   el.remove();
   cell._elev = null;
   if (held) ebFocusPane(cell);
@@ -95,35 +116,54 @@ function ebBuild(cell) {
   btn.type = "button";
   btn.className = "btn btn-danger btn-sm";
   el.append(strong, span, gap, btn);
-  const eb = { strong, span, btn, sid: "", sig: "" };
+  // pressed: this button started a Drop and its window has not changed since. settled: accDrop has
+  // answered it (true), so the pressed state outlives the request. wsig/pressedSig: the live window
+  // when painted / when pressed.
+  const eb = { strong, span, btn, sid: "", sig: "", pressed: false, settled: false, wsig: "", pressedSig: "" };
   el._eb = eb;
+  const resync = (force) => {
+    paneElevSync(cell, (lastSessions || []).find((x) => x.id === eb.sid) || null);
+    const view = accViews.get(eb.sid);
+    if (view) view(force);
+  };
   btn.onclick = () => {
     const sid = eb.sid;
-    if (!sid || accBusy.has(sid)) return;
-    accDrop(sid, (force) => {
-      paneElevSync(cell, (lastSessions || []).find((x) => x.id === sid) || null);
-      const view = accViews.get(sid);
-      if (view) view(force);
+    if (!sid || eb.pressed || accBusy.has(sid)) return;
+    eb.pressed = true; // before accDrop: its first repaint is synchronous and reads it
+    eb.settled = false;
+    eb.pressedSig = eb.wsig;
+    // Only an explicit true counts as dropped; a refusal, a failure or a throw all leave a button again.
+    Promise.resolve(accDrop(sid, resync)).then((ok) => ok === true, () => false).then((dropped) => {
+      if (dropped) { eb.settled = true; return; } // inert until the list says the window is over
+      eb.pressed = false; // refused or failed (accDrop toasted it): a button again
+      const a = document.activeElement;
+      if (el.parentNode && (!a || a === document.body)) btn.focus({ preventScroll: true });
+      resync(true);
     });
   };
   return el;
 }
 
 // ebPaint: put the model into the banner's nodes, writing only what differs.
-function ebPaint(el, m, sid, busy) {
+function ebPaint(el, m, sid, busy, wsig) {
   const eb = el._eb;
   eb.sid = sid;
-  const sig = m.key + "|" + (busy ? "1" : "0");
+  eb.wsig = wsig;
+  // A Drop that went through ends with its window; a different live window is a new question.
+  if (eb.pressed && eb.settled && wsig !== eb.pressedSig) eb.pressed = eb.settled = false;
+  const inert = busy || eb.pressed;
+  const sig = m.key + "|" + (inert ? "1" : "0") + (eb.pressed ? "1" : "0");
   if (sig === eb.sig) return;
   eb.sig = sig;
   const name = "Write access to " + m.conn;
   if (eb.strong.textContent !== name) { eb.strong.textContent = name; eb.strong.title = name; }
   if (eb.span.textContent !== m.detail) { eb.span.textContent = m.detail; eb.span.title = m.detail; }
-  const label = busy ? "Dropping…" : "Drop now";
+  const label = eb.pressed ? "Dropping…" : "Drop now";
   if (eb.btn.textContent !== label) eb.btn.textContent = label;
-  eb.btn.disabled = busy;
-  // A control at work is busy, not closed: the kit does not dim aria-busy.
-  if (busy) eb.btn.setAttribute("aria-busy", "true"); else eb.btn.removeAttribute("aria-busy");
+  // aria-disabled, never disabled (see the header): the click handler is the guard.
+  if (inert) eb.btn.setAttribute("aria-disabled", "true"); else eb.btn.removeAttribute("aria-disabled");
+  // A Drop at work is busy, not closed: the kit dims aria-disabled but not aria-busy.
+  if (eb.pressed) eb.btn.setAttribute("aria-busy", "true"); else eb.btn.removeAttribute("aria-busy");
 }
 
 // paneElevSync: make the pane match its session `s` (the pane's agent, or null):
@@ -131,7 +171,9 @@ function ebPaint(el, m, sid, busy) {
 // build. On a phone it only ever removes.
 function paneElevSync(cell, s) {
   if (!cell || !cell.bar) return;
-  if (!s || (typeof mobileActive === "function" && mobileActive(window.innerWidth))) { ebRemove(cell); return; }
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) { ebRemove(cell); return; }
+  elevPrune();
+  if (!s) { ebRemove(cell); return; }
   elevWatch(s);
   const d = accData.get(s.id);
   const m = elevBanner(s, d ? d.aws : null, Date.now());
@@ -142,7 +184,7 @@ function paneElevSync(cell, s) {
   // Directly under the header, so ahead of the ask strip (Cell.syncStrip inserts
   // its strip after this element).
   if (!el.parentNode) { cell.bar.after(el); placed = true; }
-  ebPaint(el, m, s.id, accBusy.has(s.id));
+  ebPaint(el, m, s.id, accBusy.has(s.id), elevWindowSig(s, Date.now()));
   if (placed && typeof positionDrawer === "function") positionDrawer();
 }
 

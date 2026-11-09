@@ -119,12 +119,17 @@ async function accGrant(sid, row, repaint) {
   repaint(true);
 }
 
+// accDrop: true when the daemon dropped the window, false when the press was refused (a request already
+// in flight) or failed (an error toast says why). The pane's banner (elevbanner.js) reads it to tell a Drop
+// that went through, whose button stays inert until the list catches up, from one that did not.
 async function accDrop(sid, repaint) {
-  if (accBusy.has(sid)) return;
+  if (accBusy.has(sid)) return false;
   accBusy.add(sid);
   repaint(true);
+  let ok = false;
   try {
     showToast(dropToast(await elevDrop(sid)));
+    ok = true;
     accLoad(sid, true);
     if (typeof refreshSessions === "function") refreshSessions();
   } catch (e) {
@@ -133,6 +138,7 @@ async function accDrop(sid, repaint) {
     accBusy.delete(sid);
   }
   repaint(true);
+  return ok;
 }
 
 // --- sections --------------------------------------------------------------------

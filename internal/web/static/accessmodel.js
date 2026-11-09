@@ -180,6 +180,8 @@ function accWindowNote(c, aws, nowMs) {
   if (last && ACC_WINDOW_ENDS.has(last.action) && Number.isFinite(Number(last.ts))) {
     ended = "Write access ended " + accEventTime(Number(last.ts), nowMs);
   }
+  // Per connection, unlike connWindowLine's session-wide rule: credentials issued on connection A stay valid
+  // while a window is open on B, so A's row still says so (and B's row, with its own window, says nothing).
   let leftover = "";
   const e = aws && aws.elevation;
   const valid = e ? accValidTime(e.last_valid) : null;
