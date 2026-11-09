@@ -247,12 +247,167 @@ function projShort(p) {
   return p.replace(/^-home-[^-]+-/, "").replace(/^-/, "");
 }
 
+// ---- the desktop page's KPI figures -------------------------------------------------------------------------------
+
+// anCountText: a count in a KPI tile: thousands separators below 10,000 ("1,420"), fmtCompact from there.
+function anCountText(n) {
+  n = Number(n) || 0;
+  return n < 10000 ? n.toLocaleString("en-US") : fmtCompact(n);
+}
+
+// anSessionKpis: the three tiles of the Sessions view (digest-design §A3), from the loaded window's sessionCount, topSessions
+// and byProject (both cost-descending). The two "Costliest" tiles carry a project in the label and a COST in the value: the top
+// session's project and cost, the top project's name and cost. With none, a dash and the plain label (and a project with no
+// name leaves no dangling " · ").
+function anSessionKpis(d) {
+  const named = (label, name) => (name ? label + " · " + name : label);
+  const top = (d.topSessions || [])[0];
+  const proj = (d.byProject || [])[0];
+  return [
+    { value: anCountText(d.sessionCount), label: "Sessions in this window" },
+    { value: top ? usd(top.cost) : "—", label: named("Costliest session", top && projShort(top.project)) },
+    { value: proj ? usd(proj.cost) : "—", label: named("Costliest project", proj && projShort(proj.project)) },
+  ];
+}
+
+// ---- what the Models, Projects, Sessions and Tools views say: one preparation for both skins ----------------------
+// The phone's modal (anModels, anProjects, anSessions, anTools) and the desktop page (the an...Page builders) draw different DOM
+// from the same words, figures, colours and caps. Those live here and are called by both, so a change reaches both.
+
+const AN_COPY = {
+  overview: {
+    chart: "Cost over time", chartHint: "Stacked by model · daily", byModel: "Cost by model",
+    // The page only (digest-design §A2): the phone's own heading is "Cost by project (top)" and its note is anNote's boxed one.
+    byProject: "Cost by project", byProjectHint: "top 10 · bar split = model mix",
+    note: "Descriptive only: a difference between models reflects the tasks you gave each one, not model quality.",
+  },
+  models: {
+    title: "Per-model breakdown", hint: "Cost, volume & efficiency · window",
+    shareTitle: "Why $ ≠ token count", shareHint: "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree",
+    tokens: "Share of tokens", cost: "Share of cost",
+  },
+  projects: { title: "Cost by project", hint: "Bar split shows the model mix inside each project · window", detail: "Detail" },
+  sessions: { title: "Top sessions by cost" },
+  tools: { title: "Skills · plugins · MCP", hint: "What the agents actually invoked · by records", none: "No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)." },
+};
+// A table's columns and where its numbers start (anHead gives the th from there on .num; the page capitalises the labels).
+const AN_TABLES = {
+  models: [["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1],
+  projects: [["project", "cost", "tokens", "prompts"], 1],
+  sessions: [["session", "day", "project", "model", "tokens", "prompts", "cost"], 4],
+};
+const AN_TOOL_COLORS = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
+
+// anToolGroups: tools rows ({kind, name, records}) as one group per kind, in the order the kinds are met: its colour (the accent
+// for a kind not listed), its first ten rows and the longest bar among them (never under 1).
+function anToolGroups(tools) {
+  const kinds = {};
+  for (const t of tools || []) (kinds[t.kind] = kinds[t.kind] || []).push(t);
+  return Object.keys(kinds).map((kind) => {
+    const items = kinds[kind].slice(0, 10);
+    return { kind, color: AN_TOOL_COLORS[kind] || "var(--accent)", items, max: Math.max(1, ...items.map((t) => t.records)) };
+  });
+}
+
+// anPct: v as a whole percent of total, "59%".
+function anPct(v, total) { return Math.round(v / total * 100) + "%"; }
+
+// anModelFold: the Models view's data: normModels rows with the $0 models folded into "other (unpriced)", the totals the shares
+// divide by (never 0) and the longest token and cost bars (never under 1).
+function anModelFold(byModel) {
+  const rows = collapseZeroCost(byModel);
+  return {
+    rows,
+    totalCost: rows.reduce((s, x) => s + x.cost, 0) || 1,
+    totalTokens: rows.reduce((s, x) => s + x.tokens, 0) || 1,
+    maxTokens: Math.max(1, ...rows.map((x) => x.tokens)),
+    maxCost: Math.max(1, ...rows.map((x) => x.cost)),
+  };
+}
+
+// anModelCells: a model row's figures after its name, as the table prints them (a fold's row).
+function anModelCells(x, fold) {
+  return {
+    cost: usd(x.cost), pct: anPct(x.cost, fold.totalCost), tokens: fmtCompact(x.tokens), prompts: String(x.prompts),
+    outPerPrompt: fmtCompact(x.outPerPrompt), cache: (x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0) + "%",
+  };
+}
+
+// anProjectBars: foldProjects rows as the stacked bars: each project's name, cost and segments (dearest model first, coloured by
+// its place in `models`, titled "model $cost"), and the longest bar (never under 1).
+function anProjectBars(byProject, models) {
+  return {
+    max: Math.max(1, ...byProject.map((x) => x.cost)),
+    bars: byProject.map((p) => ({
+      name: projShort(p.project), cost: p.cost,
+      segs: Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(models, m), t: shortModel(m) + " " + usd(v) })),
+    })),
+  };
+}
+
+// anProjectRow: a project's detail row as text.
+function anProjectRow(p) {
+  return { name: projShort(p.project), cost: usd(p.cost), tokens: fmtCompact(p.tokens), prompts: String(p.prompts) };
+}
+
+// anSessionRow: a top session (topSessionsByCost) as text. `mixed` marks the several-model case, whose model is the word "mixed".
+function anSessionRow(s) {
+  return {
+    sid: s.sid, day: s.day, project: projShort(s.project), model: shortModel(s.model), mixed: s.model === "mixed",
+    tokens: fmtCompact(s.tokens), prompts: String(s.prompts), cost: usd(s.cost),
+  };
+}
+
+// ---- the cost chart's scale, geometry and legend ------------------------------------------------------------------------
+
+// anYTicks: the y labels of the daily cost chart, top to bottom: `frac` is the label's height as a share of the peak (`max`) and
+// `text` the dollars there. The page labels the peak and its two thirds and never the baseline (`withZero` false, digest-design
+// §B6): $421, $281, $140. The phone also labels the zero line, "$0.00" (`withZero` true). With no scale (`max` 0, NaN, negative)
+// there is nothing to label: [] (`!(max > 0)` is also true for NaN). The text is `usd(max * (1 - i / 3))`, written exactly as the
+// phone's chart always wrote it: 1 - 1/3 is not 2/3 to the last bit, and a different expression could round a boundary value to
+// another cent.
+function anYTicks(max, withZero) {
+  if (!(max > 0)) return [];
+  const ticks = [];
+  for (let i = 0; i <= (withZero ? 3 : 2); i++) ticks.push({ frac: (3 - i) / 3, text: usd(max * (1 - i / 3)) });
+  return ticks;
+}
+
+// The desktop page's chart, in px (digest-design §B6, §D1): a 150px plot with the date labels 6px under it, a 44px gutter to its
+// left whose 38px label box right-aligns the y labels, 16px bars. Used only when anIsPage(); the phone's chart keeps its own.
+const AN_PAGE_CHART = { plotH: 150, gutter: 44, labelBox: 38, bar: 16, xLabelGap: 6 };
+
+// anXLabels: the date labels of the page's cost chart, as { slot, text } in slot order, one per `every` slots from the first. In date
+// mode (a window of at most 120 days) the slots are the window's days, so a day with no cost is labelled like any other and each
+// label says its own slot's date (MM-DD): the labels fall on a regular grid, as the frame's do. In index mode (a very wide window,
+// where slots are only the days that have a bar) the bars are the slots, as the phone's chart labels them.
+function anXLabels(lay, from, every) {
+  const out = [];
+  if (lay.dateMode) {
+    const t0 = Date.parse(from + "T00:00:00Z");
+    for (let s = 0; s < lay.slots; s += every) out.push({ slot: s, text: new Date(t0 + s * 86400000).toISOString().slice(5, 10) });
+  } else {
+    for (const b of lay.bars) if (b.slot % every === 0) out.push({ slot: b.slot, text: b.day.slice(5) });
+  }
+  return out;
+}
+
+// anLegendItems: a legend's entries, a name and a colour per model, coloured by its place in `colorModels` (the canonical list;
+// `models` itself when none is given) so a legend of only some models wears the colours the bars have.
+function anLegendItems(models, colorModels) {
+  const key = colorModels || models;
+  return models.map((m) => ({ name: shortModel(m), color: modelColor(key, m) }));
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
     collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
+    anCountText, anSessionKpis,
+    anToolGroups, anModelFold, anPct, anModelCells, anProjectBars, anProjectRow, anSessionRow,
+    anYTicks, AN_PAGE_CHART, anLegendItems, anXLabels,
   };
 }
 
@@ -283,12 +438,39 @@ async function openAnalytics() {
   AN.to = anTodayUTC();
   AN.from = anRangeFrom("30d");
   syncTabButtons();
+  anSyncPageControls();
   await anLoad();
 }
 
 function syncTabButtons() {
   for (const b of document.querySelectorAll("#an-tabs button")) {
     b.classList.toggle("act", b.dataset.antab === AN.tab);
+  }
+}
+
+// anSetTab: choose a view. The phone's tab strip (.act) and the page's view switch (aria-pressed) both follow AN.tab; the
+// window's data is already loaded, so it only re-renders (no refetch).
+function anSetTab(tab) {
+  AN.tab = tab;
+  syncTabButtons();
+  anSyncPageControls();
+  anRender();
+}
+
+// anRescan: read the transcripts again, then reload the window. `btn` is the phone's #analytics-refresh or the page's
+// #an-rescan: it disables itself and says "Scanning…" meanwhile. On the page it is the control in use, so focus comes
+// back to it if the disabled button lost it (and only then: a focus the user moved on is left where they put it).
+async function anRescan(btn) {
+  const keep = anIsPage() && document.activeElement === btn;
+  btn.disabled = true;
+  btn.textContent = "Scanning…";
+  try { await api("/api/analytics/ingest", { method: "POST" }); await anLoad(); }
+  catch (_) { /* leave the current view; the range line still shows */ }
+  finally {
+    btn.disabled = false;
+    btn.textContent = "Re-scan";
+    const now = document.activeElement;
+    if (keep && (!now || now === document.body)) btn.focus();
   }
 }
 
@@ -391,34 +573,20 @@ function anRender() {
   const range = document.getElementById("analytics-range");
   if (range && AN.data) range.textContent = `${AN.data.from} → ${AN.data.to} (UTC)`;
   body.replaceChildren();
-  // On the desktop page the range chips + Compare live in the page header
-  // (#an-ctl); the modal keeps them at the top of the body.
-  const page = anIsPage();
+  // On the desktop page the view switch, range, Compare and the window line are the page's head and toolbar: static nodes
+  // (index.html) that stay where they are and are brought up to date in place. The modal keeps its control strip at the
+  // top of the body.
   const ctl = document.getElementById("an-ctl");
   if (ctl) ctl.replaceChildren();
-  if (page && ctl) {
-    ctl.appendChild(anControls(true));
-    // Custom's two date inputs would not fit the header: a second row, first in the body.
-    if (AN.customOpen || AN.range === "custom") body.appendChild(anCustomRow());
-  } else {
-    body.appendChild(anControls(false));
-  }
+  if (anIsPage()) anSyncPageControls();
+  else body.appendChild(anControls());
   const d = AN.data;
   if (!d || !d.costByDay.days.length) {
-    if (page) body.appendChild(el("p", "an-hint", `${d ? d.from : AN.from} → ${d ? d.to : AN.to} (UTC)`));
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
   const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
   (R[AN.tab] || anOverview)(body);
-  // The mockup shows the window in the first chart's caption; the header's own
-  // #analytics-range caption is hidden on the page.
-  if (page) {
-    const win = `${d.from} → ${d.to} (UTC)`;
-    const hint = body.querySelector(".an-section .an-hint");
-    if (hint) hint.textContent += " · " + win;
-    else body.insertBefore(el("p", "an-hint", win), body.querySelector(".an-section"));
-  }
   // Time-series charts read left→right oldest→newest; open scrolled to the most
   // recent day so a window with a leading empty gap doesn't render blank.
   const tw = body.querySelector(".an-timewrap");
@@ -453,55 +621,133 @@ function anIsPage() {
   return !!(dlg && dlg.classList.contains("as-page"));
 }
 
-// the Custom range's date inputs + Apply, as one list of nodes
+// the Custom range's date inputs + Apply (the phone's inline strip), as one list of nodes
 function anCustomInputs() {
   const from = el("input", "an-date"); from.type = "date"; from.value = AN.from || "";
   const to = el("input", "an-date"); to.type = "date"; to.value = AN.to || "";
   const dash = el("span", "an-clabel", "→");
   const apply = el("button", "an-chip", "Apply");
   apply.type = "button";
-  apply.onclick = () => {
-    if (!from.value || !to.value) return;
-    const r = clampRange(from.value, to.value);
-    AN.range = "custom"; AN.from = r.from; AN.to = r.to; anLoad();
-  };
+  apply.onclick = () => { anApplyCustom(from.value, to.value); };
   return [from, dash, to, apply];
 }
-function anCustomRow() {
-  const row = el("div", "an-customrow");
-  row.append(el("span", "an-clabel", "Custom range"), ...anCustomInputs());
-  return row;
+
+// The range controls' actions, shared by the phone's chips and the page's seg. Each sets AN, brings the page's controls
+// up to date at once (a no-op on the phone) and reloads or re-renders as it always did.
+
+// anPickRange: a preset window ending today. The page's Custom row closes with it.
+function anPickRange(key) {
+  AN.range = key; AN.customOpen = false; AN.from = anRangeFrom(key); AN.to = anTodayUTC();
+  anSyncPageControls();
+  anLoad();
 }
 
-// control strip: range presets + compare toggle. `page` = the desktop header
-// slot: no inline date inputs (anCustomRow), and the shorter Compare label.
-function anControls(page) {
+// anToggleCustom: show or hide the Custom range's date inputs. Nothing is fetched; the page only shows its row (the body
+// does not change), the phone re-renders its strip.
+function anToggleCustom() {
+  AN.customOpen = !AN.customOpen;
+  if (anIsPage()) anSyncPageControls();
+  else anRender();
+}
+
+// anApplyCustom: load [f, t] as the window, a reversed pair swapped (clampRange). Nothing happens while a date is empty.
+// Returns the ordered range, or null.
+function anApplyCustom(f, t) {
+  if (!f || !t) return null;
+  const r = clampRange(f, t);
+  AN.range = "custom"; AN.from = r.from; AN.to = r.to;
+  anSyncPageControls();
+  anLoad();
+  return r;
+}
+
+// anToggleCompare: compare this window with the equal-length one before it.
+function anToggleCompare() {
+  AN.compare = !AN.compare;
+  anSyncPageControls();
+  anLoad();
+}
+
+// control strip of the phone's modal: range presets + compare toggle, the Custom range's dates inline. (The desktop page
+// has no strip: its toolbar is static markup, anSyncPageControls.)
+function anControls() {
   const wrap = el("div", "an-controls");
   const lbl = el("span", "an-clabel", "Range");
   wrap.appendChild(lbl);
   for (const key of ["7d", "30d", "90d", "all"]) {
     const b = el("button", "an-chip" + (AN.range === key ? " on" : ""), key === "all" ? "All" : key);
     b.type = "button";
-    b.onclick = () => { AN.range = key; AN.customOpen = false; AN.from = anRangeFrom(key); AN.to = anTodayUTC(); anLoad(); };
+    b.onclick = () => anPickRange(key);
     wrap.appendChild(b);
   }
   // Custom range: a chip that reveals two date inputs + Apply.
   const custom = el("button", "an-chip" + (AN.range === "custom" ? " on" : ""), "Custom…");
   custom.type = "button";
-  custom.onclick = () => { AN.customOpen = !AN.customOpen; anRender(); };
+  custom.onclick = anToggleCustom;
   wrap.appendChild(custom);
-  if (!page && (AN.customOpen || AN.range === "custom")) wrap.append(...anCustomInputs());
+  if (AN.customOpen || AN.range === "custom") wrap.append(...anCustomInputs());
   const spacer = el("span"); spacer.style.width = "12px"; wrap.appendChild(spacer);
-  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), page ? "⇄ Compare" : "⇄ Compare vs prev period");
+  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), "⇄ Compare vs prev period");
   cmp.type = "button";
   cmp.title = "Compare this window to the equal-length window immediately before it";
-  cmp.onclick = () => { AN.compare = !AN.compare; anLoad(); };
+  cmp.onclick = anToggleCompare;
   wrap.appendChild(cmp);
   return wrap;
 }
 
+// ---- the desktop page's head and toolbar (index.html .an-phead, .an-ptools, .an-pcustom) -----------------------
+// Static nodes: nothing here rebuilds them, so the control a click came from keeps focus.
+
+// anSyncPageControls: bring them up to date with AN: aria-pressed on the view and range items, Custom… and Compare
+// (Custom… mirrors the phone's `.on`: lit by an applied custom range, not by the row being open), the Custom row's hidden, and the
+// description's window (the requested one, so a pressed range is named while it loads and if its load fails). The row's dates
+// default to the window when the row opens. A no-op unless the dialog is the page.
+function anSyncPageControls() {
+  if (!anIsPage()) return;
+  const dlg = document.getElementById("analytics-modal");
+  const press = (b, on) => b.setAttribute("aria-pressed", on ? "true" : "false");
+  for (const b of dlg.querySelectorAll("#an-pview [data-antab]")) press(b, b.dataset.antab === AN.tab);
+  for (const b of dlg.querySelectorAll("#an-prange [data-range]")) press(b, AN.range === b.dataset.range);
+  const cmp = dlg.querySelector("#an-compare");
+  if (cmp) press(cmp, AN.compare);
+  const row = dlg.querySelector(".an-pcustom");
+  if (row) {
+    const open = AN.customOpen || AN.range === "custom";
+    if (open && row.hidden) {
+      const dates = row.querySelectorAll(".an-date");
+      if (dates[0]) dates[0].value = AN.from || "";
+      if (dates[1]) dates[1].value = AN.to || "";
+    }
+    row.hidden = !open;
+  }
+  const desc = dlg.querySelector("#an-pdesc");
+  if (desc) desc.textContent = "Spend read from Claude Code transcripts" + (AN.from && AN.to ? ` · ${AN.from} → ${AN.to} (UTC)` : "");
+}
+
+// anWirePage: the page's clicks, wired once at boot (app.js). A group's one handler finds the item by its data attribute.
+function anWirePage() {
+  const dlg = document.getElementById("analytics-modal");
+  if (!dlg) return;
+  const on = (sel, fn) => { const n = dlg.querySelector(sel); if (n) n.onclick = fn; };
+  on("#an-pview", (e) => { const b = e.target.closest("button[data-antab]"); if (b) anSetTab(b.dataset.antab); });
+  on("#an-prange", (e) => {
+    const b = e.target.closest("button[data-range]");
+    if (!b) return;
+    if (b.dataset.range === "custom") anToggleCustom();
+    else anPickRange(b.dataset.range);
+  });
+  on("#an-compare", anToggleCompare);
+  on("#an-papply", () => {
+    const dates = dlg.querySelectorAll(".an-pcustom .an-date");
+    if (dates.length < 2) return;
+    const r = anApplyCustom(dates[0].value, dates[1].value);
+    if (r) { dates[0].value = r.from; dates[1].value = r.to; }
+  });
+}
+
 // ---- Overview ---------------------------------------------------------------
 function anOverview(root) {
+  if (anIsPage()) return anOverviewPage(root);
   const d = AN.data, t = d.costByDay.totals;
   const kpis = el("div", "an-kpis");
   const tiles = [
@@ -514,7 +760,7 @@ function anOverview(root) {
   for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
   root.appendChild(kpis);
 
-  const sec = anSection("Cost over time", "Stacked by model · daily");
+  const sec = anSection(AN_COPY.overview.chart, AN_COPY.overview.chartHint);
   const box = el("div", "an-box");
   box.appendChild(anStackedTime(d.costByDay, d.from, d.to));
   anLegend(box, d.pricedModels, d.models);
@@ -522,16 +768,12 @@ function anOverview(root) {
   root.appendChild(sec);
 
   const g = el("div", "an-grid2");
-  const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, "Cost by model"));
-  const modelsC = collapseZeroCost(d.byModel);
-  const maxM = Math.max(1, ...modelsC.map((x) => x.cost));
-  for (const x of modelsC) anHbar(b1, shortModel(x.model), x.cost, maxM, anModelColor(d.models, x.model), usd);
+  const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, AN_COPY.overview.byModel));
+  const fold = anModelFold(d.byModel);
+  for (const x of fold.rows) anHbar(b1, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), usd);
   const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, "Cost by project (top)"));
-  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
-  for (const p of d.byProject.slice(0, 10)) {
-    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
-    anHbarSegs(b2, projShort(p.project), p.cost, maxP, segs, usd);
-  }
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars.slice(0, 10)) anHbarSegs(b2, b.name, b.cost, pb.max, b.segs, usd);
   g.append(b1, b2);
   const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
   root.appendChild(sec2);
@@ -541,60 +783,102 @@ function anOverview(root) {
   root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
 }
 
+// anOverviewPage: M3.1 (digest-design §A2, §B5-§B7): the KPI row; the cost chart's card, its head holding the title, its caption and
+// the legend, with the footnote a plain line under it; then cost by model and cost by project as two cards. The phone's anOverview
+// above is its own code; both read the same figures (anModelFold, anProjectBars, anLegendItems).
+function anOverviewPage(root) {
+  const d = AN.data, t = d.costByDay.totals;
+  // The page's tiles: the kit's KPI row, the frame's labels and thousands separators on the counts.
+  root.appendChild(anKpiRow([
+    { value: usd(t.cost), label: "Total cost" },
+    { value: fmtCompact(t.tokens), label: "Tokens" },
+    { value: anCountText(d.sessionCount), label: "Sessions" },
+    { value: anCountText(t.prompts), label: "Prompts" },
+    { value: usd(d.sessionCount ? t.cost / d.sessionCount : 0), label: "Avg per session" },
+  ]));
+
+  const sec = el("div", "an-psec");
+  const card = el("div", "an-card");
+  const head = el("div", "card-head");
+  head.append(el("h2", "t-md w-600", AN_COPY.overview.chart), el("span", "t-sm muted", AN_COPY.overview.chartHint), el("span", "grow"), anPLegend(d.pricedModels, d.models));
+  card.appendChild(head);
+  const body = anCardBody(card);
+  body.classList.add("an-chartbody");
+  body.appendChild(anStackedTime(d.costByDay, d.from, d.to));
+  sec.append(card, anFootnote(AN_COPY.overview.note));
+  root.appendChild(sec);
+
+  const grid = el("div", "an-pgrid");
+  const fold = anModelFold(d.byModel);
+  const mc = anCard(AN_COPY.overview.byModel, null, "h2");
+  const mrows = el("div", "an-hrows");
+  for (const x of fold.rows) {
+    // The "other (unpriced)" row is a label, not a model id: sans and muted, with an empty track ($0 draws no fill).
+    const unpriced = x.model === "other (unpriced)";
+    anHrow(mrows, shortModel(x.model), !unpriced, x.cost, fold.maxCost, [{ v: x.cost, c: anModelColor(d.models, x.model) }], false);
+  }
+  anCardBody(mc).appendChild(mrows);
+
+  const pb = anProjectBars(d.byProject, d.models);
+  const pc = anCard(AN_COPY.overview.byProject, AN_COPY.overview.byProjectHint, "h2");
+  const prows = el("div", "an-hrows");
+  for (const b of pb.bars.slice(0, 10)) anHrow(prows, b.name, true, b.cost, pb.max, b.segs, true);
+  anCardBody(pc).appendChild(prows);
+  grid.append(mc, pc);
+  root.appendChild(grid);
+
+  if (d.cmp) root.appendChild(anCompareBlock());
+}
+
 // ---- Models -----------------------------------------------------------------
 function anModels(root) {
+  if (anIsPage()) return anModelsPage(root);
   const d = AN.data;
-  const sec = anSection("Per-model breakdown", "Cost, volume & efficiency · window");
-  const mc = collapseZeroCost(d.byModel); // fold $0 (unpriced) models into "other"
+  const sec = anSection(AN_COPY.models.title, AN_COPY.models.hint);
+  const fold = anModelFold(d.byModel); // $0 (unpriced) models are folded into "other"
   const box = el("div", "an-box");
   const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"], 1));
-  const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
-  for (const x of mc) {
+  tbl.appendChild(anHead(...AN_TABLES.models));
+  for (const x of fold.rows) {
     const tr = el("tr");
     const nm = el("td", "mono");
     const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, document.createTextNode(shortModel(x.model)));
-    const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
-    tr.append(nm, anTd(usd(x.cost), "num"), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim num"),
-      anTd(fmtCompact(x.tokens), "dim num"), anTd(String(x.prompts), "dim num"),
-      anTd(fmtCompact(x.outPerPrompt), "dim num"), anTd(crShare + "%", "dim num"));
+    const c = anModelCells(x, fold);
+    tr.append(nm, anTd(c.cost, "num"), anTd(c.pct, "dim num"), anTd(c.tokens, "dim num"), anTd(c.prompts, "dim num"),
+      anTd(c.outPerPrompt, "dim num"), anTd(c.cache, "dim num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 
   const g = el("div", "an-grid2");
-  const totTok = mc.reduce((s, x) => s + x.tokens, 0) || 1;
-  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, "Share of tokens"));
-  const maxTok = Math.max(1, ...mc.map((x) => x.tokens));
-  for (const x of mc) anHbar(bt, shortModel(x.model), x.tokens, maxTok, anModelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
-  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, "Share of cost"));
-  const maxC = Math.max(1, ...mc.map((x) => x.cost));
-  for (const x of mc) anHbar(bc, shortModel(x.model), x.cost, maxC, anModelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, AN_COPY.models.tokens));
+  for (const x of fold.rows) anHbar(bt, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
+  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, AN_COPY.models.cost));
+  for (const x of fold.rows) anHbar(bc, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
   g.append(bt, bc);
-  const s2 = anSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
+  const s2 = anSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
   s2.appendChild(g); root.appendChild(s2);
 }
 
 // ---- Projects ---------------------------------------------------------------
 function anProjects(root) {
+  if (anIsPage()) return anProjectsPage(root);
   const d = AN.data;
-  const sec = anSection("Cost by project", "Bar split shows the model mix inside each project · window");
+  const sec = anSection(AN_COPY.projects.title, AN_COPY.projects.hint);
   const box = el("div", "an-box");
-  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
-  for (const p of d.byProject) {
-    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
-    anHbarSegs(box, projShort(p.project), p.cost, maxP, segs, usd);
-  }
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars) anHbarSegs(box, b.name, b.cost, pb.max, b.segs, usd);
   anLegend(box, d.models);
   sec.appendChild(box); root.appendChild(sec);
 
-  const s2 = anSection("Detail");
+  const s2 = anSection(AN_COPY.projects.detail);
   const box2 = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"], 1));
+  tbl.appendChild(anHead(...AN_TABLES.projects));
   for (const p of d.byProject) {
+    const r = anProjectRow(p);
     const tr = el("tr");
-    tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost), "num"), anTd(fmtCompact(p.tokens), "dim num"), anTd(String(p.prompts), "dim num"));
+    tr.append(anTd(r.name, "mono"), anTd(r.cost, "num"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"));
     tbl.appendChild(tr);
   }
   box2.appendChild(anTableWrap(tbl)); s2.appendChild(box2); root.appendChild(s2);
@@ -602,6 +886,7 @@ function anProjects(root) {
 
 // ---- Sessions ---------------------------------------------------------------
 function anSessions(root) {
+  if (anIsPage()) return anSessionsPage(root);
   const d = AN.data;
   const g = el("div", "an-grid2");
   const bh = el("div", "an-box"); bh.appendChild(el("h4", null, "Session cost distribution"));
@@ -626,13 +911,14 @@ function anSessions(root) {
   g.append(bh, bk);
   const s1 = anSection("Session shape"); s1.appendChild(g); root.appendChild(s1);
 
-  const sec = anSection("Top sessions by cost", "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
+  const sec = anSection(AN_COPY.sessions.title, "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
   const box = el("div", "an-box"); const tbl = el("table", "an-table");
-  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"], 4));
+  tbl.appendChild(anHead(...AN_TABLES.sessions));
   for (const s of d.topSessions) {
+    const r = anSessionRow(s);
     const tr = el("tr");
-    tr.append(anTd(s.sid, "mono"), anTd(s.day, "dim"), anTd(projShort(s.project), "mono"),
-      anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim num"), anTd(String(s.prompts), "dim num"), anTd(usd(s.cost), "num"));
+    tr.append(anTd(r.sid, "mono"), anTd(r.day, "dim"), anTd(r.project, "mono"),
+      anTd(r.model, "dim"), anTd(r.tokens, "dim num"), anTd(r.prompts, "dim num"), anTd(r.cost, "num"));
     tbl.appendChild(tr);
   }
   box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
@@ -640,24 +926,155 @@ function anSessions(root) {
 
 // ---- Tools ------------------------------------------------------------------
 function anTools(root) {
+  if (anIsPage()) return anToolsPage(root);
   const d = AN.data;
-  const sec = anSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
+  const sec = anSection(AN_COPY.tools.title, AN_COPY.tools.hint);
   if (!d.tools.length) {
-    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
+    sec.appendChild(anEmpty(AN_COPY.tools.none));
     root.appendChild(sec); return;
   }
-  const kinds = {};
-  for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
-  const kc = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
   const g = el("div", "an-grid2");
-  for (const kind of Object.keys(kinds)) {
-    const box = el("div", "an-box"); box.appendChild(el("h4", null, kind));
-    const items = kinds[kind].slice(0, 10);
-    const max = Math.max(1, ...items.map((t) => t.records));
-    for (const t of items) anHbar(box, t.name, t.records, max, kc[kind] || "var(--accent)", fmtCompact);
+  for (const grp of anToolGroups(d.tools)) {
+    const box = el("div", "an-box"); box.appendChild(el("h4", null, grp.kind));
+    for (const t of grp.items) anHbar(box, t.name, t.records, grp.max, grp.color, fmtCompact);
     g.appendChild(box);
   }
   sec.appendChild(g); root.appendChild(sec);
+}
+
+// ---- the desktop page's views (Models, Projects, Sessions, Tools) ------------------------------------------------------
+// The phone's functions above return into these under anIsPage(); everything the phone draws is those functions' own code.
+// The words, figures, colours and caps are the same preparation the phone's builders call (AN_COPY, AN_TABLES, anToolGroups,
+// anModelFold, anProjectBars, anSessionRow ...): only the DOM differs.
+// The page's parts are the kit's: a KPI row, h2.section-title with its caption, cards (.an-card: --panel and --r-card, a name
+// of its own because app.css's `.card` is the phone's amber session card) and the table look of §C9 on the same .an-table.
+// Models, Projects and Tools have no frame: they carry today's content in those parts (plan call 13).
+
+// anPageHint: a section caption on the page. The phone's two captions end in " · window", a word that pointed at the date range
+// beside it; the page's head names the window, so the word goes.
+function anPageHint(hint) { return hint.replace(/ · window$/, ""); }
+
+// anModelsPage: the per-model table in a card, then the two share cards under "Why $ ≠ token count".
+function anModelsPage(root) {
+  const d = AN.data;
+  const fold = anModelFold(d.byModel);
+  const sec = anPSection(AN_COPY.models.title, anPageHint(AN_COPY.models.hint));
+  const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(...AN_TABLES.models));
+  for (const x of fold.rows) {
+    const tr = el("tr");
+    // A model id is machine text (mono); the "other (unpriced)" row is a label, so sans and muted.
+    const nm = el("td");
+    const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
+    nm.append(sw, el("span", x.model === "other (unpriced)" ? "muted" : "mono t-sm", shortModel(x.model)));
+    const c = anModelCells(x, fold);
+    tr.append(nm, anTd(c.cost, "num w-500"), anTd(c.pct, "num"), anTd(c.tokens, "num"), anTd(c.prompts, "num"),
+      anTd(c.outPerPrompt, "num"), anTd(c.cache, "num"));
+    tbl.appendChild(tr);
+  }
+  const card = anCard();
+  card.appendChild(anTableWrap(tbl));
+  sec.appendChild(card);
+  root.appendChild(sec);
+
+  const bt = anCard(AN_COPY.models.tokens), bc = anCard(AN_COPY.models.cost);
+  const bodyT = anCardBody(bt), bodyC = anCardBody(bc);
+  for (const x of fold.rows) anHbar(bodyT, shortModel(x.model), x.tokens, fold.maxTokens, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalTokens));
+  for (const x of fold.rows) anHbar(bodyC, shortModel(x.model), x.cost, fold.maxCost, anModelColor(d.models, x.model), (v) => anPct(v, fold.totalCost));
+  const g = el("div", "an-pgrid");
+  g.append(bt, bc);
+  const s2 = anPSection(AN_COPY.models.shareTitle, AN_COPY.models.shareHint);
+  s2.appendChild(g);
+  root.appendChild(s2);
+}
+
+// anProjectsPage: the stacked bars and their legend in a card, then the detail table in another.
+function anProjectsPage(root) {
+  const d = AN.data;
+  const sec = anPSection(AN_COPY.projects.title, anPageHint(AN_COPY.projects.hint));
+  const card = anCard();
+  const body = anCardBody(card);
+  const pb = anProjectBars(d.byProject, d.models);
+  for (const b of pb.bars) anHbarSegs(body, b.name, b.cost, pb.max, b.segs, usd);
+  anLegend(body, d.models);
+  sec.appendChild(card);
+  root.appendChild(sec);
+
+  const s2 = anPSection(AN_COPY.projects.detail);
+  const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(...AN_TABLES.projects));
+  for (const p of d.byProject) {
+    const r = anProjectRow(p);
+    const tr = el("tr");
+    tr.append(anIdTd(r.name, "an-wrap"), anTd(r.cost, "num w-500"), anTd(r.tokens, "num"), anTd(r.prompts, "num"));
+    tbl.appendChild(tr);
+  }
+  const card2 = anCard();
+  card2.appendChild(anTableWrap(tbl));
+  s2.appendChild(card2);
+  root.appendChild(s2);
+}
+
+// anSessionsPage: M3.2 (digest-design §B8). Three KPI tiles, then a split: the top-sessions table in a card, and "Session cost"
+// (the cost bands) beside it. The split is one column below 1000px of body (desktop.css).
+function anSessionsPage(root) {
+  const d = AN.data;
+  root.appendChild(anKpiRow(anSessionKpis(d)));
+  const split = el("div", "an-split");
+
+  const left = anPSection(AN_COPY.sessions.title, "Spot the runaway session. Counts include subagent and synthetic transcripts.");
+  const tbl = el("table", "an-table an-stbl");
+  tbl.appendChild(anHead(...AN_TABLES.sessions));
+  for (const s of d.topSessions) {
+    const r = anSessionRow(s);
+    const tr = el("tr");
+    // Session, Project and a single Model are ids (mono); "mixed" and the day are muted sans. Only Project wraps (§B8 .m3-wrap):
+    // Session and Model are words that keep their width.
+    tr.append(anIdTd(r.sid), anTd(r.day, "sub tnum"), anIdTd(r.project, "an-wrap"),
+      r.mixed ? anTd(r.model, "sub") : anIdTd(r.model),
+      anTd(r.tokens, "num"), anTd(r.prompts, "num"), anTd(r.cost, "num w-500"));
+    tbl.appendChild(tr);
+  }
+  const card = anCard();
+  card.appendChild(anTableWrap(tbl));
+  left.appendChild(card);
+
+  const right = anPSection("Session cost");
+  const bands = anCard(null, "Sessions per cost band");
+  const rows = el("div", "an-bands");
+  const maxH = Math.max(1, ...d.sessionHist.map((b) => b.count));
+  for (const b of d.sessionHist) {
+    const row = el("div", "an-band");
+    const meter = el("span", "meter");
+    const fill = el("i"); fill.style.width = (b.count / maxH * 100) + "%"; // no colour: the meter's own accent
+    meter.appendChild(fill);
+    row.append(el("span", "t-sm tnum", b.label), meter, el("span", "t-sm tnum an-band-n", anCountText(b.count)));
+    rows.appendChild(row);
+  }
+  anCardBody(bands).appendChild(rows);
+  right.appendChild(bands);
+
+  split.append(left, right);
+  root.appendChild(split);
+}
+
+// anToolsPage: one card per kind, as today's boxes.
+function anToolsPage(root) {
+  const d = AN.data;
+  const sec = anPSection(AN_COPY.tools.title, AN_COPY.tools.hint);
+  if (!d.tools.length) {
+    sec.appendChild(anEmpty(AN_COPY.tools.none));
+    root.appendChild(sec); return;
+  }
+  const g = el("div", "an-pgrid");
+  for (const grp of anToolGroups(d.tools)) {
+    const card = anCard(grp.kind);
+    const body = anCardBody(card);
+    for (const t of grp.items) anHbar(body, t.name, t.records, grp.max, grp.color, fmtCompact);
+    g.appendChild(card);
+  }
+  sec.appendChild(g);
+  root.appendChild(sec);
 }
 
 // ---- comparison block -------------------------------------------------------
@@ -672,20 +1089,36 @@ function anDelta(cur, prev, costLike) {
 function anCompareBlock() {
   const C = AN.data.cmp;
   const sec = anSection("Change · this window vs previous", `${C.curFrom} → ${C.curTo}  vs  ${C.prevFrom} → ${C.prevTo}`);
-  const kpis = el("div", "an-kpis");
-  const tiles = [
-    ["cost", usd(C.cur.cost), "cost", anDelta(C.cur.cost, C.prev.cost, true)],
-    ["", fmtCompact(C.cur.tokens), "tokens", anDelta(C.cur.tokens, C.prev.tokens, true)],
-    ["", String(C.cur.prompts), "prompts", anDelta(C.cur.prompts, C.prev.prompts, false)],
-    ["", String(C.cur.sessions), "sessions", anDelta(C.cur.sessions, C.prev.sessions, false)],
-  ];
-  for (const [cls, v, l, d] of tiles) {
-    const c = anKpi(cls, v, l);
-    const dd = el("div", "an-kdelta " + d.cls, d.txt);
-    c.appendChild(dd);
-    kpis.appendChild(c);
+  const dl = {
+    cost: anDelta(C.cur.cost, C.prev.cost, true),
+    tokens: anDelta(C.cur.tokens, C.prev.tokens, true),
+    prompts: anDelta(C.cur.prompts, C.prev.prompts, false),
+    sessions: anDelta(C.cur.sessions, C.prev.sessions, false),
+  };
+  if (anIsPage()) {
+    // The page's tiles are the Overview's kit KPI row, each with its delta line inside (no frame draws this state: kit parts only).
+    sec.appendChild(anKpiRow([
+      { value: usd(C.cur.cost), label: "Cost", delta: dl.cost },
+      { value: fmtCompact(C.cur.tokens), label: "Tokens", delta: dl.tokens },
+      { value: anCountText(C.cur.prompts), label: "Prompts", delta: dl.prompts },
+      { value: anCountText(C.cur.sessions), label: "Sessions", delta: dl.sessions },
+    ]));
+  } else {
+    const kpis = el("div", "an-kpis");
+    const tiles = [
+      ["cost", usd(C.cur.cost), "cost", dl.cost],
+      ["", fmtCompact(C.cur.tokens), "tokens", dl.tokens],
+      ["", String(C.cur.prompts), "prompts", dl.prompts],
+      ["", String(C.cur.sessions), "sessions", dl.sessions],
+    ];
+    for (const [cls, v, l, d] of tiles) {
+      const c = anKpi(cls, v, l);
+      const dd = el("div", "an-kdelta " + d.cls, d.txt);
+      c.appendChild(dd);
+      kpis.appendChild(c);
+    }
+    sec.appendChild(kpis);
   }
-  sec.appendChild(kpis);
 
   const g = el("div", "an-grid2");
   g.append(
@@ -698,7 +1131,9 @@ function anCompareBlock() {
   g2.append(anMixShift(), anDowOverlay());
   sec.appendChild(g2);
 
-  sec.appendChild(anNote("Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week)."));
+  // A static literal, set as HTML on the phone (its boxed note); the page's footnote is the same words as plain text.
+  const note = "Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week).";
+  sec.appendChild(anIsPage() ? anFootnote(note.replace(/<[^>]+>/g, "")) : anNote(note));
   return sec;
 }
 
@@ -752,14 +1187,28 @@ function anDowOverlay() {
   const C = AN.data.cmp, d = C.dow, box = el("div", "an-box");
   box.appendChild(el("h4", null, "Cost by day-of-week (this vs prev)"));
   const W = 380, H = 150, pad = 26;
+  // On the page the axis text is 11px, and a label like "$12.50" no longer fits left of the plot's 26px pad: the plot starts at the
+  // cost chart's 44px gutter, the labels right-align in its 38px box and the date labels sit 6px under the plot (anPageChart's rules).
+  const page = anIsPage(), left = page ? AN_PAGE_CHART.gutter : pad;
   const max = Math.max(1, ...d.map((x) => Math.max(x.cur, x.prev)));
   const svg = anSvg(W, H);
-  for (let i = 0; i <= 2; i++) {
-    const y = pad + (H - 2 * pad) * i / 2;
-    svg.appendChild(anLine(pad, y, W - 6, y, "var(--rule)", 0.5));
-    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+  if (page) {
+    // The cost chart's scale (anYTicks): the peak and its thirds labelled, each on its own gridline, and the baseline drawn but never
+    // labelled "$0.00".
+    for (const t of anYTicks(max, false)) {
+      const y = pad + (H - 2 * pad) * (1 - t.frac);
+      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
+      svg.appendChild(anText(AN_PAGE_CHART.labelBox, y + 4, t.text, "end"));
+    }
+    svg.appendChild(anLine(left, H - pad, W - 6, H - pad, "var(--rule)", 0.5));
+  } else {
+    for (let i = 0; i <= 2; i++) {
+      const y = pad + (H - 2 * pad) * i / 2;
+      svg.appendChild(anLine(left, y, W - 6, y, "var(--rule)", 0.5));
+      svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+    }
   }
-  const xs = (i) => pad + i * ((W - 2 * pad) / 6);
+  const xs = (i) => left + i * ((W - left - pad) / 6);
   const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
   const line = (key, color, dash) => {
     let dd = "";
@@ -773,7 +1222,7 @@ function anDowOverlay() {
   };
   line("prev", "var(--muted)", true);
   line("cur", "var(--accent)", false);
-  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + 11, x.day, "middle")));
+  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + (page ? AN_PAGE_CHART.xLabelGap + 12 : 11), x.day, "middle")));
   box.appendChild(anWrapSvg(svg));
   const lg = el("div", "an-legend");
   const mk = (c, t, dash) => { const s = el("span"); const i = el("i"); i.style.background = c; if (dash) i.style.opacity = ".6"; s.append(i, el("span", null, t)); return s; };
@@ -792,22 +1241,83 @@ function anSection(title, hint) {
   return s;
 }
 function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
+// The desktop page's parts (callers are the page's views, behind anIsPage()). anKpiRow, anCard and anPSection are general: the
+// Overview builds on them too.
+// anKpiRow: the kit's KPI row, the one Audit draws too: div.kpi-row > div.kpi > span.kpi-value + span.kpi-label. The label
+// ellipsizes (desktop.css), so it carries its full text in title: the tile's own, else the label.
+function anKpiRow(tiles) {
+  const row = el("div", "kpi-row");
+  for (const t of tiles) {
+    const tile = el("div", "kpi");
+    const label = el("span", "kpi-label", t.label);
+    label.setAttribute("title", t.title || t.label);
+    tile.append(el("span", "kpi-value", t.value), label);
+    // A tile may carry a delta line ({txt, cls} from anDelta): the Compare block's, under the label.
+    if (t.delta) tile.appendChild(el("div", "an-kdelta " + t.delta.cls, t.delta.txt));
+    row.appendChild(tile);
+  }
+  return row;
+}
+// anPSection: a section of the page: the kit's h2.section-title and, on its baseline, a muted caption (M3.2's title row).
+function anPSection(title, caption) {
+  const sec = el("section", "an-psec");
+  const head = el("div", "an-psec-head");
+  head.appendChild(el("h2", "section-title", title));
+  if (caption) head.appendChild(el("span", "t-sm muted", caption));
+  sec.appendChild(head);
+  return sec;
+}
+// anCard: a card (--panel, --r-card). A title and/or a caption give it the kit's .card-head, a hairline under it; with neither
+// it is a bare panel, as a table's card is. The title is an h3 unless `level` says otherwise (the Overview's cards are the frame's
+// h2). Content goes in anCardBody (padded) or, for a table, straight in.
+function anCard(title, caption, level) {
+  const card = el("div", "an-card");
+  if (title || caption) {
+    const head = el("div", "card-head");
+    if (title) head.appendChild(el(level || "h3", "t-md w-600", title));
+    if (caption) head.appendChild(el("span", "t-sm muted", caption));
+    card.appendChild(head);
+  }
+  return card;
+}
+function anCardBody(card) { const b = el("div", "an-card-body"); card.appendChild(b); return b; }
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
+// anFootnote (the page): the note under a card as one plain muted line (§A2: no box, no border, no italics). Plain text only.
+function anFootnote(text) { return el("p", "an-foot t-sm muted", text); }
 // anHead: the header row. Columns from firstNum on hold numbers: their header gets
 // "num" like their cells (anTd(text, "num")), so desktop.css can right-align both.
-function anHead(cols, firstNum) { const tr = el("tr"); cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, c))); return tr; }
+// The page writes the labels in sentence case (§A3: Session, Day, …); the phone's stay as given.
+function anHead(cols, firstNum) {
+  const page = anIsPage();
+  const tr = el("tr");
+  cols.forEach((c, i) => tr.appendChild(el("th", i >= firstNum ? "num" : null, page ? c.charAt(0).toUpperCase() + c.slice(1) : c)));
+  return tr;
+}
 // anTableWrap keeps a wide table scrollable on its own on narrow viewports, so
 // the dialog body never scrolls horizontally.
 function anTableWrap(tbl) { const d = el("div", "an-tablewrap"); d.appendChild(tbl); return d; }
 function anTd(text, cls) { const td = el("td", cls); td.textContent = text; return td; }
+// anIdTd (the page): a cell holding an identifier: the cell is sans and the id sits in the kit's span.mono.t-sm (machine text only).
+function anIdTd(text, cls) { const td = el("td", cls); td.appendChild(el("span", "mono t-sm", text)); return td; }
 // anLegend shows `models`, but colours each by its index in `colorModels` (the
 // canonical list) so legend swatches match chart/bar colours even when the
 // legend displays only a subset (e.g. priced models).
 function anLegend(parent, models, colorModels) {
-  const key = colorModels || models;
   const lg = el("div", "an-legend");
-  for (const m of models) { const s = el("span"); const i = el("i"); i.style.background = modelColor(key, m); s.append(i, el("span", null, shortModel(m))); lg.appendChild(s); }
+  for (const it of anLegendItems(models, colorModels)) { const s = el("span"); const i = el("i"); i.style.background = it.color; s.append(i, el("span", null, it.name)); lg.appendChild(s); }
   parent.appendChild(lg);
+}
+// anPLegend (the page): the cost chart's legend for a card head (§A2, §D1): an 8px square swatch and the model id in mono, per
+// model. The same entries as anLegend's.
+function anPLegend(models, colorModels) {
+  const lg = el("div", "an-plegend");
+  for (const it of anLegendItems(models, colorModels)) {
+    const s = el("span"), sw = el("i", "an-sw");
+    sw.style.background = it.color;
+    s.append(sw, el("span", "mono t-xs fg", it.name));
+    lg.appendChild(s);
+  }
+  return lg;
 }
 // anModelColor colours a model bar, with a neutral grey for the collapsed
 // "other (unpriced)" row.
@@ -820,6 +1330,27 @@ function anHbar(parent, name, v, max, color, fmtVal) {
   const track = el("div", "track"); const fill = el("div", "fill");
   fill.style.width = (v / max * 100) + "%"; fill.style.background = color; track.appendChild(fill);
   row.appendChild(track); row.appendChild(el("div", "val", fmtVal(v)));
+  parent.appendChild(row);
+}
+// anHrow (the page): a row of the Overview's cost cards (§B7): the label, the track (the kit's .meter) holding one fill per segment,
+// and the total as dollars. A segment is {v, c, t?}: its cost, its colour, its tooltip; a fill's width and offset are shares of
+// `max`, so the second segment starts where the first ends, and a segment with no cost draws no fill. `mono` is a machine id (a
+// model or a project); the other label is words, so sans and muted along with its value. `wide` is the project card's 184px label.
+function anHrow(parent, name, mono, total, max, segs, wide) {
+  const row = el("div", wide ? "an-hrow an-wide" : "an-hrow");
+  const nm = el("span", (mono ? "mono t-sm" : "t-sm muted") + " ellipsis", name);
+  nm.title = name;
+  const meter = el("span", "meter");
+  let from = 0;
+  for (const s of segs) {
+    if (!(s.v > 0)) continue;
+    const f = el("i");
+    f.style.left = (from / max * 100) + "%"; f.style.width = (s.v / max * 100) + "%"; f.style.background = s.c;
+    if (s.t) f.title = s.t;
+    meter.appendChild(f);
+    from += s.v;
+  }
+  row.append(nm, meter, el("span", "t-sm tnum an-hv" + (mono ? "" : " muted"), usd(total)));
   parent.appendChild(row);
 }
 function anHbarSegs(parent, name, total, max, segs, fmtVal) {
@@ -844,18 +1375,21 @@ function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textCon
 // (empty days show as gaps) unless the span is very wide, where stackedLayout
 // falls back to sequential positioning. `fitW` (the desktop page) draws it at
 // that width, with a narrower floor per day; without it the width is fixed.
+// The page's chart has its own geometry (anPageChart); the phone's is below.
 function anStackedTime(agg, from, to, fitW) {
   const lay = stackedLayout(agg.days, from, to);
   const slots = Math.max(1, lay.slots);
+  if (anIsPage()) return anPageChart(agg, lay, slots, from, to, fitW);
   const H = 170, pad = 24, W = fitW ? Math.max(slots * 8, fitW) : Math.max(slots * 22, 720);
   const max = Math.max(1, agg.maxCost);
   const slotW = (W - 2 * pad) / slots;
   const bw = Math.min(16, Math.max(2, slotW - 3));
   const svg = anSvg(W, H);
+  const ticks = anYTicks(max, true);
   for (let i = 0; i <= 3; i++) {
     const y = pad + (H - 2 * pad) * i / 3;
     svg.appendChild(anLine(pad, y, W - 4, y, "var(--rule)", 0.5));
-    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 3)), "start"));
+    svg.appendChild(anText(2, y + 3, ticks[i].text, "start"));
   }
   const labelEvery = Math.max(1, Math.round(slots / 12)); // ~12 date labels max
   for (const b of lay.bars) {
@@ -869,6 +1403,72 @@ function anStackedTime(agg, from, to, fitW) {
       svg.appendChild(r);
     }
     if (b.slot % labelEvery === 0) svg.appendChild(anText(x + bw / 2, H - pad + 11, b.day.slice(5), "middle"));
+  }
+  const wrap = anWrapSvg(svg);
+  wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day
+  return wrap;
+}
+
+// anChartLabel: the page chart's accessible name (§A2): the window and, when any day cost anything, the peak and its day.
+function anChartLabel(agg, from, to) {
+  let label = "Daily cost stacked by model, " + from + " to " + to;
+  const peak = agg.maxCost > 0 ? agg.days.find((d) => d.cost === agg.maxCost) : null;
+  if (peak) label += ", peak " + usd(agg.maxCost) + " on " + peak.day.slice(5);
+  return label;
+}
+
+// anPageChart: the cost chart of the desktop page (§B6, AN_PAGE_CHART). The plot is `plotH` high and starts `gutter` from the left;
+// the y labels, the peak and its thirds, right-align at the gutter's `labelBox` edge, centred on their gridline, with no label on the
+// baseline; a bar is `bar` wide (narrower in a crowded window) centred in its slot, its segments stacked cost-ascending with 1px
+// between them, 1px at least (a day's cost is never drawn as nothing, and a segment with no cost is not drawn); the date labels sit
+// `xLabelGap` under the plot, on every round(slots/12)-th slot of the window (a day with no cost too), never so close that two touch
+// and never past the svg's edge. The scale is the raw peak: a window with no cost has no y labels, not a "$0.00" (the phone floors it
+// at 1). The svg overflows visibly and keeps TOP px above the plot for the top label, which is centred on the plot's first line.
+function anPageChart(agg, lay, slots, from, to, fitW) {
+  const C = AN_PAGE_CHART;
+  const TOP = 8, GAP = 1, LABEL_H = 16, DATE_W = 44, LABEL_W = 34; // LABEL_W: an upper estimate of an 11px "MM-DD" (about 30px)
+  const W = fitW ? Math.max(slots * 8 + C.gutter, fitW) : Math.max(slots * 22, 720);
+  const H = TOP + C.plotH + C.xLabelGap + LABEL_H;
+  const slotW = (W - C.gutter) / slots;
+  const bw = Math.min(C.bar, Math.max(2, slotW - 3));
+  const max = agg.maxCost;
+  const bottom = TOP + C.plotH;
+  const svg = anSvg(W, H);
+  svg.setAttribute("overflow", "visible");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", anChartLabel(agg, from, to));
+  // A 1px line fills the pixel row from y, so it is drawn through y + 0.5; a label's baseline is 4px under its centre (an 11px digit
+  // is 8px tall).
+  const grid = (y) => svg.appendChild(anLine(C.gutter, y + 0.5, W, y + 0.5, "var(--line)", 1));
+  for (const t of anYTicks(max, false)) {
+    const y = TOP + Math.round(C.plotH * (1 - t.frac));
+    grid(y);
+    svg.appendChild(anText(C.labelBox, y + 4, t.text, "end"));
+  }
+  grid(bottom);
+  const labelEvery = Math.max(1, Math.round(slots / 12), Math.ceil(DATE_W / slotW));
+  for (const b of lay.bars) {
+    const x = C.gutter + b.slot * slotW + (slotW - bw) / 2;
+    let yb = bottom;
+    const segs = Object.entries(b.segs).filter(([, c]) => c > 0).sort((a, c) => a[1] - c[1]);
+    segs.forEach(([m, c], k) => {
+      const h = Math.max(1, Math.round(c / max * C.plotH));
+      yb -= (k ? GAP : 0) + h;
+      const r = anRect(x, yb, bw, h, modelColor(agg.models, m));
+      r.appendChild(anTitle(b.day + " · " + shortModel(m) + " " + usd(c)));
+      svg.appendChild(r);
+    });
+  }
+  // The date labels sit on the window's slots (anXLabels), not only the ones with a bar. A label centred on the last slot would
+  // pass the svg's right edge and be clipped, so it ends at the edge instead; one that would then touch its neighbour is left out.
+  let prevRight = -Infinity;
+  for (const l of anXLabels(lay, from, labelEvery)) {
+    const cx = C.gutter + (l.slot + 0.5) * slotW;
+    const atEdge = cx + LABEL_W / 2 > W;
+    const left = atEdge ? W - LABEL_W : cx - LABEL_W / 2;
+    if (left < prevRight + 2) continue;
+    prevRight = left + LABEL_W;
+    svg.appendChild(anText(atEdge ? W : cx, bottom + C.xLabelGap + 12, l.text, atEdge ? "end" : "middle"));
   }
   const wrap = anWrapSvg(svg);
   wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day

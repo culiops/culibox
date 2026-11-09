@@ -6685,24 +6685,21 @@ paintSideHints();
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
 {
+  // Re-scan: the phone's button in the modal's head and the page's in its own (index.html #an-rescan).
   const anRefresh = $("analytics-refresh");
-  if (anRefresh) anRefresh.addEventListener("click", async () => {
-    anRefresh.disabled = true;
-    anRefresh.textContent = "Scanning…";
-    try { await api("/api/analytics/ingest", { method: "POST" }); await anLoad(); }
-    catch (_) { /* leave the current view; the range line still shows */ }
-    finally { anRefresh.disabled = false; anRefresh.textContent = "Re-scan"; }
-  });
+  if (anRefresh) anRefresh.addEventListener("click", () => anRescan(anRefresh));
+  const anRescanBtn = $("an-rescan");
+  if (anRescanBtn) anRescanBtn.addEventListener("click", () => anRescan(anRescanBtn));
   // Tab bar: switch the active analytics tab and re-render from cached data
   // (no refetch — the window data is already loaded).
   const anTabs = $("an-tabs");
   if (anTabs) anTabs.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-antab]");
     if (!b) return;
-    AN.tab = b.dataset.antab;
-    syncTabButtons();
-    anRender();
+    anSetTab(b.dataset.antab);
   });
+  // The desktop page's view switch, range, Compare and Custom range row (analytics.js wires them).
+  anWirePage();
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
 // The header's group (mobile) and the sidebar top's (desktop) are the same control.

@@ -26,13 +26,15 @@
        /error only. */
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
-    /* Analytics chart palette (S4 Task 8): categorical, no green/amber/red
-       (those are status colours). Hues are >= 25 degrees of HSL hue from --ok,
-       --amber and --red (desktop-scope.test.js). Order validated with the
-       dataviz validator, dark mode, surface #14171b. */
-    --an-1: #3d86ea; --an-2: #d462b1; --an-3: #3a6fd0; --an-4: #af6af2;
-    --an-5: #07a2c6; --an-6: #994c96; --an-7: #7b84e8;
-    --an-up: #d462b1; --an-down: #3d86ea;
+    /* Analytics chart palette (S4 Task 8; UI plan 5 Task 6, call 8): categorical, no green/amber/red (those are status colours)
+       and no magenta. Slots 1-5 are the frame's colours (digest-design §E1); 6 and 7 are the added light grey and olive (hue 68,
+       29 degrees from --amber). A hue is >= 25 degrees from --ok, --amber and --red, or the colour is grey. Series that can touch
+       in a stack (slots one or two apart: a model missing that day, the 8th model wrapping to slot 1) are >= 1.5:1 apart, and
+       every slot is >= 3:1 on --panel (desktop-scope.test.js). Compare: --an-up, a cost that rose, is the salient blue and
+       --an-down the grey, 1.61:1 apart. */
+    --an-1: #6ea8fe; --an-2: #86d9e8; --an-3: #7a828e; --an-4: #5d6570;
+    --an-5: #c391ea; --an-6: #c9ced4; --an-7: #7b853d;
+    --an-up: #6ea8fe; --an-down: #7a828e;
     --border: #23282f; --rule: #23282f;
     --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
     --background3: #2a3038;
@@ -218,7 +220,7 @@
   .btn-lg { min-height: var(--h-lg); padding: 0 14px; }
   .btn-icon { width: var(--h-ctl); padding: 0; }
   .btn-icon.btn-sm { width: var(--h-sm); }
-  .btn .kbd-hint { font-family: var(--font-mono); font-size: var(--t-xs); opacity: .75; font-weight: var(--w-regular); }
+  .btn .kbd-hint { font-family: var(--font-mono); font-size: var(--t-xs); line-height: var(--lh-md); opacity: .75; font-weight: var(--w-regular); }
   /* A toggle (Files, + Shell) pressed: raise and a faint inset ring, never a tab look. */
   .btn[aria-pressed="true"], .btn.is-pressed { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--faint); }
   /* Disabled: #169's dimmed look above; here only the hover keeps the resting fill. */
@@ -242,7 +244,7 @@
   }
   .seg > .seg-item {
     height: var(--h-sm); padding: 0 10px; border: 0; border-radius: var(--r-chip);
-    background: transparent; color: var(--muted); font-size: var(--t-sm); font-weight: var(--w-medium);
+    background: transparent; color: var(--muted); font-size: var(--t-sm); line-height: var(--lh-md); font-weight: var(--w-medium);
     cursor: pointer; font-variant-numeric: tabular-nums;
   }
   .seg > .seg-item:hover { color: var(--fg); background: var(--hover); }
@@ -306,7 +308,7 @@
   .input:hover { border-color: var(--muted); }
   /* The legacy field primitive (primitives.css .fld) rests on the same border. A page rule that sets its own border still
      wins: the Credentials forms (UI plan 4 Task 6) and the plain dialogs now set a --faint one of their own; `.dft .fld`,
-     `.ac-pcol .fld`, #au-session and .an-date keep --line until their plans adopt the kit .input. */
+     `.ac-pcol .fld` keep --line until their plans adopt the kit .input (the Audit page's Session select and the Analytics page's date fields have). */
   .fld { border-color: var(--faint); }
   .input:focus, .fld:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .input[aria-invalid="true"], .input.is-invalid { border-color: var(--red); }
@@ -2322,111 +2324,138 @@
     #page-host > #settings-modal.as-page :is(#creds, #cred-drawer) .ent-act .btn { flex: 1; }
   }
 
-  /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
-  /* Colour roles: red = elevation rows and refused/denied/write outcomes only,
-     green = status words only; everything else is neutral text. Prefixed
-     #page-host > #audit-page.as-page so the page rules outrank the dialog's own. */
+  /* --- Audit page (UI plan 5, #175; frame M3.3, digest-design §B1-§B5, §B9) ----- */
+  /* The page is the kit's: .page-head, .toolbar, .seg, .input, .kpi-row, .tbl and .btn draw it, so its markup
+     wears those classes and this block holds only what the frame sets page-locally (M3's .m3-pagehead, .m3-tools,
+     .m3-body, .m3-fixed, .m3-au) and the product's own cells. Colour roles: red is the granted or extended write
+     elevation (its tint and its Kind), the Outcome tones from auditRowView and the Write elevations KPI when above
+     zero; green is status words only; amber is not used here. Prefixed #page-host > #audit-page.as-page so these
+     outrank the dialog's own rules. */
   .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
   .ac-link:hover { text-decoration: underline; }
-  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: var(--t-lg); font-weight: 600; color: var(--fg); }
-  #page-host > #audit-page.as-page > .dhd h2 { margin: 0; font: inherit; }
-  #page-host > #audit-page.as-page #au-range { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-range button:hover { background: var(--raise); color: var(--fg); }
-  #page-host > #audit-page.as-page #au-range button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
-  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); text-decoration: none; }
-  #page-host > #audit-page.as-page #au-csv:hover { background: var(--line); }
-  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: var(--t-sm); }
-  #page-host > #audit-page.as-page #au-esc:hover { color: var(--fg); background: var(--raise); }
 
-  #page-host > #audit-page.as-page .au-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); flex: none; border-bottom: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-kpi { padding: 14px 20px; min-width: 0; }
-  #page-host > #audit-page.as-page .au-kpi + .au-kpi { border-left: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-n { font-size: var(--t-xl); font-weight: 600; color: var(--fg); }
-  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: var(--t-md); color: var(--muted); }
+  /* The frame's page text sits on the kit's 20px line (--lh-md), which every cell, the Session select and the buttons inherit; the
+     product's body is 14px / 1.5, which would make it 19.5px at 13px and draw one-line text one pixel high. */
+  #page-host > #audit-page.as-page,
+  #page-host > #analytics-modal.as-page { line-height: var(--lh-md); }
 
-  #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
-  #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
-  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); cursor: pointer; }
-  #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
-  #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
-  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-md); }
-  #page-host > #audit-page.as-page #au-session:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  /* The head and the toolbar stay put; everything from the KPI row down scrolls (the plan's call 9). The Analytics page wears the
+     same two rules (M3.1 and M3.2 draw the same head and toolbar as M3.3): one list each, so the pages cannot drift. The toolbar
+     wraps, so a narrow window never scrolls sideways; Analytics' Custom range row is the second .toolbar of its page. */
+  #page-host > #audit-page.as-page > .page-head,
+  #page-host > #analytics-modal.as-page > .page-head { flex: none; padding: var(--sp-6) var(--sp-8) var(--sp-3); }
+  #page-host > #audit-page.as-page > .toolbar.au-tools,
+  #page-host > #analytics-modal.as-page > .toolbar.an-ptools,
+  #page-host > #analytics-modal.as-page > .toolbar.an-pcustom { flex-wrap: wrap; padding: 0 var(--sp-8) var(--sp-4); }
+  /* A seg cannot wrap, and the Kind seg is 389px wide (the View seg 375px): in a window under 750px the toolbar is narrower than that and
+     the seg would run past the page and scroll it sideways. Each toolbar answers its own width: its seg items give up 6px of padding
+     a side, which brings the widest seg to 329px, inside the 340px the page has at 701px. */
+  #page-host > #audit-page.as-page > .toolbar.au-tools,
+  #page-host > #analytics-modal.as-page > .toolbar.an-ptools { container-name: page-tools; container-type: inline-size; }
+  @container page-tools (max-width: 388px) {
+    #page-host > #audit-page.as-page > .toolbar .seg > .seg-item,
+    #page-host > #analytics-modal.as-page > .toolbar .seg > .seg-item { padding: 0 var(--sp-1); }
+  }
+  #page-host > #audit-page.as-page #au-session { flex: none; width: 180px; }
 
-  #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
-  #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 116px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
-  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: var(--t-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-kind { color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: var(--t-sm); }
-  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: var(--t-md); color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table tr.au-elev { background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
-  #page-host > #audit-page.as-page #au-table td.au-bad { color: var(--red); }
-  #page-host > #audit-page.as-page #au-table td.au-ok { color: var(--ok); }
-  #page-host > #audit-page.as-page #au-table td.au-empty { height: 96px; padding: 0 20px; text-align: center; color: var(--muted); }
-  #page-host > #audit-page.as-page #au-table td.au-empty.au-bad { color: var(--red); }
+  /* The scroller is a container too, so its KPI row can answer the room it has (the wrap rule below). */
+  #page-host > #audit-page.as-page > .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-6); container-name: au-scroll; container-type: inline-size; }
+  /* A column flex scroller shrinks its children before it scrolls: none of them give way. */
+  #page-host > #audit-page.as-page > .au-scroll > * { flex: none; }
+  #page-host > #audit-page.as-page .kpi-label,
+  #page-host > #analytics-modal.as-page .kpi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A KPI tile is never narrower than 120px: its value (22px, "$44.59" is 77px) and its 16px sides need about that. Five tiles want
+     600px, so in a body narrower than that the row wraps onto more rows. The kit's hairline is a left line on every tile but the
+     first, which would leave a row's first tile with a line at its edge and no line between rows: here every tile has a left and a
+     top line, drawn one pixel outside its cell (the negative margin) so the row's own edge (overflow: hidden, which also keeps the
+     8px corners) hides the ones that sit on it. Both pages ask the container their KPI rows sit in: Analytics' body, and Audit's
+     scroller. */
+  @container (max-width: 599px) {
+    #page-host > #audit-page.as-page .kpi-row,
+    #page-host > #analytics-modal.as-page .kpi-row { grid-auto-flow: row; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); overflow: hidden; }
+    #page-host > #audit-page.as-page .kpi-row > .kpi,
+    #page-host > #analytics-modal.as-page .kpi-row > .kpi { margin: -1px 0 0 -1px; box-shadow: inset 1px 0 0 var(--line), inset 0 1px 0 var(--line); }
+  }
 
-  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: var(--t-sm); color: var(--muted); }
-  #page-host > #audit-page.as-page .au-foot .grow { flex: 1; }
-  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: var(--t-sm); color: var(--fg); }
-  #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
+  /* The table's card clips the row tint to its 8px corners (the frame's inline overflow: hidden). */
+  #page-host > #audit-page.as-page .au-card { background: var(--panel); border-radius: var(--r-card); overflow: hidden; container-name: au-card; container-type: inline-size; }
+  #page-host > #audit-page.as-page .au-tbl { table-layout: fixed; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(1) { width: 116px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(2) { width: 150px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(3) { width: 112px; }
+  #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: 150px; }
+  /* The fixed columns take 528px and What gets the rest. In a card narrower than that plus about 240px for What (a window under
+     about 1124px, the sidebar being 290px and the page's sides 64px) What would shrink to its cell padding and every row wrap to a
+     character a line, with the card clipping whatever ran past its edge. There the table sizes its columns to their content
+     instead: Time and Kind stay on one line, Session, What and Outcome wrap, nothing clips and nothing scrolls sideways. */
+  @container au-card (max-width: 769px) {
+    #page-host > #audit-page.as-page .au-tbl { table-layout: auto; }
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: auto; }
+  }
+  /* Under 480px of card (a window of 840px or less) even that is too much: the columns' own minimums (a 107px one-line Time, 12px
+     of padding either side of five columns) left What 54px at 701px and the table 53px wider than its card. So Time, Session, Kind and
+     Outcome are held to their narrowest (1%: a column never gets less than its content's minimum) and What takes everything else;
+     the Time cell wraps at its space (date over time) and every cell gives up 4px of side padding (the kit's --sp-2 for --sp-3).
+     Kind still stays on one line. The table then fits the card down to the 340px a 701px window leaves it, and What keeps about
+     130px at 760px; measured, this packs the rows tighter than the content-sized columns do below 480px and looser above it. */
+  @container au-card (max-width: 479px) {
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(1),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(2),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(3),
+    #page-host > #audit-page.as-page .au-tbl th:nth-child(5) { width: 1%; }
+    #page-host > #audit-page.as-page .au-tbl :is(th, td) { padding-left: var(--sp-2); padding-right: var(--sp-2); }
+    #page-host > #audit-page.as-page .au-tbl td.au-time { white-space: normal; }
+  }
+  /* The Time cell's date is one run (auTimeCell), so the narrow card's wrap falls at the space and not at the hyphen. */
+  #page-host > #audit-page.as-page .au-tbl .au-nb { white-space: nowrap; }
+  /* Session, What and Outcome wrap instead of clipping (the frame's .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
+  #page-host > #audit-page.as-page .au-tbl td.au-sess,
+  #page-host > #audit-page.as-page .au-tbl td.au-what,
+  #page-host > #audit-page.as-page .au-tbl td.au-out { height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+  #page-host > #audit-page.as-page .au-tbl td.au-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #page-host > #audit-page.as-page .au-tbl td.au-kind,
+  #page-host > #audit-page.as-page .au-tbl td.au-out { color: var(--muted); }
+  #page-host > #audit-page.as-page .au-tbl td.au-what .au-reason { color: var(--muted); }
+  /* au-ok has the muted rules' weight and comes after them, so it wins; au-bad out-weighs them. */
+  #page-host > #audit-page.as-page .au-tbl td.au-ok { color: var(--ok); }
+  #page-host > #audit-page.as-page .au-tbl td.au-kind.au-bad,
+  #page-host > #audit-page.as-page .au-tbl td.au-out.au-bad { color: var(--red); font-weight: var(--w-medium); }
+  /* The kit's row tint is overwritten by .tbl tbody tr:hover (0,2,2 over 0,2,1): the red row keeps it under the pointer. */
+  #page-host > #audit-page.as-page .au-tbl tbody tr.is-elevated:hover { background: var(--red-tint); }
+  /* Loading…, the empty line and the failure: one centred cell over the five columns. */
+  #page-host > #audit-page.as-page .au-tbl td.au-empty { height: 96px; text-align: center; white-space: normal; color: var(--muted); }
+  #page-host > #audit-page.as-page .au-tbl td.au-empty.au-bad { color: var(--red); }
+
+  /* The footer sits in flow under the card and scrolls with it (M3.3's .m3-foot). */
+  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-sm); font-size: var(--t-sm); line-height: var(--lh-sm); color: var(--muted); }
+  #page-host > #audit-page.as-page #au-count { font-variant-numeric: tabular-nums; }
+  /* The kit .btn sets a display, which beats the UA's [hidden] rule: Show more hides only through this one. */
   #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
 
-  /* --- Analytics page (S4; pg-4.png) ------------------------------------------ */
-  /* The dialog is re-parented into #page-host (pagehost.js). A grid puts the
-     title and the tab/controls head on one 52px row; the body spans below. The
-     range caption moves into the first chart's hint (analytics.js), so the
-     header's own #analytics-range is hidden. */
-  #page-host > #analytics-modal.as-page { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(52px, auto) minmax(0, 1fr); }
-  #page-host > #analytics-modal.as-page > .dlg-title {
-    grid-column: 1; grid-row: 1; position: static; transform: none; pointer-events: auto; align-self: stretch; width: auto; max-width: none;
-    margin: 0; padding: 15px 8px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
-    font-size: var(--t-lg); font-weight: 600; letter-spacing: 0; color: var(--fg);
-    /* Level with the head's first row, also when the head wraps to two. */
-    display: flex; align-items: flex-start; white-space: nowrap;
-  }
-  /* The head wraps when it cannot fit one row (below ~1280): the range,
-     Compare, Re-scan and ✕ drop to a second row, right-aligned, never clipped. */
-  #page-host > #analytics-modal.as-page > .dlg-head { grid-column: 2; grid-row: 1; flex-wrap: wrap; justify-content: flex-end; gap: 8px 6px; min-width: 0; padding: 9px 20px 9px 0; border-bottom: 1px solid var(--line); background: var(--bg); }
-  #page-host > #analytics-modal.as-page > .dlg-head > * { flex: none; }
-  #page-host > #analytics-modal.as-page > .dlg-head > .spacer { flex: 1 1 0; }
-  #page-host > #analytics-modal.as-page #analytics-range { display: none; }
-  #page-host > #analytics-modal.as-page #an-ctl { display: flex; align-items: center; }
-  #page-host > #analytics-modal.as-page #an-tabs { flex-wrap: nowrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 9px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); white-space: nowrap; }
-  #page-host > #analytics-modal.as-page #an-tabs button:hover { color: var(--fg); background: var(--raise); }
-  #page-host > #analytics-modal.as-page #an-tabs button.act { background: var(--raise); color: var(--fg); font-weight: 600; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-controls { flex-wrap: nowrap; gap: 2px; margin: 0; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-controls > span { display: none; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 8px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: var(--t-md); white-space: nowrap; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-chip:hover { color: var(--fg); background: var(--raise); }
-  #page-host > #analytics-modal.as-page #an-ctl .an-chip.on { background: var(--raise); color: var(--fg); font-weight: 600; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
-  #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); }
-  #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
-  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: var(--t-lg); font-weight: 400; color: var(--muted); }
-  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: var(--t-sm); }
-  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x:hover { color: var(--fg); background: var(--raise); }
-  #page-host > #analytics-modal.as-page > .dlg-body { grid-column: 1 / -1; grid-row: 2; padding: 20px; background: var(--bg); }
+  /* --- Analytics page (S4; UI plan 5, #175; frames M3.1 and M3.2, digest-design §A1, §B1-§B4, §F3) --------------- */
+  /* The dialog is re-parented into #page-host (pagehost.js) and is the base page rule's column: the page's head, its toolbar
+     and its Custom range row (index.html; the kit's .page-head, .toolbar, .seg and .btn, sized by the shared rules in the
+     Audit block above), then the body, which is the scroller. The phone's legend title and .dlg-head (tabs, caption,
+     #an-ctl, Re-scan, ×) are the modal's: not drawn here. Each rule below starts at the page, so the phone never sees it. */
+  #page-host > #analytics-modal.as-page > .dlg-title,
+  #page-host > #analytics-modal.as-page > .dlg-head { display: none; }
+  /* app.css hides the three nodes at base (#analytics-modal .an-phead …, one id); these outrank it. */
+  #page-host > #analytics-modal.as-page > .an-phead,
+  #page-host > #analytics-modal.as-page > .an-ptools,
+  #page-host > #analytics-modal.as-page > .an-pcustom { display: flex; }
+  /* The kit's .toolbar sets a display, which defeats the UA's [hidden]: the Custom range row hides through this one. */
+  #page-host > #analytics-modal.as-page > .an-pcustom[hidden] { display: none; }
+  /* The kit's .input is the width of its container. A date field keeps the width of its value. */
+  #page-host > #analytics-modal.as-page > .an-pcustom .input { width: auto; flex: none; }
+  #page-host > #analytics-modal.as-page > .dlg-body { padding: 0 var(--sp-8) var(--sp-6); background: var(--bg); }
+  /* app.css's `.an-date:focus` drops the outline and keeps the accent border; the 1px shadow beside it is the field focus's
+     second pixel (desktop-focus.test.js), the same one the kit's .input:focus gives the page's date fields. */
+  .an-date:focus { box-shadow: 0 0 0 1px var(--accent); }
 
   /* Cards: --panel, --r-card, 1px --line. */
-  #page-host > #analytics-modal.as-page .an-customrow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
-  #page-host > #analytics-modal.as-page .an-customrow .an-chip { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: var(--t-md); }
-  #page-host > #analytics-modal.as-page .an-date { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font-family: var(--font-ui); font-size: var(--t-md); }
-  /* The border above is id-weighted: it beats both app.css's .an-date:focus and the kit's field focus. */
-  #page-host > #analytics-modal.as-page .an-date:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  .an-date:focus { box-shadow: 0 0 0 1px var(--accent); }
-  #page-host > #analytics-modal.as-page .an-kpis { gap: 12px; margin-bottom: 16px; }
-  #page-host > #analytics-modal.as-page .an-kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
-  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: var(--t-kpi); font-weight: 600; color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-kpi .v.cost { color: var(--fg); }
-  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: var(--t-md); letter-spacing: 0; text-transform: none; }
   #page-host > #analytics-modal.as-page .an-box { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
   #page-host > #analytics-modal.as-page .an-box h4 { font-size: var(--t-md); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
   #page-host > #analytics-modal.as-page .an-section { margin: 0 0 16px; }
@@ -2439,14 +2468,121 @@
   .an-table th, .an-table td { text-align: left; }
   .an-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Compare: the diverging bars and their numbers share --an-up / --an-down;
-     a cost rise is not "red" here, it is a palette hue. The amber note stripe is
-     needs-you only, so the compare note goes neutral. */
+     a cost rise is not "red" here, it is a palette hue. Its note is the Overview's plain footnote (no amber stripe). */
   #page-host > #analytics-modal.as-page .an-divrow .val.an-up { color: var(--an-up); }
   #page-host > #analytics-modal.as-page .an-divrow .val.an-down { color: var(--an-down); }
   /* KPI deltas: neutral text, the up/down arrow carries the direction. The
-     base red/green (and good/bad) pairs are status colours (D23). */
-  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); }
-  #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
+     base red/green (and good/bad) pairs are status colours (D23). The line sits in a kit .kpi (its 2px gap is the spacing) at the
+     kit's smallest step. */
+  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); font-size: var(--t-xs); margin-top: 0; }
+
+  /* --- Analytics bodies: KPI row, cards, kit tables, Sessions (UI plan 5 Task 5; frame M3.2, digest-design §B5, §B8, §C8, §C9) --- */
+  /* The body is a container, so the Sessions split can answer the room it has (call 10): 1440 gives it 1086px (the sidebar's 290px
+     and the page's two 32px sides are gone), 1280 gives 926. */
+  #page-host > #analytics-modal.as-page #analytics-body { container-name: an-body; container-type: inline-size; }
+  /* The KPI row is the kit's (.kpi-row, .kpi, .kpi-value, .kpi-label); 16px to what follows (§B0 .m3-body's gap). */
+  #page-host > #analytics-modal.as-page #analytics-body > .kpi-row { margin-bottom: var(--sp-4); }
+  /* The Compare block's tiles are the same row, 16px above its two boxes. */
+  #page-host > #analytics-modal.as-page .an-section > .kpi-row { margin-bottom: var(--sp-4); }
+
+  /* A section: the title and its caption on one baseline, then the card (§B8 .m3-sec, .m3-row). */
+  #page-host > #analytics-modal.as-page .an-psec { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0 0 var(--sp-4); }
+  #page-host > #analytics-modal.as-page .an-psec-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-width: 0; }
+  /* A card is --panel at --r-card with no outline (§C8 .card). Its name is ours: app.css's `.card` is the phone's amber session card. */
+  #page-host > #analytics-modal.as-page .an-card { background: var(--panel); border-radius: var(--r-card); min-width: 0; }
+  /* A card's head holds a title, a caption and (the cost chart) a legend: the title and its caption keep their one line at their own width
+     and the head wraps, so a long legend goes to a line of its own (and wraps its items) instead of crushing "Cost over time" to a
+     character a line. */
+  #page-host > #analytics-modal.as-page .an-card .card-head { flex-wrap: wrap; }
+  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3) { margin: 0; }
+  #page-host > #analytics-modal.as-page .an-card .card-head > :is(h2, h3, .muted) { flex: none; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page .an-card-body { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+  /* A table's card clips its row hover to the 8px corners (the frame's inline overflow: hidden). */
+  #page-host > #analytics-modal.as-page .an-card > .an-tablewrap { border-radius: var(--r-card); }
+  /* Two cards side by side (the share cards, one card per tool kind): equal columns, one when the body is narrow. */
+  #page-host > #analytics-modal.as-page .an-pgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+
+  /* Tables: §C9's .tbl look on the page's .an-table (app.css's uppercase 10px head and 3px cells are the phone's). Each number column
+     is right-aligned under its header by the F01 rules above; the text columns are left. */
+  #page-host > #analytics-modal.as-page .an-table { font-size: var(--t-md); font-variant-numeric: normal; }
+  #page-host > #analytics-modal.as-page .an-table th {
+    height: var(--h-row); padding: 0 var(--sp-3); font-size: var(--t-sm); font-weight: var(--w-medium); color: var(--muted);
+    text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  #page-host > #analytics-modal.as-page .an-table td { height: var(--h-row); padding: 0 var(--sp-3); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  #page-host > #analytics-modal.as-page .an-table tr:last-child td { border-bottom: 0; }
+  #page-host > #analytics-modal.as-page .an-table tr + tr:hover { background: var(--hover); }
+  #page-host > #analytics-modal.as-page .an-table td.sub { color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-table td.tnum { font-variant-numeric: tabular-nums; }
+  /* An id, a project or a model wraps instead of clipping (§B8 .m3-wrap): one line is still the 32px row, 6 + 20 + 6. */
+  #page-host > #analytics-modal.as-page .an-table td.an-wrap { height: auto; padding-top: 6px; padding-bottom: 6px; line-height: var(--lh-md); white-space: normal; overflow-wrap: anywhere; }
+
+  /* Sessions (M3.2): the table and the cost bands side by side, 300px for the bands; the table's columns are fixed (88, 100, Project
+     the rest, 104, 76, 72, 72 = 512px of the 770px the table gets at 1440). */
+  #page-host > #analytics-modal.as-page .an-split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; min-height: 0; }
+  #page-host > #analytics-modal.as-page .an-split > .an-psec { margin-bottom: 0; }
+  #page-host > #analytics-modal.as-page .an-stbl { table-layout: fixed; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1) { width: 88px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2) { width: 100px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4) { width: 104px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5) { width: 76px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6) { width: 72px; }
+  #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: 72px; }
+  /* The cost bands: label, bar, count (§B8 .m3-hbar). The bar is the kit's .meter, whose fill is the accent. */
+  #page-host > #analytics-modal.as-page .an-bands { display: flex; flex-direction: column; }
+  #page-host > #analytics-modal.as-page .an-band { display: grid; grid-template-columns: 56px minmax(0, 1fr) 48px; align-items: center; column-gap: var(--sp-3); height: 22px; }
+  #page-host > #analytics-modal.as-page .an-band-n { text-align: right; }
+  /* Below 1000px of body the split is one column: side by side the Project column shrinks under 172px, and to 98px at 1280, where a
+     long project name wraps to three lines (§G5). */
+  @container an-body (max-width: 999px) {
+    #page-host > #analytics-modal.as-page .an-split { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* Under 672px (the fixed columns' 512px and 160px for Project) the columns size to their content, Project keeping a minimum, and the
+     card's own wrapper scrolls what is still too wide: the page never scrolls sideways. */
+  @container an-body (max-width: 671px) {
+    #page-host > #analytics-modal.as-page .an-stbl { table-layout: auto; }
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(1),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(2),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(4),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(5),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(6),
+    #page-host > #analytics-modal.as-page .an-stbl th:nth-child(7) { width: auto; }
+    #page-host > #analytics-modal.as-page .an-stbl :is(th, td):nth-child(3) { min-width: 160px; }
+    #page-host > #analytics-modal.as-page .an-pgrid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* --- Analytics Overview (UI plan 5 Task 6; frame M3.1, digest-design §A2, §B6, §B7, §D1) --- */
+  /* Axis text is the kit's smallest step (11px); app.css's 9px is the phone's. The cost chart and the Compare block's day-of-week
+     chart both wear it, each drawn with room for it (analytics.js anPageChart, anDowOverlay). */
+  #page-host > #analytics-modal.as-page .an-axis text { font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+  /* An inline svg sits on a text baseline and the wrapper would grow by its descender gap: the chart is a block, as the frame's is. */
+  #page-host > #analytics-modal.as-page .an-timewrap > svg { display: block; }
+  /* The chart's card body is §D1's .m3-cardbody (12px 16px 16px) less the 8px its svg carries above the plot for the top label. */
+  #page-host > #analytics-modal.as-page .an-chartbody { padding-top: var(--sp-1); }
+  /* The legend in the card head: items 16px apart, each a swatch and its label 6px apart; the swatch is an 8px square with no radius
+     (§D1 .m3-legend, .m3-sw). A narrow head wraps it rather than squeezing the title. */
+  #page-host > #analytics-modal.as-page .an-plegend { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); min-width: 0; }
+  #page-host > #analytics-modal.as-page .an-plegend > span { display: inline-flex; align-items: center; gap: 6px; }
+  #page-host > #analytics-modal.as-page .an-sw { display: inline-block; width: 8px; height: 8px; flex: none; }
+  /* The footnote is a plain line: the section's 8px gap sets it off the card; in the Compare block it follows the boxes by 8px. */
+  #page-host > #analytics-modal.as-page .an-foot { margin: 0; }
+  #page-host > #analytics-modal.as-page .an-section > .an-foot { margin-top: var(--sp-2); }
+  /* Cost by model and by project (§B7): label, track, value; 22px rows with no separators. The track is the kit's .meter (4px, radius
+     2, on --line), the fills are placed by the script. The project card's label column is 184px. */
+  #page-host > #analytics-modal.as-page #analytics-body > .an-pgrid { margin-bottom: var(--sp-4); }
+  #page-host > #analytics-modal.as-page .an-hrows { display: flex; flex-direction: column; }
+  #page-host > #analytics-modal.as-page .an-hrow { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; align-items: center; column-gap: var(--sp-3); height: 22px; }
+  #page-host > #analytics-modal.as-page .an-hrow.an-wide { grid-template-columns: 184px minmax(0, 1fr) 64px; }
+  #page-host > #analytics-modal.as-page .an-hv { text-align: right; }
+
+  /* Text app.css sets in raw px for the phone gets a kit step here (Plan 1 follow-up 1). */
+  #page-host > #analytics-modal.as-page .an-empty { font-size: var(--t-md); line-height: var(--lh-md); }
+  #page-host > #analytics-modal.as-page .an-badge { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-bar .cap { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-hbar { font-size: var(--t-sm); }
+  #page-host > #analytics-modal.as-page .an-legend { font-size: var(--t-xs); }
+  #page-host > #analytics-modal.as-page .an-divrow { font-size: var(--t-sm); }
+  #page-host > #analytics-modal.as-page .an-mixlabel { font-size: var(--t-xs); }
 
   /* --- chrome for the remaining modals, palette, toast, store banner, login (S4, spec 5.13) --- */
   /* No behaviour change: only the tokens and type move. Generic dialog chrome is

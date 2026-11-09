@@ -2,12 +2,14 @@ package auditlog
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/egress"
+	"github.com/culiops/culibox/internal/mask"
 )
 
 // TestDescribe pins the exact What strings by writing real rows through the
@@ -46,8 +48,10 @@ func TestDescribe(t *testing.T) {
 	rec(err)
 	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'value_set', 'daemon', 'cf-token')`, ts(18))
 	rec(err)
+	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'unlocked', 'web', 'ttl=168h0m0s')`, ts(19))
+	rec(err)
 
-	p, err := s.open().Query(Query{From: ts(1), To: ts(18), Limit: 100})
+	p, err := s.open().Query(Query{From: ts(1), To: ts(19), Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +83,7 @@ func TestDescribe(t *testing.T) {
 		{16, "settings", "aws sandbox aws checked", "aws_checked", "cli", "", 0, false},
 		{17, "store", "encrypted store unlocked", "unlocked", "you", "", 0, false},
 		{18, "store", "encrypted store value set · cf-token", "value_set", "daemon", "", 0, false},
+		{19, "store", "encrypted store unlocked · ttl=168h0m0s", "unlocked", "you", "", 0, false},
 	}
 	for _, c := range cases {
 		e, ok := byTS[ts(c.n)]
@@ -203,5 +208,192 @@ func TestDescribeSSODirect(t *testing.T) {
 	sum, err := r.Summary(1_800_000_000, 1_800_000_010)
 	if err != nil || sum.Issued != 2 || sum.Refused != 1 {
 		t.Fatalf("summary %+v %v", sum, err)
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{168 * time.Hour, "7 days"},
+		{24 * time.Hour, "1 day"},
+		{90 * time.Minute, "1 h 30 min"},
+		{30 * time.Minute, "30 min"},
+		{time.Hour, "1 h"},
+		{36*time.Hour + 30*time.Minute, "1 day 12 h 30 min"},
+		{720 * time.Hour, "30 days"},
+		{61 * time.Second, "1 min"},
+		{30 * time.Second, "30 s"},
+		{0, "0 s"},
+		{-5 * time.Second, "0 s"},
+	} {
+		if got := humanDuration(c.d); got != c.want {
+			t.Errorf("humanDuration(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// tp and ip are the expected text and identifier parts.
+func tp(s string) Part { return Part{Text: s} }
+func ip(s string) Part { return Part{Text: s, ID: true} }
+
+// TestDescribeParts pins the parts of one row of every shape, read back from
+// rows the real writers wrote. Joined, the parts are always the What.
+func TestDescribeParts(t *testing.T) {
+	s := newSeeder(t)
+	rec := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := func(n int) int64 { return int64(1_800_000_000 + n) }
+	at := func(n int) time.Time { return time.Unix(ts(n), 0) }
+	const ssoRole = "arn:aws:iam::111111111111:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ReadOnly_0123456789abcdef"
+
+	rec(s.b.Record(broker.Row{Time: at(1), SessionID: "s1", AccountID: "111111111111", RoleARN: "arn:aws:iam::111111111111:role/team/agent-ops-write",
+		Outcome: broker.OutcomeMinted, Elevated: true, Entry: "culipulse-prod"}))
+	rec(s.b.Record(broker.Row{Time: at(2), SessionID: "s1", AccountID: "111111111111", RoleARN: ssoRole,
+		Outcome: broker.OutcomeMinted, Entry: "company-ro", Mode: "sso_direct"}))
+	rec(s.b.Record(broker.Row{Time: at(3), SessionID: "s1", Outcome: broker.OutcomeMinted})) // no entry, no account
+	rec(s.b.Record(broker.Row{Time: at(4), SessionID: "s1", Provider: broker.ProviderGitHub, Subject: "culiops", Repos: 3, Outcome: broker.OutcomeMinted}))
+	rec(s.b.Record(broker.Row{Time: at(5), SessionID: "s1", Provider: broker.ProviderStatic, Entry: "datadog-read", Outcome: broker.OutcomeFetched}))
+	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(6), SessionID: "s1", Action: broker.ActionGranted, Entry: "culipulse-prod", Minutes: 30, Reason: "rotate the key", Cred: "cookie"}))
+	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(7), Action: broker.ActionSSOLoginOK, Entry: "culipulse-prod", Cred: "cookie"}))
+	rec(s.e.Record(egress.Row{Time: at(8), SessionID: "s1", Host: "registry.example.test", Port: 443, Outcome: egress.OutcomeAllowed}))
+	rec(s.e.Record(egress.Row{Time: at(9), SessionID: "s1", Host: "files.example.test", Port: 443, Outcome: egress.OutcomeAllowed, BytesDown: 148 << 20}))
+	_, err := s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor) VALUES (?, 'created', 'token', 'e2e-pat', 'web')`, ts(10))
+	rec(err)
+	_, err = s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor) VALUES (?, 'created', 'token', '', 'web')`, ts(11))
+	rec(err)
+	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'value_set', 'web', 'e2e-pat')`, ts(12))
+	rec(err)
+	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'locked', 'web', '')`, ts(13))
+	rec(err)
+
+	p, err := s.open().Query(Query{From: ts(1), To: ts(13), Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTS := map[int64]Event{}
+	for _, e := range p.Events {
+		byTS[e.TS] = e
+	}
+	cases := []struct {
+		name  string
+		n     int
+		parts []Part
+	}{
+		{"aws elevated", 1, []Part{tp("aws "), ip("culipulse-prod"), tp(" · role "), ip("agent-ops-write"), tp(" · elevated")}},
+		{"aws sso direct", 2, []Part{tp("aws "), ip("company-ro"), tp(" · role "), ip("AWSReservedSSO_ReadOnly_0123456789abcdef"), tp(" · SSO role directly")}},
+		{"aws no entry or account", 3, []Part{tp("aws")}},
+		{"github", 4, []Part{tp("github "), ip("culiops"), tp(" · 3 repos")}},
+		{"static", 5, []Part{tp("token "), ip("datadog-read")}},
+		{"elevation", 6, []Part{tp("write on "), ip("culipulse-prod"), tp(" · 30 min")}},
+		{"signin", 7, []Part{tp("SSO sign-in "), ip("culipulse-prod")}},
+		{"egress", 8, []Part{ip("registry.example.test:443")}},
+		{"egress with size", 9, []Part{ip("files.example.test:443"), tp(" · 148 MB down")}},
+		{"settings", 10, []Part{tp("token "), ip("e2e-pat"), tp(" created")}},
+		{"settings with an empty name", 11, []Part{tp("token created")}},
+		{"store value_set", 12, []Part{tp("encrypted store value set · "), ip("e2e-pat")}},
+		{"store locked", 13, []Part{tp("encrypted store locked")}},
+	}
+	for _, c := range cases {
+		e, ok := byTS[ts(c.n)]
+		if !ok {
+			t.Errorf("%s: no event", c.name)
+			continue
+		}
+		if !slices.Equal(e.Parts, c.parts) {
+			t.Errorf("%s: parts\n got %+v\nwant %+v", c.name, e.Parts, c.parts)
+		}
+		if got := joinParts(e.Parts); got != e.What {
+			t.Errorf("%s: parts join to %q, What is %q", c.name, got, e.What)
+		}
+		if e.Kind == KindElevation && e.Reason != "rotate the key" {
+			t.Errorf("%s: reason = %q", c.name, e.Reason)
+		}
+	}
+	if len(p.Events) != len(cases) {
+		t.Errorf("%d events, want %d", len(p.Events), len(cases))
+	}
+}
+
+// A store unlock reads its ttl in plain words in the parts only; What (and so
+// the CSV) keeps the stored detail. Anything that is not a positive duration,
+// and any free-text detail, stays plain text.
+func TestDescribeStoreTTL(t *testing.T) {
+	s := newSeeder(t)
+	for i, c := range []struct{ action, detail string }{
+		{"unlocked", "ttl=168h0m0s"},
+		{"unlocked", "ttl=1h30m0s"},
+		{"unlocked", "ttl=bogus"},
+		{"unlocked", "ttl=-5s"},
+		{"unlocked", "ttl=0s"},
+		{"unlocked", ""},
+		{"passwd_changed", "rotated by hand"},
+	} {
+		if _, err := s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, ?, 'web', ?)`,
+			1_800_000_001+i, c.action, c.detail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := s.open().Query(Query{From: 1_800_000_000, To: 1_800_000_010, Limit: 100})
+	if err != nil || len(p.Events) != 7 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	byTS := map[int64]Event{}
+	for _, e := range p.Events {
+		byTS[e.TS] = e
+	}
+	for i, want := range []struct{ what, parts string }{
+		{"encrypted store unlocked · ttl=168h0m0s", "encrypted store unlocked · for 7 days"},
+		{"encrypted store unlocked · ttl=1h30m0s", "encrypted store unlocked · for 1 h 30 min"},
+		{"encrypted store unlocked · ttl=bogus", "encrypted store unlocked · ttl=bogus"},
+		{"encrypted store unlocked · ttl=-5s", "encrypted store unlocked · ttl=-5s"},
+		{"encrypted store unlocked · ttl=0s", "encrypted store unlocked · ttl=0s"},
+		{"encrypted store unlocked", "encrypted store unlocked"},
+		{"encrypted store passwd changed · rotated by hand", "encrypted store passwd changed · rotated by hand"},
+	} {
+		e := byTS[int64(1_800_000_001+i)]
+		if e.What != want.what {
+			t.Errorf("row %d: What = %q, want %q", i, e.What, want.what)
+		}
+		if got := joinParts(e.Parts); got != want.parts {
+			t.Errorf("row %d: parts join to %q, want %q", i, got, want.parts)
+		}
+		for _, part := range e.Parts {
+			if part.ID {
+				t.Errorf("row %d: id part %+v on a row with no identifier", i, part)
+			}
+		}
+	}
+}
+
+// The backstop masker runs on the joined What. When it changes anything the
+// parts are dropped, so no part can carry text that What no longer shows.
+func TestDescribePartsDroppedWhenBackstopMasks(t *testing.T) {
+	s := newSeeder(t)
+	// A secret-key assignment split across two slots: the kind names the key,
+	// the name holds "=<40 characters>". Neither slot is masked alone; only the
+	// joined line is.
+	kind, name := "secretaccesskey", "="+strings.Repeat("x", 40)
+	if mask.Display(kind) != kind || mask.Display(name) != name {
+		t.Fatal("test shape is wrong: a single slot is already masked")
+	}
+	if _, err := s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor) VALUES (1800000001, 'created', ?, ?, 'web')`, kind, name); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.open().Query(Query{})
+	if err != nil || len(p.Events) != 1 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	e := p.Events[0]
+	if want := "secretaccesskey =[masked:aws-secret] created"; e.What != want {
+		t.Errorf("What = %q, want %q", e.What, want)
+	}
+	if e.Parts != nil {
+		t.Errorf("Parts = %+v, want nil", e.Parts)
 	}
 }

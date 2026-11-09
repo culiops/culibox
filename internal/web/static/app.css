@@ -1239,6 +1239,11 @@
     }
     #analytics-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
     #analytics-refresh:hover { color: var(--fg); }
+    /* The desktop page's head, toolbar and Custom range row (index.html) sit first in the dialog the phone shows as a modal:
+       never drawn here. desktop.css shows them under #page-host > #analytics-modal.as-page. The dialog's id is in the
+       selector so the kit's .page-head and .toolbar (display: flex, later in the cascade) cannot show them in a modal that
+       was opened on a phone and then widened past 700px. */
+    #analytics-modal .an-phead, #analytics-modal .an-ptools, #analytics-modal .an-pcustom { display: none; }
     #ask-modal { width: 400px; }
     /* overflow-wrap because the link confirm puts a raw URL in here, and a long
        one offers no break opportunity. #toast-msg carries it for the same reason. */

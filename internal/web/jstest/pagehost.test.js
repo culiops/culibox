@@ -154,6 +154,8 @@ function pageEnv() {
       id, open: false, hidden: false, cls,
       classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) },
       before() {}, show() { this.open = true; }, close() { this.open = false; }, querySelector: () => null,
+      // openPage tries each PAGE_FOCUS selector; a test sets `cands` ({ selector: [nodes in document order] }).
+      cands: {}, querySelectorAll(sel) { return this.cands[sel] || []; },
     };
   };
   const els = { "settings-modal": mk("settings-modal"), "analytics-modal": mk("analytics-modal"), "page-host": Object.assign(mk("page-host"), { appendChild() {} }) };
@@ -319,4 +321,80 @@ test("the profile page and the shell wire the guard through one function each", 
   const app = read("app.js");
   assert.match(body(app, "profilePageHolds"), /typeof pfvHold === "function" && pfvHold\(again\)/);
   assert.match(app, /\$\("pf-new"\)\.addEventListener\("click", \(\) => \{\s*if \(profilePageHolds\(\(\) => \$\("pf-new"\)\.click\(\)\)\) return;/);
+});
+
+// --- what a page focuses when it opens (UI plan 5 Task 4, Review Focus 5) ---
+
+// A fake element for PAGE_FOCUS: `shown` is what getClientRects() says (a display: none node, or one under one, has no boxes).
+function focusNode(tag, shown, attrs = {}) {
+  return {
+    tag, shown, attrs: { ...attrs }, focusCalls: 0, focusOpts: null,
+    matches(sel) { return sel.split(",").some((x) => { x = x.trim(); return x === this.tag || (x === "[tabindex]" && "tabindex" in this.attrs); }); },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getClientRects() { return this.shown ? [{ width: 10, height: 10 }] : []; },
+    focus(o) { this.focusCalls++; this.focusOpts = o; },
+  };
+}
+
+// A hidden .dlg-tabs button and a hidden h2 are skipped; the visible h1 gets tabindex -1 and focus.
+test("openPage focuses the first VISIBLE candidate", () => {
+  // Analytics on the desktop page: its .dlg-tabs buttons and its legend h2 sit in the head the page hides, and the page's own
+  // h1 follows them in the selector tries (".dlg-tabs button" before "h1, h2, h3"), and in document order the h1 is first.
+  const t = pageEnv();
+  const tabs = ["overview", "models", "projects"].map(() => focusNode("button", false));
+  const hiddenH2 = focusNode("h2", false);
+  const h1 = focusNode("h1", true);
+  t.els["analytics-modal"].cands = { ".dlg-tabs button": tabs, "h1, h2, h3": [h1, hiddenH2] };
+  assert.strictEqual(t.ctx.openPage("analytics-modal"), true);
+  assert.deepStrictEqual(tabs.map((n) => n.focusCalls), [0, 0, 0], "a hidden tab takes no focus (focus() on a display: none node does nothing)");
+  assert.strictEqual(hiddenH2.focusCalls, 0);
+  assert.strictEqual(h1.focusCalls, 1);
+  assert.strictEqual(h1.attrs.tabindex, "-1", "a heading is not focusable until it has a tabindex");
+  assert.strictEqual(h1.focusOpts.preventScroll, true, "focus does not scroll the page");
+  assert.strictEqual(hiddenH2.attrs.tabindex, undefined);
+
+  // A hidden h2 ahead of the visible h1 in document order: still the h1.
+  const u = pageEnv();
+  const h2 = focusNode("h2", false), visible = focusNode("h1", true);
+  u.els["analytics-modal"].cands = { "h1, h2, h3": [h2, visible] };
+  u.ctx.openPage("analytics-modal");
+  assert.strictEqual(h2.focusCalls, 0);
+  assert.strictEqual(visible.focusCalls, 1);
+});
+
+test("openPage still focuses a visible selected tab first (Settings), and a button takes no tabindex", () => {
+  const t = pageEnv();
+  const selected = focusNode("button", true);
+  const other = focusNode("button", true);
+  const h1 = focusNode("h1", true);
+  t.els["settings-modal"].cands = { '[role="tab"][aria-selected="true"]': [selected], '[role="tab"]': [selected, other], "h1, h2, h3": [h1] };
+  t.ctx.openPage("settings-modal");
+  assert.strictEqual(selected.focusCalls, 1);
+  assert.strictEqual(other.focusCalls, 0);
+  assert.strictEqual(h1.focusCalls, 0);
+  assert.strictEqual(selected.attrs.tabindex, undefined, "a button is focusable as it is");
+  // The first of several candidates is skipped only when it is hidden.
+  const u = pageEnv();
+  const hiddenTab = focusNode("button", false);
+  const shownTab = focusNode("button", true);
+  u.els["settings-modal"].cands = { '[role="tab"]': [hiddenTab, shownTab] };
+  u.ctx.openPage("settings-modal");
+  assert.strictEqual(hiddenTab.focusCalls, 0);
+  assert.strictEqual(shownTab.focusCalls, 1);
+});
+
+test("openPage with nothing visible to focus focuses nothing and still opens the page", () => {
+  const t = pageEnv();
+  const h1 = focusNode("h1", false);
+  t.els["analytics-modal"].cands = { "h1, h2, h3": [h1] };
+  assert.strictEqual(t.ctx.openPage("analytics-modal"), true);
+  assert.strictEqual(h1.focusCalls, 0);
+  assert.strictEqual(t.ctx.currentPage(), "analytics-modal");
+});
+
+test("openPage reads every match of a PAGE_FOCUS selector and asks each for its boxes", () => {
+  const b = body(read("pagehost.js"), "openPage");
+  assert.match(b, /dlg\.querySelectorAll\(sel\)/);
+  assert.match(b, /getClientRects\(\)\.length > 0/);
+  assert.doesNotMatch(b, /dlg\.querySelector\(sel\)/, "the first match in document order may be a hidden one");
 });
