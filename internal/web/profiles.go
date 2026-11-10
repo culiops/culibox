@@ -160,6 +160,8 @@ type ProfileManager struct {
 	// root, config and profiles directories; box.ProtectedOverlap). nil only in
 	// tests.
 	protected []box.ProtectedDir
+	// shares is the box VM's live folder list (macOS), nil without a VM.
+	shares box.SharesFunc
 	// accounts validates a profile's agent account on save; nil = only the
 	// default account exists. Spawn-time checkAccount stays the authority.
 	accounts launcher.AccountResolver
@@ -672,7 +674,10 @@ func (m *ProfileManager) save(p config.AgentConfig, guard func() error) error {
 	if p.DefaultCwd != "" {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
 		if rt == config.RuntimeBox {
-			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.protected); bad {
+			m.mu.Lock()
+			shares := m.shares
+			m.mu.Unlock()
+			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.protected, shares); bad {
 				return config.WithField("default_cwd", fmt.Errorf("default working dir cannot be contained: %s", reason))
 			}
 		}
@@ -871,4 +876,12 @@ func argsBypassPermissions(args []string) bool {
 		}
 	}
 	return false
+}
+
+// SetShares installs the box VM's live folder list, which the default_cwd save
+// check reads. Call at boot; nil (no VM) leaves every directory visible.
+func (m *ProfileManager) SetShares(f box.SharesFunc) {
+	m.mu.Lock()
+	m.shares = f
+	m.mu.Unlock()
 }

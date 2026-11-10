@@ -170,6 +170,16 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 	return cfg.ResolvedProfilesPath(dataDir)
 }
 
+// boxedFilter is the boxed-workspace registry's filter: the manager's workspace
+// rule, share-agnostic. Removing a VM folder never drops a recorded workspace
+// (the registry feeds the fs containment trees). No layer = nothing is refused.
+func boxedFilter(layer *boxLayer) func(string) (string, bool) {
+	if layer == nil {
+		return func(string) (string, bool) { return "", false }
+	}
+	return layer.boxes.UnboxableIgnoringShares
+}
+
 // protectedDirs is every host directory a boxed workspace must not overlap,
 // built once for all four gates (spawn, boot check, profile save, picker): the
 // data root, and the directory of each config file read on the next start
@@ -491,10 +501,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// layer (its Unboxable check filters entries) and before any spawn can happen.
 	// Corrupt or unreadable fails closed: serving without it would silently
 	// un-contain every workspace.
-	unboxable := func(string) (string, bool) { return "", false }
-	if layer != nil {
-		unboxable = layer.boxes.Unboxable
-	}
+	unboxable := boxedFilter(layer)
 	boxedReg, boxedSeeded, err := boxedws.Open(dataDir, unboxable)
 	if err != nil {
 		log.Fatalf("boxed workspace record %s: %v", filepath.Join(dataDir, "boxed-workspaces.json"), err)
@@ -714,8 +721,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
 	pm.SetEgressAll(layer != nil)
-	vmShared := layer.shareView() // the box VM's share list; nil without a VM
-	contextCheck := contextSaveCheck(h, home, protected, vmShared)
+	vmShares := layer.sharesFunc() // the box VM's live folder list; nil without a VM
+	pm.SetShares(vmShares)
+	contextCheck := contextSaveCheck(h, home, protected, vmShares)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
 	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
 	// The profile manager, the broker's token set and the minter exist now.
@@ -779,6 +787,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Profiles:         pm,
 		Home:             home,
 		Protected:        protected,
+		Shares:           vmShares,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       boxRuntime,
 		CloneUnavailable: cloneUnavailableReason(h),

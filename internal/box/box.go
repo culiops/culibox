@@ -814,6 +814,17 @@ func (m *Manager) Unboxable(cwd string) (string, bool) {
 	return reason, reason != ""
 }
 
+// UnboxableIgnoringShares is Unboxable without the VM share rule: the verdict
+// for a record that must not change when the user edits the VM folder list
+// (the boxed-workspace registry feeds the fs containment trees).
+func (m *Manager) UnboxableIgnoringShares(cwd string) (string, bool) {
+	reason, err := unboxableWorkspace(cwd, m.protected(), nil)
+	if err != nil {
+		return err.Error(), true
+	}
+	return reason, reason != ""
+}
+
 // Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
 // running and the image fits). The session layer calls it BEFORE resolving the
 // config bundle, whose MCP probe needs a reachable daemon too.

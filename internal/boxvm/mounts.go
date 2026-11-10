@@ -102,13 +102,3 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 	}
 	return nil, errors.New(yamlPath + ": mounts: block does not end with provision:")
 }
-
-// Locations are the mount paths alone. Temporary: the old []string consumers use
-// it until Tasks 7-8 rewire them to the writable-aware list.
-func Locations(ms []Mount) []string {
-	out := make([]string, len(ms))
-	for i, m := range ms {
-		out[i] = m.Location
-	}
-	return out
-}

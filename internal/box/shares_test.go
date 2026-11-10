@@ -87,3 +87,17 @@ func TestOptionsSharesNilMeansNoCheck(t *testing.T) {
 		t.Fatalf("nil Shares must not refuse: %q", reason)
 	}
 }
+
+func TestUnboxableIgnoringSharesSkipsTheShareRule(t *testing.T) {
+	m := sharesMgr(t, func() (ShareView, error) { return ShareView{}, errors.New("boom") })
+	ws := realTemp(t)
+	if reason, bad := m.Unboxable(ws); !bad || reason == "" {
+		t.Fatalf("Unboxable must refuse on a share failure, got %q %v", reason, bad)
+	}
+	if reason, bad := m.UnboxableIgnoringShares(ws); bad {
+		t.Fatalf("UnboxableIgnoringShares must ignore the share rule, got %q", reason)
+	}
+	if _, bad := m.UnboxableIgnoringShares(m.opts.StateRoot); !bad {
+		t.Fatal("the other rules still apply")
+	}
+}

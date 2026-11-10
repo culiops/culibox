@@ -184,3 +184,32 @@ func TestRecordBoxedProfiles(t *testing.T) {
 		t.Fatalf("seeded=%v recorded=%v, want seeded=true %v", seeded, got, want)
 	}
 }
+
+// Removing a VM folder never drops a recorded boxed workspace: the registry
+// feeds the fs containment trees, so its filter ignores the share rule.
+func TestBoxedRegistryIgnoresShareRule(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	l.vm.SetShares(nil)
+	ws := resolvedTemp(t)
+	if _, bad := l.boxes.Unboxable(ws); !bad {
+		t.Fatal("setup: the spawn rule must refuse a workspace outside every share")
+	}
+	data := t.TempDir()
+	reg, _, err := boxedws.Open(data, boxedFilter(l))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(ws); err != nil {
+		t.Fatal(err)
+	}
+	reg2, _, err := boxedws.Open(data, boxedFilter(l))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reg2.List(); !slices.Contains(got, ws) {
+		t.Fatalf("a recorded workspace outside every share was dropped: %v", got)
+	}
+	if boxedFilter(nil) == nil {
+		t.Fatal("no layer must still give a filter")
+	}
+}

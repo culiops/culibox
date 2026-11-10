@@ -39,9 +39,12 @@ type Server struct {
 	// root, config and profiles directories). The picker marks a directory that
 	// overlaps one unboxable, matching the daemon's refusal.
 	Protected []box.ProtectedDir
-	Terminal  http.Handler
-	EnvLabel  string // shown as the UI env badge; empty → no badge
-	EnvColor  string // CSS color for the env badge/strip
+	// Shares reads the box VM's live folder list (macOS); nil = no VM, every
+	// directory is visible. The workspace picker marks an unshared one.
+	Shares   box.SharesFunc
+	Terminal http.Handler
+	EnvLabel string // shown as the UI env badge; empty → no badge
+	EnvColor string // CSS color for the env badge/strip
 	// RepliesEnabled mirrors config replies_enabled and is published in
 	// /api/meta so the client fails closed (reply UI off until it says true).
 	RepliesEnabled bool
@@ -292,7 +295,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, meta)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected))
+		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected, s.Shares))
 	})
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)

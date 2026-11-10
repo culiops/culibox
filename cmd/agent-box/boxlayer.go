@@ -20,6 +20,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/proxyline"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // verifyTimeout bounds the containment probe of a new box. The spawn holds the
@@ -168,6 +169,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		vcfg := configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem)
 		vcfg.Fold = true // goos == "darwin" here: APFS compares case-insensitively
 		l.vm = boxvm.NewVM(vcfg, runner)
+		l.vm.SetShares(bootShares(dataDir, l.vm.Config()))
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -224,9 +226,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// #72: the context-path identity, read in the VM (Linux records it on the
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
-		// Interim (Task 8 reads the written colima.yaml and the user's list):
-		// applied and listed are both what the VM config mounts today.
-		o.Shares = func() (box.ShareView, error) { return *l.shareView(), nil }
+		o.Shares = l.shareView
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
@@ -483,16 +483,58 @@ func (l *logOnChange) changed(msg string) bool {
 	return msg != ""
 }
 
-// shareView is the VM's current mounts as a box.ShareView (applied = listed);
-// nil without a VM.
-func (l *boxLayer) shareView() *box.ShareView {
+// bootShares is the folder list the VM is built with: vm-shares.json, normalised
+// (every Load consumer does). A missing or damaged file gives an empty list for
+// now; skips are logged.
+func bootShares(dataDir string, vc boxvm.Config) []vmshares.Share {
+	list, _, err := vmshares.Load(dataDir)
+	if err != nil {
+		log.Printf("box VM folders: %v; starting with none listed", err)
+		return nil
+	}
+	out, skipped := vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold})
+	for _, s := range skipped {
+		log.Printf("box VM folders: skipping %s: %s", s.Path, s.Reason)
+	}
+	return out
+}
+
+// shareView is the live view of the box VM's folders: Applied is what its
+// written colima.yaml mounts (the only folders docker can see) minus the four
+// data-root mounts, Listed is the user's list (vm-shares.json, resolved) whether
+// applied yet or not. A mounts block that cannot be read fails closed. A VM
+// with no colima.yaml yet has nothing applied and is no error: the spawn meets
+// ErrNotSetUp in Prepare first.
+func (l *boxLayer) shareView() (box.ShareView, error) {
+	cfg := l.vm.Config()
+	v := box.ShareView{Home: cfg.Home, Fold: l.goos == "darwin"}
+	ms, err := l.vm.AppliedMounts()
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return box.ShareView{}, err
+	default:
+		data := map[string]bool{}
+		for _, d := range boxvm.DataMounts(cfg.Root) {
+			data[d.Location] = true
+		}
+		for _, m := range ms {
+			if !data[m.Location] {
+				v.Applied = append(v.Applied, box.VMShare{Path: m.Location, Writable: m.Writable})
+			}
+		}
+	}
+	for _, s := range cfg.Shares {
+		v.Listed = append(v.Listed, box.VMShare{Path: s.Path, Writable: s.Mode == vmshares.RW})
+	}
+	return v, nil
+}
+
+// sharesFunc is shareView as a box.SharesFunc, nil without a VM (Linux: every
+// path is visible).
+func (l *boxLayer) sharesFunc() box.SharesFunc {
 	if l == nil || l.vm == nil {
 		return nil
 	}
-	cfg := l.vm.Config()
-	var shares []box.VMShare
-	for _, m := range cfg.Mounts() {
-		shares = append(shares, box.VMShare{Path: m.Location, Writable: m.Writable})
-	}
-	return &box.ShareView{Applied: shares, Listed: shares, Home: cfg.Home, Fold: l.goos == "darwin"}
+	return l.shareView
 }

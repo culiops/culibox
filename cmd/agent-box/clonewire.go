@@ -41,10 +41,10 @@ type cloneHooks struct {
 	// "" when it can. BoxOwned needs neither, so it always works.
 	unavailable string
 
-	// shared is the box VM's shared directories (macOS), nil without a VM. The
-	// VM's docker sees nothing else, so a clone_of or clone dir outside them is
+	// shares reads the box VM's live folder list (macOS), nil without a VM. The
+	// VM's docker sees nothing else, so a clone_of or clone dir outside it is
 	// refused (checkShared).
-	shared *box.ShareView
+	shares box.SharesFunc
 
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
@@ -407,27 +407,32 @@ func (h *cloneHooks) checkOf(of string) error {
 }
 
 // checkShared refuses a clone_of or clone dir the box VM does not share; with
-// no VM (shared nil) docker sees the host's own paths and nothing is refused.
+// no VM (shares nil) docker sees the host's own paths and nothing is refused.
 // The VM's docker resolves every mount inside the VM, as spelled, so a path
 // outside the shares fails only at box start, after the clone was made, with
 // docker's error as the only explanation. Both the spelling and its resolved
-// form must be shared: a symlink inside a share may lead out of it.
+// form must be shared: a symlink inside a share may lead out of it. The clone
+// is only read (a read-only share suffices); its copy is written.
 func (h *cloneHooks) checkShared(c config.Clone) error {
-	if h.shared == nil {
+	if h.shares == nil {
 		return nil
 	}
-	var applied []string
-	for _, s := range h.shared.Applied {
-		applied = append(applied, s.Path)
+	view, err := h.shares()
+	if err != nil {
+		return fmt.Errorf("%w: cannot read the box VM's folder list (%v); run `agent-box doctor`", box.ErrUnboxableWorkspace, err)
 	}
-	for _, f := range []struct{ field, path string }{{"clone_of", c.Of}, {"default_cwd", c.Dir}} {
+	for _, f := range []struct {
+		path  string
+		write bool
+	}{{c.Of, false}, {c.Dir, true}} {
 		real := f.path
 		if r, err := filepath.EvalSymlinks(f.path); err == nil {
 			real = r
 		}
-		if !box.UnderMount(f.path, applied) || !box.UnderMount(real, applied) {
-			return fmt.Errorf("%w: %s %s is not under the box VM's shared directories (%s), so docker cannot see it; keep the repo and its copy under your home directory",
-				box.ErrUnboxableWorkspace, f.field, f.path, strings.Join(applied, ", "))
+		for _, p := range []string{f.path, real} {
+			if err := view.Check(p, f.write); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -454,12 +459,20 @@ func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) fu
 // entry: the disk checks of box.CheckContextPath, then the box-owned refusal.
 // A clone is written by its box, so another box's context would be read from
 // files that box controls. h is nil only in tests, which leaves only
-// CheckContextPath. shared is the box VM's shared directories, nil when there
+// CheckContextPath. shares reads the box VM's live folder list, nil when there
 // is no VM. It returns the identity box.CheckContextPathID recorded, which the
 // spawn hands to the box layer.
-func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared *box.ShareView) func(string) (*box.FileID, error) {
+func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shares box.SharesFunc) func(string) (*box.FileID, error) {
 	return func(p string) (*box.FileID, error) {
-		id, err := box.CheckContextPathID(p, home, protected, shared)
+		var view *box.ShareView
+		if shares != nil {
+			v, err := shares()
+			if err != nil {
+				return nil, fmt.Errorf("%w: context_paths %s: cannot read the box VM's folder list (%v); run `agent-box doctor`", box.ErrUnboxableWorkspace, p, err)
+			}
+			view = &v
+		}
+		id, err := box.CheckContextPathID(p, home, protected, view)
 		if err != nil {
 			return nil, err
 		}
@@ -600,8 +613,19 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 	// box VM's docker, where the clone is shared; without them a call reaches
 	// the user's own daemon.
 	h.docker = clone.ExecDocker{Bin: layer.dockerBin, Args: layer.dockerArgs}
-	if layer.vm != nil {
-		h.shared = layer.shareView()
+	h.shares = layer.sharesFunc()
+	if h.shares != nil {
+		// The memory folder lives under ~/.claude, which the VM may not share.
+		h.env.Visible = func(host string) bool {
+			view, err := h.shares()
+			if err != nil {
+				return false
+			}
+			if r, err := filepath.EvalSymlinks(host); err == nil {
+				host = r
+			}
+			return view.Check(host, false) == nil
+		}
 	}
 	h.image = layer.image
 	cli := layer.cli
