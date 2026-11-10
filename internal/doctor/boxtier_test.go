@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -320,13 +322,88 @@ func TestBoxTierMountsOnlyDriftNoRecreate(t *testing.T) {
 func TestBoxTierSharesCorruptWarns(t *testing.T) {
 	f := ok()
 	f.SharesErr = errors.New("vm-shares.json is damaged")
-	rs := boxTierResults("darwin", f, tokenOK)
-	if !strings.Contains(detail(rs), "box VM folders list: vm-shares.json cannot be read (vm-shares.json is damaged); fix or move it away; until then the folder list cannot change") {
-		t.Fatalf("corrupt warn missing:\n%s", detail(rs))
+	f.Drifted, f.Drift = true, boxvm.DriftMountsOnly
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "box VM folders list: vm-shares.json cannot be read (vm-shares.json is damaged); fix or move it away; until then the folder list cannot change") {
+		t.Fatalf("corrupt warn missing:\n%s", d)
+	}
+	for _, bad := range []string{"apply it", "0 folders", "-recreate", "box VM folders: the box VM sees"} {
+		if strings.Contains(d, bad) {
+			t.Fatalf("corrupt list must not give %q:\n%s", bad, d)
+		}
 	}
 	f.WholeHome = true
-	if n := strings.Count(detail(boxTierResults("darwin", f, tokenOK)), "box VM folders"); n != 2 {
-		t.Fatalf("whole-home + corrupt = two rows, got %d", n)
+	d = detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "WARN box VM folders: the box VM shares your whole home folder; fix vm-shares.json before applying a folder list\n") || strings.Contains(d, "apply the folder list") {
+		t.Fatalf("whole-home + corrupt:\n%s", d)
+	}
+}
+
+func TestBoxTierFoldersUnreadableWarns(t *testing.T) {
+	f := ok()
+	f.FoldersErr = errors.New("bad yaml")
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `agent-box box setup`") || strings.Contains(d, "PASS box VM folders") {
+		t.Fatalf("got:\n%s", d)
+	}
+}
+
+// An applied list matching vm-shares.json is not drift (review: SetShares must
+// come before the drift computation).
+func TestGatherBoxFactsAppliedListIsNotDrift(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	if err := os.WriteFile(colima, []byte("#!/bin/sh\n[ \"$1\" = version ] && echo 'colima version 0.8.1'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	home, err := os.MkdirTemp("/tmp", "abhome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	proj := filepath.Join(home, "proj")
+	if err := os.Mkdir(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmshares.Save(data, []vmshares.Share{{Path: proj, Mode: vmshares.RW}}); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	// Stage the VM exactly as setup would have: yaml + stamp for this list.
+	cfg := boxvm.ConfigFor(c, data, home, colima, dockerBin, 4, 8)
+	cfg.Fold = true
+	vm := boxvm.NewVM(cfg, boxvm.ExecRunner{})
+	vc := vm.Config()
+	list, _ := vmshares.Normalize([]vmshares.Share{{Path: proj, Mode: vmshares.RW}}, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: true})
+	vm.SetShares(list)
+	y, err := vm.Config().YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.YAMLPath(), y, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(y)
+	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := gatherBoxFacts(c, data, home, "darwin")
+	if !f.SetUp || f.Drifted || f.Drift != boxvm.DriftNone || f.WholeHome || f.FoldersErr != nil || f.SharesErr != nil || f.ShareCount != 1 {
+		t.Fatalf("facts = %+v", f)
+	}
+	f.Status, f.StatusErr = boxvm.Status{Running: true, MountType: "virtiofs"}, nil
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if strings.Contains(d, "box VM config") || !strings.Contains(d, "PASS box VM folders: the box VM sees 1 folders") {
+		t.Fatalf("got:\n%s", d)
 	}
 }
 

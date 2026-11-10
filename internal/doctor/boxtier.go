@@ -102,10 +102,12 @@ type boxFacts struct {
 	// differs, which an apply fixes without a recreate). WholeHome: the VM still
 	// shares the whole home folder. ShareCount: folders in the normalized list.
 	// SharesErr: vm-shares.json could not be read.
-	Drift       boxvm.Drift
-	WholeHome   bool
-	ShareCount  int
-	SharesErr   error
+	Drift      boxvm.Drift
+	WholeHome  bool
+	ShareCount int
+	SharesErr  error
+	// FoldersErr: the VM's own folder list (colima.yaml) could not be read.
+	FoldersErr  error
 	SocketErr   error
 	Status      boxvm.Status
 	StatusErr   error
@@ -233,11 +235,18 @@ func folderRows(f boxFacts) []Result {
 	const ck = "box VM folders"
 	var out []Result
 	switch {
+	case f.WholeHome && f.SharesErr != nil:
+		// Applying would drop the user's folders, so no apply advice.
+		out = append(out, Result{Warn, ck, "the box VM shares your whole home folder; fix vm-shares.json before applying a folder list"})
 	case f.WholeHome:
 		out = append(out, Result{Warn, ck, vmshares.WholeHomeLine(f.ShareCount)})
+	case f.FoldersErr != nil:
+		out = append(out, Result{Warn, ck, "cannot read the box VM's folder list (" + f.FoldersErr.Error() + "); run `agent-box box setup`"})
+	case f.SharesErr != nil:
+		// No row here: the list row below carries the warning, and "0 folders"
+		// or apply advice would be wrong for a list we cannot read.
 	case f.Drift == boxvm.DriftMountsOnly:
 		out = append(out, Result{Warn, ck, "the folder list changed since the box VM started; apply it in Settings › VM folders (or `agent-box box share apply`)"})
-	case f.SharesErr != nil:
 	default:
 		out = append(out, Result{Pass, ck, fmt.Sprintf("the box VM sees %d folders and CuliBox data", f.ShareCount)})
 	}
@@ -279,12 +288,12 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	f.MacOSMajor = boxvm.MacOSMajor(ctx)
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)
 	f.SocketErr = vc.CheckSocketPaths()
-	f.SetUp, f.Drifted = vm.SetUp(), vm.Drifted()
-	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
+	f.SetUp = vm.SetUp()
 	if !f.SetUp {
 		return f
 	}
-	// The folder list must be on the VM before DriftKind/WholeHome compare it.
+	// The folder list must be on the VM before any drift is computed, or every
+	// VM with an applied list reads as drifted.
 	list, _, lerr := vmshares.Load(dataDir)
 	f.SharesErr = lerr
 	if lerr == nil {
@@ -292,11 +301,18 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 		vm.SetShares(list)
 		f.ShareCount = len(list)
 	}
-	if d, err := vm.DriftKind(); err == nil {
-		f.Drift = d
-	}
-	if wh, err := vm.WholeHome(); err == nil {
+	f.Drifted = vm.Drifted()
+	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
+	f.WholeHome = false
+	if wh, err := vm.WholeHome(); err != nil {
+		f.FoldersErr = err
+	} else {
 		f.WholeHome = wh
+	}
+	if d, err := vm.DriftKind(); err != nil {
+		f.FoldersErr = err
+	} else {
+		f.Drift = d
 	}
 	f.Status, f.StatusErr = vm.Status(ctx)
 	if f.StatusErr != nil || !f.Status.Running {
