@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // Runner runs colima. A fake drives every unit test: no Mac, no VM.
@@ -74,31 +76,9 @@ type VM struct {
 // a second virtiofs mount. Config() returns the resolved form; callers (box
 // homes, the docker mounts) must build their paths from it.
 func NewVM(cfg Config, r Runner) *VM {
-	cfg.Root = resolvePath(cfg.Root)
-	cfg.Home = resolvePath(cfg.Home)
+	cfg.Root = vmshares.Resolve(cfg.Root)
+	cfg.Home = vmshares.Resolve(cfg.Home)
 	return &VM{cfg: cfg, r: r, sem: make(chan struct{}, 1), startTimeout: 120 * time.Second}
-}
-
-// resolvePath follows symlinks in the longest existing prefix of p and keeps
-// the rest as written (the data root may not exist yet). A relative or
-// unresolvable path is returned unchanged for Validate to refuse.
-func resolvePath(p string) string {
-	if !filepath.IsAbs(p) {
-		return p
-	}
-	p = filepath.Clean(p)
-	rest := ""
-	for cur := p; ; {
-		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(r, rest)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
-	}
 }
 
 func (v *VM) Config() Config { return v.cfg }

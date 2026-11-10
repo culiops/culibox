@@ -12,11 +12,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // Profile is the colima profile name. Short on purpose: lima puts sockets under
@@ -270,24 +269,6 @@ true
 `
 }
 
-// yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
-// could be read differently: a double quote, a backslash, invalid UTF-8, any
-// control character (C0, DEL, C1 including U+0085 NEL) and U+2028/U+2029, which
-// YAML 1.1 readers treat as line breaks. Refused, not escaped: the same paths
-// also reach docker and colima argv.
-func yamlSafe(p string) error {
-	bad := !utf8.ValidString(p)
-	for _, r := range p {
-		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-			bad = true
-		}
-	}
-	if bad {
-		return fmt.Errorf("path %q contains a character agent-box will not write into the VM config", p)
-	}
-	return nil
-}
-
 // Validate refuses a configuration that cannot be carried safely, before any
 // colima or docker call. The data root is written into the VM's YAML and is
 // bind-mounted into boxes through docker's CSV --mount parser; the home is
@@ -299,7 +280,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("the box VM needs an absolute %s, got %q", p.what, p.path)
 		}
 		why := ""
-		if err := yamlSafe(p.path); err != nil {
+		if err := vmshares.YAMLSafe(p.path); err != nil {
 			why = err.Error()
 		} else if r := box.MountUnsafe(p.path); r != "" {
 			why = fmt.Sprintf("%s %q: %s", p.what, p.path, r)
@@ -349,7 +330,7 @@ func (c Config) YAML() ([]byte, error) {
 	b.WriteString("autoActivate: false\nsshConfig: false\nforwardAgent: false\n")
 	b.WriteString("mounts:\n")
 	for _, m := range c.Mounts() {
-		if err := yamlSafe(m); err != nil {
+		if err := vmshares.YAMLSafe(m); err != nil {
 			return nil, err
 		}
 		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
