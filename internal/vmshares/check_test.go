@@ -73,6 +73,11 @@ func TestCheckRefusals(t *testing.T) {
 		{h + "/.ssh/x", KindSensitive},
 		{h + "/Library/Mobile Documents", KindSensitive},
 		{h + "/.config", KindSensitive},
+		{h + "/.config/gh/x", KindSensitive},
+		{h + "/.azure", KindSensitive},
+		{h + "/.terraform.d", KindSensitive},
+		{h + "/.password-store", KindSensitive},
+		{h + "/.config/op", KindSensitive},
 		{h + "/.claude", KindSensitive},
 		{h + "/.claude/projects", KindSensitive},
 		{h + "/.claude/projects/-a-b/memory", ""},
@@ -123,5 +128,34 @@ func TestCheckResolvesSymlinks(t *testing.T) {
 	}
 	if !strings.HasPrefix(err.Error(), "~/proj ") {
 		t.Errorf("Error() = %q", err)
+	}
+}
+
+func TestCheckRefusesTargetOfSymlinkedSensitiveDir(t *testing.T) {
+	env := testEnv(t, false)
+	if err := os.RemoveAll(filepath.Join(env.Home, ".aws")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(env.Home, "dotfiles", "aws"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(env.Home, "dotfiles", "aws"), filepath.Join(env.Home, ".aws")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{env.Home + "/dotfiles/aws", env.Home + "/dotfiles"} {
+		if got := kindOf(Check(p, env)); got != KindSensitive {
+			t.Errorf("Check(%q) kind = %q, want sensitive", p, got)
+		}
+	}
+}
+
+func TestYAMLSafe(t *testing.T) {
+	for _, p := range []string{`/a"b`, `/a\b`, "/a\nb", "/a\x7fb", "/a\u0085b", "/a\u2028b", "/a\u2029b", "/a\xffb"} {
+		if YAMLSafe(p) == nil {
+			t.Errorf("YAMLSafe(%q) = nil, want refusal", p)
+		}
+	}
+	if err := YAMLSafe("/Users/me/my code/é"); err != nil {
+		t.Errorf("valid path refused: %v", err)
 	}
 }

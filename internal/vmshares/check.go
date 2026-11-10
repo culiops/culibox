@@ -37,7 +37,7 @@ type Refused struct {
 func (r *Refused) Error() string { return Display(r.Path, r.home) + " " + r.Reason }
 
 // sensitiveDirs are the home-relative folders that hold keys and sockets.
-var sensitiveDirs = []string{".aws", ".gnupg", ".kube", "Library", ".config/gcloud"}
+var sensitiveDirs = []string{".aws", ".gnupg", ".kube", "Library", ".config/gcloud", ".config/gh", ".azure", ".terraform.d", ".password-store", ".config/op"}
 
 // Check returns nil or a *Refused for p. The rules run on both p and its
 // symlink-resolved form; Path in the error is p as given.
@@ -75,27 +75,39 @@ func Check(p string, env Env) error {
 	return nil
 }
 
+// spellings is d as written and, when it differs, d with symlinks resolved:
+// ~/.aws may be a link to ~/dotfiles/aws, and sharing the target is sharing it.
+func spellings(d string) []string {
+	if r := Resolve(d); r != d {
+		return []string{d, r}
+	}
+	return []string{d}
+}
+
 func sensitive(c string, env Env) bool {
 	dirs := box.HostSocketDirs(env.Home)
 	for _, d := range sensitiveDirs {
 		dirs = append(dirs, filepath.Join(env.Home, d))
 	}
 	for _, d := range dirs {
-		if Within(c, d, env.Fold) || Within(d, c, env.Fold) {
+		for _, s := range spellings(d) {
+			if Within(c, s, env.Fold) || Within(s, c, env.Fold) {
+				return true
+			}
+		}
+	}
+	for _, claude := range spellings(filepath.Join(env.Home, ".claude")) {
+		if Within(env.Home, c, env.Fold) || !Within(c, claude, env.Fold) && !Within(claude, c, env.Fold) {
+			continue
+		}
+		if !Within(c, claude, env.Fold) || Within(claude, c, env.Fold) {
+			return true // equal to or containing ~/.claude
+		}
+		// Inside ~/.claude: only projects/<slug>/memory[/...] is allowed.
+		rel := parts(c)[len(parts(claude)):]
+		if !(len(rel) >= 3 && eq(rel[0], "projects", env.Fold) && eq(rel[2], "memory", env.Fold)) {
 			return true
 		}
 	}
-	claude := filepath.Join(env.Home, ".claude")
-	if Within(env.Home, c, env.Fold) || !Within(c, claude, env.Fold) && !Within(claude, c, env.Fold) {
-		return false
-	}
-	if !Within(c, claude, env.Fold) || Within(claude, c, env.Fold) {
-		return true // equal to or containing ~/.claude
-	}
-	// Inside ~/.claude: only projects/<slug>/memory[/...] is allowed.
-	rel := parts(c)[len(parts(claude)):]
-	if len(rel) >= 3 && eq(rel[0], "projects", env.Fold) && eq(rel[2], "memory", env.Fold) {
-		return false
-	}
-	return true
+	return false
 }

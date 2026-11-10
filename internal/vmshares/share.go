@@ -125,7 +125,7 @@ func Resolve(p string) string {
 func YAMLSafe(p string) error {
 	bad := !utf8.ValidString(p)
 	for _, r := range p {
-		if r == '"' || r == '\\' || unicode.IsControl(r) || r == ' ' || r == ' ' {
+		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
 			bad = true
 		}
 	}
