@@ -45,6 +45,7 @@ type VMApply struct {
 	ID        int           `json:"id"`
 	State     string        `json:"state"`
 	StartedMs int64         `json:"started_ms"`
+	ElapsedMs int64         `json:"elapsed_ms"` // server's now - started, while running
 	Steps     []VMApplyStep `json:"steps"`
 	Error     string        `json:"error"`  // short, for the page
 	Detail    string        `json:"detail"` // the raw error

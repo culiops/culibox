@@ -27,6 +27,7 @@ type fakeVMControl struct {
 	cwds      []string
 	applying  bool
 	failStart error
+	running   bool
 	hold      chan struct{} // Apply blocks on it when set
 	steps     chan string
 }
@@ -44,6 +45,7 @@ func (f *fakeVMControl) SetListed(l []vmshares.Share) {
 func (f *fakeVMControl) RunningBoxed() []string { return f.names }
 func (f *fakeVMControl) RunningCwds() []string  { return f.cwds }
 func (f *fakeVMControl) Applying() bool         { return f.applying }
+func (f *fakeVMControl) VMRunning() bool        { return f.running }
 func (f *fakeVMControl) Apply(ctx context.Context, step func(name, state, sub string)) error {
 	step("stop", "running", "")
 	if f.hold != nil {
@@ -358,4 +360,50 @@ func TestVMProfilesMapsBoxedOnly(t *testing.T) {
 	if d := vmMemoryDirs("", got); len(d) != 0 {
 		t.Fatalf("%v", d)
 	}
+}
+
+// A failed start is held while the VM is down, forgotten once it runs with the saved list (a terminal apply worked); a failed
+// containment check is held either way.
+func TestFailedJobForgottenOnceVMRunsWithTheList(t *testing.T) {
+	f := newSvcFixture(t)
+	f.ctl.failStart = boxvm.ErrStartTimeout
+	s := f.svc(t)
+	if _, err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, s)
+	if _, ok := s.ApplyStatus(); !ok {
+		t.Fatal("a failed start with the VM down must be reported")
+	}
+	f.ctl.running = true
+	if _, ok := s.ApplyStatus(); ok {
+		t.Fatal("VM running with the saved list: the failed job is stale")
+	}
+	if v, err := s.View(); err != nil || v.Apply != nil {
+		t.Fatalf("view still carries it: %+v %v", v.Apply, err)
+	}
+	// Running but the list differs: still reported.
+	f.ctl.running = true
+	if _, _, err := s.Add(f.sub(t, "z"), "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.ApplyStatus(); !ok {
+		t.Fatal("list differs from the VM: the failed job stays")
+	}
+}
+
+func TestRunningJobCarriesServerElapsed(t *testing.T) {
+	f := newSvcFixture(t)
+	f.ctl.hold = make(chan struct{})
+	s := f.svc(t)
+	if _, err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	j, _ := s.ApplyStatus()
+	if j.State != "running" || j.ElapsedMs < 20 || j.ElapsedMs > 5000 {
+		t.Fatalf("%+v", j)
+	}
+	close(f.ctl.hold)
+	waitJob(t, s)
 }

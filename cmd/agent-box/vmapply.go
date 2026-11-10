@@ -42,6 +42,10 @@ func (s *vmShareSvc) jobCopy() *web.VMApply {
 	}
 	j := *s.job
 	j.Steps = append([]web.VMApplyStep{}, s.job.Steps...)
+	// The server's own clock, so a browser with a skewed clock still shows the right time.
+	if j.State == "running" {
+		j.ElapsedMs = time.Now().UnixMilli() - j.StartedMs
+	}
 	return &j
 }
 
@@ -53,13 +57,52 @@ func (s *vmShareSvc) jobRunning() bool {
 }
 
 // ApplyStatus is the last job, if any.
+// A failed job that the VM has since left behind (a later `agent-box box share apply` from a terminal worked) is not reported.
 func (s *vmShareSvc) ApplyStatus() (web.VMApply, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.job == nil {
+	j := s.jobCopy()
+	list := append([]vmshares.Share{}, s.list...)
+	s.mu.Unlock()
+	if j == nil {
 		return web.VMApply{}, false
 	}
-	return *s.jobCopy(), true
+	if j.State == "failed" && s.failureSuperseded(j, list) {
+		return web.VMApply{}, false
+	}
+	return *j, true
+}
+
+// failureSuperseded: the VM runs with exactly the saved folder list, so the failed job no longer describes it. A start failure
+// leaves the written colima.yaml equal to the list too, so the VM must also be running; a failed containment check leaves the VM
+// running with the list, so that failure is kept until the next apply (nothing here can tell a fixed check from a broken one).
+func (s *vmShareSvc) failureSuperseded(j *web.VMApply, list []vmshares.Share) bool {
+	for _, st := range j.Steps {
+		if st.State == "failed" && st.Name == "check" {
+			return false
+		}
+	}
+	applied, whole, setUp, err := ctlApplied(s)
+	if err != nil || !setUp || whole || s.corruptNow() || len(applied) != len(list) {
+		return false
+	}
+	have := map[string]vmshares.Mode{}
+	for _, a := range applied {
+		have[s.key(a.Path)] = a.Mode
+	}
+	for _, l := range list {
+		if m, ok := have[s.key(l.Path)]; !ok || m != l.Mode {
+			return false
+		}
+	}
+	return s.ctl.VMRunning()
+}
+
+func ctlApplied(s *vmShareSvc) ([]vmshares.Share, bool, bool, error) { return s.ctl.Applied() }
+
+func (s *vmShareSvc) corruptNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.corrupt != nil
 }
 
 // Apply starts the background job that restarts the VM with the saved list. It
@@ -213,6 +256,13 @@ func (c *layerVMControl) Applied() ([]vmshares.Share, bool, bool, error) {
 	}
 	whole, err := vm.WholeHome()
 	return out, whole, true, err
+}
+
+// VMRunning asks colima, bounded: it runs on every meta tick while a failed job is held.
+func (c *layerVMControl) VMRunning() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.l.vm.Running(ctx)
 }
 
 func (c *layerVMControl) SetListed(l []vmshares.Share) { c.l.vm.SetShares(l) }

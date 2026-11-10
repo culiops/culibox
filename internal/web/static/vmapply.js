@@ -13,7 +13,8 @@ const VMA_POLL_MAX_MS = 5 * 60 * 1000;
 
 const VMA_TITLES = { stop: "Stop the box VM", start: "Start it with the new folders", check: "Check containment" };
 const VMA_FOOT_RUNNING = "New box sessions are refused until this finishes. Host sessions are not affected. You can leave this page; the restart goes on.";
-const VMA_FOOT_FAILED = "Your folder list is saved. The box VM is stopped, so box sessions can’t start until it runs.";
+const VMA_FOOT_FAILED = "Your folder list is saved. The box VM is stopped, so box sessions can’t start until it runs."; // a failed start
+const VMA_FOOT_NOT_APPLIED = "Your folder list is saved. Try again, or run it from a terminal."; // a failed stop or check
 
 // vmaFmt(ms): "12 s", "2 m 0 s". Whole seconds, rounded down; never negative.
 function vmaFmt(ms) {
@@ -44,34 +45,46 @@ function vmApplyConfirmCopy(names) {
   };
 }
 
+// vmaFailedStep: the name of the step that failed ("" when none says so).
+function vmaFailedStep(job) {
+  const s = ((job && job.steps) || []).find((x) => x.state === "failed");
+  return s ? s.name : "";
+}
+
 // vmApplyBannerModel(job): the sidebar banner (M9.7 running, M9.8 failed), or null for done or no job. No amber, no red.
+// Only a failed start says the VM is stopped; a failed stop or check says the folder list was not applied.
 function vmApplyBannerModel(job) {
   if (!job) return null;
   if (job.state === "running") {
     return { kind: "vmapply", title: "Box VM restarting", body: "New box sessions are refused until it is back, about 20 s.", actions: [] };
   }
   if (job.state === "failed") {
-    return { kind: "vmapply", title: "Box VM stopped", body: "Box sessions can’t start.", actions: [{ id: "open-vmfolders", label: "Open VM folders" }] };
+    const actions = [{ id: "open-vmfolders", label: "Open VM folders" }];
+    if (vmaFailedStep(job) === "start") return { kind: "vmapply", title: "Box VM stopped", body: "Box sessions can’t start.", actions };
+    return { kind: "vmapply", title: "Box VM folders not applied", body: "Open VM folders to see why.", actions };
   }
   return null;
 }
 
-// The failed card's head names what failed. "The box VM did not start" is the frame's; the other two are new copy.
-const VMA_FAILED_HEAD = { stop: "The box VM did not stop", start: "The box VM did not start", check: "The box VM failed its containment check" };
+// The failed card's head: the frame's for a failed start, "The folder list was not applied" for a failed stop or check.
+function vmaFailedHead(step) { return step === "start" ? "The box VM did not start" : "The folder list was not applied"; }
 
 // vmApplyProgressModel(job, nowMs): the card for a running or failed job, null otherwise. A step's glyph is "✓", "spin", "✕" or
 // its number; `right` is its time (a waiting step says Waiting, one after the failure says Not run). A running step's time is
-// counted from where the finished steps end (the server only stamps a step's own time once it is done or failed).
+// counted from where the finished steps end (the server only stamps a step's own time once it is done or failed). Time is the
+// server's elapsed_ms at the last answer plus the local time since that answer (seen_ms): never this browser's clock against
+// the server's started_ms.
 function vmApplyProgressModel(job, nowMs) {
   if (!job || (job.state !== "running" && job.state !== "failed")) return null;
   const failed = job.state === "failed";
-  let at = Number(job.started_ms) || 0;
+  const total = (Number(job.elapsed_ms) || 0) + Math.max(0, nowMs - (Number(job.seen_ms) || nowMs));
+  let at = 0; // where the next step starts, on the job's own clock
   let failedName = "";
   const steps = (job.steps || []).map((s, i) => {
     const m = { n: i + 1, glyph: String(i + 1), title: VMA_TITLES[s.name] || s.name, sub: s.sub || "", right: "", red: false };
     switch (s.state) {
       case "done": m.glyph = "✓"; m.right = vmaFmt(s.ms); at += Number(s.ms) || 0; break;
-      case "running": m.glyph = "spin"; m.right = vmaFmt(nowMs - at); break;
+      case "running": m.glyph = "spin"; m.right = vmaFmt(total - at); break;
       case "failed":
         m.glyph = "✕"; m.red = true; m.right = vmaFmt(s.ms);
         if (job.error) m.sub = job.error;
@@ -83,10 +96,10 @@ function vmApplyProgressModel(job, nowMs) {
     return m;
   });
   return {
-    head: failed ? VMA_FAILED_HEAD[failedName] || VMA_FAILED_HEAD.start : "Restarting the box VM",
-    elapsed: failed ? "" : vmaFmt(nowMs - (Number(job.started_ms) || 0)),
+    head: failed ? vmaFailedHead(failedName) : "Restarting the box VM",
+    elapsed: failed ? "" : vmaFmt(total),
     steps,
-    foot: failed ? VMA_FOOT_FAILED : VMA_FOOT_RUNNING,
+    foot: !failed ? VMA_FOOT_RUNNING : failedName === "start" ? VMA_FOOT_FAILED : VMA_FOOT_NOT_APPLIED,
   };
 }
 
@@ -108,7 +121,7 @@ function vmaChanged(prev) {
 function vmaSeen(job) {
   if (!job) return;
   const prev = vmaJob;
-  vmaJob = job;
+  vmaJob = Object.assign({}, job, { seen_ms: Date.now() });
   vmaChanged(prev);
 }
 
@@ -126,8 +139,14 @@ async function vmaTick() {
     vmaSeen(j);
     if (!j || j.state !== "running") stopVMApplyPoll();
   } catch (e) {
-    // A blip (the server restarting, a dropped request) is not an end: the next tick asks again. 404 = the job is gone.
-    if (e && e.status === 404) stopVMApplyPoll();
+    // A blip (a dropped request) is not an end: the next tick asks again. 404 = the server has no such job any more (it restarted
+    // mid-apply): the banner and the card go.
+    if (e && e.status === 404) {
+      stopVMApplyPoll();
+      const prev = vmaJob;
+      vmaJob = null;
+      vmaChanged(prev);
+    }
   } finally { vmaPollBusy = false; }
 }
 
@@ -146,6 +165,11 @@ function vmaFromMeta(job) {
     // Never step back from a newer local answer (a later job, or a finished one) to an older meta one.
     if (!vmaJob || job.id > vmaJob.id || (job.id === vmaJob.id && vmaJob.state === "running")) vmaSeen(job);
     if (job.state === "running") startVMApplyPoll();
+  } else if (vmaJob && vmaJob.state === "failed") {
+    // The server no longer reports the failure (a terminal apply worked, or it restarted): drop the banner and the card.
+    const prev = vmaJob;
+    vmaJob = null;
+    vmaChanged(prev);
   } else if (vmaJob && vmaJob.state === "running") startVMApplyPoll(); // meta says it ended: one poll fetches how
 }
 

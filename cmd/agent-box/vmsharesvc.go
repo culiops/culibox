@@ -36,6 +36,8 @@ type vmControl interface {
 	RunningCwds() []string
 	// Applying is true while an Apply is in flight: spawns wait it out.
 	Applying() bool
+	// VMRunning is true while the VM is up (a failed apply is forgotten once the VM runs with the saved list).
+	VMRunning() bool
 }
 
 // vmShareSvc owns the folder list (vm-shares.json) and the apply job. It is the
@@ -217,6 +219,9 @@ func (s *vmShareSvc) View() (web.VMFoldersView, error) {
 	corrupt := s.corrupt
 	job := s.jobCopy()
 	s.mu.Unlock()
+	if job != nil && job.State == "failed" && s.failureSuperseded(job, list) {
+		job = nil
+	}
 
 	applied, whole, setUp, err := s.ctl.Applied()
 	if err != nil {

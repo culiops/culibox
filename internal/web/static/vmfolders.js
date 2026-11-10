@@ -322,6 +322,11 @@ function vmfJob() {
   return g || (vmfView && vmfView.apply) || null;
 }
 
+function vmfJobRunning() {
+  const j = vmfJob();
+  return !!(j && j.state === "running");
+}
+
 function vmfPaint() {
   const body = document.getElementById("vmf-body");
   if (!body || !vmfView) return;
@@ -378,8 +383,8 @@ async function loadVMFolders() {
     return;
   }
   if (seq !== vmfLoadSeq) return;
-  // An apply the server says is running or failed: the global poller and the sidebar banner take it up (vmapply.js).
-  if (v && v.apply && typeof vmaFromMeta === "function") vmaFromMeta(v.apply);
+  // An apply the server says is running or failed (or no longer reports): the global state and the sidebar banner follow (vmapply.js).
+  if (v && typeof vmaFromMeta === "function") vmaFromMeta(v.apply);
   vmfSetView(v);
 }
 
@@ -451,7 +456,7 @@ function vmfCardSync() {
   msg.replaceChildren();
   vmfRich(msg, st.invalid ? st.error : st.note || vmfAddHelp(c.from));
   if (st.invalid) msg.setAttribute("role", "alert"); else msg.removeAttribute("role");
-  c.els.add.disabled = st.addDisabled || c.busy === true;
+  c.els.add.disabled = st.addDisabled || c.busy === true || vmfJobRunning();
   for (const l of c.els.opts) l.classList.toggle("is-on", l.firstChild.checked);
 }
 
@@ -480,7 +485,7 @@ function vmfCardCheck() {
 
 async function vmfCardSubmit() {
   const c = vmfCard;
-  if (!c || c.busy) return;
+  if (!c || c.busy || vmfJobRunning()) return;
   const typed = c.els.input.value.trim();
   if (!typed) return;
   c.busy = true;
@@ -695,6 +700,8 @@ function vmfCopy(text, okMsg) {
 // otherwise the card is repainted, or only its numbers move when nothing but time changed.
 function vmfApplyChanged(prev, job) {
   if (!vmfView || !document.getElementById("vmf-main")) return;
+  vmfCardSync(); // an open add card waits while the VM restarts
+  if (!job) vmfView.apply = null; // the job is gone: the view's old copy must not bring the card back
   if (job && job.state === "done") {
     if (prev && prev.state === "running") loadVMFolders();
     else vmfPaint();
@@ -716,7 +723,13 @@ async function vmfApplyOpen() {
   if (vmfApplyAsking) return;
   vmfApplyAsking = true;
   try {
-    try { vmfLoadSeq++; const v = await api("/api/vm-folders"); vmfLoadSeq++; vmfSetView(v); } catch (_) { /* the page's last view will do */ }
+    try {
+      vmfLoadSeq++;
+      const v = await api("/api/vm-folders");
+      vmfLoadSeq++;
+      if (typeof vmaFromMeta === "function") vmaFromMeta(v.apply);
+      vmfSetView(v);
+    } catch (_) { /* the page's last view will do: the confirm opens with it */ }
     const j = vmfJob();
     if (j && j.state === "running") return;
     const c = vmApplyConfirmCopy((vmfView && vmfView.running_boxed) || []);

@@ -6,8 +6,9 @@ const assert = require("node:assert");
 const A = require("../static/vmapply.js");
 
 const T0 = 1_700_000_000_000;
+// started_ms is deliberately far from the browser clock: the card must count from elapsed_ms (server) and seen_ms (this browser).
 const RUNNING = {
-  id: 1, state: "running", started_ms: T0, error: "", detail: "",
+  id: 1, state: "running", started_ms: 5, elapsed_ms: 10000, seen_ms: T0 + 10000, error: "", detail: "",
   steps: [
     { name: "stop", state: "done", sub: "culibox and infra-audit ended", ms: 2000 },
     { name: "start", state: "running", sub: "Usually about 16 s", ms: 0 },
@@ -56,7 +57,7 @@ test("banner model: running, failed, done, none", () => {
 });
 
 test("M9.7 progress model: step 1 done 2 s, step 2 spinner 10 s, step 3 Waiting, elapsed 12 s", () => {
-  const m = A.vmApplyProgressModel(RUNNING, T0 + 12000);
+  const m = A.vmApplyProgressModel(RUNNING, T0 + 12000); // answered at 10 s, 2 s ago here: 12 s
   assert.strictEqual(m.head, "Restarting the box VM");
   assert.strictEqual(m.elapsed, "12 s");
   assert.deepStrictEqual(m.steps.map((s) => [s.n, s.glyph, s.title, s.right, s.red]), [
@@ -80,11 +81,32 @@ test("M9.8 progress model: failed step red with the short error, 2 m 0 s, step 3
   assert.strictEqual(A.vmApplyProgressModel({ id: 1, state: "done", steps: [] }, T0), null);
 });
 
-test("a failed stop step names the stop", () => {
-  const j = JSON.parse(JSON.stringify(FAILED));
-  j.steps = [{ name: "stop", state: "failed", sub: "", ms: 3000 }, { name: "start", state: "not_run", sub: "", ms: 0 }, { name: "check", state: "not_run", sub: "", ms: 0 }];
-  j.error = "The VM did not stop.";
-  assert.strictEqual(A.vmApplyProgressModel(j, T0).head, "The box VM did not stop");
+const failedAt = (name) => {
+  const names = ["stop", "start", "check"];
+  const at = names.indexOf(name);
+  return {
+    id: 1, state: "failed", started_ms: T0, error: "It broke.", detail: "raw",
+    steps: names.map((n, i) => ({ name: n, state: i < at ? "done" : i === at ? "failed" : "not_run", sub: "", ms: i <= at ? 1000 : 0 })),
+  };
+};
+
+test("failure copy by step: only a failed start says the VM is stopped (head, foot, banner)", () => {
+  const start = failedAt("start");
+  assert.strictEqual(A.vmApplyProgressModel(start, T0).head, "The box VM did not start");
+  assert.strictEqual(A.vmApplyProgressModel(start, T0).foot, "Your folder list is saved. The box VM is stopped, so box sessions can’t start until it runs.");
+  assert.strictEqual(A.vmApplyBannerModel(start).title, "Box VM stopped");
+  assert.strictEqual(A.vmApplyBannerModel(start).body, "Box sessions can’t start.");
+  for (const name of ["stop", "check"]) {
+    const j = failedAt(name);
+    const m = A.vmApplyProgressModel(j, T0);
+    assert.strictEqual(m.head, "The folder list was not applied", name);
+    assert.strictEqual(m.foot, "Your folder list is saved. Try again, or run it from a terminal.", name);
+    assert.strictEqual(m.steps.filter((s) => s.red).length, 1);
+    const b = A.vmApplyBannerModel(j);
+    assert.strictEqual(b.title, "Box VM folders not applied", name);
+    assert.strictEqual(b.body, "Open VM folders to see why.", name);
+    assert.deepStrictEqual(b.actions, [{ id: "open-vmfolders", label: "Open VM folders" }]);
+  }
 });
 
 // ---- the poller -------------------------------------------------------------------------------------------------------------
@@ -168,4 +190,42 @@ test("the side banner is the model for the current job", () => {
   A.vmaSeen(FAILED);
   assert.strictEqual(A.vmApplySideModel().title, "Box VM stopped");
   A._reset();
+});
+
+test("server restart mid-apply: the poll gets 404, the job and the banner go", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: T0 });
+  A._reset();
+  globalThis.api = async () => { throw Object.assign(new Error("no apply has run"), { status: 404 }); };
+  t.after(() => { A._reset(); delete globalThis.api; });
+  A.startVMApplyPoll(RUNNING);
+  assert.strictEqual(A.vmApplySideModel().title, "Box VM restarting");
+  t.mock.timers.tick(1000); await flush();
+  assert.strictEqual(A.vmApplyCurrent(), null);
+  assert.strictEqual(A.vmApplySideModel(), null);
+  t.mock.timers.tick(5000); await flush(); // and the poller stopped
+});
+
+test("null meta after a failed job drops it; a running job is not dropped by null meta (one poll tells how)", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: T0 });
+  A._reset();
+  let calls = 0;
+  globalThis.api = async () => { calls++; return { id: 1, state: "done", steps: [] }; };
+  t.after(() => { A._reset(); delete globalThis.api; });
+  A.vmaFromMeta(FAILED);
+  assert.strictEqual(A.vmApplySideModel().title, "Box VM stopped");
+  A.vmaFromMeta(null);
+  assert.strictEqual(A.vmApplyCurrent(), null);
+  assert.strictEqual(A.vmApplySideModel(), null);
+  A.vmaFromMeta(RUNNING);
+  A.vmaFromMeta(null);
+  assert.strictEqual(A.vmApplyCurrent().state, "running");
+  t.mock.timers.tick(1000); await flush();
+  assert.ok(calls >= 1);
+  assert.strictEqual(A.vmApplyCurrent().state, "done");
+});
+
+test("elapsed counts server time plus the local time since the answer, whatever started_ms says", () => {
+  const j = Object.assign({}, RUNNING, { started_ms: 1, elapsed_ms: 3000, seen_ms: T0 });
+  assert.strictEqual(A.vmApplyProgressModel(j, T0).elapsed, "3 s");
+  assert.strictEqual(A.vmApplyProgressModel(j, T0 + 4000).elapsed, "7 s");
 });
