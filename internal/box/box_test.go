@@ -737,15 +737,15 @@ func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
-		Shared: []string{shared}})
+		Shares: func() (ShareView, error) { return ShareView{Applied: []VMShare{{Path: shared, Writable: true}}}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil, nil)
-	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is not shared with the box VM") {
 		t.Fatalf("want a shared-dirs refusal, got %v", err)
 	}
-	if reason, bad := m.Unboxable(t.TempDir()); !bad || !strings.Contains(reason, "shared directories") {
+	if reason, bad := m.Unboxable(t.TempDir()); !bad || !strings.Contains(reason, "is not shared with the box VM") {
 		t.Fatalf("Unboxable must apply the same rule, got %q %v", reason, bad)
 	}
 	inside := filepath.Join(shared, "proj")

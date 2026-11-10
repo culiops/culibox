@@ -288,7 +288,7 @@ func darwinCloneHooks(t *testing.T) (h *cloneHooks, shared string, called *bool)
 	}
 	// Intermediate (Task 5): the VM no longer mounts the root, so pin the shared
 	// list this test is about; Tasks 7-8 rewire h.shared to real shares.
-	h.shared = []string{shared}
+	h.shared = &box.ShareView{Applied: []box.VMShare{{Path: shared, Writable: true}}}
 	called = new(bool)
 	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
 		*called = true

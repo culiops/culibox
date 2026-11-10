@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
-	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -45,7 +44,7 @@ type cloneHooks struct {
 	// shared is the box VM's shared directories (macOS), nil without a VM. The
 	// VM's docker sees nothing else, so a clone_of or clone dir outside them is
 	// refused (checkShared).
-	shared []string
+	shared *box.ShareView
 
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
@@ -417,14 +416,18 @@ func (h *cloneHooks) checkShared(c config.Clone) error {
 	if h.shared == nil {
 		return nil
 	}
+	var applied []string
+	for _, s := range h.shared.Applied {
+		applied = append(applied, s.Path)
+	}
 	for _, f := range []struct{ field, path string }{{"clone_of", c.Of}, {"default_cwd", c.Dir}} {
 		real := f.path
 		if r, err := filepath.EvalSymlinks(f.path); err == nil {
 			real = r
 		}
-		if !box.UnderMount(f.path, h.shared) || !box.UnderMount(real, h.shared) {
+		if !box.UnderMount(f.path, applied) || !box.UnderMount(real, applied) {
 			return fmt.Errorf("%w: %s %s is not under the box VM's shared directories (%s), so docker cannot see it; keep the repo and its copy under your home directory",
-				box.ErrUnboxableWorkspace, f.field, f.path, strings.Join(h.shared, ", "))
+				box.ErrUnboxableWorkspace, f.field, f.path, strings.Join(applied, ", "))
 		}
 	}
 	return nil
@@ -454,7 +457,7 @@ func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) fu
 // CheckContextPath. shared is the box VM's shared directories, nil when there
 // is no VM. It returns the identity box.CheckContextPathID recorded, which the
 // spawn hands to the box layer.
-func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared []string) func(string) (*box.FileID, error) {
+func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared *box.ShareView) func(string) (*box.FileID, error) {
 	return func(p string) (*box.FileID, error) {
 		id, err := box.CheckContextPathID(p, home, protected, shared)
 		if err != nil {
@@ -598,7 +601,7 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 	// the user's own daemon.
 	h.docker = clone.ExecDocker{Bin: layer.dockerBin, Args: layer.dockerArgs}
 	if layer.vm != nil {
-		h.shared = boxvm.Locations(layer.vm.Config().Mounts())
+		h.shared = layer.shareView()
 	}
 	h.image = layer.image
 	cli := layer.cli

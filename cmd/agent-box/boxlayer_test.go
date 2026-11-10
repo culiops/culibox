@@ -469,7 +469,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shared != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -658,8 +658,16 @@ func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
 		t.Errorf("StateRoot = %q, want the resolved %q", o.StateRoot, real)
 	}
 	wantShared := boxvm.Locations(boxvm.DataMounts(real))
-	if !reflect.DeepEqual(o.Shared, wantShared) {
-		t.Errorf("Shared = %q, want %q", o.Shared, wantShared)
+	var gotShared []string
+	if v, verr := o.Shares(); verr != nil {
+		t.Fatal(verr)
+	} else {
+		for _, s := range v.Applied {
+			gotShared = append(gotShared, s.Path)
+		}
+	}
+	if !reflect.DeepEqual(gotShared, wantShared) {
+		t.Errorf("Shares = %q, want %q", gotShared, wantShared)
 	}
 	if got := strings.Join(l.dockerArgs, " "); !strings.Contains(got, "unix://"+real+"/vm/") || strings.Contains(got, link) {
 		t.Errorf("docker args = %q, want the resolved root", got)

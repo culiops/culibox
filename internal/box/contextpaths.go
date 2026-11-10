@@ -319,8 +319,8 @@ func (m *Manager) refuseMountChanged(ctx context.Context, name string, created b
 
 // CheckContextPath is CheckContextPathID without the identity, for the callers
 // that only need the verdict.
-func CheckContextPath(p, home string, protected []ProtectedDir, shared []string) error {
-	_, err := CheckContextPathID(p, home, protected, shared)
+func CheckContextPath(p, home string, protected []ProtectedDir, view *ShareView) error {
+	_, err := CheckContextPathID(p, home, protected, view)
 	return err
 }
 
@@ -334,9 +334,9 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 // p may be a symlink: the mount follows links on the host, so a link swapped
 // after this check would expose a different path than the one the user chose.
 // The leaf must exist and be a directory or a regular file. home is the user's
-// home directory, protected the directories a box must not touch, and shared
-// the box VM's shared directories (nil when there is no VM).
-func CheckContextPathID(p, home string, protected []ProtectedDir, shared []string) (*FileID, error) {
+// home directory, protected the directories a box must not touch, and view
+// the box VM's share list (nil when there is no VM).
+func CheckContextPathID(p, home string, protected []ProtectedDir, view *ShareView) (*FileID, error) {
 	if !filepath.IsAbs(p) {
 		return nil, ctxPathRefuse(p, "must be an absolute path")
 	}
@@ -400,9 +400,11 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, shared []strin
 		}
 		return nil, ctxPathRefuse(p, "%s", reason)
 	}
-	if len(shared) > 0 && !UnderMount(p, shared) {
-		return nil, ctxPathRefuse(p, "it is not under the box VM's shared directories (%s), so docker cannot see it; "+
-			"share its parent and run `agent-box box setup -recreate`", strings.Join(shared, ", "))
+	if view != nil {
+		// A context path is mounted read-only: a read-only share suffices.
+		if err := view.Check(p, false); err != nil {
+			return nil, ctxPathRefuse(p, "%s", err.Error())
+		}
 	}
 	if info.IsDir() {
 		ipc, err := findSocketOrPipe(p)

@@ -224,7 +224,9 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// #72: the context-path identity, read in the VM (Linux records it on the
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
-		o.Shared = boxvm.Locations(l.vm.Config().Mounts())
+		// Interim (Task 8 reads the written colima.yaml and the user's list):
+		// applied and listed are both what the VM config mounts today.
+		o.Shares = func() (box.ShareView, error) { return *l.shareView(), nil }
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
@@ -479,4 +481,18 @@ func (l *logOnChange) changed(msg string) bool {
 	}
 	l.last = msg
 	return msg != ""
+}
+
+// shareView is the VM's current mounts as a box.ShareView (applied = listed);
+// nil without a VM.
+func (l *boxLayer) shareView() *box.ShareView {
+	if l == nil || l.vm == nil {
+		return nil
+	}
+	cfg := l.vm.Config()
+	var shares []box.VMShare
+	for _, m := range cfg.Mounts() {
+		shares = append(shares, box.VMShare{Path: m.Location, Writable: m.Writable})
+	}
+	return &box.ShareView{Applied: shares, Listed: shares, Home: cfg.Home, Fold: l.goos == "darwin"}
 }

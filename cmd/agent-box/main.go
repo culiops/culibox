@@ -714,10 +714,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
 	pm.SetEgressAll(layer != nil)
-	var vmShared []string // the box VM's shared directories; nil without a VM
-	if layer != nil && layer.vm != nil {
-		vmShared = boxvm.Locations(layer.vm.Config().Mounts())
-	}
+	vmShared := layer.shareView() // the box VM's share list; nil without a VM
 	contextCheck := contextSaveCheck(h, home, protected, vmShared)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
 	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked

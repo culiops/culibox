@@ -596,7 +596,8 @@ func TestWrapGuardsStayUnderTheVMShares(t *testing.T) {
 	shared := realTemp(t)
 	f := newFake()
 	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
-		GuardInPlace: true, Shared: []string{shared}})
+		GuardInPlace: true,
+		Shares:       func() (ShareView, error) { return ShareView{Applied: []VMShare{{Path: shared, Writable: true}}}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +605,7 @@ func TestWrapGuardsStayUnderTheVMShares(t *testing.T) {
 	outside := realTemp(t)
 	gitRepo(t, outside, "")
 	_, _, _, err = m.Wrap(ctx, outside, "s1", BoxKey{}, []string{"claude"}, nil, nil)
-	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is not shared with the box VM") {
 		t.Fatalf("want a shared-dirs refusal, got %v", err)
 	}
 	if f.runs() != 0 {
@@ -628,8 +629,8 @@ func TestWrapGuardsStayUnderTheVMShares(t *testing.T) {
 		if !containsPair(args, "--mount", "type=bind,src="+g+",dst="+g+",readonly") {
 			t.Errorf("want %s bound read-only onto itself: %q", rel, args)
 		}
-		if !UnderMount(g, m.opts.Shared) {
-			t.Errorf("guard %s is outside the VM's shares %q", g, m.opts.Shared)
+		if !UnderMount(g, []string{shared}) {
+			t.Errorf("guard %s is outside the VM's share %q", g, shared)
 		}
 	}
 }
