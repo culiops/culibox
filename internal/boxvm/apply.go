@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/culiops/culibox/internal/vmshares"
@@ -159,6 +161,11 @@ func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 		return err
 	}
 	defer v.unlock()
+	unlockApply, err := lockApply(v.Config().ApplyLockPath())
+	if err != nil {
+		return err
+	}
+	defer unlockApply()
 	kind, err := v.DriftKind()
 	if err != nil {
 		return err
@@ -286,4 +293,47 @@ func unescapeMount(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+// ErrApplyLocked means another process (the daemon, or a `box share apply`
+// from a terminal) is applying the folder list now.
+var ErrApplyLocked = errors.New("another agent-box is applying the box VM's folder list; try again when it finishes")
+
+// ApplyLockPath is the advisory lock every process holds for an apply's whole
+// stop, write and start. v.lock is per process; this one spans processes.
+func (c Config) ApplyLockPath() string { return filepath.Join(c.ColimaHome(), "agent-box.apply.lock") }
+
+// lockApply takes the cross-process apply lock without waiting: an flock on
+// the lock file, released when unlock runs or the process dies.
+func lockApply(path string) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	fd := int(f.Fd())
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrApplyLocked
+		}
+		return nil, fmt.Errorf("locking %s: %w", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(fd, syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// ApplyLockHeld reports whether an apply holds the cross-process lock now
+// (this process's own included: the caller checks its own job first).
+func (v *VM) ApplyLockHeld() bool {
+	unlock, err := lockApply(v.Config().ApplyLockPath())
+	if err != nil {
+		return errors.Is(err, ErrApplyLocked)
+	}
+	unlock()
+	return false
 }

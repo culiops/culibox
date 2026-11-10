@@ -49,6 +49,7 @@ func (d *demoVMControl) SetListed(l []vmshares.Share) {
 func (d *demoVMControl) RunningBoxed() []string { return []string{"culibox", "infra-audit"} }
 func (d *demoVMControl) RunningCwds() []string  { return nil }
 func (d *demoVMControl) VMRunning() bool        { return false }
+func (d *demoVMControl) ApplyLockHeld() bool    { return false }
 func (d *demoVMControl) Applying() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()

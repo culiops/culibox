@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
@@ -273,5 +274,28 @@ func TestBoxShareAddRefusesCuliBoxConfigDir(t *testing.T) {
 	}
 	if list, _, _ := vmshares.Load(l.dataDir); len(list) != 0 || fc.called("stop") {
 		t.Fatalf("a refused add must save nothing: %+v", list)
+	}
+}
+
+// S4: while another agent-box holds the apply lock, the CLI refuses with a
+// `refusing:` line and touches nothing.
+func TestBoxShareApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
+	l, fc, _ := pendingLayer(t)
+	f, err := os.OpenFile(l.vm.Config().ApplyLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	a := shareArgs("apply", "")
+	a.Force = true
+	rc, out := runVM(t, l, a)
+	if rc != 1 || !strings.Contains(out, "refusing: another agent-box is applying the box VM's folder list; try again when it finishes") {
+		t.Fatalf("apply under another's lock = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") || fc.called("start") {
+		t.Fatal("a refused apply must not touch the VM")
 	}
 }

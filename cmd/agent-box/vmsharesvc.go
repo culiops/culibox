@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
@@ -38,10 +40,15 @@ type vmControl interface {
 	Applying() bool
 	// VMRunning is true while the VM is up (a failed apply is forgotten once the VM runs with the saved list).
 	VMRunning() bool
+	// ApplyLockHeld is true while an apply holds the cross-process apply lock
+	// (another agent-box: the daemon, or `box share apply` from a terminal).
+	ApplyLockHeld() bool
 }
 
-// vmShareSvc owns the folder list (vm-shares.json) and the apply job. It is the
-// only writer of the file. One mutex covers the list, the file and the job.
+// vmShareSvc owns the folder list (vm-shares.json) and the apply job. The
+// daemon and a `box share` CLI each run one over the same file, so every view,
+// write and apply first re-reads the file if it changed since this service
+// last read or wrote it. One mutex covers the list, the file and the job.
 type vmShareSvc struct {
 	dataDir string
 	env     vmshares.Env
@@ -51,6 +58,7 @@ type vmShareSvc struct {
 	mu      sync.Mutex
 	list    []vmshares.Share
 	corrupt error
+	file    fileStamp // vm-shares.json as last read or written; zero = none
 	job     *web.VMApply
 	jobAt   map[string]int64 // step name -> start, unix ms
 	nextID  int
@@ -74,6 +82,7 @@ func newVMShareSvc(dataDir string, env vmshares.Env, ctl vmControl, profiles fun
 	switch {
 	case errors.Is(err, vmshares.ErrCorrupt):
 		s.corrupt = err
+		s.file = statShares(dataDir) // re-read only once it changes
 		logf("box VM folders: %v; the list is left alone and cannot be changed until it is fixed", err)
 		return s, nil
 	case err != nil:
@@ -106,8 +115,57 @@ func newVMShareSvc(dataDir string, env vmshares.Env, ctl vmControl, profiles fun
 		}
 		s.list = out
 	}
+	s.file = statShares(dataDir)
 	ctl.SetListed(append([]vmshares.Share{}, s.list...))
 	return s, nil
+}
+
+// fileStamp identifies one version of vm-shares.json.
+type fileStamp struct {
+	mtime time.Time
+	size  int64
+	ino   uint64
+	ok    bool
+}
+
+func statShares(dataDir string) fileStamp {
+	fi, err := os.Lstat(filepath.Join(dataDir, vmshares.FileName))
+	if err != nil {
+		return fileStamp{}
+	}
+	st := fileStamp{mtime: fi.ModTime(), size: fi.Size(), ok: true}
+	if sys, ok := fi.Sys().(*syscall.Stat_t); ok {
+		st.ino = uint64(sys.Ino)
+	}
+	return st
+}
+
+// reload re-reads vm-shares.json when another process changed it (its mtime,
+// size or inode differ from what this service last read or wrote). The
+// caller holds s.mu. A missing file keeps the list in memory; a damaged one
+// makes the service refuse writes, as at boot.
+func (s *vmShareSvc) reload() {
+	now := statShares(s.dataDir)
+	if now == s.file || !now.ok {
+		return
+	}
+	list, _, err := vmshares.Load(s.dataDir)
+	switch {
+	case errors.Is(err, vmshares.ErrCorrupt):
+		s.corrupt = err
+		s.logf("box VM folders: %v; the list is left alone and cannot be changed until it is fixed", err)
+	case err != nil:
+		s.logf("box VM folders: re-reading the folder list: %v", err)
+		return
+	default:
+		out, skipped := vmshares.Normalize(list, s.env)
+		for _, k := range skipped {
+			s.logf("box VM folders: skipping %s: %s", k.Path, k.Reason)
+		}
+		s.list, s.corrupt = out, nil
+		s.ctl.SetListed(append([]vmshares.Share{}, out...))
+	}
+	s.file = now
 }
 
 // Listed is a copy of the saved list.
@@ -124,6 +182,7 @@ func (s *vmShareSvc) running() bool { return s.job != nil && s.job.State == "run
 func (s *vmShareSvc) write(change func(list []vmshares.Share) ([]vmshares.Share, bool, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.reload()
 	if s.corrupt != nil {
 		return web.ErrListCorrupt
 	}
@@ -137,6 +196,7 @@ func (s *vmShareSvc) write(change func(list []vmshares.Share) ([]vmshares.Share,
 	if err := vmshares.Save(s.dataDir, next); err != nil {
 		return err
 	}
+	s.file = statShares(s.dataDir)
 	s.list = next
 	s.ctl.SetListed(append([]vmshares.Share{}, next...))
 	return nil
@@ -215,6 +275,7 @@ func (s *vmShareSvc) key(p string) string {
 // View is the page: the saved list against what the VM has applied.
 func (s *vmShareSvc) View() (web.VMFoldersView, error) {
 	s.mu.Lock()
+	s.reload()
 	list := append([]vmshares.Share{}, s.list...)
 	corrupt := s.corrupt
 	job := s.jobCopy()

@@ -30,6 +30,7 @@ type fakeVMControl struct {
 	failStart error
 	running   bool
 	hold      chan struct{} // Apply blocks on it when set
+	lockHeld  bool          // another process holds the apply lock
 	steps     chan string
 }
 
@@ -47,6 +48,7 @@ func (f *fakeVMControl) RunningBoxed() []string { return f.names }
 func (f *fakeVMControl) RunningCwds() []string  { return f.cwds }
 func (f *fakeVMControl) Applying() bool         { return f.applying }
 func (f *fakeVMControl) VMRunning() bool        { return f.running }
+func (f *fakeVMControl) ApplyLockHeld() bool    { return f.lockHeld }
 func (f *fakeVMControl) Apply(ctx context.Context, step func(name, state, sub string)) error {
 	step("stop", "running", "")
 	if f.hold != nil {
@@ -455,4 +457,56 @@ func TestRunningJobCarriesServerElapsed(t *testing.T) {
 	}
 	close(f.ctl.hold)
 	waitJob(t, s)
+}
+
+// S4: the CLI and the daemon each run a service over one vm-shares.json. A
+// removal from the CLI is not undone by the daemon's next write, and the
+// daemon's view shows it.
+func TestSvcReloadsAListChangedByAnotherProcess(t *testing.T) {
+	f := newSvcFixture(t)
+	x, y := f.sub(t, "x"), f.sub(t, "y")
+	serve := f.svc(t)
+	if _, _, err := serve.Add(x, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	cli := f.svc(t)
+	if _, err := cli.Remove(x); err != nil {
+		t.Fatal(err)
+	}
+	v, err := serve.View()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range v.Rows {
+		if r.Path == x && r.Pending != "removed" {
+			t.Fatalf("the daemon still lists %s after the CLI removed it: %+v", x, v.Rows)
+		}
+	}
+	if _, _, err := serve.Add(y, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	list, _, err := vmshares.Load(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Path != y {
+		t.Fatalf("saved list %+v, want only %s (the CLI removal kept)", list, y)
+	}
+	if got := f.ctl.listed; len(got) != 1 || got[0].Path != y {
+		t.Fatalf("the VM was handed %+v", got)
+	}
+}
+
+// S4: an apply another process is running is refused here as "already applying".
+func TestSvcApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
+	f := newSvcFixture(t)
+	s := f.svc(t)
+	f.ctl.lockHeld = true
+	_, err := s.Apply()
+	if !errors.Is(err, web.ErrApplyRunning) || err.Error() != "another agent-box is applying the box VM's folder list; try again when it finishes" {
+		t.Fatalf("Apply = %v", err)
+	}
+	if j, ok := s.lastJob(); ok {
+		t.Fatalf("a job was started: %+v", j)
+	}
 }

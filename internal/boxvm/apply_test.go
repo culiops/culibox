@@ -365,3 +365,38 @@ func TestVerifyMountsEscapedMountpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// S4: two processes (here two VMs over one data root) never apply at once: the
+// second is refused while the first holds the lock, and it runs no colima.
+func TestApplyMountsRefusesAConcurrentApply(t *testing.T) {
+	r := &fakeRunner{delay: 2 * time.Second}
+	v := oldVM(t, false, r)
+	v.SetShares(newShares)
+	done := make(chan error, 1)
+	go func() { done <- v.ApplyMounts(context.Background(), ApplyHooks{}) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.startN.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first apply never started the VM")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	r2 := &fakeRunner{}
+	v2 := NewVM(v.Config(), r2)
+	if !v2.ApplyLockHeld() {
+		t.Error("ApplyLockHeld = false while an apply runs")
+	}
+	err := v2.ApplyMounts(context.Background(), ApplyHooks{})
+	if !errors.Is(err, ErrApplyLocked) || err.Error() != "another agent-box is applying the box VM's folder list; try again when it finishes" {
+		t.Fatalf("second apply: %v", err)
+	}
+	if len(callNames(r2)) != 0 {
+		t.Fatalf("the refused apply ran colima: %v", callNames(r2))
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if v2.ApplyLockHeld() {
+		t.Fatal("the lock outlived the apply")
+	}
+}

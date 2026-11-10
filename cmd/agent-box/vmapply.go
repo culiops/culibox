@@ -116,10 +116,20 @@ func (s *vmShareSvc) corruptNow() bool {
 	return s.corrupt != nil
 }
 
+// errApplyElsewhere: another agent-box holds the apply lock. It is the web's
+// ErrApplyRunning (code apply_running) with the lock's own words.
+type errApplyElsewhere struct{}
+
+func (errApplyElsewhere) Error() string { return boxvm.ErrApplyLocked.Error() }
+func (errApplyElsewhere) Is(target error) bool {
+	return target == web.ErrApplyRunning || target == boxvm.ErrApplyLocked
+}
+
 // Apply starts the background job that restarts the VM with the saved list. It
 // returns the job as it starts; the page polls ApplyStatus.
 func (s *vmShareSvc) Apply() (web.VMApply, error) {
 	s.mu.Lock()
+	s.reload()
 	if s.corrupt != nil {
 		s.mu.Unlock()
 		return web.VMApply{}, web.ErrListCorrupt
@@ -127,6 +137,10 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 	if s.running() {
 		s.mu.Unlock()
 		return web.VMApply{}, web.ErrApplyRunning
+	}
+	if s.ctl.ApplyLockHeld() {
+		s.mu.Unlock()
+		return web.VMApply{}, errApplyElsewhere{}
 	}
 	if _, _, setUp, err := s.ctl.Applied(); err == nil && !setUp {
 		s.mu.Unlock()
@@ -211,6 +225,8 @@ func (s *vmShareSvc) runJob(ctx context.Context, id int) {
 
 func applyErrorText(step string, err error) string {
 	switch {
+	case errors.Is(err, boxvm.ErrApplyLocked):
+		return boxvm.ErrApplyLocked.Error()
 	case errors.Is(err, boxvm.ErrStartTimeout):
 		return boxvm.ErrStartTimeout.Error()
 	case errors.Is(err, boxvm.ErrNeedsRecreate):
@@ -277,6 +293,8 @@ func (c *layerVMControl) VMRunning() bool {
 }
 
 func (c *layerVMControl) SetListed(l []vmshares.Share) { c.l.vm.SetShares(l) }
+
+func (c *layerVMControl) ApplyLockHeld() bool { return c.l.vm.ApplyLockHeld() }
 
 func (c *layerVMControl) live() []session.Info {
 	var out []session.Info
