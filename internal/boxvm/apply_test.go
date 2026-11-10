@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,7 +171,6 @@ func TestApplyMountsStartTimeout(t *testing.T) {
 	v := oldVM(t, false, r)
 	v.startTimeout = 20 * time.Millisecond
 	v.SetShares(newShares)
-	oldStamp, _ := os.ReadFile(v.Config().StampPath())
 	err := v.ApplyMounts(context.Background(), ApplyHooks{})
 	if !errors.Is(err, ErrStartTimeout) || err.Error() != "The VM did not start within 2 minutes." {
 		t.Fatalf("err = %v", err)
@@ -179,9 +179,64 @@ func TestApplyMountsStartTimeout(t *testing.T) {
 	if len(ms) != 6 {
 		t.Fatalf("yaml not rewritten: %v", ms)
 	}
-	if s, _ := os.ReadFile(v.Config().StampPath()); string(s) != string(oldStamp) {
-		t.Fatal("stamp written after a failed start")
+	y, _ := v.Config().YAML()
+	if s, _ := os.ReadFile(v.Config().StampPath()); strings.TrimSpace(string(s)) != yamlHash(y) {
+		t.Fatal("stamp is not the new YAML hash after a timed-out start")
 	}
+}
+
+func TestApplyMountsRetryAfterStartTimeout(t *testing.T) {
+	r := &fakeRunner{delay: time.Second}
+	v := oldVM(t, false, r)
+	v.startTimeout = 20 * time.Millisecond
+	v.SetShares(newShares)
+	if err := v.ApplyMounts(context.Background(), ApplyHooks{}); !errors.Is(err, ErrStartTimeout) {
+		t.Fatalf("first: %v", err)
+	}
+	r.mu.Lock()
+	r.delay = 0
+	r.mu.Unlock()
+	v.startTimeout = 5 * time.Second
+	if err := v.ApplyMounts(context.Background(), ApplyHooks{}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	for _, n := range callNames(r) {
+		if n == "delete" {
+			t.Fatal("delete")
+		}
+	}
+	if k, err := v.DriftKind(); err != nil || k != DriftNone {
+		t.Fatalf("drift = %v %v", k, err)
+	}
+}
+
+func TestSetSharesConcurrentWithReadsIsRaceFree(t *testing.T) {
+	v := oldVM(t, false, &fakeRunner{})
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				v.SetShares(newShares)
+				v.SetShares(nil)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				_ = v.Drifted()
+				_ = v.ProvisionDrifted()
+				_ = v.SetUp()
+				_ = v.Config().YAMLPath()
+				_, _ = v.AppliedMounts()
+				_, _ = v.DriftKind()
+				_, _ = v.WholeHome()
+				_, _ = v.Status(context.Background())
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestApplyMountsStopFailureWritesNothing(t *testing.T) {
@@ -293,5 +348,20 @@ func TestUnescapeMount(t *testing.T) {
 	}
 	if got := unescapeMount(`/x\04`); got != `/x\04` {
 		t.Fatal(got)
+	}
+}
+
+func TestVerifyMountsEscapedMountpoint(t *testing.T) {
+	r := &fakeRunner{}
+	v := oldVM(t, false, r)
+	v.SetShares([]vmshares.Share{{Path: "/Users/a/My Docs", Mode: vmshares.RW}})
+	if err := v.ApplyMounts(context.Background(), ApplyHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	root := v.Config().Root
+	r.mountsOut = "m0 " + root + "/boxstate virtiofs rw 0 0\nm1 " + root + "/bundle virtiofs ro 0 0\nm2 " + root + "/broker virtiofs ro 0 0\nm3 " + root + "/ca virtiofs ro 0 0\n" +
+		"m4 /Users/a/My\\040Docs virtiofs rw,relatime 0 0\n"
+	if err := v.VerifyMounts(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -109,7 +109,7 @@ func (v *VM) PathIDs(ctx context.Context, paths []string) ([]FileID, error) {
 		return nil, err
 	}
 	script := strings.Replace(pathIDsScript, "@LIST@", strings.Join(words, " "), 1)
-	out, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "ssh", "--profile", Profile, "--", "sh", "-c", script)
+	out, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--", "sh", "-c", script)
 	if err != nil {
 		return nil, fmt.Errorf("reading file identities in the box VM: %w", err)
 	}

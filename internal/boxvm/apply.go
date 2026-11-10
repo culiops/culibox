@@ -145,9 +145,9 @@ func (h ApplyHooks) step(s ApplyStep, e StepEvent) {
 const stopTimeout = 30 * time.Second
 
 // ApplyMounts makes the VM share the current folder list: stop, rewrite
-// colima.yaml, start. It never deletes the VM. The stamp is written only after
-// a successful start; the yaml is written before it, so a failed start retries
-// with the new list.
+// colima.yaml, start. It never deletes the VM. The yaml and its stamp are
+// written before the start, so a failed or timed-out start is retried with the
+// new list by calling ApplyMounts again.
 func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 	if !v.SetUp() {
 		return ErrNotSetUp
@@ -193,6 +193,12 @@ func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 	if err := writeOwnerOnly(cfg.YAMLPath(), y); err != nil {
 		return err
 	}
+	// The stamp is the hash of the YAML agent-box wrote for the VM, which colima
+	// uses at its next start. Writing it before the start means a failed start
+	// is retried by another ApplyMounts, not read as other drift.
+	if err := writeOwnerOnly(cfg.StampPath(), []byte(yamlHash(y)+"\n")); err != nil {
+		return err
+	}
 	h.step(StepStart, StepEvent{})
 	v.markReconcile()
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.startTimeout)
@@ -204,10 +210,6 @@ func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 		} else {
 			err = fmt.Errorf("starting the box VM: %w", err)
 		}
-		h.step(StepStart, StepEvent{Done: true, Err: err})
-		return err
-	}
-	if err := writeOwnerOnly(cfg.StampPath(), []byte(yamlHash(y)+"\n")); err != nil {
 		h.step(StepStart, StepEvent{Done: true, Err: err})
 		return err
 	}
