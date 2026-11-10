@@ -19,6 +19,10 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	if runtime.GOOS == "darwin" {
 		return runBoxDarwin(a, cfg, home, w)
 	}
+	if a.Sub == "share" {
+		fmt.Fprintln(w, "agent-box box share: only on macOS, where boxes run in agent-box's own VM")
+		return 1
+	}
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {
 		fmt.Fprintf(w, "agent-box box: %v\n", err)

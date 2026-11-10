@@ -383,15 +383,7 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, d
 		defaultRuntime: defaultRuntime,
 		protected:      protected,
 	}
-	for _, s := range seeds {
-		if _, dup := m.seeds[s.Name]; !dup {
-			m.seedOrder = append(m.seedOrder, s.Name)
-		}
-		m.seeds[s.Name] = s
-	}
-	for _, o := range options {
-		m.optDefs[o.Key] = o
-	}
+	m.setSeeds(seeds, options)
 	m.home, _ = os.UserHomeDir()
 	m.logLegacyBoxImages()
 	m.apply(m.merged())
@@ -437,6 +429,43 @@ func (m *ProfileManager) scopeOptions(a config.AgentConfig) config.AgentConfig {
 	}
 	a.Options = scoped
 	return a
+}
+
+// setSeeds loads the read-only config seeds and the option definitions.
+func (m *ProfileManager) setSeeds(seeds []config.AgentConfig, options []config.OptionDef) {
+	for _, s := range seeds {
+		if _, dup := m.seeds[s.Name]; !dup {
+			m.seedOrder = append(m.seedOrder, s.Name)
+		}
+		m.seeds[s.Name] = s
+	}
+	for _, o := range options {
+		m.optDefs[o.Key] = o
+	}
+}
+
+// staticStore is a profileStore over a fixed list (MergeProfiles).
+type staticStore []config.AgentConfig
+
+func (s staticStore) List() []config.AgentConfig { return s }
+func (s staticStore) Get(name string) (config.AgentConfig, bool) {
+	for _, p := range s {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return config.AgentConfig{}, false
+}
+func (staticStore) Save(config.AgentConfig) error { return errors.New("read-only profile list") }
+func (staticStore) Delete(string) error           { return errors.New("read-only profile list") }
+
+// MergeProfiles is the effective profile set for config seeds and stored
+// profiles without a running manager (the CLI): the same merge and option
+// scoping as ProfileManager.All.
+func MergeProfiles(seeds, stored []config.AgentConfig, options []config.OptionDef) []config.AgentConfig {
+	m := &ProfileManager{seeds: map[string]config.AgentConfig{}, optDefs: map[string]config.OptionDef{}, store: staticStore(stored)}
+	m.setSeeds(seeds, options)
+	return m.merged()
 }
 
 // merged is the effective set: a stored profile overrides a same-named seed;

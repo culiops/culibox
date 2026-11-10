@@ -1134,3 +1134,17 @@ func resolvedDir(t *testing.T) string {
 	}
 	return d
 }
+
+func TestMergeProfilesMatchesManagerAll(t *testing.T) {
+	seeds := []config.AgentConfig{{Name: "claude", Bin: "claude", Options: map[string]any{"skip": true}}, {Name: "bash", Bin: "bash"}}
+	opts := []config.OptionDef{{Key: "skip", Label: "Skip", Type: "bool", Flag: "-x"}}
+	fs := newFakeStore()
+	fs.m["bash"] = config.AgentConfig{Name: "bash", Bin: "bash", DefaultCwd: "/w"}
+	fs.m["zed"] = config.AgentConfig{Name: "zed", Bin: "bash"}
+	fs.m["amy"] = config.AgentConfig{Name: "amy", Bin: "bash"}
+	pm := NewProfileManager(seeds, opts, "", nil, fs, func([]config.AgentConfig) {})
+	got := MergeProfiles(seeds, fs.List(), opts)
+	if want := pm.All(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("MergeProfiles\n got %+v\nwant %+v", got, want)
+	}
+}
