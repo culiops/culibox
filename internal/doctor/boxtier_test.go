@@ -220,7 +220,7 @@ func fakeDocker(t *testing.T) (bin, argvLog string) {
 
 func TestGatherBoxFactsLinuxListsOnlyThisInstancesStoppedBoxes(t *testing.T) {
 	bin, argvLog := fakeDocker(t)
-	f := gatherBoxFacts(config.Config{DockerBin: bin, EnvLabel: "PROD"}, t.TempDir(), t.TempDir(), "linux")
+	f := gatherBoxFacts(config.Config{DockerBin: bin, EnvLabel: "PROD"}, t.TempDir(), t.TempDir(), "linux", nil)
 	if f.DockerErr != nil || len(f.Stopped) != 1 || f.Stopped[0] != "ab-box-1" {
 		t.Fatalf("facts = %+v", f)
 	}
@@ -231,7 +231,7 @@ func TestGatherBoxFactsLinuxListsOnlyThisInstancesStoppedBoxes(t *testing.T) {
 }
 
 func TestGatherBoxFactsLinuxMissingDocker(t *testing.T) {
-	f := gatherBoxFacts(config.Config{DockerBin: "docker-not-here-xyz"}, t.TempDir(), t.TempDir(), "linux")
+	f := gatherBoxFacts(config.Config{DockerBin: "docker-not-here-xyz"}, t.TempDir(), t.TempDir(), "linux", nil)
 	if f.DockerErr == nil {
 		t.Fatal("a missing docker must be reported")
 	}
@@ -253,7 +253,7 @@ func TestGatherBoxFactsDarwinNeverStartsTheVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(data) })
-	f := gatherBoxFacts(config.Config{DockerBin: dockerBin, ColimaBin: colima}, data, t.TempDir(), "darwin")
+	f := gatherBoxFacts(config.Config{DockerBin: dockerBin, ColimaBin: colima}, data, t.TempDir(), "darwin", nil)
 	if f.SetUp || f.ColimaVer != "0.8.1" || f.ColimaErr != nil || f.DockerErr != nil {
 		t.Fatalf("facts = %+v", f)
 	}
@@ -396,7 +396,7 @@ func TestGatherBoxFactsAppliedListIsNotDrift(t *testing.T) {
 	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f := gatherBoxFacts(c, data, home, "darwin")
+	f := gatherBoxFacts(c, data, home, "darwin", nil)
 	if !f.SetUp || f.Drifted || f.Drift != boxvm.DriftNone || f.WholeHome || f.FoldersErr != nil || f.SharesErr != nil || f.ShareCount != 1 {
 		t.Fatalf("facts = %+v", f)
 	}
@@ -470,8 +470,51 @@ func TestGatherBoxFactsVerifiesFoldersOfARunningVM(t *testing.T) {
 	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f := gatherBoxFacts(c, data, t.TempDir(), "darwin")
+	f := gatherBoxFacts(c, data, t.TempDir(), "darwin", nil)
 	if !f.Status.Running || !f.MountsRan || !errors.Is(f.MountsErr, boxvm.ErrMountsMismatch) {
 		t.Fatalf("facts: running %v, mounts ran %v, err %v", f.Status.Running, f.MountsRan, f.MountsErr)
+	}
+}
+
+// M2: doctor normalises the folder list with the same protected list serve and
+// the CLI use, so a saved share over CuliBox's config dir is dropped here too
+// (no folder count or drift an apply could never clear).
+func TestGatherBoxFactsUsesTheProtectedList(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	if err := os.WriteFile(colima, []byte("#!/bin/sh\n[ \"$1\" = version ] && echo 'colima version 0.8.1'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	home, err := os.MkdirTemp("/tmp", "abhome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	cfgDir := filepath.Join(home, "cfg")
+	if err := os.Mkdir(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmshares.Save(data, []vmshares.Share{{Path: cfgDir, Mode: vmshares.RW}}); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	vm := boxvm.NewVM(boxvm.ConfigFor(c, data, home, colima, dockerBin, 4, 8), boxvm.ExecRunner{})
+	vc := vm.Config()
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.StampPath(), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := Input{Config: c, Home: home, ConfigFiles: []string{filepath.Join(cfgDir, "config.json")}}
+	f := gatherBoxFacts(c, data, home, "darwin", protectedFor(in, data))
+	if f.SharesErr != nil || f.ShareCount != 0 {
+		t.Fatalf("a share over the config dir was counted: count %d, err %v", f.ShareCount, f.SharesErr)
 	}
 }

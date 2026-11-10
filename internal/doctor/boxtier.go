@@ -265,7 +265,8 @@ func folderRows(f boxFacts) []Result {
 
 // gatherBoxFacts asks the real world, with a 60 s overall budget. It never
 // starts the VM: a stopped VM is a normal state, reported as such.
-func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
+// protected is the directory list no VM share may overlap (protectedFor).
+func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir) boxFacts {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var f boxFacts
@@ -304,7 +305,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	list, _, lerr := vmshares.Load(dataDir)
 	f.SharesErr = lerr
 	if lerr == nil {
-		list, _ = vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold})
+		list, _ = vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: protected})
 		vm.SetShares(list)
 		f.ShareCount = len(list)
 	}

@@ -30,6 +30,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/broker"
+	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/procinfo"
 	"github.com/culiops/culibox/internal/session"
@@ -57,6 +58,16 @@ type Input struct {
 	// CredErrors describes what was wrong with the web-defined credentials file
 	// ("<kind> <name>: <err>" per skipped entry, or the file-level problem).
 	CredErrors []string
+	// ConfigFiles are the config files read on the next start (-config, the
+	// ~/.config fallback): their directories are protected from VM shares.
+	ConfigFiles []string
+}
+
+// protectedFor is the protected-directory list serve and the CLI build
+// (box.ProtectedDirsFor), from what doctor knows.
+func protectedFor(in Input, dataDir string) []box.ProtectedDir {
+	c := in.Config
+	return box.ProtectedDirsFor(dataDir, in.ConfigFiles, c.ResolvedProfilesPath(dataDir), bundle.DefaultSource(), bundle.SourceOf(c.BundleSource))
 }
 
 type Result struct{ Status, Check, Detail string }
@@ -186,7 +197,7 @@ func Checks(in Input) []Result {
 	}
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
-	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c, vst))...)
+	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir)), ClaudeBoxToken(c, vst))...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
 	}
