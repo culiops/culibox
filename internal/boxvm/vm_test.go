@@ -423,3 +423,43 @@ func TestFilterRulesRunsIptablesOverColimaSSH(t *testing.T) {
 		t.Fatalf("ssh env = %v, want the pinned env", r.envs["ssh"])
 	}
 }
+
+// M1: virtiofs needs every mount source to exist before the VM starts, so
+// Provision (box setup, -recreate) creates the four data-root folders first.
+func TestProvisionCreatesTheDataMountDirsBeforeTheStart(t *testing.T) {
+	r := &startCheckRunner{}
+	root := shortRoot(t)
+	v := NewVM(Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}, r)
+	r.dirs = DataMounts(v.Config().Root)
+	if err := v.Provision(context.Background(), false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !r.started {
+		t.Fatal("Provision did not start the VM")
+	}
+	if r.missing != "" {
+		t.Fatalf("%s did not exist when the VM started", r.missing)
+	}
+}
+
+// startCheckRunner records, at `colima start`, the first data mount source missing.
+type startCheckRunner struct {
+	dirs    []Mount
+	started bool
+	missing string
+}
+
+func (s *startCheckRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
+	switch args[0] {
+	case "status":
+		return "not running", errors.New("exit status 1")
+	case "start":
+		s.started = true
+		for _, m := range s.dirs {
+			if fi, err := os.Stat(m.Location); (err != nil || !fi.IsDir()) && s.missing == "" {
+				s.missing = m.Location
+			}
+		}
+	}
+	return "", nil
+}

@@ -320,6 +320,10 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 	if err := os.MkdirAll(cfg.DockerConfigDir(), 0o700); err != nil {
 		return err
 	}
+	// virtiofs needs every mount source to exist before the VM starts.
+	if err := EnsureDataMountDirs(cfg.Root); err != nil {
+		return err
+	}
 	if err := writeOwnerOnly(cfg.YAMLPath(), y); err != nil {
 		return err
 	}
