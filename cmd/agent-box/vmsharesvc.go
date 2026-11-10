@@ -255,19 +255,23 @@ func (s *vmShareSvc) View() (web.VMFoldersView, error) {
 		return vmshares.Describe(l, profiles, recorded, s.env.Home, s.env.Fold)
 	}
 	switch {
-	case corrupt != nil:
-		// The list cannot be trusted: show what the VM has, unmarked.
-		for _, r := range describe(applied) {
+	case corrupt != nil || !setUp || whole:
+		// Rows are unmarked: the saved list cannot be trusted (corrupt), or there
+		// is nothing applied to compare it with. The VM's own state still shows.
+		src := list
+		if corrupt != nil {
+			src = applied
+		}
+		for _, r := range describe(src) {
 			v.Rows = append(v.Rows, row(r, ""))
 		}
-		v.State = "applied"
-	case !setUp || whole:
-		for _, r := range describe(list) {
-			v.Rows = append(v.Rows, row(r, ""))
-		}
-		v.State = "whole_home"
-		if !setUp {
+		switch {
+		case !setUp:
 			v.State = "not_set_up"
+		case whole:
+			v.State = "whole_home"
+		default:
+			v.State = "applied"
 		}
 	default:
 		have := map[string]vmshares.Mode{}
@@ -299,7 +303,11 @@ func (s *vmShareSvc) View() (web.VMFoldersView, error) {
 			v.Rows = append(v.Rows, row(r, "removed"))
 			v.Removed++
 		}
-		sort.SliceStable(v.Rows, func(i, j int) bool { return s.key(v.Rows[i].Path) < s.key(v.Rows[j].Path) })
+		keys := make(map[string]string, len(v.Rows))
+		for _, r := range v.Rows {
+			keys[r.Path] = s.key(r.Path)
+		}
+		sort.SliceStable(v.Rows, func(i, j int) bool { return keys[v.Rows[i].Path] < keys[v.Rows[j].Path] })
 		v.State = "applied"
 		if v.Added+v.Removed+v.Switched > 0 {
 			v.State = "pending"
@@ -354,5 +362,6 @@ func bootVMFolders(layer *boxLayer, cfg config.Config, all func() []config.Agent
 	if _, whole, setUp, err := ctl.Applied(); err == nil && setUp && whole {
 		log.Print(vmshares.WholeHomeLine(len(svc.Listed())))
 	}
+	ctl.jobRunning = svc.jobRunning
 	return svc
 }

@@ -8,46 +8,53 @@ import "errors"
 // VMFolderRow is one shared folder. Pending is "" for a folder the VM has as
 // listed, else "added", "removed" or "switched" (its mode differs).
 type VMFolderRow struct {
-	Path, Display, Mode, Origin string
-	UsedBy                      []string
-	Running                     int
-	Pending                     string
+	Path    string   `json:"path"`
+	Display string   `json:"display"`
+	Mode    string   `json:"mode"`
+	Origin  string   `json:"origin"`
+	UsedBy  []string `json:"used_by"`
+	Running int      `json:"running"`
+	Pending string   `json:"pending"`
 }
 
 // VMFoldersView is the page. State is "applied", "pending", "whole_home" (the VM
 // still shares all of $HOME; the rows are the proposed list) or "not_set_up".
 type VMFoldersView struct {
-	State                    string
-	Added, Removed, Switched int
-	Rows                     []VMFolderRow
-	DataRoot                 string
-	RunningBoxed             []string
-	Apply                    *VMApply
-	ListError                string
+	State        string        `json:"state"`
+	Added        int           `json:"added"`
+	Removed      int           `json:"removed"`
+	Switched     int           `json:"switched"`
+	Rows         []VMFolderRow `json:"rows"`
+	DataRoot     string        `json:"data_root"`
+	RunningBoxed []string      `json:"running_boxed"`
+	Apply        *VMApply      `json:"apply"`
+	ListError    string        `json:"list_error"`
 }
 
 // VMApplyStep names are "stop", "start" and "check"; states are "waiting",
 // "running", "done", "failed" and "not_run".
 type VMApplyStep struct {
-	Name, State, Sub string
-	Ms               int64
+	Name  string `json:"name"`
+	State string `json:"state"`
+	Sub   string `json:"sub"`
+	Ms    int64  `json:"ms"`
 }
 
 // VMApply is the last apply job. State is "running", "done" or "failed".
 type VMApply struct {
-	ID        int
-	State     string
-	StartedMs int64
-	Steps     []VMApplyStep
-	Error     string // short, for the page
-	Detail    string // the raw error
+	ID        int           `json:"id"`
+	State     string        `json:"state"`
+	StartedMs int64         `json:"started_ms"`
+	Steps     []VMApplyStep `json:"steps"`
+	Error     string        `json:"error"`  // short, for the page
+	Detail    string        `json:"detail"` // the raw error
 }
 
 // VMAddResult says what an add did beyond adding: the folder that already
 // covered it, or the listed folders it swallowed.
 type VMAddResult struct {
-	CoveredBy string
-	Absorbed  []string
+	CoveredBy string   `json:"covered_by"`
+	Absorbed  []string `json:"absorbed"`
 }
 
 // VMFolders is the folder service the handlers call.

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ type fakeColima struct {
 	garbled bool   // status exits 0 with output that is not colima's JSON
 	hang    bool   // status blocks until its context ends (a wedged hostagent)
 	rules   string // what `ssh … iptables -S` prints
+	mounts  string // what `ssh … cat /proc/self/mounts` prints
+	// hangSSH makes the named ssh command ("iptables" or "mounts") block until its context ends.
+	hangSSH string
 	onSSH   func() // called on each ssh (lets a test order it against docker calls)
 	calls   []string
 }
@@ -61,6 +65,19 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
 			mount, f.socket), nil
 	case "ssh":
+		kind := "iptables"
+		if strings.Contains(strings.Join(args, " "), "/proc/self/mounts") {
+			kind = "mounts"
+		}
+		if f.hangSSH == kind {
+			f.mu.Unlock()
+			<-ctx.Done()
+			f.mu.Lock()
+			return "", ctx.Err()
+		}
+		if kind == "mounts" {
+			return f.mounts, nil
+		}
 		if f.onSSH != nil {
 			f.onSSH()
 		}
@@ -187,9 +204,31 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 		if err := os.MkdirAll(vc.ColimaHome(), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(vc.StampPath(), []byte("x\n"), 0o600); err != nil {
+		// The VM as `box setup` leaves it: its colima.yaml, the stamp that is that
+		// yaml's hash, and a running VM whose mounts are exactly the yaml's.
+		y, err := vc.YAML()
+		if err != nil {
 			t.Fatal(err)
 		}
+		if err := os.MkdirAll(filepath.Dir(vc.YAMLPath()), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vc.YAMLPath(), y, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(y)
+		if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var mb strings.Builder
+		for _, m := range vc.Mounts() {
+			mode := "ro"
+			if m.Writable {
+				mode = "rw"
+			}
+			fmt.Fprintf(&mb, "mount%d %s virtiofs %s,relatime 0 0\n", len(mb.String()), m.Location, mode)
+		}
+		fc.mounts = mb.String()
 	}
 	return l, fc, d
 }

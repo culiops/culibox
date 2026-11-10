@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -12,6 +11,12 @@ import (
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/vmshares"
 	"github.com/culiops/culibox/internal/web"
+)
+
+// Deadlines of the apply job; vars so a test can shorten them.
+var (
+	applyJobTimeout   = 5 * time.Minute
+	applyCheckTimeout = 60 * time.Second
 )
 
 const (
@@ -38,6 +43,13 @@ func (s *vmShareSvc) jobCopy() *web.VMApply {
 	j := *s.job
 	j.Steps = append([]web.VMApplyStep{}, s.job.Steps...)
 	return &j
+}
+
+// jobRunning is true while an apply job runs.
+func (s *vmShareSvc) jobRunning() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running()
 }
 
 // ApplyStatus is the last job, if any.
@@ -164,6 +176,9 @@ type layerVMControl struct {
 	l        *boxLayer
 	sessions func() []session.Info
 	applying atomic.Bool
+	// jobRunning is the folder service's job state: it is true from the moment
+	// Apply() accepts the job, before its goroutine runs.
+	jobRunning func() bool
 }
 
 func newLayerVMControl(l *boxLayer, sessions func() []session.Info) *layerVMControl {
@@ -230,11 +245,17 @@ func (c *layerVMControl) RunningCwds() []string {
 	return out
 }
 
-func (c *layerVMControl) Applying() bool { return c.applying.Load() }
+func (c *layerVMControl) Applying() bool {
+	return c.applying.Load() || (c.jobRunning != nil && c.jobRunning())
+}
 
 func (c *layerVMControl) Apply(ctx context.Context, step func(name, state, sub string)) error {
 	c.applying.Store(true)
 	defer c.applying.Store(false)
+	// A wedged colima must not leave the flag set (and every spawn refused)
+	// forever. The start has its own bound inside ApplyMounts.
+	ctx, cancel := context.WithTimeout(ctx, applyJobTimeout)
+	defer cancel()
 	names := map[boxvm.ApplyStep]string{boxvm.StepStop: "stop", boxvm.StepStart: "start"}
 	err := c.l.vm.ApplyMounts(ctx, boxvm.ApplyHooks{Step: func(s boxvm.ApplyStep, e boxvm.StepEvent) {
 		switch {
@@ -263,30 +284,33 @@ func (c *layerVMControl) Apply(ctx context.Context, step func(name, state, sub s
 // boxes and reclaims state in the fresh VM.
 func (l *boxLayer) checkAfterApply(ctx context.Context) error {
 	vc := l.vm.Config()
-	rules, err := l.vm.FilterRules(ctx)
+	rctx, cancel := context.WithTimeout(ctx, applyCheckTimeout)
+	rules, err := l.vm.FilterRules(rctx)
+	cancel()
 	if err == nil {
 		if err = boxvm.CheckInputRules(rules, vc.EgressPort, vc.BrokerPort); err == nil {
 			err = boxvm.CheckDockerUserRules(rules)
 		}
 	}
 	if err == nil {
-		err = l.verifyMounts(ctx)
+		mctx, cancel := context.WithTimeout(ctx, applyCheckTimeout)
+		err = l.verifyMounts(mctx)
+		cancel()
 	}
 	if err != nil {
 		return err
 	}
+	// reconcileAndReclaim bounds itself (vmStartPassTimeout).
 	l.reconcileAndReclaim(ctx)
 	return nil
 }
 
 // verifyMounts compares the running VM's mounts with its colima.yaml and
-// remembers a failure, so spawns keep checking until it passes. A VM with no
-// colima.yaml has nothing to compare (the spawn meets ErrNotSetUp first).
+// remembers a failure, so spawns keep checking until it passes. A missing
+// colima.yaml is a failure too: a set-up VM started without it runs on colima's
+// defaults, which share the home folder.
 func (l *boxLayer) verifyMounts(ctx context.Context) error {
 	err := l.vm.VerifyMounts(ctx)
-	if err != nil && errors.Is(err, fs.ErrNotExist) {
-		err = nil
-	}
 	l.folderCheckFailed.Store(err != nil)
 	return err
 }

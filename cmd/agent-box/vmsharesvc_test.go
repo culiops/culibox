@@ -285,8 +285,10 @@ func TestApplyJobStepsAndFailure(t *testing.T) {
 		t.Fatalf("sub %q", j.Steps[0].Sub)
 	}
 	f.ctl.failStart = errors.New("boom")
-	s.Apply()
-	if j := waitJob(t, s); j.ID != 2 && j.Error != "The VM did not start." {
+	if _, err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, s); j.ID != 2 || j.Error != "The VM did not start." || j.Detail != "boom" {
 		t.Fatalf("%+v", j)
 	}
 }
@@ -305,19 +307,8 @@ func TestPrepareRefusedWhileApplying(t *testing.T) {
 
 func TestPrepareVerifiesMountsAfterStart(t *testing.T) {
 	l, fc, _ := darwinLayer(t, false)
-	vc := l.vm.Config()
-	y, err := vc.YAML()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(vc.YAMLPath()), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(vc.YAMLPath(), y, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fc.rules = "" // /proc/self/mounts lists nothing: every mount is missing
-	err = l.prepare(context.Background())
+	fc.mounts = "" // /proc/self/mounts lists nothing: every mount is missing
+	err := l.prepare(context.Background())
 	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") || !strings.Contains(err.Error(), "agent-box doctor") {
 		t.Fatalf("%v", err)
 	}
@@ -327,6 +318,19 @@ func TestPrepareVerifiesMountsAfterStart(t *testing.T) {
 	// The VM is running now: the next spawn re-checks because the last one failed.
 	if err := l.prepare(context.Background()); err == nil || !strings.Contains(err.Error(), "do not match") {
 		t.Fatalf("second: %v", err)
+	}
+}
+
+// A set-up VM (stamp present) with no colima.yaml would start on colima's
+// defaults, which include $HOME: that is a failed check, never a pass.
+func TestPrepareMissingYAMLAfterStartIsRefused(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	if err := os.Remove(l.vm.Config().YAMLPath()); err != nil {
+		t.Fatal(err)
+	}
+	err := l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") {
+		t.Fatalf("%v", err)
 	}
 }
 
