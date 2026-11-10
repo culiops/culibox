@@ -49,6 +49,7 @@
 // the frame draws it). lastUsed(): the folder the last session started in; only an inline list pins it (first row,
 // trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
 // instead of spawnWsIdleNote's (New session names where the field's value came from).
+// filter(path): optional; false drops a row from every list (typed paths are not filtered).
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
@@ -78,7 +79,10 @@ function createWsPicker(opts) {
   let drawnInline = false;
   const workspaces = () => (typeof workspacesCache !== "undefined" && Array.isArray(workspacesCache) ? workspacesCache : []);
   // Asked each time rows are drawn: a session started since the last open is seen.
-  const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(rows, o.lastUsed()) : rows);
+  // o.filter(path): false drops a row (a Mac's New session lists only folders the box VM can see). Typed paths are not
+  // filtered; the server refuses them.
+  const keep = (rows) => (typeof o.filter === "function" ? rows.filter((r) => o.filter(r.path) !== false) : rows);
+  const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(keep(rows), o.lastUsed()) : keep(rows));
   const idleRows = () => pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
   const note = (text, idle) => onNote(text || "", idle === true);
   const idleNote = (count) => note(typeof o.idleText === "function" ? o.idleText(count) : spawnWsIdleNote(count), true);

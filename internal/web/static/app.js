@@ -5456,7 +5456,56 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
+    filter: (path) => (spawnVMFilter ? spawnVMFilter(path) : true),
   });
+  input.addEventListener("input", hideSpawnNotShared);
+}
+
+// On a Mac the picker offers only folders the box VM can see (applied rw shares from /api/vm-folders). null = no filtering: not a
+// Mac, the list could not be read, or the VM sees everything. The server still enforces either way.
+let spawnVMFilter = null;
+async function loadSpawnVMFilter() {
+  spawnVMFilter = null;
+  const help = $("spawn-ws-vmhelp");
+  if (help) help.hidden = true;
+  if (!(globalThis.vmFoldersOn === true)) return;
+  let view = null;
+  try { view = await api("/api/vm-folders"); } catch (_) { return; }
+  spawnVMFilter = vmShareFilter(view);
+  if (help && spawnVMFilter) { help.textContent = SPAWN_VM_SEES_HELP; help.hidden = false; }
+}
+
+// The M9.9 refusal under the Workspace field: the line, and a "Share this folder…" button that closes the dialog and opens
+// Settings > VM folders with the add card prefilled (M9.9b). Editing the field clears it.
+function showSpawnNotShared(body, closeSpawn) {
+  const box = $("spawn-notshared"), input = $("spawn-ws-input");
+  if (!box) return;
+  const b = body || {};
+  const line = document.createElement("div");
+  line.className = "field-error spawn-ns-line";
+  if ((b.pending === true || b.read_only === true) && b.error) line.textContent = spawnNotSharedLine(b);
+  else {
+    const code = document.createElement("code");
+    code.textContent = b.path || "";
+    line.append(code, SPAWN_NOT_SHARED_TAIL);
+  }
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-sm";
+  btn.textContent = "Share this folder…";
+  btn.onclick = () => {
+    closeSpawn();
+    openSettings("vmfolders");
+    openVMFoldersAdd(b.path || "", "rw", "spawn");
+  };
+  box.replaceChildren(line, btn);
+  box.hidden = false;
+  if (input) { input.classList.add("is-invalid"); input.setAttribute("aria-invalid", "true"); }
+}
+function hideSpawnNotShared() {
+  const box = $("spawn-notshared"), input = $("spawn-ws-input");
+  if (box && !box.hidden) { box.hidden = true; box.replaceChildren(); }
+  if (input) { input.classList.remove("is-invalid"); input.removeAttribute("aria-invalid"); }
 }
 
 // spawnWsCaption: the steady-state line under the field: the plain "N project roots · type to filter · ↵ to pick", with
@@ -5481,6 +5530,7 @@ function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
 function onSpawnCwdChanged() {
+  hideSpawnNotShared();
   updateTierExplain();
   updateRuntimeWarning();
 }
@@ -5755,6 +5805,8 @@ async function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  hideSpawnNotShared();
+  loadSpawnVMFilter(); // not awaited: the picker reads the filter when it draws
   // A Duplicate's account applies only where its prefill does (same profile).
   syncSpawnAccount(prefill && want === prefill.agent ? prefill.account : undefined);
   $("spawn-prompt").value = spawnPromptDraft;
@@ -6053,6 +6105,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     $("spawn-prompt").value = "";
   };
   hideSpawnUnlock();
+  hideSpawnNotShared();
   // A Keychain refusal left on the line by the previous try is stale now; any
   // other note there (profiles could not be refreshed) is not ours to clear.
   if (spawnUnavailMsg && $("spawn-err").textContent === spawnUnavailMsg) setDialogError("spawn-modal", "");
@@ -6070,6 +6123,12 @@ $("spawn").addEventListener("submit", async (ev) => {
   } catch (e) {
     if (spawnRefusedLocked(e.status, e.code)) {
       showSpawnUnlock(e.message); // dialog and form values stay as they were
+    } else if (spawnRefusedNotShared(e.status, e.code)) {
+      showSpawnNotShared(e.body || { error: e.message }, closeSpawn); // dialog and form values stay as they were
+    } else if (spawnRefusedRestarting(e.status, e.code)) {
+      // The VM is restarting: the sentence says so; follow the apply so the sidebar banner appears.
+      setDialogError("spawn-modal", e.message);
+      if (typeof startVMApplyPoll === "function") startVMApplyPoll();
     } else if (spawnRefusedUnavailable(e.status, e.code)) {
       // Keychain failure: nothing to type. The sentence names the fix; the dialog
       // and form values stay as they were.

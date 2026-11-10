@@ -747,3 +747,19 @@ test("a window resize across the phone breakpoint closes an open list instead of
   fire(p.input, "focus");
   assert.deepStrictEqual(cls(p.list.children[0]), ["ft-opt"], "reopened, it is drawn for the layout it is in");
 });
+
+test("filter(path) drops rows from the idle list and from a search, and drops nothing when absent", async () => {
+  const t = env();
+  const only = (p) => p.startsWith("/home/me/culishop");
+  const a = t.make({ filter: only });
+  fire(a.input, "focus");
+  assert.deepStrictEqual(rowsOf(a), ["culishop"], "idle list keeps only visible folders");
+  t.server.search = [{ rel: "me/culishop/api", path: "/home/me/culishop/api" }, { rel: "me/notes/x", path: "/home/me/notes/x" }];
+  type(a, "ap");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(a), ["api"], "search hits are filtered too");
+  const b = t.make();
+  fire(b.input, "focus");
+  assert.deepStrictEqual(rowsOf(b), ["culishop", "notes"], "no filter, no change");
+});

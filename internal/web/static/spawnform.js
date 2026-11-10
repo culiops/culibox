@@ -126,6 +126,44 @@ function spawnRefusedUnavailable(status, code) {
   return status === 503 && code === "store_unavailable";
 }
 
+// spawnRefusedNotShared: a boxed spawn was refused because its folder is not shared with the macOS box VM (HTTP 400, code
+// "not_shared"). The dialog stays open: the error sits under the Workspace field with a "Share this folder…" button (M9.9).
+function spawnRefusedNotShared(status, code) {
+  return status === 400 && code === "not_shared";
+}
+
+// spawnRefusedRestarting: refused because the box VM is restarting (HTTP 503, code "vm_restarting"). The dialog shows the
+// server's sentence in its error line and starts following the apply.
+function spawnRefusedRestarting(status, code) {
+  return status === 503 && code === "vm_restarting";
+}
+
+// The M9.9 sentence, after the folder's path (the path itself is drawn as code).
+const SPAWN_NOT_SHARED_TAIL = " is not shared with the box VM, so a box can’t use it.";
+const SPAWN_VM_SEES_HELP = "The list offers only folders the box VM can see.";
+
+// spawnNotSharedLine(body): the field error for a not_shared refusal body ({error, path, pending, read_only}). The plain case is
+// the M9.9 sentence built from the path; a folder that is only pending, or shared read-only, gets the server's own sentence.
+function spawnNotSharedLine(body) {
+  const b = body || {};
+  if ((b.pending === true || b.read_only === true) && b.error) return String(b.error);
+  return String(b.path || "") + SPAWN_NOT_SHARED_TAIL;
+}
+
+// vmShareFilter(view): the picker's folder filter on a Mac, from GET /api/vm-folders. Returns null (no filtering; the server still
+// enforces) unless the VM's list is applied: a whole-home or not-set-up VM can see everything or nothing we can name. Otherwise a
+// function(path) true when the path is inside an applied read-write share: rows with mode "rw" whose pending is not "added" (a
+// row pending removal is still applied). Case-insensitive, whole path components.
+function vmShareFilter(view) {
+  if (!view || (view.state !== "applied" && view.state !== "pending") || !Array.isArray(view.rows)) return null;
+  const norm = (p) => String(p || "").replace(/\/+$/, "").toLowerCase();
+  const roots = view.rows.filter((r) => r && r.mode === "rw" && r.pending !== "added").map((r) => norm(r.path)).filter((r) => r !== "");
+  return (path) => {
+    const p = norm(path);
+    return roots.some((r) => p === r || p.startsWith(r + "/"));
+  };
+}
+
 // spawnProgressText is the dialog's status line while a spawn POST is in flight
 // (#36). The server answers only once the session exists, and a boxed spawn may
 // first start the box (on a Mac, its VM too) and a container, which takes tens of seconds after an
@@ -140,7 +178,8 @@ function spawnProgressText(seconds, runtime) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    spawnRefusedLocked, spawnRefusedUnavailable, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
+    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter,
+    SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,
   };

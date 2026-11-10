@@ -298,6 +298,9 @@
     .storecard.mstorecard { margin: 8px 0; }
     .spawn-unlock { padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
     .spawn-unlock[hidden] { display: none; }
+    .spawn-notshared { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; min-width: 0; }
+    .spawn-notshared[hidden] { display: none; }
+    .spawn-ns-line { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
     .spawn-unlock .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
     .spawn-unlock .storeretry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
     .tabs .t[hidden] { display: none; }
