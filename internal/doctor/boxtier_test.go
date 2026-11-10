@@ -12,6 +12,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 func ok() boxFacts {
@@ -281,5 +282,62 @@ func TestBoxTierContextRowSurvivesEarlyReturns(t *testing.T) {
 		if d := detail(boxTierResults("darwin", f, tokenOK)); !strings.Contains(d, "PASS docker context") {
 			t.Errorf("%s: the context PASS row was dropped:\n%s", name, d)
 		}
+	}
+}
+
+func TestBoxTierWholeHomeWarns(t *testing.T) {
+	f := ok()
+	f.WholeHome, f.ShareCount = true, 3
+	rs := boxTierResults("darwin", f, tokenOK)
+	want := vmshares.WholeHomeLine(3)
+	found := false
+	for _, r := range rs {
+		if r.Check == "box VM folders" && r.Status == Warn && r.Detail == want {
+			found = true
+		}
+	}
+	if !found || !strings.Contains(want, "shares your whole home folder") {
+		t.Fatalf("want whole-home warn %q:\n%s", want, detail(rs))
+	}
+}
+
+func TestBoxTierMountsOnlyDriftNoRecreate(t *testing.T) {
+	f := ok()
+	f.Drifted, f.Drift = true, boxvm.DriftMountsOnly
+	rs := boxTierResults("darwin", f, tokenOK)
+	if strings.Contains(detail(rs), "-recreate") {
+		t.Fatalf("mounts-only drift must not mention -recreate:\n%s", detail(rs))
+	}
+	if !strings.Contains(detail(rs), "WARN box VM folders: the folder list changed") {
+		t.Fatalf("missing folder-list drift warn:\n%s", detail(rs))
+	}
+	f.Drift = boxvm.DriftOther
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "-recreate") {
+		t.Fatal("DriftOther keeps the recreate row")
+	}
+}
+
+func TestBoxTierSharesCorruptWarns(t *testing.T) {
+	f := ok()
+	f.SharesErr = errors.New("vm-shares.json is damaged")
+	rs := boxTierResults("darwin", f, tokenOK)
+	if !strings.Contains(detail(rs), "box VM folders list: vm-shares.json cannot be read (vm-shares.json is damaged); fix or move it away; until then the folder list cannot change") {
+		t.Fatalf("corrupt warn missing:\n%s", detail(rs))
+	}
+	f.WholeHome = true
+	if n := strings.Count(detail(boxTierResults("darwin", f, tokenOK)), "box VM folders"); n != 2 {
+		t.Fatalf("whole-home + corrupt = two rows, got %d", n)
+	}
+}
+
+func TestBoxTierFolderPassAndLinuxNoRow(t *testing.T) {
+	f := ok()
+	f.ShareCount = 4
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "box VM folders: the box VM sees 4 folders and CuliBox data") {
+		t.Fatal("missing pass row")
+	}
+	f.Stopped = []string{"x"}
+	if strings.Contains(detail(boxTierResults("linux", f, tokenOK)), "box VM folders") {
+		t.Fatal("linux has no folder row")
 	}
 }
