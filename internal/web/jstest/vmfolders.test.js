@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { vmfModel, vmfAddState, vmfCheckFrom, vmfRemoveCopy, vmfAddHelp, VMF_HELPER } = require("../static/vmfolders.js");
+const { vmfModel, vmfAddState, vmfCheckFrom, vmfRemoveCopy, vmfAddHelp, VMF_HELPER, vmfPhoneModel, vmfFootModel } = require("../static/vmfolders.js");
 
 const row = (p, o) => Object.assign({ path: "/Users/me" + p, display: "~" + p, mode: "rw", origin: "Added by you", used_by: [], running: 0, pending: "" }, o);
 const APPLIED = {
@@ -185,4 +185,61 @@ test("a finished job is not a card: the strip is back", () => {
   assert.strictEqual(m.card, false);
   assert.strictEqual(m.strip.status, "Applied");
   assert.strictEqual(m.under, VMF_HELPER);
+});
+
+// #70 Task 16: the phone's list, built from the same model (no copy of its own).
+test("phone M9.1: a card per folder with path, origin, Used by, a two-way switch and a Remove; no table, no Apply", () => {
+  const m = vmfPhoneModel(vmfModel(APPLIED));
+  assert.strictEqual(m.rows.length, 5);
+  const [a, b, , d, data] = m.rows;
+  assert.strictEqual(a.display, "~/code/culibox");
+  assert.strictEqual(a.origin, "Workspace of profile culibox; culibox-clone copies it");
+  assert.strictEqual(a.usedLabel, "Used by");
+  assert.strictEqual(a.usedText, "culibox, culibox-clone");
+  assert.deepStrictEqual(a.seg, { value: "rw", items: [["rw", "Read & write"], ["ro", "Read only"]] });
+  assert.strictEqual(a.action, "Remove");
+  assert.strictEqual(b.usedText, "1 running session");
+  assert.strictEqual(d.seg.value, "ro");
+  assert.strictEqual(data.data, true);
+  assert.strictEqual(data.seg, null);
+  assert.strictEqual(data.action, "");
+  assert.strictEqual(data.modeText, "Set by CuliBox");
+  assert.strictEqual(m.rows.filter((r) => r.usedText === "").length, 0, "an empty Used by is the muted No profile");
+});
+
+test("phone M9.3: the removed-pending row shows its chip, plain text and Undo; the armed question is the M9.5 text", () => {
+  const m = vmfPhoneModel(vmfModel(PENDING));
+  const removed = m.rows[2];
+  assert.strictEqual(removed.chip, "Removed · not applied");
+  assert.strictEqual(removed.seg, null);
+  assert.strictEqual(removed.modeText, "Read only");
+  assert.strictEqual(removed.action, "Undo");
+  assert.strictEqual(m.rows[1].chip, "Added · not applied");
+  assert.strictEqual(vmfRemoveCopy(m.rows[0]).body, "culibox uses it. Once you apply, its sessions are refused until you add it back.");
+});
+
+test("phone: the status line, the note and the banner come from the page model", () => {
+  const m = vmfPhoneModel(vmfModel(PENDING));
+  assert.strictEqual(m.strip.status, "Changes not applied yet");
+  assert.strictEqual(m.strip.action, undefined, "the footer carries Apply on the phone");
+  assert.match(m.note, /^Applying restarts the box VM/);
+  const w = vmfPhoneModel(vmfModel(Object.assign({}, APPLIED, { state: "whole_home" })));
+  assert.strictEqual(w.banner.title, "The box VM can see your whole home folder");
+  assert.strictEqual(w.banner.action, undefined);
+});
+
+test("phone footer: Apply only when pending or whole-home, disabled while a job runs, Add folder waits with it", () => {
+  assert.deepStrictEqual(vmfFootModel(APPLIED, null, false), { apply: false, applyDisabled: false, addDisabled: false });
+  assert.deepStrictEqual(vmfFootModel(PENDING, null, false), { apply: true, applyDisabled: false, addDisabled: false });
+  assert.deepStrictEqual(vmfFootModel(Object.assign({}, APPLIED, { state: "whole_home" }), null, false), { apply: true, applyDisabled: false, addDisabled: false });
+  assert.deepStrictEqual(vmfFootModel(PENDING, { state: "running" }, false), { apply: true, applyDisabled: true, addDisabled: true });
+  assert.strictEqual(vmfFootModel(APPLIED, null, true).addDisabled, true, "an open add form");
+});
+
+test("phone footer and layout are wired in index.html and app.css", () => {
+  const HTML = fs.readFileSync(path.join(__dirname, "../static/index.html"), "utf8");
+  const CSS = fs.readFileSync(path.join(__dirname, "../static/app.css"), "utf8");
+  assert.match(HTML, /<div class="dft" id="foot-vmfolders" hidden>[\s\S]*?data-close="settings-modal"[\s\S]*?id="vmf-foot-add"[\s\S]*?id="vmf-foot-apply"[^>]*>Apply \(restart box VM\)</);
+  assert.doesNotMatch(CSS, /#settings-tabs \.t\[data-tab="vmfolders"\] \{ display: none; \}/, "the phone no longer hides the tab");
+  assert.match(CSS, /#settings-modal:not\(\.as-page\) #vmfolders/);
 });

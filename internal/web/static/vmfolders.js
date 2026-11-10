@@ -107,6 +107,30 @@ function vmfModel(view) {
   };
 }
 
+// vmfPhoneModel(m): the phone's list from the page model (same words; nothing new). Each row also carries the two-way switch as
+// data. The strip and banner lose their Apply button: on the phone the footer holds it (vmfFootModel).
+function vmfPhoneModel(m) {
+  const rows = m.rows.map((r) => Object.assign({}, r, {
+    usedLabel: "Used by",
+    usedText: r.usedText || (r.data ? "" : "No profile"),
+    seg: r.seg ? { value: r.seg, items: [["rw", "Read & write"], ["ro", "Read only"]] } : null,
+    action: r.data ? "" : r.action,
+  }));
+  const strip = m.strip ? Object.assign({}, m.strip) : null;
+  if (strip) delete strip.action;
+  const banner = m.banner ? Object.assign({}, m.banner) : null;
+  if (banner) delete banner.action;
+  return Object.assign({}, m, { rows, strip, banner });
+}
+
+// vmfFootModel(view, job, cardOpen): the phone footer. Apply shows for a pending list or the whole-home proposal and waits while a
+// restart runs; Add folder waits with it and while the add form is open.
+function vmfFootModel(view, job, cardOpen) {
+  const v = view || {};
+  const running = !!(job && job.state === "running");
+  return { apply: v.state === "pending" || v.state === "whole_home", applyDisabled: running, addDisabled: running || !!cardOpen };
+}
+
 // vmfRemoveCopy(row): the in-row question for a folder a profile uses (M9.5), or null when nothing uses it and Remove is one step.
 function vmfRemoveCopy(row) {
   const used = row.usedBy || [];
@@ -185,6 +209,14 @@ function vmfRole(el, role) {
   return el;
 }
 
+// The desktop page (pagehost.js sets as-page) or the phone's modal. Asked at paint time, like tokens.js: a modal opened on a phone
+// stays a modal when the window widens, and a page stays a page when it narrows, so the next paint matches the dialog.
+function vmfPhoneMode() {
+  if (typeof document === "undefined") return false;
+  const m = document.getElementById("settings-modal");
+  return !m || !m.classList.contains("as-page");
+}
+
 function vmfLock() {
   const NS = "http://www.w3.org/2000/svg";
   const s = document.createElementNS(NS, "svg");
@@ -206,12 +238,14 @@ function vmfLock() {
 }
 
 function vmfSeg(row, locked) {
+  const cur = row.seg && row.seg.value ? row.seg.value : row.seg; // the phone's model carries the switch as {value, items}
   const seg = vmfEl("div", "seg vmf-seg");
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "What boxes can do in " + row.display);
   for (const [mode, label] of [["rw", "Read & write"], ["ro", "Read only"]]) {
-    const b = vmfBtn(label, "seg-item", () => { if (row.seg !== mode) vmfSave(() => vmfPatch(row.path, mode)); });
-    b.setAttribute("aria-pressed", row.seg === mode ? "true" : "false");
+    const b = vmfBtn(label, "seg-item", () => { if (cur !== mode) vmfSave(() => vmfPatch(row.path, mode)); });
+    b.setAttribute("aria-pressed", cur === mode ? "true" : "false");
+    if (vmfPhoneMode()) b.classList.toggle("on", cur === mode); // the phone's .seg marks the choice with .on, the page's kit with aria-pressed
     b.disabled = !!locked;
     seg.appendChild(b);
   }
@@ -344,6 +378,7 @@ function vmfPaint() {
     kids.push(e);
   }
   const pm = m.card && typeof vmApplyProgressModel === "function" ? vmApplyProgressModel(vmfJob(), Date.now()) : null;
+  if (vmfPhoneMode()) { vmfPaintPhone(main, kids, vmfPhoneModel(m), pm); return; }
   if (pm) kids.push(vmfProgressEl(pm, vmfJob()));
   else if (m.banner) kids.push(vmfBannerEl(m.banner));
   else if (m.strip) kids.push(vmfStripEl(m.strip, m.note));
@@ -360,8 +395,91 @@ function vmfPaint() {
   vmfSyncHead();
 }
 
+// ---- the phone's layout (#70 Task 16): the current mobile style, a list of cards, the footer holds the actions ---------------
+
+function vmfPaintPhone(main, kids, pm, prog) {
+  const j = vmfJob();
+  if (prog) kids.push(vmfProgressEl(prog, j));
+  else if (pm.banner) {
+    const b = vmfEl("div", "vmf-banner");
+    b.setAttribute("role", "status");
+    b.append(vmfEl("p", "vmf-banner-t", pm.banner.title), vmfRich(vmfEl("p", "hint", ""), pm.banner.body), vmfEl("p", "hint", pm.banner.muted), vmfRich(vmfEl("p", "hint", ""), pm.banner.terminal));
+    kids.push(b);
+  } else if (pm.strip) {
+    const s = vmfEl("div", "vmf-pstrip");
+    const line = vmfEl("p", "vmf-pstatus");
+    if (pm.strip.dot) line.appendChild(vmfEl("span", "dot dot-run"));
+    line.appendChild(vmfEl("b", "", pm.strip.status));
+    s.append(line, vmfEl("p", "hint", pm.strip.detail));
+    if (pm.note) s.appendChild(vmfEl("p", "hint", pm.note));
+    kids.push(s);
+  }
+  const head = vmfEl("p", "vmf-ptitle", pm.title);
+  head.appendChild(vmfEl("span", "hint", String(pm.count)));
+  kids.push(head);
+  if (pm.subtitle) kids.push(vmfEl("p", "hint vmf-psub", pm.subtitle));
+  const ul = vmfEl("ul", "vmf-plist");
+  vmfFocusKeep = null;
+  for (const r of pm.rows) {
+    ul.appendChild(vmfPhoneRow(r, pm.locked));
+    const copy = !r.data && !r.removed && !pm.locked && r.path === vmfArmed ? vmfRemoveCopy(r) : null;
+    if (copy) ul.lastChild.append(vmfPhoneAsk(r, copy));
+  }
+  kids.push(ul);
+  if (pm.under) kids.push(vmfEl("p", "hint vmf-under", pm.under));
+  main.replaceChildren(...kids);
+  if (vmfFocusKeep && typeof vmfFocusKeep.focus === "function") vmfFocusKeep.focus();
+  vmfSyncHead();
+}
+
+function vmfPhoneRow(r, locked) {
+  const li = vmfEl("li", "vmf-prow" + (r.removed ? " vmf-removed" : "") + (r.data ? " vmf-pdata" : ""));
+  const line = vmfEl("div", "vmf-path");
+  line.appendChild(vmfEl("span", "mono", r.display));
+  if (r.data) line.appendChild(vmfLock());
+  if (r.chip) line.appendChild(vmfEl("span", "hint vmf-pchip", r.chip));
+  li.append(line, vmfRich(vmfEl("div", "hint vmf-origin"), r.origin));
+  const used = vmfEl("div", "vmf-pused");
+  used.append(vmfEl("span", "hint", r.usedLabel), vmfEl("span", r.usedText === "No profile" ? "hint" : "", r.usedText));
+  if (r.seg) li.append(used, vmfSeg(r, locked));
+  else li.append(used, vmfEl("div", "hint", r.modeText));
+  if (r.action) {
+    const b = vmfBtn(r.action === "Remove" ? "Remove…" : r.action, "btn" + (r.action === "Remove" ? " dgr" : ""), () => (r.removed ? vmfSave(() => vmfAdd(r.path, r.mode), r.path) : vmfRemoveClick(r)));
+    b.setAttribute("aria-label", r.action + " " + r.display);
+    b.dataset.vmfAct = r.path;
+    b.disabled = !!locked;
+    li.appendChild(b);
+  }
+  return li;
+}
+
+// The in-row question (M9.5) on the phone: the row arms like a token's revoke, Keep it / Remove side by side.
+function vmfPhoneAsk(r, copy) {
+  const box = vmfEl("div", "vmf-pask");
+  box.setAttribute("role", "alert");
+  box.append(vmfRich(vmfEl("p", "vmf-banner-t"), copy.title), vmfEl("p", "", copy.body), vmfEl("p", "hint", copy.note));
+  const acts = vmfEl("div", "vmf-pacts");
+  const keep = vmfBtn("Keep it", "btn", () => { vmfArmed = ""; vmfPaint(); vmfFocusRow(r.path); });
+  const go = vmfBtn("Remove", "btn dgr", () => { vmfArmed = ""; vmfSave(() => vmfDelete(r.path), r.path); });
+  acts.append(keep, go);
+  box.appendChild(acts);
+  vmfFocusKeep = keep;
+  return box;
+}
+
+// vmfSyncFoot: the phone footer's Add folder and Apply follow the view, the job and the open add form.
+function vmfSyncFoot() {
+  const add = document.getElementById("vmf-foot-add");
+  const apply = document.getElementById("vmf-foot-apply");
+  if (!add && !apply) return;
+  const f = vmfFootModel(vmfView, vmfJob(), !!vmfCard);
+  if (add) { add.disabled = f.addDisabled; add.onclick = () => openVMFoldersAdd("", "rw", ""); }
+  if (apply) { apply.hidden = !f.apply; apply.disabled = f.applyDisabled; apply.onclick = () => vmfApplyOpen(); }
+}
+
 // vmfSyncHead: the header's Add folder waits while the card is open and while the VM restarts.
 function vmfSyncHead() {
+  vmfSyncFoot();
   const b = document.getElementById("set-act-vmfolders");
   if (!b) return;
   const j = vmfJob();
@@ -454,7 +572,8 @@ function vmfCardSync() {
   c.els.input.classList.toggle("is-invalid", st.invalid);
   c.els.input.setAttribute("aria-invalid", st.invalid ? "true" : "false");
   const msg = c.els.msg;
-  msg.className = st.invalid ? "field-error" : "field-help";
+  const phone = c.els.input.classList.contains("fld");
+  msg.className = st.invalid ? (phone ? "dlg-err" : "field-error") : (phone ? "hint" : "field-help");
   msg.replaceChildren();
   vmfRich(msg, st.invalid ? st.error : st.note || vmfAddHelp(c.from));
   if (st.invalid) msg.setAttribute("role", "alert"); else msg.removeAttribute("role");
@@ -527,16 +646,17 @@ function vmfBuildCard(path, mode, from) {
   const slot = document.getElementById("vmf-card-slot");
   if (!slot) return;
   const els = { opts: [] };
-  const card = vmfEl("div", "vmf-fill vmf-add");
+  const phone = vmfPhoneMode();
+  const card = vmfEl("div", "vmf-fill vmf-add" + (phone ? " vmf-padd" : ""));
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", "Add a folder");
   const body = vmfEl("div", "vmf-add-body");
   body.appendChild(vmfEl("div", "vmf-add-lbl", "Add a folder"));
   const form = vmfEl("div", "vmf-add-form");
 
-  const field = vmfEl("div", "field vmf-fieldbox");
-  const lab = vmfEl("label", "field-label", "Folder");
-  const input = vmfEl("input", "input mono");
+  const field = vmfEl("div", phone ? "fcol vmf-fieldbox" : "field vmf-fieldbox");
+  const lab = vmfEl("label", phone ? "flab" : "field-label", "Folder");
+  const input = vmfEl("input", phone ? "fld mono" : "input mono");
   input.id = "vmf-path-in";
   input.type = "text";
   input.setAttribute("autocomplete", "off");
@@ -551,16 +671,21 @@ function vmfBuildCard(path, mode, from) {
   list.setAttribute("aria-label", "Directories");
   list.hidden = true;
   input.setAttribute("aria-controls", list.id);
-  const msg = vmfEl("span", "field-help");
+  const msg = vmfEl("span", phone ? "hint" : "field-help");
   msg.id = "vmf-msg";
   input.setAttribute("aria-describedby", msg.id);
   const browse = vmfBtn("Browse…", "btn", () => { input.focus(); if (vmfCard && vmfCard.picker) vmfCard.picker.open(); });
   const row = vmfEl("div", "vmf-inrow");
-  row.append(input, browse);
-  field.append(lab, row, list, msg);
+  // The phone has no Browse… and no directory list: the list is a fixed overlay that would sit on the message under the field, and a
+  // phone types a path or pastes one. The dry run under the field still answers (stated in the Task 16 report).
+  if (phone) {
+    for (const a of ["role", "aria-expanded", "aria-autocomplete", "aria-controls"]) input.removeAttribute(a); // no list to control
+    row.append(input);
+    field.append(lab, row, msg);
+  } else { row.append(input, browse); field.append(lab, row, list, msg); }
 
   const fs = vmfEl("fieldset", "vmf-modes");
-  fs.appendChild(vmfEl("legend", "field-label", "Boxes can"));
+  fs.appendChild(vmfEl("legend", phone ? "flab" : "field-label", "Boxes can"));
   const pick = (m) => { vmfCard.mode = m; vmfCardSync(); vmfCardCheck(); };
   const rw = vmfModeCard("rw", "rw", "Read & write", "For a workspace, or where clone copies live.", mode !== "ro", pick);
   const ro = vmfModeCard("ro", "ro", "Read only", "For notes, docs or runbooks a box only reads.", mode === "ro", pick);
@@ -579,7 +704,7 @@ function vmfBuildCard(path, mode, from) {
 
   Object.assign(els, { input, msg, add });
   vmfCard = { path, mode: mode === "ro" ? "ro" : "rw", from: from || "", check: null, seq: 0, timer: null, picker: null, busy: false, els };
-  if (typeof createWsPicker === "function") {
+  if (typeof createWsPicker === "function" && !phone) {
     vmfCard.picker = createWsPicker({
       input, list, keepEsc: true, reanchor: true,
       onPick: () => { vmfCardSync(); vmfCardCheck(); },
@@ -749,5 +874,5 @@ globalThis.vmfApplyOpen = vmfApplyOpen;
 globalThis.vmfApplyChanged = vmfApplyChanged;
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { vmfModel, vmfAddState, vmfCheckFrom, vmfRemoveCopy, vmfAddHelp, vmfNames, VMF_HELPER, VMF_HELP_DEFAULT, VMF_HELP_SPAWN };
+  module.exports = { vmfPhoneModel, vmfFootModel, vmfModel, vmfAddState, vmfCheckFrom, vmfRemoveCopy, vmfAddHelp, vmfNames, VMF_HELPER, VMF_HELP_DEFAULT, VMF_HELP_SPAWN };
 }

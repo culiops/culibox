@@ -304,8 +304,6 @@
     .spawn-unlock .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
     .spawn-unlock .storeretry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
     .tabs .t[hidden] { display: none; }
-    /* VM folders is the desktop page's until the phone gets its own (#70 Task 16). */
-    #settings-tabs .t[data-tab="vmfolders"] { display: none; }
     @media (max-width: 700px) {
       #store-banner { padding: 10px 12px; }
       .storeform .storepass { flex: 1 0 100%; min-height: var(--tap); }
@@ -2845,6 +2843,69 @@
          already verified) full-screen spawn form's own .seg is untouched. */
       #settings-modal .seg { display: flex; width: 100%; }
       #settings-modal .seg button { flex: 1; }
+      /* VM folders on the phone (#70 Task 16): a card per folder in the tokens' row style; the footer holds Add folder and Apply.
+         Scoped to the phone's modal (not the desktop page): desktop.css styles the page's own DOM at 701px and up. */
+      #settings-modal:not(.as-page) #vmfolders { overflow-x: hidden; }
+      #settings-modal:not(.as-page) #vmfolders :is(.vmf-banner, .vmf-pstrip, .vmf-pask, .vmf-prog, .vmf-padd) { box-sizing: border-box; max-width: 100%; }
+      #settings-modal:not(.as-page) #vmfolders :is(.mono, .hint, p, b) { overflow-wrap: anywhere; min-width: 0; }
+      #settings-modal:not(.as-page) #vmfolders p { margin: 0; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-main > * + *, #settings-modal:not(.as-page) #vmfolders .vmf-cardslot + .vmf-main > :first-child { margin-top: 10px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-cardslot:not(:empty) { margin-bottom: 12px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pstrip, #settings-modal:not(.as-page) #vmfolders .vmf-banner { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pstatus { display: flex; align-items: center; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-banner-t { font-weight: 700; }
+      #settings-modal:not(.as-page) #vmfolders .hint { margin-top: 0; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-ptitle { display: flex; align-items: center; gap: 8px; font-weight: 700; margin-top: 14px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-plist { list-style: none; margin: 0; padding: 0; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prow { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 0; font-size: 12.5px; border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-path { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pchip { padding: 1px 6px; border: 1px solid var(--border); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pused { display: flex; gap: 8px; flex-wrap: wrap; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-removed .vmf-path .mono { color: var(--muted); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-lock { flex: none; color: var(--muted); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prow > .btn { align-self: stretch; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pask { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--danger-tint); box-shadow: inset 3px 0 0 var(--danger); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pacts { display: flex; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-pacts .btn { flex: 1; min-height: var(--tap); }
+      #settings-modal:not(.as-page) #vmfolders .btn { min-height: var(--tap); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog { background: var(--surface-2); border: 1px solid var(--border); padding: 10px 12px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog-title { font-weight: 700; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog-spacer, #settings-modal:not(.as-page) #vmfolders .vmf-prog-elapsed { margin-left: auto; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog-head .btn { flex: 1 1 40%; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-steps { display: flex; flex-direction: column; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-step { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-step .empst-d { grid-column: 2 / 4; color: var(--muted); font-size: 11px; }
+      #settings-modal:not(.as-page) #vmfolders .spin { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: spawn-pulse 1s ease-in-out infinite alternate; }
+      @media (prefers-reduced-motion: reduce) { #settings-modal:not(.as-page) #vmfolders .spin { animation: none; } }
+      #settings-modal:not(.as-page) #vmfolders .empst-n { display: inline-flex; align-items: center; justify-content: center; }
+      #settings-modal:not(.as-page) #vmfolders .c-ok { color: var(--ok); }
+      #settings-modal:not(.as-page) #vmfolders .c-red { color: var(--danger); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-prog-foot { margin-top: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-fail { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-details-toggle { display: flex; gap: 8px; align-items: center; min-height: var(--tap); background: none; border: 0; color: var(--fg); text-align: left; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-cmd { display: flex; gap: 8px; align-items: center; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-padd { display: flex; flex-direction: column; gap: 14px; background: var(--surface-2); border: 1px solid var(--border); padding: 12px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-add-body, #settings-modal:not(.as-page) #vmfolders .vmf-add-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-add-lbl { font-weight: 700; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-fieldbox { position: relative; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-inrow { display: flex; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-inrow .fld { flex: 1 1 auto; min-width: 0; width: auto; box-sizing: border-box; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-inrow .btn { flex: none; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-fieldbox > .hint, #settings-modal:not(.as-page) #vmfolders .vmf-fieldbox > .dlg-err { display: block; margin-top: 6px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-wslist { position: fixed; z-index: 30; max-height: 240px; overflow-y: auto; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-wslist[hidden] { display: none; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-modes { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-optrow { display: flex; flex-direction: column; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); column-gap: 8px; align-items: start; min-height: var(--tap); box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-opt.is-on { background: var(--sel-soft); border-color: var(--accent); }
+      #settings-modal:not(.as-page) #vmfolders .vmf-opt > input { grid-row: 1 / span 2; margin: 3px 0 0; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-opt-d { grid-column: 2; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-add-foot { display: flex; flex-direction: column; gap: 8px; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-add-foot .btn { width: 100%; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-add-foot .vmf-hint { order: -1; }
       /* M10: the allowlist rows clear 52px (the header row above them stays
          hidden on mobile, so this only ever applies to real variable rows). */
       .kvrow { min-height: 52px; }
