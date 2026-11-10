@@ -413,3 +413,12 @@ func TestWorkspaceInPersonalConfigHasNoImportsHint(t *testing.T) {
 		t.Errorf("workspace refusal must not carry the imports hint: %q", reason)
 	}
 }
+
+// C2: a context path is mounted read-only, so its hint offers a read-only share.
+func TestCheckContextPathSharedHintIsReadOnly(t *testing.T) {
+	tmp := ctxTmp(t)
+	err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: "/Users/u"}}, Home: "/Users/u"})
+	if err == nil || !strings.Contains(err.Error(), "`agent-box box share add "+tmp+" -ro`") {
+		t.Fatalf("got %v", err)
+	}
+}

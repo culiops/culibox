@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +100,23 @@ func TestUnboxableIgnoringSharesSkipsTheShareRule(t *testing.T) {
 	}
 	if _, bad := m.UnboxableIgnoringShares(m.opts.StateRoot); !bad {
 		t.Fatal("the other rules still apply")
+	}
+}
+
+// C2: a folder a box only reads (clone_of, a context path) is offered as a
+// read-only share; one a box writes as a read-write one.
+func TestNotSharedHintFollowsTheNeededAccess(t *testing.T) {
+	v := ShareView{Applied: []VMShare{{Path: "/h/code", Writable: true}}, Home: "/h"}
+	err := v.Check("/h/orig", false)
+	var ns *NotSharedError
+	if !errors.As(err, &ns) || ns.NeedWrite {
+		t.Fatalf("read-only need: %v (%+v)", err, ns)
+	}
+	if want := "~/orig is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `agent-box box share add ~/orig -ro`"; err.Error() != want {
+		t.Errorf("got  %q\nwant %q", err, want)
+	}
+	err = v.Check("/h/other", true)
+	if !errors.As(err, &ns) || !ns.NeedWrite || strings.Contains(err.Error(), "-ro") {
+		t.Errorf("write need: %v (%+v)", err, ns)
 	}
 }

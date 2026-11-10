@@ -140,7 +140,7 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 		var ns *box.NotSharedError
 		errors.As(err, &ns)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "code": "not_shared",
-			"path": vmDisplay(ns.Dir, ns.Home), "pending": ns.Pending, "read_only": ns.ReadOnly})
+			"path": vmDisplay(ns.Dir, ns.Home), "pending": ns.Pending, "read_only": ns.ReadOnly, "need_write": ns.NeedWrite})
 	case errors.Is(err, box.ErrVMRestarting):
 		writeErrCode(w, http.StatusServiceUnavailable, err.Error(), "vm_restarting")
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),

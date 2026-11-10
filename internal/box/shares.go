@@ -42,7 +42,11 @@ type NotSharedError struct {
 	Dir      string
 	Pending  bool // listed by the user, not applied to the VM yet
 	ReadOnly bool // shared read-only, but a workspace needs read & write
-	Home     string
+	// NeedWrite: the box writes the folder (a workspace, a clone copy). False
+	// for what it only reads (clone_of, a context path): the hint then offers
+	// a read-only share.
+	NeedWrite bool
+	Home      string
 }
 
 func (e *NotSharedError) Unwrap() error { return ErrUnboxableWorkspace }
@@ -57,8 +61,12 @@ func (e *NotSharedError) Error() string {
 		return d + " was added to the box VM folders but not applied yet: apply it in Settings › VM folders " +
 			"(this restarts the box VM), or run `agent-box box share apply`"
 	}
+	ro := ""
+	if !e.NeedWrite {
+		ro = " -ro"
+	}
 	return d + " is not shared with the box VM, so a box can’t use it. " +
-		"Add it in Settings › VM folders, or run `agent-box box share add " + d + "`"
+		"Add it in Settings › VM folders, or run `agent-box box share add " + d + ro + "`"
 }
 
 // tildePath shows p with a leading home directory as "~".
@@ -90,14 +98,14 @@ func (v ShareView) Check(abs string, needWrite bool) error {
 		readOnly = true
 	}
 	if readOnly {
-		return &NotSharedError{Dir: abs, ReadOnly: true, Home: v.Home}
+		return &NotSharedError{Dir: abs, ReadOnly: true, NeedWrite: true, Home: v.Home}
 	}
 	for _, s := range v.Listed {
 		if pathWithin(abs, s.Path, v.Fold) {
-			return &NotSharedError{Dir: abs, Pending: true, Home: v.Home}
+			return &NotSharedError{Dir: abs, Pending: true, NeedWrite: needWrite, Home: v.Home}
 		}
 	}
-	return &NotSharedError{Dir: abs, Home: v.Home}
+	return &NotSharedError{Dir: abs, NeedWrite: needWrite, Home: v.Home}
 }
 
 // view reads the share view; nil = no VM, no check.

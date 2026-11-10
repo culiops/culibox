@@ -1360,6 +1360,28 @@ func TestCheckSharedClone(t *testing.T) {
 	}
 }
 
+// C2: an unshared clone_of is offered as a read-only share (rw would let an
+// escape plant .git/hooks); an unshared copy as a read-write one.
+func TestCheckSharedCloneHintModes(t *testing.T) {
+	base := resolvedTemp(t)
+	of, dir := filepath.Join(base, "orig"), filepath.Join(base, "copies", "c")
+	h := &cloneHooks{shares: func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: filepath.Join(base, "copies"), Writable: true}}, Home: base}, nil
+	}}
+	err := h.checkShared(config.Clone{Of: of, Dir: dir})
+	var ns *box.NotSharedError
+	if !errors.As(err, &ns) || ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/orig -ro`") {
+		t.Errorf("clone_of: %v", err)
+	}
+	h.shares = func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: of}}, Home: base}, nil
+	}
+	err = h.checkShared(config.Clone{Of: of, Dir: dir})
+	if !errors.As(err, &ns) || !ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/copies/c`") {
+		t.Errorf("copy: %v", err)
+	}
+}
+
 func resolvedTemp(t *testing.T) string {
 	t.Helper()
 	d, err := filepath.EvalSymlinks(t.TempDir())

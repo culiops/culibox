@@ -250,3 +250,17 @@ func TestSpawnErrVMRestarting(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
+
+// C2: the spawn refusal says whether the folder needs write access, so the
+// page's "Share this folder…" picks the mode the hint names.
+func TestSpawnErrNotSharedNeedWrite(t *testing.T) {
+	for _, need := range []bool{false, true} {
+		rec := httptest.NewRecorder()
+		writeSpawnErr(rec, "claude", &box.NotSharedError{Dir: "/Users/u/orig", NeedWrite: need, Home: "/Users/u"})
+		var b map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &b)
+		if b["need_write"] != need {
+			t.Fatalf("need %v: body %s", need, rec.Body)
+		}
+	}
+}
