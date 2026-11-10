@@ -294,6 +294,7 @@
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
       <div id="pf-navlist" role="group" aria-label="Profiles"></div>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
+      <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
@@ -579,6 +580,11 @@
       <div class="dlg-err" id="creds-err"></div>
     </div>
 
+    <div class="dbd pad" id="vmfolders" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="vmf-body"></div>
+    </div>
+
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
@@ -855,6 +861,7 @@
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
   <script src="/settingshead.js"></script>
+  <script src="/vmfolders.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

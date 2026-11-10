@@ -301,6 +301,8 @@
     .spawn-unlock .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
     .spawn-unlock .storeretry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
     .tabs .t[hidden] { display: none; }
+    /* VM folders is the desktop page's until the phone gets its own (#70 Task 16). */
+    #settings-tabs .t[data-tab="vmfolders"] { display: none; }
     @media (max-width: 700px) {
       #store-banner { padding: 10px 12px; }
       .storeform .storepass { flex: 1 0 100%; min-height: var(--tap); }

@@ -220,8 +220,9 @@ function palettePageCommands(desktop, flags, h) {
   const out = [];
   if (flags && flags.audit) out.push({ kind: "view", label: "Audit", hint: "", run: () => h.audit() });
   if (flags && flags.analytics) out.push({ kind: "view", label: "Analytics", hint: "", run: () => h.analytics() });
+  out.push(settings("Profiles", "manage"), settings("Agent accounts", "accounts"), settings("Credentials", "creds"));
+  if (flags && flags.vm_folders) out.push(settings("VM folders", "vmfolders"));
   out.push(
-    settings("Profiles", "manage"), settings("Agent accounts", "accounts"), settings("Credentials", "creds"),
     settings("API tokens", "tokens"), settings("Appearance", "settings"), settings("About", "about"),
   );
   return out;
@@ -264,7 +265,7 @@ function paletteCommands(mac) {
   {
     const deskPages = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
     const linkShown = (id) => { const b = document.getElementById(id); return !!b && !b.hidden; };
-    cmds.push(...palettePageCommands(deskPages, { audit: linkShown("side-audit"), analytics: linkShown("side-analytics") },
+    cmds.push(...palettePageCommands(deskPages, { audit: linkShown("side-audit"), analytics: linkShown("side-analytics"), vm_folders: globalThis.vmFoldersOn === true },
       { audit: () => openAudit(), analytics: openAnalytics, settings: (tab) => openSettings(tab) }));
   }
   // toggleSidebar is a no-op on mobile, so don't offer it there.

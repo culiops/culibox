@@ -7109,6 +7109,10 @@ initMobileShell();
     if (sideAn) sideAn.hidden = !(meta && meta.analytics);
     const sideAudit = $("side-audit");
     if (sideAudit) sideAudit.hidden = !(meta && meta.audit); // only with an audit store
+    // macOS only: Settings > VM folders (the nav button and the palette entry wait for the server to say the page exists).
+    globalThis.vmFoldersOn = !!(meta && meta.vm_folders);
+    const vmTab = document.querySelector('#settings-tabs [data-tab="vmfolders"]');
+    if (vmTab) vmTab.hidden = !globalThis.vmFoldersOn;
     sideCostOn = !!(meta && meta.analytics);
     paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;

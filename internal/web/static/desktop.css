@@ -1960,10 +1960,11 @@
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
   #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
   #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="creds"] { order: 5; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 6; }
-  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 7; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
-  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="vmfolders"] { order: 6; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 7; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 8; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 9; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 10; }
   /* A row is the kit .nav-item (§C7): 30px, 0 10px, 4px radius, 13/20, hover --hover, selected --raise at 500
      (§B1.2: no accent bar). Sign out… is a row too, neutral, last: `margin-top: auto` takes the nav's free
      height, so it rests above the 12px foot padding (the frame's spacer). */
@@ -1972,7 +1973,7 @@
     display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
     background: transparent; font-family: var(--font-ui); font-size: var(--t-md); line-height: var(--lh-md); color: var(--fg); cursor: pointer;
   }
-  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 10; margin-top: auto; }
+  #page-host > #settings-modal.as-page > #settings-tabs > #set-signout { order: 11; margin-top: auto; }
   #page-host > #settings-modal.as-page > #settings-tabs .t:hover,
   #page-host > #settings-modal.as-page > #settings-tabs > #set-signout:hover { background: var(--hover); color: var(--fg); }
   #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); font-weight: 500; box-shadow: none; }
@@ -2079,6 +2080,65 @@
      skipping a primary like every page rule that paints a .btn. */
   #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn:where(:not(.pri)):where(:not(.gh)):hover { background: var(--line); }
   #page-host > #settings-modal.as-page > #tokens > #tok-reveal .btn.gh:hover { background: var(--hover); color: var(--fg); }
+
+  /* VM folders (#70 Task 13; frames M9.1-M9.5, M9.9b): vmfolders.js draws a status strip (or the whole-home banner), one fill holding the
+     table, the helper under it and, above all, the add card. Kit classes everywhere; the vmf-* rules are layout only. The fill is
+     --panel from `.vmf-fill`, not the kit's `.card` (app.css's `.card` is the phone's amber session card). A nav button that is
+     `hidden` stays hidden: the .t rule above says display:flex. */
+  #page-host > #settings-modal.as-page > #settings-tabs .t[hidden] { display: none; }
+  #vmfolders .vmf-fill { background: var(--panel); border-radius: var(--r-card); overflow: hidden; position: relative; }
+  #vmfolders .vmf-main > * + *, #vmfolders .vmf-cardslot + .vmf-main > :first-child { margin-top: 12px; }
+  #vmfolders .vmf-cardslot:not(:empty) { margin-bottom: 12px; }
+  #vmfolders .vmf-main > .vmf-under { margin-top: 8px; padding: 0 2px; }
+  #vmfolders .vmf-stripwrap { display: flex; flex-direction: column; gap: 8px; }
+  #vmfolders .vmf-stripwrap > .vmf-note { margin: 0; padding: 0 2px; }
+  #vmfolders .vmf-strip { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 12px 6px 14px; background: var(--panel); border-radius: var(--r-card); font-size: var(--t-md); }
+  #vmfolders .vmf-status { font-weight: 500; }
+  #vmfolders .vmf-detail { flex: 1 1 auto; min-width: 0; }
+  #vmfolders .vmf-apply { flex: none; margin-left: auto; }
+  #vmfolders .vmf-banner { margin: 0; padding: 12px 16px; gap: 8px; background: var(--panel); box-shadow: none; }
+  #vmfolders .vmf-banner .banner-acts { gap: 12px; }
+  #vmfolders .card-head .vmf-title { font-weight: 600; }
+  #vmfolders .vmf-tbl { table-layout: fixed; }
+  #vmfolders .vmf-tbl col:nth-child(1) { width: 42%; }
+  #vmfolders .vmf-tbl col:nth-child(2) { width: 23%; }
+  #vmfolders .vmf-tbl col:nth-child(3) { width: 23%; }
+  #vmfolders .vmf-tbl col:nth-child(4) { width: 12%; }
+  #vmfolders .vmf-tbl td { height: auto; padding-top: 8px; padding-bottom: 8px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; line-height: var(--lh-md); }
+  #vmfolders .vmf-tbl th:first-child, #vmfolders .vmf-tbl td:first-child { padding-left: 16px; }
+  #vmfolders .vmf-tbl th:last-child, #vmfolders .vmf-tbl td:last-child { padding-right: 12px; }
+  #vmfolders .vmf-tbl tbody tr:hover { background: transparent; }
+  #vmfolders .vmf-tbl td.num { padding-top: 6px; padding-bottom: 6px; }
+  #vmfolders .vmf-path { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  #vmfolders .vmf-origin { margin-top: 1px; }
+  #vmfolders .vmf-lock { flex: none; color: var(--muted); }
+  #vmfolders .vmf-removed .vmf-path .mono { color: var(--muted); }
+  #vmfolders .vmf-seg { display: inline-flex; }
+  #vmfolders .vmf-ask > td { padding: 0 12px 12px; border-bottom: 1px solid var(--line); }
+  #vmfolders .vmf-askbox { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+  #vmfolders .vmf-askbox > p { margin: 0; }
+  #vmfolders .vmf-askbox .banner-acts { margin-top: 2px; }
+  /* The add card: the label at the left, the form beside it, the foot under a rule (the frame's M2.2 edit block). */
+  #vmfolders .vmf-add-body { display: grid; grid-template-columns: 156px minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  #vmfolders .vmf-add-lbl { font-size: var(--t-md); font-weight: 600; line-height: var(--lh-md); }
+  #vmfolders .vmf-add-form { display: flex; flex-direction: column; gap: 16px; min-width: 0; max-width: 560px; }
+  #vmfolders .vmf-fieldbox { position: relative; }
+  #vmfolders .vmf-inrow { display: flex; gap: 8px; align-items: center; }
+  #vmfolders .vmf-inrow .input { flex: 1 1 auto; min-width: 0; }
+  #vmfolders .vmf-inrow .btn { flex: none; }
+  #vmfolders .vmf-fieldbox > #vmf-msg { overflow-wrap: anywhere; }
+  #vmfolders .vmf-wslist { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #vmfolders .vmf-wslist[hidden] { display: none; }
+  #vmfolders .vmf-modes { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  #vmfolders .vmf-modes > legend { padding: 0; margin-bottom: 6px; }
+  #vmfolders .vmf-optrow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #vmfolders .vmf-opt { display: grid; grid-template-columns: 14px minmax(0, 1fr); column-gap: 8px; row-gap: 2px; align-content: start; padding: 10px 14px; border-radius: var(--r-ctl); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
+  #vmfolders .vmf-opt.is-on { background: var(--raise); }
+  #vmfolders .vmf-opt > input { grid-row: 1 / span 2; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+  #vmfolders .vmf-opt-t { font-weight: 500; line-height: var(--lh-md); }
+  #vmfolders .vmf-opt-d { grid-column: 2; }
+  #vmfolders .vmf-add-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
+  #vmfolders .vmf-hint { margin-right: auto; }
 
   /* API tokens (UI plan 4 Task 7; digest-design §B5, frame M2.4): tokens.js draws one kit card (§C7 `.card`, clipped to its corners) holding
      the kit's `.tbl` (Name · Created · Last used · Revoke…), and under it the approved footnote (the frame's `p.t-sm.muted.m2-under`; here `li.tok-under`, an

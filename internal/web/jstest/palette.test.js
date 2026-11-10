@@ -276,3 +276,16 @@ test("paletteSessions draws its dot through palSessionDot", () => {
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "palette.js"), "utf8");
   assert.match(src, /const act = palSessionDot\(s, mobile\);/);
 });
+
+test("palettePageCommands: with vm_folders on, VM folders follows Credentials (desktop only)", () => {
+  const { palettePageCommands } = require("../static/palette.js");
+  const ran = [];
+  const h = { settings: (t) => ran.push(t) };
+  const cmds = palettePageCommands(true, { vm_folders: true }, h);
+  const labels = cmds.map((c) => c.label);
+  assert.equal(labels[labels.indexOf("Settings · Credentials") + 1], "Settings · VM folders");
+  cmds[labels.indexOf("Settings · VM folders")].run();
+  assert.deepEqual(ran, ["vmfolders"]);
+  assert.ok(!palettePageCommands(true, {}, h).some((c) => /VM folders/.test(c.label)), "off by default");
+  assert.ok(!palettePageCommands(false, { vm_folders: true }, h).some((c) => /VM folders/.test(c.label)), "no phone entry");
+});
