@@ -10,6 +10,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 )
@@ -20,7 +21,7 @@ const setupProbeTimeout = 2 * time.Minute
 // runBoxDarwin serves `agent-box box …` on macOS, where boxes run in agent-box's
 // own colima VM. Untagged (runBox gates it on GOOS) so its logic is tested on
 // Linux against fakes.
-func runBoxDarwin(a cliArgs, cfg config.Config, home string, w io.Writer) int {
+func runBoxDarwin(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.Writer) int {
 	// Absolute and clean, as serve and doctor derive it: the VM's paths are
 	// built from this string.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -28,7 +29,8 @@ func runBoxDarwin(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 		fmt.Fprintf(w, "FAIL data dir: %v\n", err)
 		return 1
 	}
-	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{}, nil, a.Sub == "setup" && a.Recreate)
+	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{},
+		protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg)), a.Sub == "setup" && a.Recreate)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1

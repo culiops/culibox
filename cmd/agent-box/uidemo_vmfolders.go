@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/vmshares"
 	"github.com/culiops/culibox/internal/web"
@@ -110,7 +111,8 @@ func uidemoBuild(home string) web.VMFolders {
 		{Name: "ops", Workspace: h("notes/runbooks")},
 	}
 	ctl := &demoVMControl{fail: os.Getenv("AB_UIDEMO_APPLY") == "fail"}
-	svc, err := newVMShareSvc(data, vmshares.Env{Home: home, DataRoot: root},
+	svc, err := newVMShareSvc(data, vmshares.Env{Home: home, DataRoot: root,
+		Protected: []box.ProtectedDir{box.ConfigDirProtected(filepath.Join(data, "config"))}},
 		ctl, func() []vmshares.Profile { return profiles },
 		func() []string { return []string{h("code/infra")} }, func() []string { return nil }, log.Printf)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/vmshares"
 )
@@ -184,7 +185,7 @@ func TestBoxShareOnLinux(t *testing.T) {
 		t.Skip("the Linux refusal")
 	}
 	var buf bytes.Buffer
-	rc := runBox(shareArgs("list", ""), config.Config{}, t.TempDir(), &buf)
+	rc := runBox(shareArgs("list", ""), config.Config{}, t.TempDir(), nil, &buf)
 	if rc != 1 || !strings.Contains(buf.String(), "agent-box box share: only on macOS, where boxes run in agent-box's own VM") {
 		t.Fatalf("share on Linux = %d:\n%s", rc, buf.String())
 	}
@@ -257,5 +258,20 @@ func TestBoxShareApplyStopFailureWithUnchangedListStillFails(t *testing.T) {
 	rc, out := runVM(t, l, a)
 	if rc != 1 || !strings.Contains(out, "stop… failed: ") {
 		t.Fatalf("stop failure = %d:\n%s", rc, out)
+	}
+}
+
+// A folder CuliBox reads its own config from can never be shared, whichever way
+// the share is asked for.
+func TestBoxShareAddRefusesCuliBoxConfigDir(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	cfgDir := otherDir(t)
+	l.protected = []box.ProtectedDir{box.ConfigDirProtected(cfgDir)}
+	rc, out := runVM(t, l, shareArgs("add", cfgDir))
+	if rc != 1 || !strings.Contains(out, "holds CuliBox's own agent-box's config directory, so it can never be shared with the box VM.") {
+		t.Fatalf("add config dir = %d:\n%s", rc, out)
+	}
+	if list, _, _ := vmshares.Load(l.dataDir); len(list) != 0 || fc.called("stop") {
+		t.Fatalf("a refused add must save nothing: %+v", list)
 	}
 }

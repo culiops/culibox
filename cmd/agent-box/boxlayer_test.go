@@ -1354,13 +1354,13 @@ func writeColimaYAML(t *testing.T, l *boxLayer, ms []boxvm.Mount) {
 // A bad share list at boot gives an empty list, a good one is normalised.
 func TestBootSharesNormalises(t *testing.T) {
 	l, _, _ := darwinLayer(t, false)
-	if got := bootShares(l.dataDir, l.vm.Config()); len(got) != 0 {
+	if got := bootShares(l.dataDir, l.vm.Config(), nil); len(got) != 0 {
 		t.Fatalf("no file: %+v", got)
 	}
 	if err := os.WriteFile(filepath.Join(l.dataDir, vmshares.FileName), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := bootShares(l.dataDir, l.vm.Config()); len(got) != 0 {
+	if got := bootShares(l.dataDir, l.vm.Config(), nil); len(got) != 0 {
 		t.Fatalf("corrupt file: %+v", got)
 	}
 }

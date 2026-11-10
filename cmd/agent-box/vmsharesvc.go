@@ -358,7 +358,7 @@ func bootVMFolders(layer *boxLayer, cfg config.Config, all func() []config.Agent
 	vc := layer.vm.Config()
 	ctl := newLayerVMControl(layer, sessions)
 	profiles := func() []vmshares.Profile { return vmProfiles(cfg, all()) }
-	svc, err := newVMShareSvc(layer.dataDir, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold}, ctl, profiles, recorded,
+	svc, err := newVMShareSvc(layer.dataDir, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: layer.protected}, ctl, profiles, recorded,
 		func() []string { return vmMemoryDirs(memRoot, profiles()) }, log.Printf)
 	if err != nil {
 		log.Printf("box VM folders: %v; the folder list cannot be managed from here", err)

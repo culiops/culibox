@@ -59,10 +59,11 @@ type boxLayer struct {
 	dockerArgs []string
 	cli        box.CLIClient
 	img        boximage.Docker
-	image      string // the fallback box image (box_image)
-	goos       string // runtime.GOOS as the layer was built
-	dataDir    string // the absolute data dir, for the store doctor and box setup read
-	stateRoot  string // where box homes and the bundle live; resolved on darwin
+	image      string             // the fallback box image (box_image)
+	goos       string             // runtime.GOOS as the layer was built
+	dataDir    string             // the absolute data dir, for the store doctor and box setup read
+	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
+	stateRoot  string             // where box homes and the bundle live; resolved on darwin
 	// addrs is the one box-address cache the egress proxy and the credential
 	// broker share (both OSes). One instance on purpose: the proxy drops a box's
 	// entry when its session ends or a probe re-verifies a recreated box, and a
@@ -162,7 +163,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 	if err != nil {
 		return nil, err
 	}
-	l := &boxLayer{goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
+	l := &boxLayer{protected: protected, goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
 	if goos == "darwin" {
 		colima, err := boxvm.LookColima(cfg.ColimaBin)
 		if err != nil {
@@ -176,7 +177,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		vcfg := configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem)
 		vcfg.Fold = true // goos == "darwin" here: APFS compares case-insensitively
 		l.vm = boxvm.NewVM(vcfg, runner)
-		l.vm.SetShares(bootShares(dataDir, l.vm.Config()))
+		l.vm.SetShares(bootShares(dataDir, l.vm.Config(), protected))
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -504,13 +505,13 @@ func (l *logOnChange) changed(msg string) bool {
 // bootShares is the folder list the VM is built with: vm-shares.json, normalised
 // (every Load consumer does). A missing or damaged file gives an empty list for
 // now; skips are logged.
-func bootShares(dataDir string, vc boxvm.Config) []vmshares.Share {
+func bootShares(dataDir string, vc boxvm.Config, protected []box.ProtectedDir) []vmshares.Share {
 	list, _, err := vmshares.Load(dataDir)
 	if err != nil {
 		log.Printf("box VM folders: %v; starting with none listed", err)
 		return nil
 	}
-	out, skipped := vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold})
+	out, skipped := vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: protected})
 	for _, s := range skipped {
 		log.Printf("box VM folders: skipping %s: %s", s.Path, s.Reason)
 	}

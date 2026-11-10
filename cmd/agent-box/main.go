@@ -120,7 +120,11 @@ func main() {
 		log.Print("WARNING: " + w)
 	}
 	if args.Cmd == "box" {
-		os.Exit(runBox(args, cfg, home, os.Stdout))
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
 	}
 	if args.Cmd == "store" {
 		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))

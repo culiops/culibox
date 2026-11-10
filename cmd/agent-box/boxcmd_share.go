@@ -61,7 +61,7 @@ func newCLIShareSvc(ctx context.Context, cfg config.Config, l *boxLayer) (*vmSha
 	vc := l.vm.Config()
 	profiles := func() []vmshares.Profile { return vmProfiles(cfg, merged) }
 	ctl := newLayerVMControl(l, cliBoxSessions(ctx, l))
-	svc, err := newVMShareSvc(l.dataDir, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold}, ctl, profiles, reg.List,
+	svc, err := newVMShareSvc(l.dataDir, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: l.protected}, ctl, profiles, reg.List,
 		func() []string { return vmMemoryDirs(bundleSourceOf(cfg), profiles()) }, nil)
 	if err != nil {
 		return nil, err

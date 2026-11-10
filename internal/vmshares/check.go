@@ -1,6 +1,7 @@
 package vmshares
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -15,6 +16,7 @@ const (
 	KindContainsHome = "contains-home"
 	KindSensitive    = "sensitive"
 	KindData         = "data"
+	KindProtected    = "protected"
 	KindNotDir       = "notdir"
 	KindRelative     = "relative"
 )
@@ -27,6 +29,8 @@ const (
 	reasonNotDir    = "is a file, not a folder."
 	reasonRelative  = "Use a full path, like ~/code/project."
 )
+
+const reasonProtectedFmt = "holds CuliBox's own %s, so it can never be shared with the box VM."
 
 // Refused is a folder the box VM may not share. Error() is Display(Path)+" "+Reason.
 type Refused struct {
@@ -67,6 +71,9 @@ func Check(p string, env Env) error {
 		}
 		if env.DataRoot != "" && (Within(c, env.DataRoot, env.Fold) || Within(env.DataRoot, c, env.Fold)) {
 			return refuse(KindData, reasonData)
+		}
+		if what := protectedHit(c, env); what != "" {
+			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
 	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
@@ -110,4 +117,35 @@ func sensitive(c string, env Env) bool {
 		}
 	}
 	return false
+}
+
+// protectedHit is the What of the first env.Protected directory that c equals
+// or contains, or (when the directory sets Inside) sits inside; "" if none. The
+// default account's ~/.claude is skipped here: sensitive() owns it, with its
+// projects/<slug>/memory exception.
+func protectedHit(c string, env Env) string {
+	claude := spellings(filepath.Join(env.Home, ".claude"))
+	for _, d := range env.Protected {
+		if d.Path == "" {
+			continue
+		}
+		spell := spellings(d.Path)
+		skip := false
+		for _, s := range spell {
+			for _, cl := range claude {
+				if Within(s, cl, env.Fold) && Within(cl, s, env.Fold) {
+					skip = true
+				}
+			}
+		}
+		if skip {
+			continue
+		}
+		for _, s := range spell {
+			if Within(s, c, env.Fold) || d.Inside && Within(c, s, env.Fold) {
+				return d.What
+			}
+		}
+	}
+	return ""
 }

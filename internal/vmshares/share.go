@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/culiops/culibox/internal/box"
 )
 
 // Mode is how a share is mounted into the VM.
@@ -31,6 +33,10 @@ type Share struct {
 type Env struct {
 	Home, DataRoot string
 	Fold           bool
+	// Protected are CuliBox's own host directories (config, profiles, bundle
+	// source): a share may never equal, contain or sit inside one. Nil means
+	// none known (a caller that cannot build the list).
+	Protected []box.ProtectedDir
 }
 
 // Expand turns what the user typed into a cleaned absolute path: "~", "~/x" or

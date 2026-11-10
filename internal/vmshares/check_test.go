@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/culiops/culibox/internal/box"
 )
 
 func kindOf(err error) string {
@@ -157,5 +159,55 @@ func TestYAMLSafe(t *testing.T) {
 	}
 	if err := YAMLSafe("/Users/me/my code/é"); err != nil {
 		t.Errorf("valid path refused: %v", err)
+	}
+}
+
+func TestCheckRefusesProtectedDirs(t *testing.T) {
+	env := testEnv(t, false)
+	cfg := filepath.Join(env.Home, ".config", "agent-box")
+	prof := filepath.Join(env.Home, "profiles-dir")
+	bundleSrc := filepath.Join(env.Home, "my-claude")
+	for _, d := range []string{filepath.Join(cfg, "sub"), prof, bundleSrc, filepath.Join(env.Home, ".claude")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.Protected = []box.ProtectedDir{
+		box.ConfigDirProtected(cfg),
+		box.ProfilesDirProtected(prof),
+		box.PersonalConfigDirProtected(filepath.Join(env.Home, ".claude")),
+		box.PersonalConfigDirProtected(bundleSrc),
+	}
+	for _, p := range []string{cfg, prof, bundleSrc, filepath.Join(bundleSrc, "x")} {
+		err := Check(p, env)
+		if kindOf(err) != KindProtected {
+			t.Errorf("Check(%s) = %v, want protected", p, err)
+		}
+	}
+	err := Check(cfg, env)
+	if err == nil || !strings.Contains(err.Error(), "holds CuliBox's own agent-box's config directory, so it can never be shared with the box VM.") {
+		t.Errorf("reason: %v", err)
+	}
+	// Inside a non-Inside dir is allowed (a profiles file may sit directly in $HOME).
+	if err := Check(filepath.Join(cfg, "sub"), env); err != nil {
+		t.Errorf("inside config dir: %v", err)
+	}
+	// The ~/.claude memory exception survives the protected list.
+	if err := Check(filepath.Join(env.Home, ".claude", "projects", "-a-b", "memory"), env); err != nil {
+		t.Errorf("memory exception: %v", err)
+	}
+	if err := Check(filepath.Join(env.Home, ".claude"), env); kindOf(err) != KindSensitive {
+		t.Errorf("~/.claude: %v", err)
+	}
+	if err := Check(filepath.Join(env.Home, "code"), env); err != nil {
+		t.Errorf("unrelated: %v", err)
+	}
+	// A symlink to the config dir is refused too.
+	link := filepath.Join(env.Home, "code", "cfglink")
+	if err := os.Symlink(cfg, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Check(link, env); kindOf(err) != KindProtected {
+		t.Errorf("symlink: %v", err)
 	}
 }
