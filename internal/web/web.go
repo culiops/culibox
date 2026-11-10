@@ -228,6 +228,10 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
 		protected.HandleFunc("/api/store/init", s.handleStoreInit)
 	}
+	if s.VMFolders != nil {
+		protected.HandleFunc("/api/vm-folders", s.handleVMFolders)
+		protected.HandleFunc("/api/vm-folders/apply", s.handleVMFoldersApply)
+	}
 	if s.Creds != nil {
 		protected.HandleFunc("/api/credentials", s.handleCredentials)
 		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
@@ -272,6 +276,15 @@ func (s *Server) Handler() http.Handler {
 		// Whether /api/bundle/imports exists on this instance, so the page does
 		// not request a route that answers 404 on every load.
 		meta["bundle_imports"] = s.Imports != nil
+		// The box VM folder list exists (macOS), and the last apply job while it
+		// runs or failed so a reload shows it; null otherwise.
+		meta["vm_folders"] = s.VMFolders != nil
+		meta["vm_apply"] = nil
+		if s.VMFolders != nil {
+			if j, ok := s.VMFolders.ApplyStatus(); ok && (j.State == "running" || j.State == "failed") {
+				meta["vm_apply"] = j
+			}
+		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}
 		if s.Profiles != nil {

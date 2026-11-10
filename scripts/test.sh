@@ -19,6 +19,7 @@ go test ./...
 # macOS runs only on a laptop this box cannot reach, so the darwin build must
 # fail here, not there.
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...
+go vet -tags uidemo ./cmd/agent-box
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/agent-box
 node --test "internal/web/jstest/*.test.js"
 # Last, because it is the slowest and the one that can skip itself.

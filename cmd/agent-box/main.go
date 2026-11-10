@@ -58,6 +58,9 @@ var _ session.PidResolver = (*abduco.Adapter)(nil)
 // new conversation (/clear), so history stays whole with no browser open.
 const conversationPollEvery = 5 * time.Second
 
+// uidemoVMFolders is set only by the uidemo-tagged file; nil in every normal build.
+var uidemoVMFolders func(home string) web.VMFolders
+
 func main() {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -724,6 +727,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	vmShares := layer.sharesFunc() // the box VM's live folder list; nil without a VM
 	pm.SetShares(vmShares)
 	vmFolders := bootVMFolders(layer, cfg, pm.All, boxedReg.List, bundleSrc, mgr.List)
+	if vmFolders == nil && uidemoVMFolders != nil {
+		vmFolders = uidemoVMFolders(home) // nil unless a `-tags uidemo` build asks for it
+	}
 	contextCheck := contextSaveCheck(h, home, protected, vmShares)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
 	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
