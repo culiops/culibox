@@ -1364,3 +1364,18 @@ func TestBootSharesNormalises(t *testing.T) {
 		t.Fatalf("corrupt file: %+v", got)
 	}
 }
+
+// M4: `box` needs the config files only for the macOS VM's protected list, so
+// failing to name them is fatal only on darwin.
+func TestBoxConfigFilesFatalOnlyOnDarwin(t *testing.T) {
+	boom := errors.New("boom")
+	if files, err := boxConfigFiles("linux", nil, boom); err != nil || files != nil {
+		t.Fatalf("linux: %v %v", files, err)
+	}
+	if _, err := boxConfigFiles("darwin", nil, boom); !errors.Is(err, boom) {
+		t.Fatalf("darwin: %v", err)
+	}
+	if files, err := boxConfigFiles("darwin", []string{"/c"}, nil); err != nil || len(files) != 1 {
+		t.Fatalf("darwin ok: %v %v", files, err)
+	}
+}

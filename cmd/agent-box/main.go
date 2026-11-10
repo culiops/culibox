@@ -124,7 +124,7 @@ func main() {
 	}
 	if args.Cmd == "box" {
 		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
-		if err != nil {
+		if cfgFiles, err = boxConfigFiles(runtime.GOOS, cfgFiles, err); err != nil {
 			log.Fatalf("config: %v", err)
 		}
 		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
@@ -147,6 +147,15 @@ func main() {
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
 		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles}, ring)
+}
+
+// boxConfigFiles: `box` uses the config files only for the macOS VM's
+// protected list, so failing to name them is fatal on darwin alone.
+func boxConfigFiles(goos string, files []string, err error) ([]string, error) {
+	if err != nil && goos != "darwin" {
+		return nil, nil
+	}
+	return files, err
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
