@@ -211,3 +211,48 @@ func TestCorruptListDoesNotHideVMState(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+func statusCalls(fc *fakeColima) int {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	n := 0
+	for _, c := range fc.calls {
+		if strings.HasPrefix(c, "status ") {
+			n++
+		}
+	}
+	return n
+}
+
+// C3: VMRunning runs on /api/meta while a failed apply is held, so its colima
+// status answer is cached for 5 s and bounded at 3 s (under the 4 s probe).
+func TestVMRunningIsCached(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	fc.running = true
+	c := newLayerVMControl(l, func() []session.Info { return nil })
+	now := time.Unix(1000, 0)
+	c.now = func() time.Time { return now }
+	if !c.VMRunning() || !c.VMRunning() {
+		t.Fatal("VMRunning = false for a running VM")
+	}
+	if n := statusCalls(fc); n != 1 {
+		t.Fatalf("colima status ran %d times within 5 s, want 1", n)
+	}
+	fc.mu.Lock()
+	fc.running = false
+	fc.mu.Unlock()
+	now = now.Add(4 * time.Second)
+	if !c.VMRunning() {
+		t.Fatal("a cached answer changed before 5 s")
+	}
+	now = now.Add(2 * time.Second)
+	if c.VMRunning() {
+		t.Fatal("the cache outlived 5 s")
+	}
+	if n := statusCalls(fc); n != 2 {
+		t.Fatalf("colima status ran %d times, want 2", n)
+	}
+	if vmRunningTimeout != 3*time.Second {
+		t.Fatalf("vmRunningTimeout = %s, want 3s", vmRunningTimeout)
+	}
+}

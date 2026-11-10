@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -251,6 +252,14 @@ type layerVMControl struct {
 	// jobRunning is the folder service's job state: it is true from the moment
 	// Apply() accepts the job, before its goroutine runs.
 	jobRunning func() bool
+	// now is the cache clock (time.Now; a test sets it).
+	now func() time.Time
+	// runMu guards the VMRunning cache and is held across the colima call, so
+	// concurrent askers share one fork.
+	runMu  sync.Mutex
+	runAt  time.Time
+	runVal bool
+	runSet bool
 }
 
 func newLayerVMControl(l *boxLayer, sessions func() []session.Info) *layerVMControl {
@@ -287,11 +296,28 @@ func (c *layerVMControl) Applied() ([]vmshares.Share, bool, bool, error) {
 	return out, whole, true, err
 }
 
-// VMRunning asks colima, bounded: it runs on every meta tick while a failed job is held.
+// vmRunningTTL and vmRunningTimeout bound VMRunning: it runs on every meta
+// request while a failed job is held, and /api/meta answers the 4 s reconnect
+// probe, so one colima fork serves every caller for 5 s and gives up at 3 s.
+const vmRunningTTL = 5 * time.Second
+
+var vmRunningTimeout = 3 * time.Second
+
+// VMRunning asks colima, cached and bounded (vmRunningTTL, vmRunningTimeout).
 func (c *layerVMControl) VMRunning() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	c.runMu.Lock()
+	defer c.runMu.Unlock()
+	if c.runSet && now().Sub(c.runAt) < vmRunningTTL {
+		return c.runVal
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), vmRunningTimeout)
 	defer cancel()
-	return c.l.vm.Running(ctx)
+	c.runVal, c.runAt, c.runSet = c.l.vm.Running(ctx), now(), true
+	return c.runVal
 }
 
 func (c *layerVMControl) SetListed(l []vmshares.Share) { c.l.vm.SetShares(l) }
