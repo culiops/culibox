@@ -423,7 +423,9 @@ func bootVMFolders(layer *boxLayer, cfg config.Config, all func() []config.Agent
 		func() []string { return vmMemoryDirs(memRoot, profiles()) }, log.Printf)
 	if err != nil {
 		log.Printf("box VM folders: %v; the folder list cannot be managed from here", err)
-		return nil
+		// Every share refusal points to Settings › VM folders: keep the page,
+		// saying why, and refuse every change with the same error.
+		return brokenVMFolders{err: err, dataRoot: vc.Root}
 	}
 	if _, whole, setUp, err := ctl.Applied(); err == nil && setUp && whole {
 		log.Print(vmshares.WholeHomeLine(len(svc.Listed())))
@@ -431,3 +433,30 @@ func bootVMFolders(layer *boxLayer, cfg config.Config, all func() []config.Agent
 	ctl.jobRunning = svc.jobRunning
 	return svc
 }
+
+// brokenVMFolders is the VM folders page when the folder service could not be
+// built at boot: it shows the boot error and refuses every change and apply
+// with it.
+type brokenVMFolders struct {
+	err      error
+	dataRoot string
+}
+
+var _ web.VMFolders = brokenVMFolders{}
+
+func (b brokenVMFolders) View() (web.VMFoldersView, error) {
+	return web.VMFoldersView{State: "not_set_up", ListError: b.err.Error(), Rows: []web.VMFolderRow{},
+		RunningBoxed: []string{}, DataRoot: b.dataRoot}, nil
+}
+
+func (b brokenVMFolders) Add(string, string, bool) (web.VMFoldersView, web.VMAddResult, error) {
+	return web.VMFoldersView{}, web.VMAddResult{}, b.err
+}
+
+func (b brokenVMFolders) SetMode(string, string) (web.VMFoldersView, error) {
+	return web.VMFoldersView{}, b.err
+}
+
+func (b brokenVMFolders) Remove(string) (web.VMFoldersView, error) { return web.VMFoldersView{}, b.err }
+func (b brokenVMFolders) Apply() (web.VMApply, error)              { return web.VMApply{}, b.err }
+func (b brokenVMFolders) ApplyStatus() (web.VMApply, bool)         { return web.VMApply{}, false }

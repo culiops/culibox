@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/vmshares"
 	"github.com/culiops/culibox/internal/web"
 )
@@ -508,5 +509,39 @@ func TestSvcApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
 	}
 	if j, ok := s.lastJob(); ok {
 		t.Fatalf("a job was started: %+v", j)
+	}
+}
+
+// M6: a folder service that cannot be built at boot still gives the page every
+// refusal points to (Settings › VM folders): it shows why, and every change
+// and apply returns the same error.
+func TestBootVMFoldersFailureServesAStub(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	if err := os.Mkdir(filepath.Join(l.dataDir, vmshares.FileName), 0o700); err != nil {
+		t.Fatal(err) // a directory where the list file goes: Load fails, not as corrupt
+	}
+	vf := bootVMFolders(l, config.Config{}, func() []config.AgentConfig { return nil }, func() []string { return nil }, "",
+		func() []session.Info { return nil })
+	if vf == nil {
+		t.Fatal("no VM folders page after a boot failure")
+	}
+	v, err := vf.View()
+	if err != nil || v.State != "not_set_up" || !strings.Contains(v.ListError, "is a directory") || v.Rows == nil || v.RunningBoxed == nil {
+		t.Fatalf("View = %+v, %v", v, err)
+	}
+	if _, _, err := vf.Add("/x", "rw", false); err == nil || err.Error() != v.ListError {
+		t.Errorf("Add = %v, want the boot error", err)
+	}
+	if _, err := vf.SetMode("/x", "ro"); err == nil || err.Error() != v.ListError {
+		t.Errorf("SetMode = %v", err)
+	}
+	if _, err := vf.Remove("/x"); err == nil || err.Error() != v.ListError {
+		t.Errorf("Remove = %v", err)
+	}
+	if _, err := vf.Apply(); err == nil || err.Error() != v.ListError {
+		t.Errorf("Apply = %v", err)
+	}
+	if _, ok := vf.ApplyStatus(); ok {
+		t.Error("a stub has no apply job")
 	}
 }
