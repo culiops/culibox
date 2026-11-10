@@ -105,3 +105,44 @@ func TestDeriveSharesTheCopyWhenItsParentHoldsCloneOf(t *testing.T) {
 		}
 	}
 }
+
+// S5 (a): one clone profile's copy parent can hold ANOTHER profile's clone_of;
+// that parent is not shared rw either, the copy dir is.
+func TestDeriveCopyParentHoldingAnotherProfilesOriginal(t *testing.T) {
+	env := testEnv(t, false)
+	j := func(r string) string { return filepath.Join(env.Home, r) }
+	if err := os.MkdirAll(j("work/b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := j("wlink") // a second spelling of ~/work: compared resolved
+	if err := os.Symlink(j("work"), link); err != nil {
+		t.Fatal(err)
+	}
+	profiles := []Profile{
+		{Name: "a-clone", Clone: true, CloneOf: j("code/a"), Workspace: filepath.Join(link, "a-box")},
+		{Name: "b-clone", Clone: true, CloneOf: j("work/b"), Workspace: j("clones/b")},
+	}
+	got, _ := Derive(DeriveInput{Env: env, Profiles: profiles})
+	want := []Share{{Path: j("clones"), Mode: RW}, {Path: j("code/a"), Mode: RO}, {Path: filepath.Join(link, "a-box"), Mode: RW}, {Path: j("work/b"), Mode: RO}}
+	if !reflect.DeepEqual(got, sorted(want, false)) {
+		t.Fatalf("Derive = %+v\nwant %+v", got, sorted(want, false))
+	}
+}
+
+// S5 (b): a copy kept inside another profile's original is not shared rw (it
+// would make that original rw through Normalize); it is skipped with a reason.
+func TestDeriveSkipsACopyInsideAnOriginal(t *testing.T) {
+	env := testEnv(t, false)
+	j := func(r string) string { return filepath.Join(env.Home, r) }
+	profiles := []Profile{
+		{Name: "a-clone", Clone: true, CloneOf: j("code/a"), Workspace: j("code/a/copies/a-box")},
+	}
+	got, skipped := Derive(DeriveInput{Env: env, Profiles: profiles})
+	if want := []Share{{Path: j("code/a"), Mode: RO}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Derive = %+v, want %+v", got, want)
+	}
+	want := Skip{Path: j("code/a/copies"), Reason: "inside the original of profile a-clone, which boxes may only read; share it in Settings › VM folders if you need it"}
+	if len(skipped) != 1 || skipped[0] != want {
+		t.Fatalf("skipped = %+v, want %+v", skipped, want)
+	}
+}

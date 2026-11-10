@@ -38,20 +38,49 @@ func Derive(in DeriveInput) (list []Share, skipped []Skip) {
 	for _, r := range in.Recorded {
 		add(r, RW)
 	}
+	// Every clone profile's original, resolved: the VM mounts resolved paths.
+	type origin struct{ name, key string }
+	var origins []origin
+	for _, p := range in.Profiles {
+		if p.Clone && p.CloneOf != "" {
+			origins = append(origins, origin{p.Name, Resolve(filepath.Clean(p.CloneOf))})
+		}
+	}
+	var own []Skip
 	for _, p := range in.Profiles {
 		if p.Clone {
 			add(p.CloneOf, RO)
-			if p.Workspace != "" {
-				// The copy parent, rw, so new copies appear without an apply.
-				// Not when it holds clone_of (a copy kept beside its original):
-				// that would make the original writable, so share the copy
-				// itself, created or not yet.
-				dir := filepath.Dir(p.Workspace)
-				if p.CloneOf != "" && Within(filepath.Clean(p.CloneOf), dir, in.Env.Fold) {
-					dir = p.Workspace
-				}
-				add(dir, RW)
+			if p.Workspace == "" {
+				continue
 			}
+			// The copy parent, rw, so new copies appear without an apply. Not
+			// when it holds any profile's clone_of (a copy kept beside an
+			// original): that would make the original writable, so share the
+			// copy itself, created or not yet.
+			dir := filepath.Clean(filepath.Dir(p.Workspace))
+			rd := Resolve(dir)
+			for _, o := range origins {
+				if Within(o.key, rd, in.Env.Fold) {
+					dir = filepath.Clean(p.Workspace)
+					rd = Resolve(dir)
+					break
+				}
+			}
+			// A copy kept inside an original: sharing it rw would make
+			// Normalize promote that original to rw. Skip it, with the reason.
+			inside := ""
+			for _, o := range origins {
+				if Within(rd, o.key, in.Env.Fold) {
+					inside = o.name
+					break
+				}
+			}
+			if inside != "" {
+				own = append(own, Skip{Path: dir, Reason: "inside the original of profile " + inside +
+					", which boxes may only read; share it in Settings › VM folders if you need it"})
+				continue
+			}
+			add(dir, RW)
 		}
 	}
 	for _, p := range in.Profiles {
@@ -64,7 +93,8 @@ func Derive(in DeriveInput) (list []Share, skipped []Skip) {
 			add(m, RO)
 		}
 	}
-	return Normalize(raw, in.Env)
+	list, skipped = Normalize(raw, in.Env)
+	return list, append(own, skipped...)
 }
 
 // CopyParents are the directories clone profiles keep their copies in. The
