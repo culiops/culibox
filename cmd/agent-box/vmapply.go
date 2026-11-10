@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -312,6 +313,7 @@ func (c *layerVMControl) Applying() bool {
 func (c *layerVMControl) Apply(ctx context.Context, step func(name, state, sub string)) error {
 	c.applying.Store(true)
 	defer c.applying.Store(false)
+	c.l.foldersOK.Store(nil) // the restart needs a new check
 	// A wedged colima must not leave the flag set (and every spawn refused)
 	// forever. The start has its own bound inside ApplyMounts.
 	ctx, cancel := context.WithTimeout(ctx, applyJobTimeout)
@@ -366,11 +368,29 @@ func (l *boxLayer) checkAfterApply(ctx context.Context) error {
 }
 
 // verifyMounts compares the running VM's mounts with its colima.yaml and
-// remembers a failure, so spawns keep checking until it passes. A missing
-// colima.yaml is a failure too: a set-up VM started without it runs on colima's
-// defaults, which share the home folder.
+// remembers a pass against that colima.yaml, so spawns keep checking until one
+// passes and again after the next apply. A missing colima.yaml is a failure
+// too: a set-up VM started without it runs on colima's defaults, which share
+// the home folder.
 func (l *boxLayer) verifyMounts(ctx context.Context) error {
+	// Stat first: a colima.yaml rewritten during the check then reads as changed.
+	fi, statErr := os.Stat(l.vm.Config().YAMLPath())
 	err := l.vm.VerifyMounts(ctx)
-	l.folderCheckFailed.Store(err != nil)
-	return err
+	if err != nil || statErr != nil {
+		l.foldersOK.Store(nil)
+		return err
+	}
+	l.foldersOK.Store(&yamlStamp{fi.ModTime(), fi.Size()})
+	return nil
+}
+
+// foldersVerified reports whether a folder check passed against the VM's
+// current colima.yaml.
+func (l *boxLayer) foldersVerified() bool {
+	ok := l.foldersOK.Load()
+	if ok == nil {
+		return false
+	}
+	fi, err := os.Stat(l.vm.Config().YAMLPath())
+	return err == nil && fi.ModTime().Equal(ok.mtime) && fi.Size() == ok.size
 }

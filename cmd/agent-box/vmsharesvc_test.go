@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	boximage "github.com/culiops/culibox/docker/agent-box"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
@@ -314,12 +315,60 @@ func TestPrepareVerifiesMountsAfterStart(t *testing.T) {
 	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") || !strings.Contains(err.Error(), "agent-box doctor") {
 		t.Fatalf("%v", err)
 	}
-	if !l.folderCheckFailed.Load() {
+	if l.foldersVerified() {
 		t.Fatal("a failed check must be remembered")
 	}
 	// The VM is running now: the next spawn re-checks because the last one failed.
 	if err := l.prepare(context.Background()); err == nil || !strings.Contains(err.Error(), "do not match") {
 		t.Fatalf("second: %v", err)
+	}
+}
+
+// S3: a check that failed in another process (a CLI apply) or before a
+// restart lives in no memory here, so a new layer starts unverified: the first
+// spawn on a VM that was already running checks its folders too.
+func TestPrepareVerifiesARunningVMOnFirstUse(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	d.set(t, "image", "arm64|"+boximage.Hash()+"\n")
+	fc.running = true // started by someone else: this layer never sees started=true
+	fc.mounts = ""    // every mount is missing
+	err := l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "folders do not match its folder list") {
+		t.Fatalf("first prepare on a running VM with wrong folders: %v", err)
+	}
+}
+
+func mountReads(fc *fakeColima) int {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	n := 0
+	for _, c := range fc.calls {
+		if strings.Contains(c, "/proc/self/mounts") {
+			n++
+		}
+	}
+	return n
+}
+
+// A pass holds until the VM's colima.yaml changes (an apply, from any process).
+func TestPrepareVerifiesOnceUntilTheFolderListIsApplied(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	d.set(t, "image", "arm64|"+boximage.Hash()+"\n")
+	fc.running = true
+	for i := 0; i < 2; i++ {
+		if err := l.prepare(context.Background()); err != nil {
+			t.Fatalf("prepare %d: %v", i, err)
+		}
+	}
+	if n := mountReads(fc); n != 1 {
+		t.Fatalf("folder checks = %d, want 1 (verified once)", n)
+	}
+	writeColimaYAML(t, l, l.vm.Config().Mounts()) // another process applied the list
+	if err := l.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare after apply: %v", err)
+	}
+	if n := mountReads(fc); n != 2 {
+		t.Fatalf("folder checks = %d, want 2 (an apply clears the verdict)", n)
 	}
 }
 

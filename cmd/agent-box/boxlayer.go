@@ -85,9 +85,18 @@ type boxLayer struct {
 	// ctl is the VM folder control (macOS, set by the daemon): while it reports
 	// an apply, spawns are refused instead of racing the VM restart.
 	ctl vmControl
-	// folderCheckFailed is true while the last VM folder check failed; every
-	// spawn then runs the check again until one passes.
-	folderCheckFailed atomic.Bool
+	// foldersOK is the VM folder check's verdict: the colima.yaml (mtime, size)
+	// a passing check ran against, nil = unverified. Every layer starts
+	// unverified (a failure in another process or before a restart is in no
+	// memory here), and any change to colima.yaml (an apply, from any process)
+	// makes it unverified again. Until verified, every spawn runs the check.
+	foldersOK atomic.Pointer[yamlStamp]
+}
+
+// yamlStamp identifies one written colima.yaml.
+type yamlStamp struct {
+	mtime time.Time
+	size  int64
 }
 
 // relaySecretFile is the relay key's file in the data directory. The name pairs
@@ -274,7 +283,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 		// stopped, and the boot pass skipped them while the VM was down.
 		l.reconcileAndReclaim(context.WithoutCancel(ctx))
 	}
-	if started || l.folderCheckFailed.Load() {
+	if started || !l.foldersVerified() {
 		mctx, mcancel := context.WithTimeout(ctx, imageCheckTimeout)
 		err := l.verifyMounts(mctx)
 		mcancel()

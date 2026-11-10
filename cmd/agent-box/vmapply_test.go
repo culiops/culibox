@@ -83,7 +83,7 @@ func TestLayerApplyStepsFlagAndCheckOrder(t *testing.T) {
 	if !strings.Contains(d.log(), "ps") {
 		t.Fatalf("no reconcile after the checks:\n%s", d.log())
 	}
-	if l.folderCheckFailed.Load() {
+	if !l.foldersVerified() {
 		t.Fatal("a passing check left the failure flag set")
 	}
 }
@@ -102,7 +102,7 @@ func TestLayerApplyCheckFailureCopy(t *testing.T) {
 	if !strings.Contains(j.Detail, "folders do not match") {
 		t.Fatalf("detail %q", j.Detail)
 	}
-	if l.ctl.Applying() || !l.folderCheckFailed.Load() {
+	if l.ctl.Applying() || l.foldersVerified() {
 		t.Fatal("flag must clear and the failed check be remembered")
 	}
 }

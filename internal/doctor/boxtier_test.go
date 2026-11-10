@@ -418,3 +418,60 @@ func TestBoxTierFolderPassAndLinuxNoRow(t *testing.T) {
 		t.Fatal("linux has no folder row")
 	}
 }
+
+// S3: a running VM whose real folders differ from its colima.yaml fails the
+// folder row (every boxed spawn is refused until it is fixed).
+func TestBoxTierFolderMismatchFails(t *testing.T) {
+	f := ok()
+	f.MountsRan, f.MountsErr = true, errors.New("missing /x")
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `agent-box box share apply`"
+	if !strings.Contains(d, want) || strings.Contains(d, "PASS box VM folders") {
+		t.Fatalf("got:\n%s", d)
+	}
+	f.MountsErr = nil
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "PASS box VM folders") {
+		t.Fatal("a passing check must keep the pass row")
+	}
+}
+
+// Doctor runs the folder check when the VM is running, over the same ssh it
+// uses for the firewall rules.
+func TestGatherBoxFactsVerifiesFoldersOfARunningVM(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) echo 'colima version 0.8.1' ;;\n" +
+		"status) echo '{\"driver\":\"vz\",\"mount_type\":\"virtiofs\"}' ;;\n" +
+		"ssh) case \"$*\" in *mounts*) echo 'm /nowhere virtiofs rw 0 0' ;; esac ;;\nesac\nexit 0\n"
+	if err := os.WriteFile(colima, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	cfg := boxvm.ConfigFor(c, data, t.TempDir(), colima, dockerBin, 4, 8)
+	vm := boxvm.NewVM(cfg, boxvm.ExecRunner{})
+	vc := vm.Config()
+	y, err := vc.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.YAMLPath(), y, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(y)
+	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := gatherBoxFacts(c, data, t.TempDir(), "darwin")
+	if !f.Status.Running || !f.MountsRan || !errors.Is(f.MountsErr, boxvm.ErrMountsMismatch) {
+		t.Fatalf("facts: running %v, mounts ran %v, err %v", f.Status.Running, f.MountsRan, f.MountsErr)
+	}
+}

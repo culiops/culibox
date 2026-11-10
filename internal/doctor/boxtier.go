@@ -128,6 +128,10 @@ type boxFacts struct {
 	FirewallRan     bool
 	FirewallErr     error
 	FirewallReadErr error
+	// MountsRan: the VM runs and its real folders were compared with its
+	// colima.yaml (boxvm.VerifyMounts); MountsErr: they differ or could not be read.
+	MountsRan bool
+	MountsErr error
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -235,6 +239,9 @@ func folderRows(f boxFacts) []Result {
 	const ck = "box VM folders"
 	var out []Result
 	switch {
+	case f.MountsRan && f.MountsErr != nil:
+		// Every boxed spawn is refused until this is fixed: it outranks the rest.
+		out = append(out, Result{Fail, ck, "the box VM's folders do not match its folder list (" + f.MountsErr.Error() + "); run `agent-box box share apply`"})
 	case f.WholeHome && f.SharesErr != nil:
 		// Applying would drop the user's folders, so no apply advice.
 		out = append(out, Result{Warn, ck, "the box VM shares your whole home folder; fix vm-shares.json before applying a folder list"})
@@ -325,6 +332,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	} else if f.FirewallErr = boxvm.CheckInputRules(rules, vc.EgressPort, vc.BrokerPort); f.FirewallErr == nil {
 		f.FirewallErr = boxvm.CheckDockerUserRules(rules)
 	}
+	// The same check a spawn runs before it trusts the VM's folders.
+	f.MountsRan = true
+	f.MountsErr = vm.VerifyMounts(ctx)
 	cli := box.CLIClient{Bin: bin, Args: vc.DockerArgs()}
 	img := boximage.Docker{Bin: bin, Args: vc.DockerArgs()}
 	if f.ServerArch, err = img.ServerArch(ctx); err != nil {
