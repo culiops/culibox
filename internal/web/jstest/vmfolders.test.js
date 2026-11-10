@@ -276,5 +276,5 @@ test("G1/G5: the data row label is sans, the remove title has no gap before the 
 
 test("G3: the add card's picker opens only on demand (Browse…), never on focus or click", () => {
   const src = fs.readFileSync(path.join(__dirname, "../static/vmfolders.js"), "utf8");
-  assert.ok(src.includes("openOnFocus: () => false, openOnClick: () => false"));
+  assert.ok(src.includes("openOnFocus: () => false, openOnClick: () => false, openOnType: () => false"));
 });

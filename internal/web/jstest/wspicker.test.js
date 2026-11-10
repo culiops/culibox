@@ -773,3 +773,19 @@ test("openOnClick false keeps a click from opening the list (an on-demand picker
   p.picker.open();
   assert.strictEqual(p.list.hidden, false);
 });
+
+test("openOnType false: typing never opens the list, and closes one Browse… opened", () => {
+  const t = env();
+  const p = t.make({ openOnFocus: () => false, openOnClick: () => false, openOnType: () => false });
+  p.input.value = "proj";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "typing a fuzzy query opens nothing");
+  p.input.value = "";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "emptying the field opens nothing");
+  p.picker.open();
+  assert.strictEqual(p.list.hidden, false, "Browse… opens it");
+  p.input.value = "a";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "typing closes it again");
+});

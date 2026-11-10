@@ -723,7 +723,7 @@ function vmfBuildCard(path, mode, from) {
   if (typeof createWsPicker === "function" && !phone) {
     vmfCard.picker = createWsPicker({
       input, list, keepEsc: true, reanchor: true,
-      openOnFocus: () => false, openOnClick: () => false, // on demand only: Browse… opens the list, so no idle caption sits over the field message
+      openOnFocus: () => false, openOnClick: () => false, openOnType: () => false, // on demand only: Browse… opens the list, so no idle caption sits over the field message
       onPick: () => { vmfCardSync(); vmfCardCheck(); },
       onNote: () => {},
     });

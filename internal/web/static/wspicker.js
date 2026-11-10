@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, reanchor, inline, lastUsed, idleText })
+//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -368,7 +368,8 @@ function createWsPicker(opts) {
     const before = cwd;
     if (c.mode === "path") cwd = c.value;
     else if (c.mode === "empty") cwd = "";
-    query(input.value);
+    if (typeof o.openOnType === "function" && !o.openOnType()) close(); // an on-demand list closes as the user types: it never covers the field message
+    else query(input.value);
     if (cwd !== before) onPick(cwd);
   });
   // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same pure functions, same measured
