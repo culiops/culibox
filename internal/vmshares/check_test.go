@@ -311,3 +311,60 @@ func TestCheckRefusesAliasesByIdentity(t *testing.T) {
 		}
 	}
 }
+
+// S2 (a): /System/Volumes/Data physically holds /Users, so a firmlink root
+// contains the home although the home's ancestors never name it. Everything
+// under /System is refused, whatever the case; /Volumes (external drives) is not.
+func TestCheckRefusesSystem(t *testing.T) {
+	env := testEnv(t, false)
+	for _, p := range []string{"/System", "/System/Volumes/Data", "/System/Volumes/Data/Users/me", "/system/volumes/data", "/SYSTEM/Volumes"} {
+		err := Check(p, env)
+		if kindOf(err) != KindContainsHome || !strings.HasSuffix(err.Error(), reasonHome) {
+			t.Errorf("Check(%s) = %v, want contains-home", p, err)
+		}
+	}
+	for _, p := range []string{"/Volumes/ext/code", "/Systemic/x"} {
+		if err := Check(p, env); err != nil {
+			t.Errorf("Check(%s) = %v, want allowed", p, err)
+		}
+	}
+}
+
+// S2 (b): the ~/.claude memory exception is judged on the real path. A memory
+// folder that is a link to elsewhere in ~/.claude looks like the exception in
+// every spelling a firmlink leaves, and is still refused.
+func TestCheckMemoryExceptionUsesTheRealPath(t *testing.T) {
+	env := testEnv(t, false)
+	h := env.Home
+	hooks := filepath.Join(h, ".claude", "hooks")
+	if err := os.MkdirAll(filepath.Join(h, ".claude", "projects", "-x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mem := filepath.Join(h, ".claude", "projects", "-x", "memory")
+	if err := os.Symlink(hooks, mem); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(filepath.Dir(filepath.Dir(h)), "alias-home")
+	if err := os.Symlink(h, alias); err != nil {
+		t.Fatal(err)
+	}
+	viaAlias := filepath.Join(alias, ".claude", "projects", "-x", "memory")
+	for _, stub := range []bool{false, true} {
+		if stub {
+			old := resolveSpelling
+			resolveSpelling = filepath.Clean
+			t.Cleanup(func() { resolveSpelling = old })
+		}
+		for _, p := range []string{mem, viaAlias} {
+			if err := Check(p, env); kindOf(err) != KindSensitive {
+				t.Errorf("stub=%v Check(%s) = %v, want sensitive", stub, p, err)
+			}
+		}
+		if err := Check(filepath.Join(alias, ".claude", "projects", "-a-b", "memory"), env); err != nil {
+			t.Errorf("stub=%v a real memory folder via the alias: %v", stub, err)
+		}
+	}
+}

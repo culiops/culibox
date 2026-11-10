@@ -64,6 +64,12 @@ func Check(p string, env Env) error {
 		if c == "/" {
 			return refuse(KindRoot, reasonHome)
 		}
+		// macOS firmlink roots: /System/Volumes/Data holds /Users, so it
+		// contains the home although no ancestor of the home names it. Folded
+		// on every OS; harmless where /System does not exist.
+		if Within(c, "/System", true) {
+			return refuse(KindContainsHome, reasonHome)
+		}
 		if Within(c, env.Home, env.Fold) && Within(env.Home, c, env.Fold) {
 			return refuse(KindHome, reasonHome)
 		}
@@ -80,8 +86,10 @@ func Check(p string, env Env) error {
 			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
-	if kind, reason := identityHit(p, env); kind != "" {
-		return refuse(kind, reason)
+	for _, c := range []string{p, resolveSpelling(p)} {
+		if kind, reason := identityHit(c, env); kind != "" {
+			return refuse(kind, reason)
+		}
 	}
 	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 		return refuse(KindNotDir, reasonNotDir)
@@ -174,15 +182,21 @@ func (ids idCache) stat(p string) os.FileInfo {
 }
 
 // inside reports whether some existing ancestor-or-self of c is dir, and the
-// components of c below that ancestor.
+// components of c below that ancestor. They are taken from the real paths
+// (links followed), not the spelling: a link below the ancestor can make a
+// path that reads as ~/.claude/projects/<slug>/memory land elsewhere in
+// ~/.claude. A match whose real path leaves the ancestor is no match.
 func (ids idCache) inside(c, dir string) ([]string, bool) {
 	dfi := ids.stat(dir)
 	if dfi == nil {
 		return nil, false
 	}
+	rc := Resolve(c)
 	for a := filepath.Clean(c); ; {
 		if fi := ids.stat(a); fi != nil && os.SameFile(fi, dfi) {
-			return parts(c)[len(parts(a)):], true
+			if ra := Resolve(a); Within(rc, ra, false) {
+				return parts(rc)[len(parts(ra)):], true
+			}
 		}
 		up := filepath.Dir(a)
 		if up == a {
