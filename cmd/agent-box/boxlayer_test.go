@@ -35,9 +35,10 @@ type fakeColima struct {
 	rules   string // what `ssh … iptables -S` prints
 	mounts  string // what `ssh … cat /proc/self/mounts` prints
 	// hangSSH makes the named ssh command ("iptables" or "mounts") block until its context ends.
-	hangSSH string
-	onSSH   func() // called on each ssh (lets a test order it against docker calls)
-	calls   []string
+	hangSSH  string
+	onSSH    func() // called on each ssh (lets a test order it against docker calls)
+	calls    []string
+	failStop bool // stop fails and the VM keeps running
 }
 
 func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
@@ -85,6 +86,9 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 	case "start":
 		f.running = true
 	case "stop":
+		if f.failStop {
+			return "", errors.New("colima stop: hostagent did not exit")
+		}
 		f.running = false
 	}
 	return "", nil

@@ -316,10 +316,12 @@ function vmfBannerEl(b) {
   return el;
 }
 
-// vmfJob: the apply job the page shows. The global one (vmapply.js, followed by its own poller) wins over the one the last GET carried.
+// vmfJob: the apply job the page shows (the global one, vmapply.js, followed by its own poller).
 function vmfJob() {
-  const g = typeof vmApplyCurrent === "function" ? vmApplyCurrent() : null;
-  return g || (vmfView && vmfView.apply) || null;
+  // Only the global job (every source goes through vmaFromMeta / vmaSeen, which stamp when this browser got it); a view's own
+  // copy would freeze the elapsed time, and could bring back a card the global state dropped.
+  if (typeof vmApplyCurrent === "function") return vmApplyCurrent();
+  return (vmfView && vmfView.apply) || null;
 }
 
 function vmfJobRunning() {

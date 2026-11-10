@@ -246,3 +246,16 @@ func TestBoxShareRmFallsBackToTheResolvedPath(t *testing.T) {
 		t.Fatalf("list after rm = %+v, %v", list, err)
 	}
 }
+
+// A stop that fails leaves the VM running the old list, which is also the saved list: the web forgets that failure at once,
+// the CLI must still print it and exit 1.
+func TestBoxShareApplyStopFailureWithUnchangedListStillFails(t *testing.T) {
+	l, fc, _ := applyLayer(t)
+	fc.failStop = true
+	a := shareArgs("apply", "")
+	a.Force = true
+	rc, out := runVM(t, l, a)
+	if rc != 1 || !strings.Contains(out, "stop… failed: ") {
+		t.Fatalf("stop failure = %d:\n%s", rc, out)
+	}
+}

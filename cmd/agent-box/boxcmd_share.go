@@ -174,7 +174,7 @@ func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, 
 	}
 	printed := 0
 	for {
-		st, _ := svc.ApplyStatus()
+		st, _ := svc.lastJob() // unfiltered: ApplyStatus forgets a failure the VM has left behind
 		for printed < len(st.Steps) {
 			s := st.Steps[printed]
 			if s.State == "done" {

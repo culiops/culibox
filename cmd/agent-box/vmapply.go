@@ -56,7 +56,17 @@ func (s *vmShareSvc) jobRunning() bool {
 	return s.running()
 }
 
-// ApplyStatus is the last job, if any.
+// lastJob is the last job as it is, for the CLI: it must see a failure however the VM looks now.
+func (s *vmShareSvc) lastJob() (web.VMApply, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.job == nil {
+		return web.VMApply{}, false
+	}
+	return *s.jobCopy(), true
+}
+
+// ApplyStatus is the last job, if any, for the web (meta, GET apply).
 // A failed job that the VM has since left behind (a later `agent-box box share apply` from a terminal worked) is not reported.
 func (s *vmShareSvc) ApplyStatus() (web.VMApply, bool) {
 	s.mu.Lock()
