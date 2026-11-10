@@ -41,10 +41,12 @@ type Server struct {
 	Protected []box.ProtectedDir
 	// Shares reads the box VM's live folder list (macOS); nil = no VM, every
 	// directory is visible. The workspace picker marks an unshared one.
-	Shares   box.SharesFunc
-	Terminal http.Handler
-	EnvLabel string // shown as the UI env badge; empty → no badge
-	EnvColor string // CSS color for the env badge/strip
+	Shares box.SharesFunc
+	// VMFolders is the box VM's folder list service (macOS); nil = no VM.
+	VMFolders VMFolders
+	Terminal  http.Handler
+	EnvLabel  string // shown as the UI env badge; empty → no badge
+	EnvColor  string // CSS color for the env badge/strip
 	// RepliesEnabled mirrors config replies_enabled and is published in
 	// /api/meta so the client fails closed (reply UI off until it says true).
 	RepliesEnabled bool

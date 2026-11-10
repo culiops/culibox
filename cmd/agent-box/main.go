@@ -723,6 +723,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm.SetEgressAll(layer != nil)
 	vmShares := layer.sharesFunc() // the box VM's live folder list; nil without a VM
 	pm.SetShares(vmShares)
+	vmFolders := bootVMFolders(layer, cfg, pm.All, boxedReg.List, bundleSrc, mgr.List)
 	contextCheck := contextSaveCheck(h, home, protected, vmShares)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
 	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
@@ -788,6 +789,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Home:             home,
 		Protected:        protected,
 		Shares:           vmShares,
+		VMFolders:        vmFolders,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       boxRuntime,
 		CloneUnavailable: cloneUnavailableReason(h),

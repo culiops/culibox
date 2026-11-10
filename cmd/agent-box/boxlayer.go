@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
@@ -80,6 +81,12 @@ type boxLayer struct {
 	reclaimErr logOnChange
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
+	// ctl is the VM folder control (macOS, set by the daemon): while it reports
+	// an apply, spawns are refused instead of racing the VM restart.
+	ctl vmControl
+	// folderCheckFailed is true while the last VM folder check failed; every
+	// spawn then runs the check again until one passes.
+	folderCheckFailed atomic.Bool
 }
 
 // relaySecretFile is the relay key's file in the data directory. The name pairs
@@ -248,6 +255,9 @@ func (l *boxLayer) prober(image string) bundle.ImageProber {
 // deadline, so the spawn simply takes longer and no "starting the box VM"
 // state is needed in the UI (spec §3.6).
 func (l *boxLayer) prepare(ctx context.Context) error {
+	if l.ctl != nil && l.ctl.Applying() {
+		return box.ErrVMRestarting
+	}
 	vctx, vcancel := context.WithTimeout(ctx, prepareVMTimeout)
 	started, err := l.vm.EnsureRunning(vctx)
 	vcancel()
@@ -262,6 +272,14 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 		// Every box in a freshly started VM is a leftover from before it
 		// stopped, and the boot pass skipped them while the VM was down.
 		l.reconcileAndReclaim(context.WithoutCancel(ctx))
+	}
+	if started || l.folderCheckFailed.Load() {
+		mctx, mcancel := context.WithTimeout(ctx, imageCheckTimeout)
+		err := l.verifyMounts(mctx)
+		mcancel()
+		if err != nil {
+			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `agent-box doctor`", box.ErrBoxUnavailable, err)
+		}
 	}
 	ictx, cancel := context.WithTimeout(ctx, imageCheckTimeout)
 	defer cancel()
