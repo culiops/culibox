@@ -68,6 +68,7 @@ type VM struct {
 	// whose caller went away, still gets exactly one reconcile.
 	flagMu         sync.Mutex
 	needsReconcile bool
+	mountsCache    *mountsCache
 }
 
 // NewVM resolves the config's Root and Home through symlinks, so the mount
@@ -88,7 +89,11 @@ func NewVM(cfg Config, r Runner) *VM {
 	return &VM{cfg: cfg, r: r, sem: make(chan struct{}, 1), startTimeout: 120 * time.Second}
 }
 
-func (v *VM) Config() Config { return v.cfg }
+func (v *VM) Config() Config {
+	v.flagMu.Lock()
+	defer v.flagMu.Unlock()
+	return v.cfg
+}
 
 // lock takes the start/stop lock, or gives up when ctx ends first.
 func (v *VM) lock(ctx context.Context) error {

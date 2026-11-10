@@ -24,6 +24,7 @@ type fakeRunner struct {
 	startCancelled atomic.Bool
 	delay          time.Duration
 	failOn         string
+	mountsOut      string // answer to `colima ssh … cat /proc/self/mounts`
 }
 
 func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
@@ -43,6 +44,8 @@ func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...
 			return "colima [profile=agent-box] is not running", errors.New("exit status 1")
 		}
 		return `{"display_name":"colima [profile=agent-box]","driver":"macOS Virtualization.Framework","arch":"aarch64","runtime":"docker","mount_type":"virtiofs","docker_socket":"unix:///r/vm/agent-box/docker.sock"}`, nil
+	case "ssh":
+		return f.mountsOut, nil
 	case "start":
 		f.startN.Add(1)
 		select {
