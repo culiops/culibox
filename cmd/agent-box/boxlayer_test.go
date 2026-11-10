@@ -657,8 +657,9 @@ func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
 	if o.StateRoot != real {
 		t.Errorf("StateRoot = %q, want the resolved %q", o.StateRoot, real)
 	}
-	if !reflect.DeepEqual(o.Shared, []string{real}) {
-		t.Errorf("Shared = %q, want [%q]", o.Shared, real)
+	wantShared := boxvm.Locations(boxvm.DataMounts(real))
+	if !reflect.DeepEqual(o.Shared, wantShared) {
+		t.Errorf("Shared = %q, want %q", o.Shared, wantShared)
 	}
 	if got := strings.Join(l.dockerArgs, " "); !strings.Contains(got, "unix://"+real+"/vm/") || strings.Contains(got, link) {
 		t.Errorf("docker args = %q, want the resolved root", got)

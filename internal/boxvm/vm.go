@@ -78,6 +78,13 @@ type VM struct {
 func NewVM(cfg Config, r Runner) *VM {
 	cfg.Root = vmshares.Resolve(cfg.Root)
 	cfg.Home = vmshares.Resolve(cfg.Home)
+	if len(cfg.Shares) > 0 {
+		rs := make([]vmshares.Share, len(cfg.Shares))
+		for i, sh := range cfg.Shares {
+			rs[i] = vmshares.Share{Path: vmshares.Resolve(sh.Path), Mode: sh.Mode}
+		}
+		cfg.Shares = rs
+	}
 	return &VM{cfg: cfg, r: r, sem: make(chan struct{}, 1), startTimeout: 120 * time.Second}
 }
 

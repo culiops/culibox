@@ -318,8 +318,8 @@ func TestConfigIsSymlinkResolved(t *testing.T) {
 	if c.Home != wantHome || c.Root != filepath.Join(wantHome, "data") {
 		t.Fatalf("not resolved: home=%q root=%q", c.Home, c.Root)
 	}
-	if m := c.Mounts(); len(m) != 1 {
-		t.Fatalf("root inside the home must not add a second mount: %q", m)
+	if m := c.Mounts(); len(m) != 4 || m[0].Location != filepath.Join(wantHome, "data", "boxstate") {
+		t.Fatalf("mounts must be the four data-root subfolders under the resolved root: %v", m)
 	}
 }
 

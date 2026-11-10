@@ -60,6 +60,12 @@ type Config struct {
 	// ExtraCAPEM is the canonical PEM of extra_ca_certs; empty means none, and
 	// then the YAML is byte-identical to what it was before the feature.
 	ExtraCAPEM []byte
+	// Shares are the folders the user chose to share, beyond the four data-root
+	// subfolders. NewVM resolves each Path through symlinks.
+	Shares []vmshares.Share
+	// Fold is true on darwin (APFS compares case-insensitively); the share
+	// checks that read the VM's mounts compare with it.
+	Fold bool
 }
 
 // ConfigFor is the VM config for an instance: paths from the data root and
@@ -139,18 +145,6 @@ func (c Config) DockerSocket() string { return filepath.Join(c.ProfileDir(), "do
 // agent-box owns, so the user's contexts are neither read nor written.
 func (c Config) DockerArgs() []string {
 	return []string{"--host", "unix://" + c.DockerSocket(), "--config", c.DockerConfigDir()}
-}
-
-// Mounts are the host dirs the VM shares: the home (where workspaces live) and
-// the data root when it sits outside the home (box homes must be visible too).
-func (c Config) Mounts() []string {
-	home := filepath.Clean(c.Home)
-	out := []string{home}
-	root := filepath.Clean(c.Root)
-	if root != home && !strings.HasPrefix(root, home+string(filepath.Separator)) {
-		out = append(out, root)
-	}
-	return out
 }
 
 // provisionScript runs as root on every VM start. lima's user-mode network maps
@@ -275,7 +269,8 @@ true
 // written into the YAML. A path either parser would misread is refused, not
 // escaped, and the error names the path and the remedy.
 func (c Config) Validate() error {
-	for _, p := range []struct{ what, path string }{{"data root", c.Root}, {"home", c.Home}} {
+	// Home is display-only now: the VM no longer mounts it, so it is not checked.
+	for _, p := range []struct{ what, path string }{{"data root", c.Root}} {
 		if !filepath.IsAbs(p.path) {
 			return fmt.Errorf("the box VM needs an absolute %s, got %q", p.what, p.path)
 		}
@@ -319,6 +314,12 @@ func (c Config) Validate() error {
 // YAML is the colima.yaml agent-box owns. Every setting that would let colima
 // touch the user's state is pinned off.
 func (c Config) YAML() ([]byte, error) {
+	return renderYAML(c, c.Mounts())
+}
+
+// renderYAML is YAML for an explicit mount list. For an all-writable list the
+// output is byte-identical to what v0.32 wrote.
+func renderYAML(c Config, mounts []Mount) ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -329,11 +330,11 @@ func (c Config) YAML() ([]byte, error) {
 	b.WriteString("runtime: docker\nvmType: vz\nrosetta: false\nmountType: virtiofs\nmountInotify: true\n")
 	b.WriteString("autoActivate: false\nsshConfig: false\nforwardAgent: false\n")
 	b.WriteString("mounts:\n")
-	for _, m := range c.Mounts() {
-		if err := vmshares.YAMLSafe(m); err != nil {
+	for _, m := range mounts {
+		if err := vmshares.YAMLSafe(m.Location); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
+		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: %t\n", m.Location, m.Writable)
 	}
 	b.WriteString("provision:\n  - mode: system\n    script: |\n")
 	script := provisionScript(c.BrokerPort, c.EgressPort)

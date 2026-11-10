@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/box"
+	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/session"
@@ -597,7 +598,7 @@ func newCloneHooks(layer *boxLayer, home, memRoot, dataDir, instance string, pro
 	// the user's own daemon.
 	h.docker = clone.ExecDocker{Bin: layer.dockerBin, Args: layer.dockerArgs}
 	if layer.vm != nil {
-		h.shared = layer.vm.Config().Mounts()
+		h.shared = boxvm.Locations(layer.vm.Config().Mounts())
 	}
 	h.image = layer.image
 	cli := layer.cli

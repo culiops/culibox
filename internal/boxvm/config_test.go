@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 func testCfg() Config {
@@ -49,17 +50,6 @@ func TestDockerArgsPinTheVMAndConfig(t *testing.T) {
 	}
 }
 
-func TestMountsAreHomeAndAnOutsideRoot(t *testing.T) {
-	c := testCfg()
-	if m := c.Mounts(); len(m) != 1 || m[0] != "/Users/a" {
-		t.Fatalf("root inside home must not add a mount: %v", m)
-	}
-	c.Root = "/Volumes/fast/ab"
-	if m := c.Mounts(); len(m) != 2 || m[1] != "/Volumes/fast/ab" {
-		t.Fatalf("root outside home must be shared too: %v", m)
-	}
-}
-
 func TestYAMLSettingsAndProvision(t *testing.T) {
 	y, err := testCfg().YAML()
 	if err != nil {
@@ -69,7 +59,7 @@ func TestYAMLSettingsAndProvision(t *testing.T) {
 	for _, want := range []string{
 		"vmType: vz\n", "mountType: virtiofs\n", "autoActivate: false\n", "sshConfig: false\n",
 		"forwardAgent: false\n", "rosetta: false\n", "cpu: 4\n", "memory: 4\n", "runtime: docker\n",
-		"  - location: \"/Users/a\"\n    writable: true\n",
+		"  - location: \"" + testCfg().Root + "/boxstate\"\n    writable: true\n",
 		"  - mode: system\n", "DOCKER-USER", "host.lima.internal", "-j DROP",
 	} {
 		if !strings.Contains(s, want) {
@@ -81,7 +71,7 @@ func TestYAMLSettingsAndProvision(t *testing.T) {
 func TestYAMLRefusesUnsafeMountPaths(t *testing.T) {
 	for _, bad := range []string{`/Users/a"b`, `/Users/a\b`, "/Users/a\nb"} {
 		c := testCfg()
-		c.Home = bad
+		c.Shares = []vmshares.Share{{Path: bad, Mode: vmshares.RW}}
 		if _, err := c.YAML(); err == nil {
 			t.Fatalf("%q must be refused", bad)
 		}
@@ -147,7 +137,8 @@ func TestSocketPathLimit(t *testing.T) {
 func TestValidateRefusesPathsDockerOrYAMLCannotCarry(t *testing.T) {
 	for _, bad := range []string{"/Users/a,b", `/Users/a"b`, `/Users/a\b`, "/Users/a\nb", "/Users/a\x7fb",
 		"/Users/a\u0085b", "/Users/a\u0080b", "/Users/a\u009bb", "/Users/a\u2028b", "/Users/a\u2029b", "/Users/a\xffb"} {
-		for _, field := range []string{"root", "home"} {
+		// The home is no longer mounted, so it is not validated (Task 5).
+		for _, field := range []string{"root"} {
 			c := testCfg()
 			if field == "root" {
 				c.Root = bad + "/agent-box"
@@ -185,7 +176,6 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 	}
 	for name, mut := range map[string]func(*Config){
 		"relative root": func(c *Config) { c.Root = "rel/ab" },
-		"relative home": func(c *Config) { c.Home = "Users/a" },
 		"zero cpus":     func(c *Config) { c.CPUs = 0 },
 		"zero memory":   func(c *Config) { c.MemoryGiB = 0 },
 		"empty colima":  func(c *Config) { c.ColimaBin = "" },
@@ -661,7 +651,7 @@ func TestYAMLWithoutCAUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := testCfg().YAML()
+	got, err := renderYAML(testCfg(), []Mount{{"/Users/a", true}}) // the v0.32 mount list for this config
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +663,7 @@ func TestYAMLWithoutCAUnchanged(t *testing.T) {
 	}
 	c := testCfg()
 	c.ExtraCAPEM = []byte{}
-	if g, _ := c.YAML(); string(g) != string(want) {
+	if g, _ := renderYAML(c, []Mount{{"/Users/a", true}}); string(g) != string(want) {
 		t.Fatal("an empty, non-nil ExtraCAPEM must read as no CA")
 	}
 }

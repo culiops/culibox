@@ -716,7 +716,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm.SetEgressAll(layer != nil)
 	var vmShared []string // the box VM's shared directories; nil without a VM
 	if layer != nil && layer.vm != nil {
-		vmShared = layer.vm.Config().Mounts()
+		vmShared = boxvm.Locations(layer.vm.Config().Mounts())
 	}
 	contextCheck := contextSaveCheck(h, home, protected, vmShared)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })

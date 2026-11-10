@@ -165,7 +165,9 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		if fresh {
 			configFor = boxvm.ConfigForFresh
 		}
-		l.vm = boxvm.NewVM(configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem), runner)
+		vcfg := configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem)
+		vcfg.Fold = true // goos == "darwin" here: APFS compares case-insensitively
+		l.vm = boxvm.NewVM(vcfg, runner)
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -222,7 +224,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// #72: the context-path identity, read in the VM (Linux records it on the
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
-		o.Shared = l.vm.Config().Mounts()
+		o.Shared = boxvm.Locations(l.vm.Config().Mounts())
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
