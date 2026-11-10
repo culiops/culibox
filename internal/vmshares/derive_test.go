@@ -82,3 +82,26 @@ func TestDeriveMemoryDirSymlinkIsSkipped(t *testing.T) {
 		t.Fatalf("a symlinked memory dir was offered: %v", got)
 	}
 }
+
+// S5: a copy kept beside its original (~/code/proj-box next to ~/code/proj)
+// would share ~/code rw, which holds clone_of and makes it writable. The copy
+// dir itself is shared rw instead, existing or not.
+func TestDeriveSharesTheCopyWhenItsParentHoldsCloneOf(t *testing.T) {
+	for _, fold := range []bool{false, true} {
+		env := testEnv(t, fold)
+		of := filepath.Join(env.Home, "code", "proj")
+		if err := os.MkdirAll(of, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ofSpelled := of
+		if fold {
+			ofSpelled = filepath.Join(env.Home, "Code", "proj") // APFS: the same folder
+		}
+		copyDir := filepath.Join(env.Home, "code", "proj-box")
+		got, _ := Derive(DeriveInput{Env: env, Profiles: []Profile{{Name: "c", Clone: true, CloneOf: ofSpelled, Workspace: copyDir}}})
+		want := []Share{{Path: ofSpelled, Mode: RO}, {Path: copyDir, Mode: RW}}
+		if !reflect.DeepEqual(sorted(got, fold), sorted(want, fold)) {
+			t.Errorf("fold=%v: Derive = %+v, want %+v", fold, got, want)
+		}
+	}
+}

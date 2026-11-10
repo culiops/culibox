@@ -42,7 +42,15 @@ func Derive(in DeriveInput) (list []Share, skipped []Skip) {
 		if p.Clone {
 			add(p.CloneOf, RO)
 			if p.Workspace != "" {
-				add(filepath.Dir(p.Workspace), RW)
+				// The copy parent, rw, so new copies appear without an apply.
+				// Not when it holds clone_of (a copy kept beside its original):
+				// that would make the original writable, so share the copy
+				// itself, created or not yet.
+				dir := filepath.Dir(p.Workspace)
+				if p.CloneOf != "" && Within(filepath.Clean(p.CloneOf), dir, in.Env.Fold) {
+					dir = p.Workspace
+				}
+				add(dir, RW)
 			}
 		}
 	}
