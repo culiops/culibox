@@ -105,8 +105,10 @@ function sysBannerSync() {
   // The rail's marker follows the same model, then the store's; renderRail48 skips an unchanged rail.
   // The store banner (own slot below, Task 9) repaints on the same beats: a poll moves its count, a 401 hides it.
   if (typeof paintStoreBanner === "function") paintStoreBanner();
+  if (typeof paintVMApplyBanner === "function") paintVMApplyBanner();
   const sr = typeof storeRailBanner === "function" ? storeRailBanner() : null;
-  const rk = (key || "") + "|" + (sr ? "store" : "");
+  const vr = typeof vmApplyRailBanner === "function" ? vmApplyRailBanner() : null;
+  const rk = (key || "") + "|" + (sr ? "store" : "") + "|" + (vr ? vr.title : "");
   if (rk !== sysBannerRailKey) {
     sysBannerRailKey = rk;
     if (typeof renderRail48 === "function") renderRail48();
@@ -125,7 +127,8 @@ function sysBannerFocusSignIn() {
 
 // The rail marker's model: the first banner in display order (the system one, else the store's, R19).
 function sysRailMarkerModel() {
-  return railMarkerModel(sysBannerCurrent(), typeof storeRailBanner === "function" ? storeRailBanner() : null);
+  return railMarkerModel(sysBannerCurrent(), typeof storeRailBanner === "function" ? storeRailBanner() : null,
+    typeof vmApplyRailBanner === "function" ? vmApplyRailBanner() : null);
 }
 
 function sysRailMarkerEl(marker) {

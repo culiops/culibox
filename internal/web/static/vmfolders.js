@@ -28,7 +28,8 @@ function vmfPlural(n, one, many) {
 // (added, removed, switched; "switched" is new copy) and the primary Apply. Whole-home and not-set-up draw no strip.
 function vmfStrip(view, n) {
   if (view.state === "applied") {
-    return { dot: true, status: "Applied", detail: "The box VM sees only these " + n + " folders and CuliBox data." };
+    // One folder reads "this folder" (new copy: the frame's sentence is the plural).
+    return { dot: true, status: "Applied", detail: "The box VM sees only " + (n === 1 ? "this folder" : "these " + n + " folders") + " and CuliBox data." };
   }
   if (view.state === "pending") {
     const parts = [];
@@ -83,12 +84,16 @@ function vmfModel(view) {
     modeText: "Set by CuliBox", usedText: "Every box",
   });
   const applying = !!(v.apply && v.apply.state === "running");
+  // A running or failed job is a card (M9.7, M9.8) in place of the strip and the banner; only a running one locks the table.
+  const card = applying || !!(v.apply && v.apply.state === "failed");
   return {
-    strip: vmfStrip(v, live),
-    note: v.state === "pending" ? vmfPendingNote(v) : "",
-    banner: whole ? {
+    card,
+    locked: applying,
+    strip: card ? null : vmfStrip(v, live),
+    note: v.state === "pending" && !card ? vmfPendingNote(v) : "",
+    banner: whole && !card ? {
       title: "The box VM can see your whole home folder",
-      body: "It shares `~` read & write, so a box that broke out of its container could change any file in it, like `~/.zshrc`. Apply the list below and the VM sees only the " + live + " folders your boxes use.",
+      body: "It shares `~` read & write, so a box that broke out of its container could change any file in it, like `~/.zshrc`. Apply the list below and the VM sees only " + (live === 1 ? "the folder" : "the " + live + " folders") + " your boxes use.",
       muted: "Nothing changes until you apply: sessions still start as before.",
       action: "Apply (restart box VM)",
       terminal: "or, in a terminal, `agent-box box share apply`",
@@ -97,7 +102,7 @@ function vmfModel(view) {
     subtitle: whole ? "Made from your profiles and the folders boxed sessions ran in" : "",
     count: live,
     rows,
-    under: applying ? "" : VMF_HELPER,
+    under: card ? "" : VMF_HELPER,
     headAddDisabled: applying,
   };
 }
@@ -133,7 +138,7 @@ function vmfAddState(input, mode, check) {
   if (empty || !check) return s;
   if (check.kind === "error") { s.invalid = true; s.error = check.error; return s; }
   if (check.kind === "covered") {
-    s.note = "Already covered by " + check.display + ", which boxes can " + (check.mode === "ro" ? "read" : "read and write") + ". Nothing to add.";
+    s.note = "Already covered by `" + check.display + "`, which boxes can " + (check.mode === "ro" ? "read" : "read and write") + ". Nothing to add.";
     s.addDisabled = true;
   }
   return s;
@@ -200,19 +205,20 @@ function vmfLock() {
   return s;
 }
 
-function vmfSeg(row) {
+function vmfSeg(row, locked) {
   const seg = vmfEl("div", "seg vmf-seg");
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "What boxes can do in " + row.display);
   for (const [mode, label] of [["rw", "Read & write"], ["ro", "Read only"]]) {
     const b = vmfBtn(label, "seg-item", () => { if (row.seg !== mode) vmfSave(() => vmfPatch(row.path, mode)); });
     b.setAttribute("aria-pressed", row.seg === mode ? "true" : "false");
+    b.disabled = !!locked;
     seg.appendChild(b);
   }
   return seg;
 }
 
-function vmfRowEl(row) {
+function vmfRowEl(row, locked) {
   const tr = vmfRole(vmfEl("tr", row.removed ? "vmf-removed" : ""), "row");
   const td = (cls) => vmfRole(vmfEl("td", cls), "cell");
   const f = td("vmf-folder");
@@ -222,14 +228,16 @@ function vmfRowEl(row) {
   if (row.chip) line.appendChild(vmfEl("span", "chip", row.chip));
   f.append(line, vmfRich(vmfEl("div", "vmf-origin t-sm muted"), row.origin));
   const mode = td(row.data || row.removed ? "muted" : "");
-  if (row.seg) mode.appendChild(vmfSeg(row));
+  if (row.seg) mode.appendChild(vmfSeg(row, locked));
   else mode.textContent = row.modeText;
   const used = td(row.usedText ? "" : "muted");
   used.textContent = row.usedText || "No profile";
   const act = td("num");
   if (!row.data) {
-    const b = vmfBtn(row.action, "btn btn-ghost btn-sm", () => (row.removed ? vmfSave(() => vmfAdd(row.path, row.mode)) : vmfRemoveClick(row)));
+    const b = vmfBtn(row.action, "btn btn-ghost btn-sm", () => (row.removed ? vmfSave(() => vmfAdd(row.path, row.mode), row.path) : vmfRemoveClick(row)));
     b.setAttribute("aria-label", row.action + " " + row.display);
+    b.dataset.vmfAct = row.path;
+    b.disabled = !!locked;
     act.appendChild(b);
   }
   tr.append(f, mode, used, act);
@@ -245,8 +253,8 @@ function vmfAskRow(row, copy) {
   box.setAttribute("role", "alert");
   box.append(vmfRich(vmfEl("p", "banner-title"), copy.title), vmfEl("p", "t-md", copy.body), vmfEl("p", "t-sm muted", copy.note));
   const acts = vmfEl("div", "banner-acts");
-  const keep = vmfBtn("Keep it", "btn btn-sm", () => { vmfArmed = ""; vmfPaint(); });
-  const go = vmfBtn("Remove", "btn btn-danger btn-sm", () => { vmfArmed = ""; vmfSave(() => vmfDelete(row.path)); });
+  const keep = vmfBtn("Keep it", "btn btn-sm", () => { vmfArmed = ""; vmfPaint(); vmfFocusRow(row.path); });
+  const go = vmfBtn("Remove", "btn btn-danger btn-sm", () => { vmfArmed = ""; vmfSave(() => vmfDelete(row.path), row.path); });
   acts.append(keep, go);
   box.appendChild(acts);
   td.appendChild(box);
@@ -259,6 +267,7 @@ let vmfFocusKeep = null;
 function vmfTable(m) {
   const table = vmfRole(vmfEl("table", "tbl vmf-tbl"), "table");
   table.setAttribute("aria-label", m.title);
+  table.tabIndex = -1; // where focus lands when the row it was on is gone
   const cols = vmfEl("colgroup");
   for (let i = 0; i < 4; i++) cols.appendChild(vmfEl("col"));
   table.appendChild(cols);
@@ -272,8 +281,8 @@ function vmfTable(m) {
   const body = vmfRole(vmfEl("tbody"), "rowgroup");
   vmfFocusKeep = null;
   for (const r of m.rows) {
-    body.appendChild(vmfRowEl(r));
-    const copy = !r.data && !r.removed && r.path === vmfArmed ? vmfRemoveCopy(r) : null;
+    body.appendChild(vmfRowEl(r, m.locked));
+    const copy = !r.data && !r.removed && !m.locked && r.path === vmfArmed ? vmfRemoveCopy(r) : null;
     if (copy) body.appendChild(vmfAskRow(r, copy));
   }
   table.appendChild(body);
@@ -307,10 +316,18 @@ function vmfBannerEl(b) {
   return el;
 }
 
+// vmfJob: the apply job the page shows. The global one (vmapply.js, followed by its own poller) wins over the one the last GET carried.
+function vmfJob() {
+  const g = typeof vmApplyCurrent === "function" ? vmApplyCurrent() : null;
+  return g || (vmfView && vmfView.apply) || null;
+}
+
 function vmfPaint() {
   const body = document.getElementById("vmf-body");
   if (!body || !vmfView) return;
-  const m = vmfModel(vmfView);
+  const m = vmfModel(Object.assign({}, vmfView, { apply: vmfJob() }));
+  if (m.locked) vmfArmed = "";
+  vmfProg = null;
   vmfEnsureSlot();
   const main = document.getElementById("vmf-main");
   const kids = [];
@@ -319,7 +336,9 @@ function vmfPaint() {
     e.setAttribute("role", "alert");
     kids.push(e);
   }
-  if (m.banner) kids.push(vmfBannerEl(m.banner));
+  const pm = m.card && typeof vmApplyProgressModel === "function" ? vmApplyProgressModel(vmfJob(), Date.now()) : null;
+  if (pm) kids.push(vmfProgressEl(pm, vmfJob()));
+  else if (m.banner) kids.push(vmfBannerEl(m.banner));
   else if (m.strip) kids.push(vmfStripEl(m.strip, m.note));
   const card = vmfEl("div", "vmf-fill");
   const head = vmfEl("div", "card-head");
@@ -338,8 +357,8 @@ function vmfPaint() {
 function vmfSyncHead() {
   const b = document.getElementById("set-act-vmfolders");
   if (!b) return;
-  const applying = !!(vmfView && vmfView.apply && vmfView.apply.state === "running");
-  b.disabled = !!vmfCard || applying;
+  const j = vmfJob();
+  b.disabled = !!vmfCard || !!(j && j.state === "running");
 }
 
 function vmfSetView(v) {
@@ -352,12 +371,15 @@ async function loadVMFolders() {
   const seq = ++vmfLoadSeq;
   let v;
   try { v = await api("/api/vm-folders"); } catch (e) {
+    if (seq !== vmfLoadSeq) return;
     vmfEnsureSlot();
     const main = document.getElementById("vmf-main");
     if (main && !vmfView) main.replaceChildren(vmfEl("p", "field-error", "Could not load the VM folders: " + e.message));
     return;
   }
   if (seq !== vmfLoadSeq) return;
+  // An apply the server says is running or failed: the global poller and the sidebar banner take it up (vmapply.js).
+  if (v && v.apply && typeof vmaFromMeta === "function") vmaFromMeta(v.apply);
   vmfSetView(v);
 }
 
@@ -372,10 +394,17 @@ async function vmfDelete(path) { return api("/api/vm-folders?path=" + encodeURIC
 async function vmfAdd(path, mode) { const r = await api("/api/vm-folders", vmfJSON("POST", { path, mode, dry_run: false })); return r.view; }
 
 // vmfSave: one change at a time; the page repaints from the answer, a refusal is a toast (the add card has its own place).
-async function vmfSave(run) {
+// One sequence for loads and saves (vmfLoadSeq): a GET that started before a save, or while it ran, never paints over its answer.
+async function vmfSave(run, focusPath) {
   if (vmfBusy) return;
   vmfBusy = true;
-  try { vmfSetView(await run()); } catch (e) {
+  vmfLoadSeq++;
+  try {
+    const v = await run();
+    vmfLoadSeq++;
+    vmfSetView(v);
+    if (focusPath) vmfFocusRow(focusPath);
+  } catch (e) {
     if (typeof showToast === "function") showToast(e.message);
     loadVMFolders();
   } finally { vmfBusy = false; }
@@ -383,7 +412,16 @@ async function vmfSave(run) {
 
 function vmfRemoveClick(row) {
   if (vmfRemoveCopy(row)) { vmfArmed = row.path; vmfPaint(); return; }
-  vmfSave(() => vmfDelete(row.path));
+  vmfSave(() => vmfDelete(row.path), row.path);
+}
+
+// vmfFocusRow: focus goes back to the row's own Remove (or Undo) button; when the row is gone, to the table.
+function vmfFocusRow(path) {
+  const main = document.getElementById("vmf-main");
+  if (!main) return;
+  const btn = Array.from(main.querySelectorAll("button")).find((b) => b.dataset && b.dataset.vmfAct === path && !b.disabled);
+  const target = btn || main.querySelector("table");
+  if (target && typeof target.focus === "function") target.focus();
 }
 
 // ---- the add card ----------------------------------------------------------------------------------------------------------
@@ -448,7 +486,9 @@ async function vmfCardSubmit() {
   c.busy = true;
   vmfCardSync();
   try {
+    vmfLoadSeq++;
     const r = await api("/api/vm-folders", vmfJSON("POST", { path: typed, mode: c.mode, dry_run: false }));
+    vmfLoadSeq++;
     c.busy = false;
     if (r.result && r.result.covered_by) {
       c.check = vmfCheckFrom({ ok: true, result: r.result }, r.view.rows);
@@ -571,6 +611,127 @@ function vmfEnsureSlot() {
     body.append(slot, main);
   }
 }
+
+
+// ---- applying the list (M9.6 confirm, M9.7 progress, M9.8 failure) -----------------------------------------------------------
+
+let vmfProg = null; // the painted card: { sig, elapsed, rights } so a poll tick only moves the numbers
+
+function vmfProgSig(pm) {
+  return [pm.head].concat(pm.steps.map((s) => [s.glyph, s.title, s.sub, s.red].join("|"))).join("\n");
+}
+
+function vmfStepEl(s) {
+  const el = vmfEl("div", "empst-step vmf-step");
+  const n = vmfEl("span", "empst-n");
+  if (s.glyph === "spin") { const sp = vmfEl("span", "spin"); sp.setAttribute("aria-hidden", "true"); n.appendChild(sp); }
+  else { n.textContent = s.glyph; if (s.glyph === "✓") n.classList.add("c-ok"); else if (s.glyph === "✕") n.classList.add("c-red"); }
+  const right = vmfEl("span", "vmf-step-right t-md muted", s.right);
+  el.append(n, vmfEl("b", "empst-t" + (s.red ? " c-red" : ""), s.title), right, vmfEl("small", "empst-d", s.sub));
+  return { el, right };
+}
+
+// vmfProgressEl: the card for a running job (spinner, elapsed) or a failed one (red step, the buttons, Details and the terminal line).
+function vmfProgressEl(pm, job) {
+  const failed = job.state === "failed";
+  const card = vmfEl("div", "vmf-fill vmf-prog");
+  card.setAttribute("role", failed ? "alert" : "status");
+  const head = vmfEl("div", "vmf-prog-head");
+  if (!failed) { const sp = vmfEl("span", "spin"); sp.setAttribute("aria-hidden", "true"); head.appendChild(sp); }
+  head.appendChild(vmfEl("span", "vmf-prog-title", pm.head));
+  const prog = { sig: vmfProgSig(pm), elapsed: null, rights: [] };
+  if (failed) {
+    head.appendChild(vmfEl("span", "vmf-prog-spacer"));
+    head.appendChild(vmfBtn("Copy details", "btn", () => vmfCopy(job.detail || job.error || "", "Details copied")));
+    head.appendChild(vmfBtn("Try again", "btn btn-primary", () => vmfApplyOpen()));
+  } else {
+    prog.elapsed = vmfEl("span", "vmf-prog-elapsed t-md muted", pm.elapsed);
+    head.appendChild(prog.elapsed);
+  }
+  const steps = vmfEl("div", "empst-steps vmf-steps");
+  for (const s of pm.steps) {
+    const e = vmfStepEl(s);
+    prog.rights.push(e.right);
+    steps.appendChild(e.el);
+  }
+  card.append(head, steps, vmfEl("p", "vmf-prog-foot t-md" + (failed ? "" : " muted"), pm.foot));
+  if (failed) card.appendChild(vmfFailExtras(job));
+  vmfProg = prog;
+  return card;
+}
+
+function vmfFailExtras(job) {
+  const wrap = vmfEl("div", "vmf-fail");
+  const toggle = vmfBtn("", "vmf-details-toggle", () => {
+    const open = toggle.getAttribute("aria-expanded") !== "true";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    chev.textContent = open ? "⌄" : "›";
+    raw.hidden = !open;
+  });
+  toggle.setAttribute("aria-expanded", "false");
+  const chev = vmfEl("span", "vmf-chev", "›");
+  toggle.append(chev, vmfEl("span", "", "Details"), vmfEl("span", "muted", "The error as the VM reported it"));
+  const raw = vmfEl("pre", "vmf-raw mono t-sm", job.detail || job.error || "");
+  raw.hidden = true;
+  wrap.append(toggle, raw, vmfEl("p", "t-md muted vmf-or", "Or try it from a terminal on this Mac:"));
+  const cmd = vmfEl("div", "vmf-cmd");
+  cmd.appendChild(vmfEl("code", "mono", VMA_CLI_TEXT));
+  const copy = vmfBtn("Copy", "btn btn-ghost btn-sm", () => vmfCopy(VMA_CLI_TEXT, "Command copied"));
+  copy.setAttribute("aria-label", "Copy the command");
+  cmd.appendChild(copy);
+  wrap.appendChild(cmd);
+  return wrap;
+}
+const VMA_CLI_TEXT = "agent-box box share apply";
+
+function vmfCopy(text, okMsg) {
+  if (typeof copyText !== "function") return;
+  copyText(text, (ok) => {
+    if (typeof showToast === "function") showToast(ok ? okMsg : "Could not copy. Select the text and copy it.", { error: !ok });
+  });
+}
+
+// vmfApplyChanged(prev, job): the global job moved (vmapply.js). Done after running reloads the view (the strip says Applied);
+// otherwise the card is repainted, or only its numbers move when nothing but time changed.
+function vmfApplyChanged(prev, job) {
+  if (!vmfView || !document.getElementById("vmf-main")) return;
+  if (job && job.state === "done") {
+    if (prev && prev.state === "running") loadVMFolders();
+    else vmfPaint();
+    return;
+  }
+  const pm = job && typeof vmApplyProgressModel === "function" ? vmApplyProgressModel(job, Date.now()) : null;
+  if (pm && vmfProg && vmfProg.sig === vmfProgSig(pm) && job.state === "running") {
+    if (vmfProg.elapsed) vmfProg.elapsed.textContent = pm.elapsed;
+    pm.steps.forEach((s, i) => { if (vmfProg.rights[i]) vmfProg.rights[i].textContent = s.right; });
+    return;
+  }
+  vmfPaint();
+}
+
+// vmfApplyOpen: Apply and Try again. The confirm always opens, with the sessions running in boxes right now (the page's list
+// may be old, so the view is fetched first); the restart starts on Restart box VM.
+let vmfApplyAsking = false;
+async function vmfApplyOpen() {
+  if (vmfApplyAsking) return;
+  vmfApplyAsking = true;
+  try {
+    try { vmfLoadSeq++; const v = await api("/api/vm-folders"); vmfLoadSeq++; vmfSetView(v); } catch (_) { /* the page's last view will do */ }
+    const j = vmfJob();
+    if (j && j.state === "running") return;
+    const c = vmApplyConfirmCopy((vmfView && vmfView.running_boxed) || []);
+    const ok = await askConfirm({ title: c.title, body: c.body, notes: c.notes, confirmLabel: c.confirmLabel, danger: true, focusCancel: true, hint: c.hint, cls: "vmapply" });
+    if (!ok) return;
+    try {
+      startVMApplyPoll(await api("/api/vm-folders/apply", { method: "POST" }));
+    } catch (e) {
+      if (e.code === "apply_running") { startVMApplyPoll(); return; } // another tab or the CLI started it: follow it
+      if (typeof showToast === "function") showToast(e.message, { error: true });
+    }
+  } finally { vmfApplyAsking = false; }
+}
+globalThis.vmfApplyOpen = vmfApplyOpen;
+globalThis.vmfApplyChanged = vmfApplyChanged;
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { vmfModel, vmfAddState, vmfCheckFrom, vmfRemoveCopy, vmfAddHelp, vmfNames, VMF_HELPER, VMF_HELP_DEFAULT, VMF_HELP_SPAWN };

@@ -392,9 +392,11 @@ function sysVisibilityStep(sys, hidden, now) {
 // display order: the system banner if there is one, else the store's. Its title is the banner's title (the
 // button's accessible name and tooltip). Neutral for a system banner, amber for the store (a blocked cause).
 // storeBanner is Task 9's input: anything with a `title`, or null.
-function railMarkerModel(sysBanner, storeBanner) {
+// vmBanner (#70 Task 14, the box VM restart) comes last and is neutral.
+function railMarkerModel(sysBanner, storeBanner, vmBanner) {
   if (sysBanner) return { title: sysBanner.title, tone: "neutral", key: sysBanner.key };
   if (storeBanner && storeBanner.title) return { title: storeBanner.title, tone: "amber", key: "store" };
+  if (vmBanner && vmBanner.title) return { title: vmBanner.title, tone: "neutral", key: "vmapply" };
   return null;
 }
 

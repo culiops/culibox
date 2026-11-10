@@ -130,9 +130,9 @@ test("vmfAddState: already covered is a muted note, not an error, and disables A
   const check = vmfCheckFrom({ ok: true, result: { covered_by: "/Users/me/code/culibox", absorbed: [] } }, APPLIED.rows);
   assert.deepStrictEqual(check, { kind: "covered", display: "~/code/culibox", mode: "rw" });
   assert.deepStrictEqual(vmfAddState("~/code/culibox/docs", "rw", check),
-    { invalid: false, error: "", note: "Already covered by ~/code/culibox, which boxes can read and write. Nothing to add.", addDisabled: true });
+    { invalid: false, error: "", note: "Already covered by `~/code/culibox`, which boxes can read and write. Nothing to add.", addDisabled: true });
   const ro = vmfCheckFrom({ ok: true, result: { covered_by: "/users/me/notes/RUNBOOKS" } }, APPLIED.rows);
-  assert.strictEqual(vmfAddState("~/notes/runbooks/a", "ro", ro).note, "Already covered by ~/notes/runbooks, which boxes can read. Nothing to add.", "case-folded match, read only wording");
+  assert.strictEqual(vmfAddState("~/notes/runbooks/a", "ro", ro).note, "Already covered by `~/notes/runbooks`, which boxes can read. Nothing to add.", "case-folded match, read only wording");
   assert.strictEqual(vmfCheckFrom({ ok: true, result: { covered_by: "", absorbed: [] } }, []).kind, "ok");
   assert.strictEqual(vmfCheckFrom(null, []), null);
 });
@@ -147,4 +147,42 @@ test("vmfolders.js: no native dialogs, no innerHTML (a path is user input), and 
   assert.doesNotMatch(src, /\b(alert|confirm|prompt)\(/);
   assert.doesNotMatch(src, /innerHTML/);
   assert.match(src, /typeof module !== "undefined" && module\.exports/);
+});
+
+test("one folder reads in the singular (new copy): the Applied strip and the whole-home banner", () => {
+  const one = { state: "applied", rows: [row("/code/culibox")], running_boxed: [], apply: null };
+  assert.strictEqual(vmfModel(one).strip.detail, "The box VM sees only this folder and CuliBox data.");
+  const whole = vmfModel(Object.assign({}, one, { state: "whole_home" }));
+  assert.ok(whole.banner.body.endsWith("Apply the list below and the VM sees only the folder your boxes use."), whole.banner.body);
+});
+
+const job = (state) => ({ id: 1, state, started_ms: 1, steps: [], error: "", detail: "" });
+
+test("M9.7 a running job: card, no strip, no banner, no helper, table and header Add folder locked", () => {
+  const m = vmfModel(Object.assign({}, PENDING, { apply: job("running") }));
+  assert.strictEqual(m.card, true);
+  assert.strictEqual(m.locked, true);
+  assert.strictEqual(m.strip, null);
+  assert.strictEqual(m.banner, null);
+  assert.strictEqual(m.note, "");
+  assert.strictEqual(m.under, "");
+  assert.strictEqual(m.headAddDisabled, true);
+  const whole = vmfModel(Object.assign({}, APPLIED, { state: "whole_home", apply: job("running") }));
+  assert.strictEqual(whole.banner, null, "the whole-home banner gives way to the card");
+});
+
+test("M9.8 a failed job: the card replaces the strip, the table is enabled", () => {
+  const m = vmfModel(Object.assign({}, PENDING, { apply: job("failed") }));
+  assert.strictEqual(m.card, true);
+  assert.strictEqual(m.locked, false);
+  assert.strictEqual(m.strip, null);
+  assert.strictEqual(m.under, "");
+  assert.strictEqual(m.headAddDisabled, false);
+});
+
+test("a finished job is not a card: the strip is back", () => {
+  const m = vmfModel(Object.assign({}, APPLIED, { apply: job("done") }));
+  assert.strictEqual(m.card, false);
+  assert.strictEqual(m.strip.status, "Applied");
+  assert.strictEqual(m.under, VMF_HELPER);
 });

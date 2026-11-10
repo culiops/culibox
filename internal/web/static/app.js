@@ -7111,6 +7111,7 @@ initMobileShell();
     if (sideAudit) sideAudit.hidden = !(meta && meta.audit); // only with an audit store
     // macOS only: Settings > VM folders (the nav button and the palette entry wait for the server to say the page exists).
     globalThis.vmFoldersOn = !!(meta && meta.vm_folders);
+    if (typeof vmaFromMeta === "function") vmaFromMeta(meta && meta.vm_apply); // an apply in flight (or a failed one) shows at once
     const vmTab = document.querySelector('#settings-tabs [data-tab="vmfolders"]');
     if (vmTab) vmTab.hidden = !globalThis.vmFoldersOn;
     sideCostOn = !!(meta && meta.analytics);
@@ -7207,6 +7208,7 @@ setInterval(async () => {
     globalThis.repliesEnabled = !!(m && m.replies === true);
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
+    if (typeof vmaFromMeta === "function") vmaFromMeta(m && m.vm_apply); // the box VM restart: start the global poller if one runs
   } catch (_) {}
   // The store's lock state moves on the same slow cadence (TTL expiry, a lock
   // or unlock from the CLI), so it rides this tick rather than a timer of its own.
