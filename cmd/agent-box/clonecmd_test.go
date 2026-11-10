@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 )
@@ -86,7 +87,9 @@ func newCloneEnv(t *testing.T, stored []config.AgentConfig, seeds []config.Agent
 		e.req = r
 		return e.res, e.err
 	}
-	cloneBackends = func(config.Config, string, string, string) (clone.Git, clone.Docker, error) { return nil, nil, nil }
+	cloneBackends = func(config.Config, string, string, string, []box.ProtectedDir) (clone.Git, clone.Docker, error) {
+		return nil, nil, nil
+	}
 	t.Cleanup(func() { cloneFetch, cloneBackends = oldFetch, oldBack })
 	return e
 }
@@ -207,7 +210,7 @@ func TestRunCloneFetchError(t *testing.T) {
 
 func TestRunCloneBackendError(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
-	cloneBackends = func(config.Config, string, string, string) (clone.Git, clone.Docker, error) {
+	cloneBackends = func(config.Config, string, string, string, []box.ProtectedDir) (clone.Git, clone.Docker, error) {
 		return nil, nil, errors.New("git not found")
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
@@ -223,8 +226,9 @@ func TestRunCloneOnDarwin(t *testing.T) {
 	e.goos = "darwin"
 	e.res = clone.FetchResult{Ref: "refs/heads/box/b"}
 	var gotOS, gotData, gotHome string
-	cloneBackends = func(_ config.Config, goos, dataDir, home string) (clone.Git, clone.Docker, error) {
-		gotOS, gotData, gotHome = goos, dataDir, home
+	var gotProt []box.ProtectedDir
+	cloneBackends = func(_ config.Config, goos, dataDir, home string, prot []box.ProtectedDir) (clone.Git, clone.Docker, error) {
+		gotOS, gotData, gotHome, gotProt = goos, dataDir, home, prot
 		return nil, nil, nil
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
@@ -233,6 +237,10 @@ func TestRunCloneOnDarwin(t *testing.T) {
 	}
 	if gotOS != "darwin" || gotData != e.data || gotHome != e.home {
 		t.Fatalf("backends for (%q, %q, %q), want (darwin, %q, %q)", gotOS, gotData, gotHome, e.data, e.home)
+	}
+	// M3: the box layer clone fetch builds knows CuliBox's protected dirs, as serve's does.
+	if len(gotProt) == 0 || gotProt[0] != box.DataDirProtected(e.data) {
+		t.Fatalf("backends got protected %+v, want the data dir first", gotProt)
 	}
 }
 
@@ -248,7 +256,7 @@ func TestCloneDockerOnDarwinIsTheVMs(t *testing.T) {
 	root := resolved(t, shortRoot(t))
 	d := newFakeDocker(t)
 	fc := &fakeColima{running: true}
-	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc)
+	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +275,7 @@ func TestCloneDockerRefusesAStoppedVM(t *testing.T) {
 	root := resolved(t, shortRoot(t))
 	d := newFakeDocker(t)
 	fc := &fakeColima{}
-	_, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc)
+	_, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc, nil)
 	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "agent-box box setup") {
 		t.Fatalf("err = %v; want the stopped-VM refusal", err)
 	}
@@ -280,7 +288,7 @@ func TestCloneDockerRefusesAStoppedVM(t *testing.T) {
 func TestCloneDockerOnLinuxIsTheHosts(t *testing.T) {
 	root := t.TempDir()
 	d := newFakeDocker(t)
-	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin}, "linux", root, root, nil)
+	dk, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin}, "linux", root, root, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
