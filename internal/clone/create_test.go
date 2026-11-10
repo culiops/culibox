@@ -274,6 +274,9 @@ func TestEnsureCloneRefusesExisting(t *testing.T) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(filepath.Join(dir, "stray"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err) // non-empty: an empty dir now counts as "not created yet"
+			}
 		}, false},
 	}
 	for _, tc := range cases {
@@ -539,5 +542,76 @@ func TestHostOriginURLUnsetIsEmpty(t *testing.T) {
 	g := &fakeOriginGit{err: errors.New("boom")}
 	if _, err := HostOriginURL(context.Background(), g, "/home/u/repo"); err == nil {
 		t.Fatal("a failure other than unset must be an error")
+	}
+}
+
+func TestEnsureCloneFillsAnEmptyCopyDir(t *testing.T) {
+	rec := newRec(t)
+	of := makeOf(t, true)
+	c := config.Clone{Of: of, Dir: filepath.Join(t.TempDir(), "box-clones", "work")}
+	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(c.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := EnsureClone(context.Background(), rec, c, t.TempDir())
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if st, err := os.Stat(filepath.Join(c.Dir, ".git")); err != nil || !st.IsDir() {
+		t.Fatalf(".git missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, "a")); err != nil {
+		t.Errorf("checked-out file missing: %v", err)
+	}
+	after, err := os.Stat(c.Dir)
+	if err != nil || !os.SameFile(before, after) {
+		t.Errorf("the copy dir changed inode (err=%v); a VM sharing it would not see the clone", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(c.Dir), ".agent-box-clone-*")); len(left) != 0 {
+		t.Errorf("temp dirs left behind: %v", left)
+	}
+	if got, err := gitConfigIn(t, rec, c.Dir, "remote.origin.url"); err != nil || got != originURL(of) {
+		t.Errorf("origin = %q, %v", got, err)
+	}
+}
+
+func TestEnsureCloneRefusesNonEmptyNonClone(t *testing.T) {
+	rec := newRec(t)
+	c := config.Clone{Of: makeOf(t, true), Dir: filepath.Join(t.TempDir(), "work")}
+	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.Dir, "stray"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	created, err := EnsureClone(context.Background(), rec, c, t.TempDir())
+	if created || !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "no .git directory") {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, "stray")); err != nil {
+		t.Errorf("stray file touched: %v", err)
+	}
+}
+
+func TestEnsureCloneRefusesSymlinkedEmptyDir(t *testing.T) {
+	rec := newRec(t)
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Clone{Of: makeOf(t, true), Dir: filepath.Join(base, "work")}
+	if err := os.Symlink(real, c.Dir); err != nil {
+		t.Fatal(err)
+	}
+	created, err := EnsureClone(context.Background(), rec, c, t.TempDir())
+	if created || !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if ents, _ := os.ReadDir(real); len(ents) != 0 {
+		t.Errorf("the link target was written to: %v", ents)
 	}
 }

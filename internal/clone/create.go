@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -33,6 +34,14 @@ func originURL(of string) string { return of }
 // Creation is atomic: git clones into a fresh temp dir beside c.Dir, and the
 // result is renamed into place, so git never writes through a path a box could
 // have planted a link at, and a failed clone leaves nothing behind.
+//
+// An existing, empty, real directory at c.Dir counts as "not created yet": on
+// macOS the box VM may share the copy dir before it exists, and Lima then
+// creates the missing mount source as an empty directory. The VM keeps sharing
+// that directory (inode) until a restart, so a rename onto it would leave the
+// VM looking at the old, empty one. The clone is therefore made the same way,
+// and its top-level entries are moved INTO the existing directory, which keeps
+// its inode.
 func EnsureClone(ctx context.Context, g Git, c config.Clone, home string) (created bool, err error) {
 	if err := checkParents(c); err != nil {
 		return false, err
@@ -68,6 +77,19 @@ func EnsureClone(ctx context.Context, g Git, c config.Clone, home string) (creat
 	}
 	if err := copyIdentity(ctx, g, c.Of, repo, home); err != nil {
 		return fail(err)
+	}
+	if isEmptyRealDir(c.Dir) {
+		if err := fillInPlace(repo, c.Dir); err != nil {
+			if errors.Is(err, errFillNotEmpty) { // something appeared meanwhile
+				_, cerr := checkExisting(c)
+				if cerr == nil {
+					return false, nil // it is the clone we wanted
+				}
+				return false, cerr
+			}
+			return fail(err)
+		}
+		return true, nil
 	}
 	if err := os.Rename(repo, c.Dir); err != nil {
 		// Something appeared at c.Dir since the check (another process): accept
@@ -171,12 +193,56 @@ func checkParents(c config.Clone) error {
 	return nil
 }
 
-// checkExisting inspects c.Dir without git. exists is false only when c.Dir is
-// absent; an existing dir that is not the wanted clone is an
-// ErrUnboxableWorkspace.
+var errFillNotEmpty = errors.New("directory is no longer empty")
+
+// isEmptyRealDir reports whether path is a real directory (not a symlink) with
+// no entries at all.
+func isEmptyRealDir(path string) bool {
+	st, err := os.Lstat(path)
+	if err != nil || !st.IsDir() || st.Mode()&fs.ModeSymlink != 0 {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	return len(names) == 0 && errors.Is(err, io.EOF)
+}
+
+// fillInPlace moves src's top-level entries into the existing empty dir,
+// keeping dir's inode, then removes src. Emptiness is re-checked right before
+// the first move (errFillNotEmpty). If a move fails, the entries already moved
+// are renamed back into src (which the caller removes), so dir is left empty;
+// nothing here deletes a path under a clone dir.
+func fillInPlace(src, dir string) error {
+	if !isEmptyRealDir(dir) {
+		return errFillNotEmpty
+	}
+	ents, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	var moved []string
+	for _, e := range ents {
+		if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+			for _, m := range moved {
+				_ = os.Rename(filepath.Join(dir, m), filepath.Join(src, m))
+			}
+			return err
+		}
+		moved = append(moved, e.Name())
+	}
+	return os.Remove(src)
+}
+
+// checkExisting inspects c.Dir without git. exists is false when c.Dir is
+// absent or is an empty real directory (not created yet, see EnsureClone); any
+// other existing dir that is not the wanted clone is an ErrUnboxableWorkspace.
 func checkExisting(c config.Clone) (exists bool, err error) {
 	st, lerr := os.Lstat(c.Dir)
-	if errors.Is(lerr, fs.ErrNotExist) {
+	if errors.Is(lerr, fs.ErrNotExist) || isEmptyRealDir(c.Dir) {
 		return false, nil
 	}
 	refuse := func(why string) (bool, error) {
