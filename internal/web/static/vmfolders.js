@@ -469,6 +469,7 @@ function vmfPhoneAsk(r, copy) {
 
 // vmfSyncFoot: the phone footer's Add folder and Apply follow the view, the job and the open add form.
 function vmfSyncFoot() {
+  if (!vmfPhoneMode()) return; // the desktop page has no footer (desktop.css hides it)
   const add = document.getElementById("vmf-foot-add");
   const apply = document.getElementById("vmf-foot-apply");
   if (!add && !apply) return;

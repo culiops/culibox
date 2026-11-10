@@ -2026,7 +2026,7 @@
   #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; max-width: 884px; height: auto; min-height: 0; flex-wrap: wrap; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg); }
   #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
   #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about,
-  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings { display: none; }
+  #page-host > #settings-modal.as-page > #foot-tokens, #page-host > #settings-modal.as-page > #foot-accounts, #page-host > #settings-modal.as-page > #foot-settings, #page-host > #settings-modal.as-page > #foot-vmfolders { display: none; }
   /* The Credentials drawer's foot (#cred-drawer-foot, over the profile page) is the same kit footer: its buttons are named in
      this rule, so the drawer's Check all / Cancel / Save are the page footer's 28px buttons by construction. The secondary fill,
      its hover (which skips an aria-disabled button) and the primary come from the Credentials `.btn` rules, which are the same

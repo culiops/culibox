@@ -243,3 +243,8 @@ test("phone footer and layout are wired in index.html and app.css", () => {
   assert.doesNotMatch(CSS, /#settings-tabs \.t\[data-tab="vmfolders"\] \{ display: none; \}/, "the phone no longer hides the tab");
   assert.match(CSS, /#settings-modal:not\(\.as-page\) #vmfolders/);
 });
+
+test("the desktop page hides the phone's footer (#foot-vmfolders is in desktop.css's page-footer hide rule)", () => {
+  const DESK = fs.readFileSync(path.join(__dirname, "../static/desktop.css"), "utf8");
+  assert.match(DESK, /#page-host > #settings-modal\.as-page > #foot-vmfolders[^{]*\{ display: none; \}/);
+});
