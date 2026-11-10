@@ -52,7 +52,7 @@ func Derive(in DeriveInput) (list []Share, skipped []Skip) {
 		}
 	}
 	for _, m := range in.MemoryDirs {
-		if fi, err := os.Stat(m); err == nil && fi.IsDir() {
+		if fi, err := os.Lstat(m); err == nil && fi.IsDir() {
 			add(m, RO)
 		}
 	}

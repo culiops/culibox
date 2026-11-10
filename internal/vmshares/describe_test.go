@@ -1,6 +1,7 @@
 package vmshares
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -45,5 +46,25 @@ func TestWholeHomeLine(t *testing.T) {
 	want := "the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `agent-box box share apply`) so it sees only 4 folders"
 	if got := WholeHomeLine(4); got != want {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestDescribeSeveralCopiersUsePluralVerb(t *testing.T) {
+	env := testEnv(t, false)
+	j := func(r string) string { return filepath.Join(env.Home, r) }
+	profiles := []Profile{
+		{Name: "a", Workspace: j("code/x")},
+		{Name: "b", Clone: true, CloneOf: j("code/x"), Workspace: j("bc/b")},
+		{Name: "c", Clone: true, CloneOf: j("code/x"), Workspace: j("bc/c")},
+	}
+	list := []Share{{Path: j("code/x"), Mode: RW}}
+	rows := Describe(list, profiles, nil, env.Home, false)
+	if want := "Workspace of profile a; b, c copy it"; rows[0].Origin != want {
+		t.Errorf("origin = %q, want %q", rows[0].Origin, want)
+	}
+	profiles = profiles[:2]
+	rows = Describe(list, profiles, nil, env.Home, false)
+	if want := "Workspace of profile a; b copies it"; rows[0].Origin != want {
+		t.Errorf("origin = %q, want %q", rows[0].Origin, want)
 	}
 }

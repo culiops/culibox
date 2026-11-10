@@ -62,7 +62,11 @@ func Describe(list []Share, profiles []Profile, recorded []string, home string, 
 		case len(wsOf) > 0:
 			origin = "Workspace of profile " + wsOf[0]
 			if len(copiers) > 0 {
-				origin += "; " + strings.Join(copiers, ", ") + " copies it"
+				verb := " copies it"
+				if len(copiers) > 1 {
+					verb = " copy it"
+				}
+				origin += "; " + strings.Join(copiers, ", ") + verb
 			}
 		case len(keepers) > 0:
 			origin = "Where " + keepers[0] + " keeps its copies"

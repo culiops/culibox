@@ -1,6 +1,7 @@
 package vmshares
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -59,5 +60,25 @@ func TestDeriveEmpty(t *testing.T) {
 	got, skipped := Derive(DeriveInput{Env: testEnv(t, false)})
 	if got == nil || len(got) != 0 || len(skipped) != 0 {
 		t.Fatalf("%#v %v", got, skipped)
+	}
+}
+
+// A memory folder that is a symlink is not offered (clone.MemoryMount refuses
+// one too), even when it leads to a directory.
+func TestDeriveMemoryDirSymlinkIsSkipped(t *testing.T) {
+	env := testEnv(t, false)
+	target := filepath.Join(env.Home, "elsewhere")
+	link := filepath.Join(env.Home, ".claude/projects/-l-k/memory")
+	for _, d := range []string{target, filepath.Dir(link)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := Derive(DeriveInput{MemoryDirs: []string{link}, Env: env})
+	if len(got) != 0 {
+		t.Fatalf("a symlinked memory dir was offered: %v", got)
 	}
 }
