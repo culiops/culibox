@@ -2,6 +2,7 @@ package vmshares
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -141,5 +142,45 @@ func TestSetModeAndRemoveNotListed(t *testing.T) {
 	got, err = Remove(list, list[0].Path, false)
 	if err != nil || len(got) != 0 || got == nil {
 		t.Fatalf("%v %v", got, err)
+	}
+}
+
+// C1: the VM mounts resolved paths, so overlap is judged on them. ~/code is a
+// link to a volume folder; its spellings must not give nested or duplicate
+// mounts (colima refuses to start with them).
+func TestOverlapUsesResolvedPaths(t *testing.T) {
+	env := testEnv(t, false)
+	vol := filepath.Join(filepath.Dir(filepath.Dir(env.Home)), "vol", "code")
+	if err := os.MkdirAll(filepath.Join(vol, "proj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(env.Home, "lcode")
+	if err := os.Symlink(vol, link); err != nil {
+		t.Fatal(err)
+	}
+	volProj, linkProj := filepath.Join(vol, "proj"), filepath.Join(link, "proj")
+
+	out, _ := Normalize([]Share{{Path: link, Mode: RW}, {Path: volProj, Mode: RW}}, env)
+	if len(out) != 1 || out[0].Path != link {
+		t.Errorf("Normalize parent+child spellings = %+v, want only %s", out, link)
+	}
+	out, _ = Normalize([]Share{{Path: linkProj, Mode: RO}, {Path: volProj, Mode: RW}}, env)
+	if len(out) != 1 || out[0].Mode != RW {
+		t.Errorf("Normalize two spellings of one folder = %+v, want one rw entry", out)
+	}
+	add, err := Add([]Share{{Path: link, Mode: RW}}, Share{Path: volProj, Mode: RW}, env)
+	if err != nil || add.CoveredBy != link {
+		t.Errorf("Add child spelling = %+v, %v; want covered by %s", add, err, link)
+	}
+	add, err = Add([]Share{{Path: volProj, Mode: RW}}, Share{Path: link, Mode: RW}, env)
+	if err != nil || !reflect.DeepEqual(add.Absorbed, []string{volProj}) || len(add.List) != 1 {
+		t.Errorf("Add parent spelling = %+v, %v; want %s absorbed", add, err, volProj)
+	}
+	list := []Share{{Path: linkProj, Mode: RW}}
+	if got, err := SetMode(list, volProj, RO, env); err != nil || got[0].Mode != RO || got[0].Path != linkProj {
+		t.Errorf("SetMode by the other spelling = %+v, %v", got, err)
+	}
+	if got, err := Remove(list, volProj, false); err != nil || len(got) != 0 {
+		t.Errorf("Remove by the other spelling = %+v, %v", got, err)
 	}
 }

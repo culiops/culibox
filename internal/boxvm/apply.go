@@ -178,6 +178,10 @@ func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 	if err != nil {
 		return err
 	}
+	// Before the stop: a list colima would refuse must not take the VM down.
+	if err := checkMountsDisjoint(cfg.Mounts(), cfg.Fold); err != nil {
+		return err
+	}
 	st, err := v.Status(ctx)
 	if err != nil {
 		return err
@@ -336,4 +340,25 @@ func (v *VM) ApplyLockHeld() bool {
 	}
 	unlock()
 	return false
+}
+
+// ErrMountsOverlap means two of the VM's mounts would nest or repeat once links
+// are followed: colima refuses to start with that, so the apply stops first.
+var ErrMountsOverlap = errors.New("two of the box VM's folders overlap once links are followed, and colima cannot start with one inside another; the VM was not touched. Remove one of them in Settings › VM folders (or `agent-box box share rm`)")
+
+// checkMountsDisjoint refuses a mount list where one location (resolved now)
+// equals or lies inside another.
+func checkMountsDisjoint(ms []Mount, fold bool) error {
+	locs := make([]string, len(ms))
+	for i, m := range ms {
+		locs[i] = vmshares.Resolve(m.Location)
+	}
+	for i := range locs {
+		for j := range locs {
+			if i != j && vmshares.Within(locs[i], locs[j], fold) {
+				return fmt.Errorf("%w: %s is inside %s", ErrMountsOverlap, ms[i].Location, ms[j].Location)
+			}
+		}
+	}
+	return nil
 }

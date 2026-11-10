@@ -400,3 +400,44 @@ func TestApplyMountsRefusesAConcurrentApply(t *testing.T) {
 		t.Fatal("the lock outlived the apply")
 	}
 }
+
+// C1: colima refuses to start with one mount inside another, so an apply whose
+// final mounts (data mounts and shares, resolved) nest or repeat is refused
+// before the VM is stopped.
+func TestApplyMountsRefusesNestedMountsBeforeStopping(t *testing.T) {
+	base := shortRoot(t)
+	real := filepath.Join(base, "vol", "code")
+	if err := os.MkdirAll(filepath.Join(real, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "lcode")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, shares := range map[string][]vmshares.Share{
+		"nested":       {{Path: real, Mode: vmshares.RW}, {Path: filepath.Join(real, "p"), Mode: vmshares.RO}},
+		"duplicate":    {{Path: real, Mode: vmshares.RW}, {Path: link, Mode: vmshares.RW}},
+		"in data root": {{Path: "DATA/boxstate/x", Mode: vmshares.RW}},
+	} {
+		r := &fakeRunner{}
+		v := oldVM(t, false, r)
+		r.running.Store(true)
+		before, _ := os.ReadFile(v.Config().YAMLPath())
+		for i := range shares {
+			shares[i].Path = strings.Replace(shares[i].Path, "DATA", v.Config().Root, 1)
+		}
+		v.SetShares(shares)
+		err := v.ApplyMounts(context.Background(), ApplyHooks{})
+		if !errors.Is(err, ErrMountsOverlap) {
+			t.Errorf("%s: ApplyMounts = %v, want ErrMountsOverlap", name, err)
+		}
+		for _, c := range callNames(r) {
+			if c == "stop" || c == "start" {
+				t.Errorf("%s: the VM was touched: %v", name, callNames(r))
+			}
+		}
+		if after, _ := os.ReadFile(v.Config().YAMLPath()); string(after) != string(before) {
+			t.Errorf("%s: colima.yaml was rewritten", name)
+		}
+	}
+}

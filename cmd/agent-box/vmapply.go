@@ -227,6 +227,8 @@ func applyErrorText(step string, err error) string {
 	switch {
 	case errors.Is(err, boxvm.ErrApplyLocked):
 		return boxvm.ErrApplyLocked.Error()
+	case errors.Is(err, boxvm.ErrMountsOverlap):
+		return boxvm.ErrMountsOverlap.Error()
 	case errors.Is(err, boxvm.ErrStartTimeout):
 		return boxvm.ErrStartTimeout.Error()
 	case errors.Is(err, boxvm.ErrNeedsRecreate):

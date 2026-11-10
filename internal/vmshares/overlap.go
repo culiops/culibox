@@ -35,6 +35,17 @@ func (c *Conflict) Error() string {
 
 func sameKey(a, b string, fold bool) bool { return Within(a, b, fold) && Within(b, a, fold) }
 
+// keys are the symlink-resolved spellings of list's paths: the VM mounts the
+// resolved path, so every overlap rule compares those, while the list keeps
+// the spelling the user typed.
+func keys(list []Share) []string {
+	out := make([]string, len(list))
+	for i, s := range list {
+		out[i] = Resolve(s.Path)
+	}
+	return out
+}
+
 func sorted(list []Share, fold bool) []Share {
 	out := append([]Share{}, list...)
 	key := func(s Share) string {
@@ -52,19 +63,21 @@ func sorted(list []Share, fold bool) []Share {
 	return out
 }
 
-// Add puts s in list under the rule that no share contains another.
+// Add puts s in list under the rule that no share contains another, judged on
+// the resolved paths.
 func Add(list []Share, s Share, env Env) (Outcome, error) {
 	if err := Check(s.Path, env); err != nil {
 		return Outcome{}, err
 	}
-	for _, e := range list {
-		if sameKey(e.Path, s.Path, env.Fold) {
+	ks, k := keys(list), Resolve(s.Path)
+	for i, e := range list {
+		if sameKey(ks[i], k, env.Fold) {
 			next, err := SetMode(list, e.Path, s.Mode, env)
 			return Outcome{List: next}, err
 		}
 	}
-	for _, e := range list {
-		if !Within(s.Path, e.Path, env.Fold) {
+	for i, e := range list {
+		if !Within(k, ks[i], env.Fold) {
 			continue
 		}
 		if e.Mode == RW || s.Mode == RO {
@@ -74,8 +87,8 @@ func Add(list []Share, s Share, env Env) (Outcome, error) {
 	}
 	next := []Share{}
 	var absorbed []string
-	for _, e := range list {
-		if Within(e.Path, s.Path, env.Fold) {
+	for i, e := range list {
+		if Within(ks[i], k, env.Fold) {
 			if s.Mode == RO && e.Mode == RW {
 				return Outcome{}, &Conflict{Child: e.Path, Parent: s.Path, Home: env.Home}
 			}
@@ -89,12 +102,14 @@ func Add(list []Share, s Share, env Env) (Outcome, error) {
 	return Outcome{List: next, Absorbed: absorbed}, nil
 }
 
-// SetMode changes the mode of the listed path. The list invariant (no share
-// contains another) means it can never conflict. The input is not modified.
+// SetMode changes the mode of the listed path (any spelling of it). The list
+// invariant (no share contains another) means it can never conflict. The
+// input is not modified.
 func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 	out := append([]Share{}, list...)
-	for i := range out {
-		if sameKey(out[i].Path, path, env.Fold) {
+	k := Resolve(path)
+	for i, rk := range keys(out) {
+		if sameKey(rk, k, env.Fold) {
 			out[i].Mode = m
 			return out, nil
 		}
@@ -102,16 +117,17 @@ func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 	return nil, ErrNotListed
 }
 
-// Remove drops the listed path. The input is not modified.
+// Remove drops the listed path (any spelling of it). The input is not modified.
 func Remove(list []Share, path string, fold bool) ([]Share, error) {
 	out := []Share{}
 	found := false
-	for _, e := range list {
-		if sameKey(e.Path, path, fold) {
+	k := Resolve(path)
+	for i, rk := range keys(list) {
+		if sameKey(rk, k, fold) {
 			found = true
 			continue
 		}
-		out = append(out, e)
+		out = append(out, list[i])
 	}
 	if !found {
 		return nil, ErrNotListed
@@ -119,12 +135,16 @@ func Remove(list []Share, path string, fold bool) ([]Share, error) {
 	return out, nil
 }
 
-// Normalize makes list satisfy the invariants: refused entries are dropped,
-// duplicates merged (strongest mode wins), a read-only parent of a read-write
-// child becomes read-write so existing profiles keep working, covered children
-// are dropped. Output is sorted by path.
+// Normalize makes list satisfy the invariants, judged on the resolved paths:
+// refused entries are dropped, duplicates merged (strongest mode wins), a
+// read-only parent of a read-write child becomes read-write so existing
+// profiles keep working, covered children are dropped. Output is sorted by path.
 func Normalize(list []Share, env Env) (out []Share, skipped []Skip) {
-	var merged []Share
+	type keyed struct {
+		Share
+		key string
+	}
+	var merged []keyed
 outer:
 	for _, s := range list {
 		if err := Check(s.Path, env); err != nil {
@@ -136,33 +156,46 @@ outer:
 			skipped = append(skipped, Skip{Path: s.Path, Reason: reason})
 			continue
 		}
+		k := Resolve(s.Path)
 		for i := range merged {
-			if sameKey(merged[i].Path, s.Path, env.Fold) {
+			if sameKey(merged[i].key, k, env.Fold) {
 				if s.Mode == RW {
 					merged[i].Mode = RW
 				}
 				continue outer
 			}
 		}
-		merged = append(merged, s)
+		merged = append(merged, keyed{s, k})
 	}
-	out = []Share{}
-	for _, s := range sorted(merged, env.Fold) {
+	// Parents before children: sort by the resolved key.
+	sortKey := func(k string) string {
+		if env.Fold {
+			return strings.ToLower(k)
+		}
+		return k
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return sortKey(merged[i].key) < sortKey(merged[j].key) })
+	var kept []keyed
+	for _, s := range merged {
 		covered := false
-		for i := range out {
-			if !Within(s.Path, out[i].Path, env.Fold) {
+		for i := range kept {
+			if !Within(s.key, kept[i].key, env.Fold) {
 				continue
 			}
 			covered = true
-			if out[i].Mode == RO && s.Mode == RW {
-				out[i].Mode = RW
-				skipped = append(skipped, Skip{Path: out[i].Path, Reason: "made read & write because " + s.Path + " needs write access"})
+			if kept[i].Mode == RO && s.Mode == RW {
+				kept[i].Mode = RW
+				skipped = append(skipped, Skip{Path: kept[i].Path, Reason: "made read & write because " + s.Path + " needs write access"})
 			}
 			break
 		}
 		if !covered {
-			out = append(out, s)
+			kept = append(kept, s)
 		}
 	}
-	return out, skipped
+	out = []Share{}
+	for _, s := range kept {
+		out = append(out, s.Share)
+	}
+	return sorted(out, env.Fold), skipped
 }
