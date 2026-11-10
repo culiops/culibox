@@ -197,7 +197,7 @@ func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, 
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(w, "FAIL box VM folders: interrupted (%v). The box VM may be stopped; run `agent-box box share apply` to finish.\n", ctx.Err())
+			fmt.Fprintf(w, "FAIL box VM folders: interrupted (%v). The box VM may be stopped; run `agent-box box share apply -force` to finish.\n", ctx.Err())
 			return 1
 		case <-time.After(100 * time.Millisecond):
 		}

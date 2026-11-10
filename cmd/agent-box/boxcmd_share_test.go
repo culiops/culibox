@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -297,5 +298,23 @@ func TestBoxShareApplyRefusedWhileAnotherProcessApplies(t *testing.T) {
 	}
 	if fc.called("stop") || fc.called("start") {
 		t.Fatal("a refused apply must not touch the VM")
+	}
+}
+
+// M7: an interrupted apply may leave the VM stopped, and a stopped VM needs
+// -force to apply, so the hint names it.
+func TestBoxShareApplyInterruptHintNamesForce(t *testing.T) {
+	f := newSvcFixture(t)
+	f.ctl.hold = make(chan struct{})
+	s := f.svc(t)
+	defer func() { close(f.ctl.hold); waitJob(t, s) }() // the job logs; let it end inside the test
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	if rc := applyShares(ctx, true, s, nil, &out); rc != 1 {
+		t.Fatalf("rc = %d:\n%s", rc, out.String())
+	}
+	if !strings.Contains(out.String(), "run `agent-box box share apply -force` to finish") {
+		t.Fatalf("output:\n%s", out.String())
 	}
 }
