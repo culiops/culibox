@@ -734,6 +734,10 @@ test("railMarkerModel: one marker for the first banner (system, else store); neu
   assert.deepEqual(st, { title: "Secret store locked", tone: "amber", key: "store" });
   assert.equal(m.railMarkerModel(null, null), null);
   assert.equal(m.railMarkerModel(null, undefined), null);
+  // #70: the box VM restart banner comes last, neutral.
+  assert.deepEqual(m.railMarkerModel(null, null, { title: "Box VM restarting" }), { title: "Box VM restarting", tone: "neutral", key: "vmapply" });
+  assert.equal(m.railMarkerModel(null, { title: "Secret store locked" }, { title: "Box VM restarting" }).key, "store");
+  assert.equal(m.railMarkerModel(sysB, null, { title: "Box VM restarting" }).key, "sys:signedout");
 });
 
 // ---- Plan 7 Task 8 (#177, DD§A8/E1): the desktop pane-bar model --------------------------------------

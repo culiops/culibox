@@ -638,6 +638,18 @@ func ExpandTilde(p string) string {
 	return p
 }
 
+// SourceOf is the config bundle's source dir for the bundle_source setting:
+// "" for "off", the configured dir (tilde expanded), or DefaultSource().
+func SourceOf(setting string) string {
+	if setting == "off" {
+		return ""
+	}
+	if src := ExpandTilde(setting); src != "" {
+		return src
+	}
+	return DefaultSource()
+}
+
 // DefaultSource resolves the agent config directory the way the agent does:
 // $CLAUDE_CONFIG_DIR when set, else ~/.claude.
 func DefaultSource() string {

@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a
@@ -91,12 +92,22 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 // boxFacts is everything doctor learned about the box tier. Gathering never
 // starts the VM; interpreting is the pure boxTierResults.
 type boxFacts struct {
-	DockerErr   error
-	ColimaErr   error  // darwin only
-	MacOSMajor  int    // darwin only; 0 = unknown
-	ColimaVer   string // darwin only; "" = unknown
-	SetUp       bool
-	Drifted     bool
+	DockerErr  error
+	ColimaErr  error  // darwin only
+	MacOSMajor int    // darwin only; 0 = unknown
+	ColimaVer  string // darwin only; "" = unknown
+	SetUp      bool
+	Drifted    bool
+	// Drift classifies Drifted (boxvm.DriftMountsOnly: only the folder list
+	// differs, which an apply fixes without a recreate). WholeHome: the VM still
+	// shares the whole home folder. ShareCount: folders in the normalized list.
+	// SharesErr: vm-shares.json could not be read.
+	Drift      boxvm.Drift
+	WholeHome  bool
+	ShareCount int
+	SharesErr  error
+	// FoldersErr: the VM's own folder list (colima.yaml) could not be read.
+	FoldersErr  error
 	SocketErr   error
 	Status      boxvm.Status
 	StatusErr   error
@@ -117,6 +128,10 @@ type boxFacts struct {
 	FirewallRan     bool
 	FirewallErr     error
 	FirewallReadErr error
+	// MountsRan: the VM runs and its real folders were compared with its
+	// colima.yaml (boxvm.VerifyMounts); MountsErr: they differ or could not be read.
+	MountsRan bool
+	MountsErr error
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -168,12 +183,16 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.ColimaVer != "" && !boxvm.VersionAtLeast(f.ColimaVer, 0, 8) {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
-	if f.Drifted && f.ProvisionDrifted {
+	if f.Drift == boxvm.DriftMountsOnly {
+		// The folder list alone changed: "box VM folders" below says how to apply
+		// it, and a recreate is not needed.
+	} else if f.Drifted && f.ProvisionDrifted {
 		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"agent-box box setup -recreate\" (every boxed spawn is refused until then)"})
 	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
 	out = append(out, userCtx)
+	out = append(out, folderRows(f)...)
 	if !f.Status.Running {
 		out = append(out, Result{Pass, ck, "box VM stopped (starts on the first boxed spawn)"}, token)
 		return out
@@ -212,9 +231,42 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	return append(out, token)
 }
 
+// folderRows reports the box VM's folder list (darwin only; the caller gates it).
+// One "box VM folders" row: a whole-home share wins, then a changed list, then
+// a pass. A vm-shares.json that cannot be read is its own row, so it is never
+// hidden behind the whole-home warning.
+func folderRows(f boxFacts) []Result {
+	const ck = "box VM folders"
+	var out []Result
+	switch {
+	case f.MountsRan && f.MountsErr != nil:
+		// Every boxed spawn is refused until this is fixed: it outranks the rest.
+		out = append(out, Result{Fail, ck, "the box VM's folders do not match its folder list (" + f.MountsErr.Error() + "); run `agent-box box share apply`"})
+	case f.WholeHome && f.SharesErr != nil:
+		// Applying would drop the user's folders, so no apply advice.
+		out = append(out, Result{Warn, ck, "the box VM shares your whole home folder; fix vm-shares.json before applying a folder list"})
+	case f.WholeHome:
+		out = append(out, Result{Warn, ck, vmshares.WholeHomeLine(f.ShareCount)})
+	case f.FoldersErr != nil:
+		out = append(out, Result{Warn, ck, "cannot read the box VM's folder list (" + f.FoldersErr.Error() + "); run `agent-box box setup`"})
+	case f.SharesErr != nil:
+		// No row here: the list row below carries the warning, and "0 folders"
+		// or apply advice would be wrong for a list we cannot read.
+	case f.Drift == boxvm.DriftMountsOnly:
+		out = append(out, Result{Warn, ck, "the folder list changed since the box VM started; apply it in Settings › VM folders (or `agent-box box share apply`)"})
+	default:
+		out = append(out, Result{Pass, ck, fmt.Sprintf("the box VM sees %d folders and CuliBox data", f.ShareCount)})
+	}
+	if f.SharesErr != nil {
+		out = append(out, Result{Warn, ck + " list", "vm-shares.json cannot be read (" + f.SharesErr.Error() + "); fix or move it away; until then the folder list cannot change"})
+	}
+	return out
+}
+
 // gatherBoxFacts asks the real world, with a 60 s overall budget. It never
 // starts the VM: a stopped VM is a normal state, reported as such.
-func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
+// protected is the directory list no VM share may overlap (protectedFor).
+func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir) boxFacts {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var f boxFacts
@@ -237,15 +289,38 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 		return f
 	}
 	hostCPUs, hostMem := boxvm.HostSize()
-	vm := boxvm.NewVM(boxvm.ConfigFor(c, dataDir, home, colima, bin, hostCPUs, hostMem), boxvm.ExecRunner{})
+	cfg := boxvm.ConfigFor(c, dataDir, home, colima, bin, hostCPUs, hostMem)
+	cfg.Fold = goos == "darwin"
+	vm := boxvm.NewVM(cfg, boxvm.ExecRunner{})
 	vc := vm.Config() // symlink-resolved: the paths the VM really uses
 	f.MacOSMajor = boxvm.MacOSMajor(ctx)
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)
 	f.SocketErr = vc.CheckSocketPaths()
-	f.SetUp, f.Drifted = vm.SetUp(), vm.Drifted()
-	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
+	f.SetUp = vm.SetUp()
 	if !f.SetUp {
 		return f
+	}
+	// The folder list must be on the VM before any drift is computed, or every
+	// VM with an applied list reads as drifted.
+	list, _, lerr := vmshares.Load(dataDir)
+	f.SharesErr = lerr
+	if lerr == nil {
+		list, _ = vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: protected})
+		vm.SetShares(list)
+		f.ShareCount = len(list)
+	}
+	f.Drifted = vm.Drifted()
+	f.ProvisionDrifted = f.Drifted && vm.ProvisionDrifted()
+	f.WholeHome = false
+	if wh, err := vm.WholeHome(); err != nil {
+		f.FoldersErr = err
+	} else {
+		f.WholeHome = wh
+	}
+	if d, err := vm.DriftKind(); err != nil {
+		f.FoldersErr = err
+	} else {
+		f.Drift = d
 	}
 	f.Status, f.StatusErr = vm.Status(ctx)
 	if f.StatusErr != nil || !f.Status.Running {
@@ -258,6 +333,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	} else if f.FirewallErr = boxvm.CheckInputRules(rules, vc.EgressPort, vc.BrokerPort); f.FirewallErr == nil {
 		f.FirewallErr = boxvm.CheckDockerUserRules(rules)
 	}
+	// The same check a spawn runs before it trusts the VM's folders.
+	f.MountsRan = true
+	f.MountsErr = vm.VerifyMounts(ctx)
 	cli := box.CLIClient{Bin: bin, Args: vc.DockerArgs()}
 	img := boximage.Docker{Bin: bin, Args: vc.DockerArgs()}
 	if f.ServerArch, err = img.ServerArch(ctx); err != nil {

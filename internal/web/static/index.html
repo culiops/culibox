@@ -70,6 +70,7 @@
       <!-- System banner (Plan 7 Task 7); the store banner (Task 9) has its own slot below it. Both empty and hidden until painted. -->
       <div id="sys-banner-slot" hidden></div>
       <div id="store-banner-slot" hidden></div>
+      <div id="vmapply-banner-slot" hidden></div>
       <div id="sessions-pane">
         <div class="phd" id="sessions-phd">
           <button class="cv" id="sessions-cv" type="button" aria-expanded="true" aria-controls="sessions" title="Collapse sessions">&#9662;</button>
@@ -233,6 +234,8 @@
                  aria-autocomplete="list" placeholder="~/project">
           <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
           <div class="form-hint" id="spawn-ws-note"></div>
+          <div class="spawn-notshared" id="spawn-notshared" role="alert" hidden></div>
+          <div class="form-hint" id="spawn-ws-vmhelp" hidden></div>
           <div class="form-hint" id="spawn-copy-line" hidden></div>
         </div>
         <div class="span2" id="spawn-prompt-row" hidden>
@@ -294,6 +297,7 @@
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
       <div id="pf-navlist" role="group" aria-label="Profiles"></div>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
+      <button type="button" class="t" data-tab="vmfolders" role="tab" aria-selected="false" aria-controls="vmfolders" hidden>VM folders</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
@@ -579,6 +583,11 @@
       <div class="dlg-err" id="creds-err"></div>
     </div>
 
+    <div class="dbd pad" id="vmfolders" role="tabpanel" hidden>
+      <div class="set-head"></div>
+      <div id="vmf-body"></div>
+    </div>
+
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
@@ -596,6 +605,12 @@
       <span class="grow"></span>
       <button id="tok-new" type="button" class="btn">+ new token</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+    <div class="dft" id="foot-vmfolders" hidden>
+      <button type="button" class="btn" data-close="settings-modal">Done</button>
+      <span class="grow"></span>
+      <button id="vmf-foot-add" type="button" class="btn">Add folder</button>
+      <button id="vmf-foot-apply" type="button" class="btn pri" hidden>Apply (restart box VM)</button>
     </div>
     <div class="dft" id="foot-creds" hidden>
       <span class="grow"></span>
@@ -855,6 +870,8 @@
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
   <script src="/settingshead.js"></script>
+  <script src="/vmapply.js"></script>
+  <script src="/vmfolders.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>

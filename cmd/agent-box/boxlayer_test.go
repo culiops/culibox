@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // fakeColima stands in for the colima binary. Its zero value answers every
@@ -31,8 +33,12 @@ type fakeColima struct {
 	garbled bool   // status exits 0 with output that is not colima's JSON
 	hang    bool   // status blocks until its context ends (a wedged hostagent)
 	rules   string // what `ssh … iptables -S` prints
-	onSSH   func() // called on each ssh (lets a test order it against docker calls)
-	calls   []string
+	mounts  string // what `ssh … cat /proc/self/mounts` prints
+	// hangSSH makes the named ssh command ("iptables" or "mounts") block until its context ends.
+	hangSSH  string
+	onSSH    func() // called on each ssh (lets a test order it against docker calls)
+	calls    []string
+	failStop bool // stop fails and the VM keeps running
 }
 
 func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
@@ -60,6 +66,19 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
 			mount, f.socket), nil
 	case "ssh":
+		kind := "iptables"
+		if strings.Contains(strings.Join(args, " "), "/proc/self/mounts") {
+			kind = "mounts"
+		}
+		if f.hangSSH == kind {
+			f.mu.Unlock()
+			<-ctx.Done()
+			f.mu.Lock()
+			return "", ctx.Err()
+		}
+		if kind == "mounts" {
+			return f.mounts, nil
+		}
 		if f.onSSH != nil {
 			f.onSSH()
 		}
@@ -67,6 +86,9 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 	case "start":
 		f.running = true
 	case "stop":
+		if f.failStop {
+			return "", errors.New("colima stop: hostagent did not exit")
+		}
 		f.running = false
 	}
 	return "", nil
@@ -186,9 +208,31 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 		if err := os.MkdirAll(vc.ColimaHome(), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(vc.StampPath(), []byte("x\n"), 0o600); err != nil {
+		// The VM as `box setup` leaves it: its colima.yaml, the stamp that is that
+		// yaml's hash, and a running VM whose mounts are exactly the yaml's.
+		y, err := vc.YAML()
+		if err != nil {
 			t.Fatal(err)
 		}
+		if err := os.MkdirAll(filepath.Dir(vc.YAMLPath()), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vc.YAMLPath(), y, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(y)
+		if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var mb strings.Builder
+		for _, m := range vc.Mounts() {
+			mode := "ro"
+			if m.Writable {
+				mode = "rw"
+			}
+			fmt.Fprintf(&mb, "mount%d %s virtiofs %s,relatime 0 0\n", len(mb.String()), m.Location, mode)
+		}
+		fc.mounts = mb.String()
 	}
 	return l, fc, d
 }
@@ -469,7 +513,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shared != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -657,8 +701,11 @@ func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
 	if o.StateRoot != real {
 		t.Errorf("StateRoot = %q, want the resolved %q", o.StateRoot, real)
 	}
-	if !reflect.DeepEqual(o.Shared, []string{real}) {
-		t.Errorf("Shared = %q, want [%q]", o.Shared, real)
+	// No colima.yaml yet: nothing applied, and no error (Prepare meets
+	// ErrNotSetUp first).
+	v, verr := o.Shares()
+	if verr != nil || len(v.Applied) != 0 {
+		t.Errorf("Shares = %+v, %v; want nothing applied and no error", v, verr)
 	}
 	if got := strings.Join(l.dockerArgs, " "); !strings.Contains(got, "unix://"+real+"/vm/") || strings.Contains(got, link) {
 		t.Errorf("docker args = %q, want the resolved root", got)
@@ -1243,5 +1290,92 @@ func TestBundleSourceOf(t *testing.T) {
 	}
 	if got := bundleSourceOf(config.Config{BundleSource: "/x/cfg"}); got != "/x/cfg" {
 		t.Errorf("custom = %q", got)
+	}
+}
+
+// Applied is the written colima.yaml minus the data-root mounts; Listed is the
+// user's list, applied or not.
+func TestDarwinLayerShareViewFromYAML(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	vc := l.vm.Config()
+	h := resolved(t, t.TempDir())
+	a, b := filepath.Join(h, "a"), filepath.Join(h, "b")
+	writeColimaYAML(t, l, append(boxvm.DataMounts(vc.Root), boxvm.Mount{Location: a, Writable: true}))
+	l.vm.SetShares([]vmshares.Share{{Path: a, Mode: vmshares.RW}, {Path: b, Mode: vmshares.RO}})
+	v, err := l.shareView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []box.VMShare{{Path: a, Writable: true}}; !reflect.DeepEqual(v.Applied, want) {
+		t.Errorf("Applied = %+v, want %+v", v.Applied, want)
+	}
+	if want := []box.VMShare{{Path: a, Writable: true}, {Path: b}}; !reflect.DeepEqual(v.Listed, want) {
+		t.Errorf("Listed = %+v, want %+v", v.Listed, want)
+	}
+	if !v.Fold || v.Home != vc.Home {
+		t.Errorf("Fold = %v, Home = %q; want fold and %q", v.Fold, v.Home, vc.Home)
+	}
+	if err := v.Check(filepath.Join(b, "x"), false); err == nil {
+		t.Error("a listed-only folder must not pass the check")
+	}
+}
+
+func TestDarwinLayerShareViewCorruptYAMLFailsClosed(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	vc := l.vm.Config()
+	if err := os.MkdirAll(vc.ProfileDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.YAMLPath(), []byte("mounts:\n  - hand edited\nprovision:\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.shareView(); err == nil {
+		t.Fatal("a mounts block that cannot be read must fail closed")
+	}
+}
+
+func writeColimaYAML(t *testing.T, l *boxLayer, ms []boxvm.Mount) {
+	t.Helper()
+	vc := l.vm.Config()
+	if err := os.MkdirAll(vc.ProfileDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	sb.WriteString("cpu: 2\nmounts:\n")
+	for _, m := range ms {
+		fmt.Fprintf(&sb, "  - location: %q\n    writable: %v\n", m.Location, m.Writable)
+	}
+	sb.WriteString("provision:\n")
+	if err := os.WriteFile(vc.YAMLPath(), []byte(sb.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A bad share list at boot gives an empty list, a good one is normalised.
+func TestBootSharesNormalises(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	if got := bootShares(l.dataDir, l.vm.Config(), nil); len(got) != 0 {
+		t.Fatalf("no file: %+v", got)
+	}
+	if err := os.WriteFile(filepath.Join(l.dataDir, vmshares.FileName), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := bootShares(l.dataDir, l.vm.Config(), nil); len(got) != 0 {
+		t.Fatalf("corrupt file: %+v", got)
+	}
+}
+
+// M4: `box` needs the config files only for the macOS VM's protected list, so
+// failing to name them is fatal only on darwin.
+func TestBoxConfigFilesFatalOnlyOnDarwin(t *testing.T) {
+	boom := errors.New("boom")
+	if files, err := boxConfigFiles("linux", nil, boom); err != nil || files != nil {
+		t.Fatalf("linux: %v %v", files, err)
+	}
+	if _, err := boxConfigFiles("darwin", nil, boom); !errors.Is(err, boom) {
+		t.Fatalf("darwin: %v", err)
+	}
+	if files, err := boxConfigFiles("darwin", []string{"/c"}, nil); err != nil || len(files) != 1 {
+		t.Fatalf("darwin ok: %v %v", files, err)
 	}
 }

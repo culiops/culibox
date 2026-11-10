@@ -10,6 +10,7 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
+	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 )
@@ -20,7 +21,7 @@ const setupProbeTimeout = 2 * time.Minute
 // runBoxDarwin serves `agent-box box …` on macOS, where boxes run in agent-box's
 // own colima VM. Untagged (runBox gates it on GOOS) so its logic is tested on
 // Linux against fakes.
-func runBoxDarwin(a cliArgs, cfg config.Config, home string, w io.Writer) int {
+func runBoxDarwin(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.Writer) int {
 	// Absolute and clean, as serve and doctor derive it: the VM's paths are
 	// built from this string.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -28,7 +29,8 @@ func runBoxDarwin(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 		fmt.Fprintf(w, "FAIL data dir: %v\n", err)
 		return 1
 	}
-	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{}, nil, a.Sub == "setup" && a.Recreate)
+	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{},
+		protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg)), a.Sub == "setup" && a.Recreate)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1
@@ -44,6 +46,8 @@ func runBoxVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, w 
 		return boxStatusVM(ctx, l, w)
 	case "stop":
 		return boxStopVM(ctx, a.Force, l, w)
+	case "share":
+		return boxShareVM(ctx, a, cfg, l, w)
 	}
 	return boxSetupVM(ctx, a, cfg, l, w)
 }
@@ -152,6 +156,26 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 			fmt.Fprintln(w, "refusing: the box VM reads as not running, so running boxes cannot be ruled out, "+
 				"and -recreate deletes it. Use -recreate -force.")
 			return 1
+		}
+	}
+	// The folder list is read (or derived, on a first setup) before the VM is
+	// provisioned, so a new VM starts with it. A list that only differs from
+	// what a set-up VM has applied is a stop and start, never a recreate.
+	svc, err := newCLIShareSvc(ctx, cfg, l)
+	if err != nil {
+		fmt.Fprintf(w, "FAIL box VM folders: %v\n", err)
+		return 1
+	}
+	if svc.corrupt != nil {
+		fmt.Fprintf(w, "FAIL box VM folders: %v\n", svc.corrupt)
+		return 1
+	}
+	if l.vm.SetUp() && !a.Recreate {
+		if kind, err := l.vm.DriftKind(); err == nil && kind == boxvm.DriftMountsOnly {
+			fmt.Fprintln(w, "the box VM's folder list changed; applying it (a VM stop and start)")
+			if rc := applyShares(ctx, a.Force, svc, l, w); rc != 0 {
+				return rc
+			}
 		}
 	}
 	if err := l.vm.Provision(ctx, a.Recreate, w); err != nil {

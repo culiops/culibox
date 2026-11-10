@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/clone"
@@ -28,12 +29,12 @@ var (
 )
 
 // realCloneBackends finds host git and the docker CLI the way the daemon does.
-func realCloneBackends(cfg config.Config, goos, dataDir, home string) (clone.Git, clone.Docker, error) {
+func realCloneBackends(cfg config.Config, goos, dataDir, home string, protected []box.ProtectedDir) (clone.Git, clone.Docker, error) {
 	g, err := clone.NewExecGit()
 	if err != nil {
 		return nil, nil, err
 	}
-	d, err := cloneDocker(context.Background(), cfg, goos, dataDir, home, boxvm.ExecRunner{})
+	d, err := cloneDocker(context.Background(), cfg, goos, dataDir, home, boxvm.ExecRunner{}, protected)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -43,9 +44,10 @@ func realCloneBackends(cfg config.Config, goos, dataDir, home string) (clone.Git
 // cloneDocker is the docker the bundle container runs on: the box layer's, as
 // in the daemon, so on macOS the box VM's (where the clone is shared). It never
 // starts the VM: a CLI starting colima beside a serving daemon could race its
-// own start, so a stopped VM is refused with the way to start it.
-func cloneDocker(ctx context.Context, cfg config.Config, goos, dataDir, home string, runner boxvm.Runner) (clone.Docker, error) {
-	l, err := newBoxLayer(cfg, dataDir, home, goos, runner, nil)
+// own start, so a stopped VM is refused with the way to start it. protected is
+// the same list serve builds, so the layer reads the folder list as serve does.
+func cloneDocker(ctx context.Context, cfg config.Config, goos, dataDir, home string, runner boxvm.Runner, protected []box.ProtectedDir) (clone.Docker, error) {
+	l, err := newBoxLayer(cfg, dataDir, home, goos, runner, protected)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +123,8 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 	if err := owner.checkOf(c.Of); err != nil {
 		return fail("%v", err)
 	}
-	g, d, err := cloneBackends(cfg, goos, dataDir, home)
+	protected := protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource(), bundleSourceOf(cfg))
+	g, d, err := cloneBackends(cfg, goos, dataDir, home, protected)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -137,7 +140,7 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 		Instance:  cfg.BoxInstance(),
 		TempDir:   filepath.Join(dataDir, "clone-fetch"),
 		Home:      home,
-		Protected: protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource(), bundleSourceOf(cfg)),
+		Protected: protected,
 
 		DataDir:         dataDir,
 		AllowOldHistory: a.AllowOldHistory,

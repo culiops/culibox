@@ -12,11 +12,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // Profile is the colima profile name. Short on purpose: lima puts sockets under
@@ -61,6 +60,12 @@ type Config struct {
 	// ExtraCAPEM is the canonical PEM of extra_ca_certs; empty means none, and
 	// then the YAML is byte-identical to what it was before the feature.
 	ExtraCAPEM []byte
+	// Shares are the folders the user chose to share, beyond the four data-root
+	// subfolders. NewVM resolves each Path through symlinks.
+	Shares []vmshares.Share
+	// Fold is true on darwin (APFS compares case-insensitively); the share
+	// checks that read the VM's mounts compare with it.
+	Fold bool
 }
 
 // ConfigFor is the VM config for an instance: paths from the data root and
@@ -140,18 +145,6 @@ func (c Config) DockerSocket() string { return filepath.Join(c.ProfileDir(), "do
 // agent-box owns, so the user's contexts are neither read nor written.
 func (c Config) DockerArgs() []string {
 	return []string{"--host", "unix://" + c.DockerSocket(), "--config", c.DockerConfigDir()}
-}
-
-// Mounts are the host dirs the VM shares: the home (where workspaces live) and
-// the data root when it sits outside the home (box homes must be visible too).
-func (c Config) Mounts() []string {
-	home := filepath.Clean(c.Home)
-	out := []string{home}
-	root := filepath.Clean(c.Root)
-	if root != home && !strings.HasPrefix(root, home+string(filepath.Separator)) {
-		out = append(out, root)
-	}
-	return out
 }
 
 // provisionScript runs as root on every VM start. lima's user-mode network maps
@@ -270,36 +263,19 @@ true
 `
 }
 
-// yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
-// could be read differently: a double quote, a backslash, invalid UTF-8, any
-// control character (C0, DEL, C1 including U+0085 NEL) and U+2028/U+2029, which
-// YAML 1.1 readers treat as line breaks. Refused, not escaped: the same paths
-// also reach docker and colima argv.
-func yamlSafe(p string) error {
-	bad := !utf8.ValidString(p)
-	for _, r := range p {
-		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
-			bad = true
-		}
-	}
-	if bad {
-		return fmt.Errorf("path %q contains a character agent-box will not write into the VM config", p)
-	}
-	return nil
-}
-
 // Validate refuses a configuration that cannot be carried safely, before any
 // colima or docker call. The data root is written into the VM's YAML and is
 // bind-mounted into boxes through docker's CSV --mount parser; the home is
 // written into the YAML. A path either parser would misread is refused, not
 // escaped, and the error names the path and the remedy.
 func (c Config) Validate() error {
-	for _, p := range []struct{ what, path string }{{"data root", c.Root}, {"home", c.Home}} {
+	// Home is display-only now: the VM no longer mounts it, so it is not checked.
+	for _, p := range []struct{ what, path string }{{"data root", c.Root}} {
 		if !filepath.IsAbs(p.path) {
 			return fmt.Errorf("the box VM needs an absolute %s, got %q", p.what, p.path)
 		}
 		why := ""
-		if err := yamlSafe(p.path); err != nil {
+		if err := vmshares.YAMLSafe(p.path); err != nil {
 			why = err.Error()
 		} else if r := box.MountUnsafe(p.path); r != "" {
 			why = fmt.Sprintf("%s %q: %s", p.what, p.path, r)
@@ -338,6 +314,12 @@ func (c Config) Validate() error {
 // YAML is the colima.yaml agent-box owns. Every setting that would let colima
 // touch the user's state is pinned off.
 func (c Config) YAML() ([]byte, error) {
+	return renderYAML(c, c.Mounts())
+}
+
+// renderYAML is YAML for an explicit mount list. For an all-writable list the
+// output is byte-identical to what v0.32 wrote.
+func renderYAML(c Config, mounts []Mount) ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -348,11 +330,11 @@ func (c Config) YAML() ([]byte, error) {
 	b.WriteString("runtime: docker\nvmType: vz\nrosetta: false\nmountType: virtiofs\nmountInotify: true\n")
 	b.WriteString("autoActivate: false\nsshConfig: false\nforwardAgent: false\n")
 	b.WriteString("mounts:\n")
-	for _, m := range c.Mounts() {
-		if err := yamlSafe(m); err != nil {
+	for _, m := range mounts {
+		if err := vmshares.YAMLSafe(m.Location); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
+		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: %t\n", m.Location, m.Writable)
 	}
 	b.WriteString("provision:\n  - mode: system\n    script: |\n")
 	script := provisionScript(c.BrokerPort, c.EgressPort)

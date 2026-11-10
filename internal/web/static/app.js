@@ -5456,7 +5456,73 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
+    filter: (path) => { const f = spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter); return f ? f(path) : true; },
   });
+  input.addEventListener("input", hideSpawnNotShared);
+}
+
+// On a Mac the picker offers only folders the box VM can see (applied rw shares from /api/vm-folders). null = no filtering: not a
+// Mac, the list could not be read, or the VM sees everything. The server still enforces either way.
+let spawnVMFilter = null;
+const spawnVMLatest = spawnLatest();
+// syncSpawnVMFilter: the filter and its help line follow the selected runtime (spec I4): a host session needs no VM folder. An open
+// list is redrawn, so a filter that arrives (or a runtime that changes) after the list opened shows at once.
+function syncSpawnVMFilter() {
+  const help = $("spawn-ws-vmhelp");
+  const on = !!spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter);
+  if (help) {
+    if (on) help.textContent = SPAWN_VM_SEES_HELP;
+    help.hidden = !on;
+  }
+  if (spawnWsPicker) spawnWsPicker.refresh();
+}
+async function loadSpawnVMFilter() {
+  const mine = spawnVMLatest.next();
+  spawnVMFilter = null;
+  syncSpawnVMFilter();
+  if (!(globalThis.vmFoldersOn === true)) return;
+  let view = null;
+  try { view = await api("/api/vm-folders"); } catch (_) { return; }
+  if (!spawnVMLatest.current(mine)) return; // a newer open of the dialog asked again: this answer is stale
+  spawnVMFilter = vmShareFilter(view);
+  syncSpawnVMFilter();
+}
+
+// The M9.9 refusal under the Workspace field: the line, and a "Share this folder…" button that closes the dialog and opens
+// Settings > VM folders with the add card prefilled (M9.9b). Editing the field clears it.
+function showSpawnNotShared(body, closeSpawn) {
+  const box = $("spawn-notshared"), input = $("spawn-ws-input");
+  if (!box) return;
+  const b = body || {};
+  const row = $("spawn-ws-row");
+  if (row) row.classList.add("ns-on"); // the caption line gives way: input, error, button, help (M9.9)
+  const line = document.createElement("div");
+  line.className = "field-error spawn-ns-line";
+  if ((b.pending === true || b.read_only === true) && b.error) line.textContent = spawnNotSharedLine(b);
+  else {
+    const code = document.createElement("code");
+    code.textContent = b.path || "";
+    line.append(code, SPAWN_NOT_SHARED_TAIL);
+  }
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-sm";
+  btn.textContent = "Share this folder…";
+  btn.onclick = () => {
+    closeSpawn();
+    openSettings("vmfolders");
+    openVMFoldersAdd(b.path || "", spawnShareMode(b), "spawn");
+  };
+  box.replaceChildren(line, btn);
+  box.hidden = false;
+  if (input) { input.classList.add("is-invalid"); input.setAttribute("aria-invalid", "true"); }
+}
+function hideSpawnNotShared() {
+  const box = $("spawn-notshared"), input = $("spawn-ws-input");
+  if (box && !box.hidden) { box.hidden = true; box.replaceChildren(); }
+  const row = $("spawn-ws-row");
+  if (row) row.classList.remove("ns-on");
+  if (input) { input.classList.remove("is-invalid"); input.removeAttribute("aria-invalid"); }
 }
 
 // spawnWsCaption: the steady-state line under the field: the plain "N project roots · type to filter · ↵ to pick", with
@@ -5481,6 +5547,7 @@ function getCwd() { return spawnWsPicker ? spawnWsPicker.value() : ""; }
 // profile default, the last-spawn fallback) so the box/host copy and the
 // unboxable-workspace warning never lag behind what will actually be spawned.
 function onSpawnCwdChanged() {
+  hideSpawnNotShared();
   updateTierExplain();
   updateRuntimeWarning();
 }
@@ -5696,6 +5763,7 @@ let spawnPromptDraft = "";
 // which still runs regardless of what this function decides to show.
 function updateRuntimeWarning() {
   syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
+  syncSpawnVMFilter(); // a box lists only shared folders; a host session lists them all
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (segValue(seg) === "host") {
@@ -5755,6 +5823,8 @@ async function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  hideSpawnNotShared();
+  loadSpawnVMFilter(); // not awaited: the picker reads the filter when it draws
   // A Duplicate's account applies only where its prefill does (same profile).
   syncSpawnAccount(prefill && want === prefill.agent ? prefill.account : undefined);
   $("spawn-prompt").value = spawnPromptDraft;
@@ -6053,6 +6123,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     $("spawn-prompt").value = "";
   };
   hideSpawnUnlock();
+  hideSpawnNotShared();
   // A Keychain refusal left on the line by the previous try is stale now; any
   // other note there (profiles could not be refreshed) is not ours to clear.
   if (spawnUnavailMsg && $("spawn-err").textContent === spawnUnavailMsg) setDialogError("spawn-modal", "");
@@ -6070,6 +6141,12 @@ $("spawn").addEventListener("submit", async (ev) => {
   } catch (e) {
     if (spawnRefusedLocked(e.status, e.code)) {
       showSpawnUnlock(e.message); // dialog and form values stay as they were
+    } else if (spawnRefusedNotShared(e.status, e.code)) {
+      showSpawnNotShared(e.body || { error: e.message }, closeSpawn); // dialog and form values stay as they were
+    } else if (spawnRefusedRestarting(e.status, e.code)) {
+      // The VM is restarting: the sentence says so; follow the apply so the sidebar banner appears.
+      setDialogError("spawn-modal", e.message);
+      if (typeof startVMApplyPoll === "function") startVMApplyPoll();
     } else if (spawnRefusedUnavailable(e.status, e.code)) {
       // Keychain failure: nothing to type. The sentence names the fix; the dialog
       // and form values stay as they were.
@@ -7109,6 +7186,11 @@ initMobileShell();
     if (sideAn) sideAn.hidden = !(meta && meta.analytics);
     const sideAudit = $("side-audit");
     if (sideAudit) sideAudit.hidden = !(meta && meta.audit); // only with an audit store
+    // macOS only: Settings > VM folders (the nav button and the palette entry wait for the server to say the page exists).
+    globalThis.vmFoldersOn = !!(meta && meta.vm_folders);
+    if (typeof vmaFromMeta === "function") vmaFromMeta(meta && meta.vm_apply); // an apply in flight (or a failed one) shows at once
+    const vmTab = document.querySelector('#settings-tabs [data-tab="vmfolders"]');
+    if (vmTab) vmTab.hidden = !globalThis.vmFoldersOn;
     sideCostOn = !!(meta && meta.analytics);
     paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;
@@ -7203,6 +7285,7 @@ setInterval(async () => {
     globalThis.repliesEnabled = !!(m && m.replies === true);
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
+    if (typeof vmaFromMeta === "function") vmaFromMeta(m && m.vm_apply); // the box VM restart: start the global poller if one runs
   } catch (_) {}
   // The store's lock state moves on the same slow cadence (TTL expiry, a lock
   // or unlock from the CLI), so it rides this tick rather than a timer of its own.

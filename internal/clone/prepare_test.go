@@ -1,8 +1,10 @@
 package clone
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -473,5 +475,43 @@ func TestPrepareNoRecordWithoutDataDir(t *testing.T) {
 	}
 	if _, err := os.Lstat(baseRecordDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Lstat(%s) = %v, want not exist", baseRecordDir, err)
+	}
+}
+
+func TestPrepareSkipsUnsharedMemoryMount(t *testing.T) {
+	f := newShareFixture(t)
+	e := f.env(t)
+	var asked []string
+	e.Visible = func(host string) bool { asked = append(asked, host); return false }
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	for i := 0; i < 2; i++ {
+		cm, _, err := Prepare(context.Background(), e, f.c, true)
+		if err != nil {
+			t.Fatalf("prepare %d: %v", i, err)
+		}
+		for _, m := range cm.RO {
+			if strings.HasPrefix(m.Box, "/home/agent/.claude/projects/") {
+				t.Errorf("unshared memory folder was mounted: %+v", m)
+			}
+		}
+	}
+	host := MemoryDir(f.mem, f.of)
+	if len(asked) != 2 || asked[0] != host {
+		t.Errorf("Visible asked %q, want the memory dir %q twice", asked, host)
+	}
+	want := "clone: the clone memory folder " + host + " is not shared with the box VM; boxes start without it (add it in Settings › VM folders)"
+	if got := strings.Count(buf.String(), want); got != 1 {
+		t.Errorf("log line count = %d, want 1; log:\n%s", got, buf.String())
+	}
+	// A visible folder is still mounted.
+	e.Visible = func(string) bool { return true }
+	cm, _, err := Prepare(context.Background(), e, f.c, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cm.RO) != 4 {
+		t.Errorf("RO = %+v, want .git, two shares and the memory mount", cm.RO)
 	}
 }

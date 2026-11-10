@@ -270,9 +270,10 @@ type Options struct {
 	// nil = such mounts are not checked (Linux records the identity on the host
 	// itself, the workspace's included).
 	VMIDs func(ctx context.Context, paths []string) ([]FileID, error)
-	// Shared lists the host directories the docker daemon can see; a workspace
-	// outside them is refused. nil = every path is visible.
-	Shared []string
+	// Shares reads the live list of host folders the docker daemon can see; a
+	// workspace outside the applied ones (or read-only) is refused. nil = no VM,
+	// every path is visible.
+	Shares SharesFunc
 	// Protected are host directories besides StateRoot (always protected) that
 	// a workspace must not overlap: the config and profiles directories when
 	// they live outside the data root.
@@ -711,10 +712,10 @@ func ensureMountpoints(root *os.Root, mounts []Mount) error {
 // agent the whole home — ~/.ssh, any secrets file, the agent's own config —
 // and every other control in this package becomes decoration. Refuse loudly
 // rather than narrow silently: a surprising mount is how containment dies.
-func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (string, bool) {
+func unboxableWorkspace(cwd string, protected []ProtectedDir, view func() (*ShareView, error)) (string, error) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
-		return "", false
+		return "", nil
 	}
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
@@ -724,35 +725,46 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 		// resolved, as ProtectedOverlap always did.
 		abs = resolveExisting(abs)
 	}
-	return unboxableResolved(abs, protected, shared)
+	return unboxableResolved(abs, protected, view)
 }
 
 // unboxableResolved is unboxableWorkspace for a path that is already absolute and
 // symlink-resolved (workspace.Path), which it does not resolve again: the
 // protected check in it (protectedOverlapResolved) is about this very path.
-func unboxableResolved(abs string, protected []ProtectedDir, shared []string) (string, bool) {
+//
+// It returns a reason, or, for a share failure, the *NotSharedError itself
+// (the spawn API needs the type); both empty = boxable. view reads the live
+// share list (nil view = no VM).
+func unboxableResolved(abs string, protected []ProtectedDir, view func() (*ShareView, error)) (string, error) {
 	if reason := MountUnsafe(abs); reason != "" {
-		return reason, true
+		return reason, nil
 	}
 	if abs == string(filepath.Separator) {
-		return "it is the filesystem root", true
+		return "it is the filesystem root", nil
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		if real, err := filepath.EvalSymlinks(home); err == nil {
 			home = real
 		}
 		if reason := homeReason(abs, home); reason != "" {
-			return reason, true
+			return reason, nil
 		}
 	}
 	if reason := protectedOverlapResolved(abs, protected); reason != "" {
-		return reason, true
+		return reason, nil
 	}
-	if len(shared) > 0 && !UnderMount(abs, shared) {
-		return "it is not under the box VM's shared directories (" + strings.Join(shared, ", ") +
-			"), so docker cannot see it", true
+	if view != nil {
+		v, err := view()
+		if err != nil {
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `agent-box doctor`", nil
+		}
+		if v != nil {
+			if err := v.Check(abs, true); err != nil {
+				return "", err
+			}
+		}
 	}
-	return "", false
+	return "", nil
 }
 
 // errUnboxable is Wrap's refusal of a workspace unboxableWorkspace (or
@@ -761,6 +773,15 @@ func errUnboxable(cwd, reason string) error {
 	return fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 		"or choose \"Run on trusted host\" to run it uncontained on purpose",
 		ErrUnboxableWorkspace, cwd, reason)
+}
+
+// refuseUnboxable is Wrap's refusal: the typed *NotSharedError as it is (it
+// names the folder and the fix), else errUnboxable's wording of the reason.
+func refuseUnboxable(cwd, reason string, serr error) error {
+	if serr != nil {
+		return serr
+	}
+	return errUnboxable(cwd, reason)
 }
 
 // homeReason reports why abs (absolute, symlinks resolved) cannot be mounted
@@ -786,7 +807,22 @@ func (m *Manager) protected() []ProtectedDir {
 
 // Unboxable is the workspace refusal Wrap applies, for the boot-time check.
 func (m *Manager) Unboxable(cwd string) (string, bool) {
-	return unboxableWorkspace(cwd, m.protected(), m.opts.Shared)
+	reason, err := unboxableWorkspace(cwd, m.protected(), m.opts.view)
+	if err != nil {
+		return err.Error(), true
+	}
+	return reason, reason != ""
+}
+
+// UnboxableIgnoringShares is Unboxable without the VM share rule: the verdict
+// for a record that must not change when the user edits the VM folder list
+// (the boxed-workspace registry feeds the fs containment trees).
+func (m *Manager) UnboxableIgnoringShares(cwd string) (string, bool) {
+	reason, err := unboxableWorkspace(cwd, m.protected(), nil)
+	if err != nil {
+		return err.Error(), true
+	}
+	return reason, reason != ""
 }
 
 // Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
@@ -825,8 +861,8 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// Nothing is created either way; this only words the refusal. It is for a
 		// resolution that failed here, never for a path whose identity cannot be
 		// read below: that one changed, whatever it leads to now.
-		if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
-			return nil, nil, "", errUnboxable(cwd, reason)
+		if reason, serr := unboxableWorkspace(cwd, m.protected(), m.opts.view); serr != nil || reason != "" {
+			return nil, nil, "", refuseUnboxable(cwd, reason, serr)
 		}
 		return nil, nil, "", err
 	}
@@ -837,8 +873,8 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if wrapResolvedHook != nil {
 		wrapResolvedHook(ws)
 	}
-	if reason, bad := unboxableResolved(ws.Path, m.protected(), m.opts.Shared); bad {
-		return nil, nil, "", errUnboxable(cwd, reason)
+	if reason, serr := unboxableResolved(ws.Path, m.protected(), m.opts.view); serr != nil || reason != "" {
+		return nil, nil, "", refuseUnboxable(cwd, reason, serr)
 	}
 	name := m.nameFor(ws.Path, key)
 	// Before anything exists: the caller prepared this box's broker socket

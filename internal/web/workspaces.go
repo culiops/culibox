@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,7 +27,9 @@ type Workspace struct {
 // box.MountUnsafe and box.ProtectedOverlap, shared so the two cannot drift) so
 // the UI and the startup check explain the same rule. protected are the
 // directories a workspace must not overlap (data root, config, profiles).
-func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir) (string, bool) {
+// shares is the live VM folder list (macOS), nil without a VM: a directory the
+// VM does not share read & write cannot be a workspace, so it is refused too.
+func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir, shares box.SharesFunc) (string, bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", false
@@ -54,14 +57,30 @@ func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir) (string
 	if reason := box.ProtectedOverlap(abs, protected); reason != "" {
 		return reason, true
 	}
+	if shares != nil {
+		v, err := shares()
+		if err != nil {
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `agent-box doctor`", true
+		}
+		if err := v.Check(abs, true); err != nil {
+			var ns *box.NotSharedError
+			if errors.As(err, &ns) && !ns.Pending && !ns.ReadOnly {
+				return notSharedReason, true
+			}
+			return err.Error(), true
+		}
+	}
 	return "", false
 }
+
+// notSharedReason is the short why of a folder the box VM does not share.
+const notSharedReason = "not shared with the box VM: add it in Settings › VM folders"
 
 // listWorkspaces returns home first, then each non-hidden subdirectory of home
 // (depth 1, symlinked dirs included), sorted by name. Only home's children are
 // listed — no arbitrary path traversal is exposed. A directory overlapping a
 // protected directory is listed but not boxable.
-func listWorkspaces(home string, protected []box.ProtectedDir) []Workspace {
+func listWorkspaces(home string, protected []box.ProtectedDir, shares box.SharesFunc) []Workspace {
 	// Home stays listed — it is a legitimate trusted-host workspace — but it can
 	// never be boxed, so it is labelled rather than silently offered.
 	out := []Workspace{{
@@ -90,7 +109,7 @@ func listWorkspaces(home string, protected []box.ProtectedDir) []Workspace {
 		if !isDir {
 			continue
 		}
-		reason, bad := UnboxableDefaultCwd(full, home, protected)
+		reason, bad := UnboxableDefaultCwd(full, home, protected, shares)
 		dirs = append(dirs, Workspace{Label: name, Path: full, Boxable: !bad, Reason: reason})
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Label < dirs[j].Label })

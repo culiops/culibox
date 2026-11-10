@@ -743,7 +743,7 @@ func TestSaveWarningsEgressWithoutBinding(t *testing.T) {
 // sentence an older client matches on, unchanged, plus the "field" path the
 // refusal is about. A refusal that names no field has no "field" key.
 func TestSaveRefusalCarriesFieldPath(t *testing.T) {
-	cwdReason, bad := UnboxableDefaultCwd("/", "/home/nobody", nil)
+	cwdReason, bad := UnboxableDefaultCwd("/", "/home/nobody", nil, nil)
 	if !bad || cwdReason == "" {
 		t.Fatalf("UnboxableDefaultCwd(/) = %q, %v; the default_cwd row needs a refused directory", cwdReason, bad)
 	}

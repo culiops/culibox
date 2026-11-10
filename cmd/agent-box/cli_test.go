@@ -341,7 +341,7 @@ func TestParseBoxSubcommands(t *testing.T) {
 		t.Fatalf("got %+v %v", a, err)
 	}
 	for _, bad := range [][]string{{"box"}, {"box", "nuke"}, {"box", "status", "-force"}, {"box", "stop", "-rebuild"},
-		{"box", "setup", "-force"}} {
+		{"box", "status", "-ro"}} {
 		if _, err := parseArgs(bad); err == nil {
 			t.Fatalf("%q must be refused", bad)
 		}
@@ -360,5 +360,49 @@ func TestConfigureServer_RepliesEnabledWired(t *testing.T) {
 	configureServer(off, config.Config{BindAddr: "127.0.0.1:8899"})
 	if off.RepliesEnabled {
 		t.Error("RepliesEnabled on without config")
+	}
+}
+
+func TestParseBoxShare(t *testing.T) {
+	ok := []struct {
+		argv           []string
+		action, path   string
+		ro, force, cfg bool
+	}{
+		{[]string{"box", "share", "list"}, "list", "", false, false, false},
+		{[]string{"box", "share", "add", "~/x"}, "add", "~/x", false, false, false},
+		{[]string{"box", "share", "add", "~/x", "--ro"}, "add", "~/x", true, false, false},
+		{[]string{"box", "share", "add", "-ro", "~/x"}, "add", "~/x", true, false, false},
+		{[]string{"box", "share", "add", "--ro", "~/x"}, "add", "~/x", true, false, false},
+		{[]string{"box", "share", "rm", "~/x"}, "rm", "~/x", false, false, false},
+		{[]string{"box", "share", "apply"}, "apply", "", false, false, false},
+		{[]string{"box", "share", "apply", "-force"}, "apply", "", false, true, false},
+		{[]string{"box", "share", "add", "-config", "c.json", "~/x"}, "add", "~/x", false, false, true},
+		{[]string{"box", "share", "add", "~/x", "-config", "c.json"}, "add", "~/x", false, false, true},
+	}
+	for _, c := range ok {
+		a, err := parseArgs(c.argv)
+		if err != nil || a.Cmd != "box" || a.Sub != "share" || a.ShareAction != c.action || a.SharePath != c.path || a.ReadOnly != c.ro || a.Force != c.force || a.ConfigSet != c.cfg {
+			t.Errorf("%v = %+v, %v", c.argv, a, err)
+		}
+	}
+	bad := map[string][]string{
+		"box share needs list, add, rm or apply":  {"box", "share"},
+		"box share needs list, add, rm or apply ": {"box", "share", "-force"},
+		"unknown box share action":                {"box", "share", "nuke"},
+		"needs one <dir>":                         {"box", "share", "add"},
+		"needs one <dir> ":                        {"box", "share", "rm", "a", "b"},
+		"takes no folder":                         {"box", "share", "list", "x"},
+		"-ro only applies":                        {"box", "share", "rm", "x", "-ro"},
+		"-force only applies":                     {"box", "share", "list", "-force"},
+	}
+	for want, argv := range bad {
+		if _, err := parseArgs(argv); err == nil || !strings.Contains(err.Error(), strings.TrimSpace(want)) {
+			t.Errorf("%v: err = %v, want %q", argv, err, want)
+		}
+	}
+	// box setup takes -force for a folder-list apply.
+	if a, err := parseArgs([]string{"box", "setup", "-force"}); err != nil || !a.Force {
+		t.Errorf("box setup -force = %+v, %v", a, err)
 	}
 }

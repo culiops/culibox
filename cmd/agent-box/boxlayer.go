@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
@@ -20,6 +21,7 @@ import (
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/proxyline"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // verifyTimeout bounds the containment probe of a new box. The spawn holds the
@@ -57,10 +59,11 @@ type boxLayer struct {
 	dockerArgs []string
 	cli        box.CLIClient
 	img        boximage.Docker
-	image      string // the fallback box image (box_image)
-	goos       string // runtime.GOOS as the layer was built
-	dataDir    string // the absolute data dir, for the store doctor and box setup read
-	stateRoot  string // where box homes and the bundle live; resolved on darwin
+	image      string             // the fallback box image (box_image)
+	goos       string             // runtime.GOOS as the layer was built
+	dataDir    string             // the absolute data dir, for the store doctor and box setup read
+	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
+	stateRoot  string             // where box homes and the bundle live; resolved on darwin
 	// addrs is the one box-address cache the egress proxy and the credential
 	// broker share (both OSes). One instance on purpose: the proxy drops a box's
 	// entry when its session ends or a probe re-verifies a recreated box, and a
@@ -79,6 +82,21 @@ type boxLayer struct {
 	reclaimErr logOnChange
 	// egressProbe is egress.Probe; a test replaces it.
 	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
+	// ctl is the VM folder control (macOS, set by the daemon): while it reports
+	// an apply, spawns are refused instead of racing the VM restart.
+	ctl vmControl
+	// foldersOK is the VM folder check's verdict: the colima.yaml (mtime, size)
+	// a passing check ran against, nil = unverified. Every layer starts
+	// unverified (a failure in another process or before a restart is in no
+	// memory here), and any change to colima.yaml (an apply, from any process)
+	// makes it unverified again. Until verified, every spawn runs the check.
+	foldersOK atomic.Pointer[yamlStamp]
+}
+
+// yamlStamp identifies one written colima.yaml.
+type yamlStamp struct {
+	mtime time.Time
+	size  int64
 }
 
 // relaySecretFile is the relay key's file in the data directory. The name pairs
@@ -154,7 +172,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 	if err != nil {
 		return nil, err
 	}
-	l := &boxLayer{goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
+	l := &boxLayer{protected: protected, goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
 	if goos == "darwin" {
 		colima, err := boxvm.LookColima(cfg.ColimaBin)
 		if err != nil {
@@ -165,7 +183,10 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 		if fresh {
 			configFor = boxvm.ConfigForFresh
 		}
-		l.vm = boxvm.NewVM(configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem), runner)
+		vcfg := configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem)
+		vcfg.Fold = true // goos == "darwin" here: APFS compares case-insensitively
+		l.vm = boxvm.NewVM(vcfg, runner)
+		l.vm.SetShares(bootShares(dataDir, l.vm.Config(), protected))
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -222,7 +243,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// #72: the context-path identity, read in the VM (Linux records it on the
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
-		o.Shared = l.vm.Config().Mounts()
+		o.Shares = l.shareView
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
@@ -244,6 +265,9 @@ func (l *boxLayer) prober(image string) bundle.ImageProber {
 // deadline, so the spawn simply takes longer and no "starting the box VM"
 // state is needed in the UI (spec §3.6).
 func (l *boxLayer) prepare(ctx context.Context) error {
+	if l.ctl != nil && l.ctl.Applying() {
+		return box.ErrVMRestarting
+	}
 	vctx, vcancel := context.WithTimeout(ctx, prepareVMTimeout)
 	started, err := l.vm.EnsureRunning(vctx)
 	vcancel()
@@ -258,6 +282,14 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 		// Every box in a freshly started VM is a leftover from before it
 		// stopped, and the boot pass skipped them while the VM was down.
 		l.reconcileAndReclaim(context.WithoutCancel(ctx))
+	}
+	if started || !l.foldersVerified() {
+		mctx, mcancel := context.WithTimeout(ctx, imageCheckTimeout)
+		err := l.verifyMounts(mctx)
+		mcancel()
+		if err != nil {
+			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `agent-box doctor`", box.ErrBoxUnavailable, err)
+		}
 	}
 	ictx, cancel := context.WithTimeout(ctx, imageCheckTimeout)
 	defer cancel()
@@ -477,4 +509,60 @@ func (l *logOnChange) changed(msg string) bool {
 	}
 	l.last = msg
 	return msg != ""
+}
+
+// bootShares is the folder list the VM is built with: vm-shares.json, normalised
+// (every Load consumer does). A missing or damaged file gives an empty list for
+// now; skips are logged.
+func bootShares(dataDir string, vc boxvm.Config, protected []box.ProtectedDir) []vmshares.Share {
+	list, _, err := vmshares.Load(dataDir)
+	if err != nil {
+		log.Printf("box VM folders: %v; starting with none listed", err)
+		return nil
+	}
+	out, skipped := vmshares.Normalize(list, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: vc.Fold, Protected: protected})
+	for _, s := range skipped {
+		log.Printf("box VM folders: skipping %s: %s", s.Path, s.Reason)
+	}
+	return out
+}
+
+// shareView is the live view of the box VM's folders: Applied is what its
+// written colima.yaml mounts (the only folders docker can see) minus the four
+// data-root mounts, Listed is the user's list (vm-shares.json, resolved) whether
+// applied yet or not. A mounts block that cannot be read fails closed. A VM
+// with no colima.yaml yet has nothing applied and is no error: the spawn meets
+// ErrNotSetUp in Prepare first.
+func (l *boxLayer) shareView() (box.ShareView, error) {
+	cfg := l.vm.Config()
+	v := box.ShareView{Home: cfg.Home, Fold: l.goos == "darwin"}
+	ms, err := l.vm.AppliedMounts()
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return box.ShareView{}, err
+	default:
+		data := map[string]bool{}
+		for _, d := range boxvm.DataMounts(cfg.Root) {
+			data[d.Location] = true
+		}
+		for _, m := range ms {
+			if !data[m.Location] {
+				v.Applied = append(v.Applied, box.VMShare{Path: m.Location, Writable: m.Writable})
+			}
+		}
+	}
+	for _, s := range cfg.Shares {
+		v.Listed = append(v.Listed, box.VMShare{Path: s.Path, Writable: s.Mode == vmshares.RW})
+	}
+	return v, nil
+}
+
+// sharesFunc is shareView as a box.SharesFunc, nil without a VM (Linux: every
+// path is visible).
+func (l *boxLayer) sharesFunc() box.SharesFunc {
+	if l == nil || l.vm == nil {
+		return nil
+	}
+	return l.shareView
 }

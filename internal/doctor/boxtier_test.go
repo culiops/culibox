@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/secretstore"
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 func ok() boxFacts {
@@ -217,7 +220,7 @@ func fakeDocker(t *testing.T) (bin, argvLog string) {
 
 func TestGatherBoxFactsLinuxListsOnlyThisInstancesStoppedBoxes(t *testing.T) {
 	bin, argvLog := fakeDocker(t)
-	f := gatherBoxFacts(config.Config{DockerBin: bin, EnvLabel: "PROD"}, t.TempDir(), t.TempDir(), "linux")
+	f := gatherBoxFacts(config.Config{DockerBin: bin, EnvLabel: "PROD"}, t.TempDir(), t.TempDir(), "linux", nil)
 	if f.DockerErr != nil || len(f.Stopped) != 1 || f.Stopped[0] != "ab-box-1" {
 		t.Fatalf("facts = %+v", f)
 	}
@@ -228,7 +231,7 @@ func TestGatherBoxFactsLinuxListsOnlyThisInstancesStoppedBoxes(t *testing.T) {
 }
 
 func TestGatherBoxFactsLinuxMissingDocker(t *testing.T) {
-	f := gatherBoxFacts(config.Config{DockerBin: "docker-not-here-xyz"}, t.TempDir(), t.TempDir(), "linux")
+	f := gatherBoxFacts(config.Config{DockerBin: "docker-not-here-xyz"}, t.TempDir(), t.TempDir(), "linux", nil)
 	if f.DockerErr == nil {
 		t.Fatal("a missing docker must be reported")
 	}
@@ -250,7 +253,7 @@ func TestGatherBoxFactsDarwinNeverStartsTheVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(data) })
-	f := gatherBoxFacts(config.Config{DockerBin: dockerBin, ColimaBin: colima}, data, t.TempDir(), "darwin")
+	f := gatherBoxFacts(config.Config{DockerBin: dockerBin, ColimaBin: colima}, data, t.TempDir(), "darwin", nil)
 	if f.SetUp || f.ColimaVer != "0.8.1" || f.ColimaErr != nil || f.DockerErr != nil {
 		t.Fatalf("facts = %+v", f)
 	}
@@ -281,5 +284,237 @@ func TestBoxTierContextRowSurvivesEarlyReturns(t *testing.T) {
 		if d := detail(boxTierResults("darwin", f, tokenOK)); !strings.Contains(d, "PASS docker context") {
 			t.Errorf("%s: the context PASS row was dropped:\n%s", name, d)
 		}
+	}
+}
+
+func TestBoxTierWholeHomeWarns(t *testing.T) {
+	f := ok()
+	f.WholeHome, f.ShareCount = true, 3
+	rs := boxTierResults("darwin", f, tokenOK)
+	want := vmshares.WholeHomeLine(3)
+	found := false
+	for _, r := range rs {
+		if r.Check == "box VM folders" && r.Status == Warn && r.Detail == want {
+			found = true
+		}
+	}
+	if !found || !strings.Contains(want, "shares your whole home folder") {
+		t.Fatalf("want whole-home warn %q:\n%s", want, detail(rs))
+	}
+}
+
+func TestBoxTierMountsOnlyDriftNoRecreate(t *testing.T) {
+	f := ok()
+	f.Drifted, f.Drift = true, boxvm.DriftMountsOnly
+	rs := boxTierResults("darwin", f, tokenOK)
+	if strings.Contains(detail(rs), "-recreate") {
+		t.Fatalf("mounts-only drift must not mention -recreate:\n%s", detail(rs))
+	}
+	if !strings.Contains(detail(rs), "WARN box VM folders: the folder list changed") {
+		t.Fatalf("missing folder-list drift warn:\n%s", detail(rs))
+	}
+	f.Drift = boxvm.DriftOther
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "-recreate") {
+		t.Fatal("DriftOther keeps the recreate row")
+	}
+}
+
+func TestBoxTierSharesCorruptWarns(t *testing.T) {
+	f := ok()
+	f.SharesErr = errors.New("vm-shares.json is damaged")
+	f.Drifted, f.Drift = true, boxvm.DriftMountsOnly
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "box VM folders list: vm-shares.json cannot be read (vm-shares.json is damaged); fix or move it away; until then the folder list cannot change") {
+		t.Fatalf("corrupt warn missing:\n%s", d)
+	}
+	for _, bad := range []string{"apply it", "0 folders", "-recreate", "box VM folders: the box VM sees"} {
+		if strings.Contains(d, bad) {
+			t.Fatalf("corrupt list must not give %q:\n%s", bad, d)
+		}
+	}
+	f.WholeHome = true
+	d = detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "WARN box VM folders: the box VM shares your whole home folder; fix vm-shares.json before applying a folder list\n") || strings.Contains(d, "apply the folder list") {
+		t.Fatalf("whole-home + corrupt:\n%s", d)
+	}
+}
+
+func TestBoxTierFoldersUnreadableWarns(t *testing.T) {
+	f := ok()
+	f.FoldersErr = errors.New("bad yaml")
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `agent-box box setup`") || strings.Contains(d, "PASS box VM folders") {
+		t.Fatalf("got:\n%s", d)
+	}
+}
+
+// An applied list matching vm-shares.json is not drift (review: SetShares must
+// come before the drift computation).
+func TestGatherBoxFactsAppliedListIsNotDrift(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	if err := os.WriteFile(colima, []byte("#!/bin/sh\n[ \"$1\" = version ] && echo 'colima version 0.8.1'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	home, err := os.MkdirTemp("/tmp", "abhome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	proj := filepath.Join(home, "proj")
+	if err := os.Mkdir(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmshares.Save(data, []vmshares.Share{{Path: proj, Mode: vmshares.RW}}); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	// Stage the VM exactly as setup would have: yaml + stamp for this list.
+	cfg := boxvm.ConfigFor(c, data, home, colima, dockerBin, 4, 8)
+	cfg.Fold = true
+	vm := boxvm.NewVM(cfg, boxvm.ExecRunner{})
+	vc := vm.Config()
+	list, _ := vmshares.Normalize([]vmshares.Share{{Path: proj, Mode: vmshares.RW}}, vmshares.Env{Home: vc.Home, DataRoot: vc.Root, Fold: true})
+	vm.SetShares(list)
+	y, err := vm.Config().YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.YAMLPath(), y, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(y)
+	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := gatherBoxFacts(c, data, home, "darwin", nil)
+	if !f.SetUp || f.Drifted || f.Drift != boxvm.DriftNone || f.WholeHome || f.FoldersErr != nil || f.SharesErr != nil || f.ShareCount != 1 {
+		t.Fatalf("facts = %+v", f)
+	}
+	f.Status, f.StatusErr = boxvm.Status{Running: true, MountType: "virtiofs"}, nil
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	if strings.Contains(d, "box VM config") || !strings.Contains(d, "PASS box VM folders: the box VM sees 1 folders") {
+		t.Fatalf("got:\n%s", d)
+	}
+}
+
+func TestBoxTierFolderPassAndLinuxNoRow(t *testing.T) {
+	f := ok()
+	f.ShareCount = 4
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "box VM folders: the box VM sees 4 folders and CuliBox data") {
+		t.Fatal("missing pass row")
+	}
+	f.Stopped = []string{"x"}
+	if strings.Contains(detail(boxTierResults("linux", f, tokenOK)), "box VM folders") {
+		t.Fatal("linux has no folder row")
+	}
+}
+
+// S3: a running VM whose real folders differ from its colima.yaml fails the
+// folder row (every boxed spawn is refused until it is fixed).
+func TestBoxTierFolderMismatchFails(t *testing.T) {
+	f := ok()
+	f.MountsRan, f.MountsErr = true, errors.New("missing /x")
+	d := detail(boxTierResults("darwin", f, tokenOK))
+	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `agent-box box share apply`"
+	if !strings.Contains(d, want) || strings.Contains(d, "PASS box VM folders") {
+		t.Fatalf("got:\n%s", d)
+	}
+	f.MountsErr = nil
+	if !strings.Contains(detail(boxTierResults("darwin", f, tokenOK)), "PASS box VM folders") {
+		t.Fatal("a passing check must keep the pass row")
+	}
+}
+
+// Doctor runs the folder check when the VM is running, over the same ssh it
+// uses for the firewall rules.
+func TestGatherBoxFactsVerifiesFoldersOfARunningVM(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) echo 'colima version 0.8.1' ;;\n" +
+		"status) echo '{\"driver\":\"vz\",\"mount_type\":\"virtiofs\"}' ;;\n" +
+		"ssh) case \"$*\" in *mounts*) echo 'm /nowhere virtiofs rw 0 0' ;; esac ;;\nesac\nexit 0\n"
+	if err := os.WriteFile(colima, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	cfg := boxvm.ConfigFor(c, data, t.TempDir(), colima, dockerBin, 4, 8)
+	vm := boxvm.NewVM(cfg, boxvm.ExecRunner{})
+	vc := vm.Config()
+	y, err := vc.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.YAMLPath(), y, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(y)
+	if err := os.WriteFile(vc.StampPath(), []byte(hex.EncodeToString(sum[:])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := gatherBoxFacts(c, data, t.TempDir(), "darwin", nil)
+	if !f.Status.Running || !f.MountsRan || !errors.Is(f.MountsErr, boxvm.ErrMountsMismatch) {
+		t.Fatalf("facts: running %v, mounts ran %v, err %v", f.Status.Running, f.MountsRan, f.MountsErr)
+	}
+}
+
+// M2: doctor normalises the folder list with the same protected list serve and
+// the CLI use, so a saved share over CuliBox's config dir is dropped here too
+// (no folder count or drift an apply could never clear).
+func TestGatherBoxFactsUsesTheProtectedList(t *testing.T) {
+	dockerBin, _ := fakeDocker(t)
+	dir := t.TempDir()
+	colima := filepath.Join(dir, "colima")
+	if err := os.WriteFile(colima, []byte("#!/bin/sh\n[ \"$1\" = version ] && echo 'colima version 0.8.1'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.MkdirTemp("/tmp", "abdoc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(data) })
+	home, err := os.MkdirTemp("/tmp", "abhome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	cfgDir := filepath.Join(home, "cfg")
+	if err := os.Mkdir(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmshares.Save(data, []vmshares.Share{{Path: cfgDir, Mode: vmshares.RW}}); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Config{DockerBin: dockerBin, ColimaBin: colima}
+	vm := boxvm.NewVM(boxvm.ConfigFor(c, data, home, colima, dockerBin, 4, 8), boxvm.ExecRunner{})
+	vc := vm.Config()
+	if err := os.MkdirAll(vc.ProfileDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(vc.StampPath(), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := Input{Config: c, Home: home, ConfigFiles: []string{filepath.Join(cfgDir, "config.json")}}
+	f := gatherBoxFacts(c, data, home, "darwin", protectedFor(in, data))
+	if f.SharesErr != nil || f.ShareCount != 0 {
+		t.Fatalf("a share over the config dir was counted: count %d, err %v", f.ShareCount, f.SharesErr)
 	}
 }

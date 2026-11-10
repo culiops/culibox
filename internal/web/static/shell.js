@@ -503,6 +503,7 @@ function selectSettingsTab(name) {
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
   if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
   if (name === "creds" && typeof loadCredentials === "function") loadCredentials();
+  if (name === "vmfolders" && typeof loadVMFolders === "function") loadVMFolders();
   if (name === "about" && typeof loadAboutInfo === "function") loadAboutInfo();
   // The profile form's pickers list what Credentials holds now, not what it held at page load.
   if (name === "manage" && typeof refreshCredLists === "function") refreshCredLists();

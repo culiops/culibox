@@ -25,6 +25,10 @@ import (
 // them. filepath.Join(home, "x") on the home that main.go already resolved is
 // invisible here; review catches that.
 var pathEscapes = map[string]int{
+	// The refusal list for VM shares: ~/Library and ~/.config/gcloud are named so they can
+	// never be shared (a deny, never a read or a write).
+	"internal/vmshares/check.go literal .config": 3,
+	"internal/vmshares/check.go literal Library": 1,
 	// Locating the data root itself, and the ~/.config fallback for the config file.
 	"internal/config/config.go literal .local":   1, // ResolvedDataDir, for a Config not built by Resolve
 	"internal/config/resolve.go literal .local":  1,

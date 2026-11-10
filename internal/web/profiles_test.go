@@ -1101,3 +1101,50 @@ func TestViewsSourceWithoutSetBuiltinIsConfig(t *testing.T) {
 		t.Fatalf("SetBuiltin(nil) must leave a seed %q, got %q", ProfileSourceConfig, vs[0].Source)
 	}
 }
+
+func TestSaveChecksDefaultCwdAgainstTheLiveShares(t *testing.T) {
+	home := resolvedDir(t)
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = home
+	shared, other := filepath.Join(home, "shared"), filepath.Join(home, "other")
+	for _, d := range []string{shared, other} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pm.SetShares(func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: shared, Writable: true}}, Home: home}, nil
+	})
+	p := config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: other}
+	err := pm.Save(p)
+	if err == nil || !strings.Contains(err.Error(), "not shared with the box VM: add it in Settings › VM folders") {
+		t.Fatalf("an unshared default_cwd must be refused with the share reason, got %v", err)
+	}
+	p.DefaultCwd = shared
+	if err := pm.Save(p); err != nil {
+		t.Fatalf("a shared default_cwd should save: %v", err)
+	}
+}
+
+func resolvedDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestMergeProfilesMatchesManagerAll(t *testing.T) {
+	seeds := []config.AgentConfig{{Name: "claude", Bin: "claude", Options: map[string]any{"skip": true}}, {Name: "bash", Bin: "bash"}}
+	opts := []config.OptionDef{{Key: "skip", Label: "Skip", Type: "bool", Flag: "-x"}}
+	fs := newFakeStore()
+	fs.m["bash"] = config.AgentConfig{Name: "bash", Bin: "bash", DefaultCwd: "/w"}
+	fs.m["zed"] = config.AgentConfig{Name: "zed", Bin: "bash"}
+	fs.m["amy"] = config.AgentConfig{Name: "amy", Bin: "bash"}
+	pm := NewProfileManager(seeds, opts, "", nil, fs, func([]config.AgentConfig) {})
+	got := MergeProfiles(seeds, fs.List(), opts)
+	if want := pm.All(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("MergeProfiles\n got %+v\nwant %+v", got, want)
+	}
+}

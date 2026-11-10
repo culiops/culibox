@@ -747,3 +747,45 @@ test("a window resize across the phone breakpoint closes an open list instead of
   fire(p.input, "focus");
   assert.deepStrictEqual(cls(p.list.children[0]), ["ft-opt"], "reopened, it is drawn for the layout it is in");
 });
+
+test("filter(path) drops rows from the idle list and from a search, and drops nothing when absent", async () => {
+  const t = env();
+  const only = (p) => p.startsWith("/home/me/culishop");
+  const a = t.make({ filter: only });
+  fire(a.input, "focus");
+  assert.deepStrictEqual(rowsOf(a), ["culishop"], "idle list keeps only visible folders");
+  t.server.search = [{ rel: "me/culishop/api", path: "/home/me/culishop/api" }, { rel: "me/notes/x", path: "/home/me/notes/x" }];
+  type(a, "ap");
+  t.runDebounce();
+  await flush();
+  assert.deepStrictEqual(rowsOf(a), ["api"], "search hits are filtered too");
+  const b = t.make();
+  fire(b.input, "focus");
+  assert.deepStrictEqual(rowsOf(b), ["culishop", "notes"], "no filter, no change");
+});
+
+test("openOnClick false keeps a click from opening the list (an on-demand picker); open() still does", () => {
+  const t = env();
+  const p = t.make({ openOnFocus: () => false, openOnClick: () => false });
+  fire(p.input, "focus");
+  fire(p.input, "click");
+  assert.strictEqual(p.list.hidden, true);
+  p.picker.open();
+  assert.strictEqual(p.list.hidden, false);
+});
+
+test("openOnType false: typing never opens the list, and closes one Browse… opened", () => {
+  const t = env();
+  const p = t.make({ openOnFocus: () => false, openOnClick: () => false, openOnType: () => false });
+  p.input.value = "proj";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "typing a fuzzy query opens nothing");
+  p.input.value = "";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "emptying the field opens nothing");
+  p.picker.open();
+  assert.strictEqual(p.list.hidden, false, "Browse… opens it");
+  p.input.value = "a";
+  fire(p.input, "input");
+  assert.strictEqual(p.list.hidden, true, "typing closes it again");
+});

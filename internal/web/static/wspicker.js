@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, reanchor, inline, lastUsed, idleText })
+//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, openOnType, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -38,7 +38,7 @@
 // (preventDefault), so a surrounding page's own Esc does not also fire; a dialog that closes
 // on the same Esc, as New session's does, leaves it unset. openOnFocus(): asked when the field
 // gains focus; false keeps the list closed (a form that focuses the field by itself when it
-// opens does not want a dropdown over it). A click always opens the list; unset means yes.
+// opens does not want a dropdown over it). A click opens the list unless openOnClick() says no; unset means yes.
 // reanchor: also keep an open list under its field when something behind it scrolls. The list is
 // position: fixed, so a page that scrolls under it (the profile page) needs this; New session never
 // listened for scrolls and does not pass it.
@@ -49,6 +49,7 @@
 // the frame draws it). lastUsed(): the folder the last session started in; only an inline list pins it (first row,
 // trailing "Last used"), by reordering rows the server returned (pinLastUsed). idleText(count): the steady-state caption
 // instead of spawnWsIdleNote's (New session names where the field's value came from).
+// filter(path): optional; false drops a row from every list (typed paths are not filtered).
 //
 // Classic script: the helpers above are dirpicker.js's, showToast is shell.js's and
 // workspacesCache is app.js's, all read at call time.
@@ -78,7 +79,10 @@ function createWsPicker(opts) {
   let drawnInline = false;
   const workspaces = () => (typeof workspacesCache !== "undefined" && Array.isArray(workspacesCache) ? workspacesCache : []);
   // Asked each time rows are drawn: a session started since the last open is seen.
-  const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(rows, o.lastUsed()) : rows);
+  // o.filter(path): false drops a row (a Mac's New session lists only folders the box VM can see). Typed paths are not
+  // filtered; the server refuses them.
+  const keep = (rows) => (typeof o.filter === "function" ? rows.filter((r) => o.filter(r.path) !== false) : rows);
+  const pinned = (rows) => (inline() && typeof o.lastUsed === "function" ? pinLastUsed(keep(rows), o.lastUsed()) : keep(rows));
   const idleRows = () => pinned(pickerRows({ mode: "empty", workspaces: workspaces() }));
   const note = (text, idle) => onNote(text || "", idle === true);
   const idleNote = (count) => note(typeof o.idleText === "function" ? o.idleText(count) : spawnWsIdleNote(count), true);
@@ -364,7 +368,8 @@ function createWsPicker(opts) {
     const before = cwd;
     if (c.mode === "path") cwd = c.value;
     else if (c.mode === "empty") cwd = "";
-    query(input.value);
+    if (typeof o.openOnType === "function" && !o.openOnType()) close(); // an on-demand list closes as the user types: it never covers the field message
+    else query(input.value);
     if (cwd !== before) onPick(cwd);
   });
   // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same pure functions, same measured
@@ -385,6 +390,7 @@ function createWsPicker(opts) {
   });
   on(input, "click", () => {
     if (pickerShouldSelectAll(input.value, input.selectionStart === input.selectionEnd)) input.select();
+    if (typeof o.openOnClick === "function" && !o.openOnClick()) return; // an on-demand list (VM folders): only Browse… opens it
     open();
   });
   on(input, "keydown", onKeydown);

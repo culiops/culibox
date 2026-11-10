@@ -58,6 +58,9 @@ var _ session.PidResolver = (*abduco.Adapter)(nil)
 // new conversation (/clear), so history stays whole with no browser open.
 const conversationPollEvery = 5 * time.Second
 
+// uidemoVMFolders is set only by the uidemo-tagged file; nil in every normal build.
+var uidemoVMFolders func(home string) web.VMFolders
+
 func main() {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -91,15 +94,18 @@ func main() {
 	if homeErr == nil && cfgErr == nil {
 		cfg, cred = mergeCredentials(cfg, home)
 	}
-	if args.Cmd == "doctor" {
-		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
-		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}))
-	}
-	if args.Cmd == "bug-report" {
+	if args.Cmd == "doctor" || args.Cmd == "bug-report" {
+		// home is "" when $HOME is unusable; doctor reports that as a FAIL. The
+		// config files only feed the protected list of the folder row: a
+		// failure to name them leaves that list without them.
+		cfgFiles, _ := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		in := doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
+			Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles}
+		if args.Cmd == "doctor" {
+			os.Exit(doctor.Run(os.Stdout, in))
+		}
 		host, _ := os.Hostname()
-		os.Exit(runBugReport(doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}, host, runtime.GOOS, os.Stdout, os.Stderr))
+		os.Exit(runBugReport(in, host, runtime.GOOS, os.Stdout, os.Stderr))
 	}
 	if homeErr != nil {
 		log.Fatalf("home: %v", homeErr)
@@ -117,7 +123,11 @@ func main() {
 		log.Print("WARNING: " + w)
 	}
 	if args.Cmd == "box" {
-		os.Exit(runBox(args, cfg, home, os.Stdout))
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		if cfgFiles, err = boxConfigFiles(runtime.GOOS, cfgFiles, err); err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
 	}
 	if args.Cmd == "store" {
 		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))
@@ -136,7 +146,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
-		Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}, ring)
+		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles}, ring)
+}
+
+// boxConfigFiles: `box` uses the config files only for the macOS VM's
+// protected list, so failing to name them is fatal on darwin alone.
+func boxConfigFiles(goos string, files []string, err error) ([]string, error) {
+	if err != nil && goos != "darwin" {
+		return nil, nil
+	}
+	return files, err
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -170,6 +189,16 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 	return cfg.ResolvedProfilesPath(dataDir)
 }
 
+// boxedFilter is the boxed-workspace registry's filter: the manager's workspace
+// rule, share-agnostic. Removing a VM folder never drops a recorded workspace
+// (the registry feeds the fs containment trees). No layer = nothing is refused.
+func boxedFilter(layer *boxLayer) func(string) (string, bool) {
+	if layer == nil {
+		return func(string) (string, bool) { return "", false }
+	}
+	return layer.boxes.UnboxableIgnoringShares
+}
+
 // protectedDirs is every host directory a boxed workspace must not overlap,
 // built once for all four gates (spawn, boot check, profile save, picker): the
 // data root, and the directory of each config file read on the next start
@@ -185,43 +214,12 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 // not personalDir gets the same protection: a box that could write it could
 // add an "@" line that pulls a host file into the next box.
 func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string) []box.ProtectedDir {
-	out := []box.ProtectedDir{box.DataDirProtected(dataDir), box.PersonalConfigDirProtected(personalDir)}
-	if bundleSrc != "" && !sameDir(bundleSrc, personalDir) {
-		out = append(out, box.PersonalConfigDirProtected(bundleSrc))
-	}
-	for _, f := range cfgFiles {
-		for _, d := range box.FileDirs(f) {
-			out = append(out, box.ConfigDirProtected(d))
-		}
-	}
-	for _, d := range box.FileDirs(profilesPath) {
-		out = append(out, box.ProfilesDirProtected(d))
-	}
-	return box.DedupeProtected(out)
-}
-
-// sameDir reports whether a and b name one directory: the same spelling, or
-// the same path once links are resolved (a missing path compares as spelled).
-func sameDir(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
-	}
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && ra == rb
+	return box.ProtectedDirsFor(dataDir, cfgFiles, profilesPath, personalDir, bundleSrc)
 }
 
 // bundleSourceOf is the config bundle's source dir: "" with bundle_source
 // "off", the configured dir, or bundle.DefaultSource().
-func bundleSourceOf(cfg config.Config) string {
-	if cfg.BundleSource == "off" {
-		return ""
-	}
-	if src := bundle.ExpandTilde(cfg.BundleSource); src != "" {
-		return src
-	}
-	return bundle.DefaultSource()
-}
+func bundleSourceOf(cfg config.Config) string { return bundle.SourceOf(cfg.BundleSource) }
 
 // importDenyDirs is the host directories no CLAUDE.md import may come from: the
 // same sources as protectedDirs (data root, each config file's and the profiles
@@ -491,10 +489,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// layer (its Unboxable check filters entries) and before any spawn can happen.
 	// Corrupt or unreadable fails closed: serving without it would silently
 	// un-contain every workspace.
-	unboxable := func(string) (string, bool) { return "", false }
-	if layer != nil {
-		unboxable = layer.boxes.Unboxable
-	}
+	unboxable := boxedFilter(layer)
 	boxedReg, boxedSeeded, err := boxedws.Open(dataDir, unboxable)
 	if err != nil {
 		log.Fatalf("boxed workspace record %s: %v", filepath.Join(dataDir, "boxed-workspaces.json"), err)
@@ -714,11 +709,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// As mgr.SetEgressAll above: the profile list previews each box's network.
 	pm.SetEgressAll(layer != nil)
-	var vmShared []string // the box VM's shared directories; nil without a VM
-	if layer != nil && layer.vm != nil {
-		vmShared = layer.vm.Config().Mounts()
+	vmShares := layer.sharesFunc() // the box VM's live folder list; nil without a VM
+	pm.SetShares(vmShares)
+	vmFolders := bootVMFolders(layer, cfg, pm.All, boxedReg.List, bundleSrc, mgr.List)
+	if vmFolders == nil && uidemoVMFolders != nil {
+		vmFolders = uidemoVMFolders(home) // nil unless a `-tags uidemo` build asks for it
 	}
-	contextCheck := contextSaveCheck(h, home, protected, vmShared)
+	contextCheck := contextSaveCheck(h, home, protected, vmShares)
 	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
 	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
 	// The profile manager, the broker's token set and the minter exist now.
@@ -782,6 +779,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Profiles:         pm,
 		Home:             home,
 		Protected:        protected,
+		Shares:           vmShares,
+		VMFolders:        vmFolders,
 		Terminal:         terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime:       boxRuntime,
 		CloneUnavailable: cloneUnavailableReason(h),

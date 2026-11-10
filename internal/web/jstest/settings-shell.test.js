@@ -224,7 +224,7 @@ test("Sign out… is a neutral nav item at the nav foot, desktop only", () => {
   const so = decls(NAV + " > #set-signout");
   assert.strictEqual(so.get("display"), "flex");
   assert.strictEqual(so.get("margin-top"), "auto", "the foot: the nav is a flex column, the spacer is the free space");
-  assert.ok(Number(so.get("order")) > 9, "after About, the last of the nine ordered rows");
+  assert.ok(Number(so.get("order")) > 10, "after About, the last of the ten ordered rows");
   // Neutral: the row's own colour (--fg), not red; Sign out… only ends a login, it deletes nothing.
   const all = [...decls(NAV + " > #set-signout"), ...decls(NAV + " > #set-signout:hover"), ...decls(ROW)].map(([, v]) => v).join(" ");
   assert.doesNotMatch(all, /--red|--danger|#f06a6a/);
@@ -412,7 +412,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   const root = el("body");
   const dlg = root.appendChild(el("dialog", "settings-modal", page ? "as-page" : ""));
   const panels = {};
-  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about"]) {
+  for (const id of ["manage", "creds", "settings", "tokens", "accounts", "about", "vmfolders"]) {
     panels[id] = dlg.appendChild(el("div", id, "dbd"));
     if (id !== "manage") panels[id].appendChild(el("div", null, "set-head"));
   }
@@ -445,7 +445,7 @@ function makeDom({ page = true, version = "CuliBox v0.24.2 · commit abc1234", a
   return { ctx, dlg, panels, calls, hint, ver, reset, doc, slot: (tab) => panels[tab].children[0] };
 }
 
-const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about"];
+const HEAD_TABS = ["creds", "tokens", "settings", "accounts", "about", "vmfolders"];
 const INFO = { version: "CuliBox v0.24.2 · commit abc1234", accountsLead: ACCOUNTS_LEAD };
 
 test("settingsHeadSpec carries the approved copy", () => {
@@ -475,6 +475,11 @@ test("settingsHeadSpec carries the approved copy", () => {
   });
   // U+2026 and nothing else for the ellipsis the frame draws.
   assert.ok(settingsHeadSpec("tokens", INFO).desc.includes("Bearer … and"));
+  assert.deepStrictEqual(settingsHeadSpec("vmfolders", INFO), {
+    title: "VM folders",
+    desc: "Folders on this Mac the box VM can see. If a box broke out of its container, these are all it could reach.",
+    action: { id: "set-act-vmfolders", label: "Add folder" },
+  });
   // The two descriptions that come from the page read what they are given, and are empty without it.
   assert.strictEqual(settingsHeadSpec("about", {}).desc, "");
   assert.strictEqual(settingsHeadSpec("accounts", {}).desc, "");
@@ -506,11 +511,11 @@ test("the first sentence of the accounts hint is the lead", () => {
   assert.deepStrictEqual(accountsLead(undefined), { lead: "", rest: "" });
 });
 
-test("each of the five pages starts with one empty .set-head slot", () => {
+test("each of the six pages starts with one empty .set-head slot", () => {
   for (const id of HEAD_TABS) {
     const m = new RegExp('<div class="dbd pad" id="' + id + '"[^>]*>\\s*<div class="set-head"></div>').exec(HTML);
     assert.ok(m, "#" + id + " has the slot as its first child, empty (the phone's DOM carries nothing the head would draw)");
-    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 5, "five slots, none on Profiles");
+    assert.strictEqual((HTML.match(/class="set-head"/g) || []).length, 6, "six slots, none on Profiles");
   }
   assert.doesNotMatch(HTML.slice(HTML.indexOf('id="manage"'), HTML.indexOf('id="pfv"')), /set-head/);
 });
@@ -2131,4 +2136,18 @@ test("initSettings draws the Shortcuts label once; app.css hides it below the br
   vm.createContext(bare);
   new vm.Script(lift("fsShortcutsLabel"), { filename: "app.js:fsShortcutsLabel" }).runInContext(bare);
   assert.doesNotThrow(() => bare.fsShortcutsLabel(), "no button, no label, no error");
+});
+
+// #70 Task 13: the VM folders page sits in the nav right after Credentials, hidden until /api/meta says the server has it.
+test("the nav lists VM folders after Credentials, hidden by default, and orders it between Credentials and API tokens", () => {
+  const tabs = [...HTML.matchAll(/<button type="button" class="t[^"]*" data-tab="([a-z]+)"([^>]*)>/g)].map((m) => [m[1], m[2]]);
+  const names = tabs.map((t) => t[0]);
+  assert.ok(names.indexOf("vmfolders") === names.indexOf("creds") + 1, "right after Credentials in the DOM: " + names.join(","));
+  assert.match(tabs[names.indexOf("vmfolders")][1], /\bhidden\b/, "hidden until META.vm_folders");
+  const order = (t) => Number(decls(NAV + ' .t[data-tab="' + t + '"]').get("order"));
+  assert.ok(order("creds") < order("vmfolders") && order("vmfolders") < order("tokens"), "Credentials, VM folders, API tokens");
+  assert.ok(order("about") > order("settings") && Number(decls(NAV + " > #set-signout").get("order")) > order("about"));
+  assert.strictEqual(decls(NAV + ' .t[hidden]').get("display"), "none", "a hidden nav button stays hidden under the .t rule's display:flex");
+  assert.match(HTML, /<div class="dbd pad" id="vmfolders" role="tabpanel" hidden>\s*<div class="set-head"><\/div>\s*<div id="vmf-body"><\/div>/);
+  assert.ok(HTML.indexOf('/vmfolders.js') > HTML.indexOf('/settingshead.js') && HTML.indexOf('/vmfolders.js') < HTML.indexOf('/app.js"'), "script order");
 });

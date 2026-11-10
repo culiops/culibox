@@ -15,9 +15,13 @@ import (
 
 // runBox serves `agent-box box …`. It never touches a running daemon's state
 // beyond docker objects, so it is safe to run while agent-box serves.
-func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
+func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.Writer) int {
 	if runtime.GOOS == "darwin" {
-		return runBoxDarwin(a, cfg, home, w)
+		return runBoxDarwin(a, cfg, home, cfgFiles, w)
+	}
+	if a.Sub == "share" {
+		fmt.Fprintln(w, "agent-box box share: only on macOS, where boxes run in agent-box's own VM")
+		return 1
 	}
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {

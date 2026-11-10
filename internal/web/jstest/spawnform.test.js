@@ -158,3 +158,66 @@ test("profileMatches: name, touch line, case, blank query", () => {
   assert.strictEqual(profileMatches("a b", "y", " a b "), true);
   assert.strictEqual(profileMatches(undefined, undefined, "q"), false);
 });
+
+test("spawnRefusedNotShared / spawnRefusedRestarting: status and code must both match", () => {
+  const f = require("../static/spawnform.js");
+  assert.strictEqual(f.spawnRefusedNotShared(400, "not_shared"), true);
+  assert.strictEqual(f.spawnRefusedNotShared(400, "other"), false);
+  assert.strictEqual(f.spawnRefusedNotShared(423, "not_shared"), false);
+  assert.strictEqual(f.spawnRefusedRestarting(503, "vm_restarting"), true);
+  assert.strictEqual(f.spawnRefusedRestarting(503, "store_unavailable"), false);
+  assert.strictEqual(f.spawnRefusedRestarting(400, "vm_restarting"), false);
+});
+
+test("spawnNotSharedLine: the M9.9 sentence for a plain refusal, the server's for pending / read-only", () => {
+  const { spawnNotSharedLine } = require("../static/spawnform.js");
+  assert.strictEqual(spawnNotSharedLine({ error: "x", path: "~/work/api", code: "not_shared" }),
+    "~/work/api is not shared with the box VM, so a box can’t use it.");
+  assert.strictEqual(spawnNotSharedLine({ error: "Added, not applied yet.", path: "~/a", pending: true }), "Added, not applied yet.");
+  assert.strictEqual(spawnNotSharedLine({ error: "Shared read-only.", path: "~/a", read_only: true }), "Shared read-only.");
+});
+
+test("vmShareFilter: applied rw shares only, case-folded, whole components; null when the VM list is not in force", () => {
+  const { vmShareFilter } = require("../static/spawnform.js");
+  const view = { state: "applied", rows: [
+    { path: "/Users/Me/Work", mode: "rw" },
+    { path: "/Users/Me/Docs", mode: "ro" },
+    { path: "/Users/Me/New", mode: "rw", pending: "added" },
+    { path: "/Users/Me/Going", mode: "rw", pending: "removed" },
+  ] };
+  const f = vmShareFilter(view);
+  assert.strictEqual(f("/Users/Me/Work"), true);
+  assert.strictEqual(f("/users/me/work/api/"), true, "case-insensitive, inside the share");
+  assert.strictEqual(f("/Users/Me/Workshop"), false, "whole components, not a string prefix");
+  assert.strictEqual(f("/Users/Me/Docs"), false, "read-only is not enough for a workspace");
+  assert.strictEqual(f("/Users/Me/New"), false, "added but not applied");
+  assert.strictEqual(f("/Users/Me/Going/x"), true, "pending removal is still applied");
+  assert.strictEqual(vmShareFilter({ state: "whole_home", rows: view.rows }), null);
+  assert.strictEqual(vmShareFilter({ state: "not_set_up", rows: [] }), null);
+  assert.strictEqual(vmShareFilter(null), null);
+});
+
+test("I3: Share this folder prefills Read only only when the body says need_write false", () => {
+  const { spawnShareMode } = require("../static/spawnform.js");
+  assert.strictEqual(spawnShareMode({ need_write: false }), "ro");
+  assert.strictEqual(spawnShareMode({ need_write: true }), "rw");
+  assert.strictEqual(spawnShareMode({}), "rw");
+  assert.strictEqual(spawnShareMode(null), "rw");
+});
+
+test("I4: the VM filter applies only to a box runtime; switching re-evaluates", () => {
+  const { spawnVMFilterFor } = require("../static/spawnform.js");
+  const f = () => true;
+  assert.strictEqual(spawnVMFilterFor("box", f), f);
+  assert.strictEqual(spawnVMFilterFor("host", f), null);
+  assert.strictEqual(spawnVMFilterFor("", f), null);
+  assert.strictEqual(spawnVMFilterFor("box", null), null);
+});
+
+test("T15: only the newest request is current", () => {
+  const { spawnLatest } = require("../static/spawnform.js");
+  const l = spawnLatest();
+  const a = l.next(), b = l.next();
+  assert.strictEqual(l.current(a), false);
+  assert.strictEqual(l.current(b), true);
+});

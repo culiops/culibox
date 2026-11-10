@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/config"
@@ -19,7 +21,15 @@ type Env struct {
 	Protected  []box.ProtectedDir // dirs no mount may be, contain or (Inside) sit in
 	MemoryRoot string             // the bundle source dir (~/.claude); "" = no memory mount
 	DataDir    string             // the daemon's data dir, for the base record; "" = no base record
+	// Visible reports whether the box VM can read a host path (macOS: the path
+	// is under a folder the VM shares). nil = every path is visible. An invisible
+	// memory folder is skipped, never a reason to refuse a spawn.
+	Visible func(host string) bool
 }
+
+// memorySkipLogged remembers the memory folders already reported as unshared,
+// so a spawn per session does not repeat the line.
+var memorySkipLogged sync.Map
 
 // CheckOf refuses a clone_of agent-box must not clone from or mount the .git of
 // (spec correction 8): it must be a real directory (not a symlink), not /, the
@@ -167,7 +177,11 @@ func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (cm bo
 	}
 	if withMemory && e.MemoryRoot != "" {
 		if m, ok := MemoryMount(e.MemoryRoot, c.Of, c.Dir); ok {
-			ro = append(ro, m)
+			if e.Visible == nil || e.Visible(m.Host) {
+				ro = append(ro, m)
+			} else if _, seen := memorySkipLogged.LoadOrStore(m.Host, true); !seen {
+				log.Printf("clone: the clone memory folder %s is not shared with the box VM; boxes start without it (add it in Settings › VM folders)", m.Host)
+			}
 		}
 	}
 	return box.CloneMounts{Hash: c.Hash(), RO: ro}, created, nil

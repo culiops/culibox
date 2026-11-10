@@ -38,6 +38,12 @@ function settingsHeadSpec(tab, info) {
         mono: ["Authorization: Bearer …"],
         action: { id: "set-act-tokens", label: "New token" },
       };
+    case "vmfolders":
+      return {
+        title: "VM folders",
+        desc: "Folders on this Mac the box VM can see. If a box broke out of its container, these are all it could reach.",
+        action: { id: "set-act-vmfolders", label: "Add folder" },
+      };
     case "settings":
       return {
         title: "Appearance",
@@ -60,6 +66,7 @@ function settingsHeadSpec(tab, info) {
 const SETTINGS_HEAD_RUN = {
   "set-act-accounts": () => acctNew(),
   "set-act-tokens": () => createToken(),
+  "set-act-vmfolders": () => openVMFoldersAdd("", "rw", ""),
   "set-act-settings": () => { const b = document.getElementById("fs-reset"); if (b) b.click(); },
   "set-act-about": () => openBugReport(),
 };
@@ -178,6 +185,7 @@ function paintSettingsHead(tab) {
   // the menu code exists, and a disable comment would turn into an unused-directive warning once it does. So that
   // function must be a top-level function declaration (which is what makes it a property of the global).
   if (spec.action && spec.action.menu && typeof globalThis.credAddMenuAttach === "function") globalThis.credAddMenuAttach(trigger);
+  if (tab === "vmfolders" && typeof vmfSyncHead === "function") vmfSyncHead();
   if (refocus) refocus();
 }
 

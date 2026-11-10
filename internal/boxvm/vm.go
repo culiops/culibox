@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/culiops/culibox/internal/vmshares"
 )
 
 // Runner runs colima. A fake drives every unit test: no Mac, no VM.
@@ -66,6 +68,7 @@ type VM struct {
 	// whose caller went away, still gets exactly one reconcile.
 	flagMu         sync.Mutex
 	needsReconcile bool
+	mountsCache    *mountsCache
 }
 
 // NewVM resolves the config's Root and Home through symlinks, so the mount
@@ -74,34 +77,23 @@ type VM struct {
 // a second virtiofs mount. Config() returns the resolved form; callers (box
 // homes, the docker mounts) must build their paths from it.
 func NewVM(cfg Config, r Runner) *VM {
-	cfg.Root = resolvePath(cfg.Root)
-	cfg.Home = resolvePath(cfg.Home)
+	cfg.Root = vmshares.Resolve(cfg.Root)
+	cfg.Home = vmshares.Resolve(cfg.Home)
+	if len(cfg.Shares) > 0 {
+		rs := make([]vmshares.Share, len(cfg.Shares))
+		for i, sh := range cfg.Shares {
+			rs[i] = vmshares.Share{Path: vmshares.Resolve(sh.Path), Mode: sh.Mode}
+		}
+		cfg.Shares = rs
+	}
 	return &VM{cfg: cfg, r: r, sem: make(chan struct{}, 1), startTimeout: 120 * time.Second}
 }
 
-// resolvePath follows symlinks in the longest existing prefix of p and keeps
-// the rest as written (the data root may not exist yet). A relative or
-// unresolvable path is returned unchanged for Validate to refuse.
-func resolvePath(p string) string {
-	if !filepath.IsAbs(p) {
-		return p
-	}
-	p = filepath.Clean(p)
-	rest := ""
-	for cur := p; ; {
-		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(r, rest)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
-	}
+func (v *VM) Config() Config {
+	v.flagMu.Lock()
+	defer v.flagMu.Unlock()
+	return v.cfg
 }
-
-func (v *VM) Config() Config { return v.cfg }
 
 // lock takes the start/stop lock, or gives up when ctx ends first.
 func (v *VM) lock(ctx context.Context) error {
@@ -134,17 +126,17 @@ func (v *VM) claimReconcile() bool {
 // invocation: a root docker or YAML would misparse, or a socket path past the
 // platform limit.
 func (v *VM) preflight() error {
-	if err := v.cfg.Validate(); err != nil {
+	if err := v.Config().Validate(); err != nil {
 		return err
 	}
-	return v.cfg.CheckSocketPaths()
+	return v.Config().CheckSocketPaths()
 }
 
-func (v *VM) env() []string { return v.cfg.Env(os.Environ()) }
+func (v *VM) env() []string { return v.Config().Env(os.Environ()) }
 
 // SetUp reports whether box setup has provisioned this VM.
 func (v *VM) SetUp() bool {
-	_, err := os.Stat(v.cfg.StampPath())
+	_, err := os.Stat(v.Config().StampPath())
 	return err == nil
 }
 
@@ -156,18 +148,18 @@ func yamlHash(y []byte) string {
 // Drifted reports whether the config agent-box would write now differs from
 // the one the VM was provisioned with (cpus, memory, mounts, extra_ca_certs, provision script).
 func (v *VM) Drifted() bool {
-	y, err := v.cfg.YAML()
+	y, err := v.Config().YAML()
 	if err != nil {
 		return true
 	}
-	b, err := os.ReadFile(v.cfg.StampPath())
+	b, err := os.ReadFile(v.Config().StampPath())
 	return err != nil || strings.TrimSpace(string(b)) != yamlHash(y)
 }
 
 // provisionHash is the hash of the base provision script (the egress and broker
 // INPUT rules), without the user's extra CA block.
 func (v *VM) provisionHash() string {
-	return yamlHash([]byte(provisionScript(v.cfg.BrokerPort, v.cfg.EgressPort)))
+	return yamlHash([]byte(provisionScript(v.Config().BrokerPort, v.Config().EgressPort)))
 }
 
 // ProvisionDrifted reports whether the VM was provisioned with a different
@@ -176,7 +168,7 @@ func (v *VM) provisionHash() string {
 // predates egress control for all boxes. A changed port or a newer script (#113)
 // drifts it too. Fails closed on an unreadable stamp.
 func (v *VM) ProvisionDrifted() bool {
-	b, err := os.ReadFile(v.cfg.ProvisionStampPath())
+	b, err := os.ReadFile(v.Config().ProvisionStampPath())
 	return err != nil || strings.TrimSpace(string(b)) != v.provisionHash()
 }
 
@@ -186,7 +178,7 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 	if err := v.preflight(); err != nil {
 		return Status{}, err
 	}
-	out, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "status", "--profile", Profile, "--json")
+	out, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "status", "--profile", Profile, "--json")
 	if ctx.Err() != nil {
 		return Status{}, ctx.Err()
 	}
@@ -219,7 +211,7 @@ func (v *VM) FilterRules(ctx context.Context) (string, error) {
 	if err := v.preflight(); err != nil {
 		return "", err
 	}
-	out, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "ssh", "--profile", Profile, "--", "sudo", "iptables", "-w", "-S")
+	out, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--", "sudo", "iptables", "-w", "-S")
 	if err != nil {
 		return "", fmt.Errorf("reading the box VM's firewall rules: %w", err)
 	}
@@ -261,12 +253,13 @@ func (v *VM) EnsureRunning(ctx context.Context) (started bool, err error) {
 		return v.claimReconcile(), nil
 	}
 	v.markReconcile()
+	cfg := v.Config()
 	done := make(chan error, 1)
 	go func() {
 		defer v.unlock() // the lock lasts as long as the start, not the caller
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.startTimeout)
 		defer cancel()
-		_, err := v.r.Run(sctx, v.env(), v.cfg.ColimaBin, v.cfg.StartArgs()...)
+		_, err := v.r.Run(sctx, cfg.Env(os.Environ()), cfg.ColimaBin, cfg.StartArgs()...)
 		done <- err
 	}()
 	select {
@@ -289,7 +282,7 @@ func (v *VM) Stop(ctx context.Context) error {
 		return err
 	}
 	defer v.unlock()
-	_, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "stop", "--profile", Profile)
+	_, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "stop", "--profile", Profile)
 	return err
 }
 
@@ -305,28 +298,33 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		return err
 	}
 	defer v.unlock()
-	y, err := v.cfg.YAML()
+	cfg := v.Config()
+	y, err := cfg.YAML()
 	if err != nil {
 		return err
 	}
-	if _, statErr := os.Stat(v.cfg.StampPath()); statErr == nil && v.Drifted() && !recreate {
+	if _, statErr := os.Stat(cfg.StampPath()); statErr == nil && v.Drifted() && !recreate {
 		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate` (deletes the VM's images and cache, not box homes)")
 	}
 	if recreate {
 		fmt.Fprintln(w, "deleting the box VM …")
-		if _, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "delete", "--profile", Profile, "--force"); err != nil {
+		if _, err := v.r.Run(ctx, cfg.Env(os.Environ()), cfg.ColimaBin, "delete", "--profile", Profile, "--force"); err != nil {
 			return err
 		}
-		_ = os.Remove(v.cfg.StampPath())
-		_ = os.Remove(v.cfg.ProvisionStampPath())
+		_ = os.Remove(cfg.StampPath())
+		_ = os.Remove(cfg.ProvisionStampPath())
 	}
-	if err := os.MkdirAll(v.cfg.ProfileDir(), 0o700); err != nil {
+	if err := os.MkdirAll(cfg.ProfileDir(), 0o700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(v.cfg.DockerConfigDir(), 0o700); err != nil {
+	if err := os.MkdirAll(cfg.DockerConfigDir(), 0o700); err != nil {
 		return err
 	}
-	if err := writeOwnerOnly(v.cfg.YAMLPath(), y); err != nil {
+	// virtiofs needs every mount source to exist before the VM starts.
+	if err := EnsureDataMountDirs(cfg.Root); err != nil {
+		return err
+	}
+	if err := writeOwnerOnly(cfg.YAMLPath(), y); err != nil {
 		return err
 	}
 	st, err := v.Status(ctx)
@@ -337,14 +335,14 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		fmt.Fprintln(w, "starting the box VM (first start downloads an image; a few minutes) …")
 		sctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
-		if _, err := v.r.Run(sctx, v.env(), v.cfg.ColimaBin, v.cfg.StartArgs()...); err != nil {
+		if _, err := v.r.Run(sctx, cfg.Env(os.Environ()), cfg.ColimaBin, cfg.StartArgs()...); err != nil {
 			return fmt.Errorf("starting the box VM: %w", err)
 		}
 	}
-	if err := writeOwnerOnly(v.cfg.ProvisionStampPath(), []byte(v.provisionHash()+"\n")); err != nil {
+	if err := writeOwnerOnly(cfg.ProvisionStampPath(), []byte(v.provisionHash()+"\n")); err != nil {
 		return err
 	}
-	return writeOwnerOnly(v.cfg.StampPath(), []byte(yamlHash(y)+"\n"))
+	return writeOwnerOnly(cfg.StampPath(), []byte(yamlHash(y)+"\n"))
 }
 
 // writeOwnerOnly replaces path atomically with mode 0600. The directory is

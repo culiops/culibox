@@ -115,13 +115,25 @@ func TestCheckContextPathProtected(t *testing.T) {
 
 func TestCheckContextPathShared(t *testing.T) {
 	tmp := ctxTmp(t)
-	wantCtxErr(t, CheckContextPath(tmp, "/h", nil, []string{"/Users/u"}), tmp,
-		"not under the box VM's shared directories", "agent-box box setup -recreate")
+	other := &ShareView{Applied: []VMShare{{Path: "/Users/u"}}, Home: "/Users/u"}
+	wantCtxErr(t, CheckContextPath(tmp, "/h", nil, other), tmp, "is not shared with the box VM")
 	if err := CheckContextPath(tmp, "/h", nil, nil); err != nil {
-		t.Errorf("with no shared directories the check must not run: %v", err)
+		t.Errorf("with no VM the check must not run: %v", err)
 	}
-	if err := CheckContextPath(tmp, "/h", nil, []string{tmp}); err != nil {
+	if err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: tmp}}}); err != nil {
 		t.Errorf("under a shared directory: %v", err)
+	}
+}
+
+func TestContextPathNotSharedWording(t *testing.T) {
+	tmp := ctxTmp(t)
+	err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: "/Users/u"}}})
+	if err == nil || !strings.Contains(err.Error(), "Settings › VM folders") || strings.Contains(err.Error(), "-recreate") {
+		t.Fatalf("want the Settings fix and no -recreate, got %v", err)
+	}
+	// A read-only share suffices for a context path.
+	if err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: tmp, Writable: false}}}); err != nil {
+		t.Errorf("ro share: %v", err)
 	}
 }
 
@@ -399,5 +411,14 @@ func TestWorkspaceInPersonalConfigHasNoImportsHint(t *testing.T) {
 	}
 	if strings.Contains(reason, "imports") {
 		t.Errorf("workspace refusal must not carry the imports hint: %q", reason)
+	}
+}
+
+// C2: a context path is mounted read-only, so its hint offers a read-only share.
+func TestCheckContextPathSharedHintIsReadOnly(t *testing.T) {
+	tmp := ctxTmp(t)
+	err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: "/Users/u"}}, Home: "/Users/u"})
+	if err == nil || !strings.Contains(err.Error(), "`agent-box box share add "+tmp+" -ro`") {
+		t.Fatalf("got %v", err)
 	}
 }

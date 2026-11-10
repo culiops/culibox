@@ -25,9 +25,10 @@ const usage = `usage:
   agent-box [serve] [-config <path>]                   run the web control-plane
   agent-box doctor  [-config <path>]                   check this machine; prints no secrets
   agent-box bug-report [-config <path>]                redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
-  agent-box box setup [-rebuild] [-recreate [-force]]  build the box image (macOS: also the box VM)
+  agent-box box setup [-rebuild] [-recreate] [-force]  build the box image (macOS: also the box VM)
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
+  agent-box box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
   agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while agent-box serves (a daemon restart aborts it; rerun)
   agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
@@ -38,16 +39,21 @@ $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 
 type cliArgs struct {
 	Cmd        string // "serve" | "doctor" | "bug-report" | "box" | "clone" | "store"
-	Sub        string // box: "setup" | "stop" | "status"; clone: "fetch"; store: "init" | "status" | ... | "list"
+	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"
 	ID         string // store set|rm: the value id
 	ConfigPath string
-	ConfigSet  bool   // -config given explicitly
-	Rebuild    bool   // box setup
-	Recreate   bool   // box setup
-	Force      bool   // box stop, box setup -recreate
-	Profile    string // clone fetch: the clone-mode profile
-	Branch     string // clone fetch: the branch in the clone to bring home
-	Base       string // clone fetch: the branch in clone_of the range starts after (default main)
+	ConfigSet  bool // -config given explicitly
+	Rebuild    bool // box setup
+	Recreate   bool // box setup
+	Force      bool // box stop, box setup, box share apply
+	ReadOnly   bool // box share add: share the folder read-only
+	// ShareAction is box share's action: list | add | rm | apply; SharePath is
+	// the <dir> of add and rm.
+	ShareAction string
+	SharePath   string
+	Profile     string // clone fetch: the clone-mode profile
+	Branch      string // clone fetch: the branch in the clone to bring home
+	Base        string // clone fetch: the branch in clone_of the range starts after (default main)
 
 	AllowOldHistory bool // clone fetch: let a known stale or unverified history through, loudly
 }
@@ -71,10 +77,10 @@ func parseArgs(argv []string) (cliArgs, error) {
 	case "serve", "doctor", "bug-report":
 	case "box":
 		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
-			return cliArgs{}, errors.New("box needs a subcommand: setup, stop or status")
+			return cliArgs{}, errors.New("box needs a subcommand: setup, stop, status or share")
 		}
 		sub, argv = argv[0], argv[1:]
-		if sub != "setup" && sub != "stop" && sub != "status" {
+		if sub != "setup" && sub != "stop" && sub != "status" && sub != "share" {
 			return cliArgs{}, fmt.Errorf("unknown box subcommand %q", sub)
 		}
 	case "clone":
@@ -96,19 +102,41 @@ func parseArgs(argv []string) (cliArgs, error) {
 	default:
 		return cliArgs{}, fmt.Errorf("unknown command %q", cmd)
 	}
+	shareAction := ""
+	var sharePos []string
+	if cmd == "box" && sub == "share" {
+		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			return cliArgs{}, errors.New(shareNeedsAction)
+		}
+		shareAction, argv = argv[0], argv[1:]
+		if !slices.Contains(shareActions, shareAction) {
+			return cliArgs{}, fmt.Errorf("unknown box share action %q", shareAction)
+		}
+		argv, sharePos = splitShareArgs(argv)
+	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $AGENT_BOX_HOME or ~/.local/share/agent-box; then $XDG_CONFIG_HOME or ~/.config/agent-box/config.json unless AGENT_BOX_HOME is set; else built-in defaults; never ./config.json)")
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
-	force := fs.Bool("force", false, "box stop, box setup -recreate: go ahead even with boxes running or the VM state unknown")
+	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
+	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
 	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history agent-box cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}
-	var profile, branch, id string
-	if cmd == "store" && (sub == "set" || sub == "rm") {
+	var profile, branch, id, sharePath string
+	if cmd == "box" && sub == "share" {
+		switch want := shareArgCount[shareAction]; {
+		case want == 0 && len(sharePos) > 0:
+			return cliArgs{}, fmt.Errorf("box share %s takes no folder", shareAction)
+		case want == 1 && len(sharePos) != 1:
+			return cliArgs{}, fmt.Errorf("box share %s needs one <dir>", shareAction)
+		case want == 1:
+			sharePath = sharePos[0]
+		}
+	} else if cmd == "store" && (sub == "set" || sub == "rm") {
 		// Flags come before the id, as with clone.
 		if fs.NArg() != 1 {
 			return cliArgs{}, fmt.Errorf("store %s needs exactly one <id> after its flags", sub)
@@ -127,8 +155,11 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if (*rebuild || *recreate) && sub != "setup" {
 		return cliArgs{}, errors.New("-rebuild and -recreate only apply to box setup")
 	}
-	if *force && sub != "stop" && !(sub == "setup" && *recreate) {
-		return cliArgs{}, errors.New("-force only applies to box stop and box setup -recreate")
+	if *force && sub != "stop" && sub != "setup" && !(sub == "share" && shareAction == "apply") {
+		return cliArgs{}, errors.New("-force only applies to box stop, box setup and box share apply")
+	}
+	if *ro && !(sub == "share" && shareAction == "add") {
+		return cliArgs{}, errors.New("-ro only applies to box share add")
 	}
 	set, baseSet := false, false
 	fs.Visit(func(f *flag.Flag) {
@@ -151,7 +182,38 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
 		Rebuild: *rebuild, Recreate: *recreate, Force: *force,
-		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld}, nil
+		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld,
+		ReadOnly: *ro, ShareAction: shareAction, SharePath: sharePath}, nil
+}
+
+// shareActions are the `agent-box box share` actions, with how many <dir>s each takes.
+var shareActions = []string{"list", "add", "rm", "apply"}
+var shareArgCount = map[string]int{"list": 0, "add": 1, "rm": 1, "apply": 0}
+
+const shareNeedsAction = "box share needs list, add, rm or apply"
+
+// splitShareArgs separates flags from <dir>s so a flag may come before or after
+// the folder (the flag package stops at the first positional). -config takes the
+// next word as its value; "--" ends the flags.
+func splitShareArgs(argv []string) (flags, pos []string) {
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--":
+			return flags, append(pos, argv[i+1:]...)
+		case a == "-config" || a == "--config":
+			flags = append(flags, a)
+			if i+1 < len(argv) {
+				i++
+				flags = append(flags, argv[i])
+			}
+		case strings.HasPrefix(a, "-") && a != "-":
+			flags = append(flags, a)
+		default:
+			pos = append(pos, a)
+		}
+	}
+	return flags, pos
 }
 
 // shutdownSignals end the daemon through DetachAll. SIGHUP is the one a laptop

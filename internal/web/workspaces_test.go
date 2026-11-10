@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ func TestListWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ws := listWorkspaces(home, nil)
+	ws := listWorkspaces(home, nil, nil)
 	if len(ws) != 3 {
 		t.Fatalf("want 3 (home + 2 non-hidden dirs), got %d: %+v", len(ws), ws)
 	}
@@ -51,7 +52,7 @@ func TestHomeIsListedButNotBoxable(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "project"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := listWorkspaces(home, nil)
+	got := listWorkspaces(home, nil, nil)
 	if len(got) < 2 {
 		t.Fatalf("expected home plus the project, got %+v", got)
 	}
@@ -75,14 +76,14 @@ func TestHomeIsListedButNotBoxable(t *testing.T) {
 // can never be contained.
 func TestDefaultCwdIsCheckedForBoxability(t *testing.T) {
 	home := t.TempDir()
-	if reason, ok := UnboxableDefaultCwd(home, home, nil); !ok || reason == "" {
+	if reason, ok := UnboxableDefaultCwd(home, home, nil, nil); !ok || reason == "" {
 		t.Fatal("a default_cwd equal to home must be reported at startup")
 	}
 	proj := filepath.Join(home, "project")
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := UnboxableDefaultCwd(proj, home, nil); ok {
+	if _, ok := UnboxableDefaultCwd(proj, home, nil, nil); ok {
 		t.Fatal("a project directory must pass")
 	}
 }
@@ -98,7 +99,7 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 		mustMkdir(t, filepath.Join(home, n))
 	}
 	byLabel := map[string]Workspace{}
-	for _, w := range listWorkspaces(home, nil) {
+	for _, w := range listWorkspaces(home, nil, nil) {
 		byLabel[w.Label] = w
 	}
 	if w := byLabel["a,b"]; w.Boxable || w.Reason == "" {
@@ -112,7 +113,7 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 	if !byLabel["fine"].Boxable {
 		t.Fatalf("an ordinary directory must stay boxable: %+v", byLabel["fine"])
 	}
-	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "a,b"), home, nil); !bad || reason == "" {
+	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "a,b"), home, nil, nil); !bad || reason == "" {
 		t.Fatal("default_cwd with a comma must be reported at save/startup")
 	}
 }
@@ -135,12 +136,12 @@ func TestDataRootOverlapIsNotBoxable(t *testing.T) {
 	for name, dir := range map[string]string{
 		"equal": root, "ancestor": parent, "descendant": inside, "symlink into it": link,
 	} {
-		if reason, bad := UnboxableDefaultCwd(dir, home, []box.ProtectedDir{box.DataDirProtected(root)}); !bad || !strings.Contains(reason, "data directory") {
+		if reason, bad := UnboxableDefaultCwd(dir, home, []box.ProtectedDir{box.DataDirProtected(root)}, nil); !bad || !strings.Contains(reason, "data directory") {
 			t.Errorf("%s: want a data-root refusal, got %q %v", name, reason, bad)
 		}
 	}
 	byLabel := map[string]Workspace{}
-	for _, w := range listWorkspaces(home, []box.ProtectedDir{box.DataDirProtected(root)}) {
+	for _, w := range listWorkspaces(home, []box.ProtectedDir{box.DataDirProtected(root)}, nil) {
 		byLabel[w.Label] = w
 	}
 	for _, l := range []string{"local", "vmlink"} {
@@ -162,13 +163,52 @@ func TestConfigDirOutsideDataRootIsNotBoxable(t *testing.T) {
 	mustMkdir(t, filepath.Join(home, "proj"))
 	cfgDir := filepath.Join(home, "proj", "agent-box") // not created yet
 	prot := []box.ProtectedDir{box.DataDirProtected(root), box.ConfigDirProtected(cfgDir)}
-	reason, bad := UnboxableDefaultCwd(filepath.Join(home, "proj"), home, prot)
+	reason, bad := UnboxableDefaultCwd(filepath.Join(home, "proj"), home, prot, nil)
 	if !bad || !strings.Contains(reason, "config directory") {
 		t.Fatalf("a workspace containing the config dir must be refused, got %q %v", reason, bad)
 	}
-	for _, w := range listWorkspaces(home, prot) {
+	for _, w := range listWorkspaces(home, prot, nil) {
 		if w.Label == "proj" && (w.Boxable || !strings.Contains(w.Reason, "config directory")) {
 			t.Fatalf("picker must mark proj unboxable for the config dir: %+v", w)
 		}
+	}
+}
+
+// On macOS a directory the box VM does not share (read & write) is listed but
+// not boxable, and the default_cwd check refuses it with the same reason.
+func TestListWorkspacesDarwinMarksUnshared(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"shared", "other", "ro"} {
+		mustMkdir(t, filepath.Join(home, d))
+	}
+	shares := func() (box.ShareView, error) {
+		return box.ShareView{
+			Applied: []box.VMShare{{Path: filepath.Join(home, "shared"), Writable: true}, {Path: filepath.Join(home, "ro")}},
+			Home:    home,
+		}, nil
+	}
+	got := map[string]Workspace{}
+	for _, w := range listWorkspaces(home, nil, shares) {
+		got[w.Label] = w
+	}
+	if w := got["shared"]; !w.Boxable || w.Reason != "" {
+		t.Errorf("shared: %+v, want boxable", w)
+	}
+	want := "not shared with the box VM: add it in Settings › VM folders"
+	if w := got["other"]; w.Boxable || w.Reason != want {
+		t.Errorf("other: %+v, want unboxable with %q", w, want)
+	}
+	if w := got["ro"]; w.Boxable || !strings.Contains(w.Reason, "read-only") {
+		t.Errorf("ro: %+v, want unboxable, shared read-only", w)
+	}
+	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "other"), home, nil, shares); !bad || reason != want {
+		t.Errorf("default_cwd outside the shares: %q %v", reason, bad)
+	}
+	failing := func() (box.ShareView, error) { return box.ShareView{}, errors.New("boom") }
+	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "shared"), home, nil, failing); !bad || !strings.Contains(reason, "folder list") {
+		t.Errorf("a share read error must fail closed: %q %v", reason, bad)
 	}
 }

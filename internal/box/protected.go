@@ -358,3 +358,25 @@ func resolveExisting(p string) string {
 		cur = parent
 	}
 }
+
+// ProtectedDirsFor is every host directory a boxed workspace or a box VM share
+// must not overlap, built the same way for every caller (serve, the box and
+// clone CLIs, doctor): the data root, the default account's config dir
+// (personalDir, ~/.claude), the config bundle's source when it is another dir
+// (bundleSrc, "" with the bundle off), and the directory of each config file
+// (cfgFiles) and of the profiles file, every symlink hop included (FileDirs).
+func ProtectedDirsFor(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string) []ProtectedDir {
+	out := []ProtectedDir{DataDirProtected(dataDir), PersonalConfigDirProtected(personalDir)}
+	if bundleSrc != "" && !sameDir(bundleSrc, personalDir) {
+		out = append(out, PersonalConfigDirProtected(bundleSrc))
+	}
+	for _, f := range cfgFiles {
+		for _, d := range FileDirs(f) {
+			out = append(out, ConfigDirProtected(d))
+		}
+	}
+	for _, d := range FileDirs(profilesPath) {
+		out = append(out, ProfilesDirProtected(d))
+	}
+	return DedupeProtected(out)
+}

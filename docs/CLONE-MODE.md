@@ -64,7 +64,7 @@ Commit subjects are printed with control characters replaced, because a box wrot
 
 Clone mode works as on Linux, with the boxes in CuliBox's box VM (see [Running CuliBox on macOS](MACOS.md#boxed-tier-contained-sessions)). The containers that refresh a clone, list its branches and make the bundle for `clone fetch` run in that VM too, never on your own docker.
 
-- `clone_of` and the copy (`default_cwd`) must both be under your home directory: the VM shares only the home (and the data root, which cannot hold either). Any other place is refused when you save the profile and when you spawn it, before the copy is made.
+- `clone_of` must be inside a VM folder (read-only is enough) and the copy's parent directory inside a read-write one: the VM shares only the folders on its list (see [VM folders](MACOS.md#vm-folders)), and the data root cannot hold either. Any other place is refused when you save the profile and when you spawn it, before the copy is made.
 - `agent-box clone fetch` needs the box VM running and never starts it. With the VM stopped it refuses and tells you to run `agent-box box setup` (or start any boxed session) first.
 - Leftover clone containers are removed when `agent-box serve` starts and the VM is running. While the VM is stopped no container runs in it.
 - Files the box writes in the clone are owned by your Mac user.

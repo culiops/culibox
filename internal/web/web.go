@@ -39,6 +39,11 @@ type Server struct {
 	// root, config and profiles directories). The picker marks a directory that
 	// overlaps one unboxable, matching the daemon's refusal.
 	Protected []box.ProtectedDir
+	// Shares reads the box VM's live folder list (macOS); nil = no VM, every
+	// directory is visible. The workspace picker marks an unshared one.
+	Shares box.SharesFunc
+	// VMFolders is the box VM's folder list service (macOS); nil = no VM.
+	VMFolders VMFolders
 	Terminal  http.Handler
 	EnvLabel  string // shown as the UI env badge; empty → no badge
 	EnvColor  string // CSS color for the env badge/strip
@@ -223,6 +228,10 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
 		protected.HandleFunc("/api/store/init", s.handleStoreInit)
 	}
+	if s.VMFolders != nil {
+		protected.HandleFunc("/api/vm-folders", s.handleVMFolders)
+		protected.HandleFunc("/api/vm-folders/apply", s.handleVMFoldersApply)
+	}
 	if s.Creds != nil {
 		protected.HandleFunc("/api/credentials", s.handleCredentials)
 		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
@@ -267,6 +276,15 @@ func (s *Server) Handler() http.Handler {
 		// Whether /api/bundle/imports exists on this instance, so the page does
 		// not request a route that answers 404 on every load.
 		meta["bundle_imports"] = s.Imports != nil
+		// The box VM folder list exists (macOS), and the last apply job while it
+		// runs or failed so a reload shows it; null otherwise.
+		meta["vm_folders"] = s.VMFolders != nil
+		meta["vm_apply"] = nil
+		if s.VMFolders != nil {
+			if j, ok := s.VMFolders.ApplyStatus(); ok && (j.State == "running" || j.State == "failed") {
+				meta["vm_apply"] = j
+			}
+		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}
 		if s.Profiles != nil {
@@ -292,7 +310,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, meta)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected))
+		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected, s.Shares))
 	})
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)

@@ -24,6 +24,7 @@ type fakeRunner struct {
 	startCancelled atomic.Bool
 	delay          time.Duration
 	failOn         string
+	mountsOut      string // answer to `colima ssh … cat /proc/self/mounts`
 }
 
 func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
@@ -43,6 +44,8 @@ func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...
 			return "colima [profile=agent-box] is not running", errors.New("exit status 1")
 		}
 		return `{"display_name":"colima [profile=agent-box]","driver":"macOS Virtualization.Framework","arch":"aarch64","runtime":"docker","mount_type":"virtiofs","docker_socket":"unix:///r/vm/agent-box/docker.sock"}`, nil
+	case "ssh":
+		return f.mountsOut, nil
 	case "start":
 		f.startN.Add(1)
 		select {
@@ -318,8 +321,8 @@ func TestConfigIsSymlinkResolved(t *testing.T) {
 	if c.Home != wantHome || c.Root != filepath.Join(wantHome, "data") {
 		t.Fatalf("not resolved: home=%q root=%q", c.Home, c.Root)
 	}
-	if m := c.Mounts(); len(m) != 1 {
-		t.Fatalf("root inside the home must not add a second mount: %q", m)
+	if m := c.Mounts(); len(m) != 4 || m[0].Location != filepath.Join(wantHome, "data", "boxstate") {
+		t.Fatalf("mounts must be the four data-root subfolders under the resolved root: %v", m)
 	}
 }
 
@@ -419,4 +422,44 @@ func TestFilterRulesRunsIptablesOverColimaSSH(t *testing.T) {
 	if !slices.Equal(r.envs["ssh"], v.env()) {
 		t.Fatalf("ssh env = %v, want the pinned env", r.envs["ssh"])
 	}
+}
+
+// M1: virtiofs needs every mount source to exist before the VM starts, so
+// Provision (box setup, -recreate) creates the four data-root folders first.
+func TestProvisionCreatesTheDataMountDirsBeforeTheStart(t *testing.T) {
+	r := &startCheckRunner{}
+	root := shortRoot(t)
+	v := NewVM(Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}, r)
+	r.dirs = DataMounts(v.Config().Root)
+	if err := v.Provision(context.Background(), false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !r.started {
+		t.Fatal("Provision did not start the VM")
+	}
+	if r.missing != "" {
+		t.Fatalf("%s did not exist when the VM started", r.missing)
+	}
+}
+
+// startCheckRunner records, at `colima start`, the first data mount source missing.
+type startCheckRunner struct {
+	dirs    []Mount
+	started bool
+	missing string
+}
+
+func (s *startCheckRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
+	switch args[0] {
+	case "status":
+		return "not running", errors.New("exit status 1")
+	case "start":
+		s.started = true
+		for _, m := range s.dirs {
+			if fi, err := os.Stat(m.Location); (err != nil || !fi.IsDir()) && s.missing == "" {
+				s.missing = m.Location
+			}
+		}
+	}
+	return "", nil
 }

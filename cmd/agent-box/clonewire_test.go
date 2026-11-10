@@ -286,6 +286,11 @@ func darwinCloneHooks(t *testing.T) (h *cloneHooks, shared string, called *bool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The VM mounts only the data-root subfolders, so pin the share list this
+	// test is about.
+	h.shares = func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: shared, Writable: true}}, Home: shared, Fold: true}, nil
+	}
 	called = new(bool)
 	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
 		*called = true
@@ -326,8 +331,9 @@ func TestCloneRefusesPathsTheVMDoesNotShare(t *testing.T) {
 		{"clone dir outside", config.Clone{Of: in, Dir: filepath.Join(outside, "c3")}, "default_cwd"},
 	} {
 		_, _, err := h.Prepare(context.Background(), c.clone, false)
-		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), c.field+" ") || !strings.Contains(err.Error(), "("+shared+")") {
-			t.Errorf("%s: Prepare = %v; want a refusal naming %s and the shares", c.name, err, c.field)
+		var ns *box.NotSharedError
+		if !errors.Is(err, box.ErrUnboxableWorkspace) || !errors.As(err, &ns) {
+			t.Errorf("%s: Prepare = %v; want a *NotSharedError", c.name, err)
 		}
 		if *called {
 			t.Errorf("%s: the clone was made", c.name)
@@ -335,8 +341,8 @@ func TestCloneRefusesPathsTheVMDoesNotShare(t *testing.T) {
 		if _, owned := h.BoxOwned(c.clone.Dir); owned {
 			t.Errorf("%s: a refused clone dir was recorded", c.name)
 		}
-		if err := cloneSaveCheck(h, shared, nil)(c.clone); err == nil || !strings.Contains(err.Error(), c.field+" ") {
-			t.Errorf("%s: save check = %v; want a refusal naming %s", c.name, err, c.field)
+		if err := cloneSaveCheck(h, shared, nil)(c.clone); err == nil || !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Errorf("%s: save check = %v; want a refusal", c.name, err)
 		}
 	}
 
@@ -1314,4 +1320,73 @@ func TestCloneReturnPanicReleasesLock(t *testing.T) {
 		f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never, ReturnBudget: time.Minute})
 	})
 	free("a panicking return inside Refresh")
+}
+
+// checkShared: the clone_of is only read (a read-only share suffices), the copy
+// is written, and a share not applied yet says so.
+func TestCheckSharedClone(t *testing.T) {
+	base := resolvedTemp(t)
+	of, dir := filepath.Join(base, "ro", "repo"), filepath.Join(base, "rw", "copy")
+	for _, d := range []string{of, filepath.Dir(dir)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view := box.ShareView{
+		Applied: []box.VMShare{{Path: filepath.Join(base, "ro")}, {Path: filepath.Join(base, "rw"), Writable: true}},
+		Listed:  []box.VMShare{{Path: filepath.Join(base, "pending"), Writable: true}},
+		Home:    base,
+	}
+	h := &cloneHooks{shares: func() (box.ShareView, error) { return view, nil }}
+	if err := h.checkShared(config.Clone{Of: of, Dir: dir}); err != nil {
+		t.Fatalf("clone_of under a read-only share and the copy under a read-write one: %v", err)
+	}
+	var ns *box.NotSharedError
+	err := h.checkShared(config.Clone{Of: of, Dir: filepath.Join(base, "ro", "copy")})
+	if !errors.As(err, &ns) || !ns.ReadOnly {
+		t.Errorf("the copy under a read-only share: want ReadOnly, got %v", err)
+	}
+	err = h.checkShared(config.Clone{Of: of, Dir: filepath.Join(base, "pending", "copy")})
+	if !errors.As(err, &ns) || !ns.Pending {
+		t.Errorf("a pending copy dir: want Pending, got %v", err)
+	}
+	h.shares = func() (box.ShareView, error) { return box.ShareView{}, errors.New("boom") }
+	if err := h.checkShared(config.Clone{Of: of, Dir: dir}); !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Errorf("an unreadable share list must fail closed, got %v", err)
+	}
+	h.shares = nil
+	if err := h.checkShared(config.Clone{Of: of, Dir: dir}); err != nil {
+		t.Errorf("no VM: nothing is refused, got %v", err)
+	}
+}
+
+// C2: an unshared clone_of is offered as a read-only share (rw would let an
+// escape plant .git/hooks); an unshared copy as a read-write one.
+func TestCheckSharedCloneHintModes(t *testing.T) {
+	base := resolvedTemp(t)
+	of, dir := filepath.Join(base, "orig"), filepath.Join(base, "copies", "c")
+	h := &cloneHooks{shares: func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: filepath.Join(base, "copies"), Writable: true}}, Home: base}, nil
+	}}
+	err := h.checkShared(config.Clone{Of: of, Dir: dir})
+	var ns *box.NotSharedError
+	if !errors.As(err, &ns) || ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/orig -ro`") {
+		t.Errorf("clone_of: %v", err)
+	}
+	h.shares = func() (box.ShareView, error) {
+		return box.ShareView{Applied: []box.VMShare{{Path: of}}, Home: base}, nil
+	}
+	err = h.checkShared(config.Clone{Of: of, Dir: dir})
+	if !errors.As(err, &ns) || !ns.NeedWrite || !strings.HasSuffix(err.Error(), "`agent-box box share add ~/copies/c`") {
+		t.Errorf("copy: %v", err)
+	}
+}
+
+func resolvedTemp(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

@@ -88,8 +88,9 @@ context and never edits `~/.ssh/config`.
   `box setup -recreate`. Boxes size their memory from the VM (by default half
   of it, but at least `4g` or all of the VM if it has less), so the VM size is
   what bounds every box on a Mac.
-- Workspaces must be under your home directory (the VM shares only that), and
-  must not be, contain or sit inside the data root (it holds the VM's own
+- Workspaces must be inside a folder the VM shares read & write (see
+  [VM folders](#vm-folders); a read-only folder is refused with its own error),
+  and must not be, contain or sit inside the data root (it holds the VM's own
   settings and SSH key). They also must not be or contain the directory of the
   config file CuliBox reads, or of `profiles_path` (symlinks are followed to
   their targets); a folder below those is fine.
@@ -108,14 +109,63 @@ context and never edits `~/.ssh/config`.
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
 - Clone mode (a box works on a private copy of a repo and its branches come
-  home for review) runs here too, in the box VM. Keep the repo and its copy
-  under your home directory; anything else is refused. `agent-box clone fetch`
+  home for review) runs here too, in the box VM. The repo must be inside a VM
+  folder and its copy inside a read-write one; anything else is refused. `agent-box clone fetch`
   needs the VM running and never starts it. See
   [Clone mode](CLONE-MODE.md#on-macos). Not yet tested end to end on a Mac.
 - Restart `agent-box serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
   still tell you to recreate. `agent-box doctor` reads the VM fresh each run.
+
+### VM folders
+
+Once the folder list is applied, the box VM does not share your home folder.
+(A VM set up by an older CuliBox shares the whole home until you apply; see
+below.) It sees only the folders on its list, each read-write or read-only,
+plus four parts of CuliBox's own data folder: `boxstate` (read-write) and
+`bundle`, `broker` and `ca` (read-only). Nothing else in the data folder is
+visible to the VM, so the config file, credentials and the VM's own
+`colima.yaml` are out of reach.
+
+The list is kept in `vm-shares.json` in the data folder, written only by
+CuliBox (it is not a `config.json` key; see [Configuration](CONFIG.md#vm-folders)).
+On the first run CuliBox builds it from what your profiles already use: their
+workspaces, clone sources (read-only) and clone parents, context paths
+(read-only), and Claude's project memory folders (read-only), plus the folders
+boxed sessions have already run in.
+
+- Manage it in Settings › VM folders, or with `agent-box box share list`,
+  `add <dir> [-ro]`, `rm <dir>` and `apply [-force]`. A change is saved at
+  once but reaches the VM only when you apply it.
+- Applying stops the VM, rewrites its folder settings and starts it again. It
+  takes about 20 seconds, ends running boxes (so it refuses while any run,
+  unless you use `-force`; it also refuses when the VM reads as not running,
+  because running boxes cannot be ruled out, and needs `-force` then too) and keeps the images and the cache. It never
+  deletes the VM. `agent-box box setup` applies a folder-list-only change the
+  same way.
+- CuliBox refuses a folder that is your home folder or contains it, that
+  overlaps its data folder, that holds CuliBox's own config, profiles or
+  bundle source directory (a share may not be, contain or, for the data folder
+  and the bundle source, sit inside one; symlinks are followed), or that holds keys or sockets: `~/.ssh`, `~/.aws`,
+  `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.colima`, `~/.lima`, `~/Library`,
+  `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, `~/.terraform.d`,
+  `~/.password-store`, `~/.config/op`, and `~/.claude` apart from a project's
+  `memory` folder. Folders on the list never contain one another: adding a
+  parent absorbs the entries inside it, and a read-write folder cannot sit
+  inside a read-only one.
+- A boxed spawn checks the folders against what the running VM actually
+  has, not against your saved list. A folder you added but have not applied is
+  refused, with an offer to share it.
+- If you set up the VM with an older CuliBox it still shares your whole home
+  folder until you apply the list. Nothing breaks: `agent-box doctor` ("box VM folders") and Settings
+  warn about it, and the home share goes away when you apply the list.
+- What a VM escape can reach: only the folders on the list (read-write or
+  read-only as listed) and CuliBox's four data parts (`boxstate`
+  read-write; `bundle`, `broker` and `ca` read-only). Everything inside a
+  listed folder is reachable, so keep secrets out of shared folders. CuliBox
+  refuses to share its own config, profiles and data directories and the
+  known credential folders above.
 
 ### Every box
 
