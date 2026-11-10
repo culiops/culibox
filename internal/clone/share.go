@@ -136,6 +136,12 @@ func mountpoint(dir, rel string, isDir bool) error {
 	return nil
 }
 
+// MemoryDir is where Claude Code keeps the project memory of of under memRoot:
+// memRoot/projects/<slug(of)>/memory. It does not check that it exists.
+func MemoryDir(memRoot, of string) string {
+	return filepath.Join(memRoot, "projects", claudeProjectSlug(of), "memory")
+}
+
 // MemoryMount is the host project memory of of, read-only at the box claude's
 // memory dir for dir (spec §6.3, correction 5): memRoot/projects/<slug(of)>/memory
 // when memRoot is absolute and it is a real directory (Lstat). Optional: a convenience the session runs
@@ -144,7 +150,7 @@ func MemoryMount(memRoot, of, dir string) (box.Mount, bool) {
 	if !filepath.IsAbs(memRoot) { // "" or relative would be read against the daemon's cwd
 		return box.Mount{}, false
 	}
-	host := filepath.Join(memRoot, "projects", claudeProjectSlug(of), "memory")
+	host := MemoryDir(memRoot, of)
 	if st, err := os.Lstat(host); err != nil || !st.IsDir() {
 		return box.Mount{}, false
 	}
