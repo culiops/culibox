@@ -211,3 +211,37 @@ func TestCheckRefusesProtectedDirs(t *testing.T) {
 		t.Errorf("symlink: %v", err)
 	}
 }
+
+// S1: colima runs os.ExpandEnv on every mount location and lima renders it as
+// a Go template, so `$`, `{`, `}` and a backtick would turn a checked path into
+// another host folder. All four are refused as unsafe, by Check and YAMLSafe.
+func TestCheckRefusesExpansionCharacters(t *testing.T) {
+	env := testEnv(t, false)
+	for _, name := range []string{"$x", "${HOME}", "a{b", "a}b", "{{.Home}}", "a`b`"} {
+		p := filepath.Join(env.Home, "code", name)
+		if err := YAMLSafe(p); err == nil {
+			t.Errorf("YAMLSafe(%q) = nil, want refusal", p)
+		}
+		err := Check(p, env)
+		if kindOf(err) != KindUnsafe {
+			t.Errorf("Check(%q) = %v, want unsafe", p, err)
+			continue
+		}
+		if !strings.HasSuffix(err.Error(), reasonUnsafe) {
+			t.Errorf("Check(%q) reason = %q, want the unsafe reason", p, err)
+		}
+	}
+}
+
+func TestNormalizeDropsExpansionCharacters(t *testing.T) {
+	env := testEnv(t, false)
+	ok := filepath.Join(env.Home, "code")
+	bad := filepath.Join(env.Home, "$x")
+	out, skipped := Normalize([]Share{{Path: bad, Mode: RW}, {Path: ok, Mode: RW}}, env)
+	if len(out) != 1 || out[0].Path != ok {
+		t.Fatalf("Normalize kept %+v, want only %s", out, ok)
+	}
+	if len(skipped) != 1 || skipped[0].Path != bad || skipped[0].Reason != reasonUnsafe {
+		t.Fatalf("skipped = %+v, want %s as unsafe", skipped, bad)
+	}
+}

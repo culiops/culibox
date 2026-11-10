@@ -934,3 +934,24 @@ func TestConfigForFreshIgnoresAnExistingVM(t *testing.T) {
 		t.Fatalf("explicit values still win on recreate, got %d/%d", got.CPUs, got.MemoryGiB)
 	}
 }
+
+// S1: a mount location colima would env-expand or lima would template-render
+// is never written, and a written one is never read back as applied.
+func TestYAMLRefusesExpansionCharacters(t *testing.T) {
+	for _, bad := range []string{"/Users/a/$x", "/Users/a/${HOME}", "/Users/a/{b", "/Users/a/b}", "/Users/a/`b`"} {
+		c := testCfg()
+		c.Shares = []vmshares.Share{{Path: bad, Mode: vmshares.RW}}
+		if _, err := c.YAML(); err == nil {
+			t.Errorf("%q must be refused by renderYAML", bad)
+		}
+		dir := t.TempDir()
+		p := filepath.Join(dir, "colima.yaml")
+		y := "mounts:\n  - location: \"" + bad + "\"\n    writable: true\nprovision:\n"
+		if err := os.WriteFile(p, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadMounts(p); err == nil {
+			t.Errorf("%q must be refused by ReadMounts", bad)
+		}
+	}
+}

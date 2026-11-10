@@ -86,6 +86,11 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 		if loc == "" {
 			return bad(i+1, "empty mount location")
 		}
+		// What colima would env-expand or lima template-render is not the
+		// folder the VM got: never read it back as applied.
+		if err := vmshares.YAMLSafe(loc); err != nil {
+			return bad(i+1, err.Error())
+		}
 		if i+1 >= len(lines) {
 			return bad(i+1, "missing writable line")
 		}

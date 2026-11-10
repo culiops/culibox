@@ -128,10 +128,17 @@ func Resolve(p string) string {
 // control character (C0, DEL, C1 including U+0085 NEL) and U+2028/U+2029, which
 // YAML 1.1 readers treat as line breaks. Refused, not escaped: the same paths
 // also reach docker and colima argv.
+//
+// The paths are not only YAML scalars. colima runs every mount location through
+// os.ExpandEnv and lima renders it as a Go text/template, so `$`, `{`, `}` and
+// the backtick are refused too: with them a path that passed every check would
+// reach the VM as a different host folder (an unset variable drops a component,
+// a template can print any path).
 func YAMLSafe(p string) error {
 	bad := !utf8.ValidString(p)
 	for _, r := range p {
-		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' ||
+			r == '$' || r == '{' || r == '}' || r == '`' {
 			bad = true
 		}
 	}
