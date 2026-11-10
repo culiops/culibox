@@ -245,3 +245,69 @@ func TestNormalizeDropsExpansionCharacters(t *testing.T) {
 		t.Fatalf("skipped = %+v, want %s as unsafe", skipped, bad)
 	}
 }
+
+// S2: a macOS firmlink (/System/Volumes/Data/Users/<u> is /Users/<u>) or an
+// APFS normalisation variant names the same folder with a spelling that
+// symlink resolution does not change. Here a symlink stands in for one, with
+// spelling resolution switched off, so only file identity can see the alias.
+func TestCheckRefusesAliasesByIdentity(t *testing.T) {
+	env := testEnv(t, false)
+	h := env.Home
+	cfg := filepath.Join(h, "conf", "agent-box")
+	for _, d := range []string{filepath.Join(cfg, "sub"), filepath.Join(h, ".claude", "hooks")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.Protected = []box.ProtectedDir{
+		box.ConfigDirProtected(cfg),
+		box.PersonalConfigDirProtected(filepath.Join(h, ".claude")),
+	}
+	old := resolveSpelling
+	resolveSpelling = filepath.Clean // the alias is invisible to spelling resolution, as a firmlink is
+	t.Cleanup(func() { resolveSpelling = old })
+	alias := filepath.Join(filepath.Dir(filepath.Dir(h)), "alias")
+	if err := os.MkdirAll(alias, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := func(name, target string) string {
+		p := filepath.Join(alias, name)
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	home := link("home", h)
+	parent := link("parent", filepath.Dir(h))
+	ssh := link("ssh", filepath.Join(h, ".ssh"))
+	data := link("data", env.DataRoot)
+	dataParent := link("dataparent", filepath.Dir(env.DataRoot))
+	for _, c := range []struct{ p, kind string }{
+		{home, KindHome},
+		{parent, KindContainsHome},
+		{ssh, KindSensitive},
+		{filepath.Join(ssh, "x"), KindSensitive},
+		{filepath.Join(home, ".ssh"), KindSensitive},
+		{filepath.Join(home, ".aws", "creds"), KindSensitive},
+		{filepath.Join(home, ".claude"), KindSensitive},
+		{filepath.Join(home, ".claude", "hooks"), KindSensitive},
+		{data, KindData},
+		{filepath.Join(data, "boxstate"), KindData},
+		{dataParent, KindData},
+		{filepath.Join(home, "conf", "agent-box"), KindProtected},
+		{filepath.Join(home, "conf"), KindProtected},
+	} {
+		if err := Check(c.p, env); kindOf(err) != c.kind {
+			t.Errorf("Check(%s) = %v, want %s", c.p, err, c.kind)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(home, "code"),                                  // inside home is what shares are
+		filepath.Join(home, ".claude", "projects", "-a-b", "memory"), // the memory exception
+		filepath.Join(home, "conf", "agent-box", "sub"),              // inside a non-Inside protected dir
+	} {
+		if err := Check(p, env); err != nil {
+			t.Errorf("Check(%s) = %v, want allowed", p, err)
+		}
+	}
+}

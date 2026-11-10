@@ -43,6 +43,10 @@ func (r *Refused) Error() string { return Display(r.Path, r.home) + " " + r.Reas
 // sensitiveDirs are the home-relative folders that hold keys and sockets.
 var sensitiveDirs = []string{".aws", ".gnupg", ".kube", "Library", ".config/gcloud", ".config/gh", ".azure", ".terraform.d", ".password-store", ".config/op"}
 
+// resolveSpelling is Resolve; a test swaps it to stand a symlink in for a
+// macOS firmlink, an alias that symlink resolution does not see.
+var resolveSpelling = Resolve
+
 // Check returns nil or a *Refused for p. The rules run on both p and its
 // symlink-resolved form; Path in the error is p as given.
 func Check(p string, env Env) error {
@@ -53,7 +57,7 @@ func Check(p string, env Env) error {
 		return refuse(KindRelative, reasonRelative)
 	}
 	p = filepath.Clean(p)
-	for _, c := range []string{p, Resolve(p)} {
+	for _, c := range []string{p, resolveSpelling(p)} {
 		if box.MountUnsafe(c) != "" || YAMLSafe(c) != nil {
 			return refuse(KindUnsafe, reasonUnsafe)
 		}
@@ -76,16 +80,140 @@ func Check(p string, env Env) error {
 			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
+	if kind, reason := identityHit(p, env); kind != "" {
+		return refuse(kind, reason)
+	}
 	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 		return refuse(KindNotDir, reasonNotDir)
 	}
 	return nil
 }
 
+// identityHit runs the home, sensitive, data-root and protected rules again by
+// file identity rather than spelling: a macOS firmlink
+// (/System/Volumes/Data/Users/<u> is /Users/<u>) or an APFS Unicode
+// normalisation variant names the same folder with a spelling the string rules
+// and symlink resolution never see. A rule only fires for a refused directory
+// that exists; c is inside it when an existing ancestor-or-self of c is it, and
+// contains it when an existing ancestor-or-self of it is c.
+func identityHit(c string, env Env) (kind, reason string) {
+	ids := idCache{}
+	if root := ids.stat("/"); root != nil {
+		if fi := ids.stat(c); fi != nil && os.SameFile(fi, root) {
+			return KindRoot, reasonHome
+		}
+	}
+	if env.Home != "" {
+		hfi, cfi := ids.stat(env.Home), ids.stat(c)
+		if hfi != nil && cfi != nil && os.SameFile(hfi, cfi) {
+			return KindHome, reasonHome
+		}
+		if ids.contains(c, env.Home) {
+			return KindContainsHome, reasonHome
+		}
+		dirs := box.HostSocketDirs(env.Home)
+		for _, d := range sensitiveDirs {
+			dirs = append(dirs, filepath.Join(env.Home, d))
+		}
+		for _, d := range dirs {
+			if _, in := ids.inside(c, d); in || ids.contains(c, d) {
+				return KindSensitive, reasonSensitive
+			}
+		}
+		claude := filepath.Join(env.Home, ".claude")
+		if ids.contains(c, claude) {
+			return KindSensitive, reasonSensitive // equal to or containing ~/.claude
+		}
+		if rel, in := ids.inside(c, claude); in && !memoryRel(rel, env.Fold) {
+			return KindSensitive, reasonSensitive
+		}
+	}
+	if env.DataRoot != "" {
+		if _, in := ids.inside(c, env.DataRoot); in || ids.contains(c, env.DataRoot) {
+			return KindData, reasonData
+		}
+	}
+	claudeFI := ids.stat(filepath.Join(env.Home, ".claude"))
+	for _, d := range env.Protected {
+		if d.Path == "" {
+			continue
+		}
+		// sensitive() owns the default account's ~/.claude, as in protectedHit.
+		if fi := ids.stat(d.Path); env.Home != "" && fi != nil && claudeFI != nil && os.SameFile(fi, claudeFI) {
+			continue
+		}
+		if ids.contains(c, d.Path) {
+			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+		}
+		if _, in := ids.inside(c, d.Path); d.Inside && in {
+			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+		}
+	}
+	return "", ""
+}
+
+// memoryRel reports whether rel (the components below ~/.claude) is
+// projects/<slug>/memory or below it: the one part of ~/.claude a share may be.
+func memoryRel(rel []string, fold bool) bool {
+	return len(rel) >= 3 && eq(rel[0], "projects", fold) && eq(rel[2], "memory", fold)
+}
+
+// idCache is os.Stat (following links) per path, for one Check; nil = missing.
+type idCache map[string]os.FileInfo
+
+func (ids idCache) stat(p string) os.FileInfo {
+	if fi, ok := ids[p]; ok {
+		return fi
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		fi = nil
+	}
+	ids[p] = fi
+	return fi
+}
+
+// inside reports whether some existing ancestor-or-self of c is dir, and the
+// components of c below that ancestor.
+func (ids idCache) inside(c, dir string) ([]string, bool) {
+	dfi := ids.stat(dir)
+	if dfi == nil {
+		return nil, false
+	}
+	for a := filepath.Clean(c); ; {
+		if fi := ids.stat(a); fi != nil && os.SameFile(fi, dfi) {
+			return parts(c)[len(parts(a)):], true
+		}
+		up := filepath.Dir(a)
+		if up == a {
+			return nil, false
+		}
+		a = up
+	}
+}
+
+// contains reports whether c exists and some existing ancestor-or-self of dir is c.
+func (ids idCache) contains(c, dir string) bool {
+	cfi := ids.stat(c)
+	if cfi == nil {
+		return false
+	}
+	for a := filepath.Clean(dir); ; {
+		if fi := ids.stat(a); fi != nil && os.SameFile(fi, cfi) {
+			return true
+		}
+		up := filepath.Dir(a)
+		if up == a {
+			return false
+		}
+		a = up
+	}
+}
+
 // spellings is d as written and, when it differs, d with symlinks resolved:
 // ~/.aws may be a link to ~/dotfiles/aws, and sharing the target is sharing it.
 func spellings(d string) []string {
-	if r := Resolve(d); r != d {
+	if r := resolveSpelling(d); r != d {
 		return []string{d, r}
 	}
 	return []string{d}
@@ -112,7 +240,7 @@ func sensitive(c string, env Env) bool {
 		}
 		// Inside ~/.claude: only projects/<slug>/memory[/...] is allowed.
 		rel := parts(c)[len(parts(claude)):]
-		if !(len(rel) >= 3 && eq(rel[0], "projects", env.Fold) && eq(rel[2], "memory", env.Fold)) {
+		if !memoryRel(rel, env.Fold) {
 			return true
 		}
 	}
