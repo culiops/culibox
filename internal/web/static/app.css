@@ -2854,6 +2854,10 @@
       #settings-modal:not(.as-page) #vmfolders .vmf-pstrip, #settings-modal:not(.as-page) #vmfolders .vmf-banner { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); }
       #settings-modal:not(.as-page) #vmfolders .vmf-pstatus { display: flex; align-items: center; gap: 8px; }
       #settings-modal:not(.as-page) #vmfolders .vmf-banner-t { font-weight: 700; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-asktitle { display: block; }
+      #settings-modal:not(.as-page) #vmfolders .vmf-fieldbox > .dlg-err { color: var(--danger); }
+      #spawn input.is-invalid { border-color: var(--danger); }
+      #spawn-ws-row.ns-on > #spawn-ws-note { display: none; }
       #settings-modal:not(.as-page) #vmfolders .hint { margin-top: 0; }
       #settings-modal:not(.as-page) #vmfolders .vmf-ptitle { display: flex; align-items: center; gap: 8px; font-weight: 700; margin-top: 14px; }
       #settings-modal:not(.as-page) #vmfolders .vmf-plist { list-style: none; margin: 0; padding: 0; }

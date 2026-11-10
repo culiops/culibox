@@ -5456,7 +5456,7 @@ function initSpawnWsPicker() {
     inline: drawerDesktop,
     lastUsed: () => { const l = loadLastSpawn(); return l && typeof l.cwd === "string" ? l.cwd : ""; },
     idleText: spawnWsCaption,
-    filter: (path) => (spawnVMFilter ? spawnVMFilter(path) : true),
+    filter: (path) => { const f = spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter); return f ? f(path) : true; },
   });
   input.addEventListener("input", hideSpawnNotShared);
 }
@@ -5464,15 +5464,28 @@ function initSpawnWsPicker() {
 // On a Mac the picker offers only folders the box VM can see (applied rw shares from /api/vm-folders). null = no filtering: not a
 // Mac, the list could not be read, or the VM sees everything. The server still enforces either way.
 let spawnVMFilter = null;
-async function loadSpawnVMFilter() {
-  spawnVMFilter = null;
+const spawnVMLatest = spawnLatest();
+// syncSpawnVMFilter: the filter and its help line follow the selected runtime (spec I4): a host session needs no VM folder. An open
+// list is redrawn, so a filter that arrives (or a runtime that changes) after the list opened shows at once.
+function syncSpawnVMFilter() {
   const help = $("spawn-ws-vmhelp");
-  if (help) help.hidden = true;
+  const on = !!spawnVMFilterFor(segValue($("runtime-seg")), spawnVMFilter);
+  if (help) {
+    if (on) help.textContent = SPAWN_VM_SEES_HELP;
+    help.hidden = !on;
+  }
+  if (spawnWsPicker) spawnWsPicker.refresh();
+}
+async function loadSpawnVMFilter() {
+  const mine = spawnVMLatest.next();
+  spawnVMFilter = null;
+  syncSpawnVMFilter();
   if (!(globalThis.vmFoldersOn === true)) return;
   let view = null;
   try { view = await api("/api/vm-folders"); } catch (_) { return; }
+  if (!spawnVMLatest.current(mine)) return; // a newer open of the dialog asked again: this answer is stale
   spawnVMFilter = vmShareFilter(view);
-  if (help && spawnVMFilter) { help.textContent = SPAWN_VM_SEES_HELP; help.hidden = false; }
+  syncSpawnVMFilter();
 }
 
 // The M9.9 refusal under the Workspace field: the line, and a "Share this folder…" button that closes the dialog and opens
@@ -5481,6 +5494,8 @@ function showSpawnNotShared(body, closeSpawn) {
   const box = $("spawn-notshared"), input = $("spawn-ws-input");
   if (!box) return;
   const b = body || {};
+  const row = $("spawn-ws-row");
+  if (row) row.classList.add("ns-on"); // the caption line gives way: input, error, button, help (M9.9)
   const line = document.createElement("div");
   line.className = "field-error spawn-ns-line";
   if ((b.pending === true || b.read_only === true) && b.error) line.textContent = spawnNotSharedLine(b);
@@ -5496,7 +5511,7 @@ function showSpawnNotShared(body, closeSpawn) {
   btn.onclick = () => {
     closeSpawn();
     openSettings("vmfolders");
-    openVMFoldersAdd(b.path || "", "rw", "spawn");
+    openVMFoldersAdd(b.path || "", spawnShareMode(b), "spawn");
   };
   box.replaceChildren(line, btn);
   box.hidden = false;
@@ -5505,6 +5520,8 @@ function showSpawnNotShared(body, closeSpawn) {
 function hideSpawnNotShared() {
   const box = $("spawn-notshared"), input = $("spawn-ws-input");
   if (box && !box.hidden) { box.hidden = true; box.replaceChildren(); }
+  const row = $("spawn-ws-row");
+  if (row) row.classList.remove("ns-on");
   if (input) { input.classList.remove("is-invalid"); input.removeAttribute("aria-invalid"); }
 }
 
@@ -5746,6 +5763,7 @@ let spawnPromptDraft = "";
 // which still runs regardless of what this function decides to show.
 function updateRuntimeWarning() {
   syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
+  syncSpawnVMFilter(); // a box lists only shared folders; a host session lists them all
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (segValue(seg) === "host") {

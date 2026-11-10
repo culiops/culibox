@@ -164,6 +164,25 @@ function vmShareFilter(view) {
   };
 }
 
+// spawnShareMode(body): the mode "Share this folder…" prefills (spec I3). The refusal body says need_write; only an explicit false
+// (a clone_of or context path the box only reads) prefills Read only. Anything else, including an older server's body, is Read & write.
+function spawnShareMode(body) {
+  return body && body.need_write === false ? "ro" : "rw";
+}
+
+// spawnVMFilterFor(runtime, filter): the folder filter the picker uses (spec I4). It applies only to a box session, since a host
+// session needs no VM folder; on a host runtime every folder is offered.
+function spawnVMFilterFor(runtime, filter) {
+  return runtime === "box" && typeof filter === "function" ? filter : null;
+}
+
+// spawnLatest(): a request serial. next() starts a request and returns its number; current(n) is true only for the newest one, so a
+// slow older answer never overwrites a newer one (T15).
+function spawnLatest() {
+  let n = 0;
+  return { next: () => ++n, current: (k) => k === n };
+}
+
 // spawnProgressText is the dialog's status line while a spawn POST is in flight
 // (#36). The server answers only once the session exists, and a boxed spawn may
 // first start the box (on a Mac, its VM too) and a container, which takes tens of seconds after an
@@ -178,7 +197,7 @@ function spawnProgressText(seconds, runtime) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter,
+    spawnRefusedLocked, spawnRefusedUnavailable, spawnRefusedNotShared, spawnRefusedRestarting, spawnNotSharedLine, vmShareFilter, spawnShareMode, spawnVMFilterFor, spawnLatest,
     SPAWN_NOT_SHARED_TAIL, SPAWN_VM_SEES_HELP, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey, spawnProgressText, spawnSubmitLabel, spawnFootHint,
     PLIST_SEARCH_MIN, profileMatches,

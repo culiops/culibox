@@ -196,3 +196,28 @@ test("vmShareFilter: applied rw shares only, case-folded, whole components; null
   assert.strictEqual(vmShareFilter({ state: "not_set_up", rows: [] }), null);
   assert.strictEqual(vmShareFilter(null), null);
 });
+
+test("I3: Share this folder prefills Read only only when the body says need_write false", () => {
+  const { spawnShareMode } = require("../static/spawnform.js");
+  assert.strictEqual(spawnShareMode({ need_write: false }), "ro");
+  assert.strictEqual(spawnShareMode({ need_write: true }), "rw");
+  assert.strictEqual(spawnShareMode({}), "rw");
+  assert.strictEqual(spawnShareMode(null), "rw");
+});
+
+test("I4: the VM filter applies only to a box runtime; switching re-evaluates", () => {
+  const { spawnVMFilterFor } = require("../static/spawnform.js");
+  const f = () => true;
+  assert.strictEqual(spawnVMFilterFor("box", f), f);
+  assert.strictEqual(spawnVMFilterFor("host", f), null);
+  assert.strictEqual(spawnVMFilterFor("", f), null);
+  assert.strictEqual(spawnVMFilterFor("box", null), null);
+});
+
+test("T15: only the newest request is current", () => {
+  const { spawnLatest } = require("../static/spawnform.js");
+  const l = spawnLatest();
+  const a = l.next(), b = l.next();
+  assert.strictEqual(l.current(a), false);
+  assert.strictEqual(l.current(b), true);
+});

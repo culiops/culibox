@@ -763,3 +763,13 @@ test("filter(path) drops rows from the idle list and from a search, and drops no
   fire(b.input, "focus");
   assert.deepStrictEqual(rowsOf(b), ["culishop", "notes"], "no filter, no change");
 });
+
+test("openOnClick false keeps a click from opening the list (an on-demand picker); open() still does", () => {
+  const t = env();
+  const p = t.make({ openOnFocus: () => false, openOnClick: () => false });
+  fire(p.input, "focus");
+  fire(p.input, "click");
+  assert.strictEqual(p.list.hidden, true);
+  p.picker.open();
+  assert.strictEqual(p.list.hidden, false);
+});

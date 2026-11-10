@@ -57,7 +57,7 @@ function vmfUsedBy(r) {
 
 // vmfModel(view): everything the page draws, as data. rows ends with the fixed CuliBox data row (data: true); count is the
 // chip beside the card title and leaves that row out.
-function vmfModel(view) {
+function vmfModel(view, cardOpen) {
   const v = view || {};
   const src = v.rows || [];
   const live = src.filter((r) => r.pending !== "removed").length;
@@ -102,7 +102,7 @@ function vmfModel(view) {
     subtitle: whole ? "Made from your profiles and the folders boxed sessions ran in" : "",
     count: live,
     rows,
-    under: card ? "" : VMF_HELPER,
+    under: card || cardOpen ? "" : VMF_HELPER, // M9.1/2/3/5/6 only: not while the add card is open, applying or failed
     headAddDisabled: applying,
   };
 }
@@ -154,13 +154,24 @@ function vmfCheckFrom(outcome, rows) {
   return { kind: "covered", display: hit ? hit.display || hit.path : by, mode: hit ? hit.mode : "rw" };
 }
 
+// vmfErrorText(check): the sentence under the field. The server's rw_in_ro text ("A needs write access but B is shared read-only;
+// make B read-write or remove it") becomes the M9.4c sentence with both paths as code; every error ends with a period.
+function vmfErrorText(check) {
+  let t = String(check.error || "").trim();
+  if (check.code === "rw_in_ro") {
+    const m = /^(.+?) needs write access but (.+?) is shared read-only; make (.+?) read-write or remove it\.?$/.exec(t);
+    if (m && m[2] === m[3]) t = "`" + m[1] + "` needs write access but `" + m[2] + "` is shared read-only; make `" + m[2] + "` read-write or remove it";
+  }
+  return t && !/[.!?]$/.test(t) ? t + "." : t;
+}
+
 // vmfAddState(input, mode, check): the add card's field message and button. An empty field has nothing to add. A refusal is
 // red under the field; a folder a listed one already covers is a muted note and nothing to add; only that one disables Add.
 function vmfAddState(input, mode, check) {
   const empty = String(input || "").trim() === "";
   const s = { invalid: false, error: "", note: "", addDisabled: empty };
   if (empty || !check) return s;
-  if (check.kind === "error") { s.invalid = true; s.error = check.error; return s; }
+  if (check.kind === "error") { s.invalid = true; s.error = vmfErrorText(check); return s; }
   if (check.kind === "covered") {
     s.note = "Already covered by `" + check.display + "`, which boxes can " + (check.mode === "ro" ? "read" : "read and write") + ". Nothing to add.";
     s.addDisabled = true;
@@ -257,7 +268,7 @@ function vmfRowEl(row, locked) {
   const td = (cls) => vmfRole(vmfEl("td", cls), "cell");
   const f = td("vmf-folder");
   const line = vmfEl("div", "vmf-path");
-  line.appendChild(vmfEl("span", "mono", row.display));
+  line.appendChild(vmfEl("span", row.data ? "t-md w-500" : "mono", row.display)); // the data row's label is a name, not a path
   if (row.data) line.appendChild(vmfLock());
   if (row.chip) line.appendChild(vmfEl("span", "chip", row.chip));
   f.append(line, vmfRich(vmfEl("div", "vmf-origin t-sm muted"), row.origin));
@@ -285,7 +296,7 @@ function vmfAskRow(row, copy) {
   td.colSpan = 4;
   const box = vmfEl("div", "vmf-askbox");
   box.setAttribute("role", "alert");
-  box.append(vmfRich(vmfEl("p", "banner-title"), copy.title), vmfEl("p", "t-md", copy.body), vmfEl("p", "t-sm muted", copy.note));
+  box.append(vmfRich(vmfEl("p", "banner-title vmf-asktitle"), copy.title), vmfEl("p", "t-md", copy.body), vmfEl("p", "t-sm muted", copy.note));
   const acts = vmfEl("div", "banner-acts");
   const keep = vmfBtn("Keep it", "btn btn-sm", () => { vmfArmed = ""; vmfPaint(); vmfFocusRow(row.path); });
   const go = vmfBtn("Remove", "btn btn-danger btn-sm", () => { vmfArmed = ""; vmfSave(() => vmfDelete(row.path), row.path); });
@@ -366,7 +377,7 @@ function vmfJobRunning() {
 function vmfPaint() {
   const body = document.getElementById("vmf-body");
   if (!body || !vmfView) return;
-  const m = vmfModel(Object.assign({}, vmfView, { apply: vmfJob() }));
+  const m = vmfModel(Object.assign({}, vmfView, { apply: vmfJob() }), !!vmfCard);
   if (m.locked) vmfArmed = "";
   vmfProg = null;
   vmfEnsureSlot();
@@ -457,7 +468,7 @@ function vmfPhoneRow(r, locked) {
 function vmfPhoneAsk(r, copy) {
   const box = vmfEl("div", "vmf-pask");
   box.setAttribute("role", "alert");
-  box.append(vmfRich(vmfEl("p", "vmf-banner-t"), copy.title), vmfEl("p", "", copy.body), vmfEl("p", "hint", copy.note));
+  box.append(vmfRich(vmfEl("p", "vmf-banner-t vmf-asktitle"), copy.title), vmfEl("p", "", copy.body), vmfEl("p", "hint", copy.note));
   const acts = vmfEl("div", "vmf-pacts");
   const keep = vmfBtn("Keep it", "btn", () => { vmfArmed = ""; vmfPaint(); vmfFocusRow(r.path); });
   const go = vmfBtn("Remove", "btn dgr", () => { vmfArmed = ""; vmfSave(() => vmfDelete(r.path), r.path); });
@@ -481,6 +492,9 @@ function vmfSyncFoot() {
 // vmfSyncHead: the header's Add folder waits while the card is open and while the VM restarts.
 function vmfSyncHead() {
   vmfSyncFoot();
+  const under = document.querySelector("#vmfolders .vmf-under");
+  if (under) under.hidden = !!vmfCard;
+  else if (!vmfCard && vmfView && vmfModel(Object.assign({}, vmfView, { apply: vmfJob() })).under) vmfPaint(); // the card closed: bring the helper back
   const b = document.getElementById("set-act-vmfolders");
   if (!b) return;
   const j = vmfJob();
@@ -675,7 +689,8 @@ function vmfBuildCard(path, mode, from) {
   const msg = vmfEl("span", phone ? "hint" : "field-help");
   msg.id = "vmf-msg";
   input.setAttribute("aria-describedby", msg.id);
-  const browse = vmfBtn("Browse…", "btn", () => { input.focus(); if (vmfCard && vmfCard.picker) vmfCard.picker.open(); });
+  // The picker closes on any click outside the field and its list, this one included, so it opens once the click has finished.
+  const browse = vmfBtn("Browse…", "btn", () => { input.focus(); setTimeout(() => { if (vmfCard && vmfCard.picker) vmfCard.picker.open(); }, 0); });
   const row = vmfEl("div", "vmf-inrow");
   // The phone has no Browse… and no directory list: the list is a fixed overlay that would sit on the message under the field, and a
   // phone types a path or pastes one. The dry run under the field still answers (stated in the Task 16 report).
@@ -708,6 +723,7 @@ function vmfBuildCard(path, mode, from) {
   if (typeof createWsPicker === "function" && !phone) {
     vmfCard.picker = createWsPicker({
       input, list, keepEsc: true, reanchor: true,
+      openOnFocus: () => false, openOnClick: () => false, // on demand only: Browse… opens the list, so no idle caption sits over the field message
       onPick: () => { vmfCardSync(); vmfCardCheck(); },
       onNote: () => {},
     });

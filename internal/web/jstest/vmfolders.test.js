@@ -248,3 +248,33 @@ test("the desktop page hides the phone's footer (#foot-vmfolders is in desktop.c
   const DESK = fs.readFileSync(path.join(__dirname, "../static/desktop.css"), "utf8");
   assert.match(DESK, /#page-host > #settings-modal\.as-page > #foot-vmfolders[^{]*\{ display: none; \}/);
 });
+
+test("G2: the helper line shows only in the list states; not while the add card is open, applying or failed", () => {
+  assert.strictEqual(vmfModel(APPLIED, false).under, VMF_HELPER);
+  assert.strictEqual(vmfModel(APPLIED, true).under, "");
+  assert.strictEqual(vmfModel(Object.assign({}, APPLIED, { state: "pending", added: 1 }), true).under, "");
+  assert.strictEqual(vmfModel(Object.assign({}, APPLIED, { apply: { state: "running" } }), false).under, "");
+  assert.strictEqual(vmfModel(Object.assign({}, APPLIED, { apply: { state: "failed" } }), false).under, "");
+});
+
+test("G4: M9.4c reads as the copy index sentence, paths as code, ending with a period", () => {
+  const srv = "~/notes/runbooks/drafts needs write access but ~/notes/runbooks is shared read-only; make ~/notes/runbooks read-write or remove it";
+  const s = vmfAddState("~/notes/runbooks/drafts", "rw", vmfCheckFrom({ ok: false, code: "rw_in_ro", error: srv }, []));
+  assert.strictEqual(s.error, "`~/notes/runbooks/drafts` needs write access but `~/notes/runbooks` is shared read-only; make `~/notes/runbooks` read-write or remove it.");
+  // A text that does not parse keeps the server's words with a period ensured; an existing period is not doubled.
+  assert.strictEqual(vmfAddState("x", "rw", vmfCheckFrom({ ok: false, code: "rw_in_ro", error: "needs write access" }, [])).error, "needs write access.");
+  assert.strictEqual(vmfAddState("x", "rw", vmfCheckFrom({ ok: false, code: "other", error: "Done." }, [])).error, "Done.");
+});
+
+test("G1/G5: the data row label is sans, the remove title has no gap before the question mark", () => {
+  const src = fs.readFileSync(path.join(__dirname, "../static/vmfolders.js"), "utf8");
+  assert.ok(src.includes('row.data ? "t-md w-500" : "mono"'), "the data row label is t-md w-500, not mono");
+  assert.ok(src.includes("vmf-asktitle"), "the title is a block, so the question mark sits against the code");
+  const css = fs.readFileSync(path.join(__dirname, "../static/desktop.css"), "utf8");
+  assert.ok(/#vmfolders \.vmf-asktitle \{ display: block; \}/.test(css));
+});
+
+test("G3: the add card's picker opens only on demand (Browse…), never on focus or click", () => {
+  const src = fs.readFileSync(path.join(__dirname, "../static/vmfolders.js"), "utf8");
+  assert.ok(src.includes("openOnFocus: () => false, openOnClick: () => false"));
+});

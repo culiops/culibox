@@ -1764,6 +1764,8 @@
   #spawn input:not([type=checkbox]):not([type=radio]) { height: var(--h-lg); padding: 0 10px; font-size: var(--t-md); }
   #spawn select { height: var(--h-lg); padding: 0 10px; font-size: var(--t-md); }
   #spawn #spawn-ws-input { font-family: var(--font-mono); font-size: var(--t-sm); }
+  #spawn input.is-invalid { border-color: var(--red); }
+  #spawn-ws-row.ns-on > #spawn-ws-note { display: none; }
   #spawn input::placeholder, #spawn textarea::placeholder { color: var(--muted); }
   /* The first message: the kit's textarea.input, 72px as drawn, never shorter than 52px when dragged. */
   #spawn textarea { height: 72px; min-height: 52px; padding: 8px 10px; font-size: var(--t-md); line-height: var(--lh-md); }
@@ -2118,7 +2120,10 @@
   #vmfolders .vmf-origin { margin-top: 1px; }
   #vmfolders .vmf-lock { flex: none; color: var(--muted); }
   #vmfolders .vmf-removed .vmf-path .mono { color: var(--muted); }
-  #vmfolders .vmf-seg { display: inline-flex; }
+  #vmfolders .vmf-seg { display: inline-flex; max-width: 100%; }
+  /* 1280 wide the 23% column is narrow: the switch shrinks its padding and type to fit, it never runs into "Used by". */
+  #vmfolders .vmf-seg .seg-item { padding-left: 8px; padding-right: 8px; font-size: var(--t-sm); white-space: nowrap; min-width: 0; }
+  #vmfolders .vmf-asktitle { display: block; }
   #vmfolders .vmf-ask > td { padding: 0 12px 12px; border-bottom: 1px solid var(--line); }
   #vmfolders .vmf-askbox { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
   #vmfolders .vmf-askbox > p { margin: 0; }

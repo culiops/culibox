@@ -3,7 +3,7 @@
 // The workspace folder picker, one factory for every place a folder is chosen: the New
 // session dialog's Workspace field and the profile page's Workspace block.
 //
-//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, reanchor, inline, lastUsed, idleText })
+//   createWsPicker({ input, list, onPick, onNote, keepEsc, openOnFocus, openOnClick, reanchor, inline, lastUsed, idleText })
 //     -> { value, set, open, close, destroy, isOpen, highlighted, settle, refresh, showIdleNote }
 //
 // It is a combobox on an <input> and its listbox <div>: the same backend as dirpicker.js's
@@ -38,7 +38,7 @@
 // (preventDefault), so a surrounding page's own Esc does not also fire; a dialog that closes
 // on the same Esc, as New session's does, leaves it unset. openOnFocus(): asked when the field
 // gains focus; false keeps the list closed (a form that focuses the field by itself when it
-// opens does not want a dropdown over it). A click always opens the list; unset means yes.
+// opens does not want a dropdown over it). A click opens the list unless openOnClick() says no; unset means yes.
 // reanchor: also keep an open list under its field when something behind it scrolls. The list is
 // position: fixed, so a page that scrolls under it (the profile page) needs this; New session never
 // listened for scrolls and does not pass it.
@@ -389,6 +389,7 @@ function createWsPicker(opts) {
   });
   on(input, "click", () => {
     if (pickerShouldSelectAll(input.value, input.selectionStart === input.selectionEnd)) input.select();
+    if (typeof o.openOnClick === "function" && !o.openOnClick()) return; // an on-demand list (VM folders): only Browse… opens it
     open();
   });
   on(input, "keydown", onKeydown);
