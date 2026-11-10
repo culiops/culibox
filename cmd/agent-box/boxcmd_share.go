@@ -153,11 +153,18 @@ func printShares(w io.Writer, svc *vmShareSvc, v web.VMFoldersView, changed bool
 
 // applyShares restarts the VM with the saved list and prints each step as it
 // ends. Without force it refuses while any box runs (noLiveBoxes: an idle box
-// counts, and a VM or box listing that cannot be read is refused). A VM that
-// reads as stopped is applied without -force: nothing in it can end.
+// counts, and a VM or box listing that cannot be read is refused) and when the
+// VM reads as not running (that reading cannot rule boxes out).
 func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, w io.Writer) int {
 	if !force {
-		if _, ok := noLiveBoxes(ctx, l, w); !ok {
+		running, ok := noLiveBoxes(ctx, l, w)
+		if !ok {
+			return 1
+		}
+		// As with -recreate: "not running" is also what a non-zero colima status
+		// exit reads as while the VM runs, so it does not rule boxes out.
+		if !running {
+			fmt.Fprintln(w, "refusing: the box VM reads as not running, so running boxes cannot be ruled out. Use -force.")
 			return 1
 		}
 	}
@@ -190,7 +197,7 @@ func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, 
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(w, "FAIL box VM folders: %v\n", ctx.Err())
+			fmt.Fprintf(w, "FAIL box VM folders: interrupted (%v). The box VM may be stopped; run `agent-box box share apply` to finish.\n", ctx.Err())
 			return 1
 		case <-time.After(100 * time.Millisecond):
 		}

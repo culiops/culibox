@@ -189,3 +189,60 @@ func TestBoxShareOnLinux(t *testing.T) {
 		t.Fatalf("share on Linux = %d:\n%s", rc, buf.String())
 	}
 }
+
+func TestBoxShareApplyOfANotRunningVMNeedsForce(t *testing.T) {
+	l, fc, _ := pendingLayer(t)
+	fc.running = false
+	rc, out := runVM(t, l, shareArgs("apply", ""))
+	if rc != 1 || !strings.Contains(out, "refusing: the box VM reads as not running, so running boxes cannot be ruled out. Use -force.") {
+		t.Fatalf("apply of a not-running VM = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") || fc.called("start") || fc.called("delete") {
+		t.Fatalf("a refused apply must not touch the VM: %v", fc.calls)
+	}
+	a := shareArgs("apply", "")
+	a.Force = true
+	rc, out = runVM(t, l, a)
+	if rc != 0 || !fc.called("start") || fc.called("delete") {
+		t.Fatalf("forced apply = %d:\n%s\n%v", rc, out, fc.calls)
+	}
+}
+
+func TestBoxSetupDriftOfANotRunningVMNeedsForce(t *testing.T) {
+	l, fc, d := pendingLayer(t)
+	d.set(t, "image", "arm64|"+boximage.Hash()+"\n")
+	d.set(t, "probe", blockedProbe)
+	d.set(t, "context", "default\n")
+	fc.running = false
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
+	if rc != 1 || !strings.Contains(out, "refusing: the box VM reads as not running") {
+		t.Fatalf("setup drift of a not-running VM = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") || fc.called("start") || fc.called("delete") {
+		t.Fatalf("a refused setup must not touch the VM: %v", fc.calls)
+	}
+	rc, out = runVM(t, l, cliArgs{Sub: "setup", Force: true})
+	if rc != 0 || !fc.called("start") || fc.called("delete") {
+		t.Fatalf("forced setup = %d:\n%s\n%v", rc, out, fc.calls)
+	}
+}
+
+// The list holds symlink-resolved paths; rm of a symlink to a listed folder works.
+func TestBoxShareRmFallsBackToTheResolvedPath(t *testing.T) {
+	l, _, _ := darwinLayer(t, false)
+	dir := otherDir(t)
+	if rc, out := runVM(t, l, shareArgs("add", dir)); rc != 0 {
+		t.Fatalf("add = %d:\n%s", rc, out)
+	}
+	link := filepath.Join(otherDir(t), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runVM(t, l, shareArgs("rm", link))
+	if rc != 0 {
+		t.Fatalf("rm via symlink = %d:\n%s", rc, out)
+	}
+	if list, _, err := vmshares.Load(l.dataDir); err != nil || len(list) != 0 {
+		t.Fatalf("list after rm = %+v, %v", list, err)
+	}
+}
