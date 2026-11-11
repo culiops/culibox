@@ -32,7 +32,9 @@ repo=$(pwd)
 
 mkdir -p "$outdir"
 outdir=$(cd "$outdir" && pwd)
-if [ -n "$(find "$outdir" -maxdepth 1 -name 'culibox_*' -print -quit)" ] || [ -e "$outdir/SHA256SUMS" ]; then
+# Captured first, so a find that fails cannot read as "nothing there".
+stale=$(find "$outdir" -maxdepth 1 -name 'culibox_*' -print -quit) || exit 1
+if [ -n "$stale" ] || [ -e "$outdir/SHA256SUMS" ]; then
   echo "build.sh: $outdir already holds culibox_* or SHA256SUMS files; use an empty directory" >&2
   exit 1
 fi
@@ -71,7 +73,13 @@ done
 # is written: SHA256SUMS must never cover a broken file. (CI smoke-tests only
 # linux/amd64.) The assignment fails the script if tar -tzf fails.
 for f in "$outdir"/culibox_*.tar.gz; do
-  members=$(tar -tzf "$f" | sort | tr '\n' ' ')
+  # No pipe: a pipeline's status is its last command's, so `tar -tzf | sort` would
+  # pass when tar prints the right names and then fails (a truncated archive).
+  list=$(tar -tzf "$f") || {
+    echo "build.sh: tar -tzf failed on $f" >&2
+    exit 1
+  }
+  members=$(printf '%s\n' "$list" | LC_ALL=C sort | tr '\n' ' ')
   if [ "$members" != "LICENSE README.md agent-box " ]; then
     echo "build.sh: $f holds '$members', want exactly agent-box, LICENSE and README.md" >&2
     exit 1
