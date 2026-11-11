@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -787,8 +788,28 @@ func TestGuardLocksSweepSavesOnlyOnChange(t *testing.T) {
 	}
 }
 
+// awaitIdleRetry waits until the box was asked to stop stops times and the
+// stop in flight has released opMu. A box that failed to start or was refused
+// while it holds guard locks gets an idle TTL of 0 (idleTTL), so rearmIfIdle
+// fires stopIfIdle at once on another goroutine, which removes it again. A
+// test that fails only the first Stop races that retry: it removes the box,
+// rightly lifts the lock, and the test's check sees it unlocked (CI run
+// 42973277692). Tests of "a box that may still run keeps its lock" therefore
+// fail every Stop and check after this.
+func awaitIdleRetry(t *testing.T, m *Manager, f *fakeClient, stops int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); f.stops() < stops; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("stops=%d; a box holding locks with no session must be removed again at once", f.stops())
+		}
+	}
+	// stopIfIdle holds opMu across its Stop and the release that follows.
+	m.opMu.Lock()
+	m.opMu.Unlock()
+}
+
 // Review #96 (6): a box that never came to be holds no lock; one docker left
-// behind keeps it.
+// behind keeps it while it may still run (every removal fails here).
 func TestGuardLocksFailedRunUnlocks(t *testing.T) {
 	for _, left := range []bool{false, true} {
 		m, f, ff := lockMgr(t)
@@ -805,11 +826,20 @@ func TestGuardLocksFailedRunUnlocks(t *testing.T) {
 			}
 			return "", true, errors.New("docker run: failed")
 		}
+		if left {
+			f.stopFails = math.MaxInt
+		}
 		if _, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
 			t.Fatal("want the run failure")
 		}
 		if got := ff.flagged(t, p); got != left {
 			t.Fatalf("left behind=%v: flagged=%v", left, got)
+		}
+		if left {
+			awaitIdleRetry(t, m, f, 1)
+			if !ff.flagged(t, p) {
+				t.Fatal("left behind, its removal failed: the lock stays")
+			}
 		}
 	}
 }
@@ -824,6 +854,9 @@ func wrongStat(args []string) (string, bool, error) {
 
 // refuseUnverified and refuseMountChanged lift the lock of the box they
 // removed, and keep it when the removal failed.
+//
+// A failing removal fails every time (see awaitIdleRetry): both the refusal
+// and the idle retry after it must keep the lock while the box may still run.
 func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
 	cases := map[string]func(m *Manager, f *fakeClient){
 		"unverified": func(m *Manager, f *fakeClient) {
@@ -854,7 +887,7 @@ func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
 				m, f, ff := lockMgr(t)
 				setup(m, f)
 				if stopFails {
-					f.stopFails = 1
+					f.stopFails = math.MaxInt
 				}
 				ws := lockWS(t)
 				p := filepath.Join(ws, "CLAUDE.md")
@@ -866,6 +899,13 @@ func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
 				}
 				if got := ff.flagged(t, p); got != stopFails {
 					t.Fatalf("flagged=%v; want it locked only while the box may still run", got)
+				}
+				if !stopFails {
+					return
+				}
+				awaitIdleRetry(t, m, f, 2)
+				if !ff.flagged(t, p) {
+					t.Fatal("the idle retry failed to remove the box too: its lock stays")
 				}
 			})
 		}
