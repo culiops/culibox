@@ -451,7 +451,7 @@ func guardLockRows(goos string, f boxFacts) []Result {
 		default:
 			var paths []string
 			for _, n := range g.files {
-				paths = append(paths, "'"+filepath.Join(g.ws, n)+"'")
+				paths = append(paths, shQuote(filepath.Join(g.ws, n)))
 			}
 			out = append(out, Result{Warn, ck, g.ws + ": " + files + " still locked, but no box holding the lock runs; " +
 				"agent-box lifts it when it next starts (or the box VM does), or unlock it now: chflags nouchg " + strings.Join(paths, " ")})
@@ -459,6 +459,11 @@ func guardLockRows(goos string, f boxFacts) []Result {
 	}
 	return out
 }
+
+// shQuote single-quotes s for a POSIX shell (a quote in s closes the quotes,
+// is escaped and reopens them), so a printed line is safe to paste whatever
+// the folder is called.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // stoppedBoxes names this instance's boxes that are not running (label is
 // "key=value"). A listing that fails is "unknown", not "none": it reports nothing.

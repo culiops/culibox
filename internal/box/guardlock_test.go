@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -369,6 +370,8 @@ func TestGuardLocksLastSessionRemovesBoxAndUnlocks(t *testing.T) {
 	m.ReleaseBox(name)
 	waitFor(t, 5*time.Second, func() bool { return f.stoppedAny(name) })
 	waitFor(t, 5*time.Second, func() bool { return !ff.flagged(t, p) })
+	// The flags are cleared, then the records saved: wait for the save too.
+	waitFor(t, 5*time.Second, func() bool { return len(readLocks(t, m)) == 0 })
 	if rs := readLocks(t, m); len(rs) != 0 {
 		t.Fatalf("records left: %+v", rs)
 	}
@@ -533,7 +536,7 @@ func TestGuardLocksUnreadableRecordsStartEmpty(t *testing.T) {
 	if g := newGuardLocks(dir, newFakeFlags()); len(g.all()) != 0 {
 		t.Fatal("unreadable records start empty")
 	}
-	b, _ := json.Marshal(guardLockDoc{Version: 2})
+	b, _ := json.Marshal(guardLockDoc{Version: 99})
 	_ = os.WriteFile(filepath.Join(dir, guardLocksFile), b, 0o600)
 	if _, err := ReadGuardLocks(dir); err == nil {
 		t.Fatal("an unknown version is not read")
@@ -546,5 +549,366 @@ func TestOtherCase(t *testing.T) {
 	}
 	if got := otherCase(".git"); got != ".GIT" {
 		t.Fatal(got)
+	}
+}
+
+// spellings are two names of one workspace folder, as ~/code/Repo and
+// ~/code/repo are on a case-insensitive Mac volume (each a different box):
+// here two symlinks to one folder, which reach the same files.
+func spellings(t *testing.T) (ws, a, b string) {
+	t.Helper()
+	ws = lockWS(t)
+	dir := realTemp(t)
+	a, b = filepath.Join(dir, "Repo"), filepath.Join(dir, "repo")
+	for _, l := range []string{a, b} {
+		if err := os.Symlink(ws, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ws, a, b
+}
+
+func claudeFile(t *testing.T, ws string) []guardFile {
+	t.Helper()
+	fi, err := os.Lstat(filepath.Join(ws, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []guardFile{{"CLAUDE.md", fi}}
+}
+
+// Review #96 (1): the lock is the file's, not the folder spelling's. A second
+// box on another spelling joins the lock CuliBox set (it is not the user's
+// flag), and the flag stays until neither box holds it, in either order.
+func TestGuardLocksTwoSpellingsShareOneLock(t *testing.T) {
+	for _, firstGone := range []string{"b1", "b2"} {
+		t.Run(firstGone+" ends first", func(t *testing.T) {
+			_, _, ff := lockMgr(t)
+			g := newGuardLocks(t.TempDir(), ff)
+			ws, a, b := spellings(t)
+			p := filepath.Join(ws, "CLAUDE.md")
+			if _, err := g.hold(a, claudeFile(t, a), "b1", "s1"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := g.hold(b, claudeFile(t, b), "b2", "s2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, []string{"CLAUDE.md"}) || !g.holdsOurs("b2") {
+				t.Fatalf("the second spelling's box holds CuliBox's lock: locked=%v holdsOurs=%v", got, g.holdsOurs("b2"))
+			}
+			rs := g.all()
+			if len(rs) != 1 || !rs[0].Ours || !slices.Equal(rs[0].Boxes, []string{"b1", "b2"}) {
+				t.Fatalf("want one record of ours held by both boxes: %+v", rs)
+			}
+			g.releaseBox(firstGone)
+			if !ff.flagged(t, p) {
+				t.Fatal("a box on the other spelling still runs: the file must stay locked")
+			}
+			g.releaseBox(map[string]string{"b1": "b2", "b2": "b1"}[firstGone])
+			if ff.flagged(t, p) || len(g.all()) != 0 {
+				t.Fatalf("no box holds it: unlocked, no record (flag=%v recs=%+v)", ff.flagged(t, p), g.all())
+			}
+		})
+	}
+}
+
+// The file is unlocked through any spelling a holder used: the first may be
+// gone by then.
+func TestGuardLocksUnlockThroughAnotherSpelling(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	ws, a, b := spellings(t)
+	if _, err := g.hold(a, claudeFile(t, a), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.hold(b, claudeFile(t, b), "b2", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(a); err != nil {
+		t.Fatal(err)
+	}
+	g.releaseBox("b1")
+	g.releaseBox("b2")
+	if ff.flagged(t, filepath.Join(ws, "CLAUDE.md")) || len(g.all()) != 0 {
+		t.Fatal("the lock must be lifted through the spelling that still reaches the file")
+	}
+}
+
+// Records written by the first #96 build (one per folder spelling) load merged
+// by file: a duplicate that read CuliBox's own flag as the user's is ours.
+func TestGuardLocksLoadMergesRecordsOfOneFile(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	dir := t.TempDir()
+	ws, a, b := spellings(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	fi, _ := os.Lstat(p)
+	id := fileIDOf(t, fi)
+	ff.userSets(t, p) // CuliBox's flag, set by the box on spelling a
+	v1 := guardLockDoc{Version: 1, Locks: []GuardLock{
+		{Workspace: a, File: "CLAUDE.md", Dev: id.Dev, Ino: id.Ino, Ours: true, Boxes: []string{"b1"}},
+		{Workspace: b, File: "CLAUDE.md", Dev: id.Dev, Ino: id.Ino, Ours: false, Boxes: []string{"b2"},
+			Sessions: []LockSession{{"b2", "s2"}}},
+	}}
+	raw, _ := json.Marshal(v1)
+	if err := os.WriteFile(filepath.Join(dir, guardLocksFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := newGuardLocks(dir, ff)
+	rs := g.all()
+	if len(rs) != 1 || !rs[0].Ours || !slices.Equal(rs[0].Boxes, []string{"b1", "b2"}) ||
+		!slices.Equal(rs[0].Sessions, []LockSession{{"b2", "s2"}}) {
+		t.Fatalf("want one merged record of ours: %+v", rs)
+	}
+	g.releaseBox("b1")
+	if !ff.flagged(t, p) {
+		t.Fatal("b2 still holds it")
+	}
+	g.releaseBox("b2")
+	if ff.flagged(t, p) {
+		t.Fatal("the merged lock is lifted with its last box")
+	}
+}
+
+// A record file that is not exactly what CuliBox writes is not read at all,
+// and then a flag already on a file is never taken for CuliBox's (fail closed:
+// it stays locked rather than be cleared on a guess).
+func TestGuardLocksBadRecordsFailClosed(t *testing.T) {
+	for name, rec := range map[string]GuardLock{
+		"relative folder": {Workspace: "code/repo", File: "CLAUDE.md", Ours: true},
+		"path in file":    {Workspace: "/Users/u/repo", File: "../x/CLAUDE.md", Ours: true},
+		"dot file name":   {Workspace: "/Users/u/repo", File: "..", Ours: true},
+		"no file":         {Workspace: "/Users/u/repo", Ours: true},
+	} {
+		dir := t.TempDir()
+		raw, _ := json.Marshal(guardLockDoc{Version: guardLocksVersion, Locks: []GuardLock{rec}})
+		_ = os.WriteFile(filepath.Join(dir, guardLocksFile), raw, 0o600)
+		if _, err := ReadGuardLocks(dir); err == nil {
+			t.Errorf("%s: a bad record must fail the read", name)
+		}
+	}
+
+	_, _, ff := lockMgr(t)
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, guardLocksFile), []byte("{"), 0o600)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	ff.userSets(t, p) // flagged by CuliBox before the records went bad
+	g := newGuardLocks(dir, ff)
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	g.releaseBox("b1")
+	if !ff.flagged(t, p) {
+		t.Fatal("with unreadable records an existing flag must never be cleared")
+	}
+}
+
+// Review #96 (3): the periodic sweep lifts a lock only for a box it removed or
+// that docker no longer lists; a box in any other state whose removal failed
+// still holds its lock.
+func TestGuardLocksSweepKeepsABoxItCouldNotRemove(t *testing.T) {
+	for _, state := range []string{"paused", "restarting", "exited"} {
+		t.Run(state, func(t *testing.T) {
+			m, f, ff := lockMgr(t)
+			ws := lockWS(t)
+			p := filepath.Join(ws, "CLAUDE.md")
+			_, _, name, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.mu.Lock()
+			delete(m.active, name)
+			m.mu.Unlock()
+			f.mu.Lock()
+			f.existing = []string{name}
+			f.states = map[string]string{name: state}
+			f.stopFails = 1
+			f.mu.Unlock()
+			if _, err := m.Sweep(context.Background(), map[string]int{}); err == nil {
+				t.Fatal("want the failed removal reported")
+			}
+			if !ff.flagged(t, p) {
+				t.Fatalf("a %s box that could not be removed may still run: its lock stays", state)
+			}
+			if _, err := m.Sweep(context.Background(), map[string]int{}); err != nil {
+				t.Fatal(err)
+			}
+			if ff.flagged(t, p) {
+				t.Fatal("removed on the next sweep: the lock is lifted")
+			}
+		})
+	}
+}
+
+// Review #96 (5): a sweep that changes nothing does not rewrite the records.
+func TestGuardLocksSweepSavesOnlyOnChange(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	ws := lockWS(t)
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	stat := func() os.FileInfo {
+		fi, err := os.Stat(g.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi
+	}
+	before := stat()
+	g.sweep(map[string]bool{"b1": true})
+	if !os.SameFile(before, stat()) {
+		t.Fatal("a sweep with nothing to change rewrote the records")
+	}
+	// A leftover whose clear keeps failing is not rewritten on every sweep either.
+	ff.setErr["CLAUDE.md"] = errors.New("EPERM")
+	g.sweep(nil)
+	before = stat()
+	g.sweep(nil)
+	if !os.SameFile(before, stat()) {
+		t.Fatal("a sweep that only failed a clear again rewrote the records")
+	}
+	g.forgetSession("b1", "none")
+	if !os.SameFile(before, stat()) {
+		t.Fatal("forgetting an unknown session rewrote the records")
+	}
+}
+
+// Review #96 (6): a box that never came to be holds no lock; one docker left
+// behind keeps it.
+func TestGuardLocksFailedRunUnlocks(t *testing.T) {
+	for _, left := range []bool{false, true} {
+		m, f, ff := lockMgr(t)
+		ws := lockWS(t)
+		p := filepath.Join(ws, "CLAUDE.md")
+		f.runHook = func(args []string) (string, bool, error) {
+			if !slices.Contains(args, "--name") {
+				return "", false, nil
+			}
+			if left {
+				f.mu.Lock()
+				f.running[args[slices.Index(args, "--name")+1]] = true
+				f.mu.Unlock()
+			}
+			return "", true, errors.New("docker run: failed")
+		}
+		if _, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
+			t.Fatal("want the run failure")
+		}
+		if got := ff.flagged(t, p); got != left {
+			t.Fatalf("left behind=%v: flagged=%v", left, got)
+		}
+	}
+}
+
+// refuseUnverified and refuseMountChanged lift the lock of the box they
+// removed, and keep it when the removal failed.
+func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
+	cases := map[string]func(m *Manager, f *fakeClient){
+		"unverified": func(m *Manager, f *fakeClient) {
+			m.opts.Verify = func(context.Context, string) error { return errors.New("reached loopback") }
+		},
+		"mount changed": func(m *Manager, f *fakeClient) {
+			f.stdoutHook = func(args []string) (string, bool, error) {
+				if len(args) > 2 && args[0] == "exec" && args[2] == "/usr/bin/stat" {
+					return "1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n", true, nil
+				}
+				return "", false, nil
+			}
+		},
+	}
+	for name, setup := range cases {
+		for _, stopFails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s stop fails %v", name, stopFails), func(t *testing.T) {
+				m, f, ff := lockMgr(t)
+				setup(m, f)
+				if stopFails {
+					f.stopFails = 1
+				}
+				ws := lockWS(t)
+				p := filepath.Join(ws, "CLAUDE.md")
+				if _, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
+					t.Fatal("want the refusal")
+				}
+				if f.stops() == 0 {
+					t.Fatal("the refusal must try to remove the box")
+				}
+				if got := ff.flagged(t, p); got != stopFails {
+					t.Fatalf("flagged=%v; want it locked only while the box may still run", got)
+				}
+			})
+		}
+	}
+}
+
+// stopIfIdle lifts the lock only once the box is removed.
+func TestGuardLocksIdleStopKeepsLockWhenRemovalFails(t *testing.T) {
+	m, f, ff := lockMgr(t)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	_, _, name, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	delete(m.active, name)
+	m.mu.Unlock()
+	f.stopFails = 1
+	m.stopIfIdle(name)
+	if !ff.flagged(t, p) || !slices.Equal(m.LockedFiles(name), []string{".git", ".mcp.json", "CLAUDE.md"}) {
+		t.Fatal("a box whose removal failed may still run: its locks stay")
+	}
+	m.stopIfIdle(name)
+	if ff.flagged(t, p) {
+		t.Fatal("removed: the lock is lifted")
+	}
+}
+
+// Review #96 (7): a volume without file flags (exFAT, a network share) says so
+// and points at clone mode, not at the file's owner.
+func TestGuardLocksUnsupportedVolumeRefusal(t *testing.T) {
+	for _, e := range []error{syscall.ENOTSUP, syscall.EOPNOTSUPP} {
+		m, _, ff := lockMgr(t)
+		ws := lockWS(t)
+		ff.setErr["CLAUDE.md"] = e
+		_, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) {
+			t.Fatalf("want a refusal, got %v", err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "does not support") || !strings.Contains(msg, "clone-mode") || strings.Contains(msg, "own the file") {
+			t.Fatalf("refusal %q must say the volume does not support the lock and point to clone mode", msg)
+		}
+	}
+}
+
+// Two instances (separate data roots) do not share records: the second takes
+// the first's flag for the user's and never clears it; the first lifts its
+// own when its box ends, whatever the second runs (docs/MACOS.md says so).
+func TestGuardLocksSeparateInstancesDoNotShare(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	x, y := newGuardLocks(t.TempDir(), ff), newGuardLocks(t.TempDir(), ff)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	if _, err := x.hold(ws, claudeFile(t, ws), "bx", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := y.hold(ws, claudeFile(t, ws), "by", ""); err != nil {
+		t.Fatal(err)
+	}
+	if y.holdsOurs("by") {
+		t.Fatal("the second instance cannot tell the first's flag from the user's")
+	}
+	y.releaseBox("by")
+	if !ff.flagged(t, p) {
+		t.Fatal("the second instance never clears a flag it did not set")
+	}
+	if _, err := y.hold(ws, claudeFile(t, ws), "by", ""); err != nil {
+		t.Fatal(err)
+	}
+	x.releaseBox("bx")
+	if ff.flagged(t, p) {
+		t.Fatal("the first instance lifts its own lock when its box ends")
 	}
 }

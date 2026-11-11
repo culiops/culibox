@@ -41,6 +41,11 @@ import (
 // guardLocksFile is the lock records' file in the data root.
 const guardLocksFile = "inplace-locks.json"
 
+// guardLocksVersion is the records' format: one record per file identity (2).
+// Version 1 (the first #96 build, never released) kept one per folder
+// spelling; it loads merged by identity (mergeByFile).
+const guardLocksVersion = 2
+
 // flagOps is what the guard locks need from the OS.
 type flagOps interface {
 	// caseSensitive reports whether names in directory dir compare
@@ -56,14 +61,19 @@ type flagOps interface {
 // locks use (macOS).
 func GuardLocksSupported() bool { return platformFlagOps() != nil }
 
-// GuardLock is one locked file as recorded in the data root.
+// GuardLock is one locked file as recorded in the data root. A record is a
+// file, by identity: two spellings of one folder (~/code/Repo and ~/code/repo
+// on a case-insensitive volume) are two boxes but one file, so one lock.
 type GuardLock struct {
-	// Workspace is the in-place workspace (absolute, symlinks resolved); File
-	// a name directly in it.
+	// Workspace is the in-place workspace (absolute, symlinks resolved) the file
+	// was first locked through; File a name directly in it.
 	Workspace string `json:"workspace"`
 	File      string `json:"file"`
-	// Dev and Ino are the file's identity on the host when it was locked: a
-	// lock is only ever cleared on that very file.
+	// Also are the other spellings boxes reached this same file by, tried in
+	// turn when it is unlocked.
+	Also []LockPath `json:"also,omitempty"`
+	// Dev and Ino are the file's identity on the host when it was locked: the
+	// record's key, and a lock is only ever cleared on that very file.
 	Dev uint64 `json:"dev"`
 	Ino uint64 `json:"ino"`
 	// Ours is false when the file already carried the flag before CuliBox
@@ -73,6 +83,17 @@ type GuardLock struct {
 	// sessions started in them, for display only.
 	Boxes    []string      `json:"boxes,omitempty"`
 	Sessions []LockSession `json:"sessions,omitempty"`
+}
+
+// LockPath is one spelling a locked file was reached by.
+type LockPath struct {
+	Workspace string `json:"workspace"`
+	File      string `json:"file"`
+}
+
+// paths are every spelling of the record's file, the first one first.
+func (l GuardLock) paths() []LockPath {
+	return append([]LockPath{{l.Workspace, l.File}}, l.Also...)
 }
 
 // LockSession is a session that runs in a box holding a lock.
@@ -129,10 +150,57 @@ func ReadGuardLocks(dataDir string) ([]GuardLock, error) {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", guardLocksFile, err)
 	}
-	if doc.Version != 1 {
+	if doc.Version != 1 && doc.Version != guardLocksVersion {
 		return nil, fmt.Errorf("%s: unknown version %d", guardLocksFile, doc.Version)
 	}
-	return doc.Locks, nil
+	for _, r := range doc.Locks {
+		for _, lp := range r.paths() {
+			if !filepath.IsAbs(lp.Workspace) || lp.File == "" || lp.File == "." || lp.File == ".." ||
+				strings.ContainsRune(lp.File, '/') {
+				return nil, fmt.Errorf("%s: a record names %q in %q, not a file directly in a folder", guardLocksFile, lp.File, lp.Workspace)
+			}
+		}
+	}
+	return mergeByFile(doc.Locks), nil
+}
+
+// mergeByFile folds records of one file identity into one. Only version 1
+// could hold several (one per folder spelling); there a duplicate may have
+// read CuliBox's own flag as the user's, so the file is ours when any record
+// says so (CuliBox records "not ours" only for a file that was flagged
+// already, and set that flag itself if any record is ours).
+func mergeByFile(rs []GuardLock) []GuardLock {
+	var out []GuardLock
+	for _, r := range rs {
+		i := slices.IndexFunc(out, func(o GuardLock) bool { return o.Dev == r.Dev && o.Ino == r.Ino })
+		if i < 0 {
+			out = append(out, r)
+			continue
+		}
+		o := &out[i]
+		o.Ours = o.Ours || r.Ours
+		for _, lp := range r.paths() {
+			o.addPath(lp)
+		}
+		for _, b := range r.Boxes {
+			if !slices.Contains(o.Boxes, b) {
+				o.Boxes = append(o.Boxes, b)
+			}
+		}
+		for _, s := range r.Sessions {
+			if !slices.Contains(o.Sessions, s) {
+				o.Sessions = append(o.Sessions, s)
+			}
+		}
+	}
+	return out
+}
+
+// addPath records lp as a spelling of the record's file, once.
+func (l *GuardLock) addPath(lp LockPath) {
+	if !slices.Contains(l.paths(), lp) {
+		l.Also = append(l.Also, lp)
+	}
 }
 
 // save writes the records atomically, owner-only; no records removes the file.
@@ -144,7 +212,7 @@ func (g *guardLocks) save() error {
 		}
 		return nil
 	}
-	b, err := json.MarshalIndent(guardLockDoc{Version: 1, Locks: g.recs}, "", "  ")
+	b, err := json.MarshalIndent(guardLockDoc{Version: guardLocksVersion, Locks: g.recs}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -184,6 +252,7 @@ func (g *guardLocks) save() error {
 func cloneLocks(rs []GuardLock) []GuardLock {
 	out := make([]GuardLock, len(rs))
 	for i, r := range rs {
+		r.Also = slices.Clone(r.Also)
 		r.Boxes = slices.Clone(r.Boxes)
 		r.Sessions = slices.Clone(r.Sessions)
 		out[i] = r
@@ -197,6 +266,19 @@ func lockRefusal(p, why string) error {
 	return refuseInPlace("%s cannot be locked on your Mac (%s). A box started in place on this case-insensitive disk "+
 		"could otherwise change it through another letter case (such as %s), so it is not started. Make sure you own the "+
 		"file and can read it, or remove it, or use a clone-mode profile", p, why, otherCase(filepath.Base(p)))
+}
+
+// setRefusal is the refusal for a flag that could not be set on p. A volume
+// without file flags (exFAT, a network share) answers ENOTSUP or EOPNOTSUPP:
+// no owner or permission fix helps there, only clone mode.
+func setRefusal(p string, err error) error {
+	if errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) {
+		return refuseInPlace("%s cannot be locked on your Mac: its volume does not support the lock (%v; exFAT and "+
+			"network shares do not). A box started in place on this case-insensitive disk could otherwise change it "+
+			"through another letter case (such as %s), so it is not started. Use a clone-mode profile for this folder",
+			p, err, otherCase(filepath.Base(p)))
+	}
+	return lockRefusal(p, err.Error())
 }
 
 // otherCase is an example spelling of name in another letter case: all lower
@@ -287,18 +369,18 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 	before := cloneLocks(g.recs)
 	var set []opened
 	for _, o := range all {
-		i := g.find(ws, o.name)
-		if i >= 0 && (g.recs[i].Dev != o.id.Dev || g.recs[i].Ino != o.id.Ino) {
-			// Another file at that name now: the recorded one is not reachable
-			// there, and its record says nothing about this one.
-			g.recs = slices.Delete(g.recs, i, i+1)
-			i = -1
-		}
+		// By identity, not by name: another spelling of the folder reaches the
+		// same file, and a file already flagged by a record of ours is joined
+		// (still ours), never taken for the user's flag. A record left at this
+		// name for another file is not this one's; it is unlocked only on its
+		// own file (unlock checks the identity).
+		i := g.find(o.id)
 		if i < 0 {
 			g.recs = append(g.recs, GuardLock{Workspace: ws, File: o.name, Dev: o.id.Dev, Ino: o.id.Ino, Ours: !o.imm})
 			i = len(g.recs) - 1
 		}
 		r := &g.recs[i]
+		r.addPath(LockPath{ws, o.name})
 		if !o.imm {
 			// Unflagged: never locked, cleared by hand, or a crash between the
 			// record and the flag. Setting it now makes it ours.
@@ -327,15 +409,15 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 			if serr := g.save(); serr != nil {
 				log.Printf("box: in-place lock records: %v", serr)
 			}
-			return nil, lockRefusal(filepath.Join(ws, o.name), err.Error())
+			return nil, setRefusal(filepath.Join(ws, o.name), err)
 		}
 	}
 	return g.lockedForLocked(box), nil
 }
 
-// find is the record of name in ws, or -1. Caller holds g.mu.
-func (g *guardLocks) find(ws, name string) int {
-	return slices.IndexFunc(g.recs, func(r GuardLock) bool { return r.Workspace == ws && r.File == name })
+// find is the record of the file with identity id, or -1. Caller holds g.mu.
+func (g *guardLocks) find(id FileID) int {
+	return slices.IndexFunc(g.recs, func(r GuardLock) bool { return r.Dev == id.Dev && r.Ino == id.Ino })
 }
 
 // lockedFor names the files CuliBox holds locked for box, sorted.
@@ -369,7 +451,7 @@ func (g *guardLocks) releaseBox(box string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.dropBoxes(func(b string) bool { return b != box }) {
-		g.settle()
+		g.settle(true)
 	}
 }
 
@@ -396,8 +478,7 @@ func (g *guardLocks) forgetSession(box, session string) {
 func (g *guardLocks) sweep(keep map[string]bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.dropBoxes(func(b string) bool { return keep[b] })
-	g.settle()
+	g.settle(g.dropBoxes(func(b string) bool { return keep[b] }))
 }
 
 // dropBoxes keeps the boxes (and their sessions) for which keep is true and
@@ -414,10 +495,12 @@ func (g *guardLocks) dropBoxes(keep func(string) bool) bool {
 	return changed
 }
 
-// settle unlocks every record no box holds and saves. A record whose clear
+// settle unlocks every record no box holds and saves when anything changed
+// (changed: the caller changed the records already). A record whose clear
 // failed stays, with no box, as a leftover: doctor names it and the next sweep
-// tries again. Caller holds g.mu.
-func (g *guardLocks) settle() {
+// tries again. A sweep that changes nothing writes nothing. Caller holds g.mu.
+func (g *guardLocks) settle(changed bool) {
+	n := len(g.recs)
 	g.recs = slices.DeleteFunc(g.recs, func(r GuardLock) bool {
 		if len(r.Boxes) > 0 {
 			return false
@@ -432,15 +515,38 @@ func (g *guardLocks) settle() {
 		}
 		return true
 	})
+	if !changed && len(g.recs) == n {
+		return
+	}
 	if err := g.save(); err != nil {
 		log.Printf("box: in-place lock records: %v", err)
 	}
 }
 
-// unlock clears the flag on the recorded file, only if it is still that very
-// file and still flagged. errLockGone when there is nothing of ours to clear.
+// unlock clears the flag on the recorded file through the first of its
+// spellings that still reaches it, only if it is still that very file and
+// still flagged. errLockGone when no spelling reaches anything of ours to
+// clear; any other failure is returned (the record stays, to retry).
 func (g *guardLocks) unlock(r GuardLock) error {
-	root, err := os.OpenRoot(r.Workspace)
+	var errs []error
+	for _, lp := range r.paths() {
+		err := g.unlockAt(r, lp)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errLockGone) {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return errLockGone
+}
+
+// unlockAt is unlock through one spelling lp of r's file.
+func (g *guardLocks) unlockAt(r GuardLock, lp LockPath) error {
+	root, err := os.OpenRoot(lp.Workspace)
 	if errors.Is(err, fs.ErrNotExist) {
 		return errLockGone
 	}
@@ -448,7 +554,7 @@ func (g *guardLocks) unlock(r GuardLock) error {
 		return err
 	}
 	defer root.Close()
-	f, id, err := openLocked(root, r.File)
+	f, id, err := openLocked(root, lp.File)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errLockGone) {
 		return errLockGone
 	}

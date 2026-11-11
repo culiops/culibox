@@ -48,3 +48,13 @@ func TestGuardLockRows(t *testing.T) {
 		t.Fatalf("unreadable records = %+v", rows)
 	}
 }
+
+// Review #96 (4): the printed unlock line is safe to paste for any folder name.
+func TestGuardLockRowsQuoteTheUnlockLine(t *testing.T) {
+	locks := []box.GuardLock{{Workspace: "/Users/u/x'$(cmd)'", File: "CLAUDE.md", Ours: true}}
+	rows := guardLockRows("darwin", boxFacts{Locks: locks, RunningKnown: true})
+	want := `chflags nouchg '/Users/u/x'\''$(cmd)'\''/CLAUDE.md'`
+	if len(rows) != 1 || !strings.HasSuffix(rows[0].Detail, want) {
+		t.Fatalf("rows = %+v, want the line to end %s", rows, want)
+	}
+}

@@ -1821,15 +1821,18 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 	m.mu.Lock()
 	m.drift = nextDrift
 	m.mu.Unlock()
-	// Guard locks of boxes docker no longer runs (a VM or docker restart, a
-	// removal that happened elsewhere) are lifted; a running box keeps its own.
-	running := map[string]bool{}
+	// Guard locks of boxes docker no longer lists (a VM or docker restart, a
+	// removal that happened elsewhere) or that this pass removed are lifted.
+	// Every other listed box keeps its own, whatever its state: one whose
+	// removal failed (paused, restarting, exited) may still run or run again,
+	// as Reconcile keeps what is left.
+	left := map[string]bool{}
 	for _, b := range boxes {
-		if b.State == "running" && !slices.ContainsFunc(rep.Removed, func(a SweepAction) bool { return a.Box == b.Name }) {
-			running[b.Name] = true
+		if !slices.ContainsFunc(rep.Removed, func(a SweepAction) bool { return a.Box == b.Name }) {
+			left[b.Name] = true
 		}
 	}
-	m.sweepLocks(running)
+	m.sweepLocks(left)
 	removed, scratchErrs := m.reapCAScratch(ctx)
 	for _, name := range removed {
 		rep.Removed = append(rep.Removed, SweepAction{name, "CA extraction container left by a crash"})

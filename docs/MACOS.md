@@ -373,10 +373,18 @@ a git config `include`, and so on). What it covers and what it does not is in
     as soon as its last session ends (instead of idling for `box_idle_ttl_seconds`),
     because what a session started in it can outlive the session; the files are
     unlocked right after. Several sessions or boxes in the same folder share the
-    lock, and it is lifted when the last one is gone.
+    lock, and it is lifted when the last one is gone. The lock is the file's,
+    so two spellings of one folder (`~/code/Repo` and `~/code/repo`, two boxes)
+    share it too.
   - If a file cannot be locked (you do not own it, or it cannot be opened), the
     spawn is refused and the message names the file. Fix the file, remove it,
-    or use a clone-mode profile.
+    or use a clone-mode profile. A volume that has no such flag (exFAT, a
+    network share) is refused with that reason: use a clone-mode profile there.
+  - Two CuliBox instances with separate data folders on one Mac do not see each
+    other's locks. The second finds the file locked already and treats the flag
+    as yours, so it never clears it; but the first lifts its own lock when its
+    box ends, even while the second's box in that folder still runs. Run boxes
+    in place in one folder from one instance only, or use a clone-mode profile.
   - A file you had already locked yourself (`uchg` set before the spawn) is
     left locked: CuliBox never clears a flag it did not set.
   - The cost: while the session runs you cannot edit those files on the Mac,

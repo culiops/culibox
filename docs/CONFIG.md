@@ -11,7 +11,7 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
 | `default_runtime` | `box` | Tier for agents that do not set their own: `box` or `host`. With no config file at all, the built-in default is `host`. |
 | `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; CuliBox never rebuilds or pulls a pinned tag. A digest or registry ref is pulled by `box setup` and never built; a box spawn never pulls. |
-| `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
+| `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. On macOS a box started in place that holds file locks (see [MACOS.md](MACOS.md)) is removed as soon as its last session ends instead. |
 | `audit_egress_retention_days` | `90` | Days of egress audit rows to keep; a daemon job prunes older ones once a day (at start, then every 24 h) while egress control is running; without it nothing is pruned and the Audit page says so. `0` keeps them forever (unset is `90`, not forever). Range 0-36500. Every other audit table is kept forever. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |

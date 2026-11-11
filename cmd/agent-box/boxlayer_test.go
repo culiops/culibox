@@ -877,6 +877,33 @@ func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {
 	}
 }
 
+// Review #96 (2): the boot pass lifts the guard locks only when colima says
+// the VM is stopped. A status that cannot be read is not "stopped": a box may
+// run, so its locks stay for the next Reconcile or Sweep.
+func TestBootSweepsGuardLocksOnlyOnAConfirmedStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		garbled   bool
+		wantSweep bool
+	}{
+		{"stopped", false, true},
+		{"status unreadable", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, fc, _ := darwinLayer(t, false)
+			fc.garbled = tc.garbled
+			swept := 0
+			l.sweepLocksNoBoxes = func() { swept++ }
+			if l.bootReconcile(context.Background()) {
+				t.Fatal("a VM that is not known to run is not reconciled")
+			}
+			if got := swept == 1; got != tc.wantSweep {
+				t.Fatalf("swept %d times, want sweep=%v", swept, tc.wantSweep)
+			}
+		})
+	}
+}
+
 func TestRunningVMIsReconciledAtBoot(t *testing.T) {
 	l, fc, d := darwinLayer(t, false)
 	fc.running = true
