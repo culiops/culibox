@@ -310,6 +310,7 @@ func (v *VM) diffMounts(ctx context.Context) (mountDiff, error) {
 func (v *VM) ReconcileMounts(ctx context.Context) error {
 	d, err := v.diffMounts(ctx)
 	if err != nil {
+		v.markReconcile() // no verdict yet: the next spawn gets the chance
 		return err
 	}
 	if len(d.problems) == 0 {
@@ -318,6 +319,34 @@ func (v *VM) ReconcileMounts(ctx context.Context) error {
 	if d.other || len(d.modeOnly) == 0 {
 		return d.err()
 	}
+	// Only one caller per start is handed started=true, so a remount that is
+	// cut off (the spawn's request ends) or fails is re-armed for the next
+	// spawn; the remount itself outlives the request, bounded by its own timeout.
+	err = v.remountModes(context.WithoutCancel(ctx), d)
+	if err != nil {
+		v.markReconcile()
+	}
+	return err
+}
+
+// reconcileTimeout bounds the remount and the check after it.
+var reconcileTimeout = 60 * time.Second
+
+// remountModes remounts the mode-only mismatches under the apply lock (an
+// apply that is stopping or starting the VM must not be raced). A lock held
+// elsewhere skips the remount and fails closed with the mismatch the check
+// found, plus the reason; the folders are never trusted unverified.
+func (v *VM) remountModes(ctx context.Context, d mountDiff) error {
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+	unlock, err := lockApply(v.Config().ApplyLockPath())
+	if err != nil {
+		if errors.Is(err, ErrApplyLocked) {
+			return fmt.Errorf("%w (not fixing the folder modes: %v)", d.err(), err)
+		}
+		return fmt.Errorf("%w (fixing the folder modes in the VM failed: %v)", d.err(), err)
+	}
+	defer unlock()
 	if _, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--", "sh", "-c", remountScript(d.modeOnly)); err != nil {
 		return fmt.Errorf("%w (fixing the folder modes in the VM failed: %v)", d.err(), err)
 	}

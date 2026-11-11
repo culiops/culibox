@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -24,6 +27,9 @@ type guestRunner struct {
 	remounts    [][]string // argv of each sh -c call
 	remountErr  error
 	remountNoop bool
+	// onMountsRead runs after each /proc/self/mounts answer (a test cancels the
+	// caller's context there, between the check and the remount).
+	onMountsRead func()
 }
 
 func (g *guestRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
@@ -37,10 +43,16 @@ func (g *guestRunner) Run(ctx context.Context, env []string, bin string, args ..
 			b.WriteString("m " + esc + " virtiofs " + g.table[p] + ",relatime 0 0\n")
 		}
 		b.WriteString(g.extra)
+		if g.onMountsRead != nil {
+			g.onMountsRead()
+		}
 		return b.String(), nil
 	}
 	if args[0] == "ssh" && len(args) > 4 && args[len(args)-3] == "sh" {
 		g.remounts = append(g.remounts, append([]string(nil), args...))
+		if ctx.Err() != nil { // a cancelled request would kill the ssh
+			return "", ctx.Err()
+		}
 		if g.remountErr != nil {
 			return "sudo: a password is required", g.remountErr
 		}
@@ -91,6 +103,7 @@ func reconcileVM(t *testing.T, shares []vmshares.Share, guest map[string]string)
 	for p, m := range guest {
 		g.table[p] = m
 	}
+	v.claimReconcile() // ApplyMounts armed it; these tests start with it spent
 	return v, g
 }
 
@@ -251,5 +264,120 @@ func TestVerifyMountsNeverRemounts(t *testing.T) {
 	}
 	if len(g.remounts) != 0 {
 		t.Fatal("VerifyMounts must stay read-only")
+	}
+}
+
+// A spawn cancelled between the check and the remount must not cost the one
+// remount chance: the remount runs detached from the request.
+func TestReconcileRemountSurvivesACancelledRequest(t *testing.T) {
+	v, g := reconcileVM(t, newShares, map[string]string{"/Users/a/docs": "rw"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g.onMountsRead = cancel
+	if err := v.ReconcileMounts(ctx); err != nil {
+		t.Fatalf("a cancelled request must not stop the remount: %v", err)
+	}
+	if len(g.remounts) != 1 || g.table["/Users/a/docs"] != "ro" {
+		t.Fatalf("remounts %v, table %v", g.remounts, g.table)
+	}
+}
+
+// Only one caller per start gets started=true, so a remount that failed or was
+// cut off re-arms the claim: the next spawn retries instead of being refused.
+func TestReconcileFailureRearmsTheClaim(t *testing.T) {
+	v, g := reconcileVM(t, newShares, map[string]string{"/Users/a/docs": "rw"})
+	g.remountErr = errors.New("exit status 1")
+	if v.ReconcileMounts(context.Background()) == nil {
+		t.Fatal("want an error")
+	}
+	if !v.claimReconcile() {
+		t.Fatal("a failed remount must leave the next spawn a reconcile")
+	}
+	g.remountErr = nil
+	g.remountNoop = true // not holding is a failure too
+	if v.ReconcileMounts(context.Background()) == nil {
+		t.Fatal("want an error")
+	}
+	if !v.claimReconcile() {
+		t.Fatal("a remount that does not hold must re-arm")
+	}
+	g.remountNoop = false
+	if err := v.ReconcileMounts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v.claimReconcile() {
+		t.Fatal("a successful reconcile must not re-arm")
+	}
+}
+
+// A missing or extra folder is not a remount case and must not loop on re-arm.
+func TestReconcileOtherMismatchDoesNotRearm(t *testing.T) {
+	v, g := reconcileVM(t, newShares, nil)
+	g.extra = "m /Users/x virtiofs rw 0 0\n"
+	if v.ReconcileMounts(context.Background()) == nil {
+		t.Fatal("want an error")
+	}
+	if v.claimReconcile() {
+		t.Fatal("an extra folder must not re-arm")
+	}
+}
+
+// The remount is one more change to the VM: it waits for no apply and races
+// none. A lock held elsewhere skips it and fails closed, re-armed for later.
+func TestReconcileSkipsRemountWhileAnApplyHoldsTheLock(t *testing.T) {
+	v, g := reconcileVM(t, newShares, map[string]string{"/Users/a/docs": "rw"})
+	unlock, err := lockApply(v.Config().ApplyLockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = v.ReconcileMounts(context.Background())
+	if !errors.Is(err, ErrMountsMismatch) || !strings.Contains(err.Error(), "/Users/a/docs is rw, expected ro") || !strings.Contains(err.Error(), "applying") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(g.remounts) != 0 {
+		t.Fatalf("remounted under another apply: %v", g.remounts)
+	}
+	if !v.claimReconcile() {
+		t.Fatal("a skipped remount must re-arm")
+	}
+	unlock()
+	if err := v.ReconcileMounts(context.Background()); err != nil {
+		t.Fatalf("lock free: %v", err)
+	}
+	// and the lock is released again afterwards
+	if v.ApplyLockHeld() {
+		t.Fatal("the remount left the apply lock held")
+	}
+}
+
+// remountScript run by a real shell, with a stub sudo that prints its argv one
+// per line: the path must arrive byte for byte, whatever it contains.
+func TestRemountScriptRunsInARealShell(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	if _, err := exec.LookPath("base64"); err != nil {
+		t.Skip("no base64")
+	}
+	dir := t.TempDir()
+	stub := "#!/bin/sh\nfor a in \"$@\"; do printf 'ARG:%s\\0' \"$a\"; done\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"/Users/a/with space", "/Users/a/it's", "/Users/a/$(id)", "/Users/a/`id`",
+		"/Users/a/-leading", "/Users/a/trailing\n", "/Users/a/Tài liệu"}
+	for _, p := range paths {
+		cmd := exec.Command(sh, "-c", remountScript([]Mount{{p, true}}))
+		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin"}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%q: %v", p, err)
+		}
+		got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+		want := []string{"ARG:-n", "ARG:mount", "ARG:-o", "ARG:remount,rw", "ARG:--", "ARG:" + p}
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("%q: argv %q, want %q", p, got, want)
+		}
 	}
 }

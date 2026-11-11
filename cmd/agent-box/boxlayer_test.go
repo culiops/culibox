@@ -39,6 +39,10 @@ type fakeColima struct {
 	onSSH    func() // called on each ssh (lets a test order it against docker calls)
 	calls    []string
 	failStop bool // stop fails and the VM keeps running
+	// fixedMounts is what the guest lists after a folder-mode remount
+	// (`ssh … sh -c …`); remounts counts those calls.
+	fixedMounts string
+	remounts    int
 }
 
 func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
@@ -66,6 +70,13 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
 			mount, f.socket), nil
 	case "ssh":
+		if strings.Contains(strings.Join(args, " "), "mount -o remount,") {
+			f.remounts++
+			if f.fixedMounts != "" {
+				f.mounts = f.fixedMounts
+			}
+			return "", nil
+		}
 		kind := "iptables"
 		if strings.Contains(strings.Join(args, " "), "/proc/self/mounts") {
 			kind = "mounts"
