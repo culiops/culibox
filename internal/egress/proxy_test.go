@@ -616,7 +616,7 @@ func TestNonAllowlistedHostDenied(t *testing.T) {
 
 func TestRebindingToPrivateIsRefused(t *testing.T) {
 	boxNet := netip.MustParsePrefix("8.8.8.0/24") // public-looking, so only the subnet rule refuses it
-	for _, a := range []string{"127.0.0.1", "100.76.118.121", "10.0.0.5", "169.254.169.254", "::1", "fc00::1",
+	for _, a := range []string{"127.0.0.1", "100.64.20.30", "10.0.0.5", "169.254.169.254", "::1", "fc00::1",
 		"::ffff:127.0.0.1", "8.8.8.8"} {
 		t.Run(a, func(t *testing.T) {
 			h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{netip.MustParseAddr(a)} })

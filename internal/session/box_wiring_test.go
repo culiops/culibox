@@ -614,7 +614,7 @@ func TestBoxedSpawnInfoCarriesBundleDrops(t *testing.T) {
 // text (which can carry host paths) stays in the log line.
 func TestBundleFailureIsOneDrop(t *testing.T) {
 	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
-	m.SetBundles(&fakeBundles{err: errors.New("read /home/claude/.claude/secret-path: boom")})
+	m.SetBundles(&fakeBundles{err: errors.New("read /home/user/.claude/secret-path: boom")})
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
 	if err != nil {
 		t.Fatal(err)

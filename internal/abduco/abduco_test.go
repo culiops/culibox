@@ -27,11 +27,22 @@ func shortTempDir(t *testing.T) string {
 	return dir
 }
 
-func testAdapter(t *testing.T) *Adapter {
+// needAbduco skips a test when abduco is not on PATH, unless
+// AGENT_BOX_REQUIRE_ABDUCO=1 (set in CI), where a missing abduco is a failure:
+// these tests must not be able to pass by skipping.
+func needAbduco(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("abduco"); err != nil {
+		if os.Getenv("AGENT_BOX_REQUIRE_ABDUCO") == "1" {
+			t.Fatal("abduco not installed and AGENT_BOX_REQUIRE_ABDUCO=1")
+		}
 		t.Skip("abduco not installed")
 	}
+}
+
+func testAdapter(t *testing.T) *Adapter {
+	t.Helper()
+	needAbduco(t)
 	dir := shortTempDir(t)
 	a, err := New("abduco", filepath.Join(dir, "sock"), filepath.Join(dir, "pids"))
 	if err != nil {

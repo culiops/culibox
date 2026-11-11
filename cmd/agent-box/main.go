@@ -67,6 +67,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "agent-box: %v\n%s", err, usage)
 		os.Exit(2)
 	}
+	if args.Cmd == "version" {
+		fmt.Print(versionLine())
+		return
+	}
 	// The daemon keeps its last log lines for the bug-report bundle. Installed
 	// before anything logs so a startup error is captured; the one-shot
 	// subcommands (doctor, bug-report, box, ...) keep plain stderr.

@@ -2,7 +2,6 @@ package abduco
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -124,9 +123,7 @@ func TestCheckSocketDir(t *testing.T) {
 // The formula must match where abduco really binds: create a real session and
 // find its socket. Uses a short temp dir so the test itself fits the limit.
 func TestSocketPathMatchesAbduco(t *testing.T) {
-	if _, err := exec.LookPath("abduco"); err != nil {
-		t.Skip("abduco not installed")
-	}
+	needAbduco(t)
 	dir, err := os.MkdirTemp("/tmp", "abs-")
 	if err != nil {
 		t.Fatal(err)

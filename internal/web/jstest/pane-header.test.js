@@ -185,7 +185,7 @@ test("a narrow pane is dot, name and ONE chip: no meta, no model, no ctx, no cos
 const live = (min) => new Date(Date.now() + min * 60000 + 30000).toISOString();
 const elevatedSession = (until) => ({
   id: "s1", name: "agent-box", activity: "working", runtime: "box", cost_usd: 3.12,
-  aws_connections: [{ name: "culipulse-prod", label: "culipulse-prod", account_id: "402100009917", role_arn: "arn:aws:iam::402100009917:role/agent-ops-read", elevated_until: until }],
+  aws_connections: [{ name: "culipulse-prod", label: "culipulse-prod", account_id: "111122223333", role_arn: "arn:aws:iam::111122223333:role/agent-ops-read", elevated_until: until }],
 });
 
 test("the header dot wears is-elevated while the session has a live write window, beside the write chip, and not otherwise (G4-D1)", () => {

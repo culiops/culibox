@@ -59,7 +59,7 @@ func spawnAWS(m *Manager, cwd string) (*Session, error) {
 
 func TestBoundSpawnNamesItsBoxBeforeTheBrokerMount(t *testing.T) {
 	elevate := testBinding()
-	elevate.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-write"}
+	elevate.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-write"}
 	cases := []struct {
 		name  string
 		l     launcher.Builder

@@ -237,7 +237,7 @@ func TestSpawnTokenMCPWithoutABundle(t *testing.T) {
 	})
 	t.Run("bundle failed", func(t *testing.T) {
 		m, boxes, hooks := mcpManager(t, "claude", account.DefaultResolved(""), grafanaEntry())
-		m.SetBundles(&fakeBundles{err: errors.New("probe failed: /home/claude/.claude boom")})
+		m.SetBundles(&fakeBundles{err: errors.New("probe failed: /home/user/.claude boom")})
 		s := spawnTok(t, m)
 		check(t, boxes, hooks)
 		if len(s.BundleDrops) != 1 || s.BundleDrops[0].Reason != bundle.ReasonBundleFailed {

@@ -60,7 +60,7 @@ func TestBoxNameSeparatesInstances(t *testing.T) {
 func TestExecArgvForwardsEnvByNameOnly(t *testing.T) {
 	m := newTestManager(t)
 	env := []string{"ANTHROPIC_API_KEY=sk-super-secret", "TERM=xterm-256color"}
-	got := m.execArgv("ab-box-abc", "/home/claude/proj", "bash-1", []string{"claude", "--model", "opus"}, env)
+	got := m.execArgv("ab-box-abc", "/home/user/proj", "bash-1", []string{"claude", "--model", "opus"}, env)
 	joined := strings.Join(got, " ")
 	if strings.Contains(joined, "sk-super-secret") {
 		t.Fatalf("secret VALUE leaked into argv: %q", joined)
@@ -68,7 +68,7 @@ func TestExecArgvForwardsEnvByNameOnly(t *testing.T) {
 	if !containsPair(got, "-e", "ANTHROPIC_API_KEY") {
 		t.Fatalf("expected valueless -e ANTHROPIC_API_KEY, got %q", joined)
 	}
-	if !containsPair(got, "-w", "/home/claude/proj") {
+	if !containsPair(got, "-w", "/home/user/proj") {
 		t.Fatalf("expected -w with the workspace, got %q", joined)
 	}
 	if got[0] != "/usr/bin/docker" {
@@ -81,12 +81,12 @@ func TestExecArgvForwardsEnvByNameOnly(t *testing.T) {
 func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 	m := newTestManager(t)
 	env := []string{
-		"PATH=/home/claude/.local/bin:/usr/bin",
-		"HOME=/home/claude",
+		"PATH=/home/user/.local/bin:/usr/bin",
+		"HOME=/home/user",
 		"SHELL=/usr/bin/zsh",
 		"USER=claude",
 		"LOGNAME=claude",
-		"PWD=/home/claude",
+		"PWD=/home/user",
 		"ABDUCO_SOCKET_DIR=/run/x",
 		"TERM=xterm-256color",
 	}
@@ -103,14 +103,14 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false, "", DefaultMemory)
+	got := m.runArgs("ab-box-abc", "/home/user/proj", nil, false, false, "", DefaultMemory)
 	joined := strings.Join(got, " ")
-	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
+	for _, forbidden := range []string{"docker.sock", "/home/user/.ssh", "/home/user/.claude,"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("run args must never reference %q: %q", forbidden, joined)
 		}
 	}
-	if !containsPair(got, "--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj") {
+	if !containsPair(got, "--mount", "type=bind,src=/home/user/proj,dst=/home/user/proj") {
 		t.Fatalf("workspace must bind at its identical host path: %q", joined)
 	}
 	if n := countFlag(got, "--mount"); n != 3 {
@@ -123,7 +123,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false, false, "", DefaultMemory)
+	got := m.runArgs("ab-box-abc", "/home/user/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false, false, "", DefaultMemory)
 	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
 		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
 	}
@@ -173,7 +173,7 @@ func TestMountUnsafeRefusesLineBreaksControlsAndBadUTF8(t *testing.T) {
 }
 
 func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
-	for _, p := range []string{"/home/claude/proj", "/Users/me/My Project", "/srv/a-b_c.d", "/Users/me/projet \u00e9t\u00e9", "/home/x/\u4e2d\u6587"} {
+	for _, p := range []string{"/home/user/proj", "/Users/me/My Project", "/srv/a-b_c.d", "/Users/me/projet \u00e9t\u00e9", "/home/x/\u4e2d\u6587"} {
 		if r := MountUnsafe(p); r != "" {
 			t.Errorf("%q should be safe, got %q", p, r)
 		}

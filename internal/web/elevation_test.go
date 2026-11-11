@@ -52,7 +52,7 @@ func (f *fakeElev) SSOLogin(id, name string) (ssologin.State, error) {
 	return ssologin.State{State: "waiting", URI: "https://device.sso.ap-southeast-1.amazonaws.com/", URITrusted: true, Code: "ABCD-EFGH"}, nil
 }
 
-const host = "100.76.118.121:8913"
+const host = "192.0.2.10:8913"
 
 func elevReq(method, path, origin, fetchSite string, kind credKind) *http.Request {
 	body := "" // sso-login: the legacy client sends no body

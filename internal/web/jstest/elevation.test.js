@@ -3,8 +3,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { connPickerKind, grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName } = require("../static/elevation.js");
 
-const WRITE = "arn:aws:iam::226198813800:role/agentbox-agent-write";
-const aws = { label: "sandbox", account_id: "226198813800", prod: false, elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false } };
+const WRITE = "arn:aws:iam::123456789012:role/agentbox-agent-write";
+const aws = { label: "sandbox", account_id: "123456789012", prod: false, elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false } };
 
 test("grantPanel: windows up to the binding's max, role, host-tier warning, prod label", () => {
   const st = { elevate: { host_sessions: [{ id: "zsh-1", name: "zsh" }], blocked: "" } };
@@ -79,9 +79,9 @@ test("dropToast names when the issued credentials stop working", () => {
 // --- #155 named AWS connections ---------------------------------------------
 const NOW = Date.parse("2027-01-15T08:00:00Z");
 const iso = (min) => new Date(NOW + min * 60000).toISOString();
-const wc = (name, over) => Object.assign({ name: name, label: name.toUpperCase(), account_id: "226198813800", role_arn: "arn:aws:iam::226198813800:role/ro-" + name,
+const wc = (name, over) => Object.assign({ name: name, label: name.toUpperCase(), account_id: "123456789012", role_arn: "arn:aws:iam::123456789012:role/ro-" + name,
   region: "ap-southeast-1", prod: false, write_capable: true,
-  elevate: { role_arn: "arn:aws:iam::226198813800:role/w-" + name, max_minutes: 60, allow_iam: false } }, over);
+  elevate: { role_arn: "arn:aws:iam::123456789012:role/w-" + name, max_minutes: 60, allow_iam: false } }, over);
 const ro = (name) => ({ name: name, label: name, account_id: "1", role_arn: "arn:aws:iam::1:role/r", region: "us-east-1", prod: false, write_capable: false });
 
 test("grantPanel (connections): the selector exists only with two or more write-capable connections", () => {

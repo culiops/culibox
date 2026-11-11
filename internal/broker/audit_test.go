@@ -43,7 +43,7 @@ func TestAuditRecordAndReadBack(t *testing.T) {
 	t0 := time.Unix(1_800_000_000, 0)
 	for i, o := range []Outcome{OutcomeMinted, OutcomeSSOExpired, OutcomeMinted} {
 		if err := a.Record(Row{Time: t0.Add(time.Duration(i) * time.Minute), SessionID: "claude-3", Profile: "c",
-			AccountID: "226198813800", RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent",
+			AccountID: "210987654321", RoleARN: "arn:aws:iam::210987654321:role/agentbox-agent",
 			SourceIdentity: "agentbox-claude-3", ScopeHash: "abc", Expires: t0.Add(15 * time.Minute), Outcome: o}); err != nil {
 			t.Fatal(err)
 		}
@@ -127,8 +127,8 @@ func TestApprovalRowsAreStored(t *testing.T) {
 	}
 	defer a.Close()
 	until := time.Unix(1_800_003_600, 0)
-	in := ApprovalRow{Time: time.Unix(1_800_000_000, 0), SessionID: "aws-1", Profile: "aws", AccountID: "226198813800",
-		RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write", Action: ActionGranted, Until: until,
+	in := ApprovalRow{Time: time.Unix(1_800_000_000, 0), SessionID: "aws-1", Profile: "aws", AccountID: "210987654321",
+		RoleARN: "arn:aws:iam::210987654321:role/agentbox-agent-write", Action: ActionGranted, Until: until,
 		Minutes: 60, Reason: "apply vpc", Cred: "cookie"}
 	if err := a.RecordApproval(in); err != nil {
 		t.Fatal(err)

@@ -123,8 +123,8 @@ test("checkedText: today shows the time, earlier shows the date, none is empty",
 });
 
 test("credRoleName is the part after role/ in an ARN", () => {
-  assert.strictEqual(credRoleName("arn:aws:iam::226198813800:role/agentbox-base"), "agentbox-base");
-  assert.strictEqual(credRoleName("arn:aws:iam::226198813800:role/path/to/r"), "path/to/r");
+  assert.strictEqual(credRoleName("arn:aws:iam::210987654321:role/agentbox-base"), "agentbox-base");
+  assert.strictEqual(credRoleName("arn:aws:iam::210987654321:role/path/to/r"), "path/to/r");
   assert.strictEqual(credRoleName(""), "");
   assert.strictEqual(credRoleName("nonsense"), "nonsense");
 });
@@ -149,17 +149,17 @@ test("awsConnName: lowercases into the entry-name shape", () => {
 });
 
 test("awsRowFromProfile: assume-role copies the role and its source profile", () => {
-  const r = awsRowFromProfile({ name: "Prod_Admin", kind: "assume-role", role_arn: "arn:aws:iam::481203957716:role/ops-admin", source_profile: "base-user", region: "ap-southeast-1", selectable: true });
+  const r = awsRowFromProfile({ name: "Prod_Admin", kind: "assume-role", role_arn: "arn:aws:iam::444455556666:role/ops-admin", source_profile: "base-user", region: "ap-southeast-1", selectable: true });
   assert.deepStrictEqual(r, {
-    name: "prod-admin", source_profile: "base-user", role_arn: "arn:aws:iam::481203957716:role/ops-admin",
+    name: "prod-admin", source_profile: "base-user", role_arn: "arn:aws:iam::444455556666:role/ops-admin",
     region: "ap-southeast-1", label: "prod-admin", prod: true, needsRole: false,
   });
 });
 
 test("awsRowFromProfile: sso starts from the account's role/ prefix and needs a role", () => {
-  const r = awsRowFromProfile({ name: "sandbox", kind: "sso", sso_account_id: "226198813800", sso_role_name: "Lab", region: "ap-southeast-1", selectable: true });
+  const r = awsRowFromProfile({ name: "sandbox", kind: "sso", sso_account_id: "210987654321", sso_role_name: "Lab", region: "ap-southeast-1", selectable: true });
   assert.deepStrictEqual(r, {
-    name: "sandbox", source_profile: "sandbox", role_arn: "arn:aws:iam::226198813800:role/",
+    name: "sandbox", source_profile: "sandbox", role_arn: "arn:aws:iam::210987654321:role/",
     region: "ap-southeast-1", label: "sandbox", prod: false, needsRole: true,
   });
 });
@@ -201,12 +201,12 @@ test("awsSplitList splits on lines, commas and spaces and drops blanks", () => {
 });
 
 test("awsRoleARN expands a bare role name with the SSO account, and leaves an ARN alone", () => {
-  assert.strictEqual(awsRoleARN("226198813800", "agentbox-agent"), "arn:aws:iam::226198813800:role/agentbox-agent");
-  assert.strictEqual(awsRoleARN("226198813800", "  path/r "), "arn:aws:iam::226198813800:role/path/r");
-  assert.strictEqual(awsRoleARN("226198813800", "arn:aws:iam::1:role/x"), "arn:aws:iam::1:role/x");
+  assert.strictEqual(awsRoleARN("210987654321", "agentbox-agent"), "arn:aws:iam::210987654321:role/agentbox-agent");
+  assert.strictEqual(awsRoleARN("210987654321", "  path/r "), "arn:aws:iam::210987654321:role/path/r");
+  assert.strictEqual(awsRoleARN("210987654321", "arn:aws:iam::1:role/x"), "arn:aws:iam::1:role/x");
   assert.strictEqual(awsRoleARN("", "agentbox-agent"), "agentbox-agent");
-  assert.strictEqual(awsRoleARN("226198813800", ""), "");
-  assert.strictEqual(awsRoleARN("226198813800", "not a role!"), "not a role!");
+  assert.strictEqual(awsRoleARN("210987654321", ""), "");
+  assert.strictEqual(awsRoleARN("210987654321", "not a role!"), "not a role!");
 });
 
 test("awsConnFromRow sends only what is set", () => {
@@ -471,7 +471,7 @@ test("a timed-out sign-in goes back to the Sign in state with a note", () => {
 // --- Settings page: one table per provider (desktop only) ---------------------
 
 const awsE = (name, extra) => ({
-  name, kind: "aws", account_id: "226198813800", role_arn: "arn:aws:iam::226198813800:role/CuliShopLabAccess",
+  name, kind: "aws", account_id: "210987654321", role_arn: "arn:aws:iam::210987654321:role/CuliShopLabAccess",
   region: "ap-southeast-1", status: "ok", source: "web", prod: false, used_by: [], base: null, ...extra,
 });
 
@@ -485,8 +485,8 @@ test("credTableRows aws: PROD with elevate, no elevation, and a can-write row ma
   const g = credGroups(view({
     aws: [
       awsE("culipulse-prod", {
-        prod: true, role_arn: "arn:aws:iam::402100009917:role/agent-investigate", account_id: "402100009917",
-        elevate: { role_arn: "arn:aws:iam::402100009917:role/agent-ops", max_minutes: 60 },
+        prod: true, role_arn: "arn:aws:iam::111122223333:role/agent-investigate", account_id: "111122223333",
+        elevate: { role_arn: "arn:aws:iam::111122223333:role/agent-ops", max_minutes: 60 },
         used_by: ["a", "b"], base: { state: "none_found", checked_at: "2020-01-02T03:04:00Z" },
       }),
       awsE("sandbox", { status: "missing" }),
@@ -499,7 +499,7 @@ test("credTableRows aws: PROD with elevate, no elevation, and a can-write row ma
   assert.strictEqual(a.cells[0].text, "culipulse-prod");
   assert.strictEqual(a.cells[0].tag, "PROD");
   assert.strictEqual(a.cells[0].sub, "elevate: agent-ops · max 60m");
-  assert.deepStrictEqual([a.cells[1].text, a.cells[1].sub, a.cells[1].mono], ["402100009917", "agent-investigate", true]);
+  assert.deepStrictEqual([a.cells[1].text, a.cells[1].sub, a.cells[1].mono], ["111122223333", "agent-investigate", true]);
   assert.deepStrictEqual([a.cells[2].text, a.cells[2].cls], ["Ready", "ready"]);
   assert.deepStrictEqual([a.cells[3].text, a.cells[3].cls], ["No broad write access found", "ok"]);
   assert.ok(/^checked 2020-01-0[123]$/.test(a.cells[3].sub), a.cells[3].sub);
@@ -610,7 +610,7 @@ test("desktop creds table: fixed-layout column widths are percentages", () => {
   assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
 });
 
-const roleList = (...names) => names.map((n) => ({ name: n, arn: "arn:aws:iam::226198813800:role/" + n }));
+const roleList = (...names) => names.map((n) => ({ name: n, arn: "arn:aws:iam::210987654321:role/" + n }));
 
 test("awsRolesShown: filters by name, case-insensitively, and caps what it renders", () => {
   const roles = roleList("agentbox-agent", "AWSServiceRoleForECS", "ecs-task-api", "Lab-reader");
@@ -634,15 +634,15 @@ test("awsRolesShown: the chosen role stays shown even when the filter or the cap
 test("awsAgentRolePick: preselects the one agentbox-* role over an unfinished role field", () => {
   const roles = roleList("agentbox-agent", "Admin", "ecs-task");
   assert.strictEqual(awsAgentRolePick(roles, ""), roles[0].arn);
-  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::226198813800:role/"), roles[0].arn);
-  assert.strictEqual(awsAgentRolePick(roleList("AgentBox-Agent"), ""), "arn:aws:iam::226198813800:role/AgentBox-Agent");
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::210987654321:role/"), roles[0].arn);
+  assert.strictEqual(awsAgentRolePick(roleList("AgentBox-Agent"), ""), "arn:aws:iam::210987654321:role/AgentBox-Agent");
 });
 
 test("awsAgentRolePick: never overrides a typed role, never guesses between several", () => {
   const roles = roleList("agentbox-agent", "Admin");
-  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::226198813800:role/Admin"), "");
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::210987654321:role/Admin"), "");
   assert.strictEqual(awsAgentRolePick(roles, "Admin"), "");
-  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::22619881380:role/Ad"), "");
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::21098765432:role/Ad"), "");
   assert.strictEqual(awsAgentRolePick(roleList("agentbox-agent", "agentbox-agent-write"), ""), "");
   assert.strictEqual(awsAgentRolePick(roleList("Admin"), ""), "");
   assert.strictEqual(awsAgentRolePick([], ""), "");

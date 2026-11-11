@@ -23,9 +23,9 @@ func hit(h http.Handler, method, path, host string) *httptest.ResponseRecorder {
 }
 
 func TestHostGuard_AllowsListedHosts(t *testing.T) {
-	h, _ := guardWith("127.0.0.1:8899", "localhost:8899", "[::1]:8899", "agent-box.culiops.dev")
+	h, _ := guardWith("127.0.0.1:8899", "localhost:8899", "[::1]:8899", "box.example.com")
 	// Review focus #2: case-insensitive and IPv6 alias.
-	for _, host := range []string{"127.0.0.1:8899", "LOCALHOST:8899", "[::1]:8899", "Agent-Box.Culiops.Dev"} {
+	for _, host := range []string{"127.0.0.1:8899", "LOCALHOST:8899", "[::1]:8899", "Box.Example.Com"} {
 		if w := hit(h, "GET", "/", host); w.Code != 200 {
 			t.Errorf("Host %q: %d, want 200", host, w.Code)
 		}

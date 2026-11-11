@@ -32,6 +32,8 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"doctor"}, cliArgs{Cmd: "doctor", ConfigPath: ""}},
 		{[]string{"bug-report"}, cliArgs{Cmd: "bug-report", ConfigPath: ""}},
 		{[]string{"bug-report", "-config", "x.json"}, cliArgs{Cmd: "bug-report", ConfigPath: "x.json", ConfigSet: true}},
+		{[]string{"version"}, cliArgs{Cmd: "version"}},
+		{[]string{"--version"}, cliArgs{Cmd: "version"}},
 	}
 	for _, c := range cases {
 		got, err := parseArgs(c.argv)
@@ -39,10 +41,23 @@ func TestParseArgs(t *testing.T) {
 			t.Errorf("parseArgs(%q) = %+v,%v want %+v", c.argv, got, err, c.want)
 		}
 	}
-	for _, bad := range [][]string{{"deploy"}, {"serve", "extra"}, {"-nope"}, {"bug-report", "extra"}, {"bug-report", "-rebuild"}} {
+	for _, bad := range [][]string{{"deploy"}, {"serve", "extra"}, {"-nope"}, {"bug-report", "extra"}, {"bug-report", "-rebuild"}, {"version", "extra"}, {"version", "-config", "x"}} {
 		if _, err := parseArgs(bad); err == nil {
 			t.Errorf("parseArgs(%q): want error", bad)
 		}
+	}
+}
+
+func TestVersionLine(t *testing.T) {
+	oldVersion, oldCommit := version, commit
+	t.Cleanup(func() { version, commit = oldVersion, oldCommit })
+	version, commit = "v1.2.3", "abc123"
+	if got, want := versionLine(), "agent-box v1.2.3 (abc123)\n"; got != want {
+		t.Errorf("versionLine() = %q, want %q", got, want)
+	}
+	version, commit = "", ""
+	if got := versionLine(); !strings.HasPrefix(got, "agent-box dev (") {
+		t.Errorf("unstamped versionLine() = %q, want prefix %q", got, "agent-box dev (")
 	}
 }
 
@@ -203,7 +218,7 @@ func TestLoginURLFor(t *testing.T) {
 	}{
 		{config.Config{BindAddr: "127.0.0.1:8899"}, "http://127.0.0.1:8899/login#token=TOKEN", false},
 		{config.Config{BindAddr: "[::1]:8899"}, "http://[::1]:8899/login#token=TOKEN", false},
-		{config.Config{BindAddr: "100.76.118.121:9000"}, "http://100.76.118.121:9000/login#token=TOKEN", false},
+		{config.Config{BindAddr: "192.0.2.10:9000"}, "http://192.0.2.10:9000/login#token=TOKEN", false},
 		{config.Config{BindAddr: "0.0.0.0:8899", AllowedHosts: []string{"box.example", "mac.lan:8899"}}, "http://mac.lan:8899/login#token=TOKEN", false},
 		{config.Config{BindAddr: "0.0.0.0:8899"}, "http://<host>:8899/login#token=TOKEN", true},
 		{config.Config{BindAddr: ":8899"}, "http://<host>:8899/login#token=TOKEN", true},
@@ -221,7 +236,7 @@ func TestLoginURLFor(t *testing.T) {
 // Carry 2: a wildcard bind with no allowed_hosts answers every browser with 403.
 func TestBindWarning(t *testing.T) {
 	for bind, warn := range map[string]bool{
-		"127.0.0.1:8899": false, "100.76.118.121:9000": false,
+		"127.0.0.1:8899": false, "192.0.2.10:9000": false,
 		"0.0.0.0:8899": true, ":8899": true, "[::]:8899": true,
 	} {
 		got := bindWarning(config.Config{BindAddr: bind})

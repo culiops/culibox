@@ -263,7 +263,7 @@ test("table headers: the empty actions column has a visually hidden label", () =
 
 // --- AWS connections and GitHub Apps: the same confirm, their own paths ------------
 
-const aws = (name, over) => ({ kind: "aws", name, account_id: "226198813800", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", mode: "assume", status: "ok", source: "web", prod: false, used_by: [], base: { state: "none_found" }, elevate: null, ...over });
+const aws = (name, over) => ({ kind: "aws", name, account_id: "123456789012", role_arn: "arn:aws:iam::123456789012:role/agentbox-agent", mode: "assume", status: "ok", source: "web", prod: false, used_by: [], base: { state: "none_found" }, elevate: null, ...over });
 const ghApp = (name, over) => ({ kind: "github", name, client_id: "Iv23liAbCdEf0123", key_ref_kind: "store", status: "ok", source: "web", used_by: [], ...over });
 
 // A table of `entries` for `key` ("aws" or "github"), the tbody of the one named `name`,
@@ -1884,7 +1884,7 @@ test("framed AWS add: a row with an elevate role says the check covered the base
   await awsTick(framed, f.opts, "acme-dev", "acme-ops");
   const elev = f.opts.host.querySelectorAll("input").filter((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
   assert.strictEqual(elev.length, 2, "one elevate role field per ticked row");
-  elev[0].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[0].value = "arn:aws:iam::123456789012:role/agentbox-write";
   elev[0].oninput();
   btnIn(f.opts.foot, "Check all").onclick();
   await settle();
@@ -1894,7 +1894,7 @@ test("framed AWS add: a row with an elevate role says the check covered the base
   assert.deepStrictEqual(when.map((w) => w.textContent), [" base role only"], "set apart from the verdict the way the tab sets it");
   assert.strictEqual(f.opts.host.querySelector("div.verdict"), null, "still one line, no second verdict line");
   // Typing the role after the check, or taking it away, moves the qualifier with it.
-  elev[1].value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev[1].value = "arn:aws:iam::123456789012:role/agentbox-write";
   elev[1].oninput();
   assert.deepStrictEqual(lines(), ["✓Assume worked. No broad write access found base role only", "✓Assume worked. No broad write access found base role only"]);
   elev[0].value = "";
@@ -1911,7 +1911,7 @@ test("the Credentials tab's verdict line is the same with or without an elevate 
   const ticks = body.querySelectorAll("input").filter((i) => i.type === "checkbox");
   ticks[0].checked = true; ticks[0].onchange();
   const elev = body.querySelectorAll("input").find((i) => i.placeholder === "arn:aws:iam::<account>:role/<write role>");
-  elev.value = "arn:aws:iam::226198813800:role/agentbox-write";
+  elev.value = "arn:aws:iam::123456789012:role/agentbox-write";
   elev.oninput();
   btnIn(body, "Check").onclick();
   await settle();

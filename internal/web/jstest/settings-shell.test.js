@@ -1758,7 +1758,7 @@ function makeNotifyDom({ secure = true, perm = "default", origin = "https://box.
 const monos = (n) => withCls(n, "mono").map((m) => m.textContent);
 
 test("on an http page the row says it is not available there, names the page and gives the two ways out; the switch stays off and disabled", () => {
-  const origin = "http://100.76.118.121:8899";
+  const origin = "http://192.0.2.10:8899";
   const { ctx, cb, why } = makeNotifyDom({ secure: false, perm: "default", origin });
   ctx.initNotifyToggle();
   assert.strictEqual(cb.disabled, true);
@@ -1766,7 +1766,7 @@ test("on an http page the row says it is not available there, names the page and
   assert.ok(classesOf(why).includes("notify-block"));
   const [para, how] = kids(why);
   assert.strictEqual(para.tag, "p");
-  assert.strictEqual(para.textContent, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://100.76.118.121:8899.");
+  assert.strictEqual(para.textContent, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://192.0.2.10:8899.");
   assert.deepStrictEqual(monos(para), ["https://", origin], "the scheme and the page's address are machine text");
   assert.deepStrictEqual(classesOf(para), ["t-sm", "muted"]);
   assert.strictEqual(how.tag, "div");
