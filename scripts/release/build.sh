@@ -59,8 +59,23 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   # Modes are recorded in the tar; the umask must not leak into it.
   chmod 755 "$dir/agent-box"
   chmod 644 "$dir/LICENSE" "$dir/README.md"
+  # POSIX sh has no pipefail, so `tar | gzip` would hide a failing tar: write the
+  # .tar first (set -e stops on its exit status), then compress it.
   tar -C "$dir" --sort=name --mtime="@$mtime" --owner=0 --group=0 --numeric-owner \
-    -cf - agent-box LICENSE README.md | gzip -n >"$outdir/$name.tar.gz"
+    -cf "$stage/$name.tar" agent-box LICENSE README.md
+  gzip -n <"$stage/$name.tar" >"$outdir/$name.tar.gz"
+  rm -f "$stage/$name.tar"
+done
+
+# Every tarball must read back and hold exactly the three members, before any sum
+# is written: SHA256SUMS must never cover a broken file. (CI smoke-tests only
+# linux/amd64.) The assignment fails the script if tar -tzf fails.
+for f in "$outdir"/culibox_*.tar.gz; do
+  members=$(tar -tzf "$f" | sort | tr '\n' ' ')
+  if [ "$members" != "LICENSE README.md agent-box " ]; then
+    echo "build.sh: $f holds '$members', want exactly agent-box, LICENSE and README.md" >&2
+    exit 1
+  fi
 done
 
 (cd "$outdir" && sha256sum culibox_*.tar.gz >SHA256SUMS)
