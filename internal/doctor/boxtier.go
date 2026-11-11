@@ -141,6 +141,10 @@ type boxFacts struct {
 	LocksErr     error
 	Running      []string
 	RunningKnown bool
+	// Home is $HOME, so a printed shell command can name a path under it as
+	// "$HOME"/'rest': doctor's output shows $HOME as "~", which a quoted
+	// command would not expand.
+	Home string
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -278,7 +282,7 @@ func folderRows(f boxFacts) []Result {
 func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box.ProtectedDir) boxFacts {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	var f boxFacts
+	f := boxFacts{Home: home}
 	bin, err := box.LookDocker(c.DockerBin)
 	if err != nil {
 		f.DockerErr = err
@@ -413,9 +417,19 @@ func guardLockRows(goos string, f boxFacts) []Result {
 		groups = append(groups, g)
 		return g
 	}
+	notOurs := map[string][]string{} // workspace -> files held by a running box of this instance
+	var notOursWS []string
 	for _, l := range f.Locks {
 		if !l.Ours {
-			continue // the user's own flag: not CuliBox's to report or lift
+			// Not CuliBox's to lift. But while a box of this instance holds the
+			// file, say so: the flag may belong to another instance (docs/MACOS.md).
+			if f.RunningKnown && slices.ContainsFunc(l.Boxes, func(b string) bool { return slices.Contains(f.Running, b) }) {
+				if _, ok := notOurs[l.Workspace]; !ok {
+					notOursWS = append(notOursWS, l.Workspace)
+				}
+				notOurs[l.Workspace] = append(notOurs[l.Workspace], l.File)
+			}
+			continue
 		}
 		class := "leftover"
 		switch {
@@ -451,13 +465,39 @@ func guardLockRows(goos string, f boxFacts) []Result {
 		default:
 			var paths []string
 			for _, n := range g.files {
-				paths = append(paths, shQuote(filepath.Join(g.ws, n)))
+				paths = append(paths, shPath(f.Home, filepath.Join(g.ws, n)))
 			}
 			out = append(out, Result{Warn, ck, g.ws + ": " + files + " still locked, but no box holding the lock runs; " +
 				"agent-box lifts it when it next starts (or the box VM does), or unlock it now: chflags nouchg " + strings.Join(paths, " ")})
 		}
 	}
+	sort.Strings(notOursWS)
+	for _, ws := range notOursWS {
+		names := notOurs[ws]
+		sort.Strings(names)
+		verb := "was"
+		if len(names) > 1 {
+			verb = "were"
+		}
+		out = append(out, Result{Warn, ck, ws + ": " + strings.Join(names, ", ") + " " + verb +
+			" already locked when CuliBox came to lock it (by you, or by another CuliBox instance on this Mac); " +
+			"this instance will not unlock it. If another CuliBox instance is running boxes in this folder, " +
+			"ending its box unlocks the file while this one still runs (see docs/MACOS.md)"})
+	}
 	return out
+}
+
+// shPath quotes an absolute path for a pasted command. Under home it is
+// "$HOME"/'rest': doctor shows $HOME as "~" in its output, and '~/x' inside
+// quotes would not expand. Anything else is single-quoted as it is.
+func shPath(home, p string) string {
+	if home != "" && home != "/" {
+		h := filepath.Clean(home)
+		if rest, ok := strings.CutPrefix(p, h+"/"); ok {
+			return `"$HOME"/` + shQuote(rest)
+		}
+	}
+	return shQuote(p)
 }
 
 // shQuote single-quotes s for a POSIX shell (a quote in s closes the quotes,
