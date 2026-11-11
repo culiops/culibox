@@ -241,8 +241,8 @@ var (
 	wfTrailing    = regexp.MustCompile(`\s+#.*$`)
 	wfJobHeader   = regexp.MustCompile(`^  ([\w-]+):\s*(?:#.*)?$`)
 	wfJobPerms    = regexp.MustCompile(`^    permissions:\s*(?:#.*)?$`)
-	wfWriteScope  = regexp.MustCompile(`^      ([\w-]+): write\s*(?:#.*)?$`)
-	wfWriteAny    = regexp.MustCompile(`:\s*write\b|write-all`)
+	wfWriteScope  = regexp.MustCompile(`^      ["']?([\w-]+)["']?: ["']?write["']?\s*(?:#.*)?$`)
+	wfWriteAny    = regexp.MustCompile(`:\s*["']?write\b|write-all`)
 	wfUses        = regexp.MustCompile(`(?:^|[\s{,])(uses:.*)$`)
 	wfPinned      = regexp.MustCompile(`^uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*$`)
 	wfLocalReuse  = regexp.MustCompile(`^    uses: \./\.github/workflows/[\w.-]+\.ya?ml\s*(?:#.*)?$`)
@@ -402,21 +402,31 @@ func TestReleaseWorkflowWriteScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, msg := range releaseWriteViolations("release.yml", string(b)) {
+		t.Error(msg)
+	}
+}
+
+// releaseWriteViolations checks that each release write scope is granted
+// exactly once, inside job release (quoted grants count too).
+func releaseWriteViolations(name, content string) []string {
+	var bad []string
 	for _, scope := range []string{"contents", "id-token", "attestations"} {
 		var hits []wfLine
-		for _, l := range parseWorkflow(string(b)) {
+		for _, l := range parseWorkflow(content) {
 			if m := wfWriteScope.FindStringSubmatch(l.text); m != nil && m[1] == scope {
 				hits = append(hits, l)
 			}
 		}
 		if len(hits) != 1 {
-			t.Errorf("release.yml: `%s: write` appears %d times, want exactly 1 (in job release)", scope, len(hits))
+			bad = append(bad, fmt.Sprintf("%s: `%s: write` appears %d times, want exactly 1 (in job release)", name, scope, len(hits)))
 			continue
 		}
 		if hits[0].job != "release" {
-			t.Errorf("release.yml:%d: `%s: write` is in job %q, want job release", hits[0].n, scope, hits[0].job)
+			bad = append(bad, fmt.Sprintf("%s:%d: `%s: write` is in job %q, want job release", name, hits[0].n, scope, hits[0].job))
 		}
 	}
+	return bad
 }
 
 // A guard that cannot fail is worth nothing: each bad workflow below must be
@@ -445,6 +455,10 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"flow write":           {top + head + checkout + "  w:\n    permissions: {contents: write}\n", "a write grant"},
 		"write-all":            {top + "  w:\n    permissions: write-all\n" + head + checkout, "a write grant"},
 		"write in steps":       {top + head + checkout + "        env:\n          contents: write\n", "a write grant"},
+		"quoted top write":     {strings.Replace(top, "contents: read\n", "contents: read\n  packages: \"write\"\n", 1) + head + checkout, "a write grant"},
+		"quoted step write":    {top + head + checkout + "        env:\n          packages: 'write'\n", "a write grant"},
+		"quoted flow write":    {top + head + checkout + "  w:\n    permissions: {packages: \"write\"}\n", "a write grant"},
+		"quoted other job":     {top + head + checkout + "  w:\n    runs-on: x\n    env: {a: 1}\n    packages: 'write'\n", "a write grant"},
 		"no persist":           {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n", "persist-credentials"},
 		"persist true":         {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          persist-credentials: true\n", "persist-credentials"},
 		"persist in next step": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n      - name: y\n        with:\n          persist-credentials: false\n", "persist-credentials"},
@@ -456,6 +470,31 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		}
 		if !strings.Contains(strings.Join(bad, "\n"), tc.want) || !strings.Contains(bad[0], "bad.yml") {
 			t.Errorf("%s: violations %v do not name bad.yml and %q", name, bad, tc.want)
+		}
+	}
+}
+
+func TestReleaseGuardCatchesQuotedAndMisplacedWrites(t *testing.T) {
+	job := func(n string, scopes ...string) string {
+		s := "  " + n + ":\n    runs-on: x\n    permissions:\n"
+		for _, sc := range scopes {
+			s += "      " + sc + "\n"
+		}
+		return s
+	}
+	const top = "permissions:\n  contents: read\njobs:\n"
+	all := []string{"contents: write", "id-token: write", "attestations: write"}
+	if bad := releaseWriteViolations("r.yml", top+job("release", all...)); len(bad) != 0 {
+		t.Fatalf("good release reported: %v", bad)
+	}
+	for name, wf := range map[string]string{
+		"quoted extra in other job": top + job("release", all...) + job("other", `contents: "write"`),
+		"single-quoted extra":       top + job("release", all...) + job("other", "id-token: 'write'"),
+		"wrong job":                 top + job("release", "contents: write", "id-token: write") + job("other", "attestations: write"),
+		"quoted in release twice":   top + job("release", append(all, `contents: "write"`)...),
+	} {
+		if bad := releaseWriteViolations("r.yml", wf); len(bad) == 0 {
+			t.Errorf("%s: no violation reported", name)
 		}
 	}
 }
