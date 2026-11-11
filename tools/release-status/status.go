@@ -31,6 +31,7 @@ type Release struct {
 	Draft      bool   `json:"draft"`
 	Prerelease bool   `json:"prerelease"`
 	HTMLURL    string `json:"html_url"`
+	Body       string `json:"body"`
 	Assets     []struct {
 		Name string `json:"name"`
 	} `json:"assets"`
@@ -89,6 +90,53 @@ func missingArches(r Run) []string {
 	return out
 }
 
+// wantMode is how each darwin arch must have been run for "verified": arm64 on the
+// Apple Silicon host, amd64 only under Rosetta 2 (there is no Intel hardware).
+var wantMode = map[string]string{"arm64": "native", "amd64": "rosetta2"}
+
+// tarballProblems checks that r.Archives holds exactly one darwin tarball per arch. A name must
+// look like culibox_<version>_darwin_<arch>.tar.gz. It returns what is wrong (no tarball,
+// several, or a sha256 that is not 64 hex digits).
+func tarballProblems(r Run) []string {
+	var problems []string
+	for _, arch := range []string{"arm64", "amd64"} {
+		suffix := "_darwin_" + arch + ".tar.gz"
+		var names []string
+		for name := range r.Archives {
+			if strings.HasPrefix(name, "culibox_") && strings.HasSuffix(name, suffix) && len(name) > len("culibox_")+len(suffix) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		switch {
+		case len(names) == 0:
+			problems = append(problems, "no darwin "+arch+" tarball sha256")
+		case len(names) > 1:
+			problems = append(problems, "several darwin "+arch+" tarballs ("+strings.Join(names, ", ")+")")
+		case !isHex64(r.Archives[names[0]]):
+			problems = append(problems, "darwin "+arch+" tarball sha256 is not 64 hex digits")
+		}
+	}
+	return problems
+}
+
+// incomplete lists why a run that did not fail still cannot be "verified" on its
+// automated half: a missing arch result, an arch run in the wrong mode, or a darwin
+// tarball not tied to a sha256.
+func incomplete(r Run) []string {
+	var out []string
+	for _, m := range missingArches(r) {
+		out = append(out, "no "+m+" result")
+	}
+	for _, a := range r.Arches {
+		arch := archName(a.Arch)
+		if want, ok := wantMode[arch]; ok && a.Mode != want {
+			out = append(out, fmt.Sprintf("%s ran in mode %q, want %q", arch, a.Mode, want))
+		}
+	}
+	return append(out, tarballProblems(r)...)
+}
+
 func failures(r Run) (arches, rows []string) {
 	for _, a := range r.Arches {
 		if !a.TestsPassed {
@@ -104,15 +152,16 @@ func failures(r Run) (arches, rows []string) {
 }
 
 // Verdict is "verified", "partial" or "failed". Anything that failed is "failed".
-// "verified" needs both arches present and passing and at least one manual row
-// marked pass, so a run never defaults to a green tick: zero rows, all-n/a rows or a
-// missing arch are "partial".
+// "verified" needs both arches present and passing (arm64 native, amd64 under Rosetta
+// 2), exactly one darwin tarball per arch tied to a 64-hex sha256, and at least one
+// manual row marked pass, so a run never defaults to a green tick: zero rows, all-n/a
+// rows, a missing arch, a wrong mode or a missing sha are "partial".
 func Verdict(r Run) string {
 	fa, fr := failures(r)
 	if len(fa) > 0 || len(fr) > 0 {
 		return "failed"
 	}
-	if len(missingArches(r)) > 0 {
+	if len(incomplete(r)) > 0 {
 		return "partial"
 	}
 	for _, m := range r.Manual {
@@ -128,7 +177,7 @@ func Verdict(r Run) string {
 func DarwinLine(r Run) string {
 	switch Verdict(r) {
 	case "verified":
-		s := fmt.Sprintf("✅ verified on macOS %s (%s), arm64 native, amd64 under Rosetta 2 (not Intel hardware)", r.MacOS, r.Chip)
+		s := fmt.Sprintf("✅ verified on macOS %s (%s), %s", r.MacOS, r.Chip, modeText(r))
 		if r.Date != "" {
 			s += ", " + r.Date
 		}
@@ -148,8 +197,8 @@ func DarwinLine(r Run) string {
 		}
 		return s
 	default:
-		if miss := missingArches(r); len(miss) > 0 {
-			return "⚠️ automated checks incomplete (no " + strings.Join(miss, ", ") + " result)"
+		if why := incomplete(r); len(why) > 0 {
+			return "⚠️ automated checks incomplete (" + strings.Join(why, "; ") + ")"
 		}
 		s := "⚠️ automated checks passed, manual checks not run"
 		if r.Date != "" {
@@ -157,6 +206,29 @@ func DarwinLine(r Run) string {
 		}
 		return s
 	}
+}
+
+// modeText says how each arch was run, from the recorded Modes and never a constant.
+// Only called for a verified run, whose Modes are arm64 native and amd64 rosetta2.
+func modeText(r Run) string {
+	var parts []string
+	for _, arch := range []string{"arm64", "amd64"} {
+		for _, a := range r.Arches {
+			if archName(a.Arch) != arch {
+				continue
+			}
+			switch a.Mode {
+			case "native":
+				parts = append(parts, arch+" native")
+			case "rosetta2":
+				parts = append(parts, arch+" under Rosetta 2 (not Intel hardware)")
+			default:
+				parts = append(parts, arch+" "+a.Mode)
+			}
+			break
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // semver is the numeric X.Y.Z core of a tag.
@@ -191,6 +263,24 @@ func (a semver) less(b semver) bool {
 	return false
 }
 
+// bodyShowsVerified reports whether the release notes' status block has a darwin line
+// that says "✅ verified on macOS". A failed or partial record leaves no such line.
+func bodyShowsVerified(body string) bool {
+	start, end, err := locateBlock(body)
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(body[start:end], "\n") {
+		l = strings.TrimRight(l, "\r")
+		for _, prefix := range []string{darwinARM, darwinAMD} {
+			if strings.HasPrefix(l, prefix) && strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(l, prefix)), "✅ verified on macOS") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func hasVerificationAsset(r Release) bool {
 	for _, a := range r.Assets {
 		if a.Name == VerificationAsset {
@@ -201,8 +291,10 @@ func hasVerificationAsset(r Release) bool {
 }
 
 // LastVerified returns the newest published release older than current (compared on
-// the X.Y.Z core, so a pre-release current works) that carries macos-verification.json.
-// Drafts and pre-release tags (anything with "-") are never candidates.
+// the X.Y.Z core, so a pre-release current works) that carries macos-verification.json
+// AND whose notes' status block shows a "✅ verified on macOS" darwin line, so a release
+// whose record failed or is partial is never named. Drafts and pre-release tags
+// (anything with "-") are never candidates.
 func LastVerified(rs []Release, current string) (Release, bool) {
 	cur, ok := parseSemver(current)
 	if !ok {
@@ -212,7 +304,7 @@ func LastVerified(rs []Release, current string) (Release, bool) {
 	var bestV semver
 	found := false
 	for _, r := range rs {
-		if r.Draft || strings.Contains(r.TagName, "-") || !hasVerificationAsset(r) {
+		if r.Draft || strings.Contains(r.TagName, "-") || !hasVerificationAsset(r) || !bodyShowsVerified(r.Body) {
 			continue
 		}
 		v, ok := parseSemver(r.TagName)

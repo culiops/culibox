@@ -13,7 +13,10 @@ import (
 func goodRun() Run {
 	return Run{
 		Date: "2026-11-12", MacOS: "15.1", Chip: "Apple M2", GoVersion: "go1.26.5", Verifier: "founder",
-		Archives: map[string]string{"a_darwin_arm64.tar.gz": "aa", "a_darwin_amd64.tar.gz": "bb"},
+		Archives: map[string]string{
+			"culibox_v0.1.0_darwin_arm64.tar.gz": sum("arm"),
+			"culibox_v0.1.0_darwin_amd64.tar.gz": sum("amd"),
+		},
 		Arches: []ArchResult{
 			{Arch: "arm64", Mode: "native", TestsPassed: true},
 			{Arch: "amd64", Mode: "rosetta2", TestsPassed: true},
@@ -39,6 +42,21 @@ func TestVerdict(t *testing.T) {
 		{"arch tests fail", mut(func(r *Run) { r.Arches[1].TestsPassed = false }), "failed"},
 		{"manual fail", mut(func(r *Run) { r.Manual = append(r.Manual, ManualRow{ID: "M2", Result: "fail"}) }), "failed"},
 		{"fail beats missing arch", mut(func(r *Run) { r.Arches = []ArchResult{{Arch: "arm64", TestsPassed: false}} }), "failed"},
+		{"nil archives", mut(func(r *Run) { r.Archives = nil }), "partial"},
+		{"one tarball", mut(func(r *Run) { delete(r.Archives, "culibox_v0.1.0_darwin_amd64.tar.gz") }), "partial"},
+		{"bad sha", mut(func(r *Run) { r.Archives["culibox_v0.1.0_darwin_arm64.tar.gz"] = "aa" }), "partial"},
+		{"empty sha", mut(func(r *Run) { r.Archives["culibox_v0.1.0_darwin_amd64.tar.gz"] = "" }), "partial"},
+		{"two arm64 tarballs", mut(func(r *Run) { r.Archives["culibox_v0.0.9_darwin_arm64.tar.gz"] = sum("old") }), "partial"},
+		{"misnamed tarballs", mut(func(r *Run) {
+			r.Archives = map[string]string{"a_darwin_arm64.tar.gz": sum("x"), "a_darwin_amd64.tar.gz": sum("y")}
+		}), "partial"},
+		{"linux tarballs only", mut(func(r *Run) {
+			r.Archives = map[string]string{"culibox_v0.1.0_linux_arm64.tar.gz": sum("x"), "culibox_v0.1.0_linux_amd64.tar.gz": sum("y")}
+		}), "partial"},
+		{"amd64 native not rosetta", mut(func(r *Run) { r.Arches[1].Mode = "native" }), "partial"},
+		{"arm64 under rosetta", mut(func(r *Run) { r.Arches[0].Mode = "rosetta2" }), "partial"},
+		{"empty mode", mut(func(r *Run) { r.Arches[0].Mode = "" }), "partial"},
+		{"failure beats bad archives", mut(func(r *Run) { r.Archives = nil; r.Arches[0].TestsPassed = false }), "failed"},
 		{"stored verdict ignored", mut(func(r *Run) { r.Verdict = "verified"; r.Manual = nil }), "partial"},
 	}
 	for _, c := range cases {
@@ -67,6 +85,25 @@ func TestLastVerified(t *testing.T) {
 	if !ok || got.TagName != "v0.9.0" {
 		t.Fatalf("LastVerified(v0.10.0) = %q, %v; want v0.9.0 (v0.9.1 has no asset, v0.10.0 is a draft, rc is a pre-release)", got.TagName, ok)
 	}
+	// v0.9.2 has the asset but its notes say failed: never named as verified.
+	for _, r := range rs {
+		if r.TagName == "v0.9.2" && (!hasVerificationAsset(r) || bodyShowsVerified(r.Body)) {
+			t.Fatal("fixture: v0.9.2 must have the asset and a failed body")
+		}
+	}
+	if got, ok := LastVerified(rs, "v0.9.3"); !ok || got.TagName != "v0.9.0" {
+		t.Fatalf("LastVerified(v0.9.3) = %q, %v; want v0.9.0 (v0.9.2's record failed)", got.TagName, ok)
+	}
+	// An asset with no status block, or a block without a verified line, is skipped too.
+	noBody := append([]Release{}, rs...)
+	for i := range noBody {
+		if noBody[i].TagName == "v0.9.0" {
+			noBody[i].Body = ""
+		}
+	}
+	if got, ok := LastVerified(noBody, "v0.10.0"); ok {
+		t.Fatalf("LastVerified with no verified body = %q, want none", got.TagName)
+	}
 	// A pre-release current is compared on its X.Y.Z core.
 	if got, ok := LastVerified(rs, "v0.0.0-test"); ok {
 		t.Fatalf("LastVerified(v0.0.0-test) = %q, want none", got.TagName)
@@ -80,7 +117,7 @@ func TestLastVerified(t *testing.T) {
 	}
 	// Numeric, not lexical: 0.10.0 beats 0.9.0.
 	more := append([]Release{}, rs...)
-	more = append(more, Release{TagName: "v0.10.0", HTMLURL: "u10", Assets: []struct {
+	more = append(more, Release{TagName: "v0.10.0", HTMLURL: "u10", Body: RenderBlock("v0.10.0", "ci", Release{}, false, DarwinLine(goodRun())), Assets: []struct {
 		Name string `json:"name"`
 	}{{Name: "macos-verification.json"}}})
 	if got, ok := LastVerified(more, "v0.11.0"); !ok || got.HTMLURL != "u10" {
@@ -166,6 +203,23 @@ func TestDarwinLine(t *testing.T) {
 	}
 	if strings.Contains(got, "M4") || strings.Contains(got, "amd64") {
 		t.Errorf("failed line must name only what failed: %s", got)
+	}
+	// The Rosetta sentence comes from the recorded Modes, never a constant.
+	for name, tc := range map[string]struct {
+		f    func(*Run)
+		want string
+	}{
+		"amd64 native":   {func(r *Run) { r.Arches[1].Mode = "native" }, "amd64 ran in mode \"native\""},
+		"arm64 rosetta2": {func(r *Run) { r.Arches[0].Mode = "rosetta2" }, "arm64 ran in mode \"rosetta2\""},
+		"nil archives":   {func(r *Run) { r.Archives = nil }, "no darwin arm64 tarball sha256"},
+		"bad sha":        {func(r *Run) { r.Archives["culibox_v0.1.0_darwin_amd64.tar.gz"] = "zz" }, "darwin amd64 tarball sha256 is not 64 hex"},
+	} {
+		r := goodRun()
+		tc.f(&r)
+		got := DarwinLine(r)
+		if strings.HasPrefix(got, "✅") || strings.Contains(got, "under Rosetta 2") || !strings.HasPrefix(got, "⚠️ automated checks incomplete") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: line %q (want incomplete, naming %q)", name, got, tc.want)
+		}
 	}
 	// The stored verdict is never trusted.
 	lie := goodRun()
@@ -335,5 +389,32 @@ func TestRecordAppendsRun(t *testing.T) {
 	}
 	if _, err := AddRun(nil, "v0.1.0", "", nr); err == nil {
 		t.Error("empty commit must error")
+	}
+}
+
+func TestCheckSumsCLI_DuplicateBaseName(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for _, sub := range []string{"one", "two"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, sub, "x.tar.gz")
+		if err := os.WriteFile(p, []byte("same"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	sums := filepath.Join(dir, "SHA256SUMS")
+	if err := os.WriteFile(sums, []byte(sum("same")+"  x.tar.gz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err := run(append([]string{"check-sums", "--sums", sums}, paths...), &out)
+	if err == nil || !strings.Contains(err.Error(), "x.tar.gz") || out.Len() != 0 {
+		t.Fatalf("duplicate base names must error and print nothing, got err=%v out=%q", err, out.String())
+	}
+	if err := run([]string{"check-sums", "--sums", sums, paths[0]}, &out); err != nil {
+		t.Fatalf("one file: %v", err)
 	}
 }

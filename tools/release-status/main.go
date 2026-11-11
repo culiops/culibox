@@ -41,6 +41,21 @@ func newFlags(name string) *flag.FlagSet {
 	return fs
 }
 
+// filesByBase keys paths by base name, which is how SHA256SUMS lists them. Two paths
+// with the same base name would collapse to one and leave a file unchecked, so that is
+// an error.
+func filesByBase(paths []string) (map[string]string, error) {
+	files := map[string]string{}
+	for _, p := range paths {
+		name := filepath.Base(p)
+		if prev, dup := files[name]; dup {
+			return nil, fmt.Errorf("%s and %s have the same file name %s; check them one at a time", prev, p, name)
+		}
+		files[name] = p
+	}
+	return files, nil
+}
+
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: release-status notes|check-sums|record|rewrite [flags]")
@@ -78,9 +93,9 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		files := map[string]string{}
-		for _, p := range fs.Args() {
-			files[filepath.Base(p)] = p
+		files, err := filesByBase(fs.Args())
+		if err != nil {
+			return err
 		}
 		if err := CheckSums(body, files); err != nil {
 			return err
