@@ -392,13 +392,12 @@ func TestAllWorkflowsSupplyChain(t *testing.T) {
 	}
 }
 
+const releaseWorkflowPath = "../../.github/workflows/release.yml"
+
 // release.yml is the only workflow that publishes and attests: its three write
 // scopes must each be granted once, to the release job and nowhere else.
 func TestReleaseWorkflowWriteScopes(t *testing.T) {
-	b, err := os.ReadFile("../../.github/workflows/release.yml")
-	if os.IsNotExist(err) {
-		t.Skip("release.yml not yet added")
-	}
+	b, err := os.ReadFile(releaseWorkflowPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,5 +634,216 @@ func TestAbducoPinMatchesDockerfile(t *testing.T) {
 		if s[1] != d[1] {
 			t.Errorf("%s: install-abduco.sh has %q, Dockerfile has %q", name, s[1], d[1])
 		}
+	}
+}
+
+// stepBlock returns the text of the step of job that contains needle: from its
+// `      - ` line to the next step (or the end of the job).
+func stepBlock(t *testing.T, job, needle string) string {
+	t.Helper()
+	lines := strings.Split(job, "\n")
+	for i, l := range lines {
+		if !strings.Contains(l, needle) {
+			continue
+		}
+		start := i
+		for start > 0 && !strings.HasPrefix(lines[start], "      - ") {
+			start--
+		}
+		end := i + 1
+		for end < len(lines) && !strings.HasPrefix(lines[end], "      - ") {
+			end++
+		}
+		return strings.Join(lines[start:end], "\n")
+	}
+	t.Fatalf("no step containing %q", needle)
+	return ""
+}
+
+// inlineExpr returns the lines of wf where a ${{ }} expression sits inside a
+// run: script (a block or a one-liner), which is how an input or a ref name
+// becomes shell injection. Such values must go through env: instead.
+func inlineExpr(wf string) []string {
+	var bad []string
+	runIndent := -1
+	for _, l := range strings.Split(wf, "\n") {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		ind := wfIndent(l)
+		if runIndent >= 0 && ind > runIndent {
+			if strings.Contains(l, "${{") {
+				bad = append(bad, strings.TrimSpace(l))
+			}
+			continue
+		}
+		runIndent = -1
+		trimmed := strings.TrimPrefix(strings.TrimSpace(l), "- ")
+		if strings.HasPrefix(trimmed, "run:") {
+			if strings.Contains(l, "${{") {
+				bad = append(bad, strings.TrimSpace(l))
+			}
+			if rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "run:")); rest == "|" || rest == ">" || rest == "|-" || rest == ">-" {
+				runIndent = ind
+				if strings.HasPrefix(strings.TrimSpace(l), "- ") {
+					runIndent = ind + 2
+				}
+			}
+		}
+	}
+	return bad
+}
+
+// TestReleaseWorkflow pins what release.yml must do: a vX.Y.Z tag push that is on
+// main runs the same CI, builds the four tarballs and opens a DRAFT release; a
+// manual run builds and packages but never releases. The supply-chain rules and the
+// write scopes are TestAllWorkflowsSupplyChain's and TestReleaseWorkflowWriteScopes's.
+func TestReleaseWorkflow(t *testing.T) {
+	b, err := os.ReadFile(releaseWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if !wfFullComment.MatchString(l) {
+			keep = append(keep, l)
+		}
+	}
+	wf := strings.Join(keep, "\n")
+
+	// Triggers: a version tag push and a manual dry run, nothing else.
+	if !regexp.MustCompile(`(?m)^on:\n  push:\n    tags: \[\s*"v\*\.\*\.\*"\s*\]\n  workflow_dispatch:[ \t]*\n`).MatchString(wf) {
+		t.Error("`on:` must be exactly `push: tags: [\"v*.*.*\"]` plus `workflow_dispatch:`")
+	}
+	if strings.Contains(strings.ToLower(wf), "macos") {
+		t.Error("release.yml must not mention macos (no macOS runners)")
+	}
+
+	// R4: a per-ref group that never cancels. Never github.workflow, which the
+	// called ci.yml would inherit.
+	conc := regexp.MustCompile(`(?m)^concurrency:\n  group: (.+)\n  cancel-in-progress: (\w+)\n`).FindStringSubmatch(wf)
+	if conc == nil {
+		t.Fatal("release.yml needs a top-level concurrency with a group and cancel-in-progress")
+	}
+	if conc[1] != "release-${{ github.ref }}" || conc[2] != "false" {
+		t.Errorf("concurrency = group %q, cancel-in-progress %s; want group release-${{ github.ref }}, false", conc[1], conc[2])
+	}
+	if strings.Contains(wf, "github.workflow") {
+		t.Error("release.yml must not use github.workflow (the called ci.yml would inherit it)")
+	}
+
+	// verify always runs (a skipped job skips every job that needs it); only its
+	// ancestry step is guarded.
+	verify := jobBlock(t, wf, "verify")
+	if regexp.MustCompile(`(?m)^    if:`).MatchString(verify) {
+		t.Error("job verify must not be skipped as a whole: the dry run needs it")
+	}
+	anc := stepBlock(t, verify, "git merge-base --is-ancestor")
+	if !strings.Contains(anc, "if: github.event_name == 'push'") {
+		t.Error("the ancestry step must be guarded by `if: github.event_name == 'push'`")
+	}
+	if !strings.Contains(anc, `"$GITHUB_SHA" origin/main`) {
+		t.Error("the ancestry check must be `git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main`")
+	}
+	if !regexp.MustCompile(`fetch-depth: 0`).MatchString(verify) {
+		t.Error("job verify must check out with fetch-depth: 0")
+	}
+
+	// tests reuses ci.yml, and the later jobs wait on it.
+	if !regexp.MustCompile(`(?m)^    uses: \./\.github/workflows/ci\.yml\s*$`).MatchString(jobBlock(t, wf, "tests")) {
+		t.Error("job tests must be `uses: ./.github/workflows/ci.yml`")
+	}
+	build, release := jobBlock(t, wf, "build"), jobBlock(t, wf, "release")
+	for name, job := range map[string]string{"tests": jobBlock(t, wf, "tests"), "build": build, "release": release} {
+		if !strings.Contains(job, "verify") {
+			t.Errorf("job %s must need verify", name)
+		}
+	}
+	for _, need := range []string{"verify", "tests", "build"} {
+		if !regexp.MustCompile(`(?m)^    needs:.*\b` + need + `\b`).MatchString(release) {
+			t.Errorf("job release must need %s", need)
+		}
+	}
+
+	// build: the script, the smoke test, the artifact (also on a dry run).
+	for _, want := range []string{"scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/agent-box" version`, "actions/upload-artifact@"} {
+		if !strings.Contains(build, want) {
+			t.Errorf("job build lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`(?m)^    if:`).MatchString(build) {
+		t.Error("job build must run on a dry run too")
+	}
+	if !strings.Contains(build, "v0.0.0-dryrun") {
+		t.Error("job build must fall back to v0.0.0-dryrun when there is no tag")
+	}
+
+	// release: push only, draft only, notes with the status block.
+	if !regexp.MustCompile(`(?m)^    if: github\.event_name == 'push'\s*$`).MatchString(release) {
+		t.Error("job release must be guarded by `if: github.event_name == 'push'`")
+	}
+	create := stepBlock(t, release, "gh release create")
+	if !strings.Contains(create, "--draft") {
+		t.Error("`gh release create` must pass --draft")
+	}
+	if !strings.Contains(create, "--verify-tag") {
+		t.Error("`gh release create` must pass --verify-tag (the tag already exists; never create one)")
+	}
+	if strings.Count(wf, "gh release create") != 1 || strings.Contains(wf, "gh release edit") || strings.Contains(wf, "--draft=false") {
+		t.Error("release.yml must create exactly one release, as a draft, and never publish one")
+	}
+	for _, want := range []string{
+		"go run ./tools/release-status notes",
+		"git log --format='- %s'",
+		"git describe --tags --abbrev=0",
+		"releases.json",
+		"jq -s .",
+		"GH_TOKEN: ${{ github.token }}",
+		"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID",
+	} {
+		if !strings.Contains(release, want) {
+			t.Errorf("job release lacks %q", want)
+		}
+	}
+	if strings.Contains(release, "--paginate") && strings.Contains(release, "--slurp") {
+		t.Error("--slurp nests the pages ([[..],[..]]); flatten with --jq '.[]' | jq -s . instead")
+	}
+
+	// Provenance: only for a public repository, with a notice otherwise.
+	att := stepBlock(t, release, "actions/attest-build-provenance@")
+	if !strings.Contains(att, "if: github.event.repository.visibility == 'public'") {
+		t.Error("the attest step must be guarded by `if: github.event.repository.visibility == 'public'`")
+	}
+	if !strings.Contains(att, "subject-path:") || !strings.Contains(att, "culibox_*") {
+		t.Error("the attest step must take the culibox_* tarballs as subject-path")
+	}
+	skip := stepBlock(t, release, "attestations skipped: repository is private")
+	if !strings.Contains(skip, "if: github.event.repository.visibility != 'public'") || !strings.Contains(skip, "GITHUB_STEP_SUMMARY") {
+		t.Error("the private-repository notice must be guarded by `visibility != 'public'` and write to GITHUB_STEP_SUMMARY")
+	}
+
+	// Nothing here publishes: no job but release may call gh, and every checkout
+	// is read-only (the supply-chain guard checks persist-credentials).
+	for _, job := range []string{"verify", "tests", "build"} {
+		if strings.Contains(jobBlock(t, wf, job), "gh release") {
+			t.Errorf("job %s must not touch releases", job)
+		}
+	}
+
+	// A tag name or input reaches a script only through env:.
+	for _, l := range inlineExpr(wf) {
+		t.Errorf("a ${{ }} expression is interpolated inside a run script (use env:): %q", l)
+	}
+}
+
+// The expression check is itself checked: a bad workflow must be reported.
+func TestInlineExprCatchesInterpolation(t *testing.T) {
+	bad := "    steps:\n      - run: echo ${{ github.ref_name }}\n      - name: x\n        run: |\n          echo hi\n          echo ${{ github.ref_name }}\n"
+	if got := inlineExpr(bad); len(got) != 2 {
+		t.Errorf("inlineExpr found %v, want both interpolations", got)
+	}
+	ok := "    steps:\n      - name: x\n        env:\n          TAG: ${{ github.ref_name }}\n        run: |\n          echo \"$TAG\"\n"
+	if got := inlineExpr(ok); len(got) != 0 {
+		t.Errorf("inlineExpr flagged an env: use: %v", got)
 	}
 }
