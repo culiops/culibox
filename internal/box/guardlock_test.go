@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -554,16 +555,27 @@ func TestOtherCase(t *testing.T) {
 
 // spellings are two names of one workspace folder, as ~/code/Repo and
 // ~/code/repo are on a case-insensitive Mac volume (each a different box):
-// here two symlinks to one folder, which reach the same files.
+// a is a symlink to the folder, b the folder's own path in another case. On a
+// case-insensitive volume b already reaches the folder (the very case the lock
+// guards); elsewhere it is made a second symlink. b is not a case variant of a:
+// on such a volume that would be a's own link, gone when a test removes a.
 func spellings(t *testing.T) (ws, a, b string) {
 	t.Helper()
 	ws = lockWS(t)
-	dir := realTemp(t)
-	a, b = filepath.Join(dir, "Repo"), filepath.Join(dir, "repo")
-	for _, l := range []string{a, b} {
-		if err := os.Symlink(ws, l); err != nil {
-			t.Fatal(err)
-		}
+	a = filepath.Join(realTemp(t), "Repo")
+	if err := os.Symlink(ws, a); err != nil {
+		t.Fatal(err)
+	}
+	b = filepath.Join(filepath.Dir(ws), strings.ToUpper(filepath.Base(ws)))
+	wfi, err := os.Stat(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(b); err == nil && os.SameFile(fi, wfi) {
+		return ws, a, b
+	}
+	if err := os.Symlink(ws, b); err != nil {
+		t.Fatal(err)
 	}
 	return ws, a, b
 }
@@ -802,6 +814,14 @@ func TestGuardLocksFailedRunUnlocks(t *testing.T) {
 	}
 }
 
+// wrongStat answers the in-box identity check with one no mount has.
+func wrongStat(args []string) (string, bool, error) {
+	if len(args) > 2 && args[0] == "exec" && args[2] == "/usr/bin/stat" {
+		return strings.Repeat("1:1\n", 8), true, nil
+	}
+	return "", false, nil
+}
+
 // refuseUnverified and refuseMountChanged lift the lock of the box they
 // removed, and keep it when the removal failed.
 func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
@@ -809,18 +829,28 @@ func TestGuardLocksRefusalsUnlockOnlyARemovedBox(t *testing.T) {
 		"unverified": func(m *Manager, f *fakeClient) {
 			m.opts.Verify = func(context.Context, string) error { return errors.New("reached loopback") }
 		},
+		// The host reads the identity: Linux only (workspaceID is nil elsewhere).
 		"mount changed": func(m *Manager, f *fakeClient) {
-			f.stdoutHook = func(args []string) (string, bool, error) {
-				if len(args) > 2 && args[0] == "exec" && args[2] == "/usr/bin/stat" {
-					return "1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n1:1\n", true, nil
+			f.stdoutHook = wrongStat
+		},
+		// The box VM reads it (Options.VMIDs), as on macOS: runs on every OS.
+		"mount changed in the VM": func(m *Manager, f *fakeClient) {
+			m.opts.VMIDs = func(_ context.Context, paths []string) ([]FileID, error) {
+				ids := make([]FileID, len(paths))
+				for i := range ids {
+					ids[i] = FileID{Dev: 7, Ino: uint64(100 + i)}
 				}
-				return "", false, nil
+				return ids, nil
 			}
+			f.stdoutHook = wrongStat
 		},
 	}
 	for name, setup := range cases {
 		for _, stopFails := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s stop fails %v", name, stopFails), func(t *testing.T) {
+				if name == "mount changed" && runtime.GOOS != "linux" {
+					t.Skip("the host reads mount identities on Linux only; the VM case covers this OS")
+				}
 				m, f, ff := lockMgr(t)
 				setup(m, f)
 				if stopFails {
