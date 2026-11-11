@@ -22,6 +22,9 @@ const keyPerm uint32 = 0x3f000000 | 0x00010000 | 0x00020000 | 0x00080000
 // process and dies with the uid's keyring or the TTL.
 type keyringKeeper struct{ desc string }
 
+// keyctlSetperm is a seam so a test can make the permission step fail.
+var keyctlSetperm = unix.KeyctlSetperm
+
 // NewKeeper returns the Linux keeper for dataDir.
 func NewKeeper(dataDir string) Keeper {
 	return &keyringKeeper{desc: "agent-box:store:" + KeyHash(dataDir)}
@@ -42,7 +45,7 @@ func (k *keyringKeeper) Save(identity string, ttl time.Duration) error {
 	// Possessor keeps everything; the owning uid gets view, read and search so
 	// a process whose session keyring does not link @u can still read it. Any
 	// process of this uid can read the key either way (the stated threat model).
-	if err := unix.KeyctlSetperm(id, keyPerm); err != nil {
+	if err := keyctlSetperm(id, keyPerm); err != nil {
 		_, _ = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
 		return fmt.Errorf("kernel keyring set permissions: %w", err)
 	}

@@ -382,7 +382,7 @@ func (s *Store) Unlock(passphrase []byte, ttl time.Duration, actor string) error
 		return err
 	}
 	if err := s.k.Save(ident, ttl); err != nil {
-		return fmt.Errorf("save master key: %w", err)
+		return fmt.Errorf("passphrase accepted, but the unlock could not be kept (%w); the store stays locked, so try again or check that the kernel keyring is usable here", err)
 	}
 	return nil
 }

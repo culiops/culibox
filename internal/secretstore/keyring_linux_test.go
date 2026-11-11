@@ -27,6 +27,26 @@ func requireKeyctl(t *testing.T) {
 	}
 }
 
+// keyringRefused reports a Save error that means this environment's keyring
+// refuses the operation (seccomp EPERM, no keyrings ENOSYS, restricted
+// permissions EACCES, key quota EDQUOT), so a test skips. Any other error is
+// a real failure.
+func keyringRefused(err error) bool {
+	return errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) ||
+		errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EDQUOT)
+}
+
+// saveOrSkip saves and skips only when the keyring refuses the operation.
+func saveOrSkip(t *testing.T, k Keeper, ttl time.Duration) {
+	t.Helper()
+	if err := k.Save(testIdentity, ttl); err != nil {
+		if keyringRefused(err) {
+			t.Skipf("kernel keyring unavailable here: %v", err)
+		}
+		t.Fatalf("save: %v", err)
+	}
+}
+
 func newTestKeeper(t *testing.T) Keeper {
 	t.Helper()
 	requireKeyctl(t)
@@ -129,9 +149,7 @@ func TestKeyringRejectsBadTTL(t *testing.T) {
 
 func TestKeyringPermissions(t *testing.T) {
 	k := newTestKeeper(t)
-	if err := k.Save(testIdentity, time.Hour); err != nil {
-		t.Fatal(err)
-	}
+	saveOrSkip(t, k, time.Hour)
 	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", k.(*keyringKeeper).desc, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -159,5 +177,28 @@ func TestKeyErrMapping(t *testing.T) {
 		if err := keyErr(e, "read"); !errors.Is(err, ErrLocked) {
 			t.Fatalf("%v: %v", e, err)
 		}
+	}
+}
+
+// A refused SETPERM must not leave the freshly added key behind: it would
+// carry the default permissions instead of keyPerm.
+func TestKeyringSetpermFailureLeavesNoKey(t *testing.T) {
+	k := newTestKeeper(t)
+	saveOrSkip(t, k, time.Hour) // the keyring works here
+	if err := k.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	old := keyctlSetperm
+	keyctlSetperm = func(int, uint32) error { return unix.EACCES }
+	t.Cleanup(func() { keyctlSetperm = old })
+	err := k.Save(testIdentity, time.Hour)
+	if !errors.Is(err, unix.EACCES) {
+		t.Fatalf("want EACCES wrapped, got %v", err)
+	}
+	if _, _, err := k.Load(); !errors.Is(err, ErrLocked) {
+		t.Fatalf("a key was left behind: %v", err)
+	}
+	if _, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", k.(*keyringKeeper).desc, 0); !errors.Is(err, unix.ENOKEY) {
+		t.Fatalf("key still linked in @u: %v", err)
 	}
 }

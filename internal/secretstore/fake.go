@@ -13,6 +13,7 @@ type FakeKeeper struct {
 	expires  time.Time
 	now      func() time.Time
 	loadErr  error
+	saveErr  error
 }
 
 // NewFakeKeeper returns an empty keeper. needsPassphrase true behaves like
@@ -35,6 +36,13 @@ func (f *FakeKeeper) FailLoad(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.loadErr = err
+}
+
+// FailSave makes every following Save return err until FailSave(nil).
+func (f *FakeKeeper) FailSave(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saveErr = err
 }
 
 func (f *FakeKeeper) NeedsPassphrase() bool { return f.needs }
@@ -60,6 +68,9 @@ func (f *FakeKeeper) Load() (string, time.Time, error) {
 func (f *FakeKeeper) Save(identity string, ttl time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	f.identity = identity
 	f.expires = time.Time{}
 	if f.needs {

@@ -814,3 +814,31 @@ func TestPassphraselessUnreadableStoreDir(t *testing.T) {
 		check(t, s, dir)
 	})
 }
+
+func TestUnlockKeeperRefusesSave(t *testing.T) {
+	s, k, _, _ := initLinux(t)
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Lock("cli"); err != nil {
+		t.Fatal(err)
+	}
+	k.FailSave(errors.New("kernel keyring set permissions: permission denied"))
+	err := s.Unlock([]byte(goodPass), time.Hour, "cli")
+	if err == nil || !strings.Contains(err.Error(), "store stays locked") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("unlock: %v", err)
+	}
+	if errors.Is(err, ErrBadPassphrase) {
+		t.Fatal("a keyring refusal must not read as a wrong passphrase")
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("store should stay locked: %v", err)
+	}
+	k.FailSave(nil)
+	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if v, err := s.Get("a"); err != nil || string(v) != "v" {
+		t.Fatalf("get after retry: %q %v", v, err)
+	}
+}
