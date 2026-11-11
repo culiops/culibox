@@ -18,7 +18,7 @@
 #
 # Runners: Linux only. There are no macOS runners (the darwin tarballs are
 # cross-compiled here and verified on a real Mac afterwards, see
-# scripts/release/macos-verify.sh); the notes say darwin is NOT yet verified until
+# scripts/macos-verify.sh); the notes say darwin is NOT yet verified until
 # that record exists.
 name: release
 
@@ -93,6 +93,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Never restore a cache: a CI job that runs unpinned npm code can save it.
+          cache: false
       - name: Build the tarballs
         run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist"
       # The linux/amd64 tarball runs on this runner: its sum is right, and the
@@ -144,6 +146,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Never restore a cache: a CI job that runs unpinned npm code can save it.
+          cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-dist

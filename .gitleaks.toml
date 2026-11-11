@@ -80,8 +80,8 @@ regexes = [
 # Vendored third-party code.
 
 [[allowlists]]
-description = "Vendored minified xterm.js and its WebGL addon (third-party code, byte-for-byte upstream): obfuscated identifiers trip the generic key rule. Path-only: the only whole-file exemption in this config"
+description = "Vendored minified xterm.js and its WebGL addon (third-party code, byte-for-byte upstream): obfuscated identifiers trip the generic key rule. Path-only and anchored with ^...$ to the exact vendored paths, so a look-alike path (xterm.js.bak, xterm.json, x/internal/...) is still scanned: the only whole-file exemption in this config"
 paths = [
-  '''internal/web/static/xterm/xterm\.js''',
-  '''internal/web/static/xterm/addon-webgl\.js''',
+  '''^internal/web/static/xterm/xterm\.js$''',
+  '''^internal/web/static/xterm/addon-webgl\.js$''',
 ]

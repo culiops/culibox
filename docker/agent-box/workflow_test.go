@@ -282,6 +282,89 @@ func parseWorkflow(content string) []wfLine {
 	return out
 }
 
+var (
+	wfOn         = regexp.MustCompile(`^["']?on["']?:[ \t]*(.*)$`)
+	wfOnKey      = regexp.MustCompile(`^([\w-]+)["']?:`)
+	wfOnItem     = regexp.MustCompile(`^-[ \t]+["']?([\w-]+)["']?\s*$`)
+	wfOnAllowed  = map[string]bool{"push": true, "workflow_dispatch": true, "workflow_call": true, "schedule": true}
+	wfOnAllowMsg = "push, workflow_dispatch, workflow_call, schedule"
+)
+
+// workflowTriggers returns the event names under a workflow's top-level `on:`
+// in any of its three forms: a block of keys (or a `- item` list), a flow
+// list/map (`on: [push, x]`) or a scalar (`on: push`). ok is false when there is
+// no `on:` at all.
+func workflowTriggers(lines []wfLine) (names []string, ok bool) {
+	for i, l := range lines {
+		m := wfOn.FindStringSubmatch(l.text)
+		if m == nil {
+			continue
+		}
+		rest := strings.TrimSpace(wfTrailing.ReplaceAllString(" "+m[1], ""))
+		switch {
+		case rest == "":
+			base := -1
+			for _, c := range lines[i+1:] {
+				t := strings.TrimSpace(c.text)
+				if t == "" {
+					continue
+				}
+				ind := wfIndent(c.text)
+				if ind == 0 {
+					break
+				}
+				if base < 0 {
+					base = ind
+				}
+				if ind != base {
+					continue
+				}
+				if k := wfOnKey.FindStringSubmatch(t); k != nil {
+					names = append(names, k[1])
+				} else if k := wfOnItem.FindStringSubmatch(t); k != nil {
+					names = append(names, k[1])
+				}
+			}
+		case rest[0] == '{':
+			names = flowMapKeys(rest)
+		case rest[0] == '[':
+			for _, it := range strings.Split(strings.Trim(rest, "[] \t"), ",") {
+				if t := strings.Trim(strings.TrimSpace(it), `"'`); t != "" {
+					names = append(names, t)
+				}
+			}
+		default:
+			names = append(names, strings.Trim(rest, `"'`))
+		}
+		return names, true
+	}
+	return nil, false
+}
+
+// flowMapKeys returns the top-level keys of a one-line flow map `{a: 1, b: {c: 2}}`.
+func flowMapKeys(s string) []string {
+	var keys []string
+	depth, cur, inVal := 0, "", false
+	for _, r := range s {
+		switch {
+		case r == '{' || r == '[':
+			depth++
+		case r == '}' || r == ']':
+			depth--
+		case r == ',' && depth == 1:
+			cur, inVal = "", false
+		case r == ':' && depth == 1 && !inVal:
+			if k := strings.Trim(strings.TrimSpace(cur), `"'`); k != "" {
+				keys = append(keys, k)
+			}
+			inVal = true
+		case depth == 1 && !inVal:
+			cur += string(r)
+		}
+	}
+	return keys
+}
+
 // checkWorkflowSupplyChain returns one message per violation, each naming the
 // file and (where there is one) the offending line.
 func checkWorkflowSupplyChain(name, content string) []string {
@@ -301,6 +384,16 @@ func checkWorkflowSupplyChain(name, content string) []string {
 	}
 	if !wfTopPerms.MatchString(strings.Join(plain, "\n") + "\n") {
 		add(0, "top level must declare `permissions:` with `contents: read` directly below")
+	}
+
+	if trig, ok := workflowTriggers(lines); !ok {
+		add(0, "no top-level `on:` found")
+	} else {
+		for _, tr := range trig {
+			if !wfOnAllowed[tr] {
+				add(0, "trigger %q is not allowed (only %s): a fork or an outsider must not be able to start a job here", tr, wfOnAllowMsg)
+			}
+		}
 	}
 
 	for i, l := range lines {
@@ -443,12 +536,31 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 	if bad := checkWorkflowSupplyChain("good.yml", good); len(bad) != 0 {
 		t.Fatalf("good workflow reported: %v", bad)
 	}
+	for name, on := range map[string]string{
+		"flow list":   "on: [push, workflow_dispatch]  # why\n",
+		"quoted flow": "on: [\"push\", 'workflow_call', schedule]\n",
+		"scalar":      "on: push\n",
+		"flow map":    "on: {push: {branches: [main]}, workflow_dispatch: {}}\n",
+		"item list":   "on:\n  - push\n  - workflow_call\n",
+		"block":       "on:\n  schedule:\n    - cron: \"17 2 * * 1\"\n  workflow_dispatch:\n",
+	} {
+		wf := "name: x\n" + on + "permissions:\n  contents: read\njobs:\n" + head + checkout
+		if bad := checkWorkflowSupplyChain("good.yml", wf); len(bad) != 0 {
+			t.Errorf("good triggers (%s) reported: %v", name, bad)
+		}
+	}
 
 	for name, tc := range map[string]struct{ wf, want string }{
 		"unpinned tag":         {top + head + "      - uses: actions/checkout@v4 # v4.0.0\n        with:\n          persist-credentials: false\n", "not pinned"},
 		"no version":           {top + head + "      - uses: actions/checkout@" + sha + "\n        with:\n          persist-credentials: false\n", "not pinned"},
 		"local in steps":       {top + head + "      - uses: ./.github/workflows/other.yml\n", "not pinned"},
 		"pull_request":         {strings.Replace(top, "  push:", "  pull_request:", 1) + head + checkout, "pull_request"},
+		"workflow_run":         {strings.Replace(top, "  push:\n    branches: [main]\n", "  push:\n  workflow_run:\n    workflows: [ci]\n", 1) + head + checkout, `trigger "workflow_run"`},
+		"issue_comment":        {strings.Replace(top, "  push:\n    branches: [main]\n", "  issue_comment:\n", 1) + head + checkout, `trigger "issue_comment"`},
+		"flow issue_comment":   {"name: x\non: [push, issue_comment]\npermissions:\n  contents: read\njobs:\n" + head + checkout, `trigger "issue_comment"`},
+		"scalar release":       {"name: x\non: release\npermissions:\n  contents: read\njobs:\n" + head + checkout, `trigger "release"`},
+		"flow map target":      {"name: x\non: {push: {branches: [main]}, pull_request_target: {}}\npermissions:\n  contents: read\njobs:\n" + head + checkout, `trigger "pull_request_target"`},
+		"no on":                {strings.Replace(top, "on:\n  push:\n    branches: [main]\n", "", 1) + head + checkout, "no top-level `on:`"},
 		"no top perms":         {strings.Replace(top, "permissions:\n  contents: read\n", "", 1) + head + checkout, "top level"},
 		"top write":            {strings.Replace(top, "contents: read", "contents: write", 1) + head + checkout, "a write grant"},
 		"flow write":           {top + head + checkout + "  w:\n    permissions: {contents: write}\n", "a write grant"},
@@ -717,6 +829,16 @@ func TestReleaseWorkflow(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^on:\n  push:\n    tags: \[\s*"v\*\.\*\.\*"\s*\]\n  workflow_dispatch:[ \t]*\n`).MatchString(wf) {
 		t.Error("`on:` must be exactly `push: tags: [\"v*.*.*\"]` plus `workflow_dispatch:`")
 	}
+	// I-1: the build must never restore a Go cache that a ci.yml job (which runs
+	// unpinned npm code) may have saved.
+	if bad := setupGoCacheViolations("release.yml", wf); len(bad) != 0 {
+		for _, m := range bad {
+			t.Error(m)
+		}
+	}
+	if strings.Count(wf, "actions/setup-go@") < 2 {
+		t.Error("release.yml should have a setup-go step in jobs build and release")
+	}
 	if strings.Contains(strings.ToLower(wf), "macos") {
 		t.Error("release.yml must not mention macos (no macOS runners)")
 	}
@@ -835,6 +957,55 @@ func TestReleaseWorkflow(t *testing.T) {
 	// A tag name or input reaches a script only through env:.
 	for _, l := range inlineExpr(wf) {
 		t.Errorf("a ${{ }} expression is interpolated inside a run script (use env:): %q", l)
+	}
+}
+
+// setupGoCacheViolations reports every actions/setup-go step in wf that does not
+// set `cache: false` (setup-go restores and saves the shared Go cache by default).
+func setupGoCacheViolations(name, wf string) []string {
+	var bad []string
+	lines := strings.Split(wf, "\n")
+	for i, l := range lines {
+		if !strings.Contains(l, "actions/setup-go@") {
+			continue
+		}
+		start := i
+		for start > 0 && !strings.HasPrefix(strings.TrimSpace(lines[start]), "- ") {
+			start--
+		}
+		dash := wfIndent(lines[start])
+		ok := false
+		for k := start + 1; k < len(lines); k++ {
+			if strings.TrimSpace(lines[k]) == "" {
+				continue
+			}
+			if wfIndent(lines[k]) <= dash {
+				break
+			}
+			if regexp.MustCompile(`^\s*cache: false\s*(?:#.*)?$`).MatchString(lines[k]) {
+				ok = true
+			}
+		}
+		if !ok {
+			bad = append(bad, fmt.Sprintf("%s:%d: setup-go step lacks `cache: false` (the release build must not restore a Go cache that CI jobs, which run unpinned npm code, can save)", name, i+1))
+		}
+	}
+	return bad
+}
+
+func TestSetupGoCacheCheckCatchesViolations(t *testing.T) {
+	const step = "      - uses: actions/setup-go@x # v1.0.0\n        with:\n          go-version-file: go.mod\n"
+	if bad := setupGoCacheViolations("a.yml", step); len(bad) != 1 {
+		t.Errorf("a setup-go step with no cache setting must be reported once, got %v", bad)
+	}
+	if bad := setupGoCacheViolations("a.yml", step+"          cache: true\n"); len(bad) != 1 {
+		t.Errorf("cache: true must be reported, got %v", bad)
+	}
+	if bad := setupGoCacheViolations("a.yml", step+"          cache: false\n      - run: x\n"+step); len(bad) != 1 {
+		t.Errorf("only the second step lacks cache: false, got %v", bad)
+	}
+	if bad := setupGoCacheViolations("a.yml", step+"          cache: false # why\n"); len(bad) != 0 {
+		t.Errorf("cache: false must pass, got %v", bad)
 	}
 }
 
