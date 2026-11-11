@@ -501,3 +501,60 @@ which uses the host's own trust store. CuliBox does not manage that: install
 the proxy's root there (on Debian or Ubuntu, copy it into
 `/usr/local/share/ca-certificates/` as a `.crt`, run `update-ca-certificates`
 and restart docker). `box setup` prints this as a hint when a pull fails.
+
+## Release verification
+
+This section is for the maintainer. A release's darwin tarballs are built on Linux
+and are not run on a Mac by CI, so each release starts with
+`⚠️ NOT yet verified on macOS` in its Platform status block. `scripts/macos-verify.sh`
+checks the published files on a Mac and records the result on the release.
+
+Run it on an Apple Silicon Mac (it refuses anything else, and a Rosetta shell
+counts as Intel):
+
+    scripts/macos-verify.sh v0.1.0
+
+You need:
+
+- `gh`, logged in with write access to the release (it works on a draft too).
+- `git`, Go, and `cc` plus `make` (the script builds the pinned abduco from source).
+- Rosetta 2: `softwareupdate --install-rosetta --agree-to-license`.
+
+What it checks, in order:
+
+1. Downloads the two darwin tarballs and `SHA256SUMS` from the release and checks
+   the sums. A mismatch stops the script before any test or binary runs.
+2. Clones the tag, builds abduco, and runs `go test ./...` natively (arm64) and
+   with `GOARCH=amd64`, which runs under Rosetta 2. A failing test run does not
+   stop the script; it is recorded as failed.
+3. Runs each extracted binary's `version` (the amd64 one under `arch -x86_64`)
+   and requires exactly `agent-box <tag> (<commit of the clone>)`.
+4. Asks for the manual rows of the Mac test guide, one per line as
+   `ID=pass|fail|na [note]`, and a blank line to finish. Nothing defaults to pass.
+5. Builds `macos-verification.json` and uploads it to the release, then rewrites
+   the two darwin lines of the Platform status block in the release notes.
+
+Verdicts:
+
+- **verified** (`✅`): both arches passed their tests and version check, arm64
+  native and amd64 under Rosetta 2, and at least one manual row is `pass`. No
+  manual row failed.
+- **partial** (`⚠️`): nothing failed, but the record is not enough to say
+  verified: no manual row passed (none given, or all `na`), or a darwin tarball
+  or an arch result is missing.
+- **failed** (`❌`): an arch's tests or version check failed, or a manual row is
+  `fail`.
+
+amd64 is checked under Rosetta 2 on Apple Silicon, not on Intel hardware, and the
+record says so.
+
+Exit codes: `0` verified; `3` the record was written but the verdict is partial or
+failed (the release now says so); `1` any other failure (nothing is uploaded unless
+the message says so); `2` usage. On a non-zero exit the work directory keeps its
+logs and downloads, and the script prints its path.
+
+Run it again for the same tag and the new run is added to `runs[]` in
+`macos-verification.json`; the asset on the release is replaced, so earlier runs
+stay in the file. If the tag now points at a different commit than an earlier run
+recorded, the script stops instead of mixing runs for different files. If the
+upload worked but the notes edit did not, run it again.

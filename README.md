@@ -62,6 +62,48 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 - The agent CLI you want to run. Claude Code (`claude`) is the supported agent. Other terminal programs can be configured as agents (a shell, for example), but status, usage and reply features are Claude Code only.
 - Node.js, only to run the browser-side tests in development.
 
+## Install
+
+Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `agent-box`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [Quick start](#quick-start).
+
+On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.1.0`):
+
+```sh
+VERSION=0.1.0
+OS=linux
+ARCH=amd64
+base=https://github.com/culiops/culibox/releases/download/v$VERSION
+curl -fsSLO "$base/culibox_${VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "$base/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+mkdir culibox && tar -xzf "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" -C culibox
+cd culibox
+./agent-box version
+```
+
+On macOS, set `OS=darwin` (`ARCH=arm64` on Apple Silicon) and check with `shasum` instead:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+
+The check must print `OK` for your tarball. `version` prints `agent-box v<version> (<commit>)`.
+
+**macOS binaries are unsigned.** A file downloaded with `curl` is not quarantined and runs as it is. A file downloaded in a browser is quarantined, so remove the flag before the first run:
+
+```sh
+xattr -d com.apple.quarantine agent-box
+```
+
+**Is the macOS build verified?** Every release's notes end with a Platform status block. The Linux lines say the build was tested in CI, with a link to the run. The macOS lines say one of these:
+
+- `⚠️ NOT yet verified on macOS`: the files are published, but nobody has checked them on a Mac yet.
+- `✅ verified on macOS ...`: the exact published files were checked on a Mac. The line gives the macOS version, the chip and the date.
+- `⚠️ automated checks passed, manual checks not run`, or `⚠️ automated checks incomplete`: only part of the check ran.
+- `❌ failed: ...`: a check failed. Do not use that build.
+
+Releases are checked on a Mac in batches, so a new release usually starts as not verified. The block's last line links the newest earlier release that has been verified. If you want a verified macOS build, pick the newest release marked ✅. The amd64 build is checked on an Apple Silicon Mac under Rosetta 2, not on Intel hardware. How the check works is in [docs/MACOS.md](docs/MACOS.md#release-verification).
+
 ## Quick start
 
 **1. Build.**
