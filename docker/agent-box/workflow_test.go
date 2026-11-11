@@ -1,7 +1,9 @@
 package boximage
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -220,6 +222,240 @@ func TestClaudeCodeStableWorkflowOnlyReports(t *testing.T) {
 	} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("workflow lacks %q", want)
+		}
+	}
+}
+
+// wfLine is one non-comment line of a workflow, with the original line number
+// and where it sits: the job it belongs to and whether it is inside that job's
+// own `permissions:` block.
+type wfLine struct {
+	n       int
+	text    string
+	job     string
+	inPerms bool
+}
+
+var (
+	wfFullComment = regexp.MustCompile(`^\s*#`)
+	wfTrailing    = regexp.MustCompile(`\s+#.*$`)
+	wfJobHeader   = regexp.MustCompile(`^  ([\w-]+):\s*(?:#.*)?$`)
+	wfJobPerms    = regexp.MustCompile(`^    permissions:\s*(?:#.*)?$`)
+	wfWriteScope  = regexp.MustCompile(`^      ([\w-]+): write\s*(?:#.*)?$`)
+	wfWriteAny    = regexp.MustCompile(`:\s*write\b|write-all`)
+	wfUses        = regexp.MustCompile(`(?:^|[\s{,])(uses:.*)$`)
+	wfPinned      = regexp.MustCompile(`^uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+\s*$`)
+	wfLocalReuse  = regexp.MustCompile(`^    uses: \./\.github/workflows/[\w.-]+\.ya?ml\s*(?:#.*)?$`)
+	wfPersist     = regexp.MustCompile(`^\s*persist-credentials: false\s*(?:#.*)?$`)
+	wfTopPerms    = regexp.MustCompile(`(?m)^permissions:[ \t]*(?:#.*)?\n  contents: read[ \t]*(?:#.*)?\n`)
+)
+
+func wfIndent(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+
+// parseWorkflow drops full-line comments (keeping each line's original number)
+// and tags every line with its job and permissions-block position. Layout is
+// the repo's: jobs at 2 spaces, a job's `permissions:` at 4, its scopes at 6.
+func parseWorkflow(content string) []wfLine {
+	var out []wfLine
+	inJobs, job, inPerms := false, "", false
+	for i, raw := range strings.Split(content, "\n") {
+		if wfFullComment.MatchString(raw) {
+			continue
+		}
+		if strings.TrimSpace(raw) != "" {
+			ind := wfIndent(raw)
+			if ind == 0 {
+				inJobs = strings.HasPrefix(raw, "jobs:")
+				job, inPerms = "", false
+			} else if inJobs {
+				if m := wfJobHeader.FindStringSubmatch(raw); m != nil {
+					job, inPerms = m[1], false
+				} else if wfJobPerms.MatchString(raw) {
+					inPerms = true
+				} else if ind <= 4 {
+					inPerms = false
+				}
+			}
+		}
+		out = append(out, wfLine{n: i + 1, text: raw, job: job, inPerms: inPerms})
+	}
+	return out
+}
+
+// checkWorkflowSupplyChain returns one message per violation, each naming the
+// file and (where there is one) the offending line.
+func checkWorkflowSupplyChain(name, content string) []string {
+	var bad []string
+	add := func(n int, format string, args ...any) {
+		where := name
+		if n > 0 {
+			where = fmt.Sprintf("%s:%d", name, n)
+		}
+		bad = append(bad, where+": "+fmt.Sprintf(format, args...))
+	}
+	lines := parseWorkflow(content)
+
+	var plain []string
+	for _, l := range lines {
+		plain = append(plain, l.text)
+	}
+	if !wfTopPerms.MatchString(strings.Join(plain, "\n") + "\n") {
+		add(0, "top level must declare `permissions:` with `contents: read` directly below")
+	}
+
+	for i, l := range lines {
+		text := strings.TrimSpace(l.text)
+		if text == "" {
+			continue
+		}
+		if m := wfUses.FindStringSubmatch(l.text); m != nil {
+			switch {
+			case wfLocalReuse.MatchString(l.text):
+				// A local reusable workflow is allowed, as a job's own `uses:` only.
+			case wfPinned.MatchString(strings.TrimSpace(m[1])):
+			default:
+				add(l.n, "action not pinned by full commit sha with a `# vX.Y.Z` comment (a local reusable workflow is allowed only directly under a job): %q", text)
+			}
+		}
+		if strings.Contains(wfTrailing.ReplaceAllString(l.text, ""), "pull_request") {
+			add(l.n, "must not mention pull_request (a PR must never run a job here): %q", text)
+		}
+		if wfWriteAny.MatchString(wfTrailing.ReplaceAllString(l.text, "")) {
+			if !wfWriteScope.MatchString(l.text) || !l.inPerms || l.job == "" {
+				add(l.n, "a write grant is allowed only as `      <scope>: write` inside a job's own `permissions:` block: %q", text)
+			}
+		}
+		if strings.Contains(l.text, "actions/checkout@") {
+			start, dash := i, wfIndent(l.text)
+			if !strings.HasPrefix(text, "- ") {
+				start = -1
+				for j := i - 1; j >= 0; j-- {
+					t := strings.TrimSpace(lines[j].text)
+					if strings.HasPrefix(t, "- ") && wfIndent(lines[j].text) < wfIndent(l.text) {
+						start, dash = j, wfIndent(lines[j].text)
+						break
+					}
+				}
+			}
+			if start < 0 {
+				add(l.n, "cannot locate the step of this checkout: %q", text)
+				continue
+			}
+			ok := false
+			for k := start + 1; k < len(lines); k++ {
+				if strings.TrimSpace(lines[k].text) == "" {
+					continue
+				}
+				if wfIndent(lines[k].text) <= dash {
+					break
+				}
+				if wfPersist.MatchString(lines[k].text) {
+					ok = true
+				}
+			}
+			if !ok {
+				add(l.n, "actions/checkout step lacks `persist-credentials: false`: %q", text)
+			}
+		}
+	}
+	return bad
+}
+
+func workflowFiles(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, pat := range []string{"*.yml", "*.yaml"} {
+		m, err := filepath.Glob("../../.github/workflows/" + pat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
+	}
+	return files
+}
+
+// TestAllWorkflowsSupplyChain holds every workflow file, present and future
+// (ci.yml, release.yml), to the same supply-chain rules as box-image.yml.
+func TestAllWorkflowsSupplyChain(t *testing.T) {
+	files := workflowFiles(t)
+	if len(files) < 2 {
+		t.Fatalf("found %d workflow files, want at least 2", len(files))
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, msg := range checkWorkflowSupplyChain(filepath.Base(f), string(b)) {
+			t.Error(msg)
+		}
+	}
+}
+
+// release.yml is the only workflow that publishes and attests: its three write
+// scopes must each be granted once, to the release job and nowhere else.
+func TestReleaseWorkflowWriteScopes(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/release.yml")
+	if os.IsNotExist(err) {
+		t.Skip("release.yml not yet added")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []string{"contents", "id-token", "attestations"} {
+		var hits []wfLine
+		for _, l := range parseWorkflow(string(b)) {
+			if m := wfWriteScope.FindStringSubmatch(l.text); m != nil && m[1] == scope {
+				hits = append(hits, l)
+			}
+		}
+		if len(hits) != 1 {
+			t.Errorf("release.yml: `%s: write` appears %d times, want exactly 1 (in job release)", scope, len(hits))
+			continue
+		}
+		if hits[0].job != "release" {
+			t.Errorf("release.yml:%d: `%s: write` is in job %q, want job release", hits[0].n, scope, hits[0].job)
+		}
+	}
+}
+
+// A guard that cannot fail is worth nothing: each bad workflow below must be
+// reported, and the good one must not.
+func TestWorkflowGuardCatchesViolations(t *testing.T) {
+	const sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+	const top = "name: x\non:\n  push:\n    branches: [main]\npermissions:\n  contents: read\njobs:\n"
+	const checkout = "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          persist-credentials: false\n"
+	const head = "  a:\n    runs-on: ubuntu-24.04\n    steps:\n"
+
+	good := "# pull_request is only mentioned in a comment\n" + top +
+		"  r:\n    uses: ./.github/workflows/other.yml\n" +
+		head + checkout + "      # - uses: x@v1\n" +
+		"  w:\n    runs-on: x\n    permissions: # why\n      contents: write # why\n    steps:\n" + checkout
+	if bad := checkWorkflowSupplyChain("good.yml", good); len(bad) != 0 {
+		t.Fatalf("good workflow reported: %v", bad)
+	}
+
+	for name, tc := range map[string]struct{ wf, want string }{
+		"unpinned tag":         {top + head + "      - uses: actions/checkout@v4 # v4.0.0\n        with:\n          persist-credentials: false\n", "not pinned"},
+		"no version":           {top + head + "      - uses: actions/checkout@" + sha + "\n        with:\n          persist-credentials: false\n", "not pinned"},
+		"local in steps":       {top + head + "      - uses: ./.github/workflows/other.yml\n", "not pinned"},
+		"pull_request":         {strings.Replace(top, "  push:", "  pull_request:", 1) + head + checkout, "pull_request"},
+		"no top perms":         {strings.Replace(top, "permissions:\n  contents: read\n", "", 1) + head + checkout, "top level"},
+		"top write":            {strings.Replace(top, "contents: read", "contents: write", 1) + head + checkout, "a write grant"},
+		"flow write":           {top + head + checkout + "  w:\n    permissions: {contents: write}\n", "a write grant"},
+		"write-all":            {top + "  w:\n    permissions: write-all\n" + head + checkout, "a write grant"},
+		"write in steps":       {top + head + checkout + "        env:\n          contents: write\n", "a write grant"},
+		"no persist":           {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n", "persist-credentials"},
+		"persist true":         {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          persist-credentials: true\n", "persist-credentials"},
+		"persist in next step": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n      - name: y\n        with:\n          persist-credentials: false\n", "persist-credentials"},
+	} {
+		bad := checkWorkflowSupplyChain("bad.yml", tc.wf)
+		if len(bad) == 0 {
+			t.Errorf("%s: no violation reported", name)
+			continue
+		}
+		if !strings.Contains(strings.Join(bad, "\n"), tc.want) || !strings.Contains(bad[0], "bad.yml") {
+			t.Errorf("%s: violations %v do not name bad.yml and %q", name, bad, tc.want)
 		}
 	}
 }
