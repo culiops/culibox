@@ -347,8 +347,8 @@ func TestEnsureCloneGitArgv(t *testing.T) {
 	// and the identity lookups.
 	want := []string{
 		fmt.Sprintf("|clone --no-hardlinks --template= -c core.hooksPath=/dev/null --no-recurse-submodules -- %s %s", of, repo),
-		fmt.Sprintf("%s|-c core.hooksPath=/dev/null -c core.fsmonitor=false config --local --get user.name", of),
-		fmt.Sprintf("%s|-c core.hooksPath=/dev/null -c core.fsmonitor=false config --local --get user.email", of),
+		fmt.Sprintf("%s|-c core.hooksPath=/dev/null -c core.fsmonitor=false -c maintenance.auto=false -c gc.auto=0 config --local --get user.name", of),
+		fmt.Sprintf("%s|-c core.hooksPath=/dev/null -c core.fsmonitor=false -c maintenance.auto=false -c gc.auto=0 config --local --get user.email", of),
 		fmt.Sprintf("%s|config -- user.name Local Name", repo),
 		fmt.Sprintf("%s|config -- user.email local@example.com", repo),
 	}

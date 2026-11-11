@@ -709,7 +709,50 @@ func TestExecDockerCancelLeavesNoGoroutine(t *testing.T) {
 }
 
 // hardenedPrefix is what every host git call in clone_of must start with.
-var hardenedPrefix = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+var hardenedPrefix = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+	"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
+
+// traceGit adds a trace2 event target to every call, so a test can see the
+// children git itself starts (CleanEnv drops any trace variable the test sets).
+type traceGit struct {
+	*recGit
+	trace string
+}
+
+func (g traceGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return g.recGit.Run(ctx, dir, append(slices.Clone(env), "GIT_TRACE2_EVENT="+g.trace), args...)
+}
+
+func (g traceGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	return g.recGit.RunStdin(ctx, dir, append(slices.Clone(env), "GIT_TRACE2_EVENT="+g.trace), stdin, args...)
+}
+
+// A host fetch must not start git's automatic maintenance in the user's repo.
+// Since git 2.47 `git fetch` starts `git maintenance run --auto --detach`, which
+// outlives the fetch: measured with git 2.56, it repacked clone_of (cruft pack,
+// multi-pack-index, info/refs) after Fetch had returned, so CuliBox left a
+// background process rewriting the user's .git, and the tests' TempDir cleanup
+// failed with "directory not empty" (CI run 42979650843). Older git starts
+// `gc --auto` the same way.
+func TestFetchStartsNoAutomaticMaintenance(t *testing.T) {
+	x := newFetchFx(t)
+	trace := filepath.Join(t.TempDir(), "trace2.json")
+	if _, err := Fetch(context.Background(), traceGit{x.rec, trace}, x.dock, x.req); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil || !bytes.Contains(data, []byte(`"event":"start"`)) {
+		t.Fatalf("no trace2 events were written (%v); the test cannot see git's children", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.Contains(line, `"event":"child_start"`) {
+			continue
+		}
+		if strings.Contains(line, `"maintenance"`) || (strings.Contains(line, `"gc"`) && strings.Contains(line, `"--auto"`)) {
+			t.Errorf("a host git call started automatic maintenance in clone_of: %s", line)
+		}
+	}
+}
 
 // The host repo is user-owned, but a hook planted in it (through a box-writable
 // clone_of, or any other way) must still never run during a fetch: git 2.43

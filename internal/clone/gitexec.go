@@ -64,7 +64,15 @@ func CleanEnv() []string {
 // of fetch; measured, git 2.43) or an fsmonitor command planted in that repo's
 // .git must never run on the host, whatever the repo's own config says: a
 // command-line -c beats the repo config.
-var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+//
+// Nor may a call leave work running after it returns: `git fetch` starts
+// automatic maintenance (`maintenance run --auto`, detached since git 2.47;
+// `gc --auto` before 2.29), which with git 2.56 was measured repacking clone_of
+// (cruft pack, multi-pack-index, info/refs) after the fetch had returned.
+// maintenance.auto=false and gc.auto=0 turn that off for CuliBox's own calls
+// only; the user's git still maintains the repo as before.
+var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+	"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
 
 // hardened is args with hardenFlags in front, before the subcommand (and before
 // any caller -c, which is for the fetch's fsck options).
