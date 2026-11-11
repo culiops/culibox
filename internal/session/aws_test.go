@@ -47,7 +47,7 @@ func (l awsLauncher) AWSFor(agent string) *config.AWSBinding {
 }
 
 func testBinding() *config.AWSBinding {
-	return &config.AWSBinding{SourceProfile: "sandbox-admin", RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent",
+	return &config.AWSBinding{SourceProfile: "sandbox-admin", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent",
 		Region: "ap-southeast-1", S3Read: []string{"culishop-tfstate"}, Label: "sandbox"}
 }
 
@@ -461,12 +461,12 @@ func TestBoundSpawnGetsBrokerEnvMountsTokenAndItsOwnBox(t *testing.T) {
 		t.Fatalf("session AWS=%+v nonce=%q", s.AWS, s.BrokerNonce)
 	}
 	info := s.Info()
-	want := &AWSInfo{Label: "sandbox", AccountID: "226198813800", RoleARN: testBinding().RoleARN, Prod: false, Fields: awsprobe.Disabled().Fields()}
+	want := &AWSInfo{Label: "sandbox", AccountID: "123456789012", RoleARN: testBinding().RoleARN, Prod: false, Fields: awsprobe.Disabled().Fields()}
 	if !reflect.DeepEqual(info.AWS, want) {
 		t.Fatalf("Info.AWS = %+v, want %+v", info.AWS, want)
 	}
 	b, _ := json.Marshal(info)
-	if !strings.Contains(string(b), `"aws":{"label":"sandbox","account_id":"226198813800"`) {
+	if !strings.Contains(string(b), `"aws":{"label":"sandbox","account_id":"123456789012"`) {
 		t.Fatalf("Info JSON = %s", b)
 	}
 	if strings.Contains(string(b), fakeNonce) || strings.Contains(string(b), "tok-") {
@@ -610,7 +610,7 @@ func TestSidecarRestoresTheBinding(t *testing.T) {
 	if r.BrokerNonce != fakeNonce {
 		t.Fatalf("restored nonce = %q, want %q", r.BrokerNonce, fakeNonce)
 	}
-	if r.Info().AWS == nil || r.Info().AWS.AccountID != "226198813800" {
+	if r.Info().AWS == nil || r.Info().AWS.AccountID != "123456789012" {
 		t.Fatalf("restored Info.AWS = %+v", r.Info().AWS)
 	}
 }
@@ -1095,7 +1095,7 @@ func TestInfoNeverCarriesTheEgressNonce(t *testing.T) {
 
 func elevTestBinding() *config.AWSBinding {
 	b := testBinding()
-	b.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write"}
+	b.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"}
 	return b
 }
 

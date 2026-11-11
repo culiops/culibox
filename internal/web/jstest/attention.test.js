@@ -155,9 +155,9 @@ test("notifyAvailability names the state: insecure, unsupported, denied or ready
 });
 
 test("notifyRowCopy, http origin: says it is not available here, names the page, and gives the two ways out (M8.1 a)", () => {
-  const c = notifyRowCopy("insecure", false, "http://100.76.118.121:8899");
-  assert.strictEqual(c.para, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://100.76.118.121:8899.");
-  assert.deepEqual(c.paraMono, ["https://", "http://100.76.118.121:8899"], "the parts of the paragraph that are machine text, in order");
+  const c = notifyRowCopy("insecure", false, "http://192.0.2.10:8899");
+  assert.strictEqual(c.para, "Not available at this address. Browsers allow notifications only on https:// or localhost pages, and this page is http://192.0.2.10:8899.");
+  assert.deepEqual(c.paraMono, ["https://", "http://192.0.2.10:8899"], "the parts of the paragraph that are machine text, in order");
   assert.strictEqual(c.heading, "How to enable");
   assert.strictEqual(c.helper, "");
   assert.strictEqual(c.checkAgain, false);
@@ -171,12 +171,12 @@ test("notifyRowCopy, http origin: says it is not available here, names the page,
     for (const m of t.mono) { const i = t.text.indexOf(m, at); assert.ok(i >= 0, m + " is in: " + t.text); at = i + m.length; }
   }
   // Whether the user is opted in changes nothing on a page that cannot ask.
-  assert.deepEqual(notifyRowCopy("insecure", true, "http://100.76.118.121:8899"), c);
+  assert.deepEqual(notifyRowCopy("insecure", true, "http://192.0.2.10:8899"), c);
 });
 
 test("notifyRowCopy, http origin: the localhost address keeps the page's port, and has none when the page has none", () => {
   const step = (origin) => notifyRowCopy("insecure", false, origin).steps[0].text;
-  assert.strictEqual(step("http://100.76.118.121:8899"), "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.");
+  assert.strictEqual(step("http://192.0.2.10:8899"), "On the machine CuliBox runs on, open http://127.0.0.1:8899. Localhost counts as secure.");
   // No port (the default 80): http://127.0.0.1, not http://127.0.0.1:
   assert.strictEqual(step("http://box.example"), "On the machine CuliBox runs on, open http://127.0.0.1. Localhost counts as secure.");
   assert.strictEqual(step("http://box.example:80"), "On the machine CuliBox runs on, open http://127.0.0.1. Localhost counts as secure.");

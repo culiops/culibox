@@ -223,7 +223,7 @@ func TestSidecarPersistsBaseAccess(t *testing.T) {
 // watched, and a later re-probe fills it in (the map starts nil).
 func TestOldSidecarWithoutBaseAccessIsNotChecked(t *testing.T) {
 	old := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","box":"ab-box-test","replyable":false,` +
-		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::226198813800:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
+		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
 		`"aws_nonce":"` + fakeNonce + `","egress_nonce":"` + fakeNonce + `"}`
 	var md sessionMeta
 	if err := json.Unmarshal([]byte(old), &md); err != nil {
@@ -271,7 +271,7 @@ func TestOldSidecarWithoutBaseAccessIsNotChecked(t *testing.T) {
 // checked", never as a clean result, and is watched.
 func TestSidecarUnknownBaseStateIsNotChecked(t *testing.T) {
 	rec := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","box":"ab-box-test","replyable":false,` +
-		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::226198813800:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
+		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
 		`"aws_nonce":"` + fakeNonce + `","egress_nonce":"` + fakeNonce + `","base_access":{"":{"state":"clean"}}}`
 	var md sessionMeta
 	if err := json.Unmarshal([]byte(rec), &md); err != nil {

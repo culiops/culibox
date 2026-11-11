@@ -1,0 +1,117 @@
+# gitleaks configuration for CuliBox.
+#
+# Run it with the default ruleset plus the allowlists below:
+#   gitleaks dir --config .gitleaks.toml --redact .
+#   gitleaks git --config .gitleaks.toml --redact .
+#
+# Every entry below allows one known false positive: a fake fixture in a test, a
+# public identifier, or vendored third-party code. Each is limited to the file it
+# was found in, and, where the fake has a recognisable shape, to a line of that
+# shape. There is no directory-wide or catch-all entry. A real secret that lands in
+# any of these files with a different shape is still reported.
+
+[extend]
+useDefault = true
+
+# Test fixtures: fake credentials that the masking, scrubbing and import-warning
+# code is tested against. The line must show the fake shape.
+
+[[allowlists]]
+description = "internal/bundle/importscan_test.go: fake 'export X_TOKEN=abcd1234efgh5678' lines that the import scanner must warn about"
+paths = ['''internal/bundle/importscan_test\.go''']
+regexTarget = "line"
+regexes = ['''(CF|A|B)_TOKEN=(abcd|zzzz)1234efgh5678''']
+
+[[allowlists]]
+description = "internal/web/audit_api_test.go: fake AWS key id made of the alphabet, used to check the audit log masks it"
+paths = ['''internal/web/audit_api_test\.go''']
+regexTarget = "line"
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
+
+[[allowlists]]
+description = "internal/account/settings_inherit_test.go: fake AWS key id made of the alphabet, used to check settings inheritance drops it"
+paths = ['''internal/account/settings_inherit_test\.go''']
+regexTarget = "line"
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
+
+[[allowlists]]
+description = "internal/web/jstest/attention.test.js: fake AWS key id made of the alphabet, used to check the approval text is masked"
+paths = ['''internal/web/jstest/attention\.test\.js''']
+regexTarget = "line"
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
+
+[[allowlists]]
+description = "internal/bugreport/bugreport_test.go: fake GitHub token (ghp_ + ABC, DEF... alphabet run) used to check the bug report scrubs it"
+paths = ['''internal/bugreport/bugreport_test\.go''']
+regexTarget = "line"
+regexes = ['''ghp_ABC[a-z]*DEFGHIJKLMNOPQRSTUVWXYZ0123456''']
+
+[[allowlists]]
+description = "internal/bugreport/scrub_test.go: fake 'MyApiKey=abc123' used to check key=value scrubbing is case-insensitive"
+paths = ['''internal/bugreport/scrub_test\.go''']
+regexTarget = "line"
+regexes = ['''MyApiKey=abc123''']
+
+[[allowlists]]
+description = "internal/web/credentials_tokens_test.go: fake Sentry-style token with the word SECRET in it"
+paths = ['''internal/web/credentials_tokens_test\.go''']
+regexTarget = "line"
+regexes = ['''sntrys_VERY-SECRET-0123456789''']
+
+[[allowlists]]
+description = "Static-token tests: the fake token 'tok-SECRET-1234', one entry per test file"
+paths = [
+  '''internal/doctor/statictokens_test\.go''',
+  '''internal/launcher/tokens_test\.go''',
+  '''internal/session/tokens_test\.go''',
+  '''internal/broker/static_test\.go''',
+  '''internal/broker/boxscripts_test\.go''',
+  '''internal/credref/credref_test\.go''',
+]
+regexTarget = "line"
+regexes = ['''tok-SECRET-1234''']
+
+[[allowlists]]
+description = "internal/session/ghbinding_test.go: fake per-spawn broker token (digits 0-9 then a-f twice)"
+paths = ['''internal/session/ghbinding_test\.go''']
+regexTarget = "line"
+regexes = ['''tok-aws-1\.0123456789abcdef0123456789abcdef''']
+
+[[allowlists]]
+description = "internal/ssologin/ssologin_test.go: env list with fake values 'secret' used to check the SSO login environment drops them"
+paths = ['''internal/ssologin/ssologin_test\.go''']
+regexTarget = "line"
+regexes = ['''(OAUTH_TOKEN|AB_PROD_PASS)=secret''']
+
+[[allowlists]]
+description = "internal/mask/mask_test.go: truncated, well-known example prefixes of AWS session tokens and fake PEM bodies (MIIB, b3Bl...) used to test the masker"
+paths = ['''internal/mask/mask_test\.go''']
+regexTarget = "line"
+regexes = [
+  '''IQoJb3JpZ2luX2VjEBkaCXVzLWVhc3QtMQ==''',
+  '''FwoGZXIvYXdzEBYaDHqa0AP1abcdefghijkl''',
+  '''BEGIN (RSA|OPENSSH) PRIVATE KEY-----\\n(MIIB|b3Bl)''',
+]
+
+# Public identifiers.
+
+[[allowlists]]
+description = "docker/agent-box/Dockerfile and its test: HashiCorp's published release-signing key fingerprint and the sha256 of the public key file, pinned to verify downloads"
+paths = [
+  '''docker/agent-box/Dockerfile''',
+  '''docker/agent-box/boximage_test\.go''',
+]
+regexTarget = "line"
+regexes = [
+  '''HASHICORP_KEY_(FPR|SHA256)=''',
+  '''hashicorpKeyFpr = ''',
+]
+
+# Vendored third-party code.
+
+[[allowlists]]
+description = "Vendored minified xterm.js and its WebGL addon (third-party code, byte-for-byte upstream): obfuscated identifiers trip the generic key rule"
+paths = [
+  '''internal/web/static/xterm/xterm\.js''',
+  '''internal/web/static/xterm/addon-webgl\.js''',
+]

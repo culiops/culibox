@@ -539,7 +539,7 @@ func TestDockerfileDeclaresPlaywright(t *testing.T) {
 	var args []string
 	for _, a := range pw["args"].([]any) {
 		s, _ := a.(string)
-		if strings.Contains(s, "/home/claude") {
+		if strings.Contains(s, "/home/user") {
 			t.Errorf("playwright arg %q names the host home", s)
 		}
 		args = append(args, s)

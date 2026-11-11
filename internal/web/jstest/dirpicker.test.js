@@ -17,7 +17,7 @@ test("an empty or blank query means the workspace list", () => {
 
 test("a leading slash means an absolute path, and is trimmed", () => {
   assert.deepStrictEqual(classifyPickerQuery("/etc/hosts"), { mode: "path", value: "/etc/hosts" });
-  assert.deepStrictEqual(classifyPickerQuery("  /home/claude/x  "), { mode: "path", value: "/home/claude/x" });
+  assert.deepStrictEqual(classifyPickerQuery("  /home/user/x  "), { mode: "path", value: "/home/user/x" });
 });
 
 test("anything else is a fuzzy search", () => {
@@ -31,14 +31,14 @@ test("the empty state lists workspaces, in order", () => {
   const rows = pickerRows({
     mode: "empty",
     workspaces: [
-      { label: "~ (home)", path: "/home/claude" },
-      { label: "culipulse", path: "/home/claude/culipulse" },
+      { label: "~ (home)", path: "/home/user" },
+      { label: "culipulse", path: "/home/user/culipulse" },
     ],
     hits: [],
   });
   assert.deepStrictEqual(rows, [
-    { label: "~ (home)", hint: "", path: "/home/claude", kind: "workspace" },
-    { label: "culipulse", hint: "", path: "/home/claude/culipulse", kind: "workspace" },
+    { label: "~ (home)", hint: "", path: "/home/user", kind: "workspace" },
+    { label: "culipulse", hint: "", path: "/home/user/culipulse", kind: "workspace" },
   ]);
 });
 
@@ -58,22 +58,22 @@ test("the empty state list is filtered by the same names skipDirRecord suppresse
   const rows = pickerRows({
     mode: "empty",
     workspaces: [
-      { label: "~ (home)", path: "/home/claude" },
-      { label: "code-server", path: "/home/claude/code-server" },
-      { label: "culipulse", path: "/home/claude/culipulse" },
-      { label: "sdk", path: "/home/claude/sdk" },
-      { label: "vendor", path: "/home/claude/vendor" },
-      { label: "worktrees", path: "/home/claude/worktrees" },
-      { label: ".zinit", path: "/home/claude/.zinit" },
-      { label: ".tmux", path: "/home/claude/.tmux" },
-      { label: ".open-next", path: "/home/claude/.open-next" },
-      { label: ".worktrees", path: "/home/claude/.worktrees" },
+      { label: "~ (home)", path: "/home/user" },
+      { label: "code-server", path: "/home/user/code-server" },
+      { label: "culipulse", path: "/home/user/culipulse" },
+      { label: "sdk", path: "/home/user/sdk" },
+      { label: "vendor", path: "/home/user/vendor" },
+      { label: "worktrees", path: "/home/user/worktrees" },
+      { label: ".zinit", path: "/home/user/.zinit" },
+      { label: ".tmux", path: "/home/user/.tmux" },
+      { label: ".open-next", path: "/home/user/.open-next" },
+      { label: ".worktrees", path: "/home/user/.worktrees" },
     ],
     hits: [],
   });
   assert.deepStrictEqual(rows, [
-    { label: "~ (home)", hint: "", path: "/home/claude", kind: "workspace" },
-    { label: "culipulse", hint: "", path: "/home/claude/culipulse", kind: "workspace" },
+    { label: "~ (home)", hint: "", path: "/home/user", kind: "workspace" },
+    { label: "culipulse", hint: "", path: "/home/user/culipulse", kind: "workspace" },
   ]);
 });
 
@@ -83,12 +83,12 @@ test("a fuzzy result shows the basename as the label and its parent as the hint"
   const rows = pickerRows({
     mode: "fuzzy",
     workspaces: [],
-    hits: [{ rel: "culiops-agent-box/internal/web/static", path: "/home/claude/culiops-agent-box/internal/web/static" }],
+    hits: [{ rel: "culiops-agent-box/internal/web/static", path: "/home/user/culiops-agent-box/internal/web/static" }],
   });
   assert.deepStrictEqual(rows, [{
     label: "static",
     hint: "culiops-agent-box/internal/web",
-    path: "/home/claude/culiops-agent-box/internal/web/static",
+    path: "/home/user/culiops-agent-box/internal/web/static",
     kind: "hit",
   }]);
 });
@@ -96,10 +96,10 @@ test("a fuzzy result shows the basename as the label and its parent as the hint"
 test("a top-level fuzzy result has no parent to show", () => {
   const rows = pickerRows({
     mode: "fuzzy", workspaces: [],
-    hits: [{ rel: "culipulse", path: "/home/claude/culipulse" }],
+    hits: [{ rel: "culipulse", path: "/home/user/culipulse" }],
   });
   assert.deepStrictEqual(rows, [
-    { label: "culipulse", hint: "", path: "/home/claude/culipulse", kind: "hit" },
+    { label: "culipulse", hint: "", path: "/home/user/culipulse", kind: "hit" },
   ]);
 });
 
@@ -117,9 +117,9 @@ test("reopening shows the workspace list for a blank value and for a settled pat
   // input, so "there is a path in the box" must still offer the workspaces.
   assert.strictEqual(pickerReopenMode("", false), "empty");
   assert.strictEqual(pickerReopenMode("   ", false), "empty");
-  assert.strictEqual(pickerReopenMode("/home/claude/culipulse", false), "empty");
+  assert.strictEqual(pickerReopenMode("/home/user/culipulse", false), "empty");
   // ...and it does not matter whether the list happened to be open already.
-  assert.strictEqual(pickerReopenMode("/home/claude/culipulse", true), "empty");
+  assert.strictEqual(pickerReopenMode("/home/user/culipulse", true), "empty");
 });
 
 test("reopening onto a fuzzy value re-runs that search instead of the workspaces", () => {
@@ -140,15 +140,15 @@ test("reopening leaves an open fuzzy list alone", () => {
 test("a plain click on a path selects all, so typing replaces it", () => {
   // A click into an already-focused field fires no focus event; without this
   // select-all, typing "XXXXX" spliced into the value:
-  // /home/claude/culipulse -> /home/claude/culXXXXXipulse.
-  assert.strictEqual(pickerShouldSelectAll("/home/claude/culipulse", true), true);
+  // /home/user/culipulse -> /home/user/culXXXXXipulse.
+  assert.strictEqual(pickerShouldSelectAll("/home/user/culipulse", true), true);
   assert.strictEqual(pickerShouldSelectAll("", true), true);
 });
 
 test("a drag inside the input is never collapsed to select-all", () => {
   // A range selection means the user picked a substring on purpose — even a
   // 14px drag. Selecting all here makes no part of a path editable in place.
-  assert.strictEqual(pickerShouldSelectAll("/home/claude/culipulse", false), false);
+  assert.strictEqual(pickerShouldSelectAll("/home/user/culipulse", false), false);
   assert.strictEqual(pickerShouldSelectAll("culi", false), false);
 });
 

@@ -56,8 +56,8 @@ func (f *fakeRunner) Status(string) (ssologin.State, bool) {
 }
 
 func boundSess(id string) *session.Session {
-	b := &config.AWSBinding{SourceProfile: "sandbox-admin", RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent",
-		Region: "ap-southeast-1", Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write"}}
+	b := &config.AWSBinding{SourceProfile: "sandbox-admin", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent",
+		Region: "ap-southeast-1", Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"}}
 	return &session.Session{ID: id, Agent: "aws", Cwd: "/w/proj", Runtime: config.RuntimeBox, Box: "ab-box-1", AWS: b, Exclusive: true}
 }
 

@@ -25,14 +25,14 @@ func TestDescribe(t *testing.T) {
 	ts := func(n int) int64 { return int64(1_800_000_000 + n) }
 	at := func(n int) time.Time { return time.Unix(ts(n), 0) }
 
-	rec(s.b.Record(broker.Row{Time: at(1), SessionID: "s1", AccountID: "226198813800", RoleARN: "arn:aws:iam::226198813800:role/team/agent-ops",
+	rec(s.b.Record(broker.Row{Time: at(1), SessionID: "s1", AccountID: "210987654321", RoleARN: "arn:aws:iam::210987654321:role/team/agent-ops",
 		Outcome: broker.OutcomeMinted, Elevated: true, Entry: "culipulse-prod"}))
-	rec(s.b.Record(broker.Row{Time: at(2), SessionID: "s1", AccountID: "226198813800", Outcome: broker.OutcomeMinted})) // no entry, no role
+	rec(s.b.Record(broker.Row{Time: at(2), SessionID: "s1", AccountID: "210987654321", Outcome: broker.OutcomeMinted})) // no entry, no role
 	rec(s.b.Record(broker.Row{Time: at(3), SessionID: "s1", Provider: broker.ProviderGitHub, Subject: "culiops", Repos: 3, Outcome: broker.OutcomeMinted}))
 	rec(s.b.Record(broker.Row{Time: at(4), SessionID: "s1", Provider: broker.ProviderGitHub, Subject: "culiops", Repos: 1, Outcome: broker.OutcomeMinted}))
 	rec(s.b.Record(broker.Row{Time: at(5), SessionID: "s1", Provider: broker.ProviderStatic, Entry: "datadog-read", Outcome: broker.OutcomeFetched}))
 	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(6), SessionID: "s1", Action: broker.ActionGranted, Entry: "culipulse-prod", Minutes: 30, Reason: "rotate the key", Cred: "cookie"}))
-	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(7), SessionID: "s1", Action: broker.ActionExtended, AccountID: "226198813800", Minutes: 15, Cred: "bearer"}))
+	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(7), SessionID: "s1", Action: broker.ActionExtended, AccountID: "210987654321", Minutes: 15, Cred: "bearer"}))
 	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(8), SessionID: "s1", Action: broker.ActionExpired, Entry: "culipulse-prod", Cred: "none"}))
 	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(9), Action: broker.ActionSSOLoginOK, Entry: "sandbox", Cred: "cookie"}))
 	rec(s.b.RecordApproval(broker.ApprovalRow{Time: at(10), Action: broker.ActionSSOLoginFailed, Entry: "sandbox"}))
@@ -66,12 +66,12 @@ func TestDescribe(t *testing.T) {
 		elevated                           bool
 	}{
 		{1, "credential", "aws culipulse-prod · role agent-ops · elevated", "minted", "", "", 0, true},
-		{2, "credential", "aws 226198813800", "minted", "", "", 0, false},
+		{2, "credential", "aws 210987654321", "minted", "", "", 0, false},
 		{3, "credential", "github culiops · 3 repos", "minted", "", "", 0, false},
 		{4, "credential", "github culiops · 1 repo", "minted", "", "", 0, false},
 		{5, "credential", "token datadog-read", "fetched", "", "", 0, false},
 		{6, "elevation", "write on culipulse-prod · 30 min", "granted", "you", "rotate the key", 0, false},
-		{7, "elevation", "write on 226198813800 · 15 min", "extended", "API token", "", 0, false},
+		{7, "elevation", "write on 210987654321 · 15 min", "extended", "API token", "", 0, false},
 		{8, "elevation", "write on culipulse-prod", "expired", "", "", 0, false},
 		{9, "signin", "SSO sign-in sandbox", "ok", "you", "", 0, false},
 		{10, "signin", "SSO sign-in sandbox", "failed", "", "", 0, false},

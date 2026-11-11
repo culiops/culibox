@@ -64,7 +64,7 @@ func TestDetectShellFallsBackToPasswd(t *testing.T) {
 	passwd := filepath.Join(dir, "passwd")
 	body := "root:x:0:0:root:/root:/bin/sh\n" +
 		"svc:x:999:999::/home/svc:/usr/sbin/nologin\n" +
-		"claude:x:1001:1001::/home/claude:" + zsh + "\n"
+		"user:x:1001:1001::/home/user:" + zsh + "\n"
 	if err := os.WriteFile(passwd, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

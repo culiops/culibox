@@ -110,11 +110,11 @@ test("a file never reports contents, even if a measurement is passed", () => {
 // /api/fs/search returns paths relative to HOME, so without one shared rule the
 // two surfaces would disagree.
 test("relativeTo strips the root", () => {
-  assert.strictEqual(relativeTo("/home/claude/proj", "/home/claude/proj/a/b.js"), "a/b.js");
+  assert.strictEqual(relativeTo("/home/user/proj", "/home/user/proj/a/b.js"), "a/b.js");
 });
 
 test("relativeTo tolerates a trailing slash on the root", () => {
-  assert.strictEqual(relativeTo("/home/claude/proj/", "/home/claude/proj/a/b.js"), "a/b.js");
+  assert.strictEqual(relativeTo("/home/user/proj/", "/home/user/proj/a/b.js"), "a/b.js");
 });
 
 test("relativeTo handles the filesystem root", () => {
@@ -122,24 +122,24 @@ test("relativeTo handles the filesystem root", () => {
 });
 
 test("relativeTo calls the root itself dot", () => {
-  assert.strictEqual(relativeTo("/home/claude/proj", "/home/claude/proj"), ".");
-  assert.strictEqual(relativeTo("/home/claude/proj/", "/home/claude/proj"), ".");
+  assert.strictEqual(relativeTo("/home/user/proj", "/home/user/proj"), ".");
+  assert.strictEqual(relativeTo("/home/user/proj/", "/home/user/proj"), ".");
 });
 
 // The trap shortPath already carries a comment about: a string prefix match puts
-// /home/claude/proj2 "inside" /home/claude/proj. Compare whole components.
+// /home/user/proj2 "inside" /home/user/proj. Compare whole components.
 test("relativeTo does not treat a sibling with a shared prefix as inside", () => {
   assert.strictEqual(
-    relativeTo("/home/claude/proj", "/home/claude/proj2/x", "/home/claude"),
+    relativeTo("/home/user/proj", "/home/user/proj2/x", "/home/user"),
     "~/proj2/x");
 });
 
 test("relativeTo falls back to the absolute path when it is outside home too", () => {
-  assert.strictEqual(relativeTo("/home/claude/proj", "/etc/hosts", "/home/claude"), "/etc/hosts");
+  assert.strictEqual(relativeTo("/home/user/proj", "/etc/hosts", "/home/user"), "/etc/hosts");
 });
 
 test("relativeTo returns the path unchanged when there is no root", () => {
-  assert.strictEqual(relativeTo("", "/etc/hosts", "/home/claude"), "/etc/hosts");
+  assert.strictEqual(relativeTo("", "/etc/hosts", "/home/user"), "/etc/hosts");
 });
 
 test("boxFileURL addresses a session's box file route, encoding both parts", () => {

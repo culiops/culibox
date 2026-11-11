@@ -7,11 +7,11 @@ const { hhmm } = require("../static/sessionrow.js");
 
 const NOW = Date.parse("2026-10-27T15:19:00Z");
 const iso = (minFromNow) => new Date(NOW + minFromNow * 60000).toISOString();
-const WRITE = "arn:aws:iam::402100009917:role/agent-write";
-const BASE = "arn:aws:iam::402100009917:role/agent-investigate";
+const WRITE = "arn:aws:iam::111122223333:role/agent-write";
+const BASE = "arn:aws:iam::111122223333:role/agent-investigate";
 
 const conn = (over) => Object.assign({
-  name: "culipulse-prod", label: "culipulse-prod", account_id: "402100009917", role_arn: BASE, region: "ap-southeast-1",
+  name: "culipulse-prod", label: "culipulse-prod", account_id: "111122223333", role_arn: BASE, region: "ap-southeast-1",
   prod: true, write_capable: true, elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false },
 }, over);
 const sess = (over) => Object.assign({
@@ -99,7 +99,7 @@ test("read connection: one row, Elevate offered, SSO unknown, last credential ti
   assert.strictEqual(r.scope, "read");
   assert.strictEqual(r.sso, "", "nothing says this connection uses SSO, so the row claims nothing");
   assert.deepStrictEqual(r.actions, ["elevate"]);
-  assert.match(r.sub, /402100009917/);
+  assert.match(r.sub, /111122223333/);
   assert.match(r.sub, /agent-investigate/);
   assert.match(r.last, /^\d\d:\d\d$/);
   assert.match(m.creds.head, /^12 mints · last \d\d:\d\d$/);
@@ -154,7 +154,7 @@ test("the window held by another connection closes Elevate here and says why", (
 });
 
 test("the legacy inline binding is one row; its grant carries no connection name", () => {
-  const s = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "226198813800", role_arn: BASE, prod: false,
+  const s = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "210987654321", role_arn: BASE, prod: false,
     elevate: { role_arn: WRITE, max_minutes: 30 } } };
   const r = model({ session: s, aws: { stats: { mints: 1, last_mint: iso(-5) }, recent: [] } }).creds.rows[0];
   assert.strictEqual(r.name, "sandbox");
@@ -423,7 +423,7 @@ test("elevBanner: the status still supplies the reason of the list's window", ()
 });
 
 test("elevBanner: a legacy inline binding is named by its label", () => {
-  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "402100009917", role_arn: BASE, prod: false,
+  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "111122223333", role_arn: BASE, prod: false,
     elevate: { role_arn: WRITE, max_minutes: 30 }, elevated_until: iso(23) }, aws) });
   const named = { ts: NOW - 60000, action: "granted", minutes: 30, reason: "load test" };
   const b = elevBanner(inline(), status({ approvals: [named] }), NOW);
@@ -438,7 +438,7 @@ test("elevBanner: a legacy inline binding is named by its label", () => {
 // The list expresses a legacy binding's window itself (AWSInfo.elevated_until, filled by List like a connection's), and
 // accConns carries it into the one entry, so the list-only rule needs no legacy fallback on the status.
 test("elevBanner: a legacy inline binding's window is the list's too: dropped from the list, gone, whatever the status says (I1)", () => {
-  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "402100009917", role_arn: BASE, prod: false,
+  const inline = (aws) => ({ id: "s2", runtime: "box", aws: Object.assign({ label: "sandbox", account_id: "111122223333", role_arn: BASE, prod: false,
     elevate: { role_arn: WRITE, max_minutes: 30 }, elevated_until: iso(23) }, aws) });
   const stale = status({ approvals: [{ ts: NOW - 60000, action: "granted", minutes: 30, reason: "load test" }],
     elevation: { active: true, name: "", until: iso(23) } });
@@ -498,7 +498,7 @@ test("access row: a later grant hides the ended line, and another connection's e
   // A nameless approval is the inline binding's; it does not end a named connection's window.
   const nameless = status({ approvals: [{ ts: NOW - 10 * 60000, action: "expired" }] });
   assert.strictEqual(model({ session: sess(), aws: nameless }).creds.rows[0].window, null);
-  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "402100009917", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
+  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "111122223333", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
   assert.match(model({ session: inline, aws: nameless }).creds.rows[0].window.ended, /^Write access ended /);
 });
 
@@ -517,7 +517,7 @@ test("access row: credentials outliving a drop are named while last_valid is in 
   assert.strictEqual(leftover(el({ last_valid: undefined })), "");
   assert.strictEqual(leftover(el({ last_valid: "0001-01-01T00:00:00Z" })), "", "the zero time is never");
   assert.strictEqual(leftover(undefined), "");
-  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "402100009917", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
+  const inline = { id: "s2", runtime: "box", aws: { label: "sandbox", account_id: "111122223333", role_arn: BASE, elevate: { role_arn: WRITE, max_minutes: 30 } } };
   assert.strictEqual(leftover(el({ name: undefined }), inline), "Credentials already issued stay valid until " + hhmm(iso(8)));
   assert.strictEqual(leftover(el(), inline), "", "a named elevation is not the inline binding's");
 });

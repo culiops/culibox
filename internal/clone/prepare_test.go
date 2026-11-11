@@ -380,8 +380,8 @@ func TestMemoryMountNeedsAnAbsoluteRoot(t *testing.T) {
 
 func TestClaudeProjectSlug(t *testing.T) {
 	for in, want := range map[string]string{
-		"/home/claude/culiops-agent-box/.worktrees/m3a": "-home-claude-culiops-agent-box--worktrees-m3a",
-		"/home/claude/box-clones/culiops-agent-box":     "-home-claude-box-clones-culiops-agent-box",
+		"/home/user/culiops-agent-box/.worktrees/m3a": "-home-user-culiops-agent-box--worktrees-m3a",
+		"/home/user/box-clones/culiops-agent-box":     "-home-user-box-clones-culiops-agent-box",
 	} {
 		if got := claudeProjectSlug(in); got != want {
 			t.Errorf("claudeProjectSlug(%q) = %q, want %q", in, got, want)

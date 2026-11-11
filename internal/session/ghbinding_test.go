@@ -239,7 +239,7 @@ func TestSpawnAWSOnlyUnchanged(t *testing.T) {
 		{Host: "/state/broker/b/ab-box-test", Box: "/opt/agentbox-broker"}}; !slices.Equal(boxes.lastRO, want) {
 		t.Fatalf("AWS-only mounts = %#v, want %#v", boxes.lastRO, want)
 	}
-	if boxes.lastKey.Session != "" || boxes.lastKey.Account != "" || boxes.lastKey.Binding != "1130ffad2979" {
+	if boxes.lastKey.Session != "" || boxes.lastKey.Account != "" || boxes.lastKey.Binding != "9f8e95567cc5" {
 		t.Fatalf("AWS-only box key = %+v", boxes.lastKey)
 	}
 	if s.GitHub != nil || s.Info().GitHub != nil {
@@ -319,7 +319,7 @@ func TestSidecarRestoresGitHubBindingAndNonce(t *testing.T) {
 // A record written before GitHub bindings carries only aws_nonce and aws.
 func TestSidecarOldRecordRestoresBrokerNonce(t *testing.T) {
 	var md sessionMeta
-	old := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","aws":{"source_profile":"p","role_arn":"arn:aws:iam::226198813800:role/a","region":"ap-southeast-1"},"aws_nonce":"n1"}`
+	old := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","aws":{"source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/a","region":"ap-southeast-1"},"aws_nonce":"n1"}`
 	if err := json.Unmarshal([]byte(old), &md); err != nil {
 		t.Fatal(err)
 	}

@@ -21,10 +21,10 @@ func TestHostAllowlist_Loopback(t *testing.T) {
 
 func TestHostAllowlist_NonLoopbackAndExtras(t *testing.T) {
 	c := validCfg()
-	c.BindAddr = "100.76.118.121:9000"
+	c.BindAddr = "192.0.2.10:9000"
 	c.AllowedHosts = []string{"Agent-Box.Culiops.dev"}
 	got := c.HostAllowlist()
-	if !slices.Equal(got, []string{"100.76.118.121:9000", "agent-box.culiops.dev"}) {
+	if !slices.Equal(got, []string{"192.0.2.10:9000", "agent-box.culiops.dev"}) {
 		t.Errorf("got %q (no loopback aliases for a non-loopback bind; extras lowercased)", got)
 	}
 }

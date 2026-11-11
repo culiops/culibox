@@ -296,8 +296,8 @@ test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => 
 const ARN = "arn:aws:iam::123456789012:role/agentbox-agent";
 const NOW = Date.parse("2027-01-15T08:00:00Z");
 const iso = (min) => new Date(NOW + min * 60000).toISOString();
-const ELEV = { label: "sandbox", account_id: "226198813800", role_arn: ARN, prod: false,
-  elevate: { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 60, allow_iam: false } };
+const ELEV = { label: "sandbox", account_id: "210987654321", role_arn: ARN, prod: false,
+  elevate: { role_arn: "arn:aws:iam::210987654321:role/agentbox-agent-write", max_minutes: 60, allow_iam: false } };
 
 test("roleName is the last path segment of a role ARN", () => {
   assert.strictEqual(roleName(ARN), "agentbox-agent");
@@ -340,7 +340,7 @@ test("awsBadge: write state, and prod keeps its red with the write outline", () 
   assert.strictEqual(awsBadge({ aws: { ...ELEV, elevated_until: iso(-1) } }, NOW).write, false); // a stale list entry is not write
   const pw = awsBadge({ aws: { ...ELEV, prod: true, elevated_until: iso(17) } }, NOW);
   assert.ok(pw.prod && pw.write);
-  assert.strictEqual(awsBadge({ aws: { ...ELEV, label: "", elevated_until: iso(17) } }, NOW).text, "aws:226198813800 · write");
+  assert.strictEqual(awsBadge({ aws: { ...ELEV, label: "", elevated_until: iso(17) } }, NOW).text, "aws:210987654321 · write");
 });
 
 test("awsRailRows: scope row by state", () => {
@@ -394,8 +394,8 @@ test("awsSig moves on grant, drop and lapse, and on nothing else", () => {
 });
 
 // --- #155 named AWS connections ---------------------------------------------
-const CARN = (n) => "arn:aws:iam::226198813800:role/agentbox-" + n;
-const conn = (name, over) => Object.assign({ name: name, label: name.toUpperCase(), account_id: "226198813800", role_arn: CARN(name),
+const CARN = (n) => "arn:aws:iam::210987654321:role/agentbox-" + n;
+const conn = (name, over) => Object.assign({ name: name, label: name.toUpperCase(), account_id: "210987654321", role_arn: CARN(name),
   region: "ap-southeast-1", prod: false, write_capable: false }, over);
 
 test("awsConnRailRows: prod first, then by name; three lines per block", () => {
@@ -405,7 +405,7 @@ test("awsConnRailRows: prod first, then by name; three lines per block", () => {
   const rows = awsConnRailRows(s, null, NOW, false);
   assert.deepStrictEqual(rows.map((r) => r.name), ["zz-prod", "sbx-a", "sbx-b"]);
   assert.ok(rows.every((r) => r.kind === "conn"));
-  assert.strictEqual(rows[1].detail, "SBX-A · 226198813800 · agentbox-sbx-a · ap-southeast-1");
+  assert.strictEqual(rows[1].detail, "SBX-A · 210987654321 · agentbox-sbx-a · ap-southeast-1");
   assert.deepStrictEqual(rows[0].chips, [{ text: "prod", chip: "bdg aws prod" }]);
   assert.deepStrictEqual(rows[1].chips, []);
   assert.strictEqual(rows[1].stat, "", "no counters loaded yet: no third line, not a made-up zero");

@@ -502,7 +502,7 @@ func TestSnapshotRecreatesSymlinksWithoutFollowing(t *testing.T) {
 	cache := filepath.Join(src, "plugins", "cache")
 	links := [][2]string{
 		{"official/link", outside},                                    // absolute, to a secret
-		{"abs", "/home/claude/.claude/plugins/cache/x"},               // absolute
+		{"abs", "/home/user/.claude/plugins/cache/x"},                 // absolute
 		{"official/demo/1.0.0/AGENTS.md", "CLAUDE.md"},                // the real tree's one link: kept
 		{"official/demo/1.0.0/up", "../../demo/1.0.0/sub/x.txt"},      // relative, in entry: kept
 		{"official/demo/1.0.0/hop", "../../.."},                       // resolves to cache/ itself: kept

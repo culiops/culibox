@@ -203,7 +203,7 @@ func TestLoginURLFor(t *testing.T) {
 	}{
 		{config.Config{BindAddr: "127.0.0.1:8899"}, "http://127.0.0.1:8899/login#token=TOKEN", false},
 		{config.Config{BindAddr: "[::1]:8899"}, "http://[::1]:8899/login#token=TOKEN", false},
-		{config.Config{BindAddr: "100.76.118.121:9000"}, "http://100.76.118.121:9000/login#token=TOKEN", false},
+		{config.Config{BindAddr: "192.0.2.10:9000"}, "http://192.0.2.10:9000/login#token=TOKEN", false},
 		{config.Config{BindAddr: "0.0.0.0:8899", AllowedHosts: []string{"box.example", "mac.lan:8899"}}, "http://mac.lan:8899/login#token=TOKEN", false},
 		{config.Config{BindAddr: "0.0.0.0:8899"}, "http://<host>:8899/login#token=TOKEN", true},
 		{config.Config{BindAddr: ":8899"}, "http://<host>:8899/login#token=TOKEN", true},
@@ -221,7 +221,7 @@ func TestLoginURLFor(t *testing.T) {
 // Carry 2: a wildcard bind with no allowed_hosts answers every browser with 403.
 func TestBindWarning(t *testing.T) {
 	for bind, warn := range map[string]bool{
-		"127.0.0.1:8899": false, "100.76.118.121:9000": false,
+		"127.0.0.1:8899": false, "192.0.2.10:9000": false,
 		"0.0.0.0:8899": true, ":8899": true, "[::]:8899": true,
 	} {
 		got := bindWarning(config.Config{BindAddr: bind})
