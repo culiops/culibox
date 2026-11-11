@@ -516,7 +516,7 @@ counts as Intel):
 
 You need:
 
-- `gh`, logged in with write access to the release (it works on a draft too).
+- `gh`, logged in with write access to the release. Whether the download, view and edit steps work on a draft release is untested.
 - `git`, Go, and `cc` plus `make` (the script builds the pinned abduco from source).
 - Rosetta 2: `softwareupdate --install-rosetta --agree-to-license`.
 

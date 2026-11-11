@@ -75,7 +75,7 @@ ARCH=amd64
 base=https://github.com/culiops/culibox/releases/download/v$VERSION
 curl -fsSLO "$base/culibox_${VERSION}_${OS}_${ARCH}.tar.gz"
 curl -fsSLO "$base/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing
+grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | sha256sum -c -
 mkdir culibox && tar -xzf "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" -C culibox
 cd culibox
 ./agent-box version
@@ -84,7 +84,7 @@ cd culibox
 On macOS, set `OS=darwin` (`ARCH=arm64` on Apple Silicon) and check with `shasum` instead:
 
 ```sh
-shasum -a 256 -c SHA256SUMS --ignore-missing
+grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | shasum -a 256 -c -
 ```
 
 The check must print `OK` for your tarball. `version` prints `agent-box v<version> (<commit>)`.
@@ -97,12 +97,12 @@ xattr -d com.apple.quarantine agent-box
 
 **Is the macOS build verified?** Every release's notes end with a Platform status block. The Linux lines say the build was tested in CI, with a link to the run. The macOS lines say one of these:
 
-- `⚠️ NOT yet verified on macOS`: the files are published, but nobody has checked them on a Mac yet.
+- `⚠️ NOT yet verified on macOS`: nobody has checked these files on a Mac yet.
 - `✅ verified on macOS ...`: the exact published files were checked on a Mac. The line gives the macOS version, the chip and the date.
 - `⚠️ automated checks passed, manual checks not run`, or `⚠️ automated checks incomplete`: only part of the check ran.
 - `❌ failed: ...`: a check failed. Do not use that build.
 
-Releases are checked on a Mac in batches, so a new release usually starts as not verified. The block's last line links the newest earlier release that has been verified. If you want a verified macOS build, pick the newest release marked ✅. The amd64 build is checked on an Apple Silicon Mac under Rosetta 2, not on Intel hardware. How the check works is in [docs/MACOS.md](docs/MACOS.md#release-verification).
+Releases are checked on a Mac in batches, so a new release usually starts as not verified. The block's last line, "Last macOS-verified release", names the newest verified release at the time this release was cut. It is not updated afterwards, so check the Releases page to see whether a newer release has been verified since. If you want a verified macOS build, pick the newest release marked ✅. The amd64 build is checked on an Apple Silicon Mac under Rosetta 2, not on Intel hardware. How the check works is in [docs/MACOS.md](docs/MACOS.md#release-verification).
 
 ## Quick start
 
