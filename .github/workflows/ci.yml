@@ -1,0 +1,170 @@
+# CI: the same checks as scripts/test.sh, on Linux amd64 and arm64, plus a secret scan.
+#
+# darwin is compile-checked only (vet and build, CGO off); it is never run here.
+# The abduco-backed Go tests need a real abduco, so it is built from the pinned
+# source first, and AGENT_BOX_REQUIRE_ABDUCO=1 turns a missing abduco into a test
+# failure instead of a silent skip.
+#
+# release.yml calls this file (workflow_call), so the checks that gate a release
+# are the ones that gate main.
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - GITHUB_TOKEN is read-only for every job: nothing here needs a write grant
+#   - the one downloaded tool (gitleaks) is checked against a pinned sha256 first
+name: ci
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Keyed on the ref, never on github.workflow: when release.yml calls this file the
+# called workflow sees the CALLER's github.workflow, so a workflow-keyed group
+# would collide with the caller's own and cancel or deadlock it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      AGENT_BOX_REQUIRE_ABDUCO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the pinned abduco
+        run: |
+          scripts/ci/install-abduco.sh "$RUNNER_TEMP/abduco"
+          echo "$RUNNER_TEMP/abduco/bin" >> "$GITHUB_PATH"
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt: these files are not formatted:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      # The quoted glob is deliberate: `node --test <dir>` is broken on Node >= 22.6.
+      - name: node --test
+        run: node --test "internal/web/jstest/*.test.js"
+      # scripts/lint.sh runs eslint through npx and needs python3 (both on the
+      # runner). It SKIPS itself when eslint cannot run, which locally keeps an
+      # offline session working; in CI a skip would be a check that never ran, so a
+      # skip is a failure here. bash gives the pipe pipefail, so a real lint
+      # failure still fails the step.
+      - name: lint page scripts
+        shell: bash
+        run: |
+          scripts/lint.sh 2>&1 | tee "$RUNNER_TEMP/lint.log"
+          if grep -q '^lint: SKIPPED' "$RUNNER_TEMP/lint.log"; then
+            echo "::error::scripts/lint.sh skipped itself, so the page scripts were not checked"
+            exit 1
+          fi
+
+  darwin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: vet darwin
+        run: |
+          GOOS=darwin GOARCH=arm64 go vet ./...
+          GOOS=darwin GOARCH=amd64 go vet ./...
+      # The uidemo build tag swaps in the demo UI: both vets that scripts/test.sh runs.
+      - name: vet uidemo
+        run: |
+          go vet -tags uidemo ./cmd/agent-box
+          GOOS=darwin GOARCH=arm64 go vet -tags uidemo ./cmd/agent-box
+      - name: build every target
+        run: |
+          for target in "darwin arm64" "darwin amd64" "linux arm64" "linux amd64"; do
+            goos=${target% *}
+            goarch=${target#* }
+            echo "build $goos/$goarch"
+            GOOS=$goos GOARCH=$goarch go build -o /dev/null ./cmd/agent-box
+          done
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Full history: a push to main is scanned over the range BEFORE..sha.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The release binary, not a third-party action. Pinned by version and sha256
+      # (the Releases API digest of the linux_x64 tarball), checked before use.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o "$dir/gitleaks.tar.gz"
+          echo "${GITLEAKS_SHA256}  $dir/gitleaks.tar.gz" | sha256sum -c -
+          tar -C "$dir" -xzf "$dir/gitleaks.tar.gz" gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+          "$dir/gitleaks" version
+      # Scanning all history would fail forever on the history the founder chose to
+      # accept (and a baseline file would publish the matched values), so a push to
+      # main scans only the commits it adds. Everything else scans the checkout:
+      # a manual run, a call from a tag push (BEFORE is all zeros for a new tag), an
+      # all-zeros BEFORE, and a BEFORE that is not in the clone (after a force-push).
+      # BEFORE reaches the shell through env, never interpolated into the script.
+      - name: Scan for secrets
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          zeros=0000000000000000000000000000000000000000
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] \
+              && [ -n "$BEFORE" ] && [ "$BEFORE" != "$zeros" ] \
+              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "scanning the commits $BEFORE..$GITHUB_SHA"
+            gitleaks git --config .gitleaks.toml --redact --log-opts="$BEFORE..$GITHUB_SHA" .
+          else
+            echo "scanning the checkout (no usable BEFORE commit)"
+            gitleaks dir --config .gitleaks.toml --redact .
+          fi

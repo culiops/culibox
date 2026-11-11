@@ -44,6 +44,10 @@ func run(in Input) (string, int) {
 func needAbduco(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("abduco"); err != nil {
+		// CI sets AGENT_BOX_REQUIRE_ABDUCO=1: a missing abduco must fail there, not skip.
+		if os.Getenv("AGENT_BOX_REQUIRE_ABDUCO") == "1" {
+			t.Fatal("abduco not installed and AGENT_BOX_REQUIRE_ABDUCO=1")
+		}
 		t.Skip("abduco is not on PATH")
 	}
 }

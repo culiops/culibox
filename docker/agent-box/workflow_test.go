@@ -498,3 +498,133 @@ func TestReleaseGuardCatchesQuotedAndMisplacedWrites(t *testing.T) {
 		}
 	}
 }
+
+const ciWorkflowPath = "../../.github/workflows/ci.yml"
+
+// ciCode returns ci.yml without its full-line comments, so a test asserts what
+// the workflow does and a comment that explains a rule cannot satisfy or break it.
+func ciCode(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(ciWorkflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if !wfFullComment.MatchString(l) {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// TestCIWorkflow pins what ci.yml must keep doing. The supply-chain rules (pins,
+// permissions, persist-credentials) are TestAllWorkflowsSupplyChain's job; this
+// holds the CI-specific shape: which events, which runners, which checks.
+func TestCIWorkflow(t *testing.T) {
+	wf := ciCode(t)
+
+	// Triggers: push to main only, a manual run, and workflow_call so release.yml
+	// can run the same checks on a tag.
+	if !regexp.MustCompile(`(?m)^\s+push:\s*\n\s+branches:\s*\[\s*main\s*\]\s*$`).MatchString(wf) {
+		t.Error("the push trigger must be limited to `branches: [main]`")
+	}
+	for _, trig := range []string{"workflow_dispatch:", "workflow_call:"} {
+		if !regexp.MustCompile(`(?m)^  ` + trig + `\s*$`).MatchString(wf) {
+			t.Errorf("ci.yml lacks the %s trigger", trig)
+		}
+	}
+
+	// Runners: the test matrix is exactly the two Linux runners, and no macOS
+	// runner exists anywhere (macOS is verified on a host, never in CI).
+	if strings.Contains(strings.ToLower(wf), "macos") {
+		t.Error("ci.yml must not mention macos (no macOS runners)")
+	}
+	matrix := regexp.MustCompile(`(?m)^\s+os:\s*\[(.*)\]\s*$`).FindStringSubmatch(jobBlock(t, wf, "test"))
+	if matrix == nil {
+		t.Fatal("job test has no `os: [..]` matrix")
+	}
+	var runners []string
+	for _, r := range strings.Split(matrix[1], ",") {
+		runners = append(runners, strings.Trim(strings.TrimSpace(r), `"'`))
+	}
+	if strings.Join(runners, " ") != "ubuntu-24.04 ubuntu-24.04-arm" {
+		t.Errorf("test matrix runners = %v, want exactly [ubuntu-24.04 ubuntu-24.04-arm]", runners)
+	}
+
+	for _, want := range []string{
+		"go test -race ./...",
+		"scripts/ci/install-abduco.sh",
+		"GOOS=darwin GOARCH=arm64 go vet ./...",
+		"GOOS=darwin GOARCH=amd64 go vet ./...",
+		"-tags uidemo",
+		"node --test",
+		"scripts/lint.sh",
+		"gitleaks git --config .gitleaks.toml",
+		"gitleaks dir --config .gitleaks.toml",
+		"sha256sum -c",
+	} {
+		if !strings.Contains(wf, want) {
+			t.Errorf("ci.yml lacks %q", want)
+		}
+	}
+	// The env switch that stops an abduco test from passing by skipping.
+	if !regexp.MustCompile(`(?m)^\s+AGENT_BOX_REQUIRE_ABDUCO:\s*["']1["']\s*$`).MatchString(jobBlock(t, wf, "test")) {
+		t.Error(`job test must set AGENT_BOX_REQUIRE_ABDUCO: "1"`)
+	}
+	// All four GOOS/GOARCH targets compile the binary.
+	for _, tgt := range []string{"darwin arm64", "darwin amd64", "linux arm64", "linux amd64"} {
+		if !strings.Contains(jobBlock(t, wf, "darwin"), tgt) {
+			t.Errorf("job darwin does not build for %q", tgt)
+		}
+	}
+
+	// A new run on a ref replaces the old one. The group is keyed on github.ref,
+	// not github.workflow: release.yml calls this workflow and the callee inherits
+	// the caller's github.workflow, so it would collide with its own caller.
+	if !regexp.MustCompile(`(?m)^concurrency:\s*\n(\s+.*\n)*?\s+cancel-in-progress:\s*true\s*$`).MatchString(wf) {
+		t.Error("ci.yml needs a top-level concurrency with cancel-in-progress: true")
+	}
+	if !strings.Contains(wf, "group: ci-${{ github.ref }}") {
+		t.Error("the concurrency group must be `ci-${{ github.ref }}`")
+	}
+	if strings.Contains(wf, "github.workflow") {
+		t.Error("ci.yml must not use github.workflow (it is the caller's name under workflow_call)")
+	}
+
+	// No write grant of any kind (the supply-chain guard allows job-level ones).
+	if wfWriteAny.MatchString(wf) {
+		t.Error("ci.yml must not hold any write permission")
+	}
+
+	// The event payload reaches the shell only through env:, never interpolated.
+	for _, l := range strings.Split(wf, "\n") {
+		if strings.Contains(l, "github.event.") && !strings.Contains(l, "BEFORE:") {
+			t.Errorf("github.event is used outside the BEFORE env entry: %q", strings.TrimSpace(l))
+		}
+	}
+}
+
+// The CI install script and the box image build the same abduco: the version and
+// sum in scripts/ci/install-abduco.sh must equal the Dockerfile ARGs.
+func TestAbducoPinMatchesDockerfile(t *testing.T) {
+	read := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	script, docker := read("../../scripts/ci/install-abduco.sh"), read("Dockerfile")
+	for _, name := range []string{"ABDUCO_VERSION", "ABDUCO_SHA256"} {
+		s := regexp.MustCompile(`(?m)^` + name + `=["']?([^\s"']+)["']?\s*$`).FindStringSubmatch(script)
+		d := regexp.MustCompile(`(?m)^ARG ` + name + `=(\S+)\s*$`).FindStringSubmatch(docker)
+		if s == nil || d == nil {
+			t.Errorf("%s: not found in both install-abduco.sh (%v) and the Dockerfile (%v)", name, s != nil, d != nil)
+			continue
+		}
+		if s[1] != d[1] {
+			t.Errorf("%s: install-abduco.sh has %q, Dockerfile has %q", name, s[1], d[1])
+		}
+	}
+}
