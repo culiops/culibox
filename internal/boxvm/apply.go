@@ -2,6 +2,7 @@ package boxvm
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -231,14 +232,41 @@ func (v *VM) ApplyMounts(ctx context.Context, h ApplyHooks) error {
 // VerifyMounts checks the running VM's real virtiofs mounts against its
 // colima.yaml: the same paths, the same modes, nothing more.
 func (v *VM) VerifyMounts(ctx context.Context) error {
-	want, err := v.AppliedMounts()
+	d, err := v.diffMounts(ctx)
 	if err != nil {
 		return err
+	}
+	return d.err()
+}
+
+// mountDiff is how the VM's real virtiofs mounts differ from colima.yaml.
+type mountDiff struct {
+	problems []string
+	// modeOnly are the folders the VM has at the wrong mode (Writable is the
+	// wanted one); other is true when anything is missing or extra.
+	modeOnly []Mount
+	other    bool
+}
+
+func (d mountDiff) err() error {
+	if len(d.problems) == 0 {
+		return nil
+	}
+	p := append([]string(nil), d.problems...)
+	sort.Strings(p)
+	return fmt.Errorf("%w: %s", ErrMountsMismatch, strings.Join(p, "; "))
+}
+
+func (v *VM) diffMounts(ctx context.Context) (mountDiff, error) {
+	var d mountDiff
+	want, err := v.AppliedMounts()
+	if err != nil {
+		return d, err
 	}
 	cfg := v.Config()
 	out, err := v.r.Run(ctx, v.env(), cfg.ColimaBin, "ssh", "--profile", Profile, "--", "cat", "/proc/self/mounts")
 	if err != nil {
-		return fmt.Errorf("reading the box VM's mounts: %w", err)
+		return d, fmt.Errorf("reading the box VM's mounts: %w", err)
 	}
 	got := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
@@ -249,28 +277,74 @@ func (v *VM) VerifyMounts(ctx context.Context) error {
 		opt, _, _ := strings.Cut(f[3], ",")
 		got[unescapeMount(f[1])] = opt == "rw"
 	}
-	var problems []string
 	seen := map[string]bool{}
 	for _, m := range want {
 		seen[m.Location] = true
 		w, ok := got[m.Location]
 		switch {
 		case !ok:
-			problems = append(problems, "missing "+m.Location)
+			d.problems = append(d.problems, "missing "+m.Location)
+			d.other = true
 		case w != m.Writable:
-			problems = append(problems, fmt.Sprintf("%s is %s, expected %s", m.Location, modeName(w), modeName(m.Writable)))
+			d.problems = append(d.problems, fmt.Sprintf("%s is %s, expected %s", m.Location, modeName(w), modeName(m.Writable)))
+			d.modeOnly = append(d.modeOnly, m)
 		}
 	}
 	for p := range got {
 		if !seen[p] {
-			problems = append(problems, "extra "+p)
+			d.problems = append(d.problems, "extra "+p)
+			d.other = true
 		}
 	}
-	if len(problems) > 0 {
-		sort.Strings(problems)
-		return fmt.Errorf("%w: %s", ErrMountsMismatch, strings.Join(problems, "; "))
+	return d, nil
+}
+
+// ReconcileMounts is VerifyMounts for a VM that was just started. After a mode
+// switch (rw to ro or back) the guest still mounts a folder at its old mode:
+// it mounts from the /etc/fstab the previous boot left, cloud-init rewrites
+// that file a moment later, and lima's `mount -a` skips a folder that is
+// already mounted (#236). The Mac side already has the new mode, so when the
+// mode is the ONLY difference this remounts each such folder in the guest and
+// verifies again. A missing or extra folder is never touched: it fails as
+// VerifyMounts does, and so does a remount that fails or does not hold.
+func (v *VM) ReconcileMounts(ctx context.Context) error {
+	d, err := v.diffMounts(ctx)
+	if err != nil {
+		return err
+	}
+	if len(d.problems) == 0 {
+		return nil
+	}
+	if d.other || len(d.modeOnly) == 0 {
+		return d.err()
+	}
+	if _, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--", "sh", "-c", remountScript(d.modeOnly)); err != nil {
+		return fmt.Errorf("%w (fixing the folder modes in the VM failed: %v)", d.err(), err)
+	}
+	if err := v.VerifyMounts(ctx); err != nil {
+		return fmt.Errorf("%w (after fixing the folder modes in the VM)", err)
 	}
 	return nil
+}
+
+// remountScript builds the guest command that remounts each folder at its
+// wanted mode. A path travels base64-encoded (an alphabet a shell reads as
+// plain text, so no quote or space in it can be interpreted, however lima
+// joins the argv), the same way PathIDs sends paths; the mode is the literal
+// ro or rw chosen here, never input. `sudo -n` never prompts: lima's guest
+// user has passwordless sudo. `--` ends options for a path that starts with -.
+func remountScript(ms []Mount) string {
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	for _, m := range ms {
+		mode := "ro"
+		if m.Writable {
+			mode = "rw"
+		}
+		enc := base64.StdEncoding.EncodeToString([]byte(m.Location))
+		fmt.Fprintf(&b, "p=$(printf %%s %s | base64 -d; echo x); p=${p%%x}\nsudo -n mount -o remount,%s -- \"$p\"\n", enc, mode)
+	}
+	return b.String()
 }
 
 func modeName(w bool) string {

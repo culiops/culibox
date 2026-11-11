@@ -160,6 +160,10 @@ boxed sessions have already run in.
 - If you set up the VM with an older CuliBox it still shares your whole home
   folder until you apply the list. Nothing breaks: `agent-box doctor` ("box VM folders") and Settings
   warn about it, and the home share goes away when you apply the list.
+- Switching a folder between read-write and read-only takes effect on one apply: after the
+  start CuliBox remounts any folder the VM still shows at its old mode, then checks the
+  folder list again. A missing or extra folder is never remounted, and a remount that
+  fails or does not hold fails the apply.
 - What a VM escape can reach: only the folders on the list (read-write or
   read-only as listed) and CuliBox's four data parts (`boxstate`
   read-write; `bundle`, `broker` and `ca` read-only). Everything inside a

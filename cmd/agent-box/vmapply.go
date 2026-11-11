@@ -402,7 +402,7 @@ func (l *boxLayer) checkAfterApply(ctx context.Context) error {
 	}
 	if err == nil {
 		mctx, cancel := context.WithTimeout(ctx, applyCheckTimeout)
-		err = l.verifyMounts(mctx)
+		err = l.verifyMounts(mctx, true)
 		cancel()
 	}
 	if err != nil {
@@ -417,11 +417,17 @@ func (l *boxLayer) checkAfterApply(ctx context.Context) error {
 // remembers a pass against that colima.yaml, so spawns keep checking until one
 // passes and again after the next apply. A missing colima.yaml is a failure
 // too: a set-up VM started without it runs on colima's defaults, which share
-// the home folder.
-func (l *boxLayer) verifyMounts(ctx context.Context) error {
+// the home folder. justStarted is true only where this process started the VM
+// (and so may fix a folder's mode in it); every other check is read-only.
+func (l *boxLayer) verifyMounts(ctx context.Context, justStarted bool) error {
 	// Stat first: a colima.yaml rewritten during the check then reads as changed.
 	fi, statErr := os.Stat(l.vm.Config().YAMLPath())
-	err := l.vm.VerifyMounts(ctx)
+	verify := l.vm.VerifyMounts
+	if justStarted {
+		// A VM we just started may still hold a folder at its old mode (#236).
+		verify = l.vm.ReconcileMounts
+	}
+	err := verify(ctx)
 	if err != nil || statErr != nil {
 		l.foldersOK.Store(nil)
 		return err

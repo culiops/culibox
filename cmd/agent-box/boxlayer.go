@@ -285,7 +285,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 	}
 	if started || !l.foldersVerified() {
 		mctx, mcancel := context.WithTimeout(ctx, imageCheckTimeout)
-		err := l.verifyMounts(mctx)
+		err := l.verifyMounts(mctx, started)
 		mcancel()
 		if err != nil {
 			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `agent-box doctor`", box.ErrBoxUnavailable, err)
