@@ -244,6 +244,11 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
 		o.Shares = l.shareView
+		// #96: on a case-insensitive Mac volume the read-only bind of a guarded
+		// file covers one spelling of its name; the file is also locked on the
+		// Mac (uchg) while a box spawned in place runs. Only where the OS has
+		// the flags: a darwin layer built on Linux (tests) has none.
+		o.LockGuards = box.GuardLocksSupported()
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
@@ -424,6 +429,9 @@ func (l *boxLayer) vmStopped(ctx context.Context) bool {
 func (l *boxLayer) bootReconcile(ctx context.Context) bool {
 	if l.vmStopped(ctx) {
 		log.Printf("box VM stopped: box reconcile and reclaim wait for the first boxed spawn")
+		// No box can run while the VM is down, so the guard locks a crash or a
+		// Mac restart left are lifted now, not at the next boxed spawn.
+		l.boxes.SweepGuardLocksNoBoxes()
 		return false
 	}
 	l.reconcileAndReclaim(ctx)

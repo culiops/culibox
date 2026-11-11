@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,6 +134,13 @@ type boxFacts struct {
 	// colima.yaml (boxvm.VerifyMounts); MountsErr: they differ or could not be read.
 	MountsRan bool
 	MountsErr error
+	// Locks are the in-place guard locks recorded in the data root (#96,
+	// darwin only); LocksErr: the records cannot be read. Running are this
+	// instance's running boxes when RunningKnown (none while the VM is down).
+	Locks        []box.GuardLock
+	LocksErr     error
+	Running      []string
+	RunningKnown bool
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -283,6 +292,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	// Needs only the user's docker CLI, so it is checked even when colima is
 	// missing: doctor reports it on every darwin path.
 	f.UserContext = boxvm.CheckUserDockerContext(ctx, bin)
+	f.Locks, f.LocksErr = box.ReadGuardLocks(dataDir)
 	colima, err := boxvm.LookColima(c.ColimaBin)
 	if err != nil {
 		f.ColimaErr = err
@@ -298,6 +308,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	f.SocketErr = vc.CheckSocketPaths()
 	f.SetUp = vm.SetUp()
 	if !f.SetUp {
+		f.RunningKnown = true // no VM: no box runs
 		return f
 	}
 	// The folder list must be on the VM before any drift is computed, or every
@@ -323,6 +334,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 		f.Drift = d
 	}
 	f.Status, f.StatusErr = vm.Status(ctx)
+	if f.StatusErr == nil && !f.Status.Running {
+		f.RunningKnown = true // the VM is down: no box runs
+	}
 	if f.StatusErr != nil || !f.Status.Running {
 		return f
 	}
@@ -337,6 +351,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	f.MountsRan = true
 	f.MountsErr = vm.VerifyMounts(ctx)
 	cli := box.CLIClient{Bin: bin, Args: vc.DockerArgs()}
+	f.Running, f.RunningKnown = runningBoxes(ctx, cli, instance)
 	img := boximage.Docker{Bin: bin, Args: vc.DockerArgs()}
 	if f.ServerArch, err = img.ServerArch(ctx); err != nil {
 		f.ImageErr = err
@@ -351,6 +366,98 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	}
 	f.Stopped = stoppedBoxes(ctx, cli, instance)
 	return f
+}
+
+// runningBoxes names this instance's running boxes; ok is false when the
+// listing failed (unknown, not none).
+func runningBoxes(ctx context.Context, c box.CLIClient, label string) ([]string, bool) {
+	bs, err := c.ListBoxes(ctx, label)
+	if err != nil {
+		return nil, false
+	}
+	var out []string
+	for _, b := range bs {
+		if b.State == "running" {
+			out = append(out, b.Name)
+		}
+	}
+	return out, true
+}
+
+// guardLockRows reports the in-place guard locks (#96, darwin only): files
+// CuliBox keeps locked on the Mac while a box runs, and locks left behind by a
+// box that is gone. No locks, no row.
+func guardLockRows(goos string, f boxFacts) []Result {
+	const ck = "in-place locks"
+	if goos != "darwin" {
+		return nil
+	}
+	var out []Result
+	if f.LocksErr != nil {
+		out = append(out, Result{Warn, ck, "the lock records cannot be read (" + f.LocksErr.Error() + "); a guarded file CuliBox " +
+			"locked may stay locked: check with `ls -lO` and unlock it with `chflags nouchg <file>`"})
+	}
+	type group struct {
+		ws, class string
+		files     []string
+		sessions  []string
+	}
+	var groups []*group
+	find := func(ws, class string) *group {
+		for _, g := range groups {
+			if g.ws == ws && g.class == class {
+				return g
+			}
+		}
+		g := &group{ws: ws, class: class}
+		groups = append(groups, g)
+		return g
+	}
+	for _, l := range f.Locks {
+		if !l.Ours {
+			continue // the user's own flag: not CuliBox's to report or lift
+		}
+		class := "leftover"
+		switch {
+		case !f.RunningKnown:
+			class = "unknown"
+		case slices.ContainsFunc(l.Boxes, func(b string) bool { return slices.Contains(f.Running, b) }):
+			class = "current"
+		}
+		g := find(l.Workspace, class)
+		g.files = append(g.files, l.File)
+		for _, s := range l.Sessions {
+			if !slices.Contains(g.sessions, s.ID) {
+				g.sessions = append(g.sessions, s.ID)
+			}
+		}
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].ws < groups[j].ws })
+	for _, g := range groups {
+		sort.Strings(g.files)
+		sort.Strings(g.sessions)
+		files := strings.Join(g.files, ", ")
+		switch g.class {
+		case "current":
+			who := "a box spawned in place runs"
+			if len(g.sessions) > 0 {
+				who = "its session runs (" + strings.Join(g.sessions, ", ") + ")"
+			}
+			out = append(out, Result{Pass, ck, g.ws + ": " + files + " locked on your Mac while " + who +
+				"; macOS cannot otherwise stop the box changing them through another letter case"})
+		case "unknown":
+			out = append(out, Result{Warn, ck, g.ws + ": " + files + " locked by CuliBox; whether the box holding the lock " +
+				"still runs cannot be checked"})
+		default:
+			var paths []string
+			for _, n := range g.files {
+				paths = append(paths, "'"+filepath.Join(g.ws, n)+"'")
+			}
+			out = append(out, Result{Warn, ck, g.ws + ": " + files + " still locked, but no box holding the lock runs; " +
+				"agent-box lifts it when it next starts (or the box VM does), or unlock it now: chflags nouchg " + strings.Join(paths, " ")})
+		}
+	}
+	return out
 }
 
 // stoppedBoxes names this instance's boxes that are not running (label is

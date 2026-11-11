@@ -309,9 +309,12 @@ func (m *Manager) refuseMountChanged(ctx context.Context, name string, created b
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		cerr = fmt.Errorf("%w (box %s could not be removed: %v; every spawn into it is checked again)", cerr, name, err)
-	} else if !created {
-		// A reused idle box: the user did not just create it, so say it is gone.
-		cerr = fmt.Errorf("%w; the box was removed, spawn again", cerr)
+	} else {
+		m.boxGone(name)
+		if !created {
+			// A reused idle box: the user did not just create it, so say it is gone.
+			cerr = fmt.Errorf("%w; the box was removed, spawn again", cerr)
+		}
 	}
 	m.rearmIfIdle(name)
 	return cerr

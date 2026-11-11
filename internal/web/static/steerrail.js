@@ -194,6 +194,17 @@ function dropsRow(s) {
   return { k: "left out", v, wrap: true };
 }
 
+// lockedRow: the rail's "locked" row for a boxed session whose workspace files
+// are locked on the Mac while it runs (Info.locked_files, macOS #96). null
+// without any, like dropsRow. The names are workspace file names the server
+// derived; they are only ever put in a string rendered with textContent.
+function lockedRow(s) {
+  const files = s && s.locked_files;
+  if (!files || !files.length) return null;
+  return { k: "locked", v: "Locked on your Mac while this session runs: " + files.join(", ") +
+    " (macOS cannot otherwise stop the box changing them through another letter case)", wrap: true };
+}
+
 // cloneParts: what a clone-mode session's refresh state says, as plain strings.
 // Every value in `c` is box-derived text (branch names, error text); it is
 // sanitized server-side, but this layer treats it as untrusted anyway and only
@@ -503,7 +514,7 @@ function renderSteerFacts(s) {
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
   // The bundle's drops and the clone's refresh state ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
-  const extraRows = [...egressRows, dropsRow(s), cloneRow(s)];
+  const extraRows = [...egressRows, dropsRow(s), lockedRow(s), cloneRow(s)];
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, extraRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
@@ -1355,5 +1366,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }

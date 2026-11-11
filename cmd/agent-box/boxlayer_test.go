@@ -513,7 +513,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 || o.LockGuards {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -555,6 +555,10 @@ func TestDarwinLayerReadsContextIdentitiesInTheVM(t *testing.T) {
 	o := l.options(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"})
 	if o.VMIDs == nil {
 		t.Fatal("darwin options must carry the VM identity hook")
+	}
+	// #96: the guard locks wherever the OS has the file flags (a real Mac).
+	if o.LockGuards != box.GuardLocksSupported() {
+		t.Fatalf("LockGuards = %v, want %v on this OS", o.LockGuards, box.GuardLocksSupported())
 	}
 	fc.mu.Lock()
 	fc.rules = "ctxid 44:393\nctxid 16777232:7\n"
