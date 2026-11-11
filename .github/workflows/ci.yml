@@ -84,6 +84,13 @@ jobs:
       # The quoted glob is deliberate: `node --test <dir>` is broken on Node >= 22.6.
       - name: node --test
         run: node --test "internal/web/jstest/*.test.js"
+      # The release scripts are tested offline against stubs. The test builds
+      # tools/release-status, so it needs Go.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: release scripts
+        run: bash scripts/macos-verify_test.sh
       # scripts/lint.sh runs eslint through npx and needs python3 (both on the
       # runner). It SKIPS itself when eslint cannot run, which locally keeps an
       # offline session working; in CI a skip would be a check that never ran, so a

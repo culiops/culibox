@@ -535,8 +535,9 @@ func TestCIWorkflow(t *testing.T) {
 	}
 
 	// Runners: the test matrix is exactly the two Linux runners, and no macOS
-	// runner exists anywhere (macOS is verified on a host, never in CI).
-	if strings.Contains(strings.ToLower(wf), "macos") {
+	// runner exists anywhere (macOS is verified on a host, never in CI). The one
+	// allowed mention is the offline test of the verify script, which runs on Linux.
+	if strings.Contains(strings.ToLower(strings.ReplaceAll(wf, "scripts/macos-verify_test.sh", "")), "macos") {
 		t.Error("ci.yml must not mention macos (no macOS runners)")
 	}
 	matrix := regexp.MustCompile(`(?m)^\s+os:\s*\[(.*)\]\s*$`).FindStringSubmatch(jobBlock(t, wf, "test"))
@@ -559,6 +560,7 @@ func TestCIWorkflow(t *testing.T) {
 		"-tags uidemo",
 		"node --test",
 		"scripts/lint.sh",
+		"bash scripts/macos-verify_test.sh",
 		"gitleaks git --config .gitleaks.toml",
 		"gitleaks dir --config .gitleaks.toml",
 		"sha256sum -c",
