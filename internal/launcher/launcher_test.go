@@ -468,7 +468,7 @@ func TestProfileEnvMayStillSetAnABVariable(t *testing.T) {
 }
 
 func TestAWSForReturnsTheProfileBinding(t *testing.T) {
-	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1",
+	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/a", Region: "ap-southeast-1",
 		S3Read: []string{"bucket"}, EgressAllow: []string{"registry.npmjs.org"}}
 	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", AWS: b}, {Name: "plain", Bin: "claude"}}, fakeResolver{}, nil)
 	if got := l.AWSFor("c"); got == nil || got.RoleARN != b.RoleARN {
@@ -487,14 +487,14 @@ func TestAWSForReturnsTheProfileBinding(t *testing.T) {
 }
 
 func TestAWSForClonesElevate(t *testing.T) {
-	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1",
-		Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/a-write", MaxMinutes: 30}}
+	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/a", Region: "ap-southeast-1",
+		Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/a-write", MaxMinutes: 30}}
 	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", AWS: b}}, fakeResolver{}, nil)
 	got := l.AWSFor("c")
 	got.Elevate.RoleARN = "mutated"
 	got.Elevate.MaxMinutes = 60
 	again := l.AWSFor("c")
-	if again.Elevate == nil || again.Elevate.RoleARN != "arn:aws:iam::226198813800:role/a-write" || again.Elevate.MaxMinutes != 30 {
+	if again.Elevate == nil || again.Elevate.RoleARN != "arn:aws:iam::123456789012:role/a-write" || again.Elevate.MaxMinutes != 30 {
 		t.Fatalf("AWSFor must deep-copy Elevate, got %+v", again.Elevate)
 	}
 }

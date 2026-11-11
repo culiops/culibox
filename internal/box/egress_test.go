@@ -19,14 +19,14 @@ func okVerify(context.Context, string) error { return nil }
 func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false, "", DefaultMemory)
+	got := m.runArgs("ab-box-abc", "/home/user/proj", nil, false, false, "", DefaultMemory)
 	if slices.Contains(got, "--network") || slices.Contains(got, "--add-host") {
 		t.Fatalf("unbound box got egress flags: %q", got)
 	}
 	want := []string{
 		"run", "-d", "--init", "--pull=never",
 		"--name", "ab-box-abc",
-		"--label", LabelWorkspace + "=/home/claude/proj",
+		"--label", LabelWorkspace + "=/home/user/proj",
 		"--label", LabelInstance + "=TEST",
 		"--label", LabelClaims + "=1",
 		"--cap-drop=ALL",
@@ -36,7 +36,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 		"--pids-limit", "512",
 		"--memory", DefaultMemory, "--memory-swap", DefaultMemory,
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
-		"--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj",
+		"--mount", "type=bind,src=/home/user/proj,dst=/home/user/proj",
 		"--mount", "type=bind,src=" + m.stateDir("ab-box-abc") + ",dst=" + boxHome,
 		"--mount", "type=bind,src=" + OutputDir(m.opts.StateRoot, "ab-box-abc") + ",dst=" + PlaywrightOutBox,
 		"culiops/agent-box:base", "sleep", "infinity",

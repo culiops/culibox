@@ -21,6 +21,17 @@ var commit string
 // when unstamped.
 var version string
 
+// versionLine is what `agent-box version` prints: the stamped release (dev when
+// unstamped) and the commit. The release smoke tests and the macOS verify
+// script parse "agent-box <tag> (<sha>)", so keep the shape.
+func versionLine() string {
+	v := version
+	if v == "" {
+		v = "dev"
+	}
+	return fmt.Sprintf("agent-box %s (%s)\n", v, buildCommit())
+}
+
 const usage = `usage:
   agent-box [serve] [-config <path>]                   run the web control-plane
   agent-box doctor  [-config <path>]                   check this machine; prints no secrets
@@ -32,13 +43,14 @@ const usage = `usage:
   agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while agent-box serves (a daemon restart aborts it; rerun)
   agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
+  agent-box version                                    print the version and commit
 
 Everything agent-box writes, its config.json included, lives in one data root:
 $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "bug-report" | "box" | "clone" | "store"
+	Cmd        string // "serve" | "doctor" | "bug-report" | "box" | "clone" | "store" | "version"
 	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"
 	ID         string // store set|rm: the value id
 	ConfigPath string
@@ -68,6 +80,10 @@ const storeNeedsSub = "store needs a subcommand: init, status, unlock, lock, pas
 // the existing `agent-box -config x.json` invocations (air, the PROD unit) are
 // unchanged.
 func parseArgs(argv []string) (cliArgs, error) {
+	// --version is the alias of the version subcommand; it takes nothing either.
+	if len(argv) > 0 && (argv[0] == "--version" || argv[0] == "-version") {
+		argv = append([]string{"version"}, argv[1:]...)
+	}
 	cmd := "serve"
 	if len(argv) > 0 && !strings.HasPrefix(argv[0], "-") {
 		cmd, argv = argv[0], argv[1:]
@@ -75,6 +91,11 @@ func parseArgs(argv []string) (cliArgs, error) {
 	sub := ""
 	switch cmd {
 	case "serve", "doctor", "bug-report":
+	case "version":
+		if len(argv) > 0 {
+			return cliArgs{}, errors.New("version takes no flags or arguments")
+		}
+		return cliArgs{Cmd: "version"}, nil
 	case "box":
 		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
 			return cliArgs{}, errors.New("box needs a subcommand: setup, stop, status or share")

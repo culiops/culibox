@@ -9,8 +9,8 @@ import (
 
 func awsConnList() []config.AWSConnection {
 	return []config.AWSConnection{
-		{Name: "sbx-b", Description: "b", AWSBinding: config.AWSBinding{SourceProfile: "sandbox", RoleARN: "arn:aws:iam::226198813800:role/b", Region: "us-east-1", Label: "B", S3Read: []string{"bkt-b"}}},
-		{Name: "sbx-a", AWSBinding: config.AWSBinding{SourceProfile: "sandbox", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1", Label: "A", EgressAllow: []string{"a.example.com"}}},
+		{Name: "sbx-b", Description: "b", AWSBinding: config.AWSBinding{SourceProfile: "sandbox", RoleARN: "arn:aws:iam::123456789012:role/b", Region: "us-east-1", Label: "B", S3Read: []string{"bkt-b"}}},
+		{Name: "sbx-a", AWSBinding: config.AWSBinding{SourceProfile: "sandbox", RoleARN: "arn:aws:iam::123456789012:role/a", Region: "ap-southeast-1", Label: "A", EgressAllow: []string{"a.example.com"}}},
 	}
 }
 
@@ -20,7 +20,7 @@ func awsConnLauncher() *AgentLauncher {
 		{Name: "plain", Bin: "claude"},
 		{Name: "bad", Bin: "claude", Runtime: config.RuntimeBox, AWSConnections: []string{"gone"}},
 		{Name: "both", Bin: "claude", Runtime: config.RuntimeBox, AWSConnections: []string{"sbx-a"},
-			AWS: &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/x", Region: "us-east-1"}},
+			AWS: &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/x", Region: "us-east-1"}},
 		{Name: "hosttier", Bin: "claude", AWSConnections: []string{"sbx-a"}},
 	}, fakeResolver{}, nil)
 	l.SetAWSConnections(awsConnList())

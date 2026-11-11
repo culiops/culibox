@@ -10,9 +10,9 @@ import (
 
 func TestProjectSlug(t *testing.T) {
 	cases := map[string]string{
-		"/home/claude/culiops-agent-box": "-home-claude-culiops-agent-box",
-		"/home/x/my.app_v2":              "-home-x-my-app-v2", // "." and "_" also become "-"
-		"/tmp/a.b/c_d":                   "-tmp-a-b-c-d",
+		"/home/user/culiops-agent-box": "-home-user-culiops-agent-box",
+		"/home/x/my.app_v2":            "-home-x-my-app-v2", // "." and "_" also become "-"
+		"/tmp/a.b/c_d":                 "-tmp-a-b-c-d",
 	}
 	for in, want := range cases {
 		if got := projectSlug(in); got != want {

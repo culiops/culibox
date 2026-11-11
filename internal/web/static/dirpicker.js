@@ -120,8 +120,8 @@ function pickerReopenMode(value, listOpen) {
 //
 //   collapsed caret ⇒ a plain click ⇒ start over, so select all and let the
 //     next keystroke replace the value. Without this, clicking back into a
-//     field already holding "/home/claude/culipulse" and typing splices into
-//     it — "/home/claude/culXXXXXipulse" — because a click into an
+//     field already holding "/home/user/culipulse" and typing splices into
+//     it — "/home/user/culXXXXXipulse" — because a click into an
 //     already-focused input fires no focus event at all.
 //   a range ⇒ a drag ⇒ the user picked a substring on purpose; leave it, or no
 //     part of a path is ever editable in place.

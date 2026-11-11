@@ -42,8 +42,8 @@ func (l connLauncher) AWSConnectionsFor(agent string) ([]config.AWSConnection, e
 
 func connA() config.AWSConnection {
 	return config.AWSConnection{Name: "sbx-a", Description: "read", AWSBinding: config.AWSBinding{SourceProfile: "sandbox-admin",
-		RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent", Region: "ap-southeast-1", Label: "Sandbox A",
-		Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write"}}}
+		RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent", Region: "ap-southeast-1", Label: "Sandbox A",
+		Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"}}}
 }
 
 func connB() config.AWSConnection {
@@ -202,7 +202,7 @@ func TestSidecarRoundTripAWSConns(t *testing.T) {
 // aws_connections key; it restores exactly as it always did.
 func TestOldSidecarWithoutAWSConnsRestores(t *testing.T) {
 	old := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","box":"ab-box-test","replyable":false,` +
-		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::226198813800:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
+		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
 		`"aws_nonce":"` + fakeNonce + `","egress_nonce":"` + fakeNonce + `"}`
 	var md sessionMeta
 	if err := json.Unmarshal([]byte(old), &md); err != nil {
@@ -274,8 +274,8 @@ func TestInfoAWSConnections(t *testing.T) {
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	in := s.Info()
 	want := []AWSConnInfo{
-		{Name: "sbx-a", Label: "Sandbox A", AccountID: "226198813800", RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent", Region: "ap-southeast-1",
-			WriteCapable: true, Elevate: &ElevateInfo{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write", MaxMinutes: 60},
+		{Name: "sbx-a", Label: "Sandbox A", AccountID: "123456789012", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent", Region: "ap-southeast-1",
+			WriteCapable: true, Elevate: &ElevateInfo{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", MaxMinutes: 60},
 			Fields: awsprobe.Disabled().Fields()},
 		{Name: "sbx-b", Label: "Sandbox B", AccountID: "111122223333", RoleARN: "arn:aws:iam::111122223333:role/b", Region: "us-east-1", Prod: true,
 			Fields: awsprobe.Disabled().Fields()},
@@ -292,7 +292,7 @@ func TestInfoAWSConnections(t *testing.T) {
 			t.Fatalf("Info leaks %q: %s", bad, b)
 		}
 	}
-	for _, key := range []string{`"aws_connections":[{"name":"sbx-a"`, `"write_capable":true`, `"account_id":"226198813800"`, `"role_arn"`, `"prod":true`} {
+	for _, key := range []string{`"aws_connections":[{"name":"sbx-a"`, `"write_capable":true`, `"account_id":"123456789012"`, `"role_arn"`, `"prod":true`} {
 		if !strings.Contains(string(b), key) {
 			t.Fatalf("Info JSON lacks %s: %s", key, b)
 		}

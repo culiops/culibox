@@ -283,11 +283,11 @@ const { inlineAWSSummary, awsInlineToSend, convertAWSConfirm, convertConnName, c
 
 test("inlineAWSSummary: source profile, role name and region on one line", () => {
   assert.strictEqual(
-    inlineAWSSummary({ source_profile: "sandbox-admin", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", region: "ap-southeast-1" }),
+    inlineAWSSummary({ source_profile: "sandbox-admin", role_arn: "arn:aws:iam::210987654321:role/agentbox-agent", region: "ap-southeast-1" }),
     "sandbox-admin → agentbox-agent (ap-southeast-1)");
   // a role with a path shows only its name
   assert.strictEqual(
-    inlineAWSSummary({ source_profile: "p", role_arn: "arn:aws:iam::226198813800:role/team/x", region: "eu-west-1" }),
+    inlineAWSSummary({ source_profile: "p", role_arn: "arn:aws:iam::210987654321:role/team/x", region: "eu-west-1" }),
     "p → x (eu-west-1)");
 });
 
@@ -299,9 +299,9 @@ test("inlineAWSSummary: a missing part never prints 'undefined' or an empty ()",
 
 test("awsInlineToSend: an untouched inline binding round-trips unchanged, copied", () => {
   const aws = {
-    source_profile: "sandbox-admin", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", region: "ap-southeast-1",
+    source_profile: "sandbox-admin", role_arn: "arn:aws:iam::210987654321:role/agentbox-agent", region: "ap-southeast-1",
     s3_read: ["b/p/"], label: "sandbox", prod: true, egress_allow: ["*.example.com"],
-    elevate: { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 30, allow_iam: true },
+    elevate: { role_arn: "arn:aws:iam::210987654321:role/agentbox-agent-write", max_minutes: 30, allow_iam: true },
   };
   const out = awsInlineToSend(aws, false);
   assert.deepStrictEqual(out, aws);

@@ -15,6 +15,10 @@ import (
 // restart) is re-attached by a fresh Manager and is still interactive.
 func TestReconcile_RealAbduco(t *testing.T) {
 	if _, err := exec.LookPath("abduco"); err != nil {
+		// CI sets AGENT_BOX_REQUIRE_ABDUCO=1: a missing abduco must fail there, not skip.
+		if os.Getenv("AGENT_BOX_REQUIRE_ABDUCO") == "1" {
+			t.Fatal("abduco not installed and AGENT_BOX_REQUIRE_ABDUCO=1")
+		}
 		t.Skip("abduco not installed")
 	}
 	// Short /tmp path: t.TempDir() is ~150 bytes on macOS, which would put every

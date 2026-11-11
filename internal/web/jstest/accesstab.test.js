@@ -2,7 +2,7 @@
 // accesstab.js: the Access view on the kit (UI plan 6, frames M6.3 and M6.4; #176), against the shared fake DOM (the
 // repo has no jsdom). The page's real accessmodel.js, sessionrow.js, steerrail.js, elevation.js and elevbanner.js run
 // beside it, so the rows are the model's own; app.js and the pane (tabs.js) are stand-ins. Fixtures use made-up ids
-// (402100009917, culipulse-prod, agent-ops-read), never a real account.
+// (111122223333, culipulse-prod, agent-ops-read), never a real account.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -17,10 +17,10 @@ const iso = (min) => new Date(Date.now() + min * MIN + 30000).toISOString(); // 
 const ago = (min) => new Date(Date.now() - min * MIN).toISOString();
 const tick = () => new Promise((r) => setImmediate(r));
 
-const BASE = "arn:aws:iam::402100009917:role/agent-ops-read";
-const WRITE = "arn:aws:iam::402100009917:role/agent-ops-write";
+const BASE = "arn:aws:iam::111122223333:role/agent-ops-read";
+const WRITE = "arn:aws:iam::111122223333:role/agent-ops-write";
 const conn = (over) => Object.assign({
-  name: "culipulse-prod", label: "culipulse-prod", account_id: "402100009917", role_arn: BASE, region: "us-east-1",
+  name: "culipulse-prod", label: "culipulse-prod", account_id: "111122223333", role_arn: BASE, region: "us-east-1",
   prod: true, write_capable: true, base_access: "none_found", base_checked_at: ago(120),
   elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false },
 }, over);
@@ -210,7 +210,7 @@ test("cloud credentials: a card of connection rows (name + PROD, sub-line, Scope
   assert.ok(has(name.children[1], "chip", "chip-prod"));
   const sub = id.children[1];
   assert.ok(has(sub, "t-sm", "muted", "ellipsis"));
-  assert.strictEqual(sub.textContent, "account 402100009917 · role agent-ops-read · us-east-1");
+  assert.strictEqual(sub.textContent, "account 111122223333 · role agent-ops-read · us-east-1");
   assert.strictEqual(sub.title, sub.textContent);
 
   const lv = (c) => [c.children[0].textContent, c.children[1].textContent];

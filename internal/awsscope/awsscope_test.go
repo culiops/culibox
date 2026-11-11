@@ -9,7 +9,7 @@ import (
 
 func TestValidRoleARN(t *testing.T) {
 	good := []string{"arn:aws:iam::123456789012:role/agentbox-agent", "arn:aws-cn:iam::123456789012:role/path/x"}
-	bad := []string{"", "arn:aws:iam::22619881380:role/x", "arn:aws:iam::123456789012:user/x",
+	bad := []string{"", "arn:aws:iam::12345678901:role/x", "arn:aws:iam::123456789012:user/x",
 		"arn:aws:iam::123456789012:role/", "arn:aws:iam::123456789012:role/a b", "arn:aws:iam::123456789012:role/x\n"}
 	for _, s := range good {
 		if err := ValidRoleARN(s); err != nil {

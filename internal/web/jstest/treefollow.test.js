@@ -6,7 +6,7 @@ const { treeFollowTarget, rootableCwd } = require("../static/filetree.js");
 // Every case passes HOME explicitly. treeFollowTarget also reads window.HOME_DIR
 // when the argument is omitted (the shortPath/relativeTo convention in
 // fsops.js), but a test that relied on a global would be testing the browser.
-const HOME = "/home/claude";
+const HOME = "/home/user";
 
 // treeFollowTarget answers one question for the focused tab: which directory
 // should the tree be rooted at, and under what key does the follow-guard record
@@ -21,8 +21,8 @@ const viewer = (path) => ({ kind: "viewer", path });
 const follow = (tab) => treeFollowTarget(tab, HOME);
 
 test("a terminal follows its cwd, keyed on the session", () => {
-  assert.deepStrictEqual(follow(term("s1", "/home/claude/culipulse")), {
-    root: "/home/claude/culipulse",
+  assert.deepStrictEqual(follow(term("s1", "/home/user/culipulse")), {
+    root: "/home/user/culipulse",
     key: "sess:s1",
   });
 });
@@ -34,17 +34,17 @@ test("a terminal whose cwd has not resolved yet is not followed", () => {
 });
 
 test("a viewer follows the directory holding the file", () => {
-  assert.deepStrictEqual(follow(viewer("/home/claude/culipulse/README.md")), {
-    root: "/home/claude/culipulse",
-    key: "view:/home/claude/culipulse",
+  assert.deepStrictEqual(follow(viewer("/home/user/culipulse/README.md")), {
+    root: "/home/user/culipulse",
+    key: "view:/home/user/culipulse",
   });
 });
 
 test("two files in one directory are the same follow target", () => {
   // Keyed on the directory, not the path: paging through a folder must not
   // re-root on every file, and must not discard a manual pick each time.
-  const a = follow(viewer("/home/claude/x/a.md"));
-  const b = follow(viewer("/home/claude/x/b.md"));
+  const a = follow(viewer("/home/user/x/a.md"));
+  const b = follow(viewer("/home/user/x/b.md"));
   assert.deepStrictEqual(a, b);
 });
 
@@ -70,7 +70,7 @@ test("a viewer outside $HOME is not followed", () => {
   // usable target either.
   assert.strictEqual(follow(viewer("/a.md")), null);
   // A sibling of home is not inside it: whole-component compare, not prefix.
-  assert.strictEqual(follow(viewer("/home/claude2/x.md")), null);
+  assert.strictEqual(follow(viewer("/home/user2/x.md")), null);
 });
 
 test("a terminal whose cwd is outside $HOME is not followed", () => {
@@ -83,18 +83,18 @@ test("a terminal whose cwd is outside $HOME is not followed", () => {
 // The tree must show THAT checkout: rooted at the spawn cwd it listed the main
 // checkout's copies, and a click opened those instead of the agent's (#49).
 const wterm = (id, cwd, agentCwd) => ({ kind: "terminal", id, cwd, agentCwd });
-const WT = "/home/claude/repo/.claude/worktrees/t49";
+const WT = "/home/user/repo/.claude/worktrees/t49";
 
 test("a terminal whose agent is in a worktree follows the worktree", () => {
-  assert.deepStrictEqual(follow(wterm("s1", "/home/claude/repo", WT)), { root: WT, key: "sess:s1@" + WT });
+  assert.deepStrictEqual(follow(wterm("s1", "/home/user/repo", WT)), { root: WT, key: "sess:s1@" + WT });
 });
 
 test("entering and leaving a worktree change the key, so the tree re-roots both ways", () => {
-  const before = follow(wterm("s1", "/home/claude/repo", ""));
-  const inside = follow(wterm("s1", "/home/claude/repo", WT));
-  const after = follow(wterm("s1", "/home/claude/repo", ""));
+  const before = follow(wterm("s1", "/home/user/repo", ""));
+  const inside = follow(wterm("s1", "/home/user/repo", WT));
+  const after = follow(wterm("s1", "/home/user/repo", ""));
   assert.notStrictEqual(before.key, inside.key);
-  assert.deepStrictEqual(after, { root: "/home/claude/repo", key: "sess:s1" });
+  assert.deepStrictEqual(after, { root: "/home/user/repo", key: "sess:s1" });
 });
 
 test("the worktree is known before the spawn cwd has resolved", () => {
@@ -102,7 +102,7 @@ test("the worktree is known before the spawn cwd has resolved", () => {
 });
 
 test("an agent cwd /api/fs/list would refuse falls back to the spawn cwd", () => {
-  assert.deepStrictEqual(follow(wterm("s1", "/home/claude/repo", "/srv/wt")), { root: "/home/claude/repo", key: "sess:s1" });
+  assert.deepStrictEqual(follow(wterm("s1", "/home/user/repo", "/srv/wt")), { root: "/home/user/repo", key: "sess:s1" });
 });
 
 test("home itself is a legitimate root", () => {
@@ -133,10 +133,10 @@ test("a box viewer is never followed: its path does not exist on the host", () =
 });
 
 test("rootableCwd: a session cwd is a root only inside $HOME (the drawer must not root where fs/list 403s)", () => {
-  assert.strictEqual(rootableCwd("/home/claude", HOME), true);
-  assert.strictEqual(rootableCwd("/home/claude/culipulse", HOME), true);
+  assert.strictEqual(rootableCwd("/home/user", HOME), true);
+  assert.strictEqual(rootableCwd("/home/user/culipulse", HOME), true);
   assert.strictEqual(rootableCwd("/tmp/abvws", HOME), false);
-  assert.strictEqual(rootableCwd("/home/claudette", HOME), false);
+  assert.strictEqual(rootableCwd("/home/username", HOME), false);
   assert.strictEqual(rootableCwd("", HOME), false);
   assert.strictEqual(rootableCwd(undefined, HOME), false);
 });

@@ -15,10 +15,10 @@ const read = (f) => fs.readFileSync(path.join(STATIC, f), "utf8");
 
 const MIN = 60000;
 const iso = (min) => new Date(Date.now() + min * MIN + 30000).toISOString(); // +30 s: floor() reads exactly `min`
-const BASE = "arn:aws:iam::402100009917:role/agent-ops-read";
-const WRITE = "arn:aws:iam::402100009917:role/agent-ops-write";
+const BASE = "arn:aws:iam::111122223333:role/agent-ops-read";
+const WRITE = "arn:aws:iam::111122223333:role/agent-ops-write";
 const conn = (over) => Object.assign({
-  name: "culipulse-prod", label: "culipulse-prod", account_id: "402100009917", role_arn: BASE, region: "ap-southeast-1",
+  name: "culipulse-prod", label: "culipulse-prod", account_id: "111122223333", role_arn: BASE, region: "ap-southeast-1",
   prod: true, write_capable: true, elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false },
 }, over);
 const sess = (min, over) => Object.assign({

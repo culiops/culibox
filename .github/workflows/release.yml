@@ -1,0 +1,188 @@
+# Release: a push of a vX.Y.Z tag that is on main runs the same CI as main, builds
+# the four platform tarballs plus SHA256SUMS, and creates a DRAFT GitHub release
+# whose notes end with the platform status block. Nothing here ever publishes: the
+# founder reads the draft and publishes it by hand.
+#
+# A manual run (workflow_dispatch) is a dry run: it runs the same CI, builds and
+# packages as v0.0.0-dryrun and uploads the result as an artifact to inspect. It
+# has no release job, so it can never create a release.
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind
+#   - GITHUB_TOKEN is read-only at the top; contents, id-token and attestations
+#     write are each granted once, to the release job only
+#   - a tag name reaches a script only through env:, never interpolated
+#   - a tag that is not on main fails the run at the ancestry check, before any
+#     test or build runs
+#
+# Runners: Linux only. There are no macOS runners (the darwin tarballs are
+# cross-compiled here and verified on a real Mac afterwards, see
+# scripts/macos-verify.sh); the notes say darwin is NOT yet verified until
+# that record exists.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Per ref, never cancelled: a second push of the same tag waits for the first
+# instead of killing a release half-built. Never github.workflow: the called ci.yml
+# would inherit it (it sees its caller's name) and collide with this group.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Always runs (a skipped job skips every job that needs it, and the dry run would
+  # then build nothing); only the checks that mean something for a tag are guarded.
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Full history and tags: the ancestry check needs origin/main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag is a version
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if ! printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag '$TAG' is not vX.Y.Z or vX.Y.Z-<prerelease>"
+            exit 1
+          fi
+      # A tag that is not on main must not produce a release.
+      - name: Tag is on main
+        if: github.event_name == 'push'
+        run: |
+          set -eu
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
+            echo "::error::origin/main is not in this checkout, so the tag cannot be checked"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not an ancestor of origin/main: only commits on main can be released"
+            exit 1
+          fi
+          echo "$GITHUB_SHA is on main"
+
+  # The same checks that gate main (ci.yml, workflow_call).
+  tests:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [verify, tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # A dry run has no tag.
+      TAG: ${{ github.event_name == 'push' && github.ref_name || 'v0.0.0-dryrun' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Never restore a cache: a CI job that runs unpinned npm code can save it.
+          cache: false
+      - name: Build the tarballs
+        run: scripts/release/build.sh "$TAG" "$RUNNER_TEMP/dist"
+      # The linux/amd64 tarball runs on this runner: its sum is right, and the
+      # binary inside reports the tag and the commit it was built from.
+      - name: Smoke test the linux/amd64 tarball
+        run: |
+          set -eu
+          DIST=$RUNNER_TEMP/dist
+          (cd "$DIST" && sha256sum -c SHA256SUMS)
+          dir=$(mktemp -d "$RUNNER_TEMP/smoke.XXXXXX")
+          tar -C "$dir" -xzf "$DIST/culibox_${TAG#v}_linux_amd64.tar.gz"
+          got=$("$dir/agent-box" version)
+          want="agent-box $TAG ($(git rev-parse HEAD))"
+          if [ "$got" != "$want" ]; then
+            echo "::error::version is '$got', want '$want'"
+            exit 1
+          fi
+          echo "$got"
+          for f in LICENSE README.md; do test -s "$dir/$f"; done
+      # On a dry run this is the thing to inspect.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  # Tag pushes only. Creates a draft: it never publishes.
+  release:
+    if: github.event_name == 'push'
+    needs: [verify, tests, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Full history and tags: the notes list the commits since the previous tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Never restore a cache: a CI job that runs unpinned npm code can save it.
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+      # Build provenance needs a public repository (or a plan that has it).
+      - name: Attest the tarballs
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/culibox_*.tar.gz
+      - name: Note that attestations are skipped
+        if: github.event.repository.visibility != 'public'
+        run: |
+          echo "attestations skipped: repository is private" >> "$GITHUB_STEP_SUMMARY"
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          # --paginate prints one array per page; --jq '.[]' | jq -s . makes one.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]' | jq -s . > releases.json
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "refs/tags/${TAG}^{commit}^" 2>/dev/null || true)
+          {
+            echo "## $TAG"
+            echo
+            if [ -n "$prev" ]; then
+              git log --format='- %s' "$prev..refs/tags/$TAG"
+            else
+              git log --format='- %s' "refs/tags/$TAG"
+            fi
+            echo
+            go run ./tools/release-status notes --tag "$TAG" \
+              --ci-run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              --releases releases.json
+          } > notes.md
+          cat notes.md
+      # --draft: the founder publishes by hand. --verify-tag: the tag already
+      # exists, and this must never create one.
+      - name: Create the draft release
+        run: gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md dist/*

@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { sheetActions, sheetMeta, SHEET_GLYPHS } = require("../static/sheet.js");
 
-const claude = { id: "a", bin: "claude", cwd: "/home/claude/x", model: "claude-opus-5", effort: "high", startedAt: 1 };
+const claude = { id: "a", bin: "claude", cwd: "/home/user/x", model: "claude-opus-5", effort: "high", startedAt: 1 };
 const shell = { id: "b", bin: "sh" };
 
 test("open-terminal is first, end is last and danger", () => {

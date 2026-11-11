@@ -50,7 +50,7 @@ test("no non-http scheme is ever tokenized as a url", () => {
 });
 
 test("file paths still tokenize exactly as before", () => {
-  assert.deepStrictEqual(kinds("edited /home/claude/a.go"), ["path:/home/claude/a.go"]);
+  assert.deepStrictEqual(kinds("edited /home/user/a.go"), ["path:/home/user/a.go"]);
   assert.deepStrictEqual(kinds("open ~/notes/x.md"), ["path:~/notes/x.md"]);
   assert.deepStrictEqual(kinds("see ./rel.txt"), ["path:./rel.txt"]);
   assert.deepStrictEqual(kinds("in internal/web/api.go"), ["path:internal/web/api.go"]);
@@ -100,22 +100,22 @@ const { rewriteLocalhost } = require("../static/links.js");
 test("localhost forms are rewritten to the host the console is viewed on", () => {
   for (const h of ["localhost", "127.0.0.1", "0.0.0.0"]) {
     assert.strictEqual(
-      rewriteLocalhost("http://" + h + ":3030/deck?x=1#s", "100.76.118.121"),
-      "http://100.76.118.121:3030/deck?x=1#s",
+      rewriteLocalhost("http://" + h + ":3030/deck?x=1#s", "192.0.2.10"),
+      "http://192.0.2.10:3030/deck?x=1#s",
     );
   }
 });
 
 test("ipv6 loopback is rewritten too", () => {
   assert.strictEqual(
-    rewriteLocalhost("http://[::1]:9000/a", "100.76.118.121"),
-    "http://100.76.118.121:9000/a",
+    rewriteLocalhost("http://[::1]:9000/a", "192.0.2.10"),
+    "http://192.0.2.10:9000/a",
   );
 });
 
 test("a non-local host is returned byte-identical", () => {
   const u = "https://culiops.dev/a?b=1#c";
-  assert.strictEqual(rewriteLocalhost(u, "100.76.118.121"), u);
+  assert.strictEqual(rewriteLocalhost(u, "192.0.2.10"), u);
 });
 
 test("no rewrite when the console itself is viewed at localhost", () => {
@@ -124,8 +124,8 @@ test("no rewrite when the console itself is viewed at localhost", () => {
 });
 
 test("unparseable input is returned unchanged", () => {
-  assert.strictEqual(rewriteLocalhost("http://", "100.76.118.121"), "http://");
-  assert.strictEqual(rewriteLocalhost("not a url", "100.76.118.121"), "not a url");
+  assert.strictEqual(rewriteLocalhost("http://", "192.0.2.10"), "http://");
+  assert.strictEqual(rewriteLocalhost("not a url", "192.0.2.10"), "not a url");
 });
 
 // Documents URL.toString() normalisation on the rewrite path. It only ever fires
@@ -331,7 +331,7 @@ test("a scheme with no host is not a link", () => {
 
 test("a URL carrying credentials is never rewritten", () => {
   const u = "https://evil.com@localhost:9000/a";
-  assert.strictEqual(rewriteLocalhost(u, "100.76.118.121"), u);
+  assert.strictEqual(rewriteLocalhost(u, "192.0.2.10"), u);
 });
 
 test("cellFromIndex survives an empty rowStarts", () => {

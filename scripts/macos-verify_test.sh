@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# Offline test for scripts/macos-verify.sh: run it with `scripts/macos-verify_test.sh`.
+#
+# The script's every external effect is stubbed or pointed at a fixture, so this
+# needs no network, no Mac, no ~/.config/gh and no real abduco:
+#   gh, go, sw_vers, sysctl, arch, uname   shell stubs in a PATH dir (go serves only
+#                                          `test` and `version`)
+#   release-status                         the REAL tool, built here with the real go
+#   git clone                              a local fixture repo that has the tag
+#   abduco installer                       a stub that drops an executable abduco
+# The "binaries" in the fixture tarballs are tiny shell scripts that print the
+# expected `agent-box <tag> (<sha>)` line. Everything lives in one mktemp dir that is
+# removed on exit.
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/.." && pwd)
+script=$here/macos-verify.sh
+
+# Found before PATH is shadowed. Used for exactly one thing: building release-status.
+real_go=$(command -v go) || {
+  echo "macos-verify_test: go is not on PATH" >&2
+  exit 1
+}
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+tag=v0.0.1
+tarver=0.0.1
+arm_tgz=culibox_${tarver}_darwin_arm64.tar.gz
+amd_tgz=culibox_${tarver}_darwin_amd64.tar.gz
+
+fails=0
+fail() {
+  echo "FAIL: $*" >&2
+  fails=$((fails + 1))
+}
+pass() { echo "ok:   $*"; }
+# contains FILE TEXT MESSAGE: TEXT (a fixed string) must be in FILE.
+contains() {
+  if grep -qF -- "$2" "$1" 2>/dev/null; then pass "$3"; else
+    fail "$3 (no '$2' in $1)"
+    sed 's/^/        | /' "$1" 2>/dev/null | head -20 >&2 || true
+  fi
+}
+absent() { # FILE TEXT MESSAGE
+  if grep -qF -- "$2" "$1" 2>/dev/null; then fail "$3 ('$2' is in $1)"; else pass "$3"; fi
+}
+missing() { # PATH MESSAGE
+  if [ -e "$1" ]; then fail "$2 ($1 exists)"; else pass "$2"; fi
+}
+exists() { # PATH MESSAGE
+  if [ -e "$1" ]; then pass "$2"; else fail "$2 ($1 is missing)"; fi
+}
+expect_rc() { # ACTUAL WANT MESSAGE
+  if [ "$1" -eq "$2" ]; then pass "$3"; else fail "$3 (exit $1, want $2)"; fi
+}
+last_verdict() { grep '"verdict":' "$1" | tail -1 | sed 's/.*: "\(.*\)".*/\1/'; }
+expect_verdict() { # FILE WANT MESSAGE
+  local got
+  got=$(last_verdict "$1" 2>/dev/null || true)
+  if [ "$got" = "$2" ]; then pass "$3"; else fail "$3 (verdict '$got', want '$2')"; fi
+}
+
+# release-status first, with the real environment, so the Go build cache is warm.
+(cd "$repo" && "$real_go" build -o "$tmp/release-status" ./tools/release-status)
+
+# From here on nothing may read the real home: no ~/.config/gh, no global git config.
+export HOME=$tmp/home
+mkdir -p "$HOME"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+# ---- the fixture repo the script clones at the tag ---------------------------------
+git init -q "$tmp/repo"
+(
+  cd "$tmp/repo"
+  echo "fixture" >README.md
+  git add README.md
+  git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m fixture
+  git -c user.name=t -c user.email=t@example.com -c tag.gpgsign=false tag -a "$tag" -m "$tag"
+)
+sha=$(git -C "$tmp/repo" rev-parse HEAD)
+
+# ---- stubs --------------------------------------------------------------------------
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/gh" <<'EOF'
+#!/bin/sh
+echo "GH_REPO=${GH_REPO:-} $*" >>"$STUB_OUT/gh.log"
+case "$1 $2" in
+"release download")
+  dir=
+  prev=
+  for a in "$@"; do
+    [ "$prev" = --dir ] && dir=$a
+    prev=$a
+  done
+  [ -n "$dir" ] || { echo "stub gh: download without --dir" >&2; exit 1; }
+  cp "$STUB_FIX"/culibox_*_darwin_*.tar.gz "$STUB_FIX/SHA256SUMS" "$dir/"
+  if [ -f "$STUB_FIX/macos-verification.json" ]; then cp "$STUB_FIX/macos-verification.json" "$dir/"; fi
+  ;;
+"release upload")
+  clobber=no
+  for a in "$@"; do [ "$a" = --clobber ] && clobber=yes; done
+  [ "$clobber" = yes ] || { echo "stub gh: upload without --clobber" >&2; exit 1; }
+  cp "$4" "$STUB_OUT/uploaded.json"
+  basename "$4" >"$STUB_OUT/uploaded.name"
+  ;;
+"release view")
+  cat "$STUB_FIX/notes.md"
+  echo
+  ;;
+"release edit")
+  [ "$4 $5" = "--notes-file -" ] || { echo "stub gh: edit wants --notes-file -, got: $*" >&2; exit 1; }
+  cat >"$STUB_OUT/notes.out"
+  ;;
+"api user")
+  [ "$3 $4" = "-q .login" ] || { echo "stub gh: api user wants -q .login" >&2; exit 1; }
+  echo testverifier
+  ;;
+*)
+  echo "stub gh: unexpected call: $*" >&2
+  exit 1
+  ;;
+esac
+EOF
+cat >"$tmp/bin/go" <<'EOF'
+#!/bin/sh
+case "$1" in
+version) echo "go version go1.99.0 darwin/arm64" ;;
+test)
+  echo "GOARCH=${GOARCH:-} REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
+  : >"$STUB_OUT/go-called.marker"
+  if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_FAIL_AMD64:-}" ]; then
+    printf -- '--- FAIL: TestX (0.00s)\nFAIL\nFAIL\tfixture/a\t0.1s\nFAIL\n'
+    exit 1
+  fi
+  printf 'ok  \tfixture/a\t0.01s\nok  \tfixture/b\t0.01s\n'
+  ;;
+*)
+  echo "stub go: unexpected call: $*" >&2
+  exit 1
+  ;;
+esac
+EOF
+cat >"$tmp/bin/sw_vers" <<'EOF'
+#!/bin/sh
+[ "$1" = -productVersion ] || { echo "stub sw_vers: unexpected: $*" >&2; exit 1; }
+echo 15.1
+EOF
+cat >"$tmp/bin/sysctl" <<'EOF'
+#!/bin/sh
+[ "$*" = "-n machdep.cpu.brand_string" ] || { echo "stub sysctl: unexpected: $*" >&2; exit 1; }
+echo "Apple M2"
+EOF
+cat >"$tmp/bin/arch" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$STUB_OUT/arch.log"
+[ "$1" = -x86_64 ] || { echo "stub arch: want -x86_64, got: $*" >&2; exit 1; }
+shift
+exec "$@"
+EOF
+cat >"$tmp/bin/uname" <<'EOF'
+#!/bin/sh
+case "$1" in
+-s) echo Linux ;;
+-m) echo x86_64 ;;
+*) echo "stub uname: unexpected: $*" >&2; exit 1 ;;
+esac
+EOF
+cat >"$tmp/bin/install-abduco" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$STUB_OUT/abduco-install.log"
+mkdir -p "$1/bin"
+printf '#!/bin/sh\nexit 0\n' >"$1/bin/abduco"
+chmod 755 "$1/bin/abduco"
+EOF
+chmod 755 "$tmp"/bin/*
+
+# ---- one case = fixtures + out + tmpdir --------------------------------------------
+# new_case NAME [AMD64_SHA]: tarballs whose binaries print `agent-box v0.0.1 (<sha>)`;
+# AMD64_SHA lets one case ship an amd64 binary stamped with another commit.
+new_case() {
+  case_dir=$tmp/$1
+  fix=$case_dir/fix
+  out=$case_dir/out
+  mkdir -p "$fix" "$out" "$case_dir/tmpdir"
+  make_tarball arm64 "$sha"
+  make_tarball amd64 "${2:-$sha}"
+  (cd "$fix" && sha256sum culibox_*.tar.gz >SHA256SUMS)
+  echo '[]' >"$case_dir/releases.json"
+  {
+    printf '## %s\n\n' "$tag"
+    "$tmp/release-status" notes --tag "$tag" --ci-run https://ci.example/run/1 --releases "$case_dir/releases.json"
+  } >"$fix/notes.md"
+}
+make_tarball() { # ARCH SHA
+  local stage=$case_dir/stage-$1
+  mkdir -p "$stage"
+  printf '%s\n' '#!/bin/sh' "[ \"\$1\" = version ] && echo \"agent-box $tag ($2)\"" >"$stage/agent-box"
+  chmod 755 "$stage/agent-box"
+  echo license >"$stage/LICENSE"
+  echo readme >"$stage/README.md"
+  tar -C "$stage" -czf "$fix/culibox_${tarver}_darwin_$1.tar.gz" agent-box LICENSE README.md
+}
+
+# run_script INPUT [ENV=VALUE...]: runs the script in the current case. Sets rc; the
+# output lands in $case_dir/stdout and $case_dir/stderr.
+run_script() {
+  local input=$1
+  shift
+  if printf '%s' "$input" | env \
+    PATH="$tmp/bin:$PATH" TMPDIR="$case_dir/tmpdir" \
+    STUB_FIX="$fix" STUB_OUT="$out" \
+    MACOS_VERIFY_TEST=1 \
+    RELEASE_STATUS="$tmp/release-status" \
+    MACOS_VERIFY_GIT_URL="file://$tmp/repo" \
+    MACOS_VERIFY_INSTALL_ABDUCO="$tmp/bin/install-abduco" \
+    "$@" \
+    "$script" "$tag" >"$case_dir/stdout" 2>"$case_dir/stderr"; then
+    rc=0
+  else
+    rc=$?
+  fi
+}
+
+echo "== RED check: the script exists and is executable"
+if [ ! -x "$script" ]; then
+  echo "macos-verify_test: $script is missing or not executable" >&2
+  exit 1
+fi
+
+# ---- (a) a good run with M1=pass is verified ---------------------------------------
+echo "== (a) good run, M1=pass"
+new_case a
+run_script $'M1=pass looks fine\nM2=na said "hi" \\ done\n\n'
+expect_rc "$rc" 0 "(a) a verified run exits 0"
+exists "$out/uploaded.json" "(a) the record was uploaded"
+contains "$out/uploaded.name" macos-verification.json "(a) the asset is named macos-verification.json"
+expect_verdict "$out/uploaded.json" verified "(a) the last run's verdict is verified"
+contains "$out/notes.out" "✅ verified on macOS 15.1 (Apple M2), arm64 native, amd64 under Rosetta 2" "(a) the notes say verified on macOS"
+contains "$out/notes.out" "- linux/amd64: tested in CI (native), [run](https://ci.example/run/1)" "(a) the Linux lines survive the rewrite"
+contains "$out/notes.out" "## $tag" "(a) the rest of the notes survives"
+for f in "$arm_tgz" "$amd_tgz"; do
+  contains "$out/uploaded.json" "\"$f\": \"$(grep " $f\$" "$fix/SHA256SUMS" | cut -d ' ' -f 1)\"" "(a) the record holds the verified sha256 of $f"
+done
+contains "$out/uploaded.json" '"mode": "native"' "(a) arm64 is recorded native"
+contains "$out/uploaded.json" '"mode": "rosetta2"' "(a) amd64 is recorded rosetta2"
+contains "$out/uploaded.json" "\"version_line\": \"agent-box $tag ($sha)\"" "(a) the version stamp is recorded"
+contains "$out/uploaded.json" '"verifier": "testverifier"' "(a) the verifier comes from gh api user"
+contains "$out/uploaded.json" '"macos": "15.1"' "(a) the macOS version is recorded"
+contains "$out/uploaded.json" '"chip": "Apple M2"' "(a) the chip is recorded"
+contains "$out/uploaded.json" '"go_version": "go1.99.0 darwin/arm64"' "(a) the Go version is recorded"
+contains "$out/uploaded.json" '"id": "M1"' "(a) row M1 is recorded"
+contains "$out/uploaded.json" '"note": "said \"hi\" \\ done"' "(a) a note with a quote and a backslash is escaped"
+contains "$out/go.log" "GOARCH=arm64 REQUIRE=1" "(a) the native run sets AGENT_BOX_REQUIRE_ABDUCO=1"
+contains "$out/go.log" "GOARCH=amd64 REQUIRE=1" "(a) the Rosetta run sets GOARCH=amd64 and AGENT_BOX_REQUIRE_ABDUCO=1"
+contains "$out/go.log" "ARGS=test -count=1 ./..." "(a) go test runs with -count=1 ./..."
+contains "$out/go.log" "PWD=$case_dir/tmpdir/" "(a) go test runs inside the work dir's clone"
+absent "$out/go.log" "ABDUCO=none" "(a) the installed abduco is on PATH for go test"
+contains "$out/arch.log" "-x86_64 $case_dir/tmpdir/" "(a) the amd64 binary runs under arch -x86_64"
+contains "$case_dir/stdout" "Mac test guide rows for $tag (ID=pass|fail|na [note]), empty line to finish:" "(a) the manual prompt is exact"
+contains "$out/gh.log" "GH_REPO=culiops/culibox " "(a) gh is pointed at culiops/culibox"
+up=$(grep -n 'release upload' "$out/gh.log" | head -1 | cut -d: -f1)
+ed=$(grep -n 'release edit' "$out/gh.log" | head -1 | cut -d: -f1)
+if [ -n "$up" ] && [ -n "$ed" ] && [ "$up" -lt "$ed" ]; then pass "(a) the record is uploaded before the notes are edited"; else fail "(a) upload (line '$up') must come before edit (line '$ed') in gh.log"; fi
+if [ -z "$(ls -A "$case_dir/tmpdir")" ]; then pass "(a) nothing is left in TMPDIR"; else fail "(a) TMPDIR still holds: $(ls "$case_dir/tmpdir")"; fi
+
+# ---- (d) a second run for the same tag keeps the history ---------------------------
+echo "== (d) re-run keeps runs[]"
+new_case d
+cp "$tmp/a/out/uploaded.json" "$fix/macos-verification.json"
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 0 "(d) a re-run exits 0"
+n=$(grep -c '"verdict":' "$out/uploaded.json" || true)
+if [ "$n" = 2 ]; then pass "(d) the re-run's record holds both runs"; else fail "(d) the record holds $n runs, want 2"; fi
+
+# ---- (b) a tampered tarball stops before go test -----------------------------------
+echo "== (b) tampered tarball"
+new_case b
+printf 'x' >>"$fix/$arm_tgz"
+run_script $'M1=pass\n\n'
+if [ "$rc" -ne 0 ]; then pass "(b) a tampered tarball makes the script exit non-zero"; else fail "(b) a tampered tarball exited 0"; fi
+missing "$out/go-called.marker" "(b) go test never ran"
+missing "$out/arch.log" "(b) no binary ran under arch"
+missing "$out/abduco-install.log" "(b) abduco was not installed"
+missing "$out/uploaded.json" "(b) nothing was uploaded"
+missing "$out/notes.out" "(b) the notes were not edited"
+contains "$case_dir/stderr" "mismatch" "(b) the error names the sha mismatch"
+contains "$case_dir/stderr" "$case_dir/tmpdir/macos-verify." "(b) the failed run says where its logs are"
+
+# ---- (c) empty manual input is partial ---------------------------------------------
+echo "== (c) empty manual input"
+new_case c
+run_script ''
+expect_rc "$rc" 3 "(c) a recorded non-verified run exits 3"
+expect_verdict "$out/uploaded.json" partial "(c) empty manual input gives verdict partial"
+contains "$out/notes.out" "⚠️ automated checks passed, manual checks not run" "(c) the notes say manual checks did not run"
+absent "$out/notes.out" "✅" "(c) the notes never show a green tick"
+contains "$out/uploaded.json" '"manual": []' "(c) no manual row is invented"
+
+# ---- (e) a failing amd64 test run is recorded as failed ----------------------------
+echo "== (e) go test fails under Rosetta"
+new_case e
+run_script $'M1=pass\n\n' STUB_GO_FAIL_AMD64=1
+expect_rc "$rc" 3 "(e) a failed run exits 3"
+expect_verdict "$out/uploaded.json" failed "(e) the verdict is failed"
+contains "$out/notes.out" "❌ failed: amd64 tests failed" "(e) the notes name the failing arch"
+contains "$out/uploaded.json" '"test_summary": "go test failed' "(e) the summary says go test failed"
+exists "$case_dir/tmpdir"/macos-verify.*/test-amd64.log "(e) the amd64 log is kept"
+
+# ---- (f) a binary stamped with another commit fails its arch -----------------------
+echo "== (f) version stamp mismatch"
+new_case f "0000000000000000000000000000000000000000"
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 3 "(f) a stamp mismatch exits 3"
+expect_verdict "$out/uploaded.json" failed "(f) the verdict is failed"
+contains "$out/notes.out" "amd64 tests failed" "(f) amd64 is the failing arch"
+absent "$out/notes.out" "arm64 tests failed" "(f) arm64 still passes"
+contains "$out/uploaded.json" "agent-box $tag (0000000000000000000000000000000000000000)" "(f) the bad version_line is kept"
+
+# ---- (g) a prior record for another commit aborts before go test -------------------
+echo "== (g) moved tag"
+new_case g
+sed "s/\"commit\": \"[0-9a-f]*\"/\"commit\": \"1111111111111111111111111111111111111111\"/" "$tmp/a/out/uploaded.json" >"$fix/macos-verification.json"
+run_script $'M1=pass\n\n'
+if [ "$rc" -ne 0 ]; then pass "(g) a record for another commit exits non-zero"; else fail "(g) exit 0 on a commit mismatch"; fi
+missing "$out/go-called.marker" "(g) go test never ran"
+missing "$out/uploaded.json" "(g) nothing was uploaded"
+
+# ---- (h) a malformed manual row is an error without a tty --------------------------
+echo "== (h) malformed manual row"
+new_case h
+run_script $'M1=yes\n\n'
+if [ "$rc" -ne 0 ]; then pass "(h) a malformed row exits non-zero without a tty"; else fail "(h) a malformed row exited 0"; fi
+missing "$out/uploaded.json" "(h) nothing was uploaded"
+contains "$case_dir/stderr" "M1=yes" "(h) the error quotes the bad row"
+
+# ---- (i) it refuses to run off a Mac -----------------------------------------------
+echo "== (i) refuses off Darwin/arm64"
+new_case i
+run_script '' MACOS_VERIFY_TEST=0
+if [ "$rc" -ne 0 ]; then pass "(i) it exits non-zero off a Mac"; else fail "(i) it ran off a Mac"; fi
+contains "$case_dir/stderr" "Darwin" "(i) the error names Darwin"
+missing "$out/gh.log" "(i) gh was never called"
+
+# ---- (j) a bad tag is a usage error ------------------------------------------------
+echo "== (j) bad tag"
+if "$script" --upload-pack=x >/dev/null 2>&1; then fail "(j) a tag that is not vX.Y.Z was accepted"; else pass "(j) a tag that is not vX.Y.Z is refused"; fi
+
+echo
+if [ "$fails" -ne 0 ]; then
+  echo "macos-verify_test: $fails check(s) failed" >&2
+  exit 1
+fi
+echo "macos-verify_test: all checks passed"
