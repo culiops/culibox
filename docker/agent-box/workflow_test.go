@@ -579,14 +579,23 @@ func TestCIWorkflow(t *testing.T) {
 		}
 	}
 
-	// A new run on a ref replaces the old one. The group is keyed on github.ref,
-	// not github.workflow: release.yml calls this workflow and the callee inherits
-	// the caller's github.workflow, so it would collide with its own caller.
+	// A push run must never be cancelled (a cancelled run leaves its BEFORE..sha
+	// range unscanned, and GitHub also cancels a pending run in a shared group), so
+	// a push gets a group of its own, keyed on the run id. Other events share a
+	// ci-<ref> group and replace their older run. Never github.workflow: release.yml
+	// calls this workflow and the callee inherits the caller's github.workflow, so
+	// it would collide with its own caller.
 	if !regexp.MustCompile(`(?m)^concurrency:\s*\n(\s+.*\n)*?\s+cancel-in-progress:\s*true\s*$`).MatchString(wf) {
 		t.Error("ci.yml needs a top-level concurrency with cancel-in-progress: true")
 	}
-	if !strings.Contains(wf, "group: ci-${{ github.ref }}") {
-		t.Error("the concurrency group must be `ci-${{ github.ref }}`")
+	group := regexp.MustCompile(`(?m)^\s+group:\s*(.+?)\s*$`).FindStringSubmatch(wf)
+	if group == nil {
+		t.Fatal("ci.yml concurrency has no group")
+	}
+	for _, want := range []string{"github.event_name == 'push'", "ci-push-{0}", "github.run_id", "ci-{0}", "github.ref"} {
+		if !strings.Contains(group[1], want) {
+			t.Errorf("concurrency group %q lacks %q (a push run needs its own run-id group)", group[1], want)
+		}
 	}
 	if strings.Contains(wf, "github.workflow") {
 		t.Error("ci.yml must not use github.workflow (it is the caller's name under workflow_call)")

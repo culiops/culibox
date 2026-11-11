@@ -24,11 +24,16 @@ on:
 permissions:
   contents: read
 
-# Keyed on the ref, never on github.workflow: when release.yml calls this file the
-# called workflow sees the CALLER's github.workflow, so a workflow-keyed group
-# would collide with the caller's own and cancel or deadlock it.
+# Never keyed on github.workflow: when release.yml calls this file the called
+# workflow sees the CALLER's github.workflow, so a workflow-keyed group would
+# collide with the caller's own and cancel or deadlock it.
+# A push run gets a group of its own (its run id), so it is never cancelled: a
+# cancelled push run would leave its BEFORE..sha range without a secret scan, and
+# GitHub also cancels a PENDING run when a newer one queues in the same group,
+# whatever cancel-in-progress says. Other events (manual runs, which go by ref)
+# still replace their own older run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.run_id) || format('ci-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
