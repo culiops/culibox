@@ -91,6 +91,8 @@ type boxLayer struct {
 	// memory here), and any change to colima.yaml (an apply, from any process)
 	// makes it unverified again. Until verified, every spawn runs the check.
 	foldersOK atomic.Pointer[yamlStamp]
+	// sweepLocksNoBoxes is boxes.SweepGuardLocksNoBoxes; a test replaces it.
+	sweepLocksNoBoxes func()
 }
 
 // yamlStamp identifies one written colima.yaml.
@@ -244,6 +246,11 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		// host and needs no hook).
 		o.VMIDs = l.vmIDs
 		o.Shares = l.shareView
+		// #96: on a case-insensitive Mac volume the read-only bind of a guarded
+		// file covers one spelling of its name; the file is also locked on the
+		// Mac (uchg) while a box spawned in place runs. Only where the OS has
+		// the flags: a darwin layer built on Linux (tests) has none.
+		o.LockGuards = box.GuardLocksSupported()
 		// Reachable only asks; it never starts the VM. The sweep skips while it
 		// is stopped instead of reaping on a failed listing.
 		o.Reachable = l.vm.Running
@@ -285,7 +292,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 	}
 	if started || !l.foldersVerified() {
 		mctx, mcancel := context.WithTimeout(ctx, imageCheckTimeout)
-		err := l.verifyMounts(mctx)
+		err := l.verifyMounts(mctx, started)
 		mcancel()
 		if err != nil {
 			return fmt.Errorf("%w: the box VM's folders do not match its folder list (%v); run `agent-box doctor`", box.ErrBoxUnavailable, err)
@@ -409,12 +416,22 @@ func (l *boxLayer) recreateHint() string {
 // first: they must never start the VM, and docker is unreachable while it is
 // down, which must not read as "no boxes" (and reap) or fill the log.
 func (l *boxLayer) vmStopped(ctx context.Context) bool {
+	stopped, _ := l.vmState(ctx)
+	return stopped
+}
+
+// vmState is vmStopped, plus whether colima answered: confirmed is true only
+// when the status was read and says the VM is not running. A status that could
+// not be read (a timeout, unreadable output) is stopped for the background
+// passes (they never start the VM) but not confirmed: a box may still run.
+func (l *boxLayer) vmState(ctx context.Context) (stopped, confirmed bool) {
 	if l.vm == nil {
-		return false
+		return false, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return !l.vm.Running(ctx)
+	st, err := l.vm.Status(ctx)
+	return err != nil || !st.Running, err == nil && !st.Running
 }
 
 // bootReconcile reaps this instance's orphaned boxes and their stale homes at
@@ -422,8 +439,19 @@ func (l *boxLayer) vmStopped(ctx context.Context) bool {
 // boxed spawn, whose VM start runs the same pass (prepare). It reports whether
 // it ran: false only while the VM is stopped and its docker unreachable.
 func (l *boxLayer) bootReconcile(ctx context.Context) bool {
-	if l.vmStopped(ctx) {
+	if stopped, confirmed := l.vmState(ctx); stopped {
 		log.Printf("box VM stopped: box reconcile and reclaim wait for the first boxed spawn")
+		// No box can run while the VM is down, so the guard locks a crash or a
+		// Mac restart left are lifted now, not at the next boxed spawn. Only on
+		// colima's word: a status that failed may hide a running box, whose
+		// locks then wait for the next Reconcile or Sweep.
+		if confirmed {
+			if l.sweepLocksNoBoxes != nil {
+				l.sweepLocksNoBoxes()
+			} else {
+				l.boxes.SweepGuardLocksNoBoxes()
+			}
+		}
 		return false
 	}
 	l.reconcileAndReclaim(ctx)

@@ -160,6 +160,10 @@ boxed sessions have already run in.
 - If you set up the VM with an older CuliBox it still shares your whole home
   folder until you apply the list. Nothing breaks: `agent-box doctor` ("box VM folders") and Settings
   warn about it, and the home share goes away when you apply the list.
+- Switching a folder between read-write and read-only takes effect on one apply: after the
+  start CuliBox remounts any folder the VM still shows at its old mode, then checks the
+  folder list again. A missing or extra folder is never remounted, and a remount that
+  fails or does not hold fails the apply.
 - What a VM escape can reach: only the folders on the list (read-write or
   read-only as listed) and CuliBox's four data parts (`boxstate`
   read-write; `bundle`, `broker` and `ca` read-only). Everything inside a
@@ -350,13 +354,53 @@ a git config `include`, and so on). What it covers and what it does not is in
   change. A read-only mount of only `.git/hooks` does not hold, which is why the
   whole `.git` is mounted. The other guarded names use the same read-only mount
   and have not been measured separately on a Mac yet.
-- Not yet tested: whether a box can write a guarded file under another spelling
-  of its name, such as `claude.md`, or a worktree's `.git` file as `.GIT`. A
-  macOS volume ignores case by default, so the Mac treats that as the same
-  file, while the read-only mount in the box covers only the one spelling.
-  Until this is measured, treat those files as writable by the box. The guarded
-  directories (`.git`, `.claude/`, the hooks directory) are expected to hold,
-  but are not measured under another spelling either.
+- Another spelling of a guarded file's name (measured on a Mac, 2026-11-10): a
+  macOS volume ignores case by default, so `claude.md`, `.MCP.JSON` or `.GIT`
+  is the same Mac file as `CLAUDE.md`, `.mcp.json` or a worktree's `.git` file,
+  while the read-only mount in the box covers only the one spelling. Through
+  another spelling the box could change the Mac file. The guarded directories
+  (`.git/`, `.claude/`, the hooks directory) hold under every spelling.
+- So the guarded files are also **locked on the Mac while the box runs**. On a
+  case-insensitive volume, before a box started in place starts, CuliBox sets
+  the user-immutable flag (`chflags uchg`) on each guarded single file there
+  is: `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json` and a
+  worktree's `.git` file (never a directory). Measured on a Mac (2026-11-11):
+  with the flag set, nothing in the box or the VM can write, truncate, remove,
+  rename, replace, chmod, touch or hard-link the file, or clear the flag,
+  through any spelling. A case-sensitive volume is not locked: it does not need
+  it.
+  - When: from before the box starts until the box is gone. The box is removed
+    as soon as its last session ends (instead of idling for `box_idle_ttl_seconds`),
+    because what a session started in it can outlive the session; the files are
+    unlocked right after. Several sessions or boxes in the same folder share the
+    lock, and it is lifted when the last one is gone. The lock is the file's,
+    so two spellings of one folder (`~/code/Repo` and `~/code/repo`, two boxes)
+    share it too.
+  - If a file cannot be locked (you do not own it, or it cannot be opened), the
+    spawn is refused and the message names the file. Fix the file, remove it,
+    or use a clone-mode profile. A volume that has no such flag (exFAT, a
+    network share) is refused with that reason: use a clone-mode profile there.
+  - Two CuliBox instances with separate data folders on one Mac do not see each
+    other's locks. The second finds the file locked already and treats the flag
+    as yours, so it never clears it; but the first lifts its own lock when its
+    box ends, even while the second's box in that folder still runs. Run boxes
+    in place in one folder from one instance only, or use a clone-mode profile.
+  - A file you had already locked yourself (`uchg` set before the spawn) is
+    left locked: CuliBox never clears a flag it did not set.
+  - The cost: while the session runs you cannot edit those files on the Mac,
+    and `git checkout` (or a branch switch) exits 0 but prints `unable to
+    unlink old 'CLAUDE.md'` and leaves the file with its old content, shown as
+    modified. End the session first, or use a clone-mode profile.
+  - Unlocking a file by hand (`chflags nouchg CLAUDE.md`) while the session
+    runs reopens the gap: the box can then change it through another spelling.
+  - The locks are recorded in `inplace-locks.json` in the data folder, so a
+    crash or a Mac restart does not leave them behind: CuliBox lifts the ones
+    whose box is gone when it starts (and when the box VM starts). `agent-box
+    doctor` lists the files locked now and any left behind, with the
+    `chflags nouchg` line to lift one by hand. The session's side panel says
+    which files are locked. If you move or rename the folder while a session
+    runs, CuliBox no longer finds the files there: unlock them by hand
+    (`ls -lO` shows `uchg`).
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.

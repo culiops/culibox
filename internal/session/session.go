@@ -784,6 +784,11 @@ type Info struct {
 	// Absent without them, so a plain session's wire shape is unchanged.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// LockedFiles are the workspace files the box layer keeps locked on the
+	// host while this session's box runs (macOS on a case-insensitive volume,
+	// where the box could otherwise change a guarded file through another
+	// letter case), as of the spawn. Absent without any.
+	LockedFiles []string `json:"locked_files,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -850,6 +855,8 @@ type Session struct {
 	// Info hands out a copy.
 	ContextPaths []string
 	CloneOf      string
+	// LockedFiles is Info.LockedFiles; immutable after publication.
+	LockedFiles []string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -1348,6 +1355,7 @@ func (s *Session) Info() Info {
 	in.Return = s.ret.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
+	in.LockedFiles = slices.Clone(s.LockedFiles)
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
 			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
@@ -1968,6 +1976,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// a host session reads any path already. The paths are re-validated purely
 	// on every spawn (a hand-edited profiles.json), the disk check runs below.
 	var ctxPaths []string
+	var lockedFiles []string // what the box layer locked on the host (macOS), set after Wrap
 	if r, ok := m.launcher.(ContextResolver); ok {
 		p, err := r.ContextPathsFor(spec.Agent)
 		if err != nil {
@@ -2424,6 +2433,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				box.ErrBoxUnavailable, spec.Agent, name, heldBrokerBox)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		if lf, ok := boxes.(interface{ LockedFiles(box string) []string }); ok {
+			lockedFiles = lf.LockedFiles(name)
+		}
 		exclusive = key.Session != ""
 		cwdForms = cwdFormsOf(spec.Cwd)
 		if spec.Resume != "" {
@@ -2534,6 +2546,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
 	sess.ContextPaths = slices.Clone(ctxPaths)
+	sess.LockedFiles = slices.Clone(lockedFiles)
 	if cl != nil {
 		sess.CloneOf = cl.Of
 	}
@@ -2560,7 +2573,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, EgressAllow: egressAllow, EgressOpen: egressOpen, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
-			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
+			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf, LockedFiles: slices.Clone(lockedFiles),
 			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
@@ -2796,9 +2809,25 @@ func (m *Manager) releaseSessionBox(s *Session) {
 		return
 	}
 	s.releaseOnce.Do(func() {
+		m.sessionEndedInBox(s)
 		m.releaseBoxNamed(s.Box)
 		m.brokerReleaseBox(s)
 	})
+}
+
+// sessionEndedInBox tells a box layer that tracks it (the macOS guard locks'
+// display) which session ended in the box. Before releaseBoxNamed, which may
+// remove the box.
+func (m *Manager) sessionEndedInBox(s *Session) {
+	if s.Box == "" {
+		return
+	}
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if se, ok := boxes.(interface{ SessionEnded(box, sessionID string) }); ok {
+		se.SessionEnded(s.Box, s.ID)
+	}
 }
 
 // brokerReleaseBox gives back the reference on the box's broker socket that the
@@ -3378,6 +3407,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Clone = md.Clone.copy()
 	sess.ContextPaths = slices.Clone(md.ContextPaths)
 	sess.CloneOf = md.CloneOf
+	sess.LockedFiles = slices.Clone(md.LockedFiles)
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"
 	// and is watched below, never a clean result.

@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, ctxEmptyNote, ctxUsedText, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, lockedRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
 // steerrail.js is a browser script: withCommas is usage.js's global there.
 globalThis.withCommas = require("../static/usage.js").withCommas;
 // The real tierBadge, not a hand-written stand-in: the point of the change these
@@ -477,4 +477,14 @@ test("clone values stay literal text: markup in a branch is never interpreted", 
   assert.ok(/function kvRow[\s\S]*?b\.textContent = v;/.test(rail));
   assert.ok(!/innerHTML/.test(rail));
   assert.ok(/getElementById\("toast-msg"\)\.textContent = msg/.test(shell));
+});
+
+test("lockedRow: null without locked files; otherwise one wrapping row naming them and why", () => {
+  assert.strictEqual(lockedRow({}), null);
+  assert.strictEqual(lockedRow({ locked_files: [] }), null);
+  const row = lockedRow({ locked_files: [".mcp.json", "CLAUDE.md"] });
+  assert.strictEqual(row.k, "locked");
+  assert.strictEqual(row.wrap, true);
+  assert.strictEqual(row.v, "Locked on your Mac while this session runs: .mcp.json, CLAUDE.md " +
+    "(macOS cannot otherwise stop the box changing them through another letter case)");
 });

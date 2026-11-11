@@ -107,6 +107,9 @@ type sessionMeta struct {
 	// restart or a profile edit. Records from before lack both and read as none.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// LockedFiles are the files the box layer locked on the host for this
+	// session's box at spawn (macOS, Info.LockedFiles).
+	LockedFiles []string `json:"locked_files,omitempty"`
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`

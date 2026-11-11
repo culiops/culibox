@@ -25,7 +25,8 @@ type fakeClient struct {
 	existing   []string // names ListByLabel reports
 	scratch    []string // names ListByLabel reports for the CA-scratch label
 	running    map[string]bool
-	exited     map[string]bool // present but not running
+	exited     map[string]bool   // present but not running
+	states     map[string]string // a listed state other than running/exited ("paused", "restarting"), by name
 	inspectErr error
 	stopFails  int               // the next N Stop calls fail and leave the container running
 	stopHook   func(name string) // runs after Stop removed the box, with no lock held
@@ -225,6 +226,9 @@ func (f *fakeClient) ListBoxes(_ context.Context, filter string) ([]BoxInfo, err
 		st := "exited"
 		if f.running[n] {
 			st = "running"
+		}
+		if s := f.states[n]; s != "" {
+			st = s
 		}
 		out = append(out, info(n, st))
 	}

@@ -298,6 +298,12 @@ type Options struct {
 	// CLAUDE.md @import). A workspace whose guards cannot be derived exactly is
 	// refused.
 	GuardInPlace bool
+	// LockGuards (macOS only, #96; needs GuardInPlace) also locks the guarded
+	// single files on the host while a box spawned in place runs, on a
+	// case-insensitive volume, where the read-only bind covers only one
+	// spelling of a file's name (see guardLocks). New refuses it on an OS
+	// without file flags. false: no lock, no record, no file in the data root.
+	LockGuards bool
 	// PidsLimit caps processes and threads per box; 0 = DefaultPidsLimit.
 	// TmpSize is the size of the box's /tmp tmpfs ("512m", number + k/m/g);
 	// "" = DefaultTmpSize. Memory is the box's RAM cap ("4g", number + k/m/g,
@@ -363,6 +369,8 @@ type Manager struct {
 	// guarded by mu.
 	memTotal          int64
 	memFallbackLogged bool
+	// locks are the macOS guard locks (Options.LockGuards); nil = off.
+	locks *guardLocks
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -397,6 +405,13 @@ func New(opts Options) (*Manager, error) {
 		verified:  map[string]bool{},
 		drift:     map[string]bool{},
 		exclusive: map[string]bool{},
+	}
+	if opts.LockGuards {
+		ops := platformFlagOps()
+		if ops == nil || !opts.GuardInPlace {
+			return nil, fmt.Errorf("box: in-place guard locks need the in-place guard and file flags (macOS)")
+		}
+		m.locks = newGuardLocks(opts.StateRoot, ops)
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -888,6 +903,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err := m.checkBrokerMount(name, extraRO); err != nil {
 		return nil, nil, "", err
 	}
+	var lk *lockReq // the macOS guard locks this spawn needs; nil = none
 	if key.Clone != nil {
 		if key.Clone.Hash == "" {
 			return nil, nil, "", errors.New("box: a clone-mode spawn needs the clone's hash")
@@ -905,15 +921,18 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		// reuseMounts (a live box without a guard is refused, an idle one
 		// recreated) and runArgs all see them. Clip: never write into the caller's
 		// backing array.
-		guard, err := inPlaceMountsAt(ws)
+		guard, files, err := inPlaceGuardsAt(ws)
 		if err != nil {
 			return nil, nil, "", err
 		}
 		extraRO = append(slices.Clip(extraRO), m.vmView(guard)...)
+		if m.locks != nil {
+			lk = &lockReq{ws: ws.Path, files: files, session: sessionID}
+		}
 	}
 	// Last, so the clone and guard mounts above count as covering too.
 	extraRO = yieldCovered(ws.Path, extraRO)
-	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust); err != nil {
+	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, lk); err != nil {
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -972,7 +991,11 @@ func withoutNames(env, names []string) []string {
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust bool) error {
+//
+// lk, when set, are the guard locks the box must hold before anything runs in
+// it: taken right before `docker run`, or, for a box already running, before
+// the session is counted. A lock that cannot be taken refuses the spawn.
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1028,6 +1051,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: removing stopped %s: %w", name, err)
 		}
+		m.boxGone(name)
 		st = StateMissing
 	}
 	if st == StateRunning {
@@ -1091,6 +1115,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 				m.rearmIfIdle(name)
 				return fmt.Errorf("%w: box %s failed its egress check and could not be removed: %v", ErrBoxUnavailable, name, stopErr)
 			}
+			m.boxGone(name)
 			st = StateMissing
 		} else {
 			m.markVerified(name)
@@ -1146,7 +1171,21 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			m.rearmIfIdle(name)
 			return err
 		}
+		// Locked before the box exists: nothing in it ever sees the files
+		// unlocked. Held by the box's name from here; released when its
+		// container is gone (boxGone), whatever happens below.
+		if err := m.holdLocks(name, lk); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, ws.Path, extraRO, fenced, exclusive, bundle, memory)); err != nil {
+			// A box that never came to be holds no lock. One docker may have left
+			// behind keeps it until it is removed.
+			if m.locks != nil {
+				if st, _, _, ierr := m.opts.Client.InspectMounts(ctx, name); ierr == nil && st == StateMissing {
+					m.boxGone(name)
+				}
+			}
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
@@ -1171,6 +1210,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	}
 	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
+	}
+	// A box this spawn did not create: it may hold the locks already (another
+	// session's), or predate them, or the files may have changed since. Held
+	// for this spawn before the agent starts; a failure leaves the box to the
+	// sessions already in it.
+	if !created {
+		if err := m.holdLocks(name, lk); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.
@@ -1410,6 +1459,7 @@ func (m *Manager) removeIdle(ctx context.Context, name string) error {
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return err
 	}
+	m.boxGone(name)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if t, ok := m.timers[name]; ok {
@@ -1434,8 +1484,12 @@ func (m *Manager) MarkExclusive(name string) {
 
 // idleTTL is how long an idle box is kept: zero for an exclusive one, which
 // is never reused. Caller holds mu.
+//
+// A box holding a guard lock is removed at once too: what its sessions started
+// can outlive them, and the lock is only lifted once the box is gone, so an
+// idle box would keep the user's files locked with no session to show for it.
 func (m *Manager) idleTTL(name string) time.Duration {
-	if m.exclusive[name] {
+	if m.exclusive[name] || (m.locks != nil && m.locks.holdsOurs(name)) {
 		return 0
 	}
 	return m.opts.IdleTTL
@@ -1486,6 +1540,8 @@ func (m *Manager) refuseUnverified(ctx context.Context, name string, verr error)
 	if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
 		verr = fmt.Errorf("%w (box %s could not be removed: %v; it is not reused and is checked again on the next spawn)",
 			verr, name, stopErr)
+	} else {
+		m.boxGone(name)
 	}
 	m.rearmIfIdle(name)
 	return verr
@@ -1613,7 +1669,9 @@ func (m *Manager) stopIfIdle(name string) {
 	delete(m.timers, name)
 	m.mu.Unlock()
 	m.unverify(name)
-	_ = m.opts.Client.Stop(context.Background(), name)
+	if m.opts.Client.Stop(context.Background(), name) == nil {
+		m.boxGone(name)
+	}
 	m.mu.Lock()
 	delete(m.exclusive, name)
 	m.mu.Unlock()
@@ -1649,18 +1707,26 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("box: listing boxes: %w", err)
 	}
 	var errs []error
+	left := map[string]bool{} // containers still there after the pass
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
 		m.mu.Unlock()
 		if live > 0 {
+			left[name] = true
 			continue
 		}
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			left[name] = true
 			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
+			continue
 		}
+		m.boxGone(name)
 	}
+	// The boot sweep of the guard locks: a lock whose boxes are all gone (a
+	// crash, a VM restart) is lifted. A box still listed keeps its lock.
+	m.sweepLocks(left)
 	_, scratchErrs := m.reapCAScratch(ctx)
 	return errors.Join(append(errs, scratchErrs...)...)
 }
@@ -1755,6 +1821,18 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 	m.mu.Lock()
 	m.drift = nextDrift
 	m.mu.Unlock()
+	// Guard locks of boxes docker no longer lists (a VM or docker restart, a
+	// removal that happened elsewhere) or that this pass removed are lifted.
+	// Every other listed box keeps its own, whatever its state: one whose
+	// removal failed (paused, restarting, exited) may still run or run again,
+	// as Reconcile keeps what is left.
+	left := map[string]bool{}
+	for _, b := range boxes {
+		if !slices.ContainsFunc(rep.Removed, func(a SweepAction) bool { return a.Box == b.Name }) {
+			left[b.Name] = true
+		}
+	}
+	m.sweepLocks(left)
 	removed, scratchErrs := m.reapCAScratch(ctx)
 	for _, name := range removed {
 		rep.Removed = append(rep.Removed, SweepAction{name, "CA extraction container left by a crash"})
@@ -1771,6 +1849,7 @@ func (m *Manager) remove(ctx context.Context, name string) error {
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)
 	}
+	m.boxGone(name)
 	m.mu.Lock()
 	if m.active[name] == 0 { // no release will come to clear it
 		delete(m.exclusive, name)

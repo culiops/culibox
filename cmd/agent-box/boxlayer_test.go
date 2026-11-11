@@ -39,6 +39,10 @@ type fakeColima struct {
 	onSSH    func() // called on each ssh (lets a test order it against docker calls)
 	calls    []string
 	failStop bool // stop fails and the VM keeps running
+	// fixedMounts is what the guest lists after a folder-mode remount
+	// (`ssh … sh -c …`); remounts counts those calls.
+	fixedMounts string
+	remounts    int
 }
 
 func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
@@ -66,6 +70,13 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
 			mount, f.socket), nil
 	case "ssh":
+		if strings.Contains(strings.Join(args, " "), "mount -o remount,") {
+			f.remounts++
+			if f.fixedMounts != "" {
+				f.mounts = f.fixedMounts
+			}
+			return "", nil
+		}
 		kind := "iptables"
 		if strings.Contains(strings.Join(args, " "), "/proc/self/mounts") {
 			kind = "mounts"
@@ -513,7 +524,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 {
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 || o.LockGuards {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -555,6 +566,10 @@ func TestDarwinLayerReadsContextIdentitiesInTheVM(t *testing.T) {
 	o := l.options(config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"})
 	if o.VMIDs == nil {
 		t.Fatal("darwin options must carry the VM identity hook")
+	}
+	// #96: the guard locks wherever the OS has the file flags (a real Mac).
+	if o.LockGuards != box.GuardLocksSupported() {
+		t.Fatalf("LockGuards = %v, want %v on this OS", o.LockGuards, box.GuardLocksSupported())
 	}
 	fc.mu.Lock()
 	fc.rules = "ctxid 44:393\nctxid 16777232:7\n"
@@ -859,6 +874,33 @@ func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {
 	}
 	if strings.Contains(d.log(), " ps ") || strings.Contains(d.log(), " rm ") {
 		t.Fatalf("a background pass reached docker with the VM stopped:\n%s", d.log())
+	}
+}
+
+// Review #96 (2): the boot pass lifts the guard locks only when colima says
+// the VM is stopped. A status that cannot be read is not "stopped": a box may
+// run, so its locks stay for the next Reconcile or Sweep.
+func TestBootSweepsGuardLocksOnlyOnAConfirmedStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		garbled   bool
+		wantSweep bool
+	}{
+		{"stopped", false, true},
+		{"status unreadable", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, fc, _ := darwinLayer(t, false)
+			fc.garbled = tc.garbled
+			swept := 0
+			l.sweepLocksNoBoxes = func() { swept++ }
+			if l.bootReconcile(context.Background()) {
+				t.Fatal("a VM that is not known to run is not reconciled")
+			}
+			if got := swept == 1; got != tc.wantSweep {
+				t.Fatalf("swept %d times, want sweep=%v", swept, tc.wantSweep)
+			}
+		})
 	}
 }
 

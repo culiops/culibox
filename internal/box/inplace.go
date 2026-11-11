@@ -60,6 +60,33 @@ func inPlaceMounts(ws string) ([]Mount, error) {
 // folder that was never checked. Both are host readings, so a Mac's inode
 // numbers do not matter here.
 func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
+	out, _, err := inPlaceGuardsAt(wsp)
+	return out, err
+}
+
+// guardFile is one guarded single file of an in-place workspace: Name directly
+// in it, Info the Lstat taken while the guards were derived (the identity the
+// macOS lock must find again, see guardLocks.hold).
+type guardFile struct {
+	Name string
+	Info fs.FileInfo
+}
+
+// inPlaceGuardsAt is inPlaceMountsAt that also returns the guarded single
+// files: the instruction and MCP files present, and .git when it is a gitfile.
+// Directories are not among them: their read-only bind holds under every
+// spelling of the name on a case-insensitive Mac volume, a file's does not (#96).
+func inPlaceGuardsAt(wsp workspace) ([]Mount, []guardFile, error) {
+	var files []guardFile
+	out, err := inPlaceDerive(wsp, &files)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, files, nil
+}
+
+// inPlaceDerive derives the guards, appending each guarded single file to files.
+func inPlaceDerive(wsp workspace, files *[]guardFile) ([]Mount, error) {
 	ws := wsp.Path
 	root, err := os.OpenRoot(ws)
 	if err != nil {
@@ -118,6 +145,9 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 				filepath.Join(ws, ".git"), lowerFirst(inPlaceTrustedHost))
 		}
 		guard(filepath.Join(ws, ".git"), gitFi)
+		if gitFi.Mode().IsRegular() {
+			*files = append(*files, guardFile{".git", gitFi})
+		}
 	}
 
 	// 4. .claude always: created here when absent, as the daemon user. Left to
@@ -146,6 +176,7 @@ func inPlaceMountsAt(wsp workspace) ([]Mount, error) {
 				filepath.Join(ws, name), lowerFirst(inPlaceTrustedHost))
 		}
 		guard(filepath.Join(ws, name), fi)
+		*files = append(*files, guardFile{name, fi})
 	}
 
 	// 6 + 7. The hooks directory git uses, when it lies in the workspace.

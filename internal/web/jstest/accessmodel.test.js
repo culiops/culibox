@@ -75,6 +75,12 @@ test("containment: network, account, runtime, started, model, effort, readable p
   assert.match(c.dropped.v, /settings/);
 });
 
+test("containment: locked files (macOS #96) come from the same row the steer rail builds", () => {
+  const c = model({ session: sess({ locked_files: ["CLAUDE.md", ".mcp.json"] }), aws: null }).containment;
+  assert.match(c.locked.v, /^Locked on your Mac while this session runs: CLAUDE\.md, \.mcp\.json \(macOS cannot otherwise stop the box changing them through another letter case\)$/);
+  assert.strictEqual(model({ session: sess({ locked_files: [] }), aws: null }).containment.locked, null);
+});
+
 test("containment: egress comes from the /aws reply when /egress was not asked, an empty account reads default", () => {
   const m = model({ session: sess(), aws: status({ egress: { mode: "open", allowed: 0, denied: 3 } }) });
   assert.deepStrictEqual(m.containment.network, { mode: "open", allowed: 0, denied: 3 });
@@ -87,6 +93,7 @@ test("containment: optional rows are absent, not empty strings, when the session
   assert.deepStrictEqual(c.readable, []);
   assert.strictEqual(c.clone, null);
   assert.strictEqual(c.dropped, null);
+  assert.strictEqual(c.locked, null);
   assert.strictEqual(c.model, "");
 });
 
