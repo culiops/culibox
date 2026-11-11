@@ -539,8 +539,16 @@ func TestDockerfileDeclaresPlaywright(t *testing.T) {
 	var args []string
 	for _, a := range pw["args"].([]any) {
 		s, _ := a.(string)
-		if strings.Contains(s, "/home/user") {
-			t.Errorf("playwright arg %q names the host home", s)
+		// No home directory of a real host may leak into the image config: any /home/<x>/ other
+		// than the box user's, and any macOS /Users/ path.
+		for _, rest := range strings.Split(s, "/home/")[1:] {
+			if user, _, _ := strings.Cut(rest, "/"); user != "agent" {
+				t.Errorf("playwright arg %q names a host home", s)
+				break
+			}
+		}
+		if strings.Contains(s, "/Users/") {
+			t.Errorf("playwright arg %q names a macOS host home", s)
 		}
 		args = append(args, s)
 	}
