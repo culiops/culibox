@@ -146,6 +146,15 @@ test("the product's own containment facts stay: readable paths, clone, left out 
   assert.ok(paths.querySelectorAll("div").every((d) => has(d, "mono", "t-sm")));
 });
 
+test("locked files show in the same grid as a textContent-only value (macOS #96)", async () => {
+  const { host } = await mount(claudeBox({ locked_files: ["CLAUDE.md", "<b>x</b>"] }), status());
+  const kvs = host.querySelector(".ac-kvs");
+  const i = kvs.children.findIndex((c) => c.textContent === "Locked files");
+  assert.ok(i >= 0);
+  assert.match(kvs.children[i + 1].textContent, /^Locked on your Mac while this session runs: CLAUDE\.md, <b>x<\/b> \(/);
+  assert.strictEqual(kvs.children[i + 1].querySelectorAll("b").length, 0);
+});
+
 test("a host session says so: a host chip and the line that it is not contained", async () => {
   const { host } = await mount({ id: "s1", agent: "bash", runtime: "host", cwd: "/home/u/w" }, null);
   const tier = host.querySelector(".ac-cell");
