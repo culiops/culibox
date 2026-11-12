@@ -89,9 +89,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # This job installs third-party npm code (eslint). It must never save a Go
+          # cache that the test and darwin jobs would restore.
+          cache: false
       - name: release scripts
-        run: bash scripts/macos-verify_test.sh
-      # scripts/lint.sh runs eslint through npx and needs python3 (both on the
+        run: |
+          bash scripts/macos-verify_test.sh
+          bash scripts/ci/secret-scan_test.sh
+      # scripts/lint.sh installs the exact eslint tree from scripts/lint/package-lock.json
+      # (npm ci, integrity-checked, no install scripts) and needs python3 (both on the
       # runner). It SKIPS itself when eslint cannot run, which locally keeps an
       # offline session working; in CI a skip would be a check that never ran, so a
       # skip is a failure here. bash gives the pipe pipefail, so a real lint
@@ -159,24 +165,9 @@ jobs:
           tar -C "$dir" -xzf "$dir/gitleaks.tar.gz" gitleaks
           echo "$dir" >> "$GITHUB_PATH"
           "$dir/gitleaks" version
-      # Scanning all history would fail forever on the history the founder chose to
-      # accept (and a baseline file would publish the matched values), so a push to
-      # main scans only the commits it adds. Everything else scans the checkout:
-      # a manual run, a call from a tag push (BEFORE is all zeros for a new tag), an
-      # all-zeros BEFORE, and a BEFORE that is not in the clone (after a force-push).
-      # BEFORE reaches the shell through env, never interpolated into the script.
+      # What is scanned, and why a force-push scans a range since the newest tag, is in
+      # scripts/ci/secret-scan.sh. BEFORE reaches it through env, never interpolated.
       - name: Scan for secrets
         env:
           BEFORE: ${{ github.event.before }}
-        run: |
-          set -eu
-          zeros=0000000000000000000000000000000000000000
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] \
-              && [ -n "$BEFORE" ] && [ "$BEFORE" != "$zeros" ] \
-              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            echo "scanning the commits $BEFORE..$GITHUB_SHA"
-            gitleaks git --config .gitleaks.toml --redact --log-opts="$BEFORE..$GITHUB_SHA" .
-          else
-            echo "scanning the checkout (no usable BEFORE commit)"
-            gitleaks dir --config .gitleaks.toml --redact .
-          fi
+        run: scripts/ci/secret-scan.sh
