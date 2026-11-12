@@ -78,6 +78,8 @@ jobs:
   tests:
     needs: verify
     uses: ./.github/workflows/ci.yml
+    with:
+      caller: release
 
   build:
     needs: [verify, tests]

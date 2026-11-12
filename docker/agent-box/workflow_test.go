@@ -705,10 +705,20 @@ func TestCIWorkflow(t *testing.T) {
 	if group == nil {
 		t.Fatal("ci.yml concurrency has no group")
 	}
-	for _, want := range []string{"github.event_name == 'push'", "ci-push-{0}", "github.run_id", "ci-{0}", "github.ref"} {
+	for _, want := range []string{"github.event_name == 'push'", "ci-push-{0}", "github.run_id"} {
 		if !strings.Contains(group[1], want) {
 			t.Errorf("concurrency group %q lacks %q (a push run needs its own run-id group)", group[1], want)
 		}
+	}
+	// Every other event: ci-<ref>-<caller>. A release dry run (workflow_dispatch of
+	// release.yml, which calls this file) reaches here as a workflow_dispatch on the
+	// same ref as a manual ci.yml dispatch, so without the caller in the key the
+	// two share a group and cancel each other. release.yml passes caller: release.
+	if !strings.Contains(group[1], "format('ci-{0}-{1}', github.ref, inputs.caller)") {
+		t.Errorf("concurrency group %q must end in format('ci-{0}-{1}', github.ref, inputs.caller) so a release dry run and a manual dispatch do not share a group", group[1])
+	}
+	if !regexp.MustCompile(`(?m)^  workflow_call:\s*\n    inputs:\s*\n      caller:\s*\n(      +.*\n)*?        type: string\s*\n(      +.*\n)*?        default: ["']{2}\s*$`).MatchString(wf) {
+		t.Error("workflow_call must declare `inputs: caller:` as a string defaulting to the empty string")
 	}
 	if strings.Contains(wf, "github.workflow") {
 		t.Error("ci.yml must not use github.workflow (it is the caller's name under workflow_call)")
@@ -873,9 +883,13 @@ func TestReleaseWorkflow(t *testing.T) {
 		t.Error("job verify must check out with fetch-depth: 0")
 	}
 
-	// tests reuses ci.yml, and the later jobs wait on it.
+	// tests reuses ci.yml, and the later jobs wait on it. It says who is calling, so
+	// ci.yml's concurrency group differs from a manual ci.yml run on the same ref.
 	if !regexp.MustCompile(`(?m)^    uses: \./\.github/workflows/ci\.yml\s*$`).MatchString(jobBlock(t, wf, "tests")) {
 		t.Error("job tests must be `uses: ./.github/workflows/ci.yml`")
+	}
+	if !regexp.MustCompile(`(?m)^    with:\s*\n      caller: release\s*$`).MatchString(jobBlock(t, wf, "tests")) {
+		t.Error("job tests must pass `with: caller: release` to ci.yml (its concurrency group keys on it)")
 	}
 	build, release := jobBlock(t, wf, "build"), jobBlock(t, wf, "release")
 	for name, job := range map[string]string{"tests": jobBlock(t, wf, "tests"), "build": build, "release": release} {
