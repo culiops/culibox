@@ -54,7 +54,10 @@ exists() { # PATH MESSAGE
   if [ -e "$1" ]; then pass "$2"; else fail "$2 ($1 is missing)"; fi
 }
 expect_rc() { # ACTUAL WANT MESSAGE
-  if [ "$1" -eq "$2" ]; then pass "$3"; else fail "$3 (exit $1, want $2)"; fi
+  if [ "$1" -eq "$2" ]; then pass "$3"; else
+    fail "$3 (exit $1, want $2)"
+    sed 's/^/        | /' "${case_dir:-/nonexistent}/stderr" 2>/dev/null | tail -8 >&2 || true
+  fi
 }
 last_verdict() { grep '"verdict":' "$1" | tail -1 | sed 's/.*: "\(.*\)".*/\1/'; }
 expect_verdict() { # FILE WANT MESSAGE
@@ -65,6 +68,19 @@ expect_verdict() { # FILE WANT MESSAGE
 
 # release-status first, with the real environment, so the Go build cache is warm.
 (cd "$repo" && "$real_go" build -o "$tmp/release-status" ./tools/release-status)
+
+# Hermetic PATH: the stubs plus symlinks to exactly the tools the script and this
+# test use, resolved NOW (before PATH is narrowed). The real gh and go are not on it,
+# so a stub that is missing or wrong cannot be papered over by the real tool.
+mkdir -p "$tmp/tools"
+for t in bash sh env git tar gzip sed grep cut tr head tail find mktemp cat cp mkdir rm sort date dirname basename sha256sum tee cmp wc ls touch chmod ln sleep true; do
+  p=$(type -P "$t") || {
+    echo "macos-verify_test: $t is not on PATH" >&2
+    exit 1
+  }
+  ln -s "$p" "$tmp/tools/$t"
+done
+hermetic_path=$tmp/bin:$tmp/tools
 
 # From here on nothing may read the real home: no ~/.config/gh, no global git config.
 export HOME=$tmp/home
@@ -120,6 +136,7 @@ case "$1 $2" in
   if [ -f "$STUB_FIX/macos-verification.json" ]; then cp "$STUB_FIX/macos-verification.json" "$dir/"; fi
   ;;
 "release upload")
+  [ -z "${STUB_UPLOAD_FAIL:-}" ] || { echo "stub gh: upload failed" >&2; exit 1; }
   clobber=no
   for a in "$@"; do [ "$a" = --clobber ] && clobber=yes; done
   [ "$clobber" = yes ] || { echo "stub gh: upload without --clobber" >&2; exit 1; }
@@ -127,12 +144,23 @@ case "$1 $2" in
   basename "$4" >"$STUB_OUT/uploaded.name"
   ;;
 "release view")
-  cat "$STUB_FIX/notes.md"
+  # The notes as the last successful edit left them, else the fixture's.
+  if [ -f "$STUB_OUT/current-notes.md" ]; then cat "$STUB_OUT/current-notes.md"; else cat "$STUB_FIX/notes.md"; fi
   echo
   ;;
 "release edit")
   [ "$4 $5" = "--notes-file -" ] || { echo "stub gh: edit wants --notes-file -, got: $*" >&2; exit 1; }
-  cat >"$STUB_OUT/notes.out"
+  n=$(cat "$STUB_OUT/edit.count" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" >"$STUB_OUT/edit.count"
+  cat >"$STUB_OUT/edit-$n.md"
+  # STUB_EDIT_FAIL_FROM=N fails edit N and every later one; STUB_EDIT_FAIL_ONLY=N only edit N.
+  if { [ -n "${STUB_EDIT_FAIL_FROM:-}" ] && [ "$n" -ge "$STUB_EDIT_FAIL_FROM" ]; } || [ "${STUB_EDIT_FAIL_ONLY:-}" = "$n" ]; then
+    echo "stub gh: release edit #$n failed" >&2
+    exit 1
+  fi
+  cp "$STUB_OUT/edit-$n.md" "$STUB_OUT/current-notes.md"
+  cp "$STUB_OUT/edit-$n.md" "$STUB_OUT/notes.out"
   ;;
 "repo view")
   [ "$3 $4 $5 $6" = "$GH_REPO --json visibility -q" ] || { echo "stub gh: repo view wants <repo> --json visibility -q .visibility, got: $*" >&2; exit 1; }
@@ -157,13 +185,17 @@ cat >"$tmp/bin/go" <<'EOF'
 case "$1" in
 version) echo "go version go1.99.0 darwin/arm64" ;;
 test)
-  echo "GOARCH=${GOARCH:-} REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
+  # EFFECTIVE_GOFLAGS is what the real go would use in this very environment: a GOFLAGS
+  # that is merely empty falls back to the GOENV file, so the variable alone proves nothing.
+  echo "GOENV=${GOENV:-} GOOS=${GOOS:-} GOARCH=${GOARCH:-} CGO=${CGO_ENABLED:-} GOFLAGS=${GOFLAGS:-} EFFECTIVE_GOFLAGS=$("$STUB_REAL_GO" env GOFLAGS 2>/dev/null) REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
   : >"$STUB_OUT/go-called.marker"
   if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_FAIL_AMD64:-}" ]; then
-    printf -- '--- FAIL: TestX (0.00s)\nFAIL\nFAIL\tfixture/a\t0.1s\nFAIL\n'
+    printf '=== RUN   TestX\n--- FAIL: TestX (0.00s)\nFAIL\nFAIL\tfixture/a\t0.1s\nFAIL\n'
     exit 1
   fi
-  printf 'ok  \tfixture/a\t0.01s\nok  \tfixture/b\t0.01s\n'
+  # go test -v: two packages, three top-level passes, one skip, one passing subtest.
+  printf '=== RUN   TestA1\n--- PASS: TestA1 (0.00s)\n=== RUN   TestA2\n=== RUN   TestA2/sub\n    --- PASS: TestA2/sub (0.00s)\n--- PASS: TestA2 (0.00s)\nPASS\nok  \tfixture/a\t0.01s\n'
+  printf '=== RUN   TestB1\n--- PASS: TestB1 (0.00s)\n=== RUN   TestB2\n--- SKIP: TestB2 (0.00s)\nPASS\nok  \tfixture/b\t0.01s\n'
   ;;
 *)
   echo "stub go: unexpected call: $*" >&2
@@ -199,9 +231,16 @@ EOF
 cat >"$tmp/bin/install-abduco" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$STUB_OUT/abduco-install.log"
+[ -z "${STUB_ABDUCO_FAIL:-}" ] || { echo "stub abduco: cc not found" >&2; exit 1; }
 mkdir -p "$1/bin"
 printf '#!/bin/sh\nexit 0\n' >"$1/bin/abduco"
 chmod 755 "$1/bin/abduco"
+EOF
+# A release-status that drops the verdict line from `record`, to show that a missing
+# verdict is reported and not a silent exit.
+cat >"$tmp/bin/rs-noverdict" <<EOF
+#!/bin/sh
+if [ "\$1" = record ]; then "$tmp/release-status" "\$@" | grep -v '"verdict":'; else exec "$tmp/release-status" "\$@"; fi
 EOF
 chmod 755 "$tmp"/bin/*
 
@@ -238,8 +277,9 @@ run_script() {
   local input=$1
   shift
   if printf '%s' "$input" | env \
-    PATH="$tmp/bin:$PATH" TMPDIR="$case_dir/tmpdir" \
-    STUB_FIX="$fix" STUB_OUT="$out" \
+    PATH="$hermetic_path" TMPDIR="$case_dir/tmpdir" \
+    MACOS_VERIFY_RETRY_DELAY=0 \
+    STUB_FIX="$fix" STUB_OUT="$out" STUB_REAL_GO="$real_go" \
     MACOS_VERIFY_TEST=1 \
     RELEASE_STATUS="$tmp/release-status" \
     MACOS_VERIFY_GIT_URL="file://$tmp/repo" \
@@ -267,7 +307,9 @@ exists "$out/uploaded.json" "(a) the record was uploaded"
 contains "$out/uploaded.name" macos-verification.json "(a) the asset is named macos-verification.json"
 expect_verdict "$out/uploaded.json" verified "(a) the last run's verdict is verified"
 contains "$out/notes.out" "✅ verified on macOS 15.1 (Apple M2), arm64 native, amd64 under Rosetta 2" "(a) the notes say verified on macOS"
-contains "$out/notes.out" "- linux/amd64: tested in CI (native), [run](https://ci.example/run/1)" "(a) the Linux lines survive the rewrite"
+contains "$out/notes.out" "- linux/amd64: source tests passed in CI on a native runner (cgo, -race); this tarball ran and reported its version, [run](https://ci.example/run/1)" "(a) the Linux lines survive the rewrite"
+contains "$out/notes.out" "- linux/arm64: source tests passed in CI on a native runner (cgo, -race); this tarball was not run, [run](https://ci.example/run/1)" "(a) the linux/arm64 line says its tarball was not run"
+contains "$out/notes.out" "go test with CGO_ENABLED=0" "(a) the tick says what was checked"
 contains "$out/notes.out" "## $tag" "(a) the rest of the notes survives"
 for f in "$arm_tgz" "$amd_tgz"; do
   contains "$out/uploaded.json" "\"$f\": \"$(grep " $f\$" "$fix/SHA256SUMS" | cut -d ' ' -f 1)\"" "(a) the record holds the verified sha256 of $f"
@@ -281,9 +323,16 @@ contains "$out/uploaded.json" '"chip": "Apple M2"' "(a) the chip is recorded"
 contains "$out/uploaded.json" '"go_version": "go1.99.0 darwin/arm64"' "(a) the Go version is recorded"
 contains "$out/uploaded.json" '"id": "M1"' "(a) row M1 is recorded"
 contains "$out/uploaded.json" '"note": "said \"hi\" \\ done"' "(a) a note with a quote and a backslash is escaped"
-contains "$out/go.log" "GOARCH=arm64 REQUIRE=1" "(a) the native run sets AGENT_BOX_REQUIRE_ABDUCO=1"
-contains "$out/go.log" "GOARCH=amd64 REQUIRE=1" "(a) the Rosetta run sets GOARCH=amd64 and AGENT_BOX_REQUIRE_ABDUCO=1"
-contains "$out/go.log" "ARGS=test -count=1 ./..." "(a) go test runs with -count=1 ./..."
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the native run ignores the go env file, pins GOOS, GOARCH, CGO_ENABLED=0 (the shipped build) and GOFLAGS, and sets AGENT_BOX_REQUIRE_ABDUCO=1"
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=amd64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the Rosetta run pins GOARCH=amd64 and the rest"
+contains "$out/go.log" "ARGS=test -count=1 -v ./..." "(a) go test runs with -count=1 -v ./..."
+contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s)"' "(a) the summary counts tests, not packages"
+contains "$out/uploaded.json" '"test_env": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"' "(a) the record says the tests ran with cgo off"
+for a in arm64 amd64; do
+  contains "$out/uploaded.json" "\"binary_sha256\": \"$(sha256sum "$case_dir/stage-$a/agent-box" | cut -d ' ' -f 1)\"" "(a) the record holds the sha256 of the $a binary that was run"
+done
+contains "$case_dir/stdout" "Run the manual rows with these exact binaries" "(a) the prompt names the binaries the rows must use"
+contains "$case_dir/stdout" "arm64: $case_dir/tmpdir/" "(a) the arm64 binary path is printed"
 contains "$out/go.log" "PWD=$case_dir/tmpdir/" "(a) go test runs inside the work dir's clone"
 absent "$out/go.log" "ABDUCO=none" "(a) the installed abduco is on PATH for go test"
 contains "$out/arch.log" "-x86_64 $case_dir/tmpdir/" "(a) the amd64 binary runs under arch -x86_64"
@@ -430,6 +479,118 @@ run_script $'M1=pass\n\n' STUB_VISIBILITY=PRIVATE
 expect_rc "$rc" 0 "(m3) a private repo (no attestations exist) still verifies"
 absent "$out/gh.log" "attestation verify" "(m3) no attestation check is attempted"
 contains "$case_dir/stderr" "attestation check skipped" "(m3) the skip is announced"
+# ---- (n) hermetic: the test PATH reaches no real gh or go ----------------------------
+echo "== (n) hermetic PATH"
+new_case n
+run_script '' PATH="$tmp/tools"
+if [ "$rc" -ne 0 ]; then pass "(n) without the stubs the script cannot find gh, whatever the box has"; else fail "(n) it ran without a gh stub: the PATH reaches a real gh"; fi
+contains "$case_dir/stderr" "gh is not on PATH" "(n) the error names gh"
+for tool in gh go; do
+  got=$(PATH="$hermetic_path" command -v "$tool")
+  if [ "$got" = "$tmp/bin/$tool" ]; then pass "(n) $tool on the test PATH is the stub"; else fail "(n) $tool resolves to $got"; fi
+done
+
+# ---- (o) the Go environment is pinned ---------------------------------------------
+echo "== (o) pinned go environment"
+new_case o
+# A GOFLAGS set with `go env -w` lives in the GOENV file and survives an empty GOFLAGS.
+printf 'GOFLAGS=-tags=sneaky\n' >"$case_dir/goenv"
+run_script $'M1=pass\n\n' GOOS=linux CGO_ENABLED=1 GOFLAGS=-race GOARCH=s390x GOENV="$case_dir/goenv"
+expect_rc "$rc" 0 "(o) a hostile Go environment still verifies"
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly " "(o) GOENV, GOOS, GOARCH, CGO_ENABLED and GOFLAGS are set by the script, not inherited"
+contains "$out/go.log" "EFFECTIVE_GOFLAGS=-mod=readonly" "(o) the flags go really uses are the pinned ones, not the go env file's"
+absent "$out/go.log" "sneaky" "(o) a GOFLAGS from the caller's go env file never reaches go test"
+absent "$out/go.log" "GOOS=linux" "(o) the caller's GOOS never reaches go test"
+absent "$out/go.log" "s390x" "(o) the caller's GOARCH never reaches go test"
+
+# ---- (p) an abduco install failure is recorded, not an abort ----------------------
+echo "== (p) abduco install fails"
+new_case p
+run_script $'M1=pass\n\n' STUB_ABDUCO_FAIL=1
+expect_rc "$rc" 3 "(p) a failed abduco install is a recorded run (exit 3)"
+expect_verdict "$out/uploaded.json" failed "(p) the verdict is failed"
+contains "$out/uploaded.json" "abduco" "(p) the record names the abduco failure"
+contains "$out/notes.out" "❌ failed: arm64, amd64 tests failed" "(p) the notes say the tests failed"
+missing "$out/go-called.marker" "(p) go test was not run without abduco"
+contains "$out/uploaded.json" "agent-box $tag ($sha)" "(p) the version stamps are still checked"
+exists "$case_dir/tmpdir"/macos-verify.*/abduco-install.log "(p) the install log is kept"
+
+# ---- (q) a record without a verdict line is reported -------------------------------
+echo "== (q) missing verdict"
+new_case q
+run_script $'M1=pass\n\n' RELEASE_STATUS="$tmp/bin/rs-noverdict"
+if [ "$rc" -ne 0 ]; then pass "(q) a record without a verdict exits non-zero"; else fail "(q) a record without a verdict exited 0"; fi
+contains "$case_dir/stderr" "no verdict" "(q) the error says there is no verdict (not a silent exit)"
+missing "$out/uploaded.json" "(q) nothing was uploaded"
+
+# ---- (r) a failed upload says what may have changed --------------------------------
+echo "== (r) upload fails"
+new_case r
+run_script $'M1=pass\n\n' STUB_UPLOAD_FAIL=1
+if [ "$rc" -ne 0 ]; then pass "(r) a failed upload exits non-zero"; else fail "(r) a failed upload exited 0"; fi
+absent "$case_dir/stderr" "nothing was changed" "(r) it does not claim nothing changed (--clobber may already have replaced the asset)"
+contains "$case_dir/stderr" "may have been replaced or removed" "(r) it says the asset may have changed"
+missing "$out/notes.out" "(r) the notes were not edited"
+
+# ---- (s) an older tick is never left standing after a failed notes edit ------------
+# A release that is already marked verified, verified again, now with a failing
+# amd64 run. The old tick is cleared BEFORE the new record is uploaded.
+mk_verified_case() { # NAME
+  new_case "$1"
+  cp "$tmp/a/out/uploaded.json" "$fix/macos-verification.json"
+  "$tmp/release-status" rewrite --notes "$fix/notes.md" --record "$fix/macos-verification.json" >"$fix/notes.verified"
+  mv "$fix/notes.verified" "$fix/notes.md"
+  grep -qF "✅ verified on macOS" "$fix/notes.md" || fail "($1) fixture notes lack the older tick"
+}
+echo "== (s1) final notes edit fails after an older tick"
+mk_verified_case s1
+run_script $'M1=pass\n\n' STUB_GO_FAIL_AMD64=1 STUB_EDIT_FAIL_FROM=2
+expect_rc "$rc" 1 "(s1) a failed notes edit exits 1"
+expect_verdict "$out/uploaded.json" failed "(s1) the new record (failed) was uploaded"
+absent "$out/current-notes.md" "✅" "(s1) the notes no longer show the older tick"
+contains "$out/current-notes.md" "NOT yet verified on macOS" "(s1) the notes say not verified"
+contains "$case_dir/stderr" "the notes were NOT updated" "(s1) the failure is loud"
+contains "$case_dir/stderr" "run this again" "(s1) it says what to do"
+n=$(cat "$out/edit.count")
+if [ "$n" -ge 3 ]; then pass "(s1) the final edit was retried ($n edits)"; else fail "(s1) the final edit was not retried ($n edits)"; fi
+
+echo "== (s2) the first (clearing) edit fails: nothing is uploaded"
+mk_verified_case s2
+run_script $'M1=pass\n\n' STUB_EDIT_FAIL_FROM=1
+expect_rc "$rc" 1 "(s2) a failed clearing edit exits 1"
+missing "$out/uploaded.json" "(s2) nothing was uploaded"
+contains "$case_dir/stderr" "nothing was uploaded" "(s2) the message is accurate"
+
+echo "== (s3) one final edit fails, the retry works"
+mk_verified_case s3
+run_script $'M1=pass\n\n' STUB_EDIT_FAIL_ONLY=2
+expect_rc "$rc" 0 "(s3) a retried notes edit succeeds"
+contains "$out/current-notes.md" "✅ verified on macOS 15.1" "(s3) the final notes show the new tick"
+contains "$case_dir/stderr" "retrying" "(s3) the retry is announced"
+
+echo "== (s4) a first verification makes no clearing edit"
+new_case s4
+run_script $'M1=pass\n\n'
+expect_rc "$rc" 0 "(s4) a first verification exits 0"
+n=$(cat "$out/edit.count")
+if [ "$n" = 1 ]; then pass "(s4) one notes edit when there was no tick to clear"; else fail "(s4) $n notes edits, want 1"; fi
+
+# A tick whose spacing differs (the notes were edited by hand) is still a tick: release-status
+# reads it that way, so the clearing step must too.
+for variant in "two spaces" "no space" "tab" "no-break space"; do
+  echo "== (s5) older tick with spacing variant: $variant"
+  mk_verified_case "s5-${variant// /_}"
+  case "$variant" in
+    "two spaces") sed -i.bak -E 's@^- darwin/(arm64|amd64): @- darwin/\1:   @' "$fix/notes.md" ;;
+    "no space") sed -i.bak -E 's@^- darwin/(arm64|amd64): @- darwin/\1:@' "$fix/notes.md" ;;
+    "tab") sed -i.bak -E "s@^- darwin/(arm64|amd64): @- darwin/\1:$(printf '\t')@" "$fix/notes.md" ;;
+    "no-break space") sed -i.bak -E "s@^- darwin/(arm64|amd64): @- darwin/\1:$(printf '\302\240')@" "$fix/notes.md" ;;
+  esac
+  rm -f "$fix/notes.md.bak"
+  run_script $'M1=pass\n\n' STUB_GO_FAIL_AMD64=1 STUB_EDIT_FAIL_FROM=2
+  expect_rc "$rc" 1 "(s5 $variant) a failed final edit exits 1"
+  if [ -f "$out/current-notes.md" ] && ! grep -qF "✅" "$out/current-notes.md"; then pass "(s5 $variant) the older tick was cleared before the upload"; else fail "(s5 $variant) the notes still show the older tick"; fi
+done
 
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"

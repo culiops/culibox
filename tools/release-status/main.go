@@ -4,7 +4,7 @@
 //	notes      --tag T --ci-run URL --releases releases.json
 //	check-sums --sums SHA256SUMS <file>...
 //	record     --tag T --commit C --in existing.json|"" --run run.json
-//	rewrite    --notes notes.md --record record.json
+//	rewrite    --notes notes.md (--record record.json | --not-verified)
 package main
 
 import (
@@ -139,14 +139,23 @@ func run(args []string, out io.Writer) error {
 	case "rewrite":
 		notes := fs.String("notes", "", "release notes file holding the status block")
 		recPath := fs.String("record", "", "macos-verification.json")
+		reset := fs.Bool("not-verified", false, "put both darwin lines back to NOT yet verified (instead of --record)")
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		if *notes == "" || *recPath == "" {
-			return errors.New("rewrite needs --notes and --record")
+		if *notes == "" || (*recPath == "") == !*reset {
+			return errors.New("rewrite needs --notes and exactly one of --record or --not-verified")
 		}
 		body, err := os.ReadFile(*notes)
 		if err != nil {
+			return err
+		}
+		if *reset {
+			res, err := RewriteDarwin(string(body), notYetVerified)
+			if err != nil {
+				return err
+			}
+			_, err = io.WriteString(out, res)
 			return err
 		}
 		var rec Record
