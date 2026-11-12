@@ -173,6 +173,11 @@ jobs:
           tar -C "$dir" -xzf "$dir/gitleaks.tar.gz" gitleaks
           echo "$dir" >> "$GITHUB_PATH"
           "$dir/gitleaks" version
+      # The custom private-identifier rules in .gitleaks.toml, proven on made-up values
+      # with the scanner installed above. The env switch turns a missing scanner into a
+      # failure instead of a skip.
+      - name: Test the private-identifier rules
+        run: GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh
       # What is scanned, and why a force-push scans a range since the newest tag, is in
       # scripts/ci/secret-scan.sh. BEFORE reaches it through env, never interpolated.
       - name: Scan for secrets

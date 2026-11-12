@@ -5,17 +5,19 @@
 #   gitleaks git --config .gitleaks.toml --redact .
 #
 # How the allowlists are scoped (measured with gitleaks v8.30.1):
-#   - Every entry except the last is REGEX-ONLY and repo-wide. Each regex is anchored and
+#   - Every [[allowlists]] entry except the path-only one is REGEX-ONLY and repo-wide. Each regex is anchored and
 #     matches the exact fake or public value (the secret the rule captured), so it hides that one string wherever it appears and
 #     nothing else. A different secret in the same file,
 #     or in any file, is still reported.
 #   - There are no `paths` on those entries on purpose: when an entry lists both `paths` and
 #     `regexes`, gitleaks treats them as OR by default, and in `dir` mode a matching path
 #     exempts the whole file even with condition = "AND".
-#   - The last entry is PATH-ONLY, and it is the only one that exempts whole files: the
+#   - The [[allowlists]] entry under "Vendored third-party code" is PATH-ONLY, and it is the only one that exempts whole files: the
 #     vendored, minified third-party xterm.js files, which are not ours to edit.
 #   - The fake values are public test fixtures that already sit in the tree. A real value
 #     never belongs in this file.
+#   - The [[rules]] at the end (private identifiers) match a SHAPE and carry their own
+#     allowlists of documented fake or placeholder values: see the comment above them.
 
 [extend]
 useDefault = true
@@ -84,4 +86,56 @@ description = "Vendored minified xterm.js and its WebGL addon (third-party code,
 paths = [
   '''^internal/web/static/xterm/xterm\.js$''',
   '''^internal/web/static/xterm/addon-webgl\.js$''',
+]
+
+# Private identifiers (generic backstop rules).
+#
+# Real internal identifiers (a tailnet address, a host home path, a cloud account id) must
+# never be written into this repo, and neither may a pattern that spells one out. These
+# rules therefore match the SHAPE of such a value and allow only the documented fake or
+# placeholder values below. A new fixture goes into the allowed set (or an existing fixture
+# value is reused), never next to a real value. scripts/ci/gitleaks-rules_test.sh proves
+# each rule fires and stays quiet, on made-up values.
+#
+# They sit behind the host's private pre-push gate (which has the real denylist and can
+# be skipped with --no-verify): CI cannot know a real value, so it flags every value of
+# the shape that is not a documented fixture.
+
+[[rules]]
+id = "culibox-cgnat-address"
+description = "An address in 100.64.0.0/10 (carrier-grade NAT, which includes tailnet addresses) outside the fixture range 100.64.0.0/24"
+regex = '''(?m)(?:^|[^0-9.])(100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})(?:[^0-9]|$)'''
+secretGroup = 1
+keywords = ["100."]
+
+[[rules.allowlists]]
+description = "The one fixture range, 100.64.0.0/24 (also the network address of 100.64.0.0/10), and the top-of-range edge value that the CGNAT range tests need"
+regexes = [
+  '''^100\.64\.0\.[0-9]{1,3}$''',
+  '''^100\.127\.255\.254$''',
+]
+
+[[rules]]
+id = "culibox-home-path"
+description = "An absolute home directory (/home/<name>/ or /Users/<name>/) of anyone but a documented placeholder user"
+regex = '''(?m)(?:^|[^A-Za-z0-9_.-])/(?:home|Users)/([A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?)(?:[/"'`\s.,;:)\]]|$)'''
+secretGroup = 1
+keywords = ["/home/", "/users/"]
+
+[[rules.allowlists]]
+description = "Placeholder users in test fixtures and docs, plus agent, the user inside the box image. None is a real person or machine"
+regexes = ['''^(u|u2|you|me|me2|Me|a|ab|x|user|user2|username|op|nobody|svc|agent|alice|someone|hostuser|operator|macuser)$''']
+
+[[rules]]
+id = "culibox-aws-account-id"
+description = "A 12-digit AWS account id in an ARN or after the word account, other than the documented fake ids"
+regex = '''(?mi)(?:arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:|account(?:[_ -]?id)?[^0-9A-Za-z]{1,4})([0-9]{12})(?:[^0-9]|$)'''
+secretGroup = 1
+keywords = ["arn:aws", "account"]
+
+[[rules.allowlists]]
+description = "Documented fake account ids: 123456789012 and 210987654321 (the AWS documentation style), a repeated digit, and two grouped fakes"
+regexes = [
+  '''^(0{12}|1{12}|2{12}|3{12}|4{12}|5{12}|6{12}|7{12}|8{12}|9{12})$''',
+  '''^(123456789012|210987654321|111122223333|444455556666)$''',
 ]

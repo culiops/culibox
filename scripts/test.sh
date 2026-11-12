@@ -21,6 +21,9 @@ go test ./...
 bash scripts/macos-verify_test.sh
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh
+# The private-identifier gitleaks rules. Skips with a notice when gitleaks is not installed
+# (CI installs it and makes a skip a failure).
+bash scripts/ci/gitleaks-rules_test.sh
 # macOS runs only on a laptop this box cannot reach, so the darwin build must
 # fail here, not there.
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...

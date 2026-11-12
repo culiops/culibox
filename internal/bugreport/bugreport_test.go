@@ -120,7 +120,7 @@ func TestLiveLogsScrubbedAndRedacted(t *testing.T) {
 func TestBindClass(t *testing.T) {
 	for addr, want := range map[string]string{
 		"127.0.0.1:8899": "loopback", "localhost:1": "loopback", "[::1]:1": "loopback",
-		"100.76.1.2:9000": "tailnet",
+		"100.64.0.2:9000": "tailnet",
 		"192.168.1.5:1":   "private", "10.0.0.1:1": "private", "172.16.0.1:1": "private",
 		"0.0.0.0:9000": "all interfaces", ":9000": "all interfaces", "[::]:1": "all interfaces",
 		"203.0.113.9:1": "public", "garbage": "public", "": "public",
@@ -326,7 +326,7 @@ func TestIPLiteralsRedactedInAwkwardContexts(t *testing.T) {
 		// address is redacted (tcpdump ip.port, and 5-part versions too).
 		{"dial 10.0.0.5.443: refused", "dial <ip>.443: refused"},
 		{"1.2.3.4.5", "<ip>"},
-		{"a 100.64.1.2.3.4 b", "a <ip> b"},
+		{"a 100.64.0.2.3.4 b", "a <ip> b"},
 		{"127.0.0.1.8899 stays", "127.0.0.1.8899 stays"},
 		{"1.300.1.1.1 no window", "1.300.1.1.1 no window"},
 		{"v300.1.1.1", "v300.1.1.1"},
