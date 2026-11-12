@@ -3219,6 +3219,13 @@ function renderSSOBody(s, opts) {
 // must not open a pane.
 let editing = false;
 
+// renameActive: is an inline rename open? A terminal asks before it takes the
+// keyboard (TerminalTab.grabFocus): a double-click on a name opens the pane on
+// its first click, and the pane focuses itself later (onShow, or its socket
+// opening), after the second click opened the input. Taking focus then would
+// blur-commit the rename and send what the operator types to the session's PTY.
+function renameActive() { return editing; }
+
 // startRename swaps the name span for an input; Enter/blur commit, Esc cancels.
 // A single finish(commit) guarded by `finished` prevents Enter+blur double-commit
 // and Esc+blur commit-on-cancel.

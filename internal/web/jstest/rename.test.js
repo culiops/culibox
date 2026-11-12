@@ -50,14 +50,14 @@ function renameIn({ name = "old", label = name, nested = false, patch = async ()
     toastFailText: require("../static/toaststack.js").toastFailText,
     refreshSessions: () => { calls.refresh++; },
   });
-  new vm.Script("let editing = false;\n" + fn(APP, "startRename") + "\nglobalThis.startRename = startRename;").runInContext(ctx);
+  new vm.Script("let editing = false;\n" + fn(APP, "renameActive") + "\n" + fn(APP, "startRename") + "\nglobalThis.startRename = startRename;").runInContext(ctx);
   ctx.startRename({ isConnected: true, classList: { contains: (c) => nested && c === "nested" } }, span, { id: "s1", name });
   const input = parent.child;
   assert.notStrictEqual(input, span, "the input replaced the name");
   const key = (k) => input.onkeydown({ key: k, preventDefault() {} });
   const settle = () => new Promise((r) => setImmediate(r));
   const editing = () => new vm.Script("editing").runInContext(ctx);
-  return { calls, parent, span, input, key, settle, editing };
+  return { calls, parent, span, input, key, settle, editing, ctx };
 }
 
 test("rename then Escape puts the old name back and saves nothing", async () => {
@@ -146,4 +146,16 @@ test("blur commits like Enter, once", async () => {
   await t.settle();
   assert.strictEqual(t.span.textContent, "by-blur");
   assert.strictEqual(t.calls.patch.length, 1);
+});
+
+// #178: terminal-tab.js asks renameActive() before it takes the keyboard, so a
+// pane opening under a double-click cannot pull focus off the rename input.
+test("renameActive is true while the rename input is open and false once it ends", async () => {
+  const t = renameIn();
+  const active = () => new vm.Script("renameActive()").runInContext(t.ctx);
+  assert.strictEqual(active(), true);
+  t.input.value = "old";
+  t.key("Escape");
+  await t.settle();
+  assert.strictEqual(active(), false);
 });
