@@ -673,6 +673,9 @@ func TestCIWorkflow(t *testing.T) {
 		"node --test",
 		"scripts/lint.sh",
 		"bash scripts/macos-verify_test.sh",
+		// The custom private-identifier rules are tested with the pinned scanner, and
+		// the run fails (not skips) when the scanner is missing.
+		"GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh",
 		"gitleaks git --config .gitleaks.toml",
 		"gitleaks dir --config .gitleaks.toml",
 		"sha256sum -c",

@@ -616,7 +616,7 @@ func TestNonAllowlistedHostDenied(t *testing.T) {
 
 func TestRebindingToPrivateIsRefused(t *testing.T) {
 	boxNet := netip.MustParsePrefix("8.8.8.0/24") // public-looking, so only the subnet rule refuses it
-	for _, a := range []string{"127.0.0.1", "100.64.20.30", "10.0.0.5", "169.254.169.254", "::1", "fc00::1",
+	for _, a := range []string{"127.0.0.1", "100.64.0.30", "10.0.0.5", "169.254.169.254", "::1", "fc00::1",
 		"::ffff:127.0.0.1", "8.8.8.8"} {
 		t.Run(a, func(t *testing.T) {
 			h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{netip.MustParseAddr(a)} })
@@ -1304,7 +1304,7 @@ func TestOpenModeStillRefuses(t *testing.T) {
 		{"ipv6 literal", "[::1]:443", "", 403, OutcomeDenied},
 		{"port 80", "example.com:80", "", 405, OutcomeBadMethod},
 		{"rfc1918", "example.com:443", "10.0.0.1", 403, OutcomePrivateAddr},
-		{"cgnat", "example.com:443", "100.100.1.1", 403, OutcomePrivateAddr},
+		{"cgnat", "example.com:443", "100.64.0.7", 403, OutcomePrivateAddr},
 		{"loopback", "example.com:443", "127.0.0.1", 403, OutcomePrivateAddr},
 		{"link-local", "example.com:443", "169.254.1.1", 403, OutcomePrivateAddr},
 		{"v6 loopback", "example.com:443", "::1", 403, OutcomePrivateAddr},
@@ -1651,7 +1651,7 @@ func TestProxyEgressOpenBound(t *testing.T) {
 	}
 
 	// Private, tailnet, loopback and host addresses are still refused.
-	for _, ip := range []string{"10.0.0.5", "100.100.1.1", "127.0.0.1", hostAddr.String()} {
+	for _, ip := range []string{"10.0.0.5", "100.64.0.7", "127.0.0.1", hostAddr.String()} {
 		h3 := newHarness(t, func(string) []netip.Addr { return []netip.Addr{netip.MustParseAddr(ip)} })
 		h3.p.SetHostAddrs([]netip.Addr{hostAddr})
 		h3.setView("s1", ghOpenView())

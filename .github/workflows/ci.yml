@@ -165,6 +165,11 @@ jobs:
       # a manual run, a call from a tag push (BEFORE is all zeros for a new tag), an
       # all-zeros BEFORE, and a BEFORE that is not in the clone (after a force-push).
       # BEFORE reaches the shell through env, never interpolated into the script.
+      # The custom private-identifier rules in .gitleaks.toml, proven on made-up values
+      # with the scanner installed above. The env switch turns a missing scanner into a
+      # failure instead of a skip.
+      - name: Test the private-identifier rules
+        run: GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh
       - name: Scan for secrets
         env:
           BEFORE: ${{ github.event.before }}
