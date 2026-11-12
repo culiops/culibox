@@ -20,6 +20,12 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      # Who is calling: release.yml passes "release". It only keeps the concurrency
+      # group of a release dry run apart from a manual run of this file.
+      caller:
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -31,9 +37,11 @@ permissions:
 # cancelled push run would leave its BEFORE..sha range without a secret scan, and
 # GitHub also cancels a PENDING run when a newer one queues in the same group,
 # whatever cancel-in-progress says. Other events (manual runs, which go by ref)
-# still replace their own older run.
+# still replace their own older run. The caller input is part of that key: a release
+# dry run calls this file as a workflow_dispatch on the same ref as a manual run of
+# it, and without the caller they would cancel each other.
 concurrency:
-  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.run_id) || format('ci-{0}', github.ref) }}
+  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.run_id) || format('ci-{0}-{1}', github.ref, inputs.caller) }}
   cancel-in-progress: true
 
 jobs:
