@@ -1835,3 +1835,50 @@ func TestZshrcPromptStaysFastOnHugeValues(t *testing.T) {
 		t.Error("a long value was not cut to 128 characters")
 	}
 }
+
+// A box commits as the agent and a commit must carry no AI attribution. The
+// config bundle carries the setting only to sessions that get the bundle (the
+// default account or an inheriting one, and only when it builds), so the image
+// pins it as Claude Code's managed policy: read by every claude in every box,
+// whatever the account or --setting-sources, and above any user, project or
+// --settings value. The file is root-owned in a read-only image.
+func TestDockerfileTurnsClaudeAttributionOffForEveryBox(t *testing.T) {
+	const path = "/etc/claude-code/managed-settings.json"
+	var ins string
+	for _, i := range dockerfileInstructions() {
+		if strings.HasPrefix(i, "RUN ") && strings.Contains(i, "> "+path) {
+			ins = i
+		}
+	}
+	if ins == "" {
+		t.Fatalf("no RUN instruction writes %s", path)
+	}
+	m := regexp.MustCompile(`'(\{[^']*\})'`).FindStringSubmatch(ins)
+	if m == nil {
+		t.Fatalf("no single-quoted JSON document in %q", ins)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(m[1]), &got); err != nil {
+		t.Fatalf("managed settings are not valid JSON: %v", err)
+	}
+	if v, ok := got["includeCoAuthoredBy"].(bool); !ok || v {
+		t.Errorf("includeCoAuthoredBy = %v, want false", got["includeCoAuthoredBy"])
+	}
+	attr, _ := got["attribution"].(map[string]any)
+	if c, ok := attr["commit"].(string); !ok || c != "" {
+		t.Errorf("attribution.commit = %v, want an empty string", attr["commit"])
+	}
+	if p, ok := attr["pr"].(string); !ok || p != "" {
+		t.Errorf("attribution.pr = %v, want an empty string", attr["pr"])
+	}
+	if s, ok := attr["sessionUrl"].(bool); !ok || s {
+		t.Errorf("attribution.sessionUrl = %v, want false (the Claude-Session trailer)", attr["sessionUrl"])
+	}
+	if !strings.Contains(ins, "jq -e") {
+		t.Error("the build must validate the file it wrote (jq -e), like mcp.json")
+	}
+	df := string(dockerfile)
+	if w, u := strings.Index(df, path), strings.Index(df, "\nUSER agent"); w < 0 || u < 0 || w > u {
+		t.Error("the managed settings must be written as root, before USER agent")
+	}
+}

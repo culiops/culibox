@@ -41,9 +41,10 @@ const (
 	// refuses MCP servers carrying credentials in headers/args/url, v4 ships
 	// agent-box's statusLine script and replaces the host statusLine, so every
 	// bundle built before it rebuilds once. v5 puts the files CLAUDE.md imports
-	// beside the bundle (<dir>.imports) and lists them in the lock. Bundle hashes
-	// are not part of the box key, so no box is recreated by that.
-	layoutMarker = "layout\x00v5\n"
+	// beside the bundle (<dir>.imports) and lists them in the lock. v6 writes the
+	// attribution-off settings, so a cached v5 bundle must not outlive the upgrade.
+	// Bundle hashes are not part of the box key, so no box is recreated by that.
+	layoutMarker = "layout\x00v6\n"
 	// maxLinkDepth bounds symlink following. A cycle must terminate rather than
 	// hang the daemon before a spawn.
 	maxLinkDepth = 8
@@ -509,6 +510,7 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, 
 	if err := m.applyStatusLine(tmp, settings, &lock); err != nil {
 		return nil, err
 	}
+	applyAttributionOff(settings, &lock)
 	if sum, err := writeJSON(filepath.Join(tmp, "settings.json"), settings); err == nil {
 		lock.Files["settings.json"] = sum
 	}

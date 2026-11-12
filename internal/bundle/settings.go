@@ -27,6 +27,7 @@ var settingsKeepList = []string{
 	"statusLine",
 	"outputStyle",
 	"includeCoAuthoredBy",
+	"attribution",
 	"cleanupPeriodDays",
 	"enabledPlugins",
 }
@@ -62,4 +63,54 @@ func filterSettings(path string) (map[string]any, []Drop) {
 			Reason: "not on the bundle keep-list; it could carry host paths, literal secrets or permission overrides into the box"})
 	}
 	return out, drops
+}
+
+// applyAttributionOff makes every box commit and open PRs without Claude Code's
+// AI attribution (the Co-Authored-By trailer and the "Generated with" text). It
+// edits settings, the keep-list-filtered map, in place and always wins over the
+// host's value: a box has no commit-msg hook (clone boxes run with
+// core.hooksPath=/dev/null on purpose) and public repos allow no AI attribution,
+// so a host that wants it on does not get it in a box.
+//
+// Both spellings, because Claude Code 2.1.311 (the box image's pin) honours
+// both: attribution.commit/pr set to "" hide the commit and PR text, and the
+// deprecated includeCoAuthoredBy:false is what older settings files and versions
+// read. attribution.sessionUrl:false also drops the Claude-Session trailer that
+// a Remote Control session adds (2.1.311's schema: "Set to false to omit the
+// Claude-Session trailer and PR-body link"). The image also pins the same keys
+// as managed policy (docker/agent-box/Dockerfile) for sessions with no bundle.
+//
+// Both keys are on the keep-list so this can say what it replaced: a host value
+// that already means "off" is not reported, anything else is a drop row.
+func applyAttributionOff(settings map[string]any, lock *Lock) {
+	off := map[string]any{"commit": "", "pr": "", "sessionUrl": false}
+	if v, had := settings["includeCoAuthoredBy"]; had && v != false {
+		lock.Dropped = append(lock.Dropped, Drop{Kind: "settings", Name: "includeCoAuthoredBy",
+			Reason: "replaced: boxes never add AI attribution to commits"})
+	}
+	if v, had := settings["attribution"]; had && !attributionIsOff(v, off) {
+		lock.Dropped = append(lock.Dropped, Drop{Kind: "settings", Name: "attribution",
+			Reason: "replaced: boxes never add AI attribution to commits or pull requests"})
+	}
+	settings["includeCoAuthoredBy"] = false
+	settings["attribution"] = off
+}
+
+// attributionIsOff reports whether a host attribution value already says what
+// off says: false (Claude Code's shorthand for everything hidden), or an object
+// whose every field matches off's.
+func attributionIsOff(host any, off map[string]any) bool {
+	if host == false {
+		return true
+	}
+	m, ok := host.(map[string]any)
+	if !ok {
+		return false
+	}
+	for k, v := range m {
+		if w, known := off[k]; !known || w != v {
+			return false
+		}
+	}
+	return true
 }
