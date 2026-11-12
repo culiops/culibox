@@ -72,15 +72,35 @@ mkdir -p "$HOME"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 # ---- the fixture repo the script clones at the tag ---------------------------------
-git init -q "$tmp/repo"
+# The release tag is on main, as a real one is.
+git init -q -b main "$tmp/repo"
 (
   cd "$tmp/repo"
   echo "fixture" >README.md
   git add README.md
   git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m fixture
   git -c user.name=t -c user.email=t@example.com -c tag.gpgsign=false tag -a "$tag" -m "$tag"
+  # main moves on after the release: the tag stays an ancestor of main.
+  echo more >>README.md
+  git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -am later
 )
-sha=$(git -C "$tmp/repo" rev-parse HEAD)
+sha=$(git -C "$tmp/repo" rev-parse "$tag^{commit}")
+
+# A second fixture whose tag points at a commit that is NOT on main (a tag pushed
+# from a side branch): the same tag name, so the release would look ordinary.
+git init -q -b main "$tmp/repo-offmain"
+(
+  cd "$tmp/repo-offmain"
+  echo "fixture" >README.md
+  git add README.md
+  git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m fixture
+  git checkout -q -b side
+  echo side >>README.md
+  git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -am side
+  git -c user.name=t -c user.email=t@example.com -c tag.gpgsign=false tag -a "$tag" -m "$tag"
+  git checkout -q main
+)
+offmain_sha=$(git -C "$tmp/repo-offmain" rev-parse "$tag^{commit}")
 
 # ---- stubs --------------------------------------------------------------------------
 mkdir -p "$tmp/bin"
@@ -113,6 +133,14 @@ case "$1 $2" in
 "release edit")
   [ "$4 $5" = "--notes-file -" ] || { echo "stub gh: edit wants --notes-file -, got: $*" >&2; exit 1; }
   cat >"$STUB_OUT/notes.out"
+  ;;
+"repo view")
+  [ "$3 $4 $5 $6" = "$GH_REPO --json visibility -q" ] || { echo "stub gh: repo view wants <repo> --json visibility -q .visibility, got: $*" >&2; exit 1; }
+  # STUB_VISIBILITY=EMPTY makes gh print nothing, as it would on a broken response.
+  if [ "${STUB_VISIBILITY:-PRIVATE}" = EMPTY ]; then echo; else echo "${STUB_VISIBILITY:-PRIVATE}"; fi
+  ;;
+"attestation verify")
+  [ -z "${STUB_ATTEST_FAIL:-}" ] || { echo "stub gh: attestation verification failed" >&2; exit 1; }
   ;;
 "api user")
   [ "$3 $4" = "-q .login" ] || { echo "stub gh: api user wants -q .login" >&2; exit 1; }
@@ -344,9 +372,73 @@ if [ "$rc" -ne 0 ]; then pass "(i) it exits non-zero off a Mac"; else fail "(i) 
 contains "$case_dir/stderr" "Darwin" "(i) the error names Darwin"
 missing "$out/gh.log" "(i) gh was never called"
 
+# ---- (k) a tag that is not on main stops before anything runs --------------------
+# The release workflow's own "tag is on main" check lives in the tagged commit, so a
+# tag pushed with an edited workflow skips it. The Mac must not trust that check.
+echo "== (k) tag not on main"
+new_case k "$offmain_sha"
+run_script $'M1=pass\n\n' MACOS_VERIFY_GIT_URL="file://$tmp/repo-offmain"
+if [ "$rc" -ne 0 ]; then pass "(k) a tag that is not on main exits non-zero"; else fail "(k) a tag off main was verified"; fi
+contains "$case_dir/stderr" "not on main" "(k) the error says the tag is not on main"
+missing "$out/go-called.marker" "(k) go test never ran"
+missing "$out/arch.log" "(k) no binary ran"
+missing "$out/abduco-install.log" "(k) abduco was not installed"
+missing "$out/uploaded.json" "(k) nothing was uploaded"
+missing "$out/notes.out" "(k) the notes were not edited"
+
+# ---- (m) public repo: the tarballs must carry a provenance attestation -----------
+echo "== (m) attestation, public repo"
+new_case m
+run_script $'M1=pass\n\n' STUB_VISIBILITY=PUBLIC
+expect_rc "$rc" 0 "(m) a public repo with valid attestations is verified"
+for f in "$arm_tgz" "$amd_tgz"; do
+  contains "$out/gh.log" "attestation verify $case_dir/tmpdir/" "(m) $f is attestation-verified"
+done
+# An exact identity (the whole workflow URL with this tag's ref), not --signer-workflow:
+# older gh versions match that flag as a prefix, so a look-alike workflow file name
+# would satisfy it. --deny-self-hosted-runners keeps a runner the owner does not host out.
+contains "$out/gh.log" "--cert-identity https://github.com/culiops/culibox/.github/workflows/release.yml@refs/tags/$tag" "(m) the signer is pinned to release.yml at this tag by exact identity"
+contains "$out/gh.log" "--deny-self-hosted-runners" "(m) attestations from self-hosted runners are refused"
+absent "$out/gh.log" "--signer-workflow" "(m) no prefix-matched --signer-workflow"
+contains "$out/gh.log" "--source-ref refs/tags/$tag" "(m) the attestation must be for this tag"
+contains "$out/gh.log" "--source-digest $sha" "(m) the attestation must be for the tag's commit"
+
+echo "== (m2) attestation fails"
+new_case m2
+run_script $'M1=pass\n\n' STUB_VISIBILITY=PUBLIC STUB_ATTEST_FAIL=1
+if [ "$rc" -ne 0 ]; then pass "(m2) a failed attestation exits non-zero"; else fail "(m2) a failed attestation was ignored"; fi
+contains "$case_dir/stderr" "attestation" "(m2) the error names the attestation"
+missing "$out/go-called.marker" "(m2) go test never ran"
+missing "$out/arch.log" "(m2) no binary ran"
+missing "$out/uploaded.json" "(m2) nothing was uploaded"
+
+# Only an exact PRIVATE skips the check; any other answer (INTERNAL, empty, garbage) is an
+# error, never a quiet skip.
+for v in INTERNAL EMPTY public Private; do
+  echo "== (m4) visibility '$v'"
+  new_case m4
+  run_script $'M1=pass\n\n' STUB_VISIBILITY="$v"
+  if [ "$rc" -ne 0 ]; then pass "(m4) visibility '$v' exits non-zero"; else fail "(m4) visibility '$v' was accepted"; fi
+  contains "$case_dir/stderr" "visibility" "(m4) the error names the visibility"
+  missing "$out/go-called.marker" "(m4) go test never ran for '$v'"
+  absent "$out/gh.log" "attestation verify" "(m4) no attestation check for '$v'"
+done
+
+echo "== (m3) attestation, private repo"
+new_case m3
+run_script $'M1=pass\n\n' STUB_VISIBILITY=PRIVATE
+expect_rc "$rc" 0 "(m3) a private repo (no attestations exist) still verifies"
+absent "$out/gh.log" "attestation verify" "(m3) no attestation check is attempted"
+contains "$case_dir/stderr" "attestation check skipped" "(m3) the skip is announced"
+
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"
 if "$script" --upload-pack=x >/dev/null 2>&1; then fail "(j) a tag that is not vX.Y.Z was accepted"; else pass "(j) a tag that is not vX.Y.Z is refused"; fi
+# A second line must not slip past the format check (grep matches any one line).
+for bad in $'v0.0.1\n--upload-pack=x' $'--upload-pack=x\nv0.0.1' $'v0.0.1\n'; do
+  if "$script" "$bad" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  expect_rc "$rc" 2 "(j) a multi-line tag is a usage error ($(printf '%s' "$bad" | tr '\n' '|'))"
+done
 
 echo
 if [ "$fails" -ne 0 ]; then

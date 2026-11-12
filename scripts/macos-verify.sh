@@ -11,6 +11,11 @@
 # What it does, in order:
 #   1. downloads the two darwin tarballs and SHA256SUMS and checks the sums; any
 #      mismatch stops the script before a single test or binary runs
+#      Before ANY release code or binary runs it also checks, for itself, that the
+#      tagged commit is reachable from main (the release workflow's own check lives
+#      in the tagged commit and can be edited away), and, once the repository is
+#      public, that each tarball has a build attestation from release.yml for this
+#      tag and commit
 #   2. clones <tag>, installs the pinned abduco, and runs the Go tests natively
 #      (arm64) and under Rosetta 2 (GOARCH=amd64)
 #   3. runs each extracted binary's `version` and requires exactly
@@ -24,8 +29,9 @@
 # "verified" (partial or failed: the release now says so); 1 any other failure,
 # with nothing uploaded unless the message says otherwise; 2 usage.
 # A failing test run does NOT stop the script: it is recorded honestly as failed.
-# Only integrity failures abort before an upload: bad sums, or a tag/commit that
-# does not match between the clone, the stamp and an earlier record.
+# Only integrity failures abort before an upload: bad sums, a tag that is not on main,
+# a missing or invalid attestation (public repo), or a tag/commit that does not match
+# between the clone, the stamp and an earlier record.
 # On any non-zero exit the work dir keeps its logs; the path is printed.
 #
 # Environment (every external effect can be redirected, which is how
@@ -51,7 +57,10 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 tag=$1
-if ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+# [[ =~ ]] anchors on the whole string: a grep on a pipe checks each LINE, so a tag
+# with a second line would pass.
+tag_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if ! [[ $tag =~ $tag_re ]]; then
   echo "macos-verify: tag '$tag' is not vX.Y.Z or vX.Y.Z-<prerelease>" >&2
   exit 2
 fi
@@ -146,25 +155,54 @@ extra=$(find "$dl" -maxdepth 1 -name 'culibox_*' ! -name "$arm_name" ! -name "$a
 arm_sha=$(sum "$dl/$arm_name")
 amd_sha=$(sum "$dl/$amd_name")
 
-# Rosetta must be installed, or amd64 binaries cannot run at all.
-arch -x86_64 true >/dev/null 2>&1 ||
-  die "Rosetta 2 is not usable (arch -x86_64 true failed); run: softwareupdate --install-rosetta --agree-to-license"
-
-for pair in "arm64:$arm_name" "amd64:$amd_name"; do
-  mkdir -p "$work/${pair%%:*}"
-  # Only the binary is extracted: a tarball is untrusted data until it is run.
-  tar -xzf "$dl/${pair#*:}" -C "$work/${pair%%:*}" agent-box ||
-    die "cannot extract agent-box from ${pair#*:}"
-done
-
 # ---- 2. the tag's source, abduco, the tests ----------------------------------------
 echo "cloning $tag"
-git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$git_url" "$work/src" ||
+# Not shallow: the next check needs main's history. Cloning runs no code from the repo.
+git -c advice.detachedHead=false clone --quiet --branch "$tag" "$git_url" "$work/src" ||
   die "cannot clone $tag from $git_url"
 commit=$(git -C "$work/src" rev-parse HEAD)
 tag_commit=$(git -C "$work/src" rev-parse "refs/tags/$tag^{commit}" 2>/dev/null) ||
   die "$tag is not a tag in $git_url"
 [ "$commit" = "$tag_commit" ] || die "the clone's HEAD $commit is not tag $tag ($tag_commit)"
+
+# Trust nothing the tag's own commit says. A v* tag runs the release.yml OF THE TAGGED
+# COMMIT, so its "tag is on main" check can be edited away by whoever can push a tag.
+# This script is about to run that tag's code and binaries on a Mac that has this
+# login, so it checks for itself, before anything from the release runs: the tagged
+# commit must be reachable from main.
+git -C "$work/src" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null ||
+  die "origin/main is not in the clone of $git_url, so $tag cannot be checked; nothing was run"
+git -C "$work/src" merge-base --is-ancestor "$commit" refs/remotes/origin/main ||
+  die "tag $tag ($commit) is not on main: only commits on main are verified; nothing was run"
+
+# Once the repository is public every release carries build provenance for each
+# tarball. Require that it was made by release.yml of this repository, for this tag
+# and this commit, on a GitHub-hosted runner. The signer is pinned by its exact
+# identity (the workflow URL with this tag's ref), not with --signer-workflow, which
+# older gh versions match as a prefix. While the repository is private no attestation
+# exists (the workflow skips them), so only an exact PRIVATE skips the check, loudly;
+# any other answer (INTERNAL, empty, anything new) stops the script.
+visibility=$(gh repo view "$GH_REPO" --json visibility -q .visibility) ||
+  die "cannot read the visibility of $GH_REPO; nothing was run"
+case "$visibility" in
+  PUBLIC)
+    for f in "$arm_name" "$amd_name"; do
+      gh attestation verify "$dl/$f" --repo "$GH_REPO" \
+        --cert-identity "https://github.com/$GH_REPO/.github/workflows/release.yml@refs/tags/$tag" \
+        --deny-self-hosted-runners \
+        --source-ref "refs/tags/$tag" --source-digest "$commit" >"$work/attest-$f.log" 2>&1 || {
+        cat "$work/attest-$f.log" >&2
+        die "no valid build attestation for $f (from release.yml, $tag, $commit); nothing was run"
+      }
+    done
+    ;;
+  PRIVATE)
+    echo "macos-verify: attestation check skipped: $GH_REPO is PRIVATE, so the release carries no attestations" >&2
+    ;;
+  *)
+    die "the visibility of $GH_REPO is '$visibility', not PUBLIC or PRIVATE, so the attestation check cannot be decided; nothing was run"
+    ;;
+esac
 
 # An earlier record must be for these exact bytes. `release-status record` enforces
 # it too; checking now saves the test runs when the tag has moved.
@@ -178,6 +216,18 @@ if [ -f "$prior" ]; then
   fi
 fi
 
+# Rosetta must be installed, or amd64 binaries cannot run at all.
+arch -x86_64 true >/dev/null 2>&1 ||
+  die "Rosetta 2 is not usable (arch -x86_64 true failed); run: softwareupdate --install-rosetta --agree-to-license"
+
+for pair in "arm64:$arm_name" "amd64:$amd_name"; do
+  mkdir -p "$work/${pair%%:*}"
+  # Only the binary is extracted: a tarball is untrusted data until it is run.
+  tar -xzf "$dl/${pair#*:}" -C "$work/${pair%%:*}" agent-box ||
+    die "cannot extract agent-box from ${pair#*:}"
+done
+
+# ---- 3. abduco and the tests -----------------------------------------------------
 echo "installing the pinned abduco"
 "$installer" "$work/abduco" >"$work/abduco-install.log" 2>&1 || {
   cat "$work/abduco-install.log" >&2

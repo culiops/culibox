@@ -1,6 +1,7 @@
 package boximage
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -230,10 +231,11 @@ func TestClaudeCodeStableWorkflowOnlyReports(t *testing.T) {
 // and where it sits: the job it belongs to and whether it is inside that job's
 // own `permissions:` block.
 type wfLine struct {
-	n       int
-	text    string
-	job     string
-	inPerms bool
+	n        int
+	text     string
+	job      string
+	inPerms  bool
+	inScript bool // inside a `run: |` style block scalar: shell text, not YAML structure
 }
 
 var (
@@ -248,6 +250,25 @@ var (
 	wfLocalReuse  = regexp.MustCompile(`^    uses: \./\.github/workflows/[\w.-]+\.ya?ml\s*(?:#.*)?$`)
 	wfPersist     = regexp.MustCompile(`^\s*persist-credentials: false\s*(?:#.*)?$`)
 	wfTopPerms    = regexp.MustCompile(`(?m)^permissions:[ \t]*(?:#.*)?\n  contents: read[ \t]*(?:#.*)?\n`)
+	wfWith        = regexp.MustCompile(`^\s*with:\s*(?:#.*)?$`)
+	wfBlockScalar = regexp.MustCompile(`:\s*[|>][-+]?\s*$`)
+
+	// Forms the line-based reader cannot follow. Each one could hide a `uses:`, a
+	// trigger or a write grant from the rules above, so the guard refuses the form
+	// instead of passing it (fail closed).
+	wfQuotedKey  = regexp.MustCompile(`^\s*(?:-\s+)?["'][^"']*["']\s*:(?:\s|$)`)
+	wfSpaceColon = regexp.MustCompile(`^\s*(?:-\s+)?[\w.-]+\s+:(?:\s|$)`)
+	wfComplexKey = regexp.MustCompile(`^\s*\?(?:\s|$)`)
+	wfAnchor     = regexp.MustCompile(`(?:^|[\s\[{,:])&[A-Za-z_][\w-]*(?:\s|$|[,\]}])`)
+	wfAlias      = regexp.MustCompile(`(?:^|[\s\[{,:])\*[A-Za-z_][\w-]*(?:\s|$|[,\]}])`)
+	wfTag        = regexp.MustCompile(`(?:^|[\s\[{,:])!(?:[!<\w-]|\s|$)`)
+	wfExprSpan   = regexp.MustCompile(`\$\{\{.*?\}\}`)
+	wfQuotedText = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'[^']*'`)
+	// The one flow form the guard reads: `key: [a, "b"]` on one line, items plain or
+	// quoted scalars (so no nested collection, pair, alias, anchor or tag in it).
+	wfFlowList     = regexp.MustCompile(`^\s*[\w.-]+:\s*\[\s*(?:` + wfFlowItem + `(?:\s*,\s*` + wfFlowItem + `)*)?\s*\]\s*$`)
+	wfMergeKey     = regexp.MustCompile(`^\s*<<\s*:`)
+	wfSingleRunKey = regexp.MustCompile(`^\s*(?:-\s+)?run:`)
 )
 
 func wfIndent(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
@@ -258,12 +279,25 @@ func wfIndent(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
 func parseWorkflow(content string) []wfLine {
 	var out []wfLine
 	inJobs, job, inPerms := false, "", false
+	scriptIndent := -1 // >= 0 while inside a block scalar opened at this indent
 	for i, raw := range strings.Split(content, "\n") {
 		if wfFullComment.MatchString(raw) {
 			continue
 		}
+		inScript := false
 		if strings.TrimSpace(raw) != "" {
 			ind := wfIndent(raw)
+			if scriptIndent >= 0 && ind > scriptIndent {
+				inScript = true
+			} else {
+				scriptIndent = -1
+				if wfBlockScalar.MatchString(wfTrailing.ReplaceAllString(raw, "")) {
+					scriptIndent = ind
+					if strings.HasPrefix(strings.TrimSpace(raw), "- ") {
+						scriptIndent = ind + 2
+					}
+				}
+			}
 			if ind == 0 {
 				inJobs = strings.HasPrefix(raw, "jobs:")
 				job, inPerms = "", false
@@ -277,14 +311,16 @@ func parseWorkflow(content string) []wfLine {
 				}
 			}
 		}
-		out = append(out, wfLine{n: i + 1, text: raw, job: job, inPerms: inPerms})
+		out = append(out, wfLine{n: i + 1, text: raw, job: job, inPerms: inPerms, inScript: inScript})
 	}
 	return out
 }
 
+const wfFlowItem = `(?:[A-Za-z0-9_./@+-][A-Za-z0-9_./@*+-]*|"[^"\\]*"|'[^']*')`
+
 var (
 	wfOn         = regexp.MustCompile(`^["']?on["']?:[ \t]*(.*)$`)
-	wfOnKey      = regexp.MustCompile(`^([\w-]+)["']?:`)
+	wfOnKey      = regexp.MustCompile(`^["']?([\w-]+)["']?\s*:`)
 	wfOnItem     = regexp.MustCompile(`^-[ \t]+["']?([\w-]+)["']?\s*$`)
 	wfOnAllowed  = map[string]bool{"push": true, "workflow_dispatch": true, "workflow_call": true, "schedule": true}
 	wfOnAllowMsg = "push, workflow_dispatch, workflow_call, schedule"
@@ -389,6 +425,9 @@ func checkWorkflowSupplyChain(name, content string) []string {
 	if trig, ok := workflowTriggers(lines); !ok {
 		add(0, "no top-level `on:` found")
 	} else {
+		if len(trig) == 0 {
+			add(0, "no trigger found under `on:` (an empty or unreadable `on:` must not pass)")
+		}
 		for _, tr := range trig {
 			if !wfOnAllowed[tr] {
 				add(0, "trigger %q is not allowed (only %s): a fork or an outsider must not be able to start a job here", tr, wfOnAllowMsg)
@@ -400,6 +439,39 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		text := strings.TrimSpace(l.text)
 		if text == "" {
 			continue
+		}
+		if !l.inScript {
+			code := wfTrailing.ReplaceAllString(l.text, "")
+			// bare: expressions and quoted text taken out, then the comment, so a brace
+			// or an exclamation mark inside text is not structure.
+			bare := wfTrailing.ReplaceAllString(wfQuotedText.ReplaceAllString(wfExprSpan.ReplaceAllString(l.text, "x"), `""`), "")
+			if !wfSingleRunKey.MatchString(code) {
+				if strings.Contains(bare, "{") {
+					add(l.n, "flow map (`{...}`) is not supported by the guard: write a block mapping: %q", text)
+				}
+				if (strings.Contains(bare, "[") || strings.Contains(bare, "]")) && !wfFlowList.MatchString(code) {
+					add(l.n, "flow list that is not a one-line `key: [a, b]` of plain or quoted scalars: write a block list: %q", text)
+				}
+				if wfTag.MatchString(bare) {
+					add(l.n, "YAML tag (`!`) is not supported by the guard: %q", text)
+				}
+				if wfAnchor.MatchString(bare) {
+					add(l.n, "YAML anchor (`&name`) is not supported by the guard: repeat the text instead: %q", text)
+				}
+				if wfAlias.MatchString(bare) {
+					add(l.n, "YAML alias (`*name`) is not supported by the guard: repeat the text instead: %q", text)
+				}
+			}
+			switch {
+			case wfQuotedKey.MatchString(code):
+				add(l.n, "quoted key: write workflow keys unquoted, the guard reads plain text: %q", text)
+			case wfSpaceColon.MatchString(code):
+				add(l.n, "space before the colon of a key: the guard reads `key:` only: %q", text)
+			case wfComplexKey.MatchString(code):
+				add(l.n, "complex key (`? key`) is not supported by the guard: %q", text)
+			case wfMergeKey.MatchString(code):
+				add(l.n, "merge key (`<<:`) is not supported by the guard: %q", text)
+			}
 		}
 		if m := wfUses.FindStringSubmatch(l.text); m != nil {
 			switch {
@@ -442,7 +514,7 @@ func checkWorkflowSupplyChain(name, content string) []string {
 				if wfIndent(lines[k].text) <= dash {
 					break
 				}
-				if wfPersist.MatchString(lines[k].text) {
+				if wfPersist.MatchString(lines[k].text) && persistUnderWith(lines, k, dash) {
 					ok = true
 				}
 			}
@@ -452,6 +524,19 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		}
 	}
 	return bad
+}
+
+// persistUnderWith reports whether the `persist-credentials` line k is a direct
+// child of the step's own `with:` (a key of the step, two columns right of its
+// dash), not of an `env:`, a script or some other mapping.
+func persistUnderWith(lines []wfLine, k, dash int) bool {
+	for j := k - 1; j >= 0; j-- {
+		if strings.TrimSpace(lines[j].text) == "" || wfIndent(lines[j].text) >= wfIndent(lines[k].text) {
+			continue
+		}
+		return wfWith.MatchString(lines[j].text) && wfIndent(lines[j].text) == dash+2
+	}
+	return false
 }
 
 func workflowFiles(t *testing.T) []string {
@@ -536,11 +621,21 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 	if bad := checkWorkflowSupplyChain("good.yml", good); len(bad) != 0 {
 		t.Fatalf("good workflow reported: %v", bad)
 	}
+	// Lists of scalars on one line, and brackets or braces in quoted text, are fine.
+	flowOK := top + head + checkout + "    needs: [verify, tests]\n    strategy:\n      matrix:\n        os: [ubuntu-24.04, \"ubuntu-24.04-arm\"]\n" +
+		"      - name: \"a {b} [c] !d\"\n        if: ${{ !cancelled() && github.event_name == 'push' }}\n        run: if [ -n \"$x\" ]; then echo \"{}\"; fi\n"
+	if bad := checkWorkflowSupplyChain("good.yml", flowOK); len(bad) != 0 {
+		t.Fatalf("one-line scalar lists and quoted brackets reported: %v", bad)
+	}
+	// Shell text and quoted values in a script are not YAML structure.
+	scripted := top + head + checkout + "      - name: s\n        run: |\n          echo \"a: b\" && ls *.go\n          case x in *) : ;; esac\n          x=\"uses :\"\n"
+	if bad := checkWorkflowSupplyChain("good.yml", scripted); len(bad) != 0 {
+		t.Fatalf("shell text in a run script reported: %v", bad)
+	}
 	for name, on := range map[string]string{
 		"flow list":   "on: [push, workflow_dispatch]  # why\n",
 		"quoted flow": "on: [\"push\", 'workflow_call', schedule]\n",
 		"scalar":      "on: push\n",
-		"flow map":    "on: {push: {branches: [main]}, workflow_dispatch: {}}\n",
 		"item list":   "on:\n  - push\n  - workflow_call\n",
 		"block":       "on:\n  schedule:\n    - cron: \"17 2 * * 1\"\n  workflow_dispatch:\n",
 	} {
@@ -573,6 +668,36 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"no persist":           {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n", "persist-credentials"},
 		"persist true":         {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          persist-credentials: true\n", "persist-credentials"},
 		"persist in next step": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n      - name: y\n        with:\n          persist-credentials: false\n", "persist-credentials"},
+		// Fail closed: a form the line-based guard cannot read is a violation, not a pass.
+		"quoted uses key":     {top + head + "      - \"uses\": actions/checkout@v4\n", "quoted key"},
+		"single-quoted key":   {top + head + "      - 'uses': actions/checkout@v4\n", "quoted key"},
+		"quoted trigger key":  {strings.Replace(top, "  push:\n    branches: [main]\n", "  push:\n  \"issue_comment\":\n", 1) + head + checkout, "quoted key"},
+		"space before colon":  {top + head + "      - uses : actions/checkout@v4\n", "space before the colon"},
+		"complex key":         {top + head + "      ? uses\n      : actions/checkout@v4\n", "complex key"},
+		"anchor":              {top + head + checkout + "    env: &shared\n      A: b\n", "anchor"},
+		"alias":               {top + head + checkout + "    env: *shared\n", "alias"},
+		"list alias":          {top + head + checkout + "      - *step\n", "alias"},
+		"merge key":           {top + head + checkout + "    env:\n      <<: *shared\n", "merge key"},
+		"persist under env":   {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        env:\n          persist-credentials: false\n", "persist-credentials"},
+		"persist in a script": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n      - run: |\n          persist-credentials: false\n", "persist-credentials"},
+		// Flow collections hide structure from a line reader: only a one-line list of
+		// plain or quoted scalars (`branches: [main]`) is accepted.
+		"flow map step":          {top + head + "      - {\"uses\": \"actions/checkout@v4\"}\n", "flow map"},
+		"flow map plain step":    {top + head + "      - {uses: actions/checkout@v4}\n", "flow map"},
+		"flow map on":            {"name: x\non: {push: {}, issue_comment: {}}\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow map"},
+		"on flow map next line":  {"name: x\non:\n  {push: {}, issue_comment: {}}\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow map"},
+		"on flow list next line": {"name: x\non:\n  [push, issue_comment]\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow list"},
+		"multi-line flow list":   {top + head + checkout + "    needs: [\n      a,\n    ]\n", "flow list"},
+		"nested flow list":       {top + head + checkout + "    needs: [a, [b]]\n", "flow list"},
+		"flow list of pairs":     {top + head + checkout + "    needs: [uses: x]\n", "flow list"},
+		"no triggers found":      {"name: x\non:\n  # nothing\npermissions:\n  contents: read\njobs:\n" + head + checkout, "no trigger"},
+		"alias in flow list":     {top + head + checkout + "    needs: [*step]\n", "alias"},
+		"anchor in flow list":    {top + head + checkout + "    needs: [&step x]\n", "anchor"},
+		"anchor after comma":     {top + head + checkout + "    needs: [a,&step x]\n", "anchor"},
+		"tag on a quoted key":    {top + head + "      - !!str \"uses\": actions/checkout@v4\n", "YAML tag"},
+		"tag on a value":         {top + head + checkout + "    env:\n      A: !!binary x\n", "YAML tag"},
+		"tag in a flow list":     {top + head + checkout + "    needs: [!x y]\n", "YAML tag"},
+		"persist sibling key":    {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n        env:\n          persist-credentials: false\n", "persist-credentials"},
 	} {
 		bad := checkWorkflowSupplyChain("bad.yml", tc.wf)
 		if len(bad) == 0 {
@@ -581,6 +706,78 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		}
 		if !strings.Contains(strings.Join(bad, "\n"), tc.want) || !strings.Contains(bad[0], "bad.yml") {
 			t.Errorf("%s: violations %v do not name bad.yml and %q", name, bad, tc.want)
+		}
+	}
+}
+
+// workflowNameViolations: GitHub runs both .yml and .yaml, but release.yml and
+// ci.yml are looked up by exact name in these tests, so a sibling named .yaml
+// would dodge the per-file rules. Only .yml is allowed under .github/workflows.
+func workflowNameViolations(names []string) []string {
+	var bad []string
+	for _, n := range names {
+		if filepath.Ext(n) != ".yml" {
+			bad = append(bad, fmt.Sprintf("%s: workflow files must be named *.yml (a .yaml sibling of release.yml would dodge its guard)", n))
+		}
+	}
+	return bad
+}
+
+// otherWorkflowScopeViolations: the release scopes (contents, id-token,
+// attestations) belong to release.yml's release job alone. In any other workflow
+// they are a violation whatever the job, so a new file cannot take over the
+// release's power. (releaseWriteViolations holds release.yml itself to one grant.)
+func otherWorkflowScopeViolations(name, content string) []string {
+	var bad []string
+	for _, l := range parseWorkflow(content) {
+		if m := wfWriteScope.FindStringSubmatch(l.text); m != nil && (m[1] == "contents" || m[1] == "id-token" || m[1] == "attestations") {
+			bad = append(bad, fmt.Sprintf("%s:%d: `%s: write` is only for release.yml's release job", name, l.n, m[1]))
+		}
+	}
+	return bad
+}
+
+func TestWorkflowFilesAreNamedYml(t *testing.T) {
+	files := workflowFiles(t)
+	var names []string
+	for _, f := range files {
+		names = append(names, filepath.Base(f))
+	}
+	for _, msg := range workflowNameViolations(names) {
+		t.Error(msg)
+	}
+	if bad := workflowNameViolations([]string{"ci.yml", "release.yaml"}); len(bad) != 1 {
+		t.Errorf("release.yaml must be reported, got %v", bad)
+	}
+	if bad := workflowNameViolations([]string{"ci.yml", "release.yml", "box-image.yml"}); len(bad) != 0 {
+		t.Errorf(".yml names reported: %v", bad)
+	}
+}
+
+func TestOtherWorkflowsHoldNoReleaseScopes(t *testing.T) {
+	for _, f := range workflowFiles(t) {
+		if filepath.Base(f) == "release.yml" {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, msg := range otherWorkflowScopeViolations(filepath.Base(f), string(b)) {
+			t.Error(msg)
+		}
+	}
+	job := func(scope string) string {
+		return "jobs:\n  x:\n    permissions:\n      " + scope + "\n"
+	}
+	for _, scope := range []string{"contents: write", `"id-token": write`, "attestations: 'write'"} {
+		if bad := otherWorkflowScopeViolations("x.yml", job(scope)); len(bad) != 1 {
+			t.Errorf("%s in another workflow must be reported once, got %v", scope, bad)
+		}
+	}
+	for _, scope := range []string{"packages: write", "issues: write", "contents: read"} {
+		if bad := otherWorkflowScopeViolations("x.yml", job(scope)); len(bad) != 0 {
+			t.Errorf("%s reported: %v", scope, bad)
 		}
 	}
 }
@@ -673,11 +870,11 @@ func TestCIWorkflow(t *testing.T) {
 		"node --test",
 		"scripts/lint.sh",
 		"bash scripts/macos-verify_test.sh",
+		"scripts/ci/secret-scan.sh",
+		"bash scripts/ci/secret-scan_test.sh",
 		// The custom private-identifier rules are tested with the pinned scanner, and
 		// the run fails (not skips) when the scanner is missing.
 		"GITLEAKS_RULES_TEST_REQUIRE=1 bash scripts/ci/gitleaks-rules_test.sh",
-		"gitleaks git --config .gitleaks.toml",
-		"gitleaks dir --config .gitleaks.toml",
 		"sha256sum -c",
 	} {
 		if !strings.Contains(wf, want) {
@@ -687,6 +884,11 @@ func TestCIWorkflow(t *testing.T) {
 	// The env switch that stops an abduco test from passing by skipping.
 	if !regexp.MustCompile(`(?m)^\s+AGENT_BOX_REQUIRE_ABDUCO:\s*["']1["']\s*$`).MatchString(jobBlock(t, wf, "test")) {
 		t.Error(`job test must set AGENT_BOX_REQUIRE_ABDUCO: "1"`)
+	}
+	// The web job runs third-party npm code (eslint). A Go cache it saved would be
+	// restored by the later jobs, so it must never restore or save one.
+	for _, msg := range setupGoCacheViolations("ci.yml (job web)", jobBlock(t, wf, "web")) {
+		t.Error(msg)
 	}
 	// All four GOOS/GOARCH targets compile the binary.
 	for _, tgt := range []string{"darwin arm64", "darwin amd64", "linux arm64", "linux amd64"} {
@@ -728,6 +930,79 @@ func TestCIWorkflow(t *testing.T) {
 			t.Errorf("github.event is used outside the BEFORE env entry: %q", strings.TrimSpace(l))
 		}
 	}
+}
+
+// scripts/lint.sh runs eslint in CI, with the network. It must install the
+// exact tree recorded in a lockfile (every package with an integrity hash) and
+// run no install scripts, never `npx eslint@<range>`, which resolves the newest
+// match and its dependencies fresh on every run.
+func TestLintInstallsPinnedEslint(t *testing.T) {
+	read := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	lint := regexp.MustCompile(`(?m)^\s*#.*$`).ReplaceAllString(read("../../scripts/lint.sh"), "")
+	if regexp.MustCompile(`\bnpx\b`).MatchString(lint) {
+		t.Error("scripts/lint.sh must not use npx (it resolves an unpinned tree each run)")
+	}
+	if !strings.Contains(lint, "npm ci") || !strings.Contains(lint, "--ignore-scripts") {
+		t.Error("scripts/lint.sh must install with `npm ci --ignore-scripts` from the committed lockfile")
+	}
+	for _, v := range lintLockViolations(read("../../scripts/lint/package.json"), read("../../scripts/lint/package-lock.json")) {
+		t.Error(v)
+	}
+	if bad := lintLockViolations(`{"devDependencies":{"eslint":"^9.39.5"}}`, `{"packages":{}}`); len(bad) == 0 {
+		t.Error("a ranged eslint version must be reported")
+	}
+	if bad := lintLockViolations(`{"devDependencies":{"eslint":"9.39.5"}}`,
+		`{"packages":{"":{},"node_modules/eslint":{"version":"9.39.5","resolved":"https://registry.npmjs.org/eslint/-/eslint-9.39.5.tgz"}}}`); len(bad) == 0 {
+		t.Error("a lock entry without integrity must be reported")
+	}
+}
+
+// lintLockViolations checks scripts/lint's package.json and lock: eslint is an
+// exact version, the lock resolves it to that version, and every locked package
+// carries a resolved URL and a sha512 integrity.
+func lintLockViolations(pkgJSON, lockJSON string) []string {
+	var bad []string
+	var pkg struct {
+		Dev map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal([]byte(pkgJSON), &pkg); err != nil {
+		return []string{"package.json: " + err.Error()}
+	}
+	want := pkg.Dev["eslint"]
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(want) {
+		bad = append(bad, fmt.Sprintf("eslint must be pinned to an exact version in package.json, got %q", want))
+	}
+	var lock struct {
+		Packages map[string]struct {
+			Version   string `json:"version"`
+			Resolved  string `json:"resolved"`
+			Integrity string `json:"integrity"`
+			Link      bool   `json:"link"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal([]byte(lockJSON), &lock); err != nil {
+		return append(bad, "package-lock.json: "+err.Error())
+	}
+	if e, ok := lock.Packages["node_modules/eslint"]; !ok {
+		bad = append(bad, "package-lock.json has no node_modules/eslint")
+	} else if e.Version != want {
+		bad = append(bad, fmt.Sprintf("the lock resolves eslint to %q, package.json pins %q", e.Version, want))
+	}
+	for path, p := range lock.Packages {
+		if path == "" || p.Link {
+			continue
+		}
+		if !strings.HasPrefix(p.Resolved, "https://registry.npmjs.org/") || !strings.HasPrefix(p.Integrity, "sha512-") {
+			bad = append(bad, fmt.Sprintf("lock entry %s lacks an https registry URL or a sha512 integrity", path))
+		}
+	}
+	return bad
 }
 
 // The CI install script and the box image build the same abduco: the version and
@@ -961,6 +1236,62 @@ func TestReleaseWorkflow(t *testing.T) {
 	for _, l := range inlineExpr(wf) {
 		t.Errorf("a ${{ }} expression is interpolated inside a run script (use env:): %q", l)
 	}
+
+	// The write-capable token is in the environment of the steps that call gh,
+	// and of no other step: repo code (go run, the build scripts) never sees it.
+	for _, msg := range ghTokenViolations(release) {
+		t.Error(msg)
+	}
+	if strings.Count(release, "GH_TOKEN: ${{ github.token }}") != 2 {
+		t.Error("GH_TOKEN must be set in exactly two steps of job release: the release list and the draft release")
+	}
+}
+
+// ghTokenViolations checks one job's text: GH_TOKEN may not sit in the job's own
+// env: (every step would inherit it), and a step that has it must call gh and
+// run nothing from the repository (go run, a script, a tool).
+func ghTokenViolations(job string) []string {
+	var bad []string
+	head, steps, _ := strings.Cut(job, "\n      - ")
+	if strings.Contains(head, "GH_TOKEN") {
+		bad = append(bad, "GH_TOKEN is set job-wide: scope it to the steps that call gh")
+	}
+	if steps == "" {
+		return bad
+	}
+	for _, step := range strings.Split("- "+steps, "\n      - ") {
+		if !strings.Contains(step, "GH_TOKEN") {
+			continue
+		}
+		first := strings.TrimSpace(strings.SplitN(step, "\n", 2)[0])
+		if !regexp.MustCompile(`(?m)(^|[\s:|])gh (api|release) `).MatchString(step) {
+			bad = append(bad, fmt.Sprintf("a step holds GH_TOKEN but does not call gh: %q", first))
+		}
+		for _, repoCode := range []string{"go run", "scripts/", "./tools", "bash ", "make "} {
+			if strings.Contains(step, repoCode) {
+				bad = append(bad, fmt.Sprintf("a step holds GH_TOKEN and also runs repository code (%s): %q", repoCode, first))
+			}
+		}
+	}
+	return bad
+}
+
+func TestGHTokenCheckCatchesViolations(t *testing.T) {
+	const gh = "      - name: a\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: gh api x\n"
+	const run = "      - name: b\n        run: go run ./tools/x\n"
+	if bad := ghTokenViolations("  release:\n    runs-on: x\n    steps:\n" + gh + run); len(bad) != 0 {
+		t.Errorf("good job reported: %v", bad)
+	}
+	for name, job := range map[string]string{
+		"job env":        "  release:\n    env:\n      GH_TOKEN: ${{ github.token }}\n    steps:\n" + run,
+		"token + go run": "  release:\n    steps:\n      - name: a\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          gh api x\n          go run ./tools/x\n",
+		"token, no gh":   "  release:\n    steps:\n      - name: a\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: echo hi\n",
+		"token + script": "  release:\n    steps:\n      - name: a\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          gh api x\n          scripts/release/build.sh\n",
+	} {
+		if bad := ghTokenViolations(job); len(bad) == 0 {
+			t.Errorf("%s: no violation reported", name)
+		}
+	}
 }
 
 // setupGoCacheViolations reports every actions/setup-go step in wf that does not
@@ -990,7 +1321,7 @@ func setupGoCacheViolations(name, wf string) []string {
 			}
 		}
 		if !ok {
-			bad = append(bad, fmt.Sprintf("%s:%d: setup-go step lacks `cache: false` (the release build must not restore a Go cache that CI jobs, which run unpinned npm code, can save)", name, i+1))
+			bad = append(bad, fmt.Sprintf("%s:%d: setup-go step lacks `cache: false` (a job that runs third-party or release code must not restore or save the shared Go cache)", name, i+1))
 		}
 	}
 	return bad
