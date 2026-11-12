@@ -63,3 +63,24 @@ func filterSettings(path string) (map[string]any, []Drop) {
 	}
 	return out, drops
 }
+
+// applyAttributionOff makes every box commit and open PRs without Claude Code's
+// AI attribution (the Co-Authored-By trailer and the "Generated with" text). It
+// edits settings, the keep-list-filtered map, in place and always wins over the
+// host's value: a box has no commit-msg hook (clone boxes run with
+// core.hooksPath=/dev/null on purpose) and public repos allow no AI attribution,
+// so a host that wants it on does not get it in a box.
+//
+// Both spellings, because Claude Code 2.1.311 (the box image's pin) honours
+// both: attribution.commit/pr set to "" hide the text, and the deprecated
+// includeCoAuthoredBy:false is what older settings files and versions read.
+// The image also pins the same two keys as managed policy
+// (docker/agent-box/Dockerfile) for sessions that get no bundle.
+func applyAttributionOff(settings map[string]any, lock *Lock) {
+	if v, had := settings["includeCoAuthoredBy"]; had && v != false {
+		lock.Dropped = append(lock.Dropped, Drop{Kind: "settings", Name: "includeCoAuthoredBy",
+			Reason: "replaced: boxes never add AI attribution to commits"})
+	}
+	settings["includeCoAuthoredBy"] = false
+	settings["attribution"] = map[string]any{"commit": "", "pr": ""}
+}

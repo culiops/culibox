@@ -509,6 +509,7 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, 
 	if err := m.applyStatusLine(tmp, settings, &lock); err != nil {
 		return nil, err
 	}
+	applyAttributionOff(settings, &lock)
 	if sum, err := writeJSON(filepath.Join(tmp, "settings.json"), settings); err == nil {
 		lock.Files["settings.json"] = sum
 	}

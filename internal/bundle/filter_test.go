@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -145,7 +146,12 @@ func TestBoxedSettingsOutputIsByteIdenticalDespiteInheritableKeys(t *testing.T) 
 		t.Fatal(err)
 	}
 	const want = `{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "effortLevel": "high",
+  "includeCoAuthoredBy": false,
   "model": "opus",
   "statusLine": {
     "command": "AGENTBOX_STATUSLINE_DELEGATE_FILE=/opt/agent-bundle/statusline-delegate /opt/agent-bundle/statusline-ratelimits.sh",
@@ -178,5 +184,77 @@ func TestEnabledPluginsSurvivesTheSettingsFilter(t *testing.T) {
 		if _, ok := kept[bad]; ok {
 			t.Errorf("%q must still be dropped", bad)
 		}
+	}
+}
+
+// A box commits as the agent, and a commit must carry no AI attribution (the
+// repo-wide rule). Claude Code adds a Co-Authored-By trailer unless told not to,
+// and a box does not get the host's own includeCoAuthoredBy:false unless the
+// bundle carries it. So the bundle writes the setting itself, in both forms
+// Claude Code 2.1.311 reads: the deprecated includeCoAuthoredBy and attribution
+// (an empty commit/pr text hides it).
+func TestBoxSettingsTurnAttributionOffWithNoHostSettings(t *testing.T) {
+	b := buildForTest(t, t.TempDir()) // no settings.json at all
+	assertAttributionOff(t, readBoxSettings(t, b.Dir))
+}
+
+// The user's own setting must not be able to switch it back on in a box.
+func TestBoxSettingsAttributionOffBeatsTheHostsSetting(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "settings.json"),
+		[]byte(`{"includeCoAuthoredBy":true,"attribution":{"commit":"Co-Authored-By: x","pr":"made by x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := buildForTest(t, src)
+	assertAttributionOff(t, readBoxSettings(t, b.Dir))
+	var recorded bool
+	for _, d := range b.Lock.Dropped {
+		if d.Kind == "settings" && d.Name == "includeCoAuthoredBy" {
+			recorded = true
+		}
+	}
+	if !recorded {
+		t.Errorf("overriding the host's includeCoAuthoredBy:true must be recorded as a drop: %v", b.Lock.Dropped)
+	}
+}
+
+// A host that already turned it off is the common case: nothing to report.
+func TestBoxSettingsHostAttributionOffIsNotADrop(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "settings.json"), []byte(`{"includeCoAuthoredBy":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := buildForTest(t, src)
+	assertAttributionOff(t, readBoxSettings(t, b.Dir))
+	for _, d := range b.Lock.Dropped {
+		if d.Name == "includeCoAuthoredBy" {
+			t.Errorf("a host setting that already matches is not a drop: %v", d)
+		}
+	}
+}
+
+func readBoxSettings(t *testing.T, dir string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func assertAttributionOff(t *testing.T, m map[string]any) {
+	t.Helper()
+	if v, ok := m["includeCoAuthoredBy"].(bool); !ok || v {
+		t.Errorf("includeCoAuthoredBy = %v, want false", m["includeCoAuthoredBy"])
+	}
+	attr, _ := m["attribution"].(map[string]any)
+	commit, cok := attr["commit"].(string)
+	pr, pok := attr["pr"].(string)
+	if !cok || commit != "" || !pok || pr != "" {
+		t.Errorf("attribution = %v, want commit and pr set to empty strings", m["attribution"])
 	}
 }

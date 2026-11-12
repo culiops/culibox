@@ -1003,6 +1003,16 @@ RUN printf '%s\n' '#!/bin/sh' \
 ARG CLAUDE_CODE_VERSION=2.1.311
 RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
+# Claude Code adds a "Co-Authored-By: Claude" trailer (and a "Generated with" line
+# in PR text) to what it commits unless told not to. A box commits as the agent,
+# clone boxes run with core.hooksPath=/dev/null so no repo commit-msg hook strips
+# it, and the config bundle reaches only some sessions, so the image pins it off as
+# Claude Code's managed policy: root-owned, read by every claude in every box, and
+# above any user, project or --settings value. Both spellings: Claude Code 2.1.311
+# reads attribution (an empty commit/pr text hides it) and the deprecated
+# includeCoAuthoredBy. Small, so it sits after the big layer and costs a bump nothing.
+RUN mkdir -p /etc/claude-code && printf '%s\n' '{"includeCoAuthoredBy":false,"attribution":{"commit":"","pr":""}}' > /etc/claude-code/managed-settings.json && jq -e '.includeCoAuthoredBy == false and .attribution.commit == "" and .attribution.pr == ""' /etc/claude-code/managed-settings.json
+
 # Nothing but the base image's two dotfiles may be left in /root: every RUN above
 # cleans after itself in its own layer (a later layer cannot remove an earlier
 # one's bytes), and this fails the build on anything that slipped through.
