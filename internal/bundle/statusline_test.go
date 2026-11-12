@@ -141,7 +141,7 @@ func TestBundleNoDelegateForOtherTypesOrBlank(t *testing.T) {
 }
 
 func TestBundleLayoutBumped(t *testing.T) {
-	if layoutMarker != "layout\x00v5\n" {
-		t.Fatalf("layout marker = %q, want v5 so cached v4 bundles rebuild", layoutMarker)
+	if layoutMarker != "layout\x00v6\n" {
+		t.Fatalf("layout marker = %q, want v6 so cached v5 bundles (no attribution settings) rebuild", layoutMarker)
 	}
 }

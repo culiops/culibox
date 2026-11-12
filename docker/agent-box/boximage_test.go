@@ -1871,6 +1871,9 @@ func TestDockerfileTurnsClaudeAttributionOffForEveryBox(t *testing.T) {
 	if p, ok := attr["pr"].(string); !ok || p != "" {
 		t.Errorf("attribution.pr = %v, want an empty string", attr["pr"])
 	}
+	if s, ok := attr["sessionUrl"].(bool); !ok || s {
+		t.Errorf("attribution.sessionUrl = %v, want false (the Claude-Session trailer)", attr["sessionUrl"])
+	}
 	if !strings.Contains(ins, "jq -e") {
 		t.Error("the build must validate the file it wrote (jq -e), like mcp.json")
 	}
