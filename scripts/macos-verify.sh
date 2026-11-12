@@ -177,22 +177,32 @@ git -C "$work/src" merge-base --is-ancestor "$commit" refs/remotes/origin/main |
 
 # Once the repository is public every release carries build provenance for each
 # tarball. Require that it was made by release.yml of this repository, for this tag
-# and this commit. While the repository is private no attestation exists (the
-# workflow skips them), so the check is skipped, loudly.
+# and this commit, on a GitHub-hosted runner. The signer is pinned by its exact
+# identity (the workflow URL with this tag's ref), not with --signer-workflow, which
+# older gh versions match as a prefix. While the repository is private no attestation
+# exists (the workflow skips them), so only an exact PRIVATE skips the check, loudly;
+# any other answer (INTERNAL, empty, anything new) stops the script.
 visibility=$(gh repo view "$GH_REPO" --json visibility -q .visibility) ||
   die "cannot read the visibility of $GH_REPO; nothing was run"
-if [ "$visibility" = PUBLIC ]; then
-  for f in "$arm_name" "$amd_name"; do
-    gh attestation verify "$dl/$f" --repo "$GH_REPO" \
-      --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
-      --source-ref "refs/tags/$tag" --source-digest "$commit" >"$work/attest-$f.log" 2>&1 || {
-      cat "$work/attest-$f.log" >&2
-      die "no valid build attestation for $f (from release.yml, $tag, $commit); nothing was run"
-    }
-  done
-else
-  echo "macos-verify: attestation check skipped: $GH_REPO is $visibility, so the release carries no attestations" >&2
-fi
+case "$visibility" in
+  PUBLIC)
+    for f in "$arm_name" "$amd_name"; do
+      gh attestation verify "$dl/$f" --repo "$GH_REPO" \
+        --cert-identity "https://github.com/$GH_REPO/.github/workflows/release.yml@refs/tags/$tag" \
+        --deny-self-hosted-runners \
+        --source-ref "refs/tags/$tag" --source-digest "$commit" >"$work/attest-$f.log" 2>&1 || {
+        cat "$work/attest-$f.log" >&2
+        die "no valid build attestation for $f (from release.yml, $tag, $commit); nothing was run"
+      }
+    done
+    ;;
+  PRIVATE)
+    echo "macos-verify: attestation check skipped: $GH_REPO is PRIVATE, so the release carries no attestations" >&2
+    ;;
+  *)
+    die "the visibility of $GH_REPO is '$visibility', not PUBLIC or PRIVATE, so the attestation check cannot be decided; nothing was run"
+    ;;
+esac
 
 # An earlier record must be for these exact bytes. `release-status record` enforces
 # it too; checking now saves the test runs when the tag has moved.

@@ -22,17 +22,71 @@ var vendoredPins = map[string]string{
 	"internal/web/static/xterm/addon-webgl.js": "b85f8d4b3e9756bebb757e3fe47134d70f03ea3d6b187624426d2e2b65dec06c",
 }
 
-// gitleaksExemptPaths returns the literal file paths of every `paths = [...]`
-// entry in the config (each is an anchored regex of the form ^a/b\.js$).
-func gitleaksExemptPaths(cfg string) []string {
-	var out []string
-	for _, block := range regexp.MustCompile(`(?s)\npaths\s*=\s*\[(.*?)\]`).FindAllStringSubmatch(cfg, -1) {
-		for _, m := range regexp.MustCompile(`'''\^(.*?)\$'''`).FindAllStringSubmatch(block[1], -1) {
-			out = append(out, strings.ReplaceAll(m[1], `\.`, "."))
+var (
+	glHeader   = regexp.MustCompile(`^\[\[?[A-Za-z0-9_."-]+\]\]?\s*(?:#.*)?$`)
+	glPathsKey = regexp.MustCompile(`(?:^|[\s{,])["']?paths["']?\s*=`)
+	glItem     = regexp.MustCompile(`'''(.*?)'''`)
+	glLiteral  = regexp.MustCompile(`^\^([A-Za-z0-9_./\\-]+)\$$`)
+	glPlain    = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
+	glComment  = regexp.MustCompile(`(?m)\s*#.*$`)
+)
+
+// gitleaksExemptPaths returns the literal file paths of every path exemption in the
+// config, and a problem for anything it cannot read. A path exemption hides a whole
+// file from the scan, so the reader fails closed: only a `paths = [...]` key at
+// column 0 of a global [[allowlists]] table, whose items are triple-single-quoted
+// anchored literals (^a/b\.js$), is accepted. Any other `paths` (indented, inline, in
+// the singular [allowlist], in a rule's own allowlist, a scalar, a quoted or regex
+// item) is a problem.
+func gitleaksExemptPaths(cfg string) (paths, problems []string) {
+	lines := strings.Split(cfg, "\n")
+	header := ""
+	for i := 0; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if glHeader.MatchString(t) {
+			header = strings.TrimSpace(glComment.ReplaceAllString(t, ""))
+			continue
+		}
+		if !glPathsKey.MatchString(lines[i]) {
+			continue
+		}
+		at := fmt.Sprintf(".gitleaks.toml:%d (%s)", i+1, header)
+		if header != "[[allowlists]]" || !strings.HasPrefix(lines[i], "paths") {
+			problems = append(problems, at+": a path exemption is only read at column 0 of a global [[allowlists]] table; this one is not")
+			continue
+		}
+		// The value: from after "=" to the closing bracket, possibly over several lines.
+		value := lines[i][strings.Index(lines[i], "=")+1:]
+		for depth := strings.Count(value, "[") - strings.Count(value, "]"); depth > 0 && i+1 < len(lines); {
+			i++
+			value += "\n" + lines[i]
+			depth += strings.Count(lines[i], "[") - strings.Count(lines[i], "]")
+		}
+		value = strings.TrimSpace(value)
+		if !strings.HasPrefix(value, "[") {
+			problems = append(problems, at+": paths must be an array")
+			continue
+		}
+		for _, m := range glItem.FindAllStringSubmatch(value, -1) {
+			lit := glLiteral.FindStringSubmatch(m[1])
+			if lit == nil || !glPlain.MatchString(strings.ReplaceAll(lit[1], `\.`, ".")) {
+				problems = append(problems, fmt.Sprintf("%s: item %q is not an anchored literal path (^a/b\\.js$): no other regex syntax", at, m[1]))
+				continue
+			}
+			paths = append(paths, strings.ReplaceAll(lit[1], `\.`, "."))
+		}
+		// Whatever is left once the items, brackets, commas and comments are gone is a
+		// form that was not read (a double-quoted or single-quoted item, say).
+		rest := glComment.ReplaceAllString(glItem.ReplaceAllString(value, ""), "")
+		if strings.Trim(rest, "[], \t\r\n") != "" {
+			problems = append(problems, at+": has an item that is not a triple-single-quoted string: "+strings.TrimSpace(rest))
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(paths)
+	return paths, problems
 }
 
 // vendoredPinViolations: the exempt paths and the pinned paths are the same set,
@@ -72,7 +126,10 @@ func TestGitleaksExemptFilesArePinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exempt := gitleaksExemptPaths(string(cfg))
+	exempt, problems := gitleaksExemptPaths(string(cfg))
+	for _, p := range problems {
+		t.Error(p)
+	}
 	if len(exempt) == 0 {
 		t.Fatal("found no path exemption in .gitleaks.toml: has its layout changed?")
 	}
@@ -104,8 +161,32 @@ func TestVendoredPinCheckCatchesViolations(t *testing.T) {
 		}
 	}
 	cfg := "x\n[[allowlists]]\nregexes = ['''^a$''']\n[[allowlists]]\npaths = [\n  '''^internal/x/a\\.js$''',\n  '''^b\\.js$''',\n]\n"
-	if got := strings.Join(gitleaksExemptPaths(cfg), " "); got != "b.js internal/x/a.js" {
-		t.Errorf("exempt paths = %q", got)
+	got, problems := gitleaksExemptPaths(cfg)
+	if strings.Join(got, " ") != "b.js internal/x/a.js" || len(problems) != 0 {
+		t.Errorf("exempt paths = %q, problems %v", got, problems)
+	}
+	// Fail closed: a path exemption the reader cannot take apart is a problem, so the
+	// pin check cannot be dodged by writing the exemption in another form.
+	const head = "[extend]\nuseDefault = true\n"
+	for name, c := range map[string]string{
+		"indented block":       head + "[[allowlists]]\n  paths = [\n    '''^a\\.js$''',\n  ]\n",
+		"double-quoted item":   head + "[[allowlists]]\npaths = [\n  \"^a\\\\.js$\",\n]\n",
+		"single-quoted item":   head + "[[allowlists]]\npaths = ['^a\\.js$']\n",
+		"regex item":           head + "[[allowlists]]\npaths = [\n  '''^internal/web/.*$''',\n]\n",
+		"unanchored item":      head + "[[allowlists]]\npaths = [\n  '''a\\.js''',\n]\n",
+		"mixed good and bad":   head + "[[allowlists]]\npaths = [\n  '''^a\\.js$''',\n  '''^b/.+$''',\n]\n",
+		"singular allowlist":   head + "[allowlist]\npaths = [\n  '''^a\\.js$''',\n]\n",
+		"rule-level allowlist": head + "[[rules]]\nid = \"x\"\nregex = '''x'''\n[[rules.allowlists]]\npaths = [\n  '''^a\\.js$''',\n]\n",
+		"rule-level scalar":    head + "[[rules]]\nid = \"x\"\nregex = '''x'''\n[[rules.allowlists]]\npaths='''^a\\.js$'''\n",
+		"inline table":         head + "allowlists = [{paths = ['''^a\\.js$''']}]\n",
+	} {
+		if _, problems := gitleaksExemptPaths(c); len(problems) == 0 {
+			t.Errorf("%s: no problem reported", name)
+		}
+	}
+	// A one-line list in a global allowlist is readable, so it is not a problem.
+	if got, problems := gitleaksExemptPaths(head + "[[allowlists]]\npaths = ['''^a\\.js$''', '''^b/c\\.js$''']\n"); len(problems) != 0 || strings.Join(got, " ") != "a.js b/c.js" {
+		t.Errorf("one-line list: %v, %v", got, problems)
 	}
 }
 

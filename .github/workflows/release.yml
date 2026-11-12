@@ -17,8 +17,9 @@
 #     test or build runs. This file is the tagged commit's own, so that check is a
 #     convenience, not a trust boundary: scripts/macos-verify.sh repeats it on the
 #     Mac before running anything, and the repository's tag ruleset is the control
-#   - the write-capable token is in the environment of the two steps that call gh
-#     only, never job-wide
+#   - GH_TOKEN is set on the two steps that call gh only, not job-wide (narrower
+#     exposure; the job's write permissions and the tag ruleset are what bound a
+#     release)
 #
 # Runners: Linux only. There are no macOS runners (the darwin tarballs are
 # cross-compiled here and verified on a real Mac afterwards, see
@@ -139,8 +140,10 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
       GH_REPO: ${{ github.repository }}
-    # GH_TOKEN is not set here: it goes only to the two steps that call gh, so the
-    # repository's own code (go run, the build scripts) never has the token.
+    # GH_TOKEN is not in the job env: only the two steps that call gh set it, so the
+    # steps that run repository code (go run) start without it in their environment.
+    # That narrows exposure, it is not a boundary: the job still holds the write
+    # permissions above, and the real control is who may push a v* tag (the tag ruleset).
     steps:
       # Full history and tags: the notes list the commits since the previous tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

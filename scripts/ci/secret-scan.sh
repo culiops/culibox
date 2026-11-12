@@ -19,6 +19,9 @@ set -eu
 zeros=0000000000000000000000000000000000000000
 cfg=(--config .gitleaks.toml --redact)
 before=${BEFORE:-}
+# [[ =~ ]] matches the whole value: a grep on a pipe checks each line, so a value whose
+# first line is a commit id and which goes on would pass.
+sha_re='^[0-9a-f]{40}$'
 
 scan_tree() {
   echo "scanning the checkout"
@@ -26,7 +29,7 @@ scan_tree() {
 }
 
 if [ "${GITHUB_EVENT_NAME:-}" = push ] && [ "${GITHUB_REF:-}" = refs/heads/main ] &&
-  printf '%s' "$before" | grep -Eq '^[0-9a-f]{40}$' && [ "$before" != "$zeros" ]; then
+  [[ $before =~ $sha_re ]] && [ "$before" != "$zeros" ]; then
   if git cat-file -e "${before}^{commit}" 2>/dev/null; then
     echo "scanning the commits $before..$GITHUB_SHA"
     gitleaks git "${cfg[@]}" --log-opts="$before..$GITHUB_SHA" .

@@ -114,6 +114,14 @@ for evil in '--output=/tmp/x' "$c1;touch $tmp/pwned" "$c1..$c3" 'main' "${c1:0:1
     pass "BEFORE '$evil' never reaches gitleaks or the shell"
   else fail "BEFORE '$evil' was used: $(cat "$tmp/i.log")"; fi
 done
+# A value of several lines whose first (or last) line is 40 hex digits is not one
+# commit id: grep checks line by line, so the gate must match the whole value.
+for multi in "$c1"$'\nextra' $'extra\n'"$c1" "$c1"$'\n'; do
+  scan j "$repo" push refs/heads/main "$multi"
+  if [ "$rc" -eq 0 ] && ! has "$tmp/j.log" "--log-opts" && has "$tmp/j.log" "dir --config .gitleaks.toml --redact ."; then
+    pass "a multi-line BEFORE is unusable and the checkout is scanned ($(printf '%s' "$multi" | tr '\n' '|' | cut -c1-30))"
+  else fail "a multi-line BEFORE was used: $(cat "$tmp/j.log")"; fi
+done
 
 echo
 if [ "$fails" -ne 0 ]; then

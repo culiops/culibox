@@ -256,11 +256,17 @@ var (
 	// Forms the line-based reader cannot follow. Each one could hide a `uses:`, a
 	// trigger or a write grant from the rules above, so the guard refuses the form
 	// instead of passing it (fail closed).
-	wfQuotedKey    = regexp.MustCompile(`^\s*(?:-\s+)?["'][^"']*["']\s*:(?:\s|$)`)
-	wfSpaceColon   = regexp.MustCompile(`^\s*(?:-\s+)?[\w.-]+\s+:(?:\s|$)`)
-	wfComplexKey   = regexp.MustCompile(`^\s*\?(?:\s|$)`)
-	wfAnchor       = regexp.MustCompile(`(?:^|\s)&[A-Za-z_][\w-]*(?:\s|$)`)
-	wfAlias        = regexp.MustCompile(`(?:^|\s)\*[A-Za-z_][\w-]*(?:\s|$|[,\]}])`)
+	wfQuotedKey  = regexp.MustCompile(`^\s*(?:-\s+)?["'][^"']*["']\s*:(?:\s|$)`)
+	wfSpaceColon = regexp.MustCompile(`^\s*(?:-\s+)?[\w.-]+\s+:(?:\s|$)`)
+	wfComplexKey = regexp.MustCompile(`^\s*\?(?:\s|$)`)
+	wfAnchor     = regexp.MustCompile(`(?:^|[\s\[{,:])&[A-Za-z_][\w-]*(?:\s|$|[,\]}])`)
+	wfAlias      = regexp.MustCompile(`(?:^|[\s\[{,:])\*[A-Za-z_][\w-]*(?:\s|$|[,\]}])`)
+	wfTag        = regexp.MustCompile(`(?:^|[\s\[{,:])!(?:[!<\w-]|\s|$)`)
+	wfExprSpan   = regexp.MustCompile(`\$\{\{.*?\}\}`)
+	wfQuotedText = regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'[^']*'`)
+	// The one flow form the guard reads: `key: [a, "b"]` on one line, items plain or
+	// quoted scalars (so no nested collection, pair, alias, anchor or tag in it).
+	wfFlowList     = regexp.MustCompile(`^\s*[\w.-]+:\s*\[\s*(?:` + wfFlowItem + `(?:\s*,\s*` + wfFlowItem + `)*)?\s*\]\s*$`)
 	wfMergeKey     = regexp.MustCompile(`^\s*<<\s*:`)
 	wfSingleRunKey = regexp.MustCompile(`^\s*(?:-\s+)?run:`)
 )
@@ -309,6 +315,8 @@ func parseWorkflow(content string) []wfLine {
 	}
 	return out
 }
+
+const wfFlowItem = `(?:[A-Za-z0-9_./@+-][A-Za-z0-9_./@*+-]*|"[^"\\]*"|'[^']*')`
 
 var (
 	wfOn         = regexp.MustCompile(`^["']?on["']?:[ \t]*(.*)$`)
@@ -417,6 +425,9 @@ func checkWorkflowSupplyChain(name, content string) []string {
 	if trig, ok := workflowTriggers(lines); !ok {
 		add(0, "no top-level `on:` found")
 	} else {
+		if len(trig) == 0 {
+			add(0, "no trigger found under `on:` (an empty or unreadable `on:` must not pass)")
+		}
 		for _, tr := range trig {
 			if !wfOnAllowed[tr] {
 				add(0, "trigger %q is not allowed (only %s): a fork or an outsider must not be able to start a job here", tr, wfOnAllowMsg)
@@ -431,6 +442,26 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		}
 		if !l.inScript {
 			code := wfTrailing.ReplaceAllString(l.text, "")
+			// bare: expressions and quoted text taken out, then the comment, so a brace
+			// or an exclamation mark inside text is not structure.
+			bare := wfTrailing.ReplaceAllString(wfQuotedText.ReplaceAllString(wfExprSpan.ReplaceAllString(l.text, "x"), `""`), "")
+			if !wfSingleRunKey.MatchString(code) {
+				if strings.Contains(bare, "{") {
+					add(l.n, "flow map (`{...}`) is not supported by the guard: write a block mapping: %q", text)
+				}
+				if (strings.Contains(bare, "[") || strings.Contains(bare, "]")) && !wfFlowList.MatchString(code) {
+					add(l.n, "flow list that is not a one-line `key: [a, b]` of plain or quoted scalars: write a block list: %q", text)
+				}
+				if wfTag.MatchString(bare) {
+					add(l.n, "YAML tag (`!`) is not supported by the guard: %q", text)
+				}
+				if wfAnchor.MatchString(bare) {
+					add(l.n, "YAML anchor (`&name`) is not supported by the guard: repeat the text instead: %q", text)
+				}
+				if wfAlias.MatchString(bare) {
+					add(l.n, "YAML alias (`*name`) is not supported by the guard: repeat the text instead: %q", text)
+				}
+			}
 			switch {
 			case wfQuotedKey.MatchString(code):
 				add(l.n, "quoted key: write workflow keys unquoted, the guard reads plain text: %q", text)
@@ -440,10 +471,6 @@ func checkWorkflowSupplyChain(name, content string) []string {
 				add(l.n, "complex key (`? key`) is not supported by the guard: %q", text)
 			case wfMergeKey.MatchString(code):
 				add(l.n, "merge key (`<<:`) is not supported by the guard: %q", text)
-			case !wfSingleRunKey.MatchString(code) && wfAnchor.MatchString(code):
-				add(l.n, "YAML anchor (`&name`) is not supported by the guard: repeat the text instead: %q", text)
-			case !wfSingleRunKey.MatchString(code) && wfAlias.MatchString(code):
-				add(l.n, "YAML alias (`*name`) is not supported by the guard: repeat the text instead: %q", text)
 			}
 		}
 		if m := wfUses.FindStringSubmatch(l.text); m != nil {
@@ -594,6 +621,12 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 	if bad := checkWorkflowSupplyChain("good.yml", good); len(bad) != 0 {
 		t.Fatalf("good workflow reported: %v", bad)
 	}
+	// Lists of scalars on one line, and brackets or braces in quoted text, are fine.
+	flowOK := top + head + checkout + "    needs: [verify, tests]\n    strategy:\n      matrix:\n        os: [ubuntu-24.04, \"ubuntu-24.04-arm\"]\n" +
+		"      - name: \"a {b} [c] !d\"\n        if: ${{ !cancelled() && github.event_name == 'push' }}\n        run: if [ -n \"$x\" ]; then echo \"{}\"; fi\n"
+	if bad := checkWorkflowSupplyChain("good.yml", flowOK); len(bad) != 0 {
+		t.Fatalf("one-line scalar lists and quoted brackets reported: %v", bad)
+	}
 	// Shell text and quoted values in a script are not YAML structure.
 	scripted := top + head + checkout + "      - name: s\n        run: |\n          echo \"a: b\" && ls *.go\n          case x in *) : ;; esac\n          x=\"uses :\"\n"
 	if bad := checkWorkflowSupplyChain("good.yml", scripted); len(bad) != 0 {
@@ -603,7 +636,6 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"flow list":   "on: [push, workflow_dispatch]  # why\n",
 		"quoted flow": "on: [\"push\", 'workflow_call', schedule]\n",
 		"scalar":      "on: push\n",
-		"flow map":    "on: {push: {branches: [main]}, workflow_dispatch: {}}\n",
 		"item list":   "on:\n  - push\n  - workflow_call\n",
 		"block":       "on:\n  schedule:\n    - cron: \"17 2 * * 1\"\n  workflow_dispatch:\n",
 	} {
@@ -648,7 +680,24 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"merge key":           {top + head + checkout + "    env:\n      <<: *shared\n", "merge key"},
 		"persist under env":   {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        env:\n          persist-credentials: false\n", "persist-credentials"},
 		"persist in a script": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n      - run: |\n          persist-credentials: false\n", "persist-credentials"},
-		"persist sibling key": {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n        env:\n          persist-credentials: false\n", "persist-credentials"},
+		// Flow collections hide structure from a line reader: only a one-line list of
+		// plain or quoted scalars (`branches: [main]`) is accepted.
+		"flow map step":          {top + head + "      - {\"uses\": \"actions/checkout@v4\"}\n", "flow map"},
+		"flow map plain step":    {top + head + "      - {uses: actions/checkout@v4}\n", "flow map"},
+		"flow map on":            {"name: x\non: {push: {}, issue_comment: {}}\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow map"},
+		"on flow map next line":  {"name: x\non:\n  {push: {}, issue_comment: {}}\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow map"},
+		"on flow list next line": {"name: x\non:\n  [push, issue_comment]\npermissions:\n  contents: read\njobs:\n" + head + checkout, "flow list"},
+		"multi-line flow list":   {top + head + checkout + "    needs: [\n      a,\n    ]\n", "flow list"},
+		"nested flow list":       {top + head + checkout + "    needs: [a, [b]]\n", "flow list"},
+		"flow list of pairs":     {top + head + checkout + "    needs: [uses: x]\n", "flow list"},
+		"no triggers found":      {"name: x\non:\n  # nothing\npermissions:\n  contents: read\njobs:\n" + head + checkout, "no trigger"},
+		"alias in flow list":     {top + head + checkout + "    needs: [*step]\n", "alias"},
+		"anchor in flow list":    {top + head + checkout + "    needs: [&step x]\n", "anchor"},
+		"anchor after comma":     {top + head + checkout + "    needs: [a,&step x]\n", "anchor"},
+		"tag on a quoted key":    {top + head + "      - !!str \"uses\": actions/checkout@v4\n", "YAML tag"},
+		"tag on a value":         {top + head + checkout + "    env:\n      A: !!binary x\n", "YAML tag"},
+		"tag in a flow list":     {top + head + checkout + "    needs: [!x y]\n", "YAML tag"},
+		"persist sibling key":    {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n        env:\n          persist-credentials: false\n", "persist-credentials"},
 	} {
 		bad := checkWorkflowSupplyChain("bad.yml", tc.wf)
 		if len(bad) == 0 {

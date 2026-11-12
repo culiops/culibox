@@ -136,7 +136,8 @@ case "$1 $2" in
   ;;
 "repo view")
   [ "$3 $4 $5 $6" = "$GH_REPO --json visibility -q" ] || { echo "stub gh: repo view wants <repo> --json visibility -q .visibility, got: $*" >&2; exit 1; }
-  echo "${STUB_VISIBILITY:-PRIVATE}"
+  # STUB_VISIBILITY=EMPTY makes gh print nothing, as it would on a broken response.
+  if [ "${STUB_VISIBILITY:-PRIVATE}" = EMPTY ]; then echo; else echo "${STUB_VISIBILITY:-PRIVATE}"; fi
   ;;
 "attestation verify")
   [ -z "${STUB_ATTEST_FAIL:-}" ] || { echo "stub gh: attestation verification failed" >&2; exit 1; }
@@ -393,7 +394,12 @@ expect_rc "$rc" 0 "(m) a public repo with valid attestations is verified"
 for f in "$arm_tgz" "$amd_tgz"; do
   contains "$out/gh.log" "attestation verify $case_dir/tmpdir/" "(m) $f is attestation-verified"
 done
-contains "$out/gh.log" "--signer-workflow culiops/culibox/.github/workflows/release.yml" "(m) the signer workflow is pinned to release.yml"
+# An exact identity (the whole workflow URL with this tag's ref), not --signer-workflow:
+# older gh versions match that flag as a prefix, so a look-alike workflow file name
+# would satisfy it. --deny-self-hosted-runners keeps a runner the owner does not host out.
+contains "$out/gh.log" "--cert-identity https://github.com/culiops/culibox/.github/workflows/release.yml@refs/tags/$tag" "(m) the signer is pinned to release.yml at this tag by exact identity"
+contains "$out/gh.log" "--deny-self-hosted-runners" "(m) attestations from self-hosted runners are refused"
+absent "$out/gh.log" "--signer-workflow" "(m) no prefix-matched --signer-workflow"
 contains "$out/gh.log" "--source-ref refs/tags/$tag" "(m) the attestation must be for this tag"
 contains "$out/gh.log" "--source-digest $sha" "(m) the attestation must be for the tag's commit"
 
@@ -405,6 +411,18 @@ contains "$case_dir/stderr" "attestation" "(m2) the error names the attestation"
 missing "$out/go-called.marker" "(m2) go test never ran"
 missing "$out/arch.log" "(m2) no binary ran"
 missing "$out/uploaded.json" "(m2) nothing was uploaded"
+
+# Only an exact PRIVATE skips the check; any other answer (INTERNAL, empty, garbage) is an
+# error, never a quiet skip.
+for v in INTERNAL EMPTY public Private; do
+  echo "== (m4) visibility '$v'"
+  new_case m4
+  run_script $'M1=pass\n\n' STUB_VISIBILITY="$v"
+  if [ "$rc" -ne 0 ]; then pass "(m4) visibility '$v' exits non-zero"; else fail "(m4) visibility '$v' was accepted"; fi
+  contains "$case_dir/stderr" "visibility" "(m4) the error names the visibility"
+  missing "$out/go-called.marker" "(m4) go test never ran for '$v'"
+  absent "$out/gh.log" "attestation verify" "(m4) no attestation check for '$v'"
+done
 
 echo "== (m3) attestation, private repo"
 new_case m3
