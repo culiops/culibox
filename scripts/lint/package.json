@@ -1,0 +1,8 @@
+{
+  "name": "culibox-page-lint",
+  "private": true,
+  "description": "Pinned eslint for scripts/lint.sh (installed with npm ci from the lockfile; never published)",
+  "devDependencies": {
+    "eslint": "9.39.5"
+  }
+}
