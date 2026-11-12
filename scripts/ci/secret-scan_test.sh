@@ -79,8 +79,8 @@ done
 #    scanned (a superset of what was pushed), and then the final tree as well.
 scan c "$repo" push refs/heads/main "$gone"
 if [ "$rc" -eq 0 ] && [ "$(lines "$log")" = 2 ] &&
-  has "$log" "git --config .gitleaks.toml --redact --log-opts=v0.1.0..$c3 ." && has "$log" "dir --config .gitleaks.toml --redact ."; then
-  pass "a force-push scans the range since the newest tag and the tree"
+  has "$log" "git --config scripts/ci/gitleaks-range.toml --redact --log-opts=v0.1.0..$c3 ." && has "$log" "dir --config .gitleaks.toml --redact ."; then
+  pass "a force-push scans the range with the range config (no private-identifier rules) and the tree with the full config"
 else fail "a force-push must scan tag..sha and the tree: rc=$rc log=$(cat "$log")"; fi
 if has "$tmp/c.out" "not in this clone"; then pass "the force-push is announced"; else fail "no force-push notice: $(cat "$err")"; fi
 

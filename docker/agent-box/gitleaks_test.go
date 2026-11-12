@@ -204,3 +204,71 @@ func TestSecretScanScriptKeepsConfigAndRedaction(t *testing.T) {
 		}
 	}
 }
+
+// The force-push range scan runs with scripts/ci/gitleaks-range.toml, the repo config
+// minus its private-identifier rules (old commits legitimately hold fixtures those
+// rules were added later to catch). The list of disabled rules must be exactly the
+// custom rules of .gitleaks.toml, so a new custom rule is a deliberate choice: add it
+// to the range config's list or move it out of the repo config.
+func TestForcePushRangeConfigDisablesExactlyTheCustomRules(t *testing.T) {
+	read := func(p string) string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	custom := customRuleIDs(read("../../.gitleaks.toml"))
+	if len(custom) == 0 {
+		t.Fatal("found no custom [[rules]] in .gitleaks.toml: has its layout changed?")
+	}
+	rng := read("../../scripts/ci/gitleaks-range.toml")
+	if !regexp.MustCompile(`(?m)^path = "\.gitleaks\.toml"$`).MatchString(rng) {
+		t.Error(`gitleaks-range.toml must extend the repo config: path = ".gitleaks.toml"`)
+	}
+	disabled := disabledRuleIDs(rng)
+	if strings.Join(disabled, ",") != strings.Join(custom, ",") {
+		t.Errorf("gitleaks-range.toml disables %v, the custom rules of .gitleaks.toml are %v: they must match", disabled, custom)
+	}
+	if got := customRuleIDs("[[rules]]\nid = \"b\"\n[[allowlists]]\nregexes = ['''x''']\n[[rules]]\nid = \"a\"\n"); strings.Join(got, ",") != "a,b" {
+		t.Errorf("customRuleIDs = %v", got)
+	}
+	if got := disabledRuleIDs("[extend]\ndisabledRules = [\n  \"b\",\n  \"a\", # c\n]\n"); strings.Join(got, ",") != "a,b" {
+		t.Errorf("disabledRuleIDs = %v", got)
+	}
+}
+
+// customRuleIDs returns the sorted ids of the [[rules]] tables.
+func customRuleIDs(cfg string) []string {
+	var ids []string
+	inRule := false
+	for _, l := range strings.Split(cfg, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "[["):
+			inRule = t == "[[rules]]"
+		case strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[["):
+			inRule = false
+		case inRule:
+			if m := regexp.MustCompile(`^id\s*=\s*"([^"]+)"`).FindStringSubmatch(t); m != nil {
+				ids = append(ids, m[1])
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// disabledRuleIDs returns the sorted entries of extend.disabledRules.
+func disabledRuleIDs(cfg string) []string {
+	m := regexp.MustCompile(`(?s)disabledRules\s*=\s*\[(.*?)\]`).FindStringSubmatch(cfg)
+	if m == nil {
+		return nil
+	}
+	var ids []string
+	for _, q := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(regexp.MustCompile(`(?m)#.*$`).ReplaceAllString(m[1], ""), -1) {
+		ids = append(ids, q[1])
+	}
+	sort.Strings(ids)
+	return ids
+}

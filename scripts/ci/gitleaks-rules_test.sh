@@ -91,6 +91,56 @@ quiet "$r" "account: $(printf '%s%s%s' 1111 1111 1111)" "a repeated-digit fake i
 quiet "$r" "stamp 2026$(printf '%s' 11121530)00 in a log" "a 12-digit number outside an account context is not flagged"
 quiet "$r" "account id 98765432109 is short" "an 11-digit number is not an account id"
 
+# ---- force-push range scan: the private-identifier rules apply to the final tree, not to
+# the old commits a rewritten history leaves in the range. Real-secret rules still apply
+# to the range. A real throwaway repository, the real scanner, made-up values.
+root=$(cd "$here/../.." && pwd)
+mkrepo() { # NAME: a repo with the configs and the script; a tagged first commit; sets repo
+  repo=$tmp/$1
+  mkdir -p "$repo/scripts/ci"
+  cp "$root/.gitleaks.toml" "$repo/"
+  cp "$root/scripts/ci/gitleaks-range.toml" "$root/scripts/ci/secret-scan.sh" "$repo/scripts/ci/"
+  git init -q -b main "$repo"
+  echo base >"$repo/README"
+  rgit add -A
+  rgit commit -q -m base
+  rgit tag v0.1.0
+}
+rgit() { git -C "$repo" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+# scan_range BEFORE: runs secret-scan.sh in $repo as a push to main; sets rc
+scan_range() {
+  if (cd "$repo" && env GIT_CONFIG_GLOBAL=/dev/null GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main \
+    GITHUB_SHA="$(git rev-parse HEAD)" BEFORE="$1" bash scripts/ci/secret-scan.sh) >"$tmp/range.out" 2>&1; then rc=0; else rc=$?; fi
+}
+gone=0123456789abcdef0123456789abcdef01234567
+private_line="host 100${dot}99${dot}1${dot}1 at ${hm}/jdoe42/work"
+token_line="tok $(printf '%s%s%s' ghp_ aZ3kQ9xLm2Pv7R tYw5Nc8BdFh4JsUe6GoXiV)"
+
+echo "== force-push: a private-identifier value only in an old commit"
+mkrepo fp1
+printf '%s\n' "$private_line" >"$repo/old.txt"
+rgit add -A && rgit commit -q -m old
+rgit rm -q old.txt && rgit commit -q -m remove
+scan_range "$gone"
+if [ "$rc" -eq 0 ]; then pass "a force-push passes: the range scan has no private-identifier rules and the final tree is clean"; else fail "the old private value failed the force-push scan: $(tail -5 "$tmp/range.out")"; fi
+scan_range "$(rgit rev-parse v0.1.0)"
+if [ "$rc" -ne 0 ]; then pass "a normal push of the same commits fails: all rules apply to the pushed range"; else fail "a normal push let a private value in a pushed commit through"; fi
+
+echo "== force-push: the same value in the final tree"
+mkrepo fp2
+printf '%s\n' "$private_line" >"$repo/now.txt"
+rgit add -A && rgit commit -q -m now
+scan_range "$gone"
+if [ "$rc" -ne 0 ]; then pass "a force-push fails when the final tree holds a private value (full config)"; else fail "the final tree scan missed a private value"; fi
+
+echo "== force-push: a real-secret shape in an old commit"
+mkrepo fp3
+printf '%s\n' "$token_line" >"$repo/tok.txt"
+rgit add -A && rgit commit -q -m tok
+rgit rm -q tok.txt && rgit commit -q -m remove
+scan_range "$gone"
+if [ "$rc" -ne 0 ]; then pass "a force-push still fails on a real-secret rule hit in the range"; else fail "the range scan dropped the real-secret rules"; fi
+
 echo
 if [ "$fails" -ne 0 ]; then
   echo "gitleaks-rules_test: $fails check(s) failed" >&2

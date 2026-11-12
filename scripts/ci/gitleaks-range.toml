@@ -1,0 +1,22 @@
+# The config for the commit RANGE scan of a force-push (scripts/ci/secret-scan.sh): the
+# repo's .gitleaks.toml without its private-identifier rules.
+#
+# After a force-push the range reaches back to the newest tag, so it holds old commits
+# that only a rewritten history left behind. Those commits legitimately hold fixtures
+# that the private-identifier rules (a tailnet-shaped address, a home path, an account
+# id) were added later to catch; they would turn every force-push red for something that
+# is no longer in the tree. Real-secret rules (every default rule, and any custom rule not
+# listed here) stay on. The FINAL TREE is still scanned with the full .gitleaks.toml, so
+# such a value in what the push leaves behind still fails the job. A normal push scans its
+# commits with the full config too.
+#
+# extend.path is read relative to the directory gitleaks runs in (the repo root).
+# docker/agent-box/gitleaks_test.go keeps this list equal to the custom rules in
+# .gitleaks.toml, so a new custom rule has to be put on one side on purpose.
+[extend]
+path = ".gitleaks.toml"
+disabledRules = [
+  "culibox-cgnat-address",
+  "culibox-home-path",
+  "culibox-aws-account-id",
+]
