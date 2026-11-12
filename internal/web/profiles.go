@@ -896,15 +896,7 @@ func (m *ProfileManager) Delete(name string) error {
 // detected and silently reads as "not bypassing", so the warning can under-
 // but never over-report.
 func argsBypassPermissions(args []string) bool {
-	for i, a := range args {
-		switch {
-		case a == "--dangerously-skip-permissions", a == "--permission-mode=bypassPermissions":
-			return true
-		case a == "--permission-mode" && i+1 < len(args) && args[i+1] == "bypassPermissions":
-			return true
-		}
-	}
-	return false
+	return launcher.ArgsBypassPermissions(args) // one spelling list, shared with the box's bypass pre-accept
 }
 
 // SetShares installs the box VM's live folder list, which the default_cwd save

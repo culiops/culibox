@@ -497,6 +497,13 @@ type BoxKey struct {
 	// user, which keeps a repo's own settings and hooks from loading; without it
 	// the dialog is the only gate before those run, so it stays.
 	PreTrust bool
+	// PreAcceptBypass asks for Claude Code's "Bypass Permissions mode" warning to
+	// be pre-accepted in the box home (see acceptBypassPermissions). Not identity,
+	// like PreTrust: it is applied when the box is created. The session layer sets
+	// it only when the spawn creating the box runs the agent with the bypass option
+	// (--dangerously-skip-permissions or --permission-mode bypassPermissions), so
+	// the option the user chose is the consent. Host-tier sessions never get here.
+	PreAcceptBypass bool
 	// NoImports is set when the profile turns CLAUDE.md imports off, so the box
 	// carries no import mounts. It is part of the identity, like Context:
 	// reuseMounts treats a box with extra mounts as fine for a spawn that asks
@@ -932,7 +939,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	// Last, so the clone and guard mounts above count as covering too.
 	extraRO = yieldCovered(ws.Path, extraRO)
-	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, lk); err != nil {
+	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -995,7 +1002,7 @@ func withoutNames(env, names []string) []string {
 // lk, when set, are the guard locks the box must hold before anything runs in
 // it: taken right before `docker run`, or, for a box already running, before
 // the session is counted. A lock that cannot be taken refuses the spawn.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust bool, lk *lockReq) error {
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1150,6 +1157,12 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		if preAcceptBypass {
+			// Best effort, like the trust entry: without it the agent just asks.
+			if err := m.preAcceptBypass(name); err != nil {
+				log.Printf("box: %s: bypass-permissions warning not pre-accepted: %v", name, err)
+			}
 		}
 		// Like the home: made by us, as us, before docker can create it as root.
 		// Also where the previous run's old screenshots are pruned.

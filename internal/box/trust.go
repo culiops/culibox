@@ -45,7 +45,49 @@ const trustTempPrefix = ".claude.json.ab-trust-"
 // Callers run it only while the box's container is absent, so no agent can
 // rewrite the file underneath it.
 func trustWorkspace(root *os.Root, workspace string) error {
-	const name = ".claude.json"
+	return mergeClaudeState(root, func(top map[string]json.RawMessage) (bool, error) {
+		projects := map[string]json.RawMessage{}
+		if p, ok := top["projects"]; ok {
+			if err := unmarshalObject(p, &projects); err != nil {
+				return false, fmt.Errorf("%s: projects: %w", claudeStateName, err)
+			}
+		}
+		entry := map[string]json.RawMessage{}
+		if e, ok := projects[workspace]; ok {
+			if err := unmarshalObject(e, &entry); err != nil {
+				return false, fmt.Errorf("%s: projects[%q]: %w", claudeStateName, workspace, err)
+			}
+		}
+		var accepted bool
+		if json.Unmarshal(entry["hasTrustDialogAccepted"], &accepted) == nil && accepted {
+			return false, nil // already trusted: leave the agent's file untouched
+		}
+
+		var err error
+		entry["hasTrustDialogAccepted"] = json.RawMessage("true")
+		if projects[workspace], err = encodeJSON(entry, ""); err != nil {
+			return false, err
+		}
+		if top["projects"], err = encodeJSON(projects, ""); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+}
+
+// claudeStateName is the agent's state file in a box home.
+const claudeStateName = ".claude.json"
+
+// mergeClaudeState reads the box home's .claude.json through root, hands its
+// top-level object to mutate, and, when mutate reports a change, writes it back
+// atomically. It is the one place that decides what a state file the daemon
+// will touch has to look like: a regular file of at most maxClaudeStateSize
+// bytes holding a JSON object. Anything else is left alone and reported, and
+// the caller logs it and spawns anyway. Every key mutate does not touch keeps
+// its value (the file is re-encoded, so key order and whitespace may change).
+// Callers run it only while the box's container is absent.
+func mergeClaudeState(root *os.Root, mutate func(top map[string]json.RawMessage) (changed bool, err error)) error {
+	const name = claudeStateName
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -72,28 +114,8 @@ func trustWorkspace(root *os.Root, workspace string) error {
 	if top == nil {
 		return fmt.Errorf("%s is not a JSON object", name)
 	}
-	projects := map[string]json.RawMessage{}
-	if p, ok := top["projects"]; ok {
-		if err := unmarshalObject(p, &projects); err != nil {
-			return fmt.Errorf("%s: projects: %w", name, err)
-		}
-	}
-	entry := map[string]json.RawMessage{}
-	if e, ok := projects[workspace]; ok {
-		if err := unmarshalObject(e, &entry); err != nil {
-			return fmt.Errorf("%s: projects[%q]: %w", name, workspace, err)
-		}
-	}
-	var accepted bool
-	if json.Unmarshal(entry["hasTrustDialogAccepted"], &accepted) == nil && accepted {
-		return nil // already trusted: leave the agent's file untouched
-	}
-
-	entry["hasTrustDialogAccepted"] = json.RawMessage("true")
-	if projects[workspace], err = encodeJSON(entry, ""); err != nil {
-		return err
-	}
-	if top["projects"], err = encodeJSON(projects, ""); err != nil {
+	changed, err := mutate(top)
+	if err != nil || !changed {
 		return err
 	}
 	out, err := encodeJSON(top, "  ")
@@ -101,6 +123,33 @@ func trustWorkspace(root *os.Root, workspace string) error {
 		return err
 	}
 	return replaceFile(root, name, append(out, '\n'))
+}
+
+// acceptBypassPermissions sets bypassPermissionsModeAccepted in the box home's
+// .claude.json, so Claude Code skips its one-time "Bypass Permissions mode"
+// warning. That dialog defaults to "No, exit" and nothing answers it in an
+// unattended boxed session, which then waits forever with no transcript.
+//
+// It is called only for a box created for a session that runs with the bypass
+// option (BoxKey.PreAcceptBypass). The consent is that option, which the user
+// chose for the profile or the spawn; the dialog's own condition, a sandboxed
+// container with restricted network access, is what a box is. Host-tier
+// sessions never reach it and keep the dialog.
+//
+// Measured on Claude Code 2.1.311 (the image's pin): with the key the dialog
+// does not show, and the agent moves the key on its first start into the box
+// home's settings.json as skipDangerousModePermissionPrompt. It merges like
+// trustWorkspace, and a value of false is replaced: the session's own option
+// is the stronger statement.
+func acceptBypassPermissions(root *os.Root) error {
+	return mergeClaudeState(root, func(top map[string]json.RawMessage) (bool, error) {
+		var accepted bool
+		if json.Unmarshal(top["bypassPermissionsModeAccepted"], &accepted) == nil && accepted {
+			return false, nil // already accepted: leave the agent's file untouched
+		}
+		top["bypassPermissionsModeAccepted"] = json.RawMessage("true")
+		return true, nil
+	})
 }
 
 // encodeJSON is json.Marshal (indented when indent != "") that leaves <, > and &
@@ -175,4 +224,15 @@ func replaceFile(root *os.Root, name string, body []byte) error {
 		_ = root.Remove(tmp)
 	}
 	return werr
+}
+
+// preAcceptBypass opens the box home through an os.Root, as ensureStateDir does,
+// and accepts the bypass-permissions warning in it.
+func (m *Manager) preAcceptBypass(boxName string) error {
+	root, err := os.OpenRoot(m.stateDir(boxName))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return acceptBypassPermissions(root)
 }
