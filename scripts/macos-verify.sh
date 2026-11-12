@@ -13,7 +13,7 @@
 #      mismatch stops the script before a single test or binary runs
 #   2. clones <tag>, installs the pinned abduco, and runs the Go tests natively
 #      (arm64) and under Rosetta 2 (amd64), built the way the tarballs are:
-#      CGO_ENABLED=0 GOOS=darwin GOARCH=<arch>, with no GOFLAGS from the caller
+#      CGO_ENABLED=0 GOOS=darwin GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file
 #   3. runs each extracted binary's `version` and requires exactly
 #      `agent-box <tag> (<commit of the clone>)`; amd64 runs under `arch -x86_64`
 #   4. asks for the manual Mac-test-guide rows (never defaults one to pass)
@@ -201,7 +201,8 @@ fi
 # run_tests ARCH GOARCH: go test ./... in the clone, logged to test-<arch>.log. The
 # environment is pinned, not inherited: the shipped tarballs are built with
 # CGO_ENABLED=0 (scripts/release/build.sh), so the tests are built that way too, for
-# darwin and this arch, with no GOFLAGS from the caller. -v so tests can be counted.
+# darwin and this arch. GOENV=off with an explicit GOFLAGS: an EMPTY GOFLAGS falls back to
+# the go env file (`go env -w`), so only a non-empty value pins it. -v so tests can be counted.
 # A failing run sets T_PASS=false and does not stop the script.
 T_PASS=
 T_SUMMARY=
@@ -216,7 +217,7 @@ run_tests() {
     return 0
   fi
   echo "go test ./... ($arch, $T_ENV)"
-  if (cd "$work/src" && env GOFLAGS= CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
+  if (cd "$work/src" && env GOENV=off GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" AGENT_BOX_REQUIRE_ABDUCO=1 \
     go test -count=1 -v ./...) >"$log" 2>&1; then
     T_PASS=true
     passed=$(grep -c '^--- PASS' "$log" || true)
@@ -364,12 +365,14 @@ edit_notes() {
   return 1
 }
 
-# If the notes now show a tick for an earlier run, clear it BEFORE the new record is
+# If the notes show anything but "NOT yet verified" for the darwin lines (a tick for an
+# earlier run, however it is spaced: the cleared text is computed by release-status, so
+# there is no second reading of the notes here), clear it BEFORE the new record is
 # uploaded. The notes edit after the upload can fail, and then the notes would keep
 # the older tick next to a record that says partial or failed. Cleared first, the
 # worst a failed final edit leaves is "NOT yet verified".
-if grep -qE '^- darwin/(arm64|amd64): ✅' "$work/notes.md"; then
-  echo "clearing the earlier verified line from the notes of $tag"
+if ! cmp -s "$work/notes.md" "$work/notes.cleared"; then
+  echo "clearing the earlier darwin status from the notes of $tag"
   edit_notes "$work/notes.cleared" ||
     die "cannot edit the notes of $tag; nothing was uploaded and the record is unchanged"
 fi

@@ -157,7 +157,9 @@ cat >"$tmp/bin/go" <<'EOF'
 case "$1" in
 version) echo "go version go1.99.0 darwin/arm64" ;;
 test)
-  echo "GOOS=${GOOS:-} GOARCH=${GOARCH:-} CGO=${CGO_ENABLED:-} GOFLAGS=${GOFLAGS:-} REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
+  # EFFECTIVE_GOFLAGS is what the real go would use in this very environment: a GOFLAGS
+  # that is merely empty falls back to the GOENV file, so the variable alone proves nothing.
+  echo "GOENV=${GOENV:-} GOOS=${GOOS:-} GOARCH=${GOARCH:-} CGO=${CGO_ENABLED:-} GOFLAGS=${GOFLAGS:-} EFFECTIVE_GOFLAGS=$("$STUB_REAL_GO" env GOFLAGS 2>/dev/null) REQUIRE=${AGENT_BOX_REQUIRE_ABDUCO:-} PWD=$PWD ABDUCO=$(command -v abduco || echo none) ARGS=$*" >>"$STUB_OUT/go.log"
   : >"$STUB_OUT/go-called.marker"
   if [ "${GOARCH:-}" = amd64 ] && [ -n "${STUB_GO_FAIL_AMD64:-}" ]; then
     printf '=== RUN   TestX\n--- FAIL: TestX (0.00s)\nFAIL\nFAIL\tfixture/a\t0.1s\nFAIL\n'
@@ -249,7 +251,7 @@ run_script() {
   if printf '%s' "$input" | env \
     PATH="$hermetic_path" TMPDIR="$case_dir/tmpdir" \
     MACOS_VERIFY_RETRY_DELAY=0 \
-    STUB_FIX="$fix" STUB_OUT="$out" \
+    STUB_FIX="$fix" STUB_OUT="$out" STUB_REAL_GO="$real_go" \
     MACOS_VERIFY_TEST=1 \
     RELEASE_STATUS="$tmp/release-status" \
     MACOS_VERIFY_GIT_URL="file://$tmp/repo" \
@@ -293,8 +295,8 @@ contains "$out/uploaded.json" '"chip": "Apple M2"' "(a) the chip is recorded"
 contains "$out/uploaded.json" '"go_version": "go1.99.0 darwin/arm64"' "(a) the Go version is recorded"
 contains "$out/uploaded.json" '"id": "M1"' "(a) row M1 is recorded"
 contains "$out/uploaded.json" '"note": "said \"hi\" \\ done"' "(a) a note with a quote and a backslash is escaped"
-contains "$out/go.log" "GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS= REQUIRE=1" "(a) the native run pins GOOS, GOARCH, CGO_ENABLED=0 (the shipped build), no GOFLAGS, and sets AGENT_BOX_REQUIRE_ABDUCO=1"
-contains "$out/go.log" "GOOS=darwin GOARCH=amd64 CGO=0 GOFLAGS= REQUIRE=1" "(a) the Rosetta run pins GOARCH=amd64 and the rest"
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the native run ignores the go env file, pins GOOS, GOARCH, CGO_ENABLED=0 (the shipped build) and GOFLAGS, and sets AGENT_BOX_REQUIRE_ABDUCO=1"
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=amd64 CGO=0 GOFLAGS=-mod=readonly EFFECTIVE_GOFLAGS=-mod=readonly REQUIRE=1" "(a) the Rosetta run pins GOARCH=amd64 and the rest"
 contains "$out/go.log" "ARGS=test -count=1 -v ./..." "(a) go test runs with -count=1 -v ./..."
 contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s)"' "(a) the summary counts tests, not packages"
 contains "$out/uploaded.json" '"test_env": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"' "(a) the record says the tests ran with cgo off"
@@ -405,9 +407,13 @@ done
 # ---- (o) the Go environment is pinned ---------------------------------------------
 echo "== (o) pinned go environment"
 new_case o
-run_script $'M1=pass\n\n' GOOS=linux CGO_ENABLED=1 GOFLAGS=-race GOARCH=s390x
+# A GOFLAGS set with `go env -w` lives in the GOENV file and survives an empty GOFLAGS.
+printf 'GOFLAGS=-tags=sneaky\n' >"$case_dir/goenv"
+run_script $'M1=pass\n\n' GOOS=linux CGO_ENABLED=1 GOFLAGS=-race GOARCH=s390x GOENV="$case_dir/goenv"
 expect_rc "$rc" 0 "(o) a hostile Go environment still verifies"
-contains "$out/go.log" "GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS= " "(o) GOOS, GOARCH, CGO_ENABLED and GOFLAGS are set by the script, not inherited"
+contains "$out/go.log" "GOENV=off GOOS=darwin GOARCH=arm64 CGO=0 GOFLAGS=-mod=readonly " "(o) GOENV, GOOS, GOARCH, CGO_ENABLED and GOFLAGS are set by the script, not inherited"
+contains "$out/go.log" "EFFECTIVE_GOFLAGS=-mod=readonly" "(o) the flags go really uses are the pinned ones, not the go env file's"
+absent "$out/go.log" "sneaky" "(o) a GOFLAGS from the caller's go env file never reaches go test"
 absent "$out/go.log" "GOOS=linux" "(o) the caller's GOOS never reaches go test"
 absent "$out/go.log" "s390x" "(o) the caller's GOARCH never reaches go test"
 
@@ -482,6 +488,23 @@ run_script $'M1=pass\n\n'
 expect_rc "$rc" 0 "(s4) a first verification exits 0"
 n=$(cat "$out/edit.count")
 if [ "$n" = 1 ]; then pass "(s4) one notes edit when there was no tick to clear"; else fail "(s4) $n notes edits, want 1"; fi
+
+# A tick whose spacing differs (the notes were edited by hand) is still a tick: release-status
+# reads it that way, so the clearing step must too.
+for variant in "two spaces" "no space" "tab" "no-break space"; do
+  echo "== (s5) older tick with spacing variant: $variant"
+  mk_verified_case "s5-${variant// /_}"
+  case "$variant" in
+    "two spaces") sed -i.bak -E 's@^- darwin/(arm64|amd64): @- darwin/\1:   @' "$fix/notes.md" ;;
+    "no space") sed -i.bak -E 's@^- darwin/(arm64|amd64): @- darwin/\1:@' "$fix/notes.md" ;;
+    "tab") sed -i.bak -E "s@^- darwin/(arm64|amd64): @- darwin/\1:$(printf '\t')@" "$fix/notes.md" ;;
+    "no-break space") sed -i.bak -E "s@^- darwin/(arm64|amd64): @- darwin/\1:$(printf '\302\240')@" "$fix/notes.md" ;;
+  esac
+  rm -f "$fix/notes.md.bak"
+  run_script $'M1=pass\n\n' STUB_GO_FAIL_AMD64=1 STUB_EDIT_FAIL_FROM=2
+  expect_rc "$rc" 1 "(s5 $variant) a failed final edit exits 1"
+  if [ -f "$out/current-notes.md" ] && ! grep -qF "✅" "$out/current-notes.md"; then pass "(s5 $variant) the older tick was cleared before the upload"; else fail "(s5 $variant) the notes still show the older tick"; fi
+done
 
 # ---- (j) a bad tag is a usage error ------------------------------------------------
 echo "== (j) bad tag"
