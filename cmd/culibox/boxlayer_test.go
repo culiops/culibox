@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -895,14 +896,30 @@ func TestBootSweepsGuardLocksOnlyOnAConfirmedStop(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		garbled   bool
+		sockAlive bool
 		wantSweep bool
 	}{
-		{"stopped", false, true},
-		{"status unreadable", true, false},
+		{"stopped", false, false, true},
+		{"status unreadable", true, false, false},
+		// #247 (1): colima also says "is not running" when it cannot read the
+		// lima instance; while the VM's docker socket still answers, that is
+		// not a confirmed stop.
+		{"docker socket answers", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, fc, _ := darwinLayer(t, false)
 			fc.garbled = tc.garbled
+			if tc.sockAlive {
+				sock := l.vm.Config().DockerSocket()
+				if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				ln, err := net.Listen("unix", sock)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { ln.Close() })
+			}
 			swept := 0
 			l.sweepLocksNoBoxes = func() { swept++ }
 			if l.bootReconcile(context.Background()) {

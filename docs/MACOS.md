@@ -404,13 +404,15 @@ a git config `include`, and so on). What it covers and what it does not is in
     spawn is refused and the message names the file. Fix the file, remove it,
     or use a clone-mode profile. A volume that has no such flag (exFAT, a
     network share) is refused with that reason: use a clone-mode profile there.
-  - Two CuliBox instances with separate data folders on one Mac do not see each
-    other's locks. The second finds the file locked already and treats the flag
-    as yours, so it never clears it; but the first lifts its own lock when its
-    box ends, even while the second's box in that folder still runs. Run boxes
-    in place in one folder from one instance only, or use a clone-mode profile.
-  - A file you had already locked yourself (`uchg` set before the spawn) is
-    left locked: CuliBox never clears a flag it did not set.
+  - A box runs in place only over locks CuliBox set itself. If a guarded file
+    is locked already and this CuliBox did not lock it (you did, another
+    CuliBox instance with its own data folder did, or an earlier run whose
+    lock records were lost), the spawn is refused and the message names the
+    file. CuliBox never clears a flag it did not set. So two CuliBox instances
+    on one Mac never box the same folder in place at once: the second is
+    refused until the first's box is gone (its lock would otherwise be lifted
+    under the second's box). End the other box, unlock a file you locked
+    yourself with `chflags nouchg`, or use a clone-mode profile.
   - The cost: while the session runs you cannot edit those files on the Mac,
     and `git checkout` (or a branch switch) exits 0 but prints `unable to
     unlink old 'CLAUDE.md'` and leaves the file with its old content, shown as
@@ -424,7 +426,12 @@ a git config `include`, and so on). What it covers and what it does not is in
     `chflags nouchg` line to lift one by hand. The session's side panel says
     which files are locked. If you move or rename the folder while a session
     runs, CuliBox no longer finds the files there: unlock them by hand
-    (`ls -lO` shows `uchg`).
+    (`ls -lO` shows `uchg`). A file on a disk that came back with another
+    device number (an external disk after a restart) is not unlocked on a
+    guess either: doctor lists it with the line to unlock it. If the records
+    file cannot be read, CuliBox keeps it as `inplace-locks.json.unreadable`
+    and starts with none: a file it had locked stays locked, and a spawn in
+    its folder is refused naming it, until you unlock it.
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.

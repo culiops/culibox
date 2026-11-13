@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/culiops/culibox/internal/vmshares"
@@ -48,7 +50,10 @@ func firstLine(s string) string {
 
 // Status is what `colima status --json` reports for the profile.
 type Status struct {
-	Running                               bool
+	Running bool
+	// Stopped: colima itself answered that the VM is not running. A status
+	// that failed any other way reads as neither: a box may still run.
+	Stopped                               bool
 	Driver, MountType, Arch, DockerSocket string
 }
 
@@ -175,6 +180,10 @@ func (v *VM) ProvisionDrifted() bool {
 
 // Status asks colima. A non-zero exit means "not running" (colima reports a
 // stopped or never-created profile that way); a cancelled context is an error.
+// Stopped needs two independent signals: colima's "is not running" answer,
+// which colima also gives when it cannot read the lima instance (so alone it
+// may hide a running VM), and nothing listening on the VM's docker socket
+// (socketDead). Any other failure leaves it false: boxes may still run.
 func (v *VM) Status(ctx context.Context) (Status, error) {
 	if err := v.preflight(); err != nil {
 		return Status{}, err
@@ -184,7 +193,7 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 		return Status{}, ctx.Err()
 	}
 	if err != nil {
-		return Status{}, nil
+		return Status{Stopped: strings.Contains(out, "is not running") && socketDead(v.Config().DockerSocket())}, nil
 	}
 	var s struct {
 		Driver       string `json:"driver"`
@@ -197,6 +206,23 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 	}
 	return Status{Running: true, Driver: s.Driver, Arch: s.Arch, MountType: s.MountType,
 		DockerSocket: strings.TrimPrefix(s.DockerSocket, "unix://")}, nil
+}
+
+// socketDead reports whether nothing serves the unix socket p: it does not
+// exist, or a connect is refused (a file left behind). lima's host agent
+// serves the VM's docker socket. This signal relies on vmType vz
+// (config.go:330): there the VM runs inside the host agent, so a dead host
+// agent means a dead VM and no box is reachable or running. With qemu the VM
+// is a separate process that can outlive the host agent, so changing vmType
+// must revisit this check. Any other answer (it connects, a permission error,
+// a timeout) is not dead.
+func socketDead(p string) bool {
+	c, err := net.DialTimeout("unix", p, 2*time.Second)
+	if err == nil {
+		c.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func lastLine(s string) string {

@@ -136,7 +136,8 @@ type boxFacts struct {
 	MountsErr error
 	// Locks are the in-place guard locks recorded in the data root (#96,
 	// darwin only); LocksErr: the records cannot be read. Running are this
-	// instance's running boxes when RunningKnown (none while the VM is down).
+	// instance's boxes docker lists, in any state, when RunningKnown (none
+	// while the VM is down): the boxes that hold their locks.
 	Locks        []box.GuardLock
 	LocksErr     error
 	Running      []string
@@ -356,7 +357,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 		f.Drift = d
 	}
 	f.Status, f.StatusErr = vm.Status(ctx)
-	if f.StatusErr == nil && !f.Status.Running {
+	if noBoxRuns(f.Status, f.StatusErr) {
 		f.RunningKnown = true // the VM is down: no box runs
 	}
 	if f.StatusErr != nil || !f.Status.Running {
@@ -396,8 +397,15 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	return f
 }
 
-// runningBoxes names this instance's running boxes; ok is false when the
-// listing failed (unknown, not none).
+// noBoxRuns reports whether colima itself said the VM is not running, so no box
+// can run. Any other failed status leaves it unknown.
+func noBoxRuns(st boxvm.Status, err error) bool { return err == nil && st.Stopped }
+
+// runningBoxes names this instance's boxes that docker still lists, in any
+// state; ok is false when the list cannot be read. They are the boxes that
+// hold their guard locks: the lock sweep keeps the locks of a listed box
+// whatever its state (a paused or exited box may run again), so doctor must
+// not call those leftovers.
 func runningBoxes(ctx context.Context, c box.CLIClient, label string) ([]string, bool) {
 	bs, err := c.ListBoxes(ctx, label)
 	if err != nil {
@@ -405,9 +413,7 @@ func runningBoxes(ctx context.Context, c box.CLIClient, label string) ([]string,
 	}
 	var out []string
 	for _, b := range bs {
-		if b.State == "running" {
-			out = append(out, b.Name)
-		}
+		out = append(out, b.Name)
 	}
 	return out, true
 }
