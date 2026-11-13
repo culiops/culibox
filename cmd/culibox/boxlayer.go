@@ -60,6 +60,7 @@ type boxLayer struct {
 	cli        box.CLIClient
 	img        boximage.Docker
 	image      string             // the fallback box image (box_image)
+	adoptable  bool               // box_image is unset: a legacy default image may be adopted (adoptImage)
 	goos       string             // runtime.GOOS as the layer was built
 	dataDir    string             // the absolute data dir, for the store doctor and box setup read
 	protected  []box.ProtectedDir // CuliBox's own host dirs (config, profiles, bundle); no VM share may overlap them
@@ -93,6 +94,12 @@ type boxLayer struct {
 	foldersOK atomic.Pointer[yamlStamp]
 	// sweepLocksNoBoxes is boxes.SweepGuardLocksNoBoxes; a test replaces it.
 	sweepLocksNoBoxes func()
+	// adoptMu guards adoptDone: set once the daemon has given a definitive
+	// answer, after which adoptImage does nothing. adoptErr keeps the retried
+	// failure from filling the log.
+	adoptMu   sync.Mutex
+	adoptDone bool
+	adoptErr  logOnChange
 }
 
 // yamlStamp identifies one written colima.yaml.
@@ -174,7 +181,7 @@ func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.
 	if err != nil {
 		return nil, err
 	}
-	l := &boxLayer{protected: protected, goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
+	l := &boxLayer{protected: protected, goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), adoptable: cfg.BoxImage == "", stateRoot: dataDir, dataDir: dataDir}
 	if goos == "darwin" {
 		colima, err := boxvm.LookColima(cfg.ColimaBin)
 		if err != nil {
@@ -239,7 +246,18 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		EgressAll:    true,
 		GuardInPlace: true,
 	}
+	if l.adoptable {
+		// Linux: the legacy default is adopted before a spawn, retried until the
+		// daemon answers. No error reaches the spawn (the image check that
+		// follows says what is missing).
+		o.Prepare = func(ctx context.Context) error {
+			l.adoptImage(ctx)
+			return nil
+		}
+	}
 	if l.vm != nil {
+		// darwin: prepare adopts first, then checks the image, so it replaces
+		// the Linux hook above rather than running next to it.
 		o.Prepare = l.prepare
 		o.Verify = l.verify
 		// #72: the context-path identity, read in the VM (Linux records it on the
@@ -261,6 +279,36 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 // prober is the config bundle's MCP probe, on the same daemon as the boxes.
 func (l *boxLayer) prober(image string) bundle.ImageProber {
 	return bundle.ImageProber{Docker: l.dockerBin, Args: l.dockerArgs, Image: image}
+}
+
+// adoptImage gives an upgraded install's pre-rename default image
+// (config.LegacyDefaultBoxImage) the new default name, by docker tag, when
+// box_image is unset and the new name is missing. The old tag is never deleted.
+// It never fails a caller: a daemon that does not answer is logged once per
+// distinct error and tried again on the next call, and after any definitive
+// answer (adopted, already there, or neither image present) it does nothing.
+func (l *boxLayer) adoptImage(ctx context.Context) {
+	if l == nil || !l.adoptable {
+		return
+	}
+	l.adoptMu.Lock()
+	defer l.adoptMu.Unlock()
+	if l.adoptDone {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, imageCheckTimeout)
+	defer cancel()
+	adopted, err := boximage.AdoptLegacyDefault(ctx, l.img, config.DefaultBoxImage, config.LegacyDefaultBoxImage)
+	if err != nil {
+		if l.adoptErr.changed(err.Error()) {
+			log.Printf("box image: could not adopt %s as %s: %v (tried again before the next spawn)", config.LegacyDefaultBoxImage, config.DefaultBoxImage, err)
+		}
+		return
+	}
+	l.adoptDone = true
+	if adopted {
+		log.Print(adoptedImageMsg)
+	}
 }
 
 // prepare readies the VM for a boxed spawn: started (lazily), and holding an
@@ -304,6 +352,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
+	l.adoptImage(ictx)
 	st, err := l.img.Inspect(ictx, l.image)
 	if err != nil {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)

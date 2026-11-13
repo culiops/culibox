@@ -206,8 +206,8 @@ func TestBundleSourceAndBoxImageClasses(t *testing.T) {
 	}
 	const digest = "sha256:0123456789abcdef0123456789abcdef"
 	for img, want := range map[string]string{
-		"":                                   "box image: culiops/agent-box:base",
-		"ghcr.io/culiops/agent-box:base":     "box image: ghcr.io/culiops/agent-box:base",
+		"":                                   "box image: culiops/culibox:base",
+		"ghcr.io/culiops/culibox:base":       "box image: ghcr.io/culiops/culibox:base",
 		"docker.io/library/debian:12":        "box image: docker.io/library/debian:12",
 		"registry.corp.example.com/team/x:1": "box image: custom\n",
 		"registry.corp.example.com/team/x@" + digest: "box image: custom@0123456789ab\n",

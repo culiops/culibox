@@ -424,8 +424,11 @@ func TestLoad_BoxVMFields(t *testing.T) {
 }
 
 func TestBoxImageOrDefault(t *testing.T) {
-	if got := (Config{}).BoxImageOrDefault(); got != "culiops/agent-box:base" {
+	if got := (Config{}).BoxImageOrDefault(); got != "culiops/culibox:base" {
 		t.Fatalf("default = %q", got)
+	}
+	if LegacyDefaultBoxImage != "culiops/agent-box:base" {
+		t.Fatalf("legacy default = %q", LegacyDefaultBoxImage)
 	}
 	if got := (Config{BoxImage: "me/img:1"}).BoxImageOrDefault(); got != "me/img:1" {
 		t.Fatalf("override = %q", got)
@@ -438,7 +441,7 @@ func TestValidate_BoxImage(t *testing.T) {
 	base := func() Config {
 		return Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "c", Bin: "claude"}}}
 	}
-	for _, ok := range []string{"", "culiops/agent-box:base", "registry.example.com:5000/a/b_c-d.e:1.2", "img@sha256:abc123"} {
+	for _, ok := range []string{"", "culiops/culibox:base", "culiops/agent-box:base", "registry.example.com:5000/a/b_c-d.e:1.2", "img@sha256:abc123"} {
 		c := base()
 		c.BoxImage = ok
 		if err := c.Validate(); err != nil {

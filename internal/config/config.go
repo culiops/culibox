@@ -303,7 +303,12 @@ func (c Config) BoxInstance() string {
 }
 
 // DefaultBoxImage is the box image every box runs when the config names none.
-const DefaultBoxImage = "culiops/agent-box:base"
+const DefaultBoxImage = "culiops/culibox:base"
+
+// LegacyDefaultBoxImage is the default before the rename to culibox. An
+// upgraded install with box_image unset still holds its image under this tag;
+// the box layer re-tags it as DefaultBoxImage (never deleting this one).
+const LegacyDefaultBoxImage = "culiops/agent-box:base"
 
 // BoxImageOrDefault is the instance-wide box image (box_image), or DefaultBoxImage.
 func (c Config) BoxImageOrDefault() string {

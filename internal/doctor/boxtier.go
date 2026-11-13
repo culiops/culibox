@@ -145,6 +145,11 @@ type boxFacts struct {
 	// "$HOME"/'rest': doctor's output shows $HOME as "~", which a quoted
 	// command would not expand.
 	Home string
+	// LegacyName is the pre-rename default image, read only when box_image is
+	// unset and the default is missing (doctor never tags it: serve adopts it);
+	// "" = not read. Legacy is what the daemon holds under it.
+	LegacyName string
+	Legacy     boximage.ImageState
 }
 
 // boxTierResults turns gathered facts into doctor lines. Pure, so every row of
@@ -214,7 +219,19 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.Status.MountType != "virtiofs" {
 		out = append(out, Result{Warn, "box VM mounts", f.Status.MountType + " is about 3.5x slower than virtiofs; run `agent-box box setup -recreate`"})
 	}
-	if f.ImageErr != nil {
+	if f.ImageErr == nil && !f.Image.Present && f.LegacyName != "" && f.Legacy.Present {
+		// An upgraded install: the next serve (or box setup) tags the old default
+		// as the new one. Said as it is, not as a missing image.
+		detail := "present as " + f.LegacyName + "; becomes " + f.ImageName + " on the next serve"
+		switch fatal, msg := f.Legacy.CheckFor(f.LegacyName, f.ServerArch); {
+		case fatal:
+			out = append(out, Result{Fail, "box image", detail + ", but " + msg})
+		case msg != "":
+			out = append(out, Result{Warn, "box image", detail + "; " + msg})
+		default:
+			out = append(out, Result{Pass, "box image", detail})
+		}
+	} else if f.ImageErr != nil {
 		out = append(out, Result{Fail, "box image", f.ImageErr.Error()})
 	} else if fatal, msg := f.Image.CheckFor(f.ImageName, f.ServerArch); fatal {
 		out = append(out, Result{Fail, "box image", msg})
@@ -364,6 +381,12 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string, protected []box
 	image := c.BoxImageOrDefault()
 	f.ImageName = image
 	f.Image, f.ImageErr = img.Inspect(ctx, image)
+	if f.ImageErr == nil && !f.Image.Present && c.BoxImage == "" {
+		// Read-only: look, never tag. A failed look leaves the plain "not built".
+		if old, err := img.Inspect(ctx, config.LegacyDefaultBoxImage); err == nil {
+			f.LegacyName, f.Legacy = config.LegacyDefaultBoxImage, old
+		}
+	}
 	if f.ImageErr == nil && f.Image.Present {
 		f.ProbeRan = true
 		f.ProbeErr = boxvm.ProbeLoopback(ctx, boxvm.ThrowawayProbe(cli, image))

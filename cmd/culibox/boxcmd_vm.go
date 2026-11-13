@@ -66,6 +66,7 @@ func boxStatusVM(ctx context.Context, l *boxLayer, w io.Writer) int {
 		return 0
 	}
 	fmt.Fprintf(w, "box VM: running, %s, mount %s, arch %s\n", st.Driver, st.MountType, st.Arch)
+	l.adoptImage(ctx)
 	rc := boxImageStatus(ctx, l.img, l.image, w)
 	return max(rc, boxListStatus(ctx, l.cli, w))
 }
@@ -195,6 +196,7 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 		fmt.Fprintf(w, "WARN box VM: mount type %s (virtiofs is about 3.5x faster); run `agent-box box setup -recreate`\n", st.MountType)
 	}
 	fmt.Fprintf(w, "PASS box VM: running (%s, %s)\n", st.Driver, st.MountType)
+	l.adoptImage(ctx)
 	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, time.Now(), l.goos, w); rc != 0 {
 		return rc
 	}

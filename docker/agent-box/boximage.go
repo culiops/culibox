@@ -62,6 +62,39 @@ func (d Docker) ServerArch(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Tag gives the local image src a second name, dst (`docker tag src dst`). It
+// copies no layers and removes nothing: both names point at one image ID.
+func (d Docker) Tag(ctx context.Context, src, dst string) error {
+	out, err := d.command(ctx, "tag", src, dst).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker tag %s %s: %w: %s", src, dst, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// AdoptLegacyDefault gives an image held under the pre-rename default name the
+// new default name: when image is missing and legacy is present, it tags legacy
+// as image. The legacy tag stays. It reports whether it tagged. An image that
+// is already there, or neither, changes nothing; the error is the daemon's, and
+// means "no answer", so the caller may ask again.
+func AdoptLegacyDefault(ctx context.Context, d interface {
+	Inspect(context.Context, string) (ImageState, error)
+	Tag(context.Context, string, string) error
+}, image, legacy string) (adopted bool, err error) {
+	st, err := d.Inspect(ctx, image)
+	if err != nil || st.Present {
+		return false, err
+	}
+	old, err := d.Inspect(ctx, legacy)
+	if err != nil || !old.Present {
+		return false, err
+	}
+	if err := d.Tag(ctx, legacy, image); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // extraCAName is the context file the Dockerfile COPYs. It is always present,
 // empty when no CA is configured, so a COPY never fails and the argv is the
 // same with CAs on or off.

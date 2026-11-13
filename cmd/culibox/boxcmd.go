@@ -37,13 +37,38 @@ func runBox(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.W
 			return 1
 		}
 		printExtraCA(w, set, time.Now())
-		return boxSetupImage(ctx, boximage.Docker{Bin: bin, ExtraCA: set.PEM()}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), runtime.GOOS, w)
+		d := boximage.Docker{Bin: bin, ExtraCA: set.PEM()}
+		adoptDefaultImage(ctx, d, cfg, w)
+		return boxSetupImage(ctx, d, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), runtime.GOOS, w)
 	case "status":
-		rc := boxImageStatus(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), w)
+		d := boximage.Docker{Bin: bin}
+		adoptDefaultImage(ctx, d, cfg, w)
+		rc := boxImageStatus(ctx, d, cfg.BoxImageOrDefault(), w)
 		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
 	default: // stop
 		fmt.Fprintln(w, "agent-box box stop: only on macOS, where boxes run in agent-box's own VM")
 		return 1
+	}
+}
+
+// adoptedImageMsg is the line that says the legacy default was re-tagged.
+const adoptedImageMsg = "box image: tagged " + config.LegacyDefaultBoxImage + " as " + config.DefaultBoxImage + " (kept the old tag)"
+
+// adoptDefaultImage is the legacy-default adoption for `box setup` and `box
+// status`, which run before the daemon: with box_image unset and the new default
+// missing, an upgraded install's culiops/agent-box:base is tagged as the new
+// default (the old tag stays). A pinned box_image is never touched. A daemon
+// that does not answer is left to the image check that follows.
+func adoptDefaultImage(ctx context.Context, d boximage.Docker, cfg config.Config, w io.Writer) {
+	if cfg.BoxImage != "" {
+		return
+	}
+	adopted, err := boximage.AdoptLegacyDefault(ctx, d, config.DefaultBoxImage, config.LegacyDefaultBoxImage)
+	switch {
+	case err != nil:
+		fmt.Fprintf(w, "WARN image: could not adopt %s as %s: %v\n", config.LegacyDefaultBoxImage, config.DefaultBoxImage, err)
+	case adopted:
+		fmt.Fprintln(w, adoptedImageMsg)
 	}
 }
 
@@ -116,7 +141,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, st boximage.ImageState, rebuild bool, goos string, w io.Writer) int {
 	if !strings.Contains(image, "@sha256:") {
 		// A registry tag can be moved by whoever pushes it; only a digest pins.
-		fmt.Fprintf(w, "WARN image: %s is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)\n", image)
+		fmt.Fprintf(w, "WARN image: %s is a mutable tag; pin box_image by digest (ghcr.io/culiops/culibox@sha256:…)\n", image)
 	}
 	if rebuild {
 		fmt.Fprintf(w, "FAIL image: %s comes from a registry; agent-box pulls it and never builds it\n", image)

@@ -505,6 +505,14 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		boxUnavailable = boxUnavailableReason(err)
 	} else {
 		layer, boxes = l, l.boxes
+		if l.vm == nil {
+			// An upgraded install's culiops/agent-box:base becomes the new default
+			// name before anything uses it. The Mac's VM is not started here (D3):
+			// its adoption runs in the first boxed spawn's prepare.
+			actx, acancel := context.WithTimeout(context.Background(), 30*time.Second)
+			l.adoptImage(actx)
+			acancel()
+		}
 		// Not fatal (D8): without the key the darwin listeners and the relay
 		// refuse, so every boxed spawn on this Mac says why instead.
 		if err := l.loadRelayKey(); err != nil {

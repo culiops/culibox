@@ -74,6 +74,29 @@ func TestBoxTierRows(t *testing.T) {
 		{"image inspect failed", func(f *boxFacts) { f.ImageErr = errors.New("docker image inspect: boom") }, Fail, "boom"},
 		{"wrong arch", func(f *boxFacts) { f.Image.Arch = "amd64" }, Fail, "amd64"},
 		{"stale image", func(f *boxFacts) { f.Image.Hash = "old" }, Warn, "-rebuild"},
+		{"legacy default present", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "arm64", Hash: boximage.Hash()}
+		}, Pass, "present as culiops/agent-box:base; becomes culiops/culibox:base on the next serve"},
+		{"legacy default stale", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "arm64", Hash: "old"}
+		}, Warn, "-rebuild"},
+		{"legacy default wrong arch", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "amd64", Hash: boximage.Hash()}
+		}, Fail, "amd64"},
+		{"legacy default absent too", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+		}, Fail, "box setup"},
 		{"probe reached", func(f *boxFacts) {
 			f.ProbeErr = errors.New("containment check failed: the box can reach the Mac's loopback services")
 		}, Fail, "loopback"},
