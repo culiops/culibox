@@ -382,14 +382,18 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 		}
 		// Held until this call returns (closing f releases it): another
 		// CuliBox instance locking the same file waits here, so two never both
-		// read it unflagged and both take the flag for their own.
-		if err := flockGuarded(f); err != nil {
-			f.Close()
-			if errors.Is(err, errFlockBusy) {
-				return nil, refuseInPlace("%s is being locked by another process right now (another CuliBox starting a box "+
-					"in this folder?), so this box is not started in place. Spawn again", p)
+		// read it unflagged and both take the flag for their own. A flock is
+		// the open file's: a hard link of a file this call already holds is
+		// not locked again (it would wait on this very call).
+		if !slices.ContainsFunc(all, func(o opened) bool { return o.id == id }) {
+			if err := flockGuarded(f); err != nil {
+				f.Close()
+				if errors.Is(err, errFlockBusy) {
+					return nil, refuseInPlace("%s is being locked by another process right now (another CuliBox starting a box "+
+						"in this folder?), so this box is not started in place. Spawn again", p)
+				}
+				return nil, setRefusal(p, err)
 			}
-			return nil, setRefusal(p, err)
 		}
 		imm, err := g.ops.immutable(f)
 		if err != nil {

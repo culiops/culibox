@@ -1123,3 +1123,37 @@ func TestGuardLocksUnreadableRecordsAreKeptAside(t *testing.T) {
 		t.Fatalf("new records are written as usual: %+v", rs)
 	}
 }
+
+// Review: two guarded names that are hard links of one file are opened twice
+// in one hold; the second open must not wait on the flock the first holds
+// (flock is per open file), or every such spawn would be refused.
+func TestGuardLocksHardLinkedGuardFiles(t *testing.T) {
+	old := guardFlockWait
+	guardFlockWait = 200 * time.Millisecond
+	t.Cleanup(func() { guardFlockWait = old })
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	ws := lockWS(t)
+	if err := os.Link(filepath.Join(ws, "CLAUDE.md"), filepath.Join(ws, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	var files []guardFile
+	for _, n := range []string{"AGENTS.md", "CLAUDE.md"} {
+		fi, err := os.Lstat(filepath.Join(ws, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, guardFile{n, fi})
+	}
+	got, err := g.hold(ws, files, "b1", "")
+	if err != nil {
+		t.Fatalf("hard-linked guard files must lock, got %v", err)
+	}
+	if !ff.flagged(t, filepath.Join(ws, "CLAUDE.md")) || len(g.all()) != 1 || len(got) != 1 {
+		t.Fatalf("one file, one record, flagged: %v %+v", got, g.all())
+	}
+	g.releaseBox("b1")
+	if ff.flagged(t, filepath.Join(ws, "AGENTS.md")) {
+		t.Fatal("unlocked with its box")
+	}
+}
