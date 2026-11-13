@@ -178,6 +178,7 @@ func Checks(in Input) []Result {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + err.Error()})
 	}
 	out = append(out, Result{Pass, "config", in.Source.String()})
+	out = append(out, checkConfigFileWarn(in)...)
 	out = append(out, checkExtraCA(in.Config, time.Now())...)
 	out = append(out, checkCredFile(in))
 	c := in.Config

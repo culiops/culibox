@@ -128,6 +128,14 @@ func moveXDGConfig(xdgBase, root string, logf func(string, ...any)) {
 	}
 }
 
+// warnUnvettedConfig logs the WARN for a config read from the culibox ~/.config
+// file before the data root moved (#266); moved: the move happened in this start.
+func warnUnvettedConfig(src config.Source, moved bool, logf func(string, ...any)) {
+	if w := src.UnvettedWarning(moved); w != "" {
+		logf("WARNING: %s", w)
+	}
+}
+
 // setsDataDir reports whether the config file at path sets data_dir.
 func setsDataDir(path string) bool {
 	b, err := os.ReadFile(path)

@@ -340,3 +340,80 @@ func TestMoveDataRootResumesUnderExplicitConfig(t *testing.T) {
 		t.Fatal("the XDG move ran with -config set")
 	}
 }
+
+// --- #266: serve warns about a ~/.config/culibox file read before the move ---
+
+// startConfigWarnings is what serve does at start for the config row: the
+// move, Resolve, then the warning with the move's outcome.
+func startConfigWarnings(t *testing.T, e *rootEnv) []string {
+	t.Helper()
+	out, err := moveDataRoot(e.home, e.xdg, "linux", func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, src, err := config.Resolve("", false, e.home, e.xdg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	warnUnvettedConfig(src, out.Moved, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	return logs
+}
+
+const warnCfg = `{"bind_addr":"127.0.0.1:8899","agents":[{"name":"a","bin":"a"}]}`
+
+func TestServeWarnsOnceForTheCuliboxConfigFile(t *testing.T) {
+	e := newRootEnv(t)
+	file := filepath.Join(e.xdg, "culibox", "config.json")
+	writeFile(t, file, warnCfg)
+	logs := startConfigWarnings(t, e)
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "WARNING: ") || !strings.Contains(logs[0], file) {
+		t.Fatalf("first start: %v", logs)
+	}
+	if fi, err := os.Lstat(e.legacy); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the data root did not move in this start: %v", err)
+	}
+	if logs := startConfigWarnings(t, e); len(logs) != 0 {
+		t.Fatalf("second start, root already moved: %v", logs)
+	}
+}
+
+func TestServeWarnsWhileTheMoveIsDeferred(t *testing.T) {
+	e := newRootEnv(t)
+	file := filepath.Join(e.xdg, "culibox", "config.json")
+	writeFile(t, file, `{"bind_addr":"127.0.0.1:8899","data_dir":"`+e.legacy+`","agents":[{"name":"a","bin":"a"}]}`)
+	// data_dir in the config only blocks the move when the file the move reads
+	// is that one: it is, so the root stays legacy.
+	logs := startConfigWarnings(t, e)
+	if len(logs) != 1 || !strings.Contains(logs[0], file) {
+		t.Fatalf("%v", logs)
+	}
+}
+
+func TestServeDoesNotWarnForOtherConfigSources(t *testing.T) {
+	cases := map[string]func(e *rootEnv){
+		"agent-box file moved by this start": func(e *rootEnv) {
+			writeFile(t, filepath.Join(e.xdg, "agent-box", "config.json"), warnCfg)
+		},
+		"config in the data root": func(e *rootEnv) {
+			writeFile(t, filepath.Join(e.legacy, "config.json"), warnCfg)
+			writeFile(t, filepath.Join(e.xdg, "culibox", "config.json"), warnCfg)
+		},
+		"fresh culibox root": func(e *rootEnv) {
+			if err := os.Remove(e.legacy); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(e.newRoot, "x"), "x")
+			writeFile(t, filepath.Join(e.xdg, "culibox", "config.json"), warnCfg)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newRootEnv(t)
+			setup(e)
+			if logs := startConfigWarnings(t, e); len(logs) != 0 {
+				t.Fatalf("%v", logs)
+			}
+		})
+	}
+}

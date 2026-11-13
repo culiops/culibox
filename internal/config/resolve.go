@@ -41,6 +41,22 @@ type Source struct {
 	Path    string   // the file read; "" with Default
 	Default bool     // no file found: built-in defaults
 	Root    RootInfo // the data root Resolve picked
+	// XDGNew: the file read is the culibox ~/.config one and nothing sits at the
+	// agent-box path beside it (#266). See UnvettedWarning.
+	XDGNew bool
+}
+
+// UnvettedWarning is the WARN for a config read from the culibox ~/.config file
+// before the one-time data root move (#266). "" when there is nothing to warn
+// about. moved: serve's move of the data root happened in this very start, so
+// the root now resolves as the new one although that file was read without a
+// move having been seen before.
+func (s Source) UnvettedWarning(moved bool) string {
+	if !s.XDGNew || s.Default || (s.Root.Kind != RootLegacy && !moved) {
+		return ""
+	}
+	return fmt.Sprintf("%s was read before the data root moved from %s. Before the rename this folder was not protected from box workspaces and shares, so check that the file is yours (it names the programs CuliBox runs), or delete it",
+		s.Path, filepath.Join(filepath.Dir(s.Root.Path), LegacyRootName))
 }
 
 func (s Source) String() string {
@@ -210,7 +226,12 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 				return Config{}, Source{Path: p}, err
 			}
 			c, lerr := Load(p)
-			return c, Source{Path: p}, lerr
+			src := Source{Path: p}
+			if i == 1 { // nothing at the agent-box path beside it (a link a move leaves counts as something)
+				_, lerr := os.Lstat(cands[2])
+				src.XDGNew = errors.Is(lerr, os.ErrNotExist)
+			}
+			return c, src, lerr
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, Source{Path: p}, err

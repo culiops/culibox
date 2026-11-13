@@ -98,12 +98,14 @@ func main() {
 	// The one-time data root move, before the config is resolved so the config,
 	// credentials and protected list are all built from the new path.
 	var rootNote string
+	var rootMoved bool
 	if homeErr == nil && envErr == nil {
 		out, err := maybeMoveDataRoot(args.Cmd, args.ConfigSet, envHome, home, xdg, runtime.GOOS, log.Printf)
 		if err != nil {
 			log.Fatalf("culibox: %v", err)
 		}
 		rootNote = out.Reason
+		rootMoved = out.Moved
 	}
 	var (
 		cfg    config.Config
@@ -178,6 +180,7 @@ func main() {
 		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
 	}
 	log.Printf("config: %s (culibox %s)", src, buildCommit())
+	warnUnvettedConfig(src, rootMoved, log.Printf)
 	log.Print(cred.summary())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 	if err != nil {
