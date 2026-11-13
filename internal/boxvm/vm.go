@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -216,6 +217,30 @@ func (v *VM) FilterRules(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("reading the box VM's firewall rules: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteBrokerReturn deletes one copy of the DOCKER-USER rule that VMs
+// provisioned before #113 carry for the broker port (the TCP pass-through to
+// the lima gateway above its DROP): the same delete the provision script runs
+// on every start, which a stamped VM never re-runs until it is recreated. Like
+// FilterRules it runs over `colima ssh`, never starts a VM, and sends fixed
+// arguments only: the rule is built from constants and a port that must be a
+// valid TCP port, so nothing from a rule or an environment reaches the remote
+// shell. It deletes nothing else; the caller reads the table again and judges
+// it.
+func (v *VM) DeleteBrokerReturn(ctx context.Context, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("deleting the old broker firewall rule: %d is not a TCP port", port)
+	}
+	if err := v.preflight(); err != nil {
+		return err
+	}
+	_, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--",
+		"sudo", "iptables", "-w", "-D", "DOCKER-USER", "-d", LimaHostGateway, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "RETURN")
+	if err != nil {
+		return fmt.Errorf("deleting the old broker firewall rule: %w", err)
+	}
+	return nil
 }
 
 // Running is Status without the error, for the sweep's reachability check.

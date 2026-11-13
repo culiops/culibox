@@ -388,10 +388,13 @@ func (r *Relay) RemoveStale(ctx context.Context) error {
 // started after the rules were verified this boot, a VM reboot or dockerd
 // restart stops it (no restart policy), and a transient ssh failure must not cut
 // every live fenced session's proxy and broker, so a current relay stays. A
-// DOCKER-USER chain that lets TCP past the relay or lacks the gateway DROP
-// (CheckDockerUserRules) is refused the same way, a current relay kept and any
-// other removed: that path does not go through the relay, so removing a current
-// one would close nothing. Within one daemon run, live sessions keep their proxy
+// DOCKER-USER chain that is not the provisioned one (CheckDockerUserRules: a TCP
+// pass-through, a foreign rule above the gateway DROP, a missing rule) is
+// refused the same way, a current relay kept and any other removed: that path
+// does not go through the relay, so removing a current one would close nothing.
+// The one exception is the old broker RETURN of a VM upgraded without a
+// recreate: Ensure deletes that exact rule live and reads the table again
+// (deleteOldBrokerReturn), and refuses only if the table is still wrong. Within one daemon run, live sessions keep their proxy
 // and broker; a daemon that starts on such a VM never starts its egress listener
 // (Ready fails before it), so they keep only the broker until the VM is
 // recreated, which ends them anyway.
@@ -418,7 +421,9 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return r.removeAlso(ctx, err)
 	}
 	if err := CheckDockerUserRules(rules); err != nil {
-		return r.removeUnlessCurrent(ctx, gw, err)
+		if err = r.deleteOldBrokerReturn(ctx, rules, err); err != nil {
+			return r.removeUnlessCurrent(ctx, gw, err)
+		}
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
@@ -443,6 +448,56 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return r.removeAlso(ctx, err)
 	}
 	return nil
+}
+
+// brokerReturnDeleter is what a VM offers to delete the old broker RETURN live;
+// a VM without it (a test fake) is only ever refused.
+type brokerReturnDeleter interface {
+	DeleteBrokerReturn(ctx context.Context, port int) error
+}
+
+// maxBrokerReturnDeletes bounds the deletes for one check: the script's own
+// `while -D` loop ends when no copy is left, and a chain does not hold this many.
+const maxBrokerReturnDeletes = 16
+
+// deleteOldBrokerReturn is the live repair for a VM that was upgraded but not
+// recreated (#117, #116 option b): the provision script deletes the old broker
+// RETURN on every start, but a stamped VM does not run it again, so the rule
+// stays above the gateway DROP. cause is CheckDockerUserRules' refusal of rules.
+// When rules hold that exact rule (the gateway, tcp, the broker port, RETURN)
+// each copy is deleted with a fixed, validated `iptables -w -D` and the table is
+// read again: nil only if the fresh table passes CheckDockerUserRules. Anything
+// else, another rule, a wrong head, a failed delete or re-read, a rule that is
+// still there, returns an error that names the recreate, and nothing but that
+// one rule is ever deleted.
+func (r *Relay) deleteOldBrokerReturn(ctx context.Context, rules string, cause error) error {
+	vm, ok := r.VM.(brokerReturnDeleter)
+	if !ok {
+		return cause
+	}
+	old := fmt.Sprintf("-d %s -p tcp --dport %d -j RETURN", LimaHostGateway, r.BrokerPort)
+	n := 0
+	for _, f := range dockerUserRules(rules) {
+		if normaliseRule(f) == old {
+			n++
+		}
+	}
+	if n == 0 {
+		return cause
+	}
+	var delErr error
+	for i := 0; i < min(n, maxBrokerReturnDeletes) && delErr == nil; i++ {
+		delErr = vm.DeleteBrokerReturn(ctx, r.BrokerPort)
+	}
+	fresh, err := r.VM.FilterRules(ctx)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("the firewall rules could not be read again after deleting the old broker rule: %w", err))
+	}
+	err = CheckDockerUserRules(fresh)
+	if err != nil && delErr != nil {
+		err = errors.Join(err, delErr)
+	}
+	return err
 }
 
 // waitListening reads the relay's own log until it reports both listeners on
