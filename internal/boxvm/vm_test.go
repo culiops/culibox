@@ -98,6 +98,27 @@ func TestStatusParsesRunningAndStopped(t *testing.T) {
 	}
 }
 
+// #247 (1): only colima's own "not running" answer is a confirmed stop. Any
+// other failed status (colima or lima erroring while the VM may run) still
+// reads as not running, but not as Stopped: a box may run.
+func TestStatusStoppedOnlyOnColimasWord(t *testing.T) {
+	r := &fakeRunner{}
+	v := setUpVM(t, r)
+	r.running.Store(false)
+	if st, err := v.Status(context.Background()); err != nil || st.Running || !st.Stopped {
+		t.Fatalf("colima says not running: want Stopped, got %+v %v", st, err)
+	}
+	r.failOn = "status"
+	if st, err := v.Status(context.Background()); err != nil || st.Running || st.Stopped {
+		t.Fatalf("colima failed: want neither Running nor Stopped, got %+v %v", st, err)
+	}
+	r.failOn = ""
+	r.running.Store(true)
+	if st, err := v.Status(context.Background()); err != nil || !st.Running || st.Stopped {
+		t.Fatalf("running: %+v %v", st, err)
+	}
+}
+
 func TestEnsureRunningRefusesWhenNotSetUp(t *testing.T) {
 	v := NewVM(Config{Root: shortRoot(t), Home: "/h", ColimaBin: "/c", DockerBin: "/d", BrokerPort: 9071, EgressPort: 9072}, &fakeRunner{})
 	if _, err := v.EnsureRunning(context.Background()); !errors.Is(err, ErrNotSetUp) {

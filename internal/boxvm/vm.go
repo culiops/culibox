@@ -47,7 +47,10 @@ func firstLine(s string) string {
 
 // Status is what `colima status --json` reports for the profile.
 type Status struct {
-	Running                               bool
+	Running bool
+	// Stopped: colima itself answered that the VM is not running. A status
+	// that failed any other way reads as neither: a box may still run.
+	Stopped                               bool
 	Driver, MountType, Arch, DockerSocket string
 }
 
@@ -174,6 +177,8 @@ func (v *VM) ProvisionDrifted() bool {
 
 // Status asks colima. A non-zero exit means "not running" (colima reports a
 // stopped or never-created profile that way); a cancelled context is an error.
+// Only colima's own "is not running" answer sets Stopped: any other failure
+// (colima or lima erroring while the VM runs) may hide running boxes.
 func (v *VM) Status(ctx context.Context) (Status, error) {
 	if err := v.preflight(); err != nil {
 		return Status{}, err
@@ -183,7 +188,7 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 		return Status{}, ctx.Err()
 	}
 	if err != nil {
-		return Status{}, nil
+		return Status{Stopped: strings.Contains(out, "is not running")}, nil
 	}
 	var s struct {
 		Driver       string `json:"driver"`

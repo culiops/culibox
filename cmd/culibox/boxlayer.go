@@ -470,9 +470,10 @@ func (l *boxLayer) vmStopped(ctx context.Context) bool {
 }
 
 // vmState is vmStopped, plus whether colima answered: confirmed is true only
-// when the status was read and says the VM is not running. A status that could
-// not be read (a timeout, unreadable output) is stopped for the background
-// passes (they never start the VM) but not confirmed: a box may still run.
+// when colima itself said the VM is not running (Status.Stopped). A status that
+// could not be read (a timeout, unreadable output, any other failed exit) is
+// stopped for the background passes (they never start the VM) but not
+// confirmed: a box may still run.
 func (l *boxLayer) vmState(ctx context.Context) (stopped, confirmed bool) {
 	if l.vm == nil {
 		return false, false
@@ -480,7 +481,7 @@ func (l *boxLayer) vmState(ctx context.Context) (stopped, confirmed bool) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	st, err := l.vm.Status(ctx)
-	return err != nil || !st.Running, err == nil && !st.Running
+	return err != nil || !st.Running, err == nil && st.Stopped
 }
 
 // bootReconcile reaps this instance's orphaned boxes and their stale homes at
