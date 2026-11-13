@@ -67,7 +67,8 @@ EOF
 chmod +x "$tmp/bin/go" "$tmp/bin/systemctl"
 export PATH=$tmp/bin:$PATH STUB_OUT=$tmp
 export GO=$tmp/bin/go AB_PROD_CONFIRM=yes AB_PROD_SERVICE=stub-prod
-export AB_PROD_BIN=$HOME/bin/agent-box-prod
+# A space in the path: the printed rollback line is pasted into a shell, so it must quote.
+export AB_PROD_BIN="$HOME/prod bin/agent-box-prod"
 bin=$AB_PROD_BIN
 stamp=$bin.deployed-sha
 
@@ -138,7 +139,7 @@ content "$bin.prev.deployed-sha" "$b" ".prev still records B"
 line=$(rollback_line)
 if [ -n "$line" ]; then
   : >"$tmp/systemctl.log"
-  if sh -c "$line" >"$tmp/rb.out" 2>&1; then pass "the printed rollback runs"; else fail "the printed rollback failed: $(cat "$tmp/rb.out")"; fi
+  if bash -c "$line" >"$tmp/rb.out" 2>&1; then pass "the printed rollback runs"; else fail "the printed rollback failed: $(cat "$tmp/rb.out")"; fi
   content "$bin" "build $b" "the rollback puts B back"
   content "$stamp" "$b" "the rollback points the stamp at B, so the next deploy lists C and D"
   if grep -q "restart stub-prod" "$tmp/systemctl.log"; then pass "the rollback restarts the service"; else fail "the rollback did not restart stub-prod"; fi
@@ -151,6 +152,27 @@ deploy
 expect_rc "$rc" 0 "the deploy after a rollback succeeds"
 content "$bin" "build $d" "D is installed again"
 content "$bin.prev" "build $b" "B, the binary running after the rollback, is kept"
+
+# ---- 9. no stamp: the kept binary has no commit, and the rollback clears the stamp ------
+rm -f "$stamp"
+commit E >/dev/null
+deploy
+expect_rc "$rc" 0 "a deploy with no stamp succeeds"
+content "$bin.prev" "build $d" "with no stamp the running binary D is still kept"
+missing "$bin.prev.deployed-sha" "a kept binary of unknown commit gets no commit record"
+line=$(rollback_line)
+if bash -c "$line" >"$tmp/rb.out" 2>&1; then pass "the no-stamp rollback runs"; else fail "the no-stamp rollback failed: $(cat "$tmp/rb.out")"; fi
+content "$bin" "build $d" "the no-stamp rollback puts D back"
+missing "$stamp" "the no-stamp rollback removes the stamp rather than leave E's"
+
+# ---- 10. a failed restart, then the same commit again: still not kept -------------------
+f=$(commit F)
+STUB_RESTART_FAIL=1 deploy
+expect_rc "$rc" 1 "F does not come up"
+deploy
+expect_rc "$rc" 0 "F deployed again succeeds"
+content "$bin" "build $f" "F is installed"
+content "$bin.prev" "build $d" ".prev stays D, not the F that did not come up"
 
 if [ "$fails" -ne 0 ]; then
   echo "deploy-prod_test: $fails failure(s)" >&2

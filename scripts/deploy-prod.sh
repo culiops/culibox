@@ -103,8 +103,11 @@ echo "building CuliBox $version → $BIN"
 # deploy still keeps the last build that ran.
 last_sha=$(cat "$STAMP" 2>/dev/null || true)
 if [ -e "$BIN" ] && [ ! -e "$UNVERIFIED" ] && [ "$last_sha" != "$head_sha" ]; then
+  # The old record goes first: stopped between these lines, $PREV is unlabelled
+  # rather than labelled with the commit of the binary it no longer holds.
+  rm -f "$PREV.deployed-sha"
   cp -p "$BIN" "$PREV"
-  if [ -n "$last_sha" ]; then echo "$last_sha" > "$PREV.deployed-sha"; else rm -f "$PREV.deployed-sha"; fi
+  if [ -n "$last_sha" ]; then echo "$last_sha" > "$PREV.deployed-sha"; fi
   echo "kept the previous binary → $PREV"
 fi
 : > "$UNVERIFIED"
