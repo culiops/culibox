@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/netip"
@@ -129,6 +130,17 @@ func newBoxAddrs(d egress.Docker, instance string) *boxaddr.Cache {
 	}, time.Now)
 }
 
+// proxyStartFailure is the boot line for a proxy that could not start on an
+// existing network. A Linux bind conflict has just been logged in full by Ready
+// (once is the point of it), so the line leaves the error out then.
+func proxyStartFailure(network string, err error) string {
+	var bc *egress.BindConflictError
+	if errors.As(err, &bc) {
+		return fmt.Sprintf("egress: network %s exists but the proxy could not start; fenced sessions are refused until it can", network)
+	}
+	return fmt.Sprintf("egress: network %s exists but the proxy could not start (%v); fenced sessions are refused until it can", network, err)
+}
+
 // startEgress builds the egress proxy: the persisted HMAC secret (its own file,
 // not the broker's), the audit store, and the lazy network + listener service.
 // Nothing listens yet unless the egress network already exists (a restored
@@ -187,7 +199,7 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	// running; the first fenced spawn's Ready runs after prepare started the VM.
 	if !layer.vmStopped(ctx) && svc.Exists(ctx) {
 		if _, err := svc.Ready(ctx); err != nil {
-			log.Printf("egress: network %s exists but the proxy could not start (%v); fenced sessions are refused until it can", svc.Network(), err)
+			log.Print(proxyStartFailure(svc.Network(), err))
 		}
 	}
 	return &egressService{

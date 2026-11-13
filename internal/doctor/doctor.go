@@ -221,6 +221,7 @@ func Checks(in Input) []Result {
 	out = append(out, guardLockRows(runtime.GOOS, bf)...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
+		out = append(out, CheckEgressPort(c))
 	}
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
