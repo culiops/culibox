@@ -250,7 +250,8 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.FirewallRan {
 		switch {
 		case f.FirewallReadErr != nil:
-			out = append(out, Result{Warn, "box VM firewall", "could not read the rules (" + f.FirewallReadErr.Error() + ")"})
+			// Relay.Ensure refuses every spawn while the rules cannot be read.
+			out = append(out, Result{Fail, "box VM firewall", "could not read the rules (" + f.FirewallReadErr.Error() + "); every boxed spawn is refused until they can be read"})
 		case f.FirewallErr != nil:
 			out = append(out, Result{Fail, "box VM firewall", f.FirewallErr.Error()})
 		default:
