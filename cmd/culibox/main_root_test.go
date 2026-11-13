@@ -115,7 +115,7 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 
 func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 	e := newRootEnv(t)
-	out, err := maybeMoveDataRoot("serve", false, "/somewhere/else", e.home, e.xdg, "linux", e.logf)
+	out, err := maybeMoveDataRoot("serve", "", false, "/somewhere/else", e.home, e.xdg, "linux", e.logf)
 	if err != nil || out.Moved || out.Reason != "" {
 		t.Fatalf("%+v %v", out, err)
 	}
@@ -123,7 +123,7 @@ func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 		t.Fatal("the legacy root must stay untouched with a root env var")
 	}
 	// Only serve moves.
-	if _, err := maybeMoveDataRoot("doctor", false, "", e.home, e.xdg, "linux", e.logf); err != nil {
+	if _, err := maybeMoveDataRoot("doctor", "", false, "", e.home, e.xdg, "linux", e.logf); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Lstat(e.legacy); !fi.IsDir() {
@@ -133,7 +133,7 @@ func TestMoveDataRootSkipsWithEnvHome(t *testing.T) {
 		t.Fatalf("new root exists: %v", err)
 	}
 	// And with no env var, serve does.
-	if out, err := maybeMoveDataRoot("serve", false, "", e.home, e.xdg, "linux", e.logf); err != nil || !out.Moved {
+	if out, err := maybeMoveDataRoot("serve", "", false, "", e.home, e.xdg, "linux", e.logf); err != nil || !out.Moved {
 		t.Fatalf("serve: %+v %v", out, err)
 	}
 }
@@ -291,7 +291,9 @@ func TestMoveDataRootSkipsExplicitConfig(t *testing.T) {
 	real := rootmoveXDG
 	rootmoveXDG = func(base string) (bool, error) { called = true; return real(base) }
 	t.Cleanup(func() { rootmoveXDG = real })
-	out, err := maybeMoveDataRoot("serve", true, "", e.home, e.xdg, "linux", e.logf)
+	explicit := filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"bind_addr":"127.0.0.1:8899"}`)
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
 	if err != nil || out.Moved || !strings.Contains(out.Reason, "-config") {
 		t.Fatalf("%+v %v", out, err)
 	}
@@ -326,7 +328,9 @@ func TestMoveDataRootResumesUnderExplicitConfig(t *testing.T) {
 	real := rootmoveXDG
 	rootmoveXDG = func(base string) (bool, error) { called = true; return real(base) }
 	t.Cleanup(func() { rootmoveXDG = real })
-	out, err := maybeMoveDataRoot("serve", true, "", e.home, e.xdg, "linux", e.logf)
+	explicit := filepath.Join(e.home, "x.json") // no data_dir: the instance uses the default root
+	writeFile(t, explicit, `{"bind_addr":"127.0.0.1:8899"}`)
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
 	if err != nil || !out.Moved || !out.Resumed {
 		t.Fatalf("%+v %v; logs %v", out, err, e.logs)
 	}
@@ -338,6 +342,77 @@ func TestMoveDataRootResumesUnderExplicitConfig(t *testing.T) {
 	}
 	if called {
 		t.Fatal("the XDG move ran with -config set")
+	}
+}
+
+// pendingMove leaves e as a kill after the rename leaves it: the legacy root
+// gone and the journal body in the new root.
+func pendingMove(t *testing.T, e *rootEnv, journal string) {
+	t.Helper()
+	if err := os.Remove(e.legacy); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(e.newRoot, "config.json"), `{"bind_addr":"127.0.0.1:8899"}`)
+	writeFile(t, filepath.Join(e.newRoot, rootmove.JournalName), journal)
+}
+
+// #273: a -config instance whose data_dir is elsewhere does not protect the
+// default roots from its boxes, so it never finishes a move found there: the
+// journal could be a box's. The move is left for a start that uses that root.
+func TestMoveDataRootExplicitConfigSkipsResumeOutsideItsRoot(t *testing.T) {
+	e := newRootEnv(t)
+	pendingMove(t, e, e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+	explicit := filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"data_dir":"`+filepath.Join(e.home, "elsewhere")+`"}`)
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || out.Moved || out.Resumed || !strings.Contains(out.Reason, "data_dir") {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if _, err := os.Lstat(filepath.Join(e.newRoot, rootmove.JournalName)); err != nil {
+		t.Fatalf("journal removed: %v", err)
+	}
+	if _, err := os.Lstat(e.legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a link was made at the legacy path: %v", err)
+	}
+	if !strings.Contains(strings.Join(e.logs, "\n"), "not finished") {
+		t.Fatalf("logs: %v", e.logs)
+	}
+}
+
+// #273: an unreadable journal in a root the -config instance does not use is
+// logged and skipped; it must not stop serve.
+func TestMoveDataRootExplicitConfigIgnoresBadJournalOutsideItsRoot(t *testing.T) {
+	e := newRootEnv(t)
+	pendingMove(t, e, "not a journal")
+	explicit := filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"data_dir":"`+filepath.Join(e.home, "elsewhere")+`"}`)
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || out.Moved {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if len(e.logs) == 0 {
+		t.Fatal("the skipped move was not logged")
+	}
+}
+
+// #273: a -config whose data_dir names the default new root uses it, so the
+// interrupted move there is finished (R14), and a bad journal still stops serve.
+func TestMoveDataRootExplicitConfigResumesInItsOwnRoot(t *testing.T) {
+	e := newRootEnv(t)
+	pendingMove(t, e, e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+	explicit := filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"data_dir":"`+e.newRoot+`/"}`)
+	out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || !out.Moved || !out.Resumed {
+		t.Fatalf("%+v %v; logs %v", out, err, e.logs)
+	}
+
+	e = newRootEnv(t)
+	pendingMove(t, e, "not a journal")
+	explicit = filepath.Join(e.home, "x.json")
+	writeFile(t, explicit, `{"data_dir":"`+e.newRoot+`"}`)
+	if _, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf); err == nil {
+		t.Fatal("a bad journal in the instance's own root must stop serve")
 	}
 }
 

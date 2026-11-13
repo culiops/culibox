@@ -100,7 +100,7 @@ func main() {
 	var rootNote string
 	var facts config.StartFacts
 	if homeErr == nil && envErr == nil {
-		out, err := maybeMoveDataRoot(args.Cmd, args.ConfigSet, envHome, home, xdg, runtime.GOOS, log.Printf)
+		out, err := maybeMoveDataRoot(args.Cmd, args.ConfigPath, args.ConfigSet, envHome, home, xdg, runtime.GOOS, log.Printf)
 		if err != nil {
 			log.Fatalf("culibox: %v", err)
 		}

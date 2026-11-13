@@ -30,13 +30,19 @@ var rootmoveXDG = rootmove.MoveXDGConfig
 // precondition (e) read the default one), so neither the root nor the
 // ~/.config file starts to move; the reason is logged and reaches doctor. An
 // interrupted move is still finished under -config (ruling R14): the resume
-// reads only its journal, not the config serve loads.
-func maybeMoveDataRoot(cmd string, configSet bool, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
+// reads only its journal, not the config serve loads. It is finished only when
+// that instance uses a default root (#273): one whose data_dir is elsewhere
+// does not protect them from its boxes, so the journal could be a box's.
+func maybeMoveDataRoot(cmd, configPath string, configSet bool, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
 	if cmd != "serve" || envHome != "" {
 		return rootmove.Outcome{}, nil
 	}
 	if configSet {
 		if newRoot, legacy := config.DefaultRoots(home); rootmove.Pending(newRoot, legacy) {
+			if why := notDefaultRoot(configPath, newRoot, legacy); why != "" {
+				logf("data root: the interrupted move in %s was not finished (%s); a serve start that uses that root finishes it", newRoot, why)
+				return rootmove.Outcome{Reason: why}, nil
+			}
 			return runRootMove(home, xdg, goos, logf)
 		}
 		out := rootmove.Outcome{Reason: "serve -config is set; the move only reads the default config"}
@@ -155,6 +161,24 @@ func serveStartWarnings(cmd string, src config.Source, cfgErr error, f config.St
 	if w := src.UnvettedWarning(f); w != "" {
 		logf("WARNING: %s", w)
 	}
+}
+
+// notDefaultRoot says why the -config file at path does not use one of the
+// default roots ("" when it does: no data_dir, or a data_dir naming one). An
+// unreadable file uses none; the config step then reports it.
+func notDefaultRoot(path, newRoot, legacy string) string {
+	c, err := config.Load(path)
+	if err != nil {
+		return "serve -config could not be read"
+	}
+	if c.DataDir == "" {
+		return ""
+	}
+	d, err := filepath.Abs(c.DataDir)
+	if err == nil && (d == newRoot || d == legacy) {
+		return ""
+	}
+	return "serve -config sets data_dir " + c.DataDir
 }
 
 // setsDataDir reports whether the config file at path sets data_dir.
