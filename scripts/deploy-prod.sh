@@ -88,6 +88,7 @@ print_rollback() {
     echo "to roll back to the previous binary (the binary only: data this build wrote is not undone), run:"
   fi
   echo "rollback: cp -p $(printf %q "$PREV") $(printf %q "$BIN.new") && mv -f $(printf %q "$BIN.new") $(printf %q "$BIN") && $stamp_step && rm -f $(printf %q "$UNVERIFIED") && systemctl --user restart $(printf %q "$SERVICE")"
+  echo "data: to also undo data changes, restore the backup taken at upgrade: see docs/UPGRADING.md"
 }
 
 mkdir -p "$(dirname "$BIN")"

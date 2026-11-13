@@ -296,7 +296,7 @@ access on a Mac:
 These limits are the same as on Linux and are not configurable.
 
 - After upgrading, run `culibox box setup -recreate` once when doctor asks
-  for it. The rules live in the VM's provisioning, so an existing VM keeps the
+  for it (what an upgrade keeps and how to go back: [Upgrading](UPGRADING.md)). The rules live in the VM's provisioning, so an existing VM keeps the
   old ones until it is recreated: a VM set up before egress control for all
   boxes has none, and `culibox doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until

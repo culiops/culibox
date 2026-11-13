@@ -89,6 +89,9 @@ deploy() { # run the script; its exit code lands in $rc, its output in $tmp/out
 }
 # The rollback the script printed, as one shell line.
 rollback_line() { sed -n 's/^rollback: //p' "$tmp/out" | tail -1; }
+# The line that points at the data restore (#229): printed with every rollback, never without one.
+DATA_LINE="data: to also undo data changes, restore the backup taken at upgrade: see docs/UPGRADING.md"
+data_lines() { grep -cFx "$DATA_LINE" "$tmp/out" || true; }
 
 # ---- 1. first deploy: nothing to keep ------------------------------------------------
 a=$(commit A)
@@ -97,6 +100,7 @@ expect_rc "$rc" 0 "first deploy succeeds"
 content "$bin" "build $a" "first deploy installs A"
 missing "$bin.prev" "first deploy has no previous binary to keep"
 if [ -z "$(rollback_line)" ]; then pass "first deploy prints no rollback"; else fail "first deploy printed a rollback with nothing to roll back to"; fi
+if ! grep -q '^data: ' "$tmp/out"; then pass "first deploy prints no data: line"; else fail "first deploy printed a data: line with nothing to roll back to"; fi
 
 # ---- 2. a new commit keeps the binary it replaces -----------------------------------
 b=$(commit B)
@@ -106,6 +110,7 @@ content "$bin" "build $b" "second deploy installs B"
 content "$bin.prev" "build $a" "the replaced binary A is kept as .prev"
 content "$bin.prev.deployed-sha" "$a" ".prev records the commit A it was built from"
 missing "$bin.new" "no half-built file is left behind"
+if [ "$(data_lines)" = 1 ]; then pass "a deploy with a .prev prints the data: restore line once"; else fail "a deploy with a .prev did not print the data: line exactly once"; fi
 
 # ---- 3. a rebuild of the deployed commit keeps the real previous one ------------------
 deploy
@@ -126,6 +131,7 @@ expect_rc "$rc" 1 "a service that does not come up fails the deploy"
 content "$bin" "build $c" "C is installed"
 content "$bin.prev" "build $b" "B, the binary it replaced, is kept"
 if [ -n "$(rollback_line)" ]; then pass "a failed restart prints the rollback"; else fail "a failed restart printed no rollback line"; fi
+if [ "$(data_lines)" = 1 ]; then pass "a failed restart prints the data: restore line once"; else fail "a failed restart did not print the data: line exactly once"; fi
 
 # ---- 6. fixing forward after that: the build that never came up is not kept ------------
 d=$(commit D)

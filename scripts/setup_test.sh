@@ -365,6 +365,7 @@ case_upgrade_keeps_prev() {
   else fail "the old binary is kept as culibox.prev"; fi
   says "rollback: mv -f" "the rollback line is printed"
   says "$PFX/culibox.prev" "the rollback line names the .prev path"
+  says "docs/UPGRADING.md" "the rollback points at the data restore"
   if [ -e "$PFX/culibox.new" ]; then fail "no culibox.new is left behind"; else pass "no culibox.new is left behind"; fi
 }
 case_unsupported_arch() {

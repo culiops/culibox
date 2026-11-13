@@ -102,6 +102,8 @@ xattr -d com.apple.quarantine culibox
 
 Releases are checked on a Mac in batches, so a new release usually starts as not verified. The block's last line, "Last macOS-verified release", names the newest verified release at the time this release was cut. It is not updated afterwards, so check the Releases page to see whether a newer release has been verified since. If you want a verified macOS build, pick the newest release marked ✅. The amd64 build is checked on an Apple Silicon Mac under Rosetta 2, not on Intel hardware. How the check works is in [docs/MACOS.md](docs/MACOS.md#release-verification).
 
+Upgrading an existing install, and going back: [docs/UPGRADING.md](docs/UPGRADING.md).
+
 ## Quick start
 
 **1. Install and set up.** Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
