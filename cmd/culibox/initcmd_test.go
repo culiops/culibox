@@ -195,6 +195,18 @@ func TestDepsDarwinMissingNo(t *testing.T) {
 	}
 }
 
+func TestDepsDarwinEnterIsNo(t *testing.T) {
+	f := &fakeInit{have: allHave("brew", "abduco", "docker", "claude")}
+	var out bytes.Buffer
+	ok := initDepsStep(newTestUI("\n", &out), config.Config{}, f.deps("darwin"))
+	if ok || len(f.runs) != 0 {
+		t.Fatalf("Enter must not install: ok=%v runs=%v", ok, f.runs)
+	}
+	if !strings.Contains(out.String(), "[y/N]") || !strings.Contains(out.String(), "stopped") || !strings.Contains(out.String(), "brew install colima") {
+		t.Fatalf("out=%q", out.String())
+	}
+}
+
 func TestDepsDarwinEOFIsNo(t *testing.T) {
 	f := &fakeInit{have: allHave("brew", "docker", "colima", "claude")}
 	ok, out := depsRun(t, f, "darwin", "", config.Config{})
@@ -281,6 +293,26 @@ func TestDepsUsesConfiguredBins(t *testing.T) {
 	ok, out := depsRun(t, f, "linux", "", cfg)
 	if !ok || !strings.Contains(out, "already done") {
 		t.Fatalf("ok=%v out=%q", ok, out)
+	}
+}
+
+func TestDepsPicksTheClaudeAgent(t *testing.T) {
+	f := &fakeInit{have: allHave("abduco", "docker", "bash", "/opt/cl")}
+	cfg := config.Config{Agents: []config.AgentConfig{{Name: "shell", Bin: "bash"}, {Name: "claude", Bin: "/opt/cl"}}}
+	ok, out := depsRun(t, f, "linux", "", cfg)
+	if !ok || !strings.Contains(out, "already done") {
+		t.Fatalf("ok=%v out=%q", ok, out)
+	}
+	// Not found by name: the binary's base name counts, and with none it is plain claude.
+	f = &fakeInit{have: allHave("abduco", "docker", "bash", "/opt/other/claude")}
+	cfg = config.Config{Agents: []config.AgentConfig{{Name: "shell", Bin: "bash"}, {Name: "c2", Bin: "/opt/other/claude"}}}
+	if ok, out := depsRun(t, f, "linux", "", cfg); !ok {
+		t.Fatalf("base-name match: %q", out)
+	}
+	f = &fakeInit{have: allHave("abduco", "docker", "bash")}
+	cfg = config.Config{Agents: []config.AgentConfig{{Name: "shell", Bin: "bash"}}}
+	if ok, out := depsRun(t, f, "linux", "", cfg); ok || !strings.Contains(out, "missing: claude") {
+		t.Fatalf("no claude agent must check plain claude: ok=%v %q", ok, out)
 	}
 }
 

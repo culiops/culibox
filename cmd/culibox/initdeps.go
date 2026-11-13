@@ -40,9 +40,14 @@ func initDepList(cfg config.Config, goos string) []initDep {
 		}
 		return v
 	}
+	// The claude agent: by name or by binary name (as doctor's box-tier rows
+	// and the config writer pick it), else plain `claude`.
 	agent := "claude"
-	if len(cfg.Agents) > 0 {
-		agent = or(cfg.Agents[0].Bin, agent)
+	for _, a := range cfg.Agents {
+		if a.Bin != "" && (a.Name == "claude" || filepath.Base(a.Bin) == "claude") {
+			agent = a.Bin
+			break
+		}
 	}
 	deps := []initDep{
 		{name: "abduco", bin: or(cfg.AbducoBin, "abduco"), brew: []string{"abduco"}, pkg: "abduco"},
@@ -126,7 +131,7 @@ func initBrewInstall(u *initUI, d initDeps, missing []initDep) bool {
 	}
 	var still, installed []initDep
 	for i, p := range missing {
-		if !u.ask(fmt.Sprintf("Install %s with `%s`?", p.name, brewLine(p)), true) {
+		if !u.ask(fmt.Sprintf("Install %s with `%s`?", p.name, brewLine(p)), false) {
 			still = append(still, p)
 			continue
 		}
