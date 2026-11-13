@@ -284,10 +284,10 @@ func (c Config) Validate() error {
 			continue
 		}
 		if p.what == "home" {
-			// AGENT_BOX_HOME moves the data root, never the user's home.
+			// CULIBOX_HOME moves the data root, never the user's home.
 			return fmt.Errorf("the box VM cannot share this home directory (%s). Rename the home directory, or run agents on the host tier instead", why)
 		}
-		return fmt.Errorf("the box VM cannot use this data root (%s). Choose another data root with AGENT_BOX_HOME", why)
+		return fmt.Errorf("the box VM cannot use this data root (%s). Choose another data root with CULIBOX_HOME", why)
 	}
 	for _, b := range []struct{ what, path string }{{"colima", c.ColimaBin}, {"docker", c.DockerBin}} {
 		if !filepath.IsAbs(b.path) {
@@ -386,7 +386,7 @@ func (c Config) CheckSocketPaths() error {
 	inst := filepath.Join(c.ColimaHome(), "_lima", "colima-"+Profile)
 	for _, p := range []string{c.DockerSocket(), filepath.Join(inst, "serialv.sock"), filepath.Join(inst, "ssh.sock")} {
 		if len(p) >= sunPathMax {
-			return fmt.Errorf("the box VM socket %q is %d bytes; macOS allows %d. Set AGENT_BOX_HOME to a shorter absolute path",
+			return fmt.Errorf("the box VM socket %q is %d bytes; macOS allows %d. Set CULIBOX_HOME to a shorter absolute path",
 				p, len(p), sunPathMax-1)
 		}
 	}

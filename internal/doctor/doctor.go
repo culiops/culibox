@@ -33,6 +33,7 @@ import (
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/procinfo"
+	"github.com/culiops/culibox/internal/rootmove"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 	"github.com/culiops/culibox/internal/storerefs"
@@ -61,6 +62,14 @@ type Input struct {
 	// ConfigFiles are the config files read on the next start (-config, the
 	// ~/.config fallback): their directories are protected from VM shares.
 	ConfigFiles []string
+	// EnvNotice is config.HomeEnv's deprecation notice ("" when none); EnvErr is
+	// its refusal (the two root env vars disagree, or a relative value). Both are
+	// rows: a WARN and a FAIL.
+	EnvNotice string
+	EnvErr    error
+	// RootNote is why a running serve kept the old data root in place ("" for the
+	// CLI, which only resolves and never tries the move).
+	RootNote string
 }
 
 // protectedFor is the protected-directory list serve and the CLI build
@@ -152,6 +161,12 @@ func Checks(in Input) []Result {
 		// serve refuses this too; every path below would be built from it.
 		return append(out, Result{Fail, "home", "the home directory is empty or not an absolute path; set $HOME"})
 	}
+	if in.EnvErr != nil {
+		return append(out, Result{Fail, "env", in.EnvErr.Error()})
+	}
+	if in.EnvNotice != "" {
+		out = append(out, Result{Warn, "env", in.EnvNotice})
+	}
 	if in.ConfigErr != nil {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + in.ConfigErr.Error()})
 	}
@@ -166,7 +181,7 @@ func Checks(in Input) []Result {
 	if abs, err := filepath.Abs(dataDir); err == nil {
 		dataDir = abs
 	}
-	out = append(out, checkDataDir(dataDir), checkAuth(c, dataDir), checkBind(c), checkPort(c))
+	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
 	bin := c.AbducoBin
 	if bin == "" {
 		bin = "abduco"
@@ -207,7 +222,7 @@ func Checks(in Input) []Result {
 	return out
 }
 
-func checkDataDir(dir string) Result {
+func checkDataDir(in Input, dir, goos string) Result {
 	fi, err := os.Stat(dir)
 	if os.IsNotExist(err) {
 		return Result{Pass, "data dir", dir + " (created on first serve)"}
@@ -219,10 +234,42 @@ func checkDataDir(dir string) Result {
 	if st == nil || int(st.Uid) != os.Getuid() {
 		return Result{Fail, "data dir", dir + " is not owned by you"}
 	}
+	story := rootStory(in, dir, goos)
 	if fi.Mode().Perm()&0o077 != 0 {
-		return Result{Warn, "data dir", fmt.Sprintf("%s has mode %o; want 700 (it holds the login and cookie secrets)", dir, fi.Mode().Perm())}
+		return Result{Warn, "data dir", fmt.Sprintf("%s has mode %o; want 700 (it holds the login and cookie secrets)", dir, fi.Mode().Perm()) + story}
 	}
-	return Result{Pass, "data dir", dir}
+	return Result{Pass, "data dir", dir + story}
+}
+
+// rootStory says which data root is in use and why (spec D2 "doctor"), as a
+// suffix. doctor never tries the move or its preconditions: it states the rule,
+// plus the one darwin fact it can read (a box VM in the old root, precondition
+// (f)) and, from a running serve, the reason it kept the old root. Nothing for
+// a data_dir elsewhere or a root named by the env var.
+func rootStory(in Input, dir, goos string) string {
+	root := in.Source.Root
+	if root.Path == "" || root.Kind == config.RootEnv || filepath.Clean(root.Path) != filepath.Clean(dir) {
+		return ""
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, rootmove.JournalName)); err == nil && fi.Mode().IsRegular() {
+		return " (a move was interrupted; the next serve start finishes it)"
+	}
+	newRoot, legacy := config.DefaultRoots(in.Home)
+	switch root.Kind {
+	case config.RootLegacy:
+		if goos == "darwin" {
+			if _, err := os.Lstat(filepath.Join(dir, "vm")); err == nil {
+				return " (kept in place: the box VM lives here; it cannot follow a move without box setup -recreate)"
+			}
+		}
+		if in.RootNote != "" {
+			return " (kept in place: " + in.RootNote + ")"
+		}
+		return " (from before the rename; the next serve start moves it to " + newRoot + ")"
+	case config.RootLinked:
+		return " (moved from " + legacy + "; a link remains at the old path)"
+	}
+	return ""
 }
 
 func checkAuth(c config.Config, dataDir string) Result {

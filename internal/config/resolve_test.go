@@ -405,6 +405,37 @@ func TestResolveRootBrokenLegacyLinkRefused(t *testing.T) {
 	}
 }
 
+func TestResolveRootBrokenNewLinkRefused(t *testing.T) {
+	home, n, l := rootsOf(t)
+	mkdir(t, l)
+	touch(t, filepath.Join(l, "a"))
+	symlink(t, filepath.Join(home, "missing"), n)
+	_, err := ResolveRoot(home, "")
+	if err == nil || !strings.Contains(err.Error(), n) || !strings.Contains(err.Error(), "broken link") {
+		t.Fatalf("want a broken-link error naming %s, got %v", n, err)
+	}
+	if strings.Contains(err.Error(), "different content") {
+		t.Fatalf("a dangling link is not a content clash: %v", err)
+	}
+}
+
+// Resolve labels a root refusal with the env var only when one was used.
+func TestResolveRootErrorLabel(t *testing.T) {
+	home, n, l := rootsOf(t)
+	mkdir(t, l)
+	touch(t, filepath.Join(l, "a"))
+	mkdir(t, n)
+	touch(t, filepath.Join(n, "b"))
+	_, src, err := Resolve("", false, home, "", "")
+	if err == nil || src.Path != "data root" {
+		t.Fatalf("two roots: label %q err %v; want %q", src.Path, err, "data root")
+	}
+	_, src, err = Resolve("", false, home, "", "rel")
+	if err == nil || src.Path != "$CULIBOX_HOME" {
+		t.Fatalf("relative env: label %q err %v; want $CULIBOX_HOME", src.Path, err)
+	}
+}
+
 func TestResolveRootEnvWins(t *testing.T) {
 	home, n, l := rootsOf(t)
 	mkdir(t, n)
@@ -453,6 +484,9 @@ func TestHomeEnv(t *testing.T) {
 		{"legacy only", "", "/a", "/a", "AGENT_BOX_HOME is deprecated; rename it to CULIBOX_HOME", ""},
 		{"same", "/a", "/a/", "/a", "AGENT_BOX_HOME is deprecated and set to the same path as CULIBOX_HOME; unset it", ""},
 		{"differ", "/a", "/b", "", "", "CULIBOX_HOME (/a) and AGENT_BOX_HOME (/b) disagree; unset one"},
+		{"relative new", "rel", "", "", "", `CULIBOX_HOME "rel" is not an absolute path`},
+		{"relative legacy", "", "rel", "", "", `AGENT_BOX_HOME "rel" is not an absolute path`},
+		{"relative both same", "rel", "rel", "", "", `CULIBOX_HOME "rel" is not an absolute path`},
 	}
 	for _, tc := range cases {
 		v, n, err := HomeEnv(env(tc.c, tc.a))

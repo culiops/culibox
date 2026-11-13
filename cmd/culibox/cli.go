@@ -46,7 +46,8 @@ const usage = `usage:
   culibox version                                      print the version and commit
 
 Everything culibox writes, its config.json included, lives in one data root:
-$AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
+$CULIBOX_HOME (absolute; the old name AGENT_BOX_HOME still works) or ~/.local/share/culibox.
+A ~/.local/share/agent-box from before the rename is moved there by serve, when that is safe.
 `
 
 type cliArgs struct {
@@ -137,7 +138,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $AGENT_BOX_HOME or ~/.local/share/agent-box; then $XDG_CONFIG_HOME or ~/.config/agent-box/config.json unless AGENT_BOX_HOME is set; else built-in defaults; never ./config.json)")
+	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $CULIBOX_HOME or ~/.local/share/culibox (an older ~/.local/share/agent-box is used until serve moves it); then $XDG_CONFIG_HOME or ~/.config/culibox/config.json (an older agent-box one is read too) unless CULIBOX_HOME is set; else built-in defaults; never ./config.json)")
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")

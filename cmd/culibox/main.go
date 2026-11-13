@@ -79,12 +79,45 @@ func main() {
 		ring = logring.New(200, 2048)
 		log.SetOutput(io.MultiWriter(os.Stderr, ring))
 	}
+	// The root env var: CULIBOX_HOME, or the deprecated AGENT_BOX_HOME. A refusal
+	// is fatal except for doctor and bug-report, which show it as a FAIL row.
+	envHome, envNotice, envErr := config.HomeEnv(os.Getenv)
+	oneShot := args.Cmd == "doctor" || args.Cmd == "bug-report"
+	if envErr != nil && !oneShot {
+		log.Fatalf("culibox: %v", envErr)
+	}
+	if envNotice != "" {
+		if args.Cmd == "serve" {
+			log.Printf("culibox: %s", envNotice) // into the ring for the bug report
+		} else {
+			fmt.Fprintf(os.Stderr, "culibox: %s\n", envNotice)
+		}
+	}
 	home, homeErr := serveHome(os.UserHomeDir)
-	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
-	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	// The one-time data root move, before the config is resolved so the config,
+	// credentials and protected list are all built from the new path.
+	var rootNote string
+	if homeErr == nil && envErr == nil {
+		out, err := maybeMoveDataRoot(args.Cmd, envHome, home, xdg, runtime.GOOS, log.Printf)
+		if err != nil {
+			log.Fatalf("culibox: %v", err)
+		}
+		rootNote = out.Reason
+	}
+	var (
+		cfg    config.Config
+		src    config.Source
+		cfgErr error
+	)
+	if envErr != nil { // doctor / bug-report: the env row carries the refusal
+		cfgErr = envErr
+	} else {
+		cfg, src, cfgErr = config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
+	}
 	if src.Default && cfgErr == nil {
 		// No file yet: let the TLS-interception hint say where to create one.
-		if files, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome); err == nil && len(files) > 0 {
+		if files, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome); err == nil && len(files) > 0 {
 			hintConfigPath = files[0]
 		}
 	}
@@ -102,9 +135,10 @@ func main() {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL. The
 		// config files only feed the protected list of the folder row: a
 		// failure to name them leaves that list without them.
-		cfgFiles, _ := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		cfgFiles, _ := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 		in := doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles}
+			Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+			EnvNotice: envNotice, EnvErr: envErr}
 		if args.Cmd == "doctor" {
 			os.Exit(doctor.Run(os.Stdout, in))
 		}
@@ -127,7 +161,7 @@ func main() {
 		log.Print("WARNING: " + w)
 	}
 	if args.Cmd == "box" {
-		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 		if cfgFiles, err = boxConfigFiles(runtime.GOOS, cfgFiles, err); err != nil {
 			log.Fatalf("config: %v", err)
 		}
@@ -137,20 +171,21 @@ func main() {
 		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))
 	}
 	if args.Cmd == "clone" {
-		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 		if err != nil {
 			log.Fatalf("config: %v", err)
 		}
 		os.Exit(runClone(args, cfg, home, runtime.GOOS, cfgFiles, os.Stdout))
 	}
-	log.Printf("config: %s (agent-box %s)", src, buildCommit())
+	log.Printf("config: %s (culibox %s)", src, buildCommit())
 	log.Print(cred.summary())
-	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
-		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles}, ring)
+		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
+		EnvNotice: envNotice, RootNote: rootNote}, ring)
 }
 
 // boxConfigFiles: `box` uses the config files only for the macOS VM's

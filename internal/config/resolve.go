@@ -60,16 +60,23 @@ func DefaultRoots(home string) (newRoot, legacyRoot string) {
 // HomeEnv reads the root env var: CULIBOX_HOME, or the deprecated
 // AGENT_BOX_HOME. notice is a line for stderr (and a doctor WARN), empty when
 // nothing is deprecated. Both set to different paths is an error: nothing is
-// picked silently.
+// picked silently. A relative value is an error naming the variable it came
+// from (ResolveRoot checks again, for callers that bring their own value).
 func HomeEnv(getenv func(string) string) (value, notice string, err error) {
 	n, o := getenv("CULIBOX_HOME"), getenv("AGENT_BOX_HOME")
+	pick := func(name, v, notice string) (string, string, error) {
+		if v != "" && !filepath.IsAbs(v) {
+			return "", "", fmt.Errorf("%s %q is not an absolute path", name, v)
+		}
+		return v, notice, nil
+	}
 	switch {
 	case o == "":
-		return n, "", nil
+		return pick("CULIBOX_HOME", n, "")
 	case n == "":
-		return o, "AGENT_BOX_HOME is deprecated; rename it to CULIBOX_HOME", nil
+		return pick("AGENT_BOX_HOME", o, "AGENT_BOX_HOME is deprecated; rename it to CULIBOX_HOME")
 	case filepath.Clean(n) == filepath.Clean(o):
-		return n, "AGENT_BOX_HOME is deprecated and set to the same path as CULIBOX_HOME; unset it", nil
+		return pick("CULIBOX_HOME", n, "AGENT_BOX_HOME is deprecated and set to the same path as CULIBOX_HOME; unset it")
 	}
 	return "", "", fmt.Errorf("CULIBOX_HOME (%s) and AGENT_BOX_HOME (%s) disagree; unset one", n, o)
 }
@@ -96,7 +103,7 @@ func Root(home, envHome string) (string, error) {
 //   - both exist and new is a real, empty directory: legacy with EmptyNew. When
 //     legacy is empty too the answer is the same: legacy holds the original
 //     hash-derived names and the choice must not depend on luck;
-//   - legacy a broken symlink or not stat-able: an error naming it;
+//   - legacy or new a broken symlink, or not stat-able: an error naming it;
 //   - both exist with different content: an error naming both and the fix. A
 //     silent pick would hide data, or let a planted directory take over, since
 //     config.json names the binaries that run.
@@ -131,6 +138,9 @@ func ResolveRoot(home, envHome string) (RootInfo, error) {
 		return RootInfo{Path: legacy, Kind: RootLegacy}, nil
 	}
 	nst, serr := os.Stat(newRoot)
+	if serr != nil && nfi.Mode()&os.ModeSymlink != 0 {
+		return RootInfo{}, fmt.Errorf("data root %s is a broken link or cannot be read (%v); fix or remove it, or set CULIBOX_HOME", newRoot, serr)
+	}
 	if serr == nil && os.SameFile(nst, lst) {
 		legLink, newLink := lfi.Mode()&os.ModeSymlink != 0, nfi.Mode()&os.ModeSymlink != 0
 		if legLink && !newLink {
@@ -165,7 +175,11 @@ func ResolveRoot(home, envHome string) (RootInfo, error) {
 func Resolve(explicit string, set bool, home, xdg, envHome string) (Config, Source, error) {
 	ri, err := ResolveRoot(home, envHome)
 	if err != nil {
-		return Config{}, Source{Path: "$CULIBOX_HOME"}, err
+		label := "data root"
+		if envHome != "" {
+			label = "$CULIBOX_HOME"
+		}
+		return Config{}, Source{Path: label}, err
 	}
 	c, src, err := load(explicit, set, ri.Path, home, xdg, envHome != "")
 	src.Root = ri
@@ -205,15 +219,21 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	return Defaults(), Source{Default: true}, nil
 }
 
+// XDGBase is the directory the ~/.config fallback lives in: an absolute
+// $XDG_CONFIG_HOME, else ~/.config.
+func XDGBase(home, xdg string) string {
+	if xdg != "" && filepath.IsAbs(xdg) {
+		return xdg
+	}
+	return filepath.Join(home, ".config")
+}
+
 // candidates are the config files load tries, in order: the root's, then (not
 // when relocated) the culibox and legacy XDG ones.
 func candidates(root, home, xdg string, relocated bool) []string {
 	out := []string{filepath.Join(root, "config.json")}
 	if !relocated {
-		base := filepath.Join(home, ".config")
-		if xdg != "" && filepath.IsAbs(xdg) {
-			base = xdg
-		}
+		base := XDGBase(home, xdg)
 		out = append(out, filepath.Join(base, RootName, "config.json"), filepath.Join(base, LegacyRootName, "config.json"))
 	}
 	return out

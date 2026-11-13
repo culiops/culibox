@@ -83,7 +83,7 @@ func TestBoxTierRows(t *testing.T) {
 		{"context unchecked", func(f *boxFacts) {
 			f.UserContext = fmt.Errorf("%w (docker context show: exit status 1)", boxvm.ErrContextUnchecked)
 		}, Warn, "could not check"},
-		{"socket too long", func(f *boxFacts) { f.SocketErr = errors.New("the box VM socket … Set AGENT_BOX_HOME") }, Fail, "AGENT_BOX_HOME"},
+		{"socket too long", func(f *boxFacts) { f.SocketErr = errors.New("the box VM socket … Set CULIBOX_HOME") }, Fail, "CULIBOX_HOME"},
 		{"stopped boxes", func(f *boxFacts) { f.Stopped = []string{"ab-box-1"} }, Warn, "ab-box-1"},
 		{"old colima", func(f *boxFacts) { f.ColimaVer = "0.6.9" }, Warn, "0.8"},
 	}
