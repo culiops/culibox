@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // CookieName is the WS auth cookie.
@@ -35,27 +36,35 @@ func ResolveCred(c config.Config) (pass string, err error) {
 type CookieAuth struct{ secret []byte }
 
 // NewCookieAuth returns a CookieAuth backed by a 32-byte signing secret loaded
-// from path, generating and persisting a fresh one (file 0600, dir 0700) if the
-// file is absent or malformed. Persisting the secret is what lets a browser's WS
-// auth cookie survive a daemon restart: the /ws route is cookie-only gated, so a
-// per-process secret would 401 the client's auto-reconnect forever. An empty
-// path yields an ephemeral per-process secret (tests).
+// from path, minting and persisting a fresh one (file 0600, dir 0700) if the
+// file is absent or empty. A file of any other length is refused, never
+// regenerated: a newer CuliBox may have written a secret in a format this one
+// cannot read, and replacing it would destroy the only copy. Persisting the
+// secret is what lets a browser's WS auth cookie survive a daemon restart: the
+// /ws route is cookie-only gated, so a per-process secret would 401 the
+// client's auto-reconnect forever. An empty path yields an ephemeral
+// per-process secret (tests).
 func NewCookieAuth(path string) (*CookieAuth, error) {
 	if path == "" {
 		return newEphemeral()
 	}
 	if b, err := os.ReadFile(path); err == nil {
-		if len(b) == 32 {
+		switch len(b) {
+		case 32:
 			return &CookieAuth{secret: b}, nil
+		case 0:
+			// Empty (a torn first write): nothing to lose, mint below.
+		default:
+			return nil, fmt.Errorf("%w; or delete the file to make a new one",
+				datacompat.Newer(path, fmt.Sprintf("it holds %d bytes, not a 32-byte secret", len(b))))
 		}
-		// Present but malformed (torn/hand-edited) — fall through to regenerate.
 	} else if !errors.Is(err, os.ErrNotExist) {
 		// An existing secret we merely couldn't read (perms/IO): refuse to
 		// silently overwrite it — that would invalidate every live cookie, the
 		// exact failure this persistence exists to prevent. Fail fast instead.
 		return nil, fmt.Errorf("auth: read cookie secret %s: %w", path, err)
 	}
-	// Absent or malformed — mint and persist a fresh secret.
+	// Absent or empty — mint and persist a fresh secret.
 	s := make([]byte, 32)
 	if _, err := rand.Read(s); err != nil {
 		return nil, err

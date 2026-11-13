@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 // LoginTokenFile holds the generated login secret in token mode.
@@ -54,15 +55,21 @@ func ResolveLogin(c config.Config, dataDir string) (Login, error) {
 }
 
 // LoadOrCreateLoginToken returns the token in path, generating 32 random bytes
-// (base64url, 43 characters) when the file is absent or malformed. Surrounding
-// whitespace is ignored, so a hand-edited file keeps working. Any read error
-// other than not-exist is fatal: regenerating would lock out a browser for no
-// reason the user could see.
+// (base64url, 43 characters) when the file is absent or blank. Surrounding
+// whitespace is ignored, so a hand-edited file keeps working. Any other content
+// is refused, never replaced: a newer CuliBox may have written a token in a form
+// this one cannot read. Any read error other than not-exist is fatal too:
+// regenerating would lock out a browser for no reason the user could see.
 func LoadOrCreateLoginToken(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err == nil {
-		if s := strings.TrimSpace(string(b)); loginTokenRe.MatchString(s) {
+		s := strings.TrimSpace(string(b))
+		if loginTokenRe.MatchString(s) {
 			return s, nil
+		}
+		if s != "" {
+			return "", fmt.Errorf("%w; or delete it to make a new one; to use your own password, set password_env",
+				datacompat.Newer(path, "it is not a 43-character login token"))
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("auth: read login token %s: %w", path, err)

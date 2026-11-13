@@ -117,7 +117,7 @@ const relaySecretFile = "relay2.secret"
 // on every connection, so whatever held a port while CuliBox did not, or read
 // the loopback interface, may have learned it. It is never loaded again:
 // loadRelayKey deletes it. A new file name, not a stamp inside the old file,
-// because auth.NewCookieAuth owns the 32-byte format and replaces anything that
+// because auth.NewCookieAuth owns the 32-byte format and refuses anything that
 // is not exactly that.
 const retiredRelaySecretFile = "relay.secret"
 
