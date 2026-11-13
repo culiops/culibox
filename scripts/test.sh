@@ -19,6 +19,9 @@ go test ./...
 # The macOS verify script runs offline against stubs, so a change to it is caught here
 # and not on the Mac. bash, because the script and its test are bash 3.2 code.
 bash scripts/macos-verify_test.sh
+# The prod deploy script (kept previous binary, rollback line), against a stub go and
+# systemctl in a throwaway checkout.
+bash scripts/deploy-prod_test.sh
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh
 # The private-identifier gitleaks rules. Skips with a notice when gitleaks is not installed
