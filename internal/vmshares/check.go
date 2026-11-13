@@ -34,6 +34,9 @@ const (
 
 const reasonProtectedFmt = "holds %s, so it can never be shared with the box VM."
 
+// reasonProgramRWFmt: a program folder may be shared read-only.
+const reasonProgramRWFmt = "holds %s, so it cannot be shared read & write."
+
 // Refused is a folder the box VM may not share. Error() is Display(Path)+" "+Reason.
 type Refused struct {
 	Path, Kind, Reason string
@@ -94,7 +97,7 @@ func checkResolved(p, rp string, env Env) error {
 		if env.DataRoot != "" && (Within(c, env.DataRoot, env.Fold) || Within(env.DataRoot, c, env.Fold)) {
 			return refuse(KindData, reasonData)
 		}
-		if what := protectedHit(c, env); what != "" {
+		if what := protectedHit(c, env, false); what != "" {
 			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
@@ -127,7 +130,28 @@ func checkModeResolved(p, rp string, m Mode, env Env) error {
 	if m == RW && insideClaude(filepath.Clean(p), rp, env) {
 		return &Refused{Path: p, Kind: KindReadOnly, Reason: reasonReadOnly, home: env.Home}
 	}
+	if m == RW {
+		if what := programHit(filepath.Clean(p), rp, env); what != "" {
+			return &Refused{Path: p, Kind: KindProtected, Reason: fmt.Sprintf(reasonProgramRWFmt, what), home: env.Home}
+		}
+	}
 	return nil
+}
+
+// programHit is the What of a program folder (a WriteOnly protected directory)
+// that p, or its resolved form rp, is or holds; "". A read-only share of such a
+// folder cannot replace the program, a read & write one could.
+func programHit(p, rp string, env Env) string {
+	ids := idCache{}
+	for _, c := range []string{p, rp} {
+		if what := protectedHit(c, env, true); what != "" {
+			return what
+		}
+		if what := identityProtected(c, env, ids, true); what != "" {
+			return what
+		}
+	}
+	return ""
 }
 
 // insideClaude reports whether p, by spelling, symlink resolution or file
@@ -195,9 +219,19 @@ func identityHit(c string, env Env) (kind, reason string) {
 			return KindData, reasonData
 		}
 	}
+	if what := identityProtected(c, env, ids, false); what != "" {
+		return KindProtected, fmt.Sprintf(reasonProtectedFmt, what)
+	}
+	return "", ""
+}
+
+// identityProtected is the protected-directory rule by file identity: the What
+// of the first env.Protected directory (the WriteOnly ones when write is set,
+// the others otherwise) that c equals or holds, or sits inside when Inside is set.
+func identityProtected(c string, env Env, ids idCache, write bool) string {
 	claudeFI := ids.stat(filepath.Join(env.Home, ".claude"))
 	for _, d := range env.Protected {
-		if d.Path == "" {
+		if d.Path == "" || d.WriteOnly != write {
 			continue
 		}
 		// sensitive() owns the default account's ~/.claude, as in protectedHit.
@@ -205,13 +239,13 @@ func identityHit(c string, env Env) (kind, reason string) {
 			continue
 		}
 		if ids.contains(c, d.Path) {
-			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+			return d.What
 		}
 		if _, in := ids.inside(c, d.Path); d.Inside && in {
-			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+			return d.What
 		}
 	}
-	return "", ""
+	return ""
 }
 
 // memoryRel reports whether rel (the components below ~/.claude) is
@@ -316,13 +350,14 @@ func sensitive(c string, env Env) bool {
 }
 
 // protectedHit is the What of the first env.Protected directory that c equals
-// or contains, or (when the directory sets Inside) sits inside; "" if none. The
-// default account's ~/.claude is skipped here: sensitive() owns it, with its
-// projects/<slug>/memory exception.
-func protectedHit(c string, env Env) string {
+// or contains, or (when the directory sets Inside) sits inside; "" if none. With
+// write=false only the directories that refuse every use count; with write=true
+// only the WriteOnly ones (program folders). The default account's ~/.claude is
+// skipped here: sensitive() owns it, with its projects/<slug>/memory exception.
+func protectedHit(c string, env Env, write bool) string {
 	claude := spellings(filepath.Join(env.Home, ".claude"))
 	for _, d := range env.Protected {
-		if d.Path == "" {
+		if d.Path == "" || d.WriteOnly != write {
 			continue
 		}
 		spell := spellings(d.Path)

@@ -446,3 +446,45 @@ func TestProtectedDirsForProtectsProgramDirs(t *testing.T) {
 		}
 	}
 }
+
+// #235 review: a program folder matters only to a use that can WRITE there.
+// Workspaces keep refusing it; context paths, which are read-only binds, do not.
+func TestProgramDirsAreEnforcedOnlyForWritableUses(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(repo, "tmp", "main")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirs := ProtectedDirsFor(root, nil, filepath.Join(root, "profiles.json"), "", "", bin)
+	if r := ProtectedOverlap(repo, dirs); !strings.Contains(r, "a program CuliBox runs") {
+		t.Errorf("a workspace holding the program folder = %q, want a refusal", r)
+	}
+	if err := CheckContextPath(repo, "/nonexistent-home", dirs, nil); err != nil {
+		t.Errorf("a read-only context path holding the program folder was refused: %v", err)
+	}
+	// The data root is refused for every use.
+	if err := CheckContextPath(root, "/nonexistent-home", dirs, nil); err == nil {
+		t.Error("a context path at the data root was accepted")
+	}
+	for _, d := range ReadOnlyUse(dirs) {
+		if d.What == "a program CuliBox runs" {
+			t.Errorf("ReadOnlyUse kept %+v", d)
+		}
+	}
+	if len(ReadOnlyUse(dirs)) == 0 {
+		t.Error("ReadOnlyUse dropped everything")
+	}
+}
+
+// A program folder never hides a config folder of the same path.
+func TestDedupeKeepsAConfigDirNextToAProgramDir(t *testing.T) {
+	d := t.TempDir()
+	out := DedupeProtected([]ProtectedDir{ProgramDirProtected(d), ConfigDirProtected(d)})
+	if len(out) != 2 {
+		t.Fatalf("%+v", out)
+	}
+}

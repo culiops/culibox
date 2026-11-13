@@ -165,18 +165,18 @@ boxed sessions have already run in.
 - CuliBox refuses a folder that is your home folder or contains it, that
   overlaps its data folder, that holds CuliBox's own config, profiles or
   bundle source directory (a share may not be, contain or, for the data folder
-  and the bundle source, sit inside one; symlinks are followed), that is or
-  holds the folder of a program CuliBox runs (docker, colima, limactl, or
-  CuliBox itself, symlinks followed: if they live in `/opt/homebrew` or
-  `/usr/local`, those folders cannot be shared, but a folder inside them
-  can; a `culibox` you built inside a project folder makes that folder
-  unshareable, so keep the binary outside the folders you share), or that
-  holds keys or sockets: `~/.ssh`, `~/.aws`,
-  `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.colima`, `~/.lima`, `~/Library`,
+  and the bundle source, sit inside one; symlinks are followed), or that holds
+  keys or sockets: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.colima`, `~/.lima`, `~/Library`,
   `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, `~/.terraform.d`,
   `~/.password-store`, `~/.config/op`, and `~/.claude` apart from a project's
   `memory` folder. That folder, and anything inside it, can only be shared
-  read-only: your own Claude Code loads what is in it. Folders on the list
+  read-only: your own Claude Code loads what is in it. A folder that is or
+  holds the folder of a program CuliBox runs (docker, colima, limactl or
+  CuliBox itself, symlinks followed) cannot be shared read & write, because a
+  box that could write there could replace the program; read-only is fine.
+  If the programs live in `/opt/homebrew` or `/usr/local`, those folders are
+  read-only at most, and so is a project folder you built `culibox` in.
+  Folders on the list
   never contain one another: adding a parent absorbs the entries inside it, and a read-write folder cannot sit
   inside a read-only one.
 - A boxed spawn checks the folders against what the running VM actually

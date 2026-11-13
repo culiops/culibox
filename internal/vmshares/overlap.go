@@ -170,6 +170,12 @@ outer:
 			s.Mode = RO
 			skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + reasonReadOnly})
 		}
+		if s.Mode == RW {
+			if what := programHit(clean, k, env); what != "" {
+				s.Mode = RO
+				skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + fmt.Sprintf(reasonProgramRWFmt, what)})
+			}
+		}
 		for i := range merged {
 			if sameKey(merged[i].key, k, env.Fold) {
 				if s.Mode == RW {
@@ -197,6 +203,12 @@ outer:
 			}
 			covered = true
 			if kept[i].Mode == RO && s.Mode == RW {
+				// The promotion must not give write access to a folder that may
+				// only be read: the child then stays read-only, inside its parent.
+				if what := programHit(filepath.Clean(kept[i].Path), kept[i].key, env); what != "" {
+					skipped = append(skipped, Skip{Path: s.Path, Reason: "left read-only: " + kept[i].Path + " " + fmt.Sprintf(reasonProgramRWFmt, what)})
+					break
+				}
 				kept[i].Mode = RW
 				skipped = append(skipped, Skip{Path: kept[i].Path, Reason: "made read & write because " + s.Path + " needs write access"})
 			}

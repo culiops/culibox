@@ -23,6 +23,13 @@ type ProtectedDir struct {
 	Why    string // what a box could do there, e.g. "holds the box VM's controls"
 	Inside bool   // also refuse a workspace below Path
 
+	// WriteOnly marks a directory that matters only to a use that can WRITE
+	// there (a program CuliBox runs: a box that cannot write it cannot replace
+	// it). Workspaces and read & write VM shares are refused; read-only binds
+	// (context paths, clone sources) and read-only VM shares are not. See
+	// ReadOnlyUse and vmshares.CheckMode.
+	WriteOnly bool
+
 	// ContextHint, when set, is appended to a context_paths refusal that names
 	// this directory (never to a workspace refusal): where to go instead.
 	ContextHint string
@@ -55,10 +62,24 @@ func ProfilesDirProtected(p string) ProtectedDir {
 // colima, limactl, its own binary). A box that could write there could replace
 // the program, and CuliBox would run the replacement on the host. Only a
 // directory that is or holds it is refused, not one inside it: /opt/homebrew
-// is refused, /opt/homebrew/share is not.
+// is refused, /opt/homebrew/share is not. And only for a use that can write
+// (WriteOnly): a read-only bind or share of it is fine.
 func ProgramDirProtected(p string) ProtectedDir {
 	return ProtectedDir{Path: p, What: "a program CuliBox runs",
-		Why: "a box that could write there could replace the program, and CuliBox would run it on the host"}
+		Why:       "a box that could write there could replace the program, and CuliBox would run it on the host",
+		WriteOnly: true}
+}
+
+// ReadOnlyUse is dirs without the WriteOnly ones: the list for a path a box
+// only ever reads (a context path, a clone's original and its share sources).
+func ReadOnlyUse(dirs []ProtectedDir) []ProtectedDir {
+	var out []ProtectedDir
+	for _, d := range dirs {
+		if !d.WriteOnly {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // PersonalConfigDirProtected is the default account's config dir (~/.claude).
@@ -84,6 +105,9 @@ func DedupeProtected(dirs []ProtectedDir) []ProtectedDir {
 			continue
 		}
 		key := filepath.Clean(d.Path) + "\x00" + resolveExisting(d.Path)
+		if d.WriteOnly {
+			key += "\x00write" // never hides (or is hidden by) an entry that refuses every use
+		}
 		if runtime.GOOS == "darwin" {
 			key = strings.ToLower(key)
 		}

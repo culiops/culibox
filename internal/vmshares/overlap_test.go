@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/culiops/culibox/internal/box"
 )
 
 func sh(env Env, rel string, m Mode) Share {
@@ -248,5 +250,57 @@ func TestAddAndNormalizeResolveEachPathOnce(t *testing.T) {
 	Normalize([]Share{{Path: link, Mode: RW}}, env)
 	if n != 1 {
 		t.Errorf("Normalize resolved the path %d times, want 1", n)
+	}
+}
+
+// #235 review: a folder that holds a program CuliBox runs may be shared
+// read-only, never read & write: a read-only share cannot replace the program.
+func TestProgramDirHolderIsShareableOnlyReadOnly(t *testing.T) {
+	env := testEnv(t, false)
+	prog := filepath.Join(env.Home, "code", "tmp")
+	if err := os.MkdirAll(filepath.Join(prog, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.Protected = []box.ProtectedDir{box.ProgramDirProtected(prog)}
+	code := sh(env, "code", RO)
+	work := sh(env, "code/proj", RW)
+
+	if err := Check(code.Path, env); err != nil {
+		t.Fatalf("Check (mode-agnostic) = %v", err)
+	}
+	if err := CheckMode(code.Path, RO, env); err != nil {
+		t.Errorf("ro: %v", err)
+	}
+	err := CheckMode(code.Path, RW, env)
+	if kindOf(err) != KindProtected || !strings.Contains(err.Error(), "can only be shared read-only") && !strings.Contains(err.Error(), "cannot be shared read & write") {
+		t.Fatalf("rw = %v, want a protected refusal", err)
+	}
+	if _, err := Add(nil, sh(env, "code", RW), env); kindOf(err) != KindProtected {
+		t.Errorf("Add rw = %v", err)
+	}
+	add, err := Add(nil, code, env)
+	if err != nil || len(add.List) != 1 {
+		t.Fatalf("Add ro = %+v %v", add, err)
+	}
+	if _, err := SetMode(add.List, code.Path, RW, env); kindOf(err) != KindProtected {
+		t.Errorf("SetMode rw = %v", err)
+	}
+	// Inside the program folder's parent but not holding it: fine either way.
+	if err := CheckMode(work.Path, RW, env); err != nil {
+		t.Errorf("a folder beside the program folder, rw: %v", err)
+	}
+	// A saved rw entry reads back ro.
+	out, skipped := Normalize([]Share{sh(env, "code", RW)}, env)
+	if len(out) != 1 || out[0].Mode != RO || len(skipped) != 1 {
+		t.Errorf("Normalize rw = %+v %+v", out, skipped)
+	}
+	// The promotion case: a ro parent holding the program folder must not be
+	// made rw by a rw child below it.
+	out, skipped = Normalize([]Share{code, work}, env)
+	if len(out) != 1 || out[0].Path != code.Path || out[0].Mode != RO {
+		t.Fatalf("Normalize promotion = %+v, want the parent kept read-only", out)
+	}
+	if len(skipped) != 1 || skipped[0].Path != work.Path {
+		t.Errorf("skipped = %+v, want the child named", skipped)
 	}
 }
