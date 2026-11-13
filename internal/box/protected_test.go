@@ -408,3 +408,41 @@ func TestPersonalConfigDirRefusesIsContainsAndInside(t *testing.T) {
 		t.Fatalf("a sibling must stay boxable: %q", r)
 	}
 }
+
+// #235 item 2: the directory of each program CuliBox runs (docker, colima,
+// limactl, its own binary) is protected like the config dirs: a workspace or a
+// VM share that is it, or holds it, is refused; one inside it, or beside it, is not.
+func TestProtectedDirsForProtectsProgramDirs(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(t.TempDir(), "brew") // like /opt/homebrew
+	for _, d := range []string{"bin", "lib", "Cellar/docker/1/bin"} {
+		if err := os.MkdirAll(filepath.Join(prefix, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := filepath.Join(prefix, "Cellar/docker/1/bin/docker")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(prefix, "bin", "docker")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	dirs := ProtectedDirsFor(root, nil, filepath.Join(root, "profiles.json"), "", "", link, "")
+	for _, c := range []struct {
+		ws   string
+		want string // "" = allowed
+	}{
+		{prefix, "it contains a program CuliBox runs"},
+		{filepath.Join(prefix, "bin"), "it is a program CuliBox runs"},
+		{filepath.Join(prefix, "Cellar/docker/1/bin"), "it is a program CuliBox runs"},
+		{filepath.Join(prefix, "Cellar"), "it contains a program CuliBox runs"},
+		{filepath.Join(prefix, "lib"), ""},
+		{filepath.Join(prefix, "bin", "sub"), ""},
+	} {
+		got := ProtectedOverlap(c.ws, dirs)
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("ProtectedOverlap(%s) = %q, want %q", c.ws, got, c.want)
+		}
+	}
+}

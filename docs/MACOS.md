@@ -165,12 +165,17 @@ boxed sessions have already run in.
 - CuliBox refuses a folder that is your home folder or contains it, that
   overlaps its data folder, that holds CuliBox's own config, profiles or
   bundle source directory (a share may not be, contain or, for the data folder
-  and the bundle source, sit inside one; symlinks are followed), or that holds keys or sockets: `~/.ssh`, `~/.aws`,
+  and the bundle source, sit inside one; symlinks are followed), that is or
+  holds the folder of a program CuliBox runs (docker, colima, limactl, or
+  CuliBox itself, symlinks followed: if they live in `/opt/homebrew` or
+  `/usr/local`, those folders cannot be shared, but a folder inside them
+  can), or that holds keys or sockets: `~/.ssh`, `~/.aws`,
   `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.colima`, `~/.lima`, `~/Library`,
   `~/.config/gcloud`, `~/.config/gh`, `~/.azure`, `~/.terraform.d`,
   `~/.password-store`, `~/.config/op`, and `~/.claude` apart from a project's
-  `memory` folder. Folders on the list never contain one another: adding a
-  parent absorbs the entries inside it, and a read-write folder cannot sit
+  `memory` folder. That folder, and anything inside it, can only be shared
+  read-only: your own Claude Code loads what is in it. Folders on the list
+  never contain one another: adding a parent absorbs the entries inside it, and a read-write folder cannot sit
   inside a read-only one.
 - A boxed spawn checks the folders against what the running VM actually
   has, not against your saved list. A folder you added but have not applied is

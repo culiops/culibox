@@ -51,6 +51,16 @@ func ProfilesDirProtected(p string) ProtectedDir {
 		Why: "holds the profiles that name the binaries sessions run and whether they are contained"}
 }
 
+// ProgramDirProtected is a directory holding a program CuliBox runs (docker,
+// colima, limactl, its own binary). A box that could write there could replace
+// the program, and CuliBox would run the replacement on the host. Only a
+// directory that is or holds it is refused, not one inside it: /opt/homebrew
+// is refused, /opt/homebrew/share is not.
+func ProgramDirProtected(p string) ProtectedDir {
+	return ProtectedDir{Path: p, What: "a program CuliBox runs",
+		Why: "a box that could write there could replace the program, and CuliBox would run it on the host"}
+}
+
 // PersonalConfigDirProtected is the default account's config dir (~/.claude).
 // Its settings.json hooks and hook scripts run on the host in every host-tier
 // session, and inheriting agent accounts copy that settings.json. Inside is
@@ -365,7 +375,10 @@ func resolveExisting(p string) string {
 // (personalDir, ~/.claude), the config bundle's source when it is another dir
 // (bundleSrc, "" with the bundle off), and the directory of each config file
 // (cfgFiles) and of the profiles file, every symlink hop included (FileDirs).
-func ProtectedDirsFor(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string) []ProtectedDir {
+// programs are the files CuliBox runs (docker, colima, limactl, its own
+// executable): the directory of each, every symlink hop included, is protected
+// the same way. An empty entry is skipped.
+func ProtectedDirsFor(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string, programs ...string) []ProtectedDir {
 	out := []ProtectedDir{DataDirProtected(dataDir), PersonalConfigDirProtected(personalDir)}
 	if bundleSrc != "" && !sameDir(bundleSrc, personalDir) {
 		out = append(out, PersonalConfigDirProtected(bundleSrc))
@@ -377,6 +390,14 @@ func ProtectedDirsFor(dataDir string, cfgFiles []string, profilesPath, personalD
 	}
 	for _, d := range FileDirs(profilesPath) {
 		out = append(out, ProfilesDirProtected(d))
+	}
+	for _, f := range programs {
+		if f == "" {
+			continue
+		}
+		for _, d := range FileDirs(f) {
+			out = append(out, ProgramDirProtected(d))
+		}
 	}
 	return DedupeProtected(out)
 }
