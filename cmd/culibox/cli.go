@@ -21,31 +21,31 @@ var commit string
 // when unstamped.
 var version string
 
-// versionLine is what `agent-box version` prints: the stamped release (dev when
+// versionLine is what `culibox version` prints: the stamped release (dev when
 // unstamped) and the commit. The release smoke tests and the macOS verify
-// script parse "agent-box <tag> (<sha>)", so keep the shape.
+// script parse "culibox <tag> (<sha>)", so keep the shape.
 func versionLine() string {
 	v := version
 	if v == "" {
 		v = "dev"
 	}
-	return fmt.Sprintf("agent-box %s (%s)\n", v, buildCommit())
+	return fmt.Sprintf("culibox %s (%s)\n", v, buildCommit())
 }
 
 const usage = `usage:
-  agent-box [serve] [-config <path>]                   run the web control-plane
-  agent-box doctor  [-config <path>]                   check this machine; prints no secrets
-  agent-box bug-report [-config <path>]                redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
-  agent-box box setup [-rebuild] [-recreate] [-force]  build the box image (macOS: also the box VM)
-  agent-box box status                                 list boxes (macOS: and the box VM)
-  agent-box box stop [-force]                          macOS: stop the box VM
-  agent-box box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
-  agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while agent-box serves (a daemon restart aborts it; rerun)
-  agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
-  agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
-  agent-box version                                    print the version and commit
+  culibox [serve] [-config <path>]                     run the web control-plane
+  culibox doctor  [-config <path>]                     check this machine; prints no secrets
+  culibox bug-report [-config <path>]                  redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
+  culibox box setup [-rebuild] [-recreate] [-force]    build the box image (macOS: also the box VM)
+  culibox box status                                   list boxes (macOS: and the box VM)
+  culibox box stop [-force]                            macOS: stop the box VM
+  culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
+  culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while culibox serves (a daemon restart aborts it; rerun)
+  culibox store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
+  culibox store set|rm [-config <path>] <id>           put a value (read from stdin, never argv) or delete one
+  culibox version                                      print the version and commit
 
-Everything agent-box writes, its config.json included, lives in one data root:
+Everything culibox writes, its config.json included, lives in one data root:
 $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 

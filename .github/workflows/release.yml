@@ -113,8 +113,8 @@ jobs:
           (cd "$DIST" && sha256sum -c SHA256SUMS)
           dir=$(mktemp -d "$RUNNER_TEMP/smoke.XXXXXX")
           tar -C "$dir" -xzf "$DIST/culibox_${TAG#v}_linux_amd64.tar.gz"
-          got=$("$dir/agent-box" version)
-          want="agent-box $TAG ($(git rev-parse HEAD))"
+          got=$("$dir/culibox" version)
+          want="culibox $TAG ($(git rev-parse HEAD))"
           if [ "$got" != "$want" ]; then
             echo "::error::version is '$got', want '$want'"
             exit 1

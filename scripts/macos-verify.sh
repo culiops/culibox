@@ -20,7 +20,7 @@
 #      (arm64) and under Rosetta 2 (amd64), built the way the tarballs are:
 #      CGO_ENABLED=0 GOOS=darwin GOARCH=<arch>, ignoring the caller's GOFLAGS and go env file
 #   3. runs each extracted binary's `version` and requires exactly
-#      `agent-box <tag> (<commit of the clone>)`; amd64 runs under `arch -x86_64`
+#      `culibox <tag> (<commit of the clone>)`; amd64 runs under `arch -x86_64`
 #   4. asks for the manual Mac-test-guide rows (never defaults one to pass)
 #   5. builds macos-verification.json with tools/release-status (it holds the sha256
 #      of each binary that was run, which the manual rows are told to use) and
@@ -227,8 +227,8 @@ arch -x86_64 true >/dev/null 2>&1 ||
 for pair in "arm64:$arm_name" "amd64:$amd_name"; do
   mkdir -p "$work/${pair%%:*}"
   # Only the binary is extracted: a tarball is untrusted data until it is run.
-  tar -xzf "$dl/${pair#*:}" -C "$work/${pair%%:*}" agent-box ||
-    die "cannot extract agent-box from ${pair#*:}"
+  tar -xzf "$dl/${pair#*:}" -C "$work/${pair%%:*}" culibox ||
+    die "cannot extract culibox from ${pair#*:}"
 done
 
 # ---- 3. abduco and the tests -----------------------------------------------------
@@ -281,14 +281,14 @@ run_tests() {
 }
 
 # check_version ARCH BINARY [RUNNER...]: the binary's `version` must equal exactly
-# `agent-box <tag> (<commit>)`. V_LINE keeps what it printed either way.
+# `culibox <tag> (<commit>)`. V_LINE keeps what it printed either way.
 V_LINE=
 V_OK=
 V_BIN_SHA=
 check_version() {
   local arch=$1 bin=$2
   shift 2
-  local want="agent-box $tag ($commit)"
+  local want="culibox $tag ($commit)"
   # The record ties the arch to these exact bytes, which are also the ones the manual
   # rows are told to use.
   V_BIN_SHA=$(sum "$bin")
@@ -307,7 +307,7 @@ arch_json() {
   local passed=$T_PASS summary=$T_SUMMARY
   if [ "$V_OK" != true ]; then
     passed=false
-    summary="$summary; version stamp mismatch (want agent-box $tag ($commit))"
+    summary="$summary; version stamp mismatch (want culibox $tag ($commit))"
   fi
   printf '{"arch": %s, "mode": %s, "tests_passed": %s, "test_summary": %s, "version_line": %s, "binary_sha256": %s, "test_env": %s}' \
     "$(json_str "$1")" "$(json_str "$2")" "$passed" "$(json_str "$summary")" "$(json_str "$V_LINE")" "$(json_str "$V_BIN_SHA")" "$(json_str "$T_ENV")"
@@ -315,11 +315,11 @@ arch_json() {
 }
 
 run_tests arm64 arm64
-check_version arm64 "$work/arm64/agent-box" env
+check_version arm64 "$work/arm64/culibox" env
 arm_json=$(arch_json arm64 native)
 
 run_tests amd64 amd64
-check_version amd64 "$work/amd64/agent-box" arch -x86_64
+check_version amd64 "$work/amd64/culibox" arch -x86_64
 amd_json=$(arch_json amd64 rosetta2)
 
 # ---- 4. the manual rows -------------------------------------------------------------
@@ -329,8 +329,8 @@ manual_json=
 seen=" "
 row_re='^([A-Za-z0-9][A-Za-z0-9._-]*)=([A-Za-z]+)([[:space:]]+(.*))?$'
 echo "Run the manual rows with these exact binaries (the record holds their sha256):"
-echo "  arm64: $work/arm64/agent-box"
-echo "  amd64: $work/amd64/agent-box (start it with arch -x86_64)"
+echo "  arm64: $work/arm64/culibox"
+echo "  amd64: $work/amd64/culibox (start it with arch -x86_64)"
 echo "Mac test guide rows for $tag (ID=pass|fail|na [note]), empty line to finish:"
 while IFS= read -r -u 3 line || [ -n "$line" ]; do
   line=${line%$'\r'}
