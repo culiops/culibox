@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -81,16 +82,29 @@ func (d *demoVMControl) Apply(ctx context.Context, step func(name, state, sub st
 	return nil
 }
 
-func uidemoBuild(home string) web.VMFolders {
+// uidemoHomeCheck refuses a fake home the demo must not write in: none, a
+// relative one, or the real home, a folder that holds it, or a link to either
+// (the demo creates folders in its fake home).
+func uidemoHomeCheck(realHome, demo string) error {
+	if demo == "" || !filepath.IsAbs(demo) {
+		return errors.New("set AB_UIDEMO_HOME to an empty scratch folder (a full path)")
+	}
+	if realHome != "" && vmshares.Within(vmshares.Resolve(realHome), vmshares.Resolve(demo), false) {
+		return errors.New("AB_UIDEMO_HOME is your real home folder or holds it; use an empty scratch folder")
+	}
+	return nil
+}
+
+func uidemoBuild(realHome string) web.VMFolders {
 	mode := os.Getenv("AB_UIDEMO_VMFOLDERS")
 	switch mode {
 	case "applied", "whole_home", "pending":
 	default:
 		return nil
 	}
-	home = os.Getenv("AB_UIDEMO_HOME") // never the real home: the demo creates folders in it
-	if home == "" {
-		log.Print("uidemo: set AB_UIDEMO_HOME to an empty scratch folder")
+	home := os.Getenv("AB_UIDEMO_HOME")
+	if err := uidemoHomeCheck(realHome, home); err != nil {
+		log.Printf("uidemo: %v", err)
 		return nil
 	}
 	for _, d := range []string{"code/culibox", "code/infra", "box-clones", "notes/runbooks", "code/newproj"} {

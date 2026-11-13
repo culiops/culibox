@@ -28,6 +28,7 @@ bash scripts/ci/gitleaks-rules_test.sh
 # fail here, not there.
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...
 go vet -tags uidemo ./cmd/culibox
+go test -tags uidemo -run UIDemo ./cmd/culibox
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet -tags uidemo ./cmd/culibox
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/culibox
 node --test "internal/web/jstest/*.test.js"
