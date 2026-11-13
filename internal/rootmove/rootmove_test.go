@@ -942,3 +942,18 @@ func TestMoveXDGConfigNoOldDirNoLink(t *testing.T) {
 		t.Error("the old dir was created")
 	}
 }
+
+func TestRealDir(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if !RealDir(dir) || RealDir(link) || RealDir(filepath.Join(dir, "absent")) {
+		t.Errorf("RealDir(dir, link, absent) = %v %v %v; want true false false", RealDir(dir), RealDir(link), RealDir(filepath.Join(dir, "absent")))
+	}
+	var a, b syscall.Stat_t
+	if syscall.Stat("/proc", &a) == nil && syscall.Stat("/", &b) == nil && a.Dev != b.Dev && RealDir("/proc") {
+		t.Error("RealDir(/proc) = true for a mount point")
+	}
+}

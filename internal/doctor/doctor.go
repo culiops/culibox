@@ -50,6 +50,10 @@ const (
 // observe that nothing is left behind.
 var probeRoot = "/tmp"
 
+// liveSessions is abduco.LiveSessions (it reads only, creating no dir); a
+// variable so the data-root row can be tested without a real abduco.
+var liveSessions = abduco.LiveSessions
+
 type Input struct {
 	Config    config.Config
 	Source    config.Source
@@ -264,6 +268,16 @@ func rootStory(in Input, dir, goos string) string {
 		}
 		if in.RootNote != "" {
 			return " (kept in place: " + in.RootNote + ")"
+		}
+		// Two preconditions doctor can read without changing anything (R17):
+		// (b) a real directory, and (d) no live session, counted from the
+		// socket dir Checks uses for this data dir.
+		if !rootmove.RealDir(legacy) {
+			return " (kept in place: not a real directory)"
+		}
+		sock := abduco.SocketDirFor(in.Config.AbducoSocketDir, goos, dir, os.Getuid())
+		if n, err := liveSessions(sock, filepath.Join(legacy, "sessions", "pids")); err == nil && n > 0 {
+			return fmt.Sprintf(" (kept in place: %d session(s) running)", n)
 		}
 		return " (from before the rename; the next serve start moves it to " + newRoot + ")"
 	case config.RootLinked:

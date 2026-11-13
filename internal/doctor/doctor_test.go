@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/abduco"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/procinfo"
 	"github.com/culiops/culibox/internal/rootmove"
@@ -479,6 +480,59 @@ func TestDataDirRowLegacyDarwinVM(t *testing.T) {
 	}
 	if r := checkDataDir(in, legacy, "darwin"); !strings.Contains(r.Detail, "next serve start moves it to") {
 		t.Fatalf("darwin without a VM: %+v", r)
+	}
+}
+
+// R17: a legacy root that is a symlink (or a mount point) is never moved, so
+// doctor does not promise a move.
+func TestDataDirRowLegacyNotARealDirectory(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	real := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Rename(legacy, real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, legacy); err != nil {
+		t.Fatal(err)
+	}
+	r := checkDataDir(in, legacy, "linux")
+	if !strings.Contains(r.Detail, "(kept in place: not a real directory)") || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// R17: live sessions on the legacy root keep it in place; doctor counts them
+// from the socket dir Checks uses and <legacy>/sessions/pids.
+func TestDataDirRowLegacyLiveSessions(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	var gotSock, gotPids string
+	real := liveSessions
+	liveSessions = func(sock, pids string) (int, error) { gotSock, gotPids = sock, pids; return 2, nil }
+	t.Cleanup(func() { liveSessions = real })
+	r := checkDataDir(in, legacy, "linux")
+	if !strings.Contains(r.Detail, "(kept in place: 2 session(s) running)") || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("%+v", r)
+	}
+	if want := abduco.SocketDirFor("", "linux", legacy, os.Getuid()); gotSock != want {
+		t.Errorf("socket dir = %q, want %q", gotSock, want)
+	}
+	if want := filepath.Join(legacy, "sessions", "pids"); gotPids != want {
+		t.Errorf("pid dir = %q, want %q", gotPids, want)
+	}
+	// None running: the move is still promised.
+	liveSessions = func(string, string) (int, error) { return 0, nil }
+	if r := checkDataDir(in, legacy, "linux"); !strings.Contains(r.Detail, "next serve start moves it to") {
+		t.Fatalf("no sessions: %+v", r)
+	}
+}
+
+// Doctor stays read-only: counting sessions creates no directory.
+func TestDataDirRowLegacyCreatesNothing(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	checkDataDir(in, legacy, "linux")
+	for _, d := range []string{filepath.Join(legacy, "abduco"), filepath.Join(legacy, "sessions")} {
+		if _, err := os.Lstat(d); !os.IsNotExist(err) {
+			t.Errorf("%s was created (%v)", d, err)
+		}
 	}
 }
 

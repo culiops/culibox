@@ -461,6 +461,17 @@ func readJournal(path string) (legacy, hash string, err error) {
 	return legacy, hash, nil
 }
 
+// RealDir reports path as a real directory: not a symlink and not a mount
+// point. Precondition (b) moves only such a legacy root; doctor reads it too.
+func RealDir(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return false
+	}
+	mp, err := isMountPoint(path)
+	return err == nil && !mp
+}
+
 // isMountPoint reports dir sitting on another device than its parent.
 func isMountPoint(dir string) (bool, error) {
 	same, err := sameDevice(dir, filepath.Dir(dir))
