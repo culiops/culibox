@@ -209,9 +209,12 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 
 // socketDead reports whether nothing serves the unix socket p: it does not
 // exist, or a connect is refused (a file left behind). lima's host agent
-// serves the VM's docker socket and, with vmType vz, runs the VM itself, so a
-// dead socket means no box is reachable or running. Any other answer (it
-// connects, a permission error, a timeout) is not dead.
+// serves the VM's docker socket. This signal relies on vmType vz
+// (config.go:330): there the VM runs inside the host agent, so a dead host
+// agent means a dead VM and no box is reachable or running. With qemu the VM
+// is a separate process that can outlive the host agent, so changing vmType
+// must revisit this check. Any other answer (it connects, a permission error,
+// a timeout) is not dead.
 func socketDead(p string) bool {
 	c, err := net.DialTimeout("unix", p, 2*time.Second)
 	if err == nil {
