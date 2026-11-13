@@ -113,28 +113,46 @@ func CheckInputRules(out string, egressPort, brokerPort int) error {
 	return nil
 }
 
-// CheckDockerUserRules refuses a DOCKER-USER rule that lets TCP through. VMs
-// provisioned before #113 carry one for the broker port, which lets every
-// container on the VM's default network reach the broker on the Mac without the
-// relay, and so write the PROXY line that names a box itself. Nothing CuliBox
-// writes passes TCP there now and docker adds at most a bare RETURN, so any such
-// rule (any port, any address, RETURN or ACCEPT) means the VM still runs an old
-// provision script. The gateway DROP itself must be there too, for the address
-// the relay dials (LimaHostGateway): the provision script drops the address
-// host.lima.internal resolves to, which is that one (measured in the spike), and
-// a VM where they differ must not pass. Rules in other chains are not looked at.
-func CheckDockerUserRules(out string) error {
-	drop := false
+// errDockerUserRules is the one message for a DOCKER-USER chain that is not the
+// one provisioning writes. It always names the gateway: the rules exist to keep
+// containers on the VM's default network off the Mac's loopback.
+func errDockerUserRules(why string) error {
+	return fmt.Errorf("the box VM's DOCKER-USER firewall chain is not the one provisioning writes (%s), so containers on its default network may reach the Mac's loopback through the lima gateway %s; run `culibox box setup -recreate`",
+		why, LimaHostGateway)
+}
+
+// dockerUserRules is the DOCKER-USER rules of `iptables -S` output, in order,
+// each as its fields after "-A DOCKER-USER".
+func dockerUserRules(out string) [][]string {
+	var rules [][]string
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 || f[0] != "-A" || f[1] != "DOCKER-USER" {
 			continue
 		}
-		if normaliseRule(f[2:]) == "-d "+LimaHostGateway+" -j DROP" {
-			drop = true
-		}
+		rules = append(rules, f[2:])
+	}
+	return rules
+}
+
+// CheckDockerUserRules verifies the DOCKER-USER chain in `iptables -S` output.
+// The first three rules must be exactly the ones provisioning writes, in order,
+// as CheckInputRules does for INPUT: the egress subnet DROP, the udp/53 RETURN
+// for the address host.lima.internal resolves to (LimaHostGateway: the address
+// the relay dials, measured in the spike), then the DROP for that address. A
+// foreign rule above the gateway DROP, of any protocol or target (a bare RETURN
+// or ACCEPT, "-p all", a jump to a chain that accepts), changes what the DROP
+// covers, so it is refused, as is a head that lost a rule or has them reordered.
+// What follows the head is not ordered (docker may add a bare RETURN there), but
+// no rule after it may let TCP through either. VMs provisioned before #113
+// carry such a rule for the broker port, which lets every container on the VM's
+// default network reach the broker on the Mac without the relay, and so write
+// the PROXY line that names a box itself. Rules in other chains are not looked at.
+func CheckDockerUserRules(out string) error {
+	rules := dockerUserRules(out)
+	for _, f := range rules {
 		var proto, target string
-		for i := 2; i+1 < len(f); i++ {
+		for i := 0; i+1 < len(f); i++ {
 			switch f[i] {
 			case "-p":
 				proto = f[i+1]
@@ -144,22 +162,33 @@ func CheckDockerUserRules(out string) error {
 		}
 		if proto == "tcp" && (target == "RETURN" || target == "ACCEPT") {
 			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `culibox box setup -recreate`",
-				strings.Join(f[2:], " "))
+				strings.Join(f, " "))
 		}
 	}
-	if !drop {
-		return fmt.Errorf("the box VM's firewall has no DOCKER-USER DROP for the lima gateway %s, so containers on its default network may reach the Mac's loopback; run `culibox box setup -recreate`", LimaHostGateway)
+	want := []string{
+		fmt.Sprintf("-s %s -j DROP", EgressSubnet),
+		fmt.Sprintf("-d %s -p udp --dport 53 -j RETURN", LimaHostGateway),
+		fmt.Sprintf("-d %s -j DROP", LimaHostGateway),
+	}
+	for i, w := range want {
+		if i >= len(rules) {
+			return errDockerUserRules(fmt.Sprintf("rule %d of %d is absent", i+1, len(want)))
+		}
+		if got := normaliseRule(rules[i]); got != w {
+			return errDockerUserRules(fmt.Sprintf("rule %d is %q, want %q", i+1, got, w))
+		}
 	}
 	return nil
 }
 
 // normaliseRule joins a rule's fields after dropping what iptables adds on
-// output: "-m tcp" (implied by --dport) and the /32 on a single address.
+// output: "-m tcp" and "-m udp" (implied by -p and --dport) and the /32 on a
+// single address.
 func normaliseRule(f []string) string {
 	var out []string
 	for i := 0; i < len(f); i++ {
 		switch {
-		case f[i] == "-m" && i+1 < len(f) && f[i+1] == "tcp":
+		case f[i] == "-m" && i+1 < len(f) && (f[i+1] == "tcp" || f[i+1] == "udp"):
 			i++
 		case (f[i] == "-s" || f[i] == "-d") && i+1 < len(f):
 			out = append(out, f[i], strings.TrimSuffix(f[i+1], "/32"))
