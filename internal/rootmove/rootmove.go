@@ -491,8 +491,9 @@ func syncDir(dir string) {
 // <xdgBase>/agent-box/config.json to <xdgBase>/culibox/config.json (the
 // directory created 0700) and leaves a symlink at the old path. Other files in
 // <xdgBase>/agent-box, such as a key a config names by absolute path, stay
-// where they are. A no-op (false, nil) when the new file already exists or
-// there is no legacy regular file. It refuses (false, a reason) when
+// where they are. When the new file already exists it only makes a missing
+// link at the old path (an interrupted move, R17); a no-op (false, nil) when
+// there is nothing to do. It refuses (false, a reason) when
 // <xdgBase>/culibox exists but is not a real directory of the current user
 // that group and others cannot write (R16). The caller holds the instance lock
 // (spec D2 "Config fallback": preconditions (a) and (c)).
@@ -500,8 +501,8 @@ func MoveXDGConfig(xdgBase string) (moved bool, err error) {
 	oldDir := filepath.Join(xdgBase, "agent-box")
 	newDir := filepath.Join(xdgBase, "culibox")
 	oldF, newF := filepath.Join(oldDir, "config.json"), filepath.Join(newDir, "config.json")
-	if _, err := os.Lstat(newF); err == nil {
-		return false, nil
+	if nfi, err := os.Lstat(newF); err == nil {
+		return linkOldXDGConfig(oldDir, oldF, newDir, newF, nfi)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
@@ -527,6 +528,30 @@ func MoveXDGConfig(xdgBase string) (moved bool, err error) {
 	syncDir(newDir)
 	if err := os.Symlink(newF, oldF); err != nil {
 		return true, fmt.Errorf("config moved to %s, but no link was left at %s: %w", newF, oldF, err)
+	}
+	syncDir(oldDir)
+	return true, nil
+}
+
+// linkOldXDGConfig finishes a config move a kill interrupted between its
+// rename and its link (R17): the new file is there, the old directory is, and
+// nothing sits at the old file path. It reports true when it made the link; any
+// other state is left alone (false, nil).
+func linkOldXDGConfig(oldDir, oldF, newDir, newF string, nfi os.FileInfo) (bool, error) {
+	if !nfi.Mode().IsRegular() {
+		return false, nil
+	}
+	if dfi, err := os.Lstat(oldDir); err != nil || !dfi.IsDir() {
+		return false, nil
+	}
+	if _, err := os.Lstat(oldF); !errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err := checkXDGNewDir(newDir); err != nil {
+		return false, err
+	}
+	if err := os.Symlink(newF, oldF); err != nil {
+		return false, fmt.Errorf("config is at %s, but no link could be left at %s: %w", newF, oldF, err)
 	}
 	syncDir(oldDir)
 	return true, nil

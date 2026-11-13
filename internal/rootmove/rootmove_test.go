@@ -909,3 +909,36 @@ func TestMoveXDGConfigIntoExistingSafeDir(t *testing.T) {
 		t.Fatalf("MoveXDGConfig = %v, %v", moved, err)
 	}
 }
+
+// R17: a kill between the config file's rename and its link leaves the new
+// file and nothing at the old path; the next call makes the link.
+func TestMoveXDGConfigMakesMissingLink(t *testing.T) {
+	xdg := t.TempDir()
+	oldF := filepath.Join(xdg, "agent-box", "config.json")
+	newF := filepath.Join(xdg, "culibox", "config.json")
+	write(t, newF, `{"a":1}`)
+	mkdir(t, filepath.Join(xdg, "agent-box"))
+	moved, err := MoveXDGConfig(xdg)
+	if err != nil || !moved {
+		t.Fatalf("MoveXDGConfig = %v, %v; want true, nil", moved, err)
+	}
+	if tgt, err := os.Readlink(oldF); err != nil || tgt != newF {
+		t.Fatalf("old path link = %q, %v; want %s", tgt, err, newF)
+	}
+	if moved, err := MoveXDGConfig(xdg); err != nil || moved {
+		t.Errorf("second call = %v, %v; want false, nil", moved, err)
+	}
+}
+
+// With no old directory at all (a fresh install that only has the new file)
+// nothing is created at the old path.
+func TestMoveXDGConfigNoOldDirNoLink(t *testing.T) {
+	xdg := t.TempDir()
+	write(t, filepath.Join(xdg, "culibox", "config.json"), `{"a":1}`)
+	if moved, err := MoveXDGConfig(xdg); err != nil || moved {
+		t.Fatalf("MoveXDGConfig = %v, %v; want false, nil", moved, err)
+	}
+	if exists(filepath.Join(xdg, "agent-box")) {
+		t.Error("the old dir was created")
+	}
+}
