@@ -75,6 +75,12 @@ func Run(newRoot, legacyRoot string, d Deps) (Outcome, error) {
 	return move(newRoot, legacyRoot, d)
 }
 
+// Pending reports an interrupted move that Run would finish (it would resume,
+// not start a move): a caller that must not start one checks it first.
+func Pending(newRoot, legacyRoot string) bool {
+	return journalPending(filepath.Clean(newRoot), filepath.Clean(legacyRoot))
+}
+
 // journalPending reports an interrupted move to finish: new is a real
 // directory holding the journal, and legacy is no longer a real directory (so
 // the journal cannot be legacy's own, seen through a link or a bind mount).

@@ -24,17 +24,21 @@ var newKeeperForHash = secretstore.NewKeeperForHash
 // rootmoveXDG is rootmove.MoveXDGConfig; a variable so a test can see it run.
 var rootmoveXDG = rootmove.MoveXDGConfig
 
-// maybeMoveDataRoot is main's gate: only `serve`, only with no root env var
-// (spec D2 precondition (a)), and only without an explicit -config, move
-// anything. With -config the config serve loads is a file the move cannot
-// inspect (the data_dir skip and precondition (e) read the default one), so
-// neither the root nor the ~/.config file moves; the reason is logged and
-// reaches doctor.
+// maybeMoveDataRoot is main's gate: only `serve`, and only with no root env
+// var (spec D2 precondition (a)), moves anything. With an explicit -config the
+// config serve loads is a file the move cannot inspect (the data_dir skip and
+// precondition (e) read the default one), so neither the root nor the
+// ~/.config file starts to move; the reason is logged and reaches doctor. An
+// interrupted move is still finished under -config (ruling R14): the resume
+// reads only its journal, not the config serve loads.
 func maybeMoveDataRoot(cmd string, configSet bool, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
 	if cmd != "serve" || envHome != "" {
 		return rootmove.Outcome{}, nil
 	}
 	if configSet {
+		if newRoot, legacy := config.DefaultRoots(home); rootmove.Pending(newRoot, legacy) {
+			return runRootMove(home, xdg, goos, logf)
+		}
 		out := rootmove.Outcome{Reason: "serve -config is set; the move only reads the default config"}
 		if ri, err := config.ResolveRoot(home, ""); err == nil && ri.Kind == config.RootLegacy {
 			logf("data root: kept at %s (%s); the next serve start tries again", ri.Path, out.Reason)
@@ -59,6 +63,12 @@ func moveDataRoot(home, xdg, goos string, logf func(string, ...any)) (rootmove.O
 		return rootmove.Outcome{}, nil
 	}
 	moveXDGConfig(config.XDGBase(home, xdg), root, logf)
+	return runRootMove(home, xdg, goos, logf)
+}
+
+// runRootMove runs rootmove.Run on the default roots with the default config's
+// deps (the config a move without -config resolves).
+func runRootMove(home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
 	cfg, src, err := config.Resolve("", false, home, xdg, "")
 	if err != nil {
 		return rootmove.Outcome{}, nil

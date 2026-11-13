@@ -311,3 +311,32 @@ func TestMoveDataRootSkipsExplicitConfig(t *testing.T) {
 		t.Fatalf("logs: %v", e.logs)
 	}
 }
+
+// R14: -config skips a fresh move but not a resume. An interrupted move (the
+// journal in the default new root) is finished whatever config serve loads.
+func TestMoveDataRootResumesUnderExplicitConfig(t *testing.T) {
+	e := newRootEnv(t)
+	if err := os.Remove(e.legacy); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(e.newRoot, "config.json"), `{"bind_addr":"127.0.0.1:8899"}`)
+	writeFile(t, filepath.Join(e.newRoot, rootmove.JournalName), e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+	writeFile(t, filepath.Join(e.xdg, "agent-box", "config.json"), `{"bind_addr":"127.0.0.1:8899"}`)
+	called := false
+	real := rootmoveXDG
+	rootmoveXDG = func(base string) (bool, error) { called = true; return real(base) }
+	t.Cleanup(func() { rootmoveXDG = real })
+	out, err := maybeMoveDataRoot("serve", true, "", e.home, e.xdg, "linux", e.logf)
+	if err != nil || !out.Moved || !out.Resumed {
+		t.Fatalf("%+v %v; logs %v", out, err, e.logs)
+	}
+	if _, err := os.Lstat(filepath.Join(e.newRoot, rootmove.JournalName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal left: %v", err)
+	}
+	if fi, err := os.Lstat(e.legacy); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("no link left: %v", err)
+	}
+	if called {
+		t.Fatal("the XDG move ran with -config set")
+	}
+}
