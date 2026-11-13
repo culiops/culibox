@@ -103,7 +103,7 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 	for _, v := range Diff(before, after, DiffOptions{Rules: AllowRules("r", nil)}) {
 		t.Errorf("unexpected change: %s", v)
 	}
-	checkBackup(t, before, after, "r", "r", root, os.Getenv("AB_UPGRADE_CUR_VERSION"), f, nil)
+	checkBackup(t, before, after, "r", "r", root, f, nil)
 	if miss := missingDBRows(f.AuditDB, auditDBRows(t, filepath.Join(root, "audit.db"))); len(miss) > 0 {
 		t.Errorf("audit.db rows lost in the upgrade: %v", miss)
 	} else {
@@ -192,7 +192,7 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 	if moved {
 		rootRel, rewrite = newRel, moveRewrite
 	}
-	checkBackup(t, before, after, beforeRoot, rootRel, root, os.Getenv("AB_UPGRADE_CUR_VERSION"), f, rewrite)
+	checkBackup(t, before, after, beforeRoot, rootRel, root, f, rewrite)
 	if moved && before[legacyRel].Mode != after[newRel].Mode {
 		t.Errorf("the moved root's mode is %v, the legacy root's was %v", after[newRel].Mode, before[legacyRel].Mode)
 	}

@@ -55,7 +55,7 @@ func backupFixture() (before, after Snapshot) {
 
 func TestBackupProblemsAcceptsAFaithfulBackup(t *testing.T) {
 	before, after := backupFixture()
-	if p := backupProblems(before, after, "r", "r", "v2", nil); len(p) != 0 {
+	if _, p := backupProblems(before, after, "r", "r", "v2", "abc1234", nil); len(p) != 0 {
 		t.Fatalf("problems: %v", p)
 	}
 }
@@ -77,14 +77,15 @@ func TestBackupProblemsFindsEachDefect(t *testing.T) {
 				}
 			}
 		}, "backup"},
-		"two backups": {func(a Snapshot) { a["r/backups/unknown-to-v2-20261113T120001Z"] = dir() }, "backup"},
-		"wrong name":  {func(a Snapshot) { a["r/backups/v1-to-v2-20261113T120000Z"] = a[b]; delete(a, b) }, "backup"},
-		"stamp":       {func(a Snapshot) { a["r/last-version"] = file("v3 abc\n", 0) }, "last-version"},
-		"stamp mode":  {func(a Snapshot) { e := a["r/last-version"]; e.Mode = 0o644; a["r/last-version"] = e }, "last-version"},
+		"two backups":  {func(a Snapshot) { a["r/backups/unknown-to-v2-20261113T120001Z"] = dir() }, "backup"},
+		"wrong name":   {func(a Snapshot) { a["r/backups/v1-to-v2-20261113T120000Z"] = a[b]; delete(a, b) }, "backup"},
+		"stamp":        {func(a Snapshot) { a["r/last-version"] = file("v3 abc\n", 0) }, "last-version"},
+		"stamp commit": {func(a Snapshot) { a["r/last-version"] = file("v2 unknown\n", 0) }, "last-version"},
+		"stamp mode":   {func(a Snapshot) { e := a["r/last-version"]; e.Mode = 0o644; a["r/last-version"] = e }, "last-version"},
 	} {
 		before, after := backupFixture()
 		c.mutate(after)
-		p := backupProblems(before, after, "r", "r", "v2", nil)
+		_, p := backupProblems(before, after, "r", "r", "v2", "abc1234", nil)
 		if len(p) == 0 || !strings.Contains(strings.Join(p, "\n"), c.want) {
 			t.Errorf("%s: problems %v, want one naming %q", name, p, c.want)
 		}
@@ -96,7 +97,45 @@ func TestBackupProblemsAppliesTheMoveRewrite(t *testing.T) {
 	before["r/accounts/alt/claude/settings.json"] = file(`{"c":"/h/.local/share/agent-box/bin/s"}`, 0)
 	after["r/accounts/alt/claude/settings.json"] = file(`{"c":"/h/.local/share/culibox/bin/s"}`, 0)
 	after["r/backups/unknown-to-v2-20261113T120000Z/accounts/alt/claude/settings.json"] = file(`{"c":"/h/.local/share/culibox/bin/s"}`, 0)
-	if p := backupProblems(before, after, "r", "r", "v2", moveRewrite); len(p) != 0 {
+	if _, p := backupProblems(before, after, "r", "r", "v2", "abc1234", moveRewrite); len(p) != 0 {
 		t.Fatalf("problems: %v", p)
+	}
+}
+
+func TestBackupProblemsPicksTheNewBackupBesideAnOlderOne(t *testing.T) {
+	before, after := backupFixture()
+	old := "r/backups/unknown-to-v1-20261101T000000Z"
+	for _, s := range []Snapshot{before, after} {
+		s["r/backups"] = dir()
+		s[old] = dir()
+		s[old+"/config.json"] = file("{}", 0)
+	}
+	name, p := backupProblems(before, after, "r", "r", "v2", "abc1234", nil)
+	if len(p) != 0 || name != "unknown-to-v2-20261113T120000Z" {
+		t.Fatalf("name %q problems %v", name, p)
+	}
+}
+
+func TestBackupProblemsChecksModesAndKinds(t *testing.T) {
+	b := "r/backups/unknown-to-v2-20261113T120000Z"
+	for name, c := range map[string]struct {
+		mutate func(before, after Snapshot)
+		want   string
+	}{
+		"backups dir mode": {func(_, a Snapshot) { a["r/backups"] = Entry{Type: "dir", Mode: 0o755} }, "backups"},
+		"backup dir mode":  {func(_, a Snapshot) { a[b] = Entry{Type: "dir", Mode: 0o755} }, b},
+		"audit.db mode":    {func(_, a Snapshot) { e := a[b+"/audit.db"]; e.Mode = 0o644; a[b+"/audit.db"] = e }, "audit.db"},
+		"followed symlink": {func(bf, a Snapshot) {
+			bf["r/clone-dirs"] = Entry{Type: "symlink", Target: "/etc/passwd"}
+			a["r/clone-dirs"] = bf["r/clone-dirs"]
+			a[b+"/clone-dirs"] = file("root:x", 0)
+		}, "clone-dirs"},
+	} {
+		before, after := backupFixture()
+		c.mutate(before, after)
+		_, p := backupProblems(before, after, "r", "r", "v2", "abc1234", nil)
+		if len(p) == 0 || !strings.Contains(strings.Join(p, "\n"), c.want) {
+			t.Errorf("%s: problems %v, want one naming %q", name, p, c.want)
+		}
 	}
 }

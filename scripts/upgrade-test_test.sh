@@ -75,8 +75,8 @@ run "$r"
 expect_rc "$rc" 0 "1: dry run exits 0"
 has "upgrade-test: v0.2.0 (2 commits behind) -> v0.2.0-2-g" "1: resolves the newest tag below HEAD"
 # 10. The builds are stamped: prev with its tag, cur with version.sh.
-has '-X main.version=v0.2.0"' "10: the previous build is stamped with its tag"
-has "-X main.version=$(git -C "$r" describe --tags --always --dirty --match 'v[0-9]*')\"" "10: the current build is stamped with version.sh"
+has "-X main.version=$(git -C "$r" describe --tags --always --dirty --match 'v[0-9]*') -X main.commit=$(git -C "$r" rev-parse HEAD)\"" "10: the current build is stamped with version.sh and HEAD's commit, like a release"
+has "-X main.version=v0.2.0 -X main.commit=$(git -C "$r" rev-parse 'v0.2.0^{commit}')\"" "10: the previous build is stamped with its tag's commit"
 # 9. The main package comes from the tree at each ref.
 has "./cmd/agent-box" "9: a tree with only cmd/agent-box builds ./cmd/agent-box"
 

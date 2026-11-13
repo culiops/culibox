@@ -93,8 +93,12 @@ trap cleanup EXIT
 
 prev_pkg=$(mainpkg "$prev")
 cur_pkg=$(mainpkg HEAD)
-prev_build="CGO_ENABLED=0 go build -trimpath -ldflags \"-X main.version=$prev\" -o $build_dir/prev $prev_pkg"
-cur_build="CGO_ENABLED=0 go build -trimpath -ldflags \"-X main.version=$cur\" -o $build_dir/cur $cur_pkg"
+# Stamped like a release build (scripts/release/build.sh): version and full commit.
+prev_sha=$(git rev-parse "$prev^{commit}")
+prev_flags="-X main.version=$prev -X main.commit=$prev_sha"
+cur_flags="-X main.version=$cur -X main.commit=$head"
+prev_build="CGO_ENABLED=0 go build -trimpath -ldflags \"$prev_flags\" -o $build_dir/prev $prev_pkg"
+cur_build="CGO_ENABLED=0 go build -trimpath -ldflags \"$cur_flags\" -o $build_dir/cur $cur_pkg"
 
 if [ -n "${AB_PREV_BIN:-}" ]; then
   guard prev "$AB_PREV_BIN" "$prev"
@@ -122,13 +126,17 @@ if [ -z "${AB_PREV_BIN:-}" ]; then
   rm -rf "$build_dir/src-prev"
   mkdir -p "$build_dir/src-prev"
   git archive "$prev" | tar -x -C "$build_dir/src-prev"
-  (cd "$build_dir/src-prev" && CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$prev" -o "$build_dir/prev" "$prev_pkg")
+  (cd "$build_dir/src-prev" && CGO_ENABLED=0 go build -trimpath -ldflags "$prev_flags" -o "$build_dir/prev" "$prev_pkg")
 fi
 if [ -z "${AB_CUR_BIN:-}" ]; then
-  CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$cur" -o "$build_dir/cur" "$cur_pkg"
+  CGO_ENABLED=0 go build -trimpath -ldflags "$cur_flags" -o "$build_dir/cur" "$cur_pkg"
 fi
+# The commit the current binary stamps, for the version-stamp check; unknown
+# for a supplied binary.
+cur_commit=
+if [ -z "${AB_CUR_BIN:-}" ]; then cur_commit=$head; fi
 
 AB_UPGRADE_PREV_BIN=$prev_bin AB_UPGRADE_CUR_BIN=$cur_bin \
-  AB_UPGRADE_PREV_VERSION=$prev AB_UPGRADE_CUR_VERSION=$cur \
+  AB_UPGRADE_PREV_VERSION=$prev AB_UPGRADE_CUR_VERSION=$cur AB_UPGRADE_CUR_COMMIT=$cur_commit \
   AB_UPGRADE_KEEP=${AB_UPGRADE_KEEP:-} \
   "${test_cmd[@]}"

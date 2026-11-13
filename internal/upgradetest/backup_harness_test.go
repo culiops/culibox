@@ -52,8 +52,8 @@ func backupName(from, to string) *regexp.Regexp {
 // and a new stamp "<cur> <commit>\n" at 0600. before and after are snapshots
 // of HOME; beforeRoot and rootRel are the data root's path in each (they
 // differ when S2's move ran).
-func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur string, rewrite func(string) string) []string {
-	var probs []string
+// commit, when known, is the commit the current binary was stamped with.
+func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur, commit string, rewrite func(string) string) (name string, probs []string) {
 	add := func(f string, a ...any) { probs = append(probs, fmt.Sprintf(f, a...)) }
 	from := "unknown"
 	if st, ok := before[beforeRoot+"/last-version"]; ok {
@@ -70,12 +70,21 @@ func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur string, rew
 	if len(dirs) != 1 {
 		sort.Strings(dirs)
 		add("want exactly one new backup in %s/backups, found %d: %v", rootRel, len(dirs), dirs)
-		return probs
+		return "", probs
 	}
+	name = dirs[0]
 	if !backupName(from, cur).MatchString(dirs[0]) {
 		add("backup %q is not named %s-to-%s-<UTC ts>", dirs[0], from, cur)
 	}
 	b := rootRel + "/backups/" + dirs[0]
+	for _, d := range []string{rootRel + "/backups", b} {
+		if m := after[d].Mode; m != 0o700 {
+			add("%s mode %v, want 0700", d, m)
+		}
+	}
+	if db, ok := after[b+"/audit.db"]; ok && db.Mode != 0o600 {
+		add("backup audit.db mode %v, want 0600", db.Mode)
+	}
 
 	// Every held file that existed before is in the backup, unchanged.
 	beforeRel := map[string]Entry{}
@@ -95,8 +104,9 @@ func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur string, rew
 		case got.Mode != e.Mode:
 			add("backup %s mode %v, want %v", rel, got.Mode, e.Mode)
 		case got.SHA256 == e.SHA256:
+		// S2: the move's rewriters ran before the backup, so a rewritten file
+		// is held exactly as rewritten.
 		case rewrite != nil && sha(rewrite(string(e.Data))) == got.SHA256:
-		case rewrite != nil && ruleAccepts(rel, rewrite, e, got):
 		default:
 			add("backup %s differs from the pre-upgrade file", rel)
 		}
@@ -107,7 +117,7 @@ func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur string, rew
 		if !ok || e.Type == "dir" || rel == "audit.db" {
 			continue
 		}
-		if _, existed := beforeRel[rel]; !existed || !held(rel) {
+		if was, existed := beforeRel[rel]; !existed || was.Type != "file" || !held(rel) {
 			add("backup holds %s, which is not a pre-upgrade file it should hold", rel)
 		}
 	}
@@ -119,11 +129,11 @@ func backupProblems(before, after Snapshot, beforeRoot, rootRel, cur string, rew
 		add("last-version mode %v, want 0600", st.Mode)
 	default:
 		f := strings.Fields(string(st.Data))
-		if len(f) != 2 || f[0] != cur || !strings.HasSuffix(string(st.Data), "\n") {
-			add("last-version is %q, want \"%s <commit>\\n\"", st.Data, cur)
+		if len(f) != 2 || f[0] != cur || (commit != "" && f[1] != commit) || !strings.HasSuffix(string(st.Data), "\n") {
+			add("last-version is %q, want \"%s %s\\n\"", st.Data, cur, commit)
 		}
 	}
-	return probs
+	return name, probs
 }
 
 func held(rel string) bool {
@@ -135,35 +145,20 @@ func held(rel string) bool {
 	return false
 }
 
-// ruleAccepts lets a file the S2 move rewrites (sessions.json, settings.json)
-// differ from its pre-upgrade bytes the way the upgrade allowlist allows.
-func ruleAccepts(rel string, rewrite func(string) string, before, got Entry) bool {
-	var r Rule
-	switch {
-	case rel == "sessions.json":
-		r = sessionsRule(rewrite)
-	case match("accounts/*/claude/settings.json", rel):
-		r = settingsRule(rewrite)
-	default:
-		return false
-	}
-	return r.Check(&before, &got) == nil
-}
-
 // checkBackup asserts part A's backup after the upgrade: backupProblems on the
 // snapshots, then audit.db in the backup holding exactly the rows vN-1 wrote.
 // root is the data root's absolute path after the upgrade.
-func checkBackup(t *testing.T, before, after Snapshot, beforeRoot, rootRel, root, cur string, f *Fixture, rewrite func(string) string) {
+func checkBackup(t *testing.T, before, after Snapshot, beforeRoot, rootRel, root string, f *Fixture, rewrite func(string) string) {
 	t.Helper()
-	probs := backupProblems(before, after, beforeRoot, rootRel, cur, rewrite)
+	cur, commit := os.Getenv("AB_UPGRADE_CUR_VERSION"), os.Getenv("AB_UPGRADE_CUR_COMMIT")
+	name, probs := backupProblems(before, after, beforeRoot, rootRel, cur, commit, rewrite)
 	for _, p := range probs {
 		t.Errorf("part A backup: %s", p)
 	}
 	if len(probs) > 0 {
 		return
 	}
-	dirs, _ := filepath.Glob(filepath.Join(root, "backups", "*"))
-	db := filepath.Join(dirs[0], "audit.db")
+	db := filepath.Join(root, "backups", name, "audit.db")
 	if _, err := os.Stat(db); err != nil {
 		t.Errorf("part A backup has no audit.db (it is skipped only above 512 MB): %v", err)
 		return
@@ -176,6 +171,6 @@ func checkBackup(t *testing.T, before, after Snapshot, beforeRoot, rootRel, root
 		t.Errorf("part A backup audit.db holds rows written after the upgrade began: %v", extra)
 	}
 	if !t.Failed() {
-		t.Logf("PASS part A backup %s holds the pre-upgrade bytes and audit rows; last-version is %s", filepath.Base(dirs[0]), cur)
+		t.Logf("PASS part A backup %s holds the pre-upgrade bytes and audit rows; last-version is %q", name, after[rootRel+"/last-version"].Data)
 	}
 }
