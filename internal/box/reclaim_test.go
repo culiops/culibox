@@ -3,11 +3,13 @@ package box
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1055,5 +1057,97 @@ func TestReclaimCutShortInTheLastHomeSaysSo(t *testing.T) {
 	}
 	for _, p := range wantCachePaths {
 		mustExist(t, filepath.Join(dir, p, "blob"))
+	}
+}
+
+// forgedName is a file name an agent can pick inside its own home: a newline
+// and text that would read as a second log line.
+const forgedName = "x\nFORGED daemon line 2099-01-01"
+
+// assertNoAgentName fails when err carries any part of the agent-chosen name,
+// whole or as the text after its newline.
+func assertNoAgentName(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("want an error from the stuck removal, got nil")
+	}
+	if s := err.Error(); strings.Contains(s, "FORGED") || strings.Contains(s, "2099-01-01") {
+		t.Fatalf("the error carries a file name chosen inside the home: %q", s)
+	}
+}
+
+// A whole-home removal that fails on a nested file must name the box and the
+// errno, not the path os.RemoveAll puts in its error.
+func TestReclaimErrorOmitsAgentChosenFileNames(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	m, _ := newTestManagerWithFake(t)
+	name := "ab-box-dddddddddddd"
+	dir := seedHome(t, m, name, 40*24*time.Hour)
+	stuck := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, forgedName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+
+	_, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultStateTTL)
+	assertNoAgentName(t, err)
+	if !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("the error must still name the box and the errno: %q", err)
+	}
+}
+
+// The same for a cache path that will not go: the allowlisted path stays in the
+// message, what is below it does not.
+func TestPruneErrorOmitsAgentChosenFileNames(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission failure cannot be simulated")
+	}
+	m, _ := newTestManagerWithFake(t)
+	name := "ab-box-eeeeeeeeeeed"
+	dir := seedHome(t, m, name, 5*time.Hour)
+	// Deeper than the walk that makes directories writable goes (maxCacheDepth),
+	// so the unwritable one at the bottom is still there when the removal fails.
+	stuck := filepath.Join(dir, ".npm", strings.Repeat("d/", maxCacheDepth+6))
+	if err := os.MkdirAll(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, forgedName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+
+	_, err := m.ReclaimState(context.Background(), DefaultStateTTL, DefaultCacheTTL)
+	assertNoAgentName(t, err)
+	for _, want := range []string{name, ".npm", "permission denied"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error must still carry %q: %q", want, err)
+		}
+	}
+}
+
+// Unit level, so it holds as root and on every OS: whatever path an error wraps
+// is dropped and the errno stays.
+func TestRemovalCauseKeepsTheErrnoAndDropsThePath(t *testing.T) {
+	pe := &fs.PathError{Op: "unlinkat", Path: "/h/" + forgedName, Err: syscall.EACCES}
+	for _, err := range []error{pe, fmt.Errorf("wrapped: %w", pe), errors.Join(pe, pe)} {
+		got := removalCause(err)
+		if got != syscall.EACCES.Error() {
+			t.Fatalf("removalCause(%v) = %q, want %q", err, got, syscall.EACCES.Error())
+		}
+	}
+	// An error with no errno still reaches the log without a path.
+	if got := removalCause(&fs.PathError{Op: "openat", Path: forgedName, Err: errors.New("path escapes from parent")}); got != "path escapes from parent" {
+		t.Fatalf("got %q", got)
 	}
 }

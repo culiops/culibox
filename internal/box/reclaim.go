@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -213,9 +214,17 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	// The out dir sits beside the home, not in it, so it goes separately. Both
 	// are attempted whatever the first returns: a stubborn home must not keep
 	// the screenshots alive too.
-	err := errors.Join(os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name))))
-	if err != nil {
-		return nil, fmt.Errorf("box: reclaiming %s: %w", name, err)
+	var causes []string
+	for _, rerr := range []error{os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name)))} {
+		if rerr != nil {
+			causes = append(causes, removalCause(rerr))
+		}
+	}
+	if len(causes) > 0 {
+		// The error names the box and the errno, never the path: os.RemoveAll puts
+		// the name of the file it stopped at in its error, and a file in a home is
+		// the box's to name, newlines included, on its way into the daemon log.
+		return nil, fmt.Errorf("box: reclaiming %s: %s", name, strings.Join(causes, "; "))
 	}
 	_ = os.Remove(m.markerPath(name))
 	return &Reclaimed{Box: name, Age: age, Bytes: size}, nil
@@ -275,7 +284,9 @@ func (m *Manager) pruneOne(ctx context.Context, name, dir string, cacheTTL time.
 			err = root.RemoveAll(p)
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", p, err))
+			// p is from cachePaths. What os.Root's error says it stopped at is not
+			// relied on to stay free of names from inside the home.
+			errs = append(errs, fmt.Errorf("%s: %s", p, removalCause(err)))
 			continue
 		}
 		removed = true
@@ -295,6 +306,35 @@ func (m *Manager) pruneOne(ctx context.Context, name, dir string, cacheTTL time.
 		return out, fmt.Errorf("box: pruning caches of %s: %w", name, errors.Join(errs...))
 	}
 	return out, nil
+}
+
+// removalCause is the reason a removal failed, without any path. A failed
+// RemoveAll names the file it stopped at, and below a box home that name was
+// chosen by the box (newlines included), so an error that is logged or shown must
+// not carry it: the errno is the part worth reporting, and the caller adds the
+// box and the allowlisted path it already knows.
+func removalCause(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno.Error()
+	}
+	switch e := err.(type) {
+	case *fs.PathError:
+		return removalCause(e.Err)
+	case *os.LinkError:
+		return removalCause(e.Err)
+	case *os.SyscallError:
+		return removalCause(e.Err)
+	case interface{ Unwrap() []error }:
+		var parts []string
+		for _, c := range e.Unwrap() {
+			parts = append(parts, removalCause(c))
+		}
+		return strings.Join(parts, "; ")
+	case interface{ Unwrap() error }:
+		return removalCause(e.Unwrap())
+	}
+	return err.Error()
 }
 
 // plainPath reports whether every component of rel (slash-separated, relative to
