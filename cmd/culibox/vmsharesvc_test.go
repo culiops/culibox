@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ type fakeVMControl struct {
 	whole     bool
 	notSetUp  bool
 	listed    []vmshares.Share
+	resolved  []vmshares.Share // what SetListedResolved was handed
 	names     []string
 	cwds      []string
 	applying  bool
@@ -43,6 +45,11 @@ func (f *fakeVMControl) Applied() ([]vmshares.Share, bool, bool, error) {
 func (f *fakeVMControl) SetListed(l []vmshares.Share) {
 	f.mu.Lock()
 	f.listed = l
+	f.mu.Unlock()
+}
+func (f *fakeVMControl) SetListedResolved(l []vmshares.Share) {
+	f.mu.Lock()
+	f.listed, f.resolved = l, l
 	f.mu.Unlock()
 }
 func (f *fakeVMControl) RunningBoxed() []string { return f.names }
@@ -294,8 +301,13 @@ func TestApplyJobStepsAndFailure(t *testing.T) {
 	if _, err := s.Apply(); err != nil {
 		t.Fatal(err)
 	}
-	if j := waitJob(t, s); j.ID != 2 || j.Error != "The VM did not start." || j.Detail != "boom" {
+	if j = waitJob(t, s); j.ID != 2 || j.Error != "The VM did not start." || j.Detail != web.VMApplyDetail || j.Raw != "boom" {
 		t.Fatalf("%+v", j)
+	}
+	// What the browser is sent never holds the raw error.
+	b, err := json.Marshal(j)
+	if err != nil || strings.Contains(string(b), "boom") {
+		t.Fatalf("the job JSON carries the raw error: %s %v", b, err)
 	}
 }
 
@@ -543,5 +555,69 @@ func TestBootVMFoldersFailureServesAStub(t *testing.T) {
 	}
 	if _, ok := vf.ApplyStatus(); ok {
 		t.Error("a stub has no apply job")
+	}
+}
+
+// #235 item 3: a listed folder is checked again, resolved, when the list is
+// applied: a link that now leads somewhere refused must not reach the VM.
+func TestApplyChecksTheListAgainBeforeItReachesTheVM(t *testing.T) {
+	f := newSvcFixture(t)
+	code, aws := f.sub(t, "code"), f.sub(t, ".aws")
+	link := filepath.Join(f.home, "link")
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	s := f.svc(t)
+	if _, _, err := s.Add(link, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(aws, link); err != nil {
+		t.Fatal(err)
+	}
+	f.ctl.listed = nil
+	if _, err := s.Apply(); !errors.Is(err, web.ErrSharesChanged) {
+		t.Fatalf("Apply = %v, want ErrSharesChanged", err)
+	}
+	if f.ctl.listed != nil {
+		t.Fatalf("the VM was handed %+v", f.ctl.listed)
+	}
+	if s.jobRunning() {
+		t.Fatal("a job started")
+	}
+	// Put the link back: the same list applies.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(); err != nil {
+		t.Fatalf("an unchanged list must apply: %v", err)
+	}
+	waitJob(t, s)
+}
+
+// #235 review: Apply hands the VM the paths its re-check already resolved, so
+// they are not resolved a second time on the way in.
+func TestApplyHandsTheVMTheKeysTheRecheckResolved(t *testing.T) {
+	f := newSvcFixture(t)
+	code := f.sub(t, "code")
+	link := filepath.Join(f.home, "link")
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	s := f.svc(t)
+	if _, _, err := s.Add(link, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, s)
+	if len(f.ctl.resolved) != 1 || f.ctl.resolved[0].Path != code || f.ctl.resolved[0].Mode != vmshares.RW {
+		t.Fatalf("the VM was handed %+v, want %s resolved", f.ctl.resolved, code)
 	}
 }

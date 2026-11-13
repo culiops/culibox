@@ -403,7 +403,7 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, view *ShareVie
 			}
 		}
 	}
-	if reason, hint := ProtectedOverlapHint(p, protected); reason != "" {
+	if reason, hint := ProtectedOverlapHint(p, ReadOnlyUse(protected)); reason != "" {
 		if hint != "" {
 			reason += "; " + hint
 		}

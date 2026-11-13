@@ -10,7 +10,6 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
-	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
 )
@@ -30,7 +29,7 @@ func runBoxDarwin(a cliArgs, cfg config.Config, home string, cfgFiles []string, 
 		return 1
 	}
 	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{},
-		protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg)), a.Sub == "setup" && a.Recreate)
+		protectedDirsOf(cfg, dataDir, cfgFiles), a.Sub == "setup" && a.Recreate)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1

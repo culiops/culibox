@@ -77,7 +77,7 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 	if why := box.MountUnsafe(gitDir); why != "" {
 		return refuse("cannot be mounted: " + why)
 	}
-	if why := box.ProtectedOverlap(gitDir, protected); why != "" {
+	if why := box.ProtectedOverlap(gitDir, box.ReadOnlyUse(protected)); why != "" {
 		return refuse("cannot be mounted: its .git: " + why)
 	}
 	return nil

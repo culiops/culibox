@@ -441,3 +441,26 @@ func TestApplyMountsRefusesNestedMountsBeforeStopping(t *testing.T) {
 		}
 	}
 }
+
+// #235 review: SetResolvedShares takes the paths as given: its caller has
+// resolved and checked them, and a second resolution could give another answer.
+func TestSetResolvedSharesDoesNotResolveAgain(t *testing.T) {
+	dir := shortRoot(t)
+	target := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	v := NewVM(Config{Root: dir, Home: "/h", ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}, &fakeRunner{})
+	v.SetResolvedShares([]vmshares.Share{{Path: link, Mode: vmshares.RO}})
+	if got := v.Config().Shares; len(got) != 1 || got[0].Path != link {
+		t.Fatalf("SetResolvedShares changed the path: %+v", got)
+	}
+	v.SetShares([]vmshares.Share{{Path: link, Mode: vmshares.RO}})
+	if got := v.Config().Shares; len(got) != 1 || got[0].Path != target {
+		t.Fatalf("SetShares must still resolve: %+v", got)
+	}
+}

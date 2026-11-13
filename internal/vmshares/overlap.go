@@ -3,6 +3,7 @@ package vmshares
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -41,7 +42,7 @@ func sameKey(a, b string, fold bool) bool { return Within(a, b, fold) && Within(
 func keys(list []Share) []string {
 	out := make([]string, len(list))
 	for i, s := range list {
-		out[i] = Resolve(s.Path)
+		out[i] = resolveSpelling(filepath.Clean(s.Path))
 	}
 	return out
 }
@@ -66,10 +67,12 @@ func sorted(list []Share, fold bool) []Share {
 // Add puts s in list under the rule that no share contains another, judged on
 // the resolved paths.
 func Add(list []Share, s Share, env Env) (Outcome, error) {
-	if err := Check(s.Path, env); err != nil {
+	// Resolved once: the value that is checked is the value that is compared.
+	k := resolveSpelling(filepath.Clean(s.Path))
+	if err := checkModeResolved(s.Path, k, s.Mode, env); err != nil {
 		return Outcome{}, err
 	}
-	ks, k := keys(list), Resolve(s.Path)
+	ks := keys(list)
 	for i, e := range list {
 		if sameKey(ks[i], k, env.Fold) {
 			next, err := SetMode(list, e.Path, s.Mode, env)
@@ -107,9 +110,14 @@ func Add(list []Share, s Share, env Env) (Outcome, error) {
 // input is not modified.
 func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 	out := append([]Share{}, list...)
-	k := Resolve(path)
+	k := resolveSpelling(filepath.Clean(path))
 	for i, rk := range keys(out) {
 		if sameKey(rk, k, env.Fold) {
+			if m == RW {
+				if err := checkModeResolved(out[i].Path, rk, m, env); err != nil {
+					return nil, err
+				}
+			}
 			out[i].Mode = m
 			return out, nil
 		}
@@ -121,7 +129,7 @@ func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 func Remove(list []Share, path string, fold bool) ([]Share, error) {
 	out := []Share{}
 	found := false
-	k := Resolve(path)
+	k := resolveSpelling(filepath.Clean(path))
 	for i, rk := range keys(list) {
 		if sameKey(rk, k, fold) {
 			found = true
@@ -140,6 +148,14 @@ func Remove(list []Share, path string, fold bool) ([]Share, error) {
 // read-only parent of a read-write child becomes read-write so existing
 // profiles keep working, covered children are dropped. Output is sorted by path.
 func Normalize(list []Share, env Env) (out []Share, skipped []Skip) {
+	out, _, skipped = NormalizeResolved(list, env)
+	return out, skipped
+}
+
+// NormalizeResolved is Normalize plus the resolved path of each kept entry
+// (keys[i] belongs to out[i]): the very resolution the entry was checked and
+// merged on, for a caller that must hand the VM exactly that path.
+func NormalizeResolved(list []Share, env Env) (out []Share, keys []string, skipped []Skip) {
 	type keyed struct {
 		Share
 		key string
@@ -147,7 +163,9 @@ func Normalize(list []Share, env Env) (out []Share, skipped []Skip) {
 	var merged []keyed
 outer:
 	for _, s := range list {
-		if err := Check(s.Path, env); err != nil {
+		clean := filepath.Clean(s.Path)
+		k := resolveSpelling(clean) // once: checked, compared and merged on this value
+		if err := checkResolved(s.Path, k, env); err != nil {
 			reason := err.Error()
 			var r *Refused
 			if errors.As(err, &r) {
@@ -156,7 +174,16 @@ outer:
 			skipped = append(skipped, Skip{Path: s.Path, Reason: reason})
 			continue
 		}
-		k := Resolve(s.Path)
+		if s.Mode == RW && insideClaude(clean, k, env) {
+			s.Mode = RO
+			skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + reasonReadOnly})
+		}
+		if s.Mode == RW {
+			if what := programHit(clean, k, env); what != "" {
+				s.Mode = RO
+				skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + fmt.Sprintf(reasonProgramRWFmt, what)})
+			}
+		}
 		for i := range merged {
 			if sameKey(merged[i].key, k, env.Fold) {
 				if s.Mode == RW {
@@ -184,6 +211,12 @@ outer:
 			}
 			covered = true
 			if kept[i].Mode == RO && s.Mode == RW {
+				// The promotion must not give write access to a folder that may
+				// only be read: the child then stays read-only, inside its parent.
+				if what := programHit(filepath.Clean(kept[i].Path), kept[i].key, env); what != "" {
+					skipped = append(skipped, Skip{Path: s.Path, Reason: "left read-only: " + kept[i].Path + " " + fmt.Sprintf(reasonProgramRWFmt, what)})
+					break
+				}
 				kept[i].Mode = RW
 				skipped = append(skipped, Skip{Path: kept[i].Path, Reason: "made read & write because " + s.Path + " needs write access"})
 			}
@@ -193,9 +226,23 @@ outer:
 			kept = append(kept, s)
 		}
 	}
+	order := func(s Share) string {
+		if env.Fold {
+			return strings.ToLower(s.Path)
+		}
+		return s.Path
+	}
+	sort.SliceStable(kept, func(i, j int) bool { // the order of sorted()
+		if ki, kj := order(kept[i].Share), order(kept[j].Share); ki != kj {
+			return ki < kj
+		}
+		return kept[i].Path < kept[j].Path
+	})
 	out = []Share{}
+	keys = []string{}
 	for _, s := range kept {
 		out = append(out, s.Share)
+		keys = append(keys, s.key)
 	}
-	return sorted(out, env.Fold), skipped
+	return out, keys, skipped
 }

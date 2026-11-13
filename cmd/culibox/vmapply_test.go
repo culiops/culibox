@@ -99,8 +99,11 @@ func TestLayerApplyCheckFailureCopy(t *testing.T) {
 	if j.State != "failed" || j.Error != "A containment check failed." || j.Steps[2].State != "failed" || j.Steps[1].State != "done" {
 		t.Fatalf("%+v", j)
 	}
-	if !strings.Contains(j.Detail, "folders do not match") {
-		t.Fatalf("detail %q", j.Detail)
+	if !strings.Contains(j.Raw, "folders do not match") {
+		t.Fatalf("raw %q", j.Raw)
+	}
+	if j.Detail != web.VMApplyDetail {
+		t.Fatalf("detail %q is not the fixed copy", j.Detail)
 	}
 	if l.ctl.Applying() || l.foldersVerified() {
 		t.Fatal("flag must clear and the failed check be remembered")

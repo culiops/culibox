@@ -350,6 +350,58 @@ func renderYAML(c Config, mounts []Mount) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// runPath is the PATH colima runs with: the directories of colima and docker,
+// then the usual places, each once.
+func runPath(colimaBin, dockerBin string) []string {
+	var dirs []string
+	seen := map[string]bool{}
+	for _, d := range []string{filepath.Dir(colimaBin), filepath.Dir(dockerBin),
+		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
+		if !seen[d] {
+			seen[d] = true
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// ProgramPaths are the host programs CuliBox runs, as absolute paths: docker,
+// colima, the limactl colima finds on its PATH, and CuliBox's own executable.
+// One that cannot be found is left out. Their folders are protected from VM
+// shares and boxed workspaces (box.ProtectedDirsFor).
+func ProgramPaths(cfg config.Config) []string {
+	var out []string
+	docker, derr := box.LookDocker(cfg.DockerBin)
+	colima, cerr := LookColima(cfg.ColimaBin)
+	for _, p := range []struct {
+		path string
+		err  error
+	}{{docker, derr}, {colima, cerr}} {
+		if p.err == nil && filepath.IsAbs(p.path) {
+			out = append(out, p.path)
+		}
+	}
+	if cerr == nil && filepath.IsAbs(colima) {
+		if derr != nil {
+			docker = "" // its folder is then ".", skipped below
+		}
+		for _, d := range runPath(colima, docker) {
+			if d == "." {
+				continue
+			}
+			p := filepath.Join(d, "limactl")
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil && filepath.IsAbs(exe) {
+		out = append(out, exe)
+	}
+	return out
+}
+
 // Env is the environment colima runs with: pinned to the data root, with the
 // user's own docker/lima endpoints removed, and a PATH that finds limactl and
 // docker even when agent-box was started without Homebrew on PATH.
@@ -365,15 +417,7 @@ next:
 		}
 		out = append(out, kv)
 	}
-	var dirs []string
-	seen := map[string]bool{}
-	for _, d := range []string{filepath.Dir(c.ColimaBin), filepath.Dir(c.DockerBin),
-		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
-		if !seen[d] {
-			seen[d] = true
-			dirs = append(dirs, d)
-		}
-	}
+	dirs := runPath(c.ColimaBin, c.DockerBin)
 	return append(out, "COLIMA_HOME="+c.ColimaHome(), "DOCKER_CONFIG="+c.DockerConfigDir(), "PATH="+strings.Join(dirs, ":"))
 }
 

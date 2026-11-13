@@ -1575,3 +1575,21 @@ func TestVMIDsTimeoutIsShortEnoughToNotStallSpawns(t *testing.T) {
 		t.Fatalf("vmIDsTimeout = %v, want 10s (see its comment for the measurement)", vmIDsTimeout)
 	}
 }
+
+// #235 item 2: serve, `box`, `clone` and doctor all protect the folders of the
+// programs CuliBox runs, from the one function that builds the list.
+func TestProtectedDirsOfIncludesProgramDirs(t *testing.T) {
+	root := t.TempDir()
+	progs := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(progs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docker := filepath.Join(progs, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prot := protectedDirsOf(config.Config{DockerBin: docker}, root, nil)
+	if reason := box.ProtectedOverlap(filepath.Dir(progs), prot); !strings.Contains(reason, "a program CuliBox runs") {
+		t.Fatalf("a folder holding docker's folder = %q, want a refusal naming a program", reason)
+	}
+}

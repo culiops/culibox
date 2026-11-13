@@ -255,8 +255,17 @@ func boxedFilter(layer *boxLayer) func(string) (string, bool) {
 // under it have their own CLAUDE.md imports followed, so a custom one that is
 // not personalDir gets the same protection: a box that could write it could
 // add an "@" line that pulls a host file into the next box.
-func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string) []box.ProtectedDir {
-	return box.ProtectedDirsFor(dataDir, cfgFiles, profilesPath, personalDir, bundleSrc)
+//
+// programs are the files CuliBox runs (boxvm.ProgramPaths): their folders are
+// protected too, so a box cannot replace a program the host then starts.
+func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string, programs ...string) []box.ProtectedDir {
+	return box.ProtectedDirsFor(dataDir, cfgFiles, profilesPath, personalDir, bundleSrc, programs...)
+}
+
+// protectedDirsOf is protectedDirs for the real process: the default account's
+// config dir, the bundle source of cfg and the programs CuliBox runs.
+func protectedDirsOf(cfg config.Config, dataDir string, cfgFiles []string) []box.ProtectedDir {
+	return protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg), boxvm.ProgramPaths(cfg)...)
 }
 
 // bundleSourceOf is the config bundle's source dir: "" with bundle_source
@@ -500,7 +509,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	boxUnavailable := "" // why boxRuntime is empty, when the layer failed to build; published in /api/meta
 	var layer *boxLayer
 	var boxes *box.Manager
-	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg))
+	protected := protectedDirsOf(cfg, dataDir, cfgFiles)
 	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.

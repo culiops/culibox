@@ -83,7 +83,7 @@ type Input struct {
 // (box.ProtectedDirsFor), from what doctor knows.
 func protectedFor(in Input, dataDir string) []box.ProtectedDir {
 	c := in.Config
-	return box.ProtectedDirsFor(dataDir, in.ConfigFiles, c.ResolvedProfilesPath(dataDir), bundle.DefaultSource(), bundle.SourceOf(c.BundleSource))
+	return box.ProtectedDirsFor(dataDir, in.ConfigFiles, c.ResolvedProfilesPath(dataDir), bundle.DefaultSource(), bundle.SourceOf(c.BundleSource), boxvm.ProgramPaths(c)...)
 }
 
 type Result struct{ Status, Check, Detail string }

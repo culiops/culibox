@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -53,14 +54,23 @@ func writeVMErr(w http.ResponseWriter, err error) {
 		body(http.StatusBadRequest, "rw_in_ro")
 	case errors.Is(err, ErrApplyRunning):
 		writeErrCode(w, http.StatusConflict, err.Error(), "apply_running")
+	case errors.Is(err, ErrSharesChanged):
+		writeErrCode(w, http.StatusConflict, err.Error(), "shares_changed")
 	case errors.Is(err, ErrListCorrupt):
 		writeErrCode(w, http.StatusLocked, err.Error(), "list_corrupt")
 	case errors.Is(err, ErrVMNotSetUp):
 		writeErrCode(w, http.StatusBadRequest, err.Error(), "vm_not_set_up")
-	default:
+	case errors.Is(err, vmshares.ErrNotListed), errors.Is(err, ErrVMBadMode):
 		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		// OS and colima text carries data-dir paths: the log has it, the page
+		// gets fixed copy.
+		log.Printf("box VM folders: %v", err)
+		writeErr(w, http.StatusInternalServerError, vmFoldersFailed)
 	}
 }
+
+const vmFoldersFailed = "Could not change the VM folders. The full error is in the CuliBox log."
 
 // handleVMFolders serves /api/vm-folders (GET view, POST add, PATCH mode, DELETE remove).
 func (s *Server) handleVMFolders(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +85,7 @@ func (s *Server) handleVMFolders(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		v, err := s.VMFolders.View()
 		if err != nil {
+			log.Printf("box VM folders: reading the folder view: %v", err)
 			writeErr(w, http.StatusInternalServerError, "could not read the VM folders")
 			return
 		}

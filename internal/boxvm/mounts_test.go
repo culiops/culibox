@@ -160,3 +160,61 @@ func TestEnsureDataMountDirs(t *testing.T) {
 		}
 	}
 }
+
+// #235 item 4: colima reads an empty mount list as "mount the home folder
+// read-write". No CuliBox writer ever wrote one, so it never reads as applied.
+func TestReadMountsRefusesAnEmptyBlock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("cpu: 4\nmounts:\nprovision:\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ReadMounts(p); err == nil {
+		t.Fatalf("an empty mounts: block was accepted: %v", m)
+	}
+}
+
+// #235 item 4: an applied list holds the four data mounts, or (a VM set up by
+// an older CuliBox) a mount that covers the home folder. Anything else, a
+// truncated or hand-edited file, is an error and never reads as applied.
+func TestAppliedMountsNeedTheDataMountsOrTheWholeHome(t *testing.T) {
+	v := setUpVM(t, &fakeRunner{})
+	c := v.Config()
+	write := func(ms []Mount) {
+		t.Helper()
+		y, err := renderYAML(c, ms)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(c.YAMLPath(), y, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := DataMounts(c.Root)
+	write(data)
+	if _, err := v.AppliedMounts(); err != nil {
+		t.Fatalf("the four data mounts: %v", err)
+	}
+	for name, ms := range map[string][]Mount{
+		"none":       nil,
+		"three":      data[:3],
+		"other four": {{"/a", true}, {"/b", true}, {"/c", true}, {"/d", true}},
+		"missing ca": append(append([]Mount{}, data[:3]...), Mount{"/Users/x", true}),
+		"unrelated":  {{"/zz", false}},
+	} {
+		write(ms)
+		if got, err := v.AppliedMounts(); err == nil {
+			t.Errorf("%s: read back as applied: %v", name, got)
+		}
+	}
+	write(nil)
+	_, err := v.AppliedMounts()
+	for _, want := range []string{"`culibox box share apply`", "`culibox box setup -recreate`"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %v does not say how to recover (%s)", err, want)
+		}
+	}
+	write([]Mount{{c.Home, true}})
+	if got, err := v.AppliedMounts(); err != nil || len(got) != 1 {
+		t.Errorf("a whole-home list (older CuliBox) must stay readable: %v %v", got, err)
+	}
+}

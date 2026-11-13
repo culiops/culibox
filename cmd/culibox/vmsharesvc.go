@@ -207,7 +207,7 @@ func parseMode(m string) (vmshares.Mode, error) {
 	case vmshares.RW, vmshares.RO:
 		return vmshares.Mode(m), nil
 	}
-	return "", fmt.Errorf("mode %q is not rw or ro", m)
+	return "", web.ErrVMBadMode
 }
 
 func (s *vmShareSvc) Add(typed, mode string, dryRun bool) (web.VMFoldersView, web.VMAddResult, error) {

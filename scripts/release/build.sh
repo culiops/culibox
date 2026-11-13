@@ -58,6 +58,8 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
     -ldflags "-s -w -X main.version=$tag -X main.commit=$sha" \
     -o "$dir/culibox" ./cmd/culibox
   cp "$repo/LICENSE" "$repo/README.md" "$dir/"
+  # No release ships the UI demo (the uidemo build tag).
+  sh "$repo/scripts/release/assert-no-uidemo.sh" "$dir/culibox"
   # Modes are recorded in the tar; the umask must not leak into it.
   chmod 755 "$dir/culibox"
   chmod 644 "$dir/LICENSE" "$dir/README.md"

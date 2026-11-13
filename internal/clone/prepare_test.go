@@ -515,3 +515,26 @@ func TestPrepareSkipsUnsharedMemoryMount(t *testing.T) {
 		t.Errorf("RO = %+v, want .git, two shares and the memory mount", cm.RO)
 	}
 }
+
+// #235 review: clone_of and share sources are read-only binds, so a program
+// folder in them does not refuse them (a config folder still does).
+func TestCheckOfAndShareSourceAcceptAProgramDir(t *testing.T) {
+	of := makeOf(t, false)
+	if err := os.MkdirAll(filepath.Join(of, "tmp", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		dir string
+		run func(p []box.ProtectedDir) error
+	}{
+		"clone_of .git": {filepath.Join(of, ".git"), func(p []box.ProtectedDir) error { return CheckOf(of, t.TempDir(), p) }},
+		"share source":  {filepath.Join(of, "tmp", "sub"), func(p []box.ProtectedDir) error { _, err := shareSource(of, "tmp", p); return err }},
+	} {
+		if err := c.run([]box.ProtectedDir{box.ProgramDirProtected(c.dir)}); err != nil {
+			t.Errorf("%s with a program folder: %v", name, err)
+		}
+		if err := c.run([]box.ProtectedDir{box.ConfigDirProtected(c.dir)}); !errors.Is(err, box.ErrUnboxableWorkspace) {
+			t.Errorf("%s: a config folder must still refuse: %v", name, err)
+		}
+	}
+}

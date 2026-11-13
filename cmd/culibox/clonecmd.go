@@ -13,7 +13,6 @@ import (
 
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
-	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/clone"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/extraca"
@@ -127,7 +126,7 @@ func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string
 	if err := owner.checkOf(c.Of); err != nil {
 		return fail("%v", err)
 	}
-	protected := protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource(), bundleSourceOf(cfg))
+	protected := protectedDirsOf(cfg, dataDir, cfgFiles)
 	g, d, err := cloneBackends(cfg, goos, dataDir, home, protected)
 	if err != nil {
 		return fail("%v", err)

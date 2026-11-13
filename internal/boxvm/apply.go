@@ -67,9 +67,12 @@ func (v *VM) DriftKind() (Drift, error) {
 }
 
 // AppliedMounts are the mounts in the VM's written colima.yaml (what the VM has
-// or will have at its next start), cached by the file's mtime and size.
+// or will have at its next start), cached by the file's mtime and size. A file
+// that lacks the four data mounts and does not share the home folder is an
+// error (ErrMountsIncomplete), never an applied list.
 func (v *VM) AppliedMounts() ([]Mount, error) {
-	path := v.Config().YAMLPath()
+	cfg := v.Config()
+	path := cfg.YAMLPath()
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -81,6 +84,9 @@ func (v *VM) AppliedMounts() ([]Mount, error) {
 	}
 	ms, err := ReadMounts(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkApplied(cfg, ms); err != nil {
 		return nil, err
 	}
 	v.mountsCache = &mountsCache{fi.ModTime(), fi.Size(), ms}
@@ -116,6 +122,14 @@ func (v *VM) SetShares(s []vmshares.Share) {
 	}
 	v.flagMu.Lock()
 	v.cfg.Shares = rs
+	v.flagMu.Unlock()
+}
+
+// SetResolvedShares is SetShares for paths the caller has already resolved and
+// checked: they are stored as given, never resolved a second time.
+func (v *VM) SetResolvedShares(s []vmshares.Share) {
+	v.flagMu.Lock()
+	v.cfg.Shares = append([]vmshares.Share(nil), s...)
 	v.flagMu.Unlock()
 }
 
