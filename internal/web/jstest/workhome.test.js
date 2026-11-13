@@ -73,33 +73,33 @@ test("reason text: a box-derived branch name is passed through verbatim", () => 
 
 test("fix: each reason, with and without -base", () => {
   const f = (base, reason) => notHomeFix("work", base, { branch: "feat", reason });
-  assert.strictEqual(f("main", "off"), "`agent-box clone fetch work feat`");
-  assert.strictEqual(f("master", "off"), "`agent-box clone fetch -base master work feat`");
-  assert.strictEqual(f("main", "not-ff"), "`agent-box clone fetch work feat` overwrites box/feat");
-  assert.strictEqual(f("master", "not-ff"), "`agent-box clone fetch -base master work feat` overwrites box/feat");
+  assert.strictEqual(f("main", "off"), "`culibox clone fetch work feat`");
+  assert.strictEqual(f("master", "off"), "`culibox clone fetch -base master work feat`");
+  assert.strictEqual(f("main", "not-ff"), "`culibox clone fetch work feat` overwrites box/feat");
+  assert.strictEqual(f("master", "not-ff"), "`culibox clone fetch -base master work feat` overwrites box/feat");
   assert.strictEqual(f("main", "checked-out"), "switch your repo off box/feat; it comes home at the next exit or spawn");
   assert.strictEqual(f("main", "refused"),
-    "rebase it in the box onto origin/main; or, after checking it, `agent-box clone fetch -allow-old-history work feat`");
+    "rebase it in the box onto origin/main; or, after checking it, `culibox clone fetch -allow-old-history work feat`");
   assert.strictEqual(f("master", "refused"),
-    "rebase it in the box onto origin/master; or, after checking it, `agent-box clone fetch -allow-old-history -base master work feat`");
+    "rebase it in the box onto origin/master; or, after checking it, `culibox clone fetch -allow-old-history -base master work feat`");
   assert.strictEqual(f("main", "name"), "rename the branch in the box");
   for (const reason of ["too-large", "deferred", "failed"]) {
-    assert.strictEqual(f("main", reason), 'use "Bring work home now", or `agent-box clone fetch work feat`');
-    assert.strictEqual(f("master", reason), 'use "Bring work home now", or `agent-box clone fetch -base master work feat`');
+    assert.strictEqual(f("main", reason), 'use "Bring work home now", or `culibox clone fetch work feat`');
+    assert.strictEqual(f("master", reason), 'use "Bring work home now", or `culibox clone fetch -base master work feat`');
   }
 });
 
 test("fix: an unknown reason gets the generic fix", () => {
   assert.strictEqual(notHomeFix("work", "main", { branch: "feat", reason: "bogus" }),
-    'use "Bring work home now", or `agent-box clone fetch work feat`');
+    'use "Bring work home now", or `culibox clone fetch work feat`');
   assert.strictEqual(notHomeFix("work", "main", { branch: "feat", reason: "constructor" }),
-    'use "Bring work home now", or `agent-box clone fetch work feat`');
+    'use "Bring work home now", or `culibox clone fetch work feat`');
 });
 
 test("fix: an empty base is treated as main", () => {
-  assert.strictEqual(notHomeFix("work", "", { branch: "feat", reason: "off" }), "`agent-box clone fetch work feat`");
+  assert.strictEqual(notHomeFix("work", "", { branch: "feat", reason: "off" }), "`culibox clone fetch work feat`");
   assert.strictEqual(notHomeFix("work", undefined, { branch: "feat", reason: "refused" }),
-    "rebase it in the box onto origin/main; or, after checking it, `agent-box clone fetch -allow-old-history work feat`");
+    "rebase it in the box onto origin/main; or, after checking it, `culibox clone fetch -allow-old-history work feat`");
 });
 
 test("toast: nothing to say gives empty", () => {

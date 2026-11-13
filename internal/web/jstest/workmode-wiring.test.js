@@ -144,7 +144,7 @@ test("fillForm sets the switch from the loaded profile", () => {
 });
 
 test("how work comes home: the table row is host-aware and no longer names the CLI", () => {
-  assert.ok(!html.includes("when you run agent-box clone fetch"));
+  assert.ok(!html.includes("when you run culibox clone fetch"));
   assert.ok(html.includes("As box/&lt;branch&gt; on its own, or as a PR the agent pushes"));
   assert.ok(html.includes('id="pf-mode-diff-home"'));
   assert.match(body(app, "syncPfMode"), /\$\("pf-mode-diff-home"\)\.textContent\s*=\s*folderCopy\.homeCell/);

@@ -227,7 +227,7 @@ func TestCredScriptAWSModeStillRefusesWithoutToken(t *testing.T) {
 	f := newFakeTokenBroker(t)
 	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
 	_, stderr, code := runNode(t, "", "", []string{js}, "AGENTBOX_BROKER=unix://"+f.sock)
-	if code != 1 || !strings.Contains(stderr, "not an agent-box AWS session") {
+	if code != 1 || !strings.Contains(stderr, "not a CuliBox AWS session") {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
@@ -974,7 +974,7 @@ func TestEnvListSSODirectConnection(t *testing.T) {
 	want := "AWS connections\n" +
 		"ro\n" +
 		"  account 333333333333 · SSO role directly · region eu-west-1\n" +
-		"  read-only: the permission set passed agent-box's read-only check when this session started\n" +
+		"  read-only: the permission set passed CuliBox's read-only check when this session started\n" +
 		"  use: aws --profile ro …   terraform: provider \"aws\" { profile = \"ro\" }\n"
 	if !strings.HasPrefix(out, want) {
 		t.Fatalf("listing:\n%s\nwant prefix:\n%s", out, want)

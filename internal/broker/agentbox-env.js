@@ -81,7 +81,7 @@ function fetchToken(name, cb) {
     });
   });
   req.on('timeout', () => req.destroy(new Error('timed out after ' + timeoutMs / 1000 + 's')));
-  req.on('error', (e) => die('agent-box broker unreachable (' + e.message + ')'));
+  req.on('error', (e) => die('CuliBox broker unreachable (' + e.message + ')'));
   req.end(body);
 }
 
@@ -173,7 +173,7 @@ function awsSection(conns) {
     const role = String(c.role_arn || '').split('/').pop();
     const lines = [head.join(' '), '  account ' + c.account_id + ' · ' + (direct ? 'SSO role directly' : 'role ' + role) + ' · region ' + c.region];
     if (direct && state === 'none_found') {
-      lines.push("  read-only: the permission set passed agent-box's read-only check when this session started");
+      lines.push("  read-only: the permission set passed CuliBox's read-only check when this session started");
     } else if (state === 'writes') {
       const acts = Array.isArray(c.base_write_actions) ? c.base_write_actions.filter((a) => typeof a === 'string') : [];
       lines.push(acts.length ? '  base role allows: ' + acts.join(', ') : '  base role allows writes');
@@ -231,7 +231,7 @@ function main() {
   const names = argv.slice(0, sep);
   const [cmd, ...args] = argv.slice(sep + 1);
   if (names.length === 0 || !cmd || new Set(names).size !== names.length) return usage();
-  if (!ep || !tok) fail('not an agent-box session with tokens (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
+  if (!ep || !tok) fail('not a CuliBox session with tokens (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
   fetchAll(names, (replies) => {
     const add = combine(names, replies);
     run(cmd, args, { ...process.env, ...add });

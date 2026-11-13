@@ -270,7 +270,7 @@ func TestBoxShareAddRefusesCuliBoxConfigDir(t *testing.T) {
 	cfgDir := otherDir(t)
 	l.protected = []box.ProtectedDir{box.ConfigDirProtected(cfgDir)}
 	rc, out := runVM(t, l, shareArgs("add", cfgDir))
-	if rc != 1 || !strings.Contains(out, "holds CuliBox's own CuliBox's config directory, so it can never be shared with the box VM.") {
+	if rc != 1 || !strings.Contains(out, "holds CuliBox's config directory, so it can never be shared with the box VM.") {
 		t.Fatalf("add config dir = %d:\n%s", rc, out)
 	}
 	if list, _, _ := vmshares.Load(l.dataDir); len(list) != 0 || fc.called("stop") {

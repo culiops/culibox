@@ -30,7 +30,7 @@ const (
 	reasonRelative  = "Use a full path, like ~/code/project."
 )
 
-const reasonProtectedFmt = "holds CuliBox's own %s, so it can never be shared with the box VM."
+const reasonProtectedFmt = "holds %s, so it can never be shared with the box VM."
 
 // Refused is a folder the box VM may not share. Error() is Display(Path)+" "+Reason.
 type Refused struct {

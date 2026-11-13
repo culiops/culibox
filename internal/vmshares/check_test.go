@@ -185,7 +185,7 @@ func TestCheckRefusesProtectedDirs(t *testing.T) {
 		}
 	}
 	err := Check(cfg, env)
-	if err == nil || !strings.Contains(err.Error(), "holds CuliBox's own CuliBox's config directory, so it can never be shared with the box VM.") {
+	if err == nil || !strings.Contains(err.Error(), "holds CuliBox's config directory, so it can never be shared with the box VM.") {
 		t.Errorf("reason: %v", err)
 	}
 	// Inside a non-Inside dir is allowed (a profiles file may sit directly in $HOME).
