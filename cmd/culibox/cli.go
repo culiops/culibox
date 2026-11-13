@@ -36,6 +36,7 @@ const usage = `usage:
   culibox [serve] [-config <path>]                     run the web control-plane
   culibox doctor  [-config <path>]                     check this machine; prints no secrets
   culibox bug-report [-config <path>]                  redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
+  culibox init [-config <path>]                        guided first-time setup: dependencies, folders, VM size, Claude token, box, doctor (needs a terminal)
   culibox box setup [-rebuild] [-recreate] [-force]    build the box image (macOS: also the box VM)
   culibox box status                                   list boxes (macOS: and the box VM)
   culibox box stop [-force]                            macOS: stop the box VM
@@ -51,7 +52,7 @@ A ~/.local/share/agent-box from before the rename is moved there by serve, when 
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "bug-report" | "box" | "clone" | "store" | "version"
+	Cmd        string // "serve" | "doctor" | "bug-report" | "init" | "box" | "clone" | "store" | "version"
 	Sub        string // box: "setup" | "stop" | "status" | "share"; clone: "fetch"; store: "init" | "status" | ... | "list"
 	ID         string // store set|rm: the value id
 	ConfigPath string
@@ -91,7 +92,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	sub := ""
 	switch cmd {
-	case "serve", "doctor", "bug-report":
+	case "serve", "doctor", "bug-report", "init":
 	case "version":
 		if len(argv) > 0 {
 			return cliArgs{}, errors.New("version takes no flags or arguments")

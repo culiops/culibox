@@ -48,6 +48,22 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestParseArgsInit(t *testing.T) {
+	got, err := parseArgs([]string{"init"})
+	if err != nil || got != (cliArgs{Cmd: "init"}) {
+		t.Errorf("parseArgs(init) = %+v,%v", got, err)
+	}
+	got, err = parseArgs([]string{"init", "-config", "/c.json"})
+	if err != nil || got != (cliArgs{Cmd: "init", ConfigPath: "/c.json", ConfigSet: true}) {
+		t.Errorf("parseArgs(init -config) = %+v,%v", got, err)
+	}
+	for _, bad := range [][]string{{"init", "-rebuild"}, {"init", "-force"}, {"init", "extra"}, {"init", "-base", "x"}} {
+		if _, err := parseArgs(bad); err == nil {
+			t.Errorf("parseArgs(%q): want error", bad)
+		}
+	}
+}
+
 func TestVersionLine(t *testing.T) {
 	oldVersion, oldCommit := version, commit
 	t.Cleanup(func() { version, commit = oldVersion, oldCommit })
