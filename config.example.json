@@ -13,7 +13,7 @@
 
   "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
 
-  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. abduco must be installed (the daemon fails fast if not). data_dir and abduco_socket_dir are optional: leave them out and everything lives in the data root ($CULIBOX_HOME, else ~/.local/share/culibox), which is also where this file belongs. Setting them pins a fixed path and stops AGENT_BOX_HOME from moving it.",
+  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. abduco must be installed (the daemon fails fast if not). data_dir and abduco_socket_dir are optional: leave them out and everything lives in the data root ($CULIBOX_HOME, else ~/.local/share/culibox), which is also where this file belongs. Setting them pins a fixed path that CULIBOX_HOME does not change; setting data_dir also turns off the one-time move of the old ~/.local/share/agent-box root to ~/.local/share/culibox.",
   "abduco_bin": "abduco",
 
   "comment_transfer": "File transfer caps. All optional; omitting one uses the default shown. There is deliberately no way to express 'unlimited': 0 or a negative number means 'use the default', so a typo cannot uncap the write path.",
