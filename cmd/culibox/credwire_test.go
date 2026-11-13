@@ -236,3 +236,30 @@ func TestSkippedAndSummaryForFilesNotFullyUnderstood(t *testing.T) {
 		t.Errorf("summary = %q", st.summary())
 	}
 }
+
+// doctor and the bug report read Problems(): a file the screen will not save
+// over must not read as "no problems".
+func TestProblemsNamesWhatIsNotUnderstood(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	for name, body := range map[string]string{
+		"unknown key":    `{"gcp_connections":[{}]}`,
+		"wrong type+key": `{"static_tokens":{},"gcp_connections":[{}]}`,
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(credfile.Path(dir), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, st := mergeCredentials(config.Config{DataDir: dir}, t.TempDir())
+		if got := strings.Join(st.Problems(), "\n"); !strings.Contains(got, "gcp_connections") {
+			t.Errorf("%s: Problems = %q, want a line naming gcp_connections", name, got)
+		}
+	}
+	// A whole-file failure is reported once, by LoadErr.
+	dir := t.TempDir()
+	_ = os.WriteFile(credfile.Path(dir), []byte("{"), 0o600)
+	_, st := mergeCredentials(config.Config{DataDir: dir}, t.TempDir())
+	if len(st.Problems()) != 1 {
+		t.Errorf("Problems = %q, want one line", st.Problems())
+	}
+}

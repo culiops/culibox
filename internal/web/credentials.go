@@ -377,11 +377,28 @@ func (c *CredentialManager) checkProfilesLocked(merged config.Config) error {
 	return nil
 }
 
+// writableLocked is nil when a write may go ahead. It runs before any side
+// effect (audit row, store value, AWS call), so a refused write changes
+// nothing. Besides the verdict taken at start, it looks at the file on disk: a
+// hand edit made while CuliBox runs can leave content this build cannot read,
+// and Save would refuse it only after those side effects. Once refused it stays
+// refused: a fixed file takes effect on the next start. Caller holds c.mu.
+func (c *CredentialManager) writableLocked() error {
+	if c.readOnly != nil {
+		return c.readOnly
+	}
+	if cur, _, _ := credfile.Load(c.dataDir); cur.CanSave() != nil {
+		c.readOnly = ErrCredReadOnly
+		return c.readOnly
+	}
+	return nil
+}
+
 // persistLocked records the audit rows, saves the file and applies the merged
 // config. A failed row or save changes nothing. Caller holds c.mu.
 func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Config, src credfile.Sources, events []broker.CredEvent) error {
-	if c.readOnly != nil {
-		return c.readOnly
+	if err := c.writableLocked(); err != nil {
+		return err
 	}
 	for _, e := range events {
 		e.Actor = storeActor
@@ -442,8 +459,9 @@ func (c *CredentialManager) refInputsLocked() (config.Config, []account.Account)
 // definition reads, or will read once a store secret_source is added.
 func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner map[string]string,
 	cand credfile.File, merged config.Config, src credfile.Sources, events []broker.CredEvent) error {
-	if c.readOnly != nil { // before any Set: a replace overwrites a value rollback cannot restore
-		return c.readOnly
+	// Before any Set: a replace overwrites a value rollback cannot restore.
+	if err := c.writableLocked(); err != nil {
+		return err
 	}
 	if len(values) > 0 {
 		refs := c.storeClaimsLocked()
@@ -746,8 +764,8 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 // the base role must be (re)checked: on create, and when source_profile or
 // role_arn changed. Caller holds c.mu.
 func (c *CredentialManager) prepAWS(conn config.AWSConnection, create bool) (needsCheck bool, err error) {
-	if c.readOnly != nil { // refuse before the check's AWS call and audit rows
-		return false, c.readOnly
+	if err := c.writableLocked(); err != nil { // before the check's AWS call and audit rows
+		return false, err
 	}
 	if err := c.presence(credfile.KindAWS, conn.Name, create); err != nil {
 		return false, err

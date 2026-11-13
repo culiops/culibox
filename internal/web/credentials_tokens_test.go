@@ -878,3 +878,48 @@ func TestCredentialsReadOnlyWhenFileNotUnderstood(t *testing.T) {
 		t.Errorf("ErrCredReadOnly = %q", ErrCredReadOnly)
 	}
 }
+
+// A hand edit made while CuliBox runs can leave credentials.json with content
+// this build cannot read. The next write is refused before it records an audit
+// row or overwrites a store value, and the refusal sticks even if the file is
+// put right again (that takes effect on a restart).
+func TestCredentialsFileBecomesNotUnderstoodMidRun(t *testing.T) {
+	fx := newCredFixture(t, config.Config{}, nil)
+	if err := fx.cm.PutTokens([]config.StaticToken{tok("t1", "T1")}, map[string][]byte{"t1": []byte("old")}, true); err != nil {
+		t.Fatal(err)
+	}
+	good := fx.fileBytes(t)
+	rowsBefore := len(fx.rec.events)
+
+	bad := `{"static_tokens":[],"gcp_connections":[{}]}`
+	if err := os.WriteFile(credfile.Path(fx.dir), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := fx.cm.PutTokens([]config.StaticToken{tok("t1", "T1")}, map[string][]byte{"t1": []byte("new")}, false)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("replace = %v, want ErrCredReadOnly", err)
+	}
+	if got := string(fx.vals.m["t1"]); got != "old" {
+		t.Errorf("store value = %q, want it unchanged", got)
+	}
+	if len(fx.rec.events) != rowsBefore {
+		t.Errorf("audit rows %d -> %d, want none recorded", rowsBefore, len(fx.rec.events))
+	}
+	if got := fx.fileBytes(t); got != bad {
+		t.Errorf("file = %q, want it untouched", got)
+	}
+	if _, err := fx.cm.PutAWS(context.Background(), awsConn("a1", "p", arnRead), true, false); !errors.Is(err, ErrCredReadOnly) || fx.chk.n() != 0 {
+		t.Errorf("PutAWS = %v after %d checks, want a refusal before any check", err, fx.chk.n())
+	}
+
+	if err := os.WriteFile(credfile.Path(fx.dir), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = fx.cm.PutTokens([]config.StaticToken{tok("t1", "T1")}, map[string][]byte{"t1": []byte("newer")}, false)
+	if !errors.Is(err, ErrCredReadOnly) {
+		t.Fatalf("after the file was restored: replace = %v, want ErrCredReadOnly", err)
+	}
+	if got := string(fx.vals.m["t1"]); got != "old" {
+		t.Errorf("store value = %q, want it unchanged", got)
+	}
+}

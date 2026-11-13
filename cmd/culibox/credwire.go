@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
@@ -31,6 +32,12 @@ func (s credState) Problems() []string {
 	var out []string
 	if s.LoadErr != nil {
 		out = append(out, s.LoadErr.Error())
+	}
+	for _, line := range s.File.NotUnderstood {
+		// A whole-file reason is already inside LoadErr.
+		if s.LoadErr == nil || !strings.Contains(s.LoadErr.Error(), line) {
+			out = append(out, "credentials.json: "+line)
+		}
 	}
 	for _, e := range s.Errs {
 		out = append(out, e.Kind+" "+e.Name+": "+e.Err)
