@@ -281,7 +281,7 @@ func initDataRootStep(u *initUI, cfg config.Config, src config.Source, home stri
 		return "", false
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		u.stopped(fmt.Sprintf("%s cannot be created (%v); create it with `mkdir -m 700 %s`, then run culibox init again", dataDir, err, dataDir))
+		u.stopped(fmt.Sprintf("%s cannot be created (%v); create it with `mkdir -p -m 700 %s`, then run culibox init again", dataDir, err, dataDir))
 		return "", false
 	}
 	u.say("created %s (%s)", dataDir, why)

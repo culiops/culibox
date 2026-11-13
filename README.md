@@ -168,7 +168,7 @@ Then put this in `~/.local/share/culibox/config.json` and run `culibox serve` ag
 }
 ```
 
-Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts (see [Features](docs/FEATURES.md); `culibox init` does this for an account named `claude-box`), or store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)) and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
+Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts, then add `"account": "<name>"` to the claude agent in `config.json` (see [Features](docs/FEATURES.md); `culibox init` does all of this for an account named `claude-box`), or store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)) and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
 
 Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
 

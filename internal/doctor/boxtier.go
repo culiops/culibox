@@ -114,7 +114,7 @@ func claudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.S
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
 			" have no Claude token that resolves (account or CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret); a boxed claude will ask to /login. " +
-			`Run "culibox init" or paste a setup-token under Settings → Agent accounts`}, false
+			`Run "culibox init", or paste a setup-token under Settings → Agent accounts and set "account": "<name>" on the claude agent`}, false
 	}
 	return Result{Pass, check, fmt.Sprintf("%d boxed claude agent(s) have a credential", boxed)}, false
 }
