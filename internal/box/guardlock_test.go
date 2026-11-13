@@ -28,6 +28,7 @@ type fakeFlags struct {
 	imm       map[FileID]bool
 	setErr    map[string]error // by file base name
 	sets      int
+	onSet     func() // called before each set or clear, unlocked
 }
 
 func newFakeFlags() *fakeFlags {
@@ -62,6 +63,9 @@ func (f *fakeFlags) setImmutable(file *os.File, on bool) error {
 	fi, err := file.Stat()
 	if err != nil {
 		return err
+	}
+	if f.onSet != nil {
+		f.onSet()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -284,32 +288,30 @@ func TestGuardLocksRefuseASwappedFile(t *testing.T) {
 	}
 }
 
-func TestGuardLocksNeverClearAUserFlag(t *testing.T) {
+// #246: a flag this instance did not set (the user's, another instance's, or
+// one whose record was lost) is never relied on, so it is never lifted under a
+// box either: the spawn is refused, naming the file, and the flag stays.
+func TestGuardLocksRefuseAFlagNotOurs(t *testing.T) {
 	_, _, ff := lockMgr(t)
 	g := newGuardLocks(t.TempDir(), ff)
 	ws := lockWS(t)
 	p := filepath.Join(ws, "CLAUDE.md")
 	ff.userSets(t, p)
 	fi, _ := os.Lstat(p)
-	got, err := g.hold(ws, []guardFile{{"CLAUDE.md", fi}}, "b1", "s1")
-	if err != nil {
-		t.Fatal(err)
+	_, err := g.hold(ws, []guardFile{{"CLAUDE.md", fi}}, "b1", "s1")
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), p) ||
+		!strings.Contains(err.Error(), "is locked already") {
+		t.Fatalf("want a refusal naming %s, got %v", p, err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("a file the user locked is not reported as CuliBox's: %v", got)
+	if len(g.all()) != 0 || g.holdsOurs("b1") {
+		t.Fatalf("a refused file is not recorded: %+v", g.all())
 	}
-	if rs := g.all(); len(rs) != 1 || rs[0].Ours {
-		t.Fatalf("want one not-ours record: %+v", rs)
-	}
-	if g.holdsOurs("b1") {
-		t.Fatal("a box holding only the user's flag must keep its idle time")
+	if !ff.flagged(t, p) {
+		t.Fatal("the flag CuliBox did not set must never be cleared")
 	}
 	g.releaseBox("b1")
 	if !ff.flagged(t, p) {
-		t.Fatal("the user's own flag must never be cleared")
-	}
-	if len(g.all()) != 0 {
-		t.Fatal("the record must go with its last box")
+		t.Fatal("the flag CuliBox did not set must never be cleared")
 	}
 }
 
@@ -708,8 +710,9 @@ func TestGuardLocksBadRecordsFailClosed(t *testing.T) {
 	p := filepath.Join(ws, "CLAUDE.md")
 	ff.userSets(t, p) // flagged by CuliBox before the records went bad
 	g := newGuardLocks(dir, ff)
-	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
-		t.Fatal(err)
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); !errors.Is(err, ErrUnboxableWorkspace) ||
+		!strings.Contains(err.Error(), p) {
+		t.Fatalf("a flag with no record of ours refuses the spawn, naming the file: %v", err)
 	}
 	g.releaseBox("b1")
 	if !ff.flagged(t, p) {
@@ -953,10 +956,11 @@ func TestGuardLocksUnsupportedVolumeRefusal(t *testing.T) {
 	}
 }
 
-// Two instances (separate data roots) do not share records: the second takes
-// the first's flag for the user's and never clears it; the first lifts its
-// own when its box ends, whatever the second runs (docs/MACOS.md says so).
-func TestGuardLocksSeparateInstancesDoNotShare(t *testing.T) {
+// #246: two instances (separate data roots) never hold one file at once. The
+// second is refused while the first's flag is on, so the first lifting its own
+// lock can never unprotect a box of the second; once it is lifted, the second
+// locks the file as its own.
+func TestGuardLocksSecondInstanceIsRefused(t *testing.T) {
 	_, _, ff := lockMgr(t)
 	x, y := newGuardLocks(t.TempDir(), ff), newGuardLocks(t.TempDir(), ff)
 	ws := lockWS(t)
@@ -964,21 +968,101 @@ func TestGuardLocksSeparateInstancesDoNotShare(t *testing.T) {
 	if _, err := x.hold(ws, claudeFile(t, ws), "bx", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := y.hold(ws, claudeFile(t, ws), "by", ""); err != nil {
-		t.Fatal(err)
+	if _, err := y.hold(ws, claudeFile(t, ws), "by", ""); !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("the second instance must be refused, got %v", err)
 	}
-	if y.holdsOurs("by") {
-		t.Fatal("the second instance cannot tell the first's flag from the user's")
-	}
-	y.releaseBox("by")
-	if !ff.flagged(t, p) {
-		t.Fatal("the second instance never clears a flag it did not set")
-	}
-	if _, err := y.hold(ws, claudeFile(t, ws), "by", ""); err != nil {
-		t.Fatal(err)
+	if len(y.all()) != 0 {
+		t.Fatalf("the refused instance records nothing: %+v", y.all())
 	}
 	x.releaseBox("bx")
 	if ff.flagged(t, p) {
 		t.Fatal("the first instance lifts its own lock when its box ends")
 	}
+	got, err := y.hold(ws, claudeFile(t, ws), "by", "")
+	if err != nil || !slices.Equal(got, []string{"CLAUDE.md"}) || !ff.flagged(t, p) {
+		t.Fatalf("with the first's lock gone the second locks it as its own: %v %v", got, err)
+	}
+	if _, err := x.hold(ws, claudeFile(t, ws), "bx", ""); !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("now the first instance is refused, got %v", err)
+	}
+}
+
+// #246: the read-flag, set-flag, record step is serialised across processes
+// by an exclusive flock on the guarded file: while another process holds it,
+// the spawn waits, then is refused; once it is free, the lock is taken.
+func TestGuardLocksWaitForAnotherLocker(t *testing.T) {
+	old := guardFlockWait
+	guardFlockWait = 200 * time.Millisecond
+	t.Cleanup(func() { guardFlockWait = old })
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	other, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	_, err = g.hold(ws, claudeFile(t, ws), "b1", "")
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "being locked") {
+		t.Fatalf("want a refusal while another process locks it, got %v", err)
+	}
+	if ff.flagged(t, p) || len(g.all()) != 0 {
+		t.Fatal("a refused hold sets and records nothing")
+	}
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil || !ff.flagged(t, p) {
+		t.Fatalf("free again: locked, got %v", err)
+	}
+}
+
+// #247 (3): the flag is set before the record says ours, so a crash between
+// the two can never leave a record of ours on an unflagged file (whose flag,
+// set later by the user, the next sweep would clear). A record that cannot be
+// written undoes the flags this call set and refuses.
+func TestGuardLocksFlagBeforeRecord(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	dir := t.TempDir()
+	g := newGuardLocks(dir, ff)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	ff.onSet = func() {
+		rs, err := ReadGuardLocks(dir)
+		if err != nil || len(rs) != 0 {
+			t.Errorf("a record was written before the flag was set: %+v %v", rs, err)
+		}
+	}
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	ff.onSet = nil
+	if rs := readLocksAt(t, dir); len(rs) != 1 || !rs[0].Ours || !ff.flagged(t, p) {
+		t.Fatalf("after the hold: flagged and recorded as ours: %+v", rs)
+	}
+	g.releaseBox("b1")
+
+	// The record cannot be written: the flag just set is cleared again.
+	if err := os.Mkdir(filepath.Join(dir, guardLocksFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("an unwritable record refuses: %v", err)
+	}
+	if ff.flagged(t, p) || len(g.all()) != 0 {
+		t.Fatalf("a refused hold leaves no flag and no record: %+v", g.all())
+	}
+}
+
+func readLocksAt(t *testing.T, dir string) []GuardLock {
+	t.Helper()
+	rs, err := ReadGuardLocks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rs
 }
