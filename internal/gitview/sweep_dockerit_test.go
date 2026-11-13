@@ -16,11 +16,12 @@ func TestSweepRealDocker(t *testing.T) {
 	d, image := hostileDocker(t)
 	leaked, live := newName(), newName()
 	t.Cleanup(func() { exec.Command(d.Bin, "rm", "-f", leaked, live).Run() })
-	// What a CLI killed between create and start leaves behind.
-	if out, err := exec.Command(d.Bin, "create", "--name", leaked, "--pull=never", "--entrypoint", "true", image).CombinedOutput(); err != nil {
+	// What a CLI killed between create and start leaves behind; both carry the
+	// label every gitview run sets, so only the state tells them apart.
+	if out, err := exec.Command(d.Bin, "create", "--name", leaked, "--label", Label+"=1", "--pull=never", "--entrypoint", "true", image).CombinedOutput(); err != nil {
 		t.Fatalf("docker create: %v: %s", err, out)
 	}
-	if out, err := exec.Command(d.Bin, "run", "-d", "--name", live, "--pull=never", "--entrypoint", "sleep", image, "120").CombinedOutput(); err != nil {
+	if out, err := exec.Command(d.Bin, "run", "-d", "--name", live, "--label", Label+"=1", "--pull=never", "--entrypoint", "sleep", image, "120").CombinedOutput(); err != nil {
 		t.Fatalf("docker run: %v: %s", err, out)
 	}
 	// An hour from now, both are past sweepGrace.

@@ -85,11 +85,14 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// SweepLater runs one Sweep after d in the background. Calls while one is
-// pending add nothing: that sweep lists every leftover anyway.
+// SweepLater runs one Sweep after d in the background. A call while one is
+// pending joins it, and that sweep then schedules one more SweepDelay later: a
+// container left by the joining call may still be too young when the pending
+// one runs.
 func (r *Runner) SweepLater(d time.Duration) {
 	r.mu.Lock()
 	if r.sweepPending {
+		r.sweepAgain = true
 		r.mu.Unlock()
 		return
 	}
@@ -101,12 +104,16 @@ func (r *Runner) SweepLater(d time.Duration) {
 	}
 	after(d, func() {
 		r.mu.Lock()
-		r.sweepPending = false
+		again := r.sweepAgain
+		r.sweepPending, r.sweepAgain = false, false
 		r.mu.Unlock()
 		if n, err := r.Sweep(context.Background()); err != nil {
 			log.Printf("gitview: sweeping leftover git containers: %s", failReasonText(err.Error()))
 		} else if n > 0 {
 			log.Printf("gitview: removed %d leftover git container(s)", n)
+		}
+		if again {
+			r.SweepLater(SweepDelay)
 		}
 	})
 }

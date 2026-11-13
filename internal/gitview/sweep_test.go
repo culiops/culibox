@@ -168,14 +168,42 @@ func TestSweepsCoalesceUntilTheScheduledOneRuns(t *testing.T) {
 	r := newRunner(f, newClock())
 	r.AfterFunc = after.add
 	r.Diff(context.Background(), tgt, "a.go", false)
+	if after.count() != 1 {
+		t.Fatalf("scheduled %d sweeps after one failure, want 1", after.count())
+	}
+	after.fire(0)
+	r.Diff(context.Background(), tgt, "b.go", false)
+	if after.count() != 2 {
+		t.Fatalf("scheduled %d sweeps after the first ran, want 2", after.count())
+	}
+}
+
+// A failure while a sweep is pending may leave a container too young for that
+// sweep (a failed run 2 minutes after serve start, swept at 3), so the pending
+// sweep schedules one more SweepDelay later. Any number of joins adds one.
+func TestFailureJoiningAPendingSweepGetsOneMoreLater(t *testing.T) {
+	var after afterFuncs
+	f := &fakeDocker{run: func(_ context.Context, args []string, _ io.Writer) error {
+		if isPs(args) {
+			return nil
+		}
+		return errors.New("docker run: boom")
+	}}
+	r := newRunner(f, newClock())
+	r.AfterFunc = after.add
+	r.SweepLater(SweepDelay) // the start sweep
+	r.Diff(context.Background(), tgt, "a.go", false)
 	r.Diff(context.Background(), tgt, "b.go", false)
 	if after.count() != 1 {
 		t.Fatalf("scheduled %d sweeps while one is pending, want 1", after.count())
 	}
 	after.fire(0)
-	r.Diff(context.Background(), tgt, "c.go", false)
+	if after.count() != 2 || after.delays[1] != SweepDelay {
+		t.Fatalf("scheduled %v after the pending sweep ran, want one more at %v", after.delays, SweepDelay)
+	}
+	after.fire(1) // nothing joined it: no third
 	if after.count() != 2 {
-		t.Fatalf("scheduled %d sweeps after the first ran, want 2", after.count())
+		t.Fatalf("scheduled %v, want no sweep after one nothing joined", after.delays)
 	}
 }
 

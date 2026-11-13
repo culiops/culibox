@@ -79,6 +79,7 @@ type Runner struct {
 	semOnce      sync.Once
 	sem          chan struct{}
 	sweepPending bool
+	sweepAgain   bool
 }
 
 type cached struct {
