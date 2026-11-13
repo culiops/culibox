@@ -96,7 +96,7 @@ function vmfModel(view, cardOpen) {
       body: "It shares `~` read & write, so a box that broke out of its container could change any file in it, like `~/.zshrc`. Apply the list below and the VM sees only " + (live === 1 ? "the folder" : "the " + live + " folders") + " your boxes use.",
       muted: "Nothing changes until you apply: sessions still start as before.",
       action: "Apply (restart box VM)",
-      terminal: "or, in a terminal, `agent-box box share apply`",
+      terminal: "or, in a terminal, `culibox box share apply`",
     } : null,
     title: whole ? "Proposed folders" : "Shared folders",
     subtitle: whole ? "Made from your profiles and the folders boxed sessions ran in" : "",
@@ -831,7 +831,7 @@ function vmfFailExtras(job) {
   wrap.appendChild(cmd);
   return wrap;
 }
-const VMA_CLI_TEXT = "agent-box box share apply";
+const VMA_CLI_TEXT = "culibox box share apply";
 
 function vmfCopy(text, okMsg) {
   if (typeof copyText !== "function") return;

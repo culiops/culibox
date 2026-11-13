@@ -53,7 +53,7 @@ async function openBugReport() {
   bugSetReady(false);
   bugSetStatus("");
   setDialogError("bug-modal", "");
-  pre.textContent = "Building report… (runs agent-box doctor, up to 30 s)";
+  pre.textContent = "Building report… (runs culibox doctor, up to 30 s)";
   openDialog("bug-modal");
   if (what) what.focus();
   try {

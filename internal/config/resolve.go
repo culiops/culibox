@@ -8,11 +8,39 @@ import (
 	"syscall"
 )
 
+// RootName is the data root's directory name under ~/.local/share; LegacyRootName
+// is what it was called before the rebrand (#255). Both are default locations.
+const (
+	RootName       = "culibox"
+	LegacyRootName = "agent-box"
+)
+
+// RootKind says how a data root was picked.
+type RootKind int
+
+const (
+	RootEnv    RootKind = iota // CULIBOX_HOME / AGENT_BOX_HOME: used as is, never moved
+	RootNew                    // ~/.local/share/culibox (also: nothing exists yet)
+	RootLegacy                 // ~/.local/share/agent-box, from before the rename
+	RootLinked                 // culibox, with the compat link left at the legacy path
+)
+
+// RootInfo is a resolved data root and why it is the one.
+type RootInfo struct {
+	Path string
+	Kind RootKind
+	// EmptyNew: Kind is RootLegacy and an empty new directory sits next to it.
+	// An empty directory holds no config, so it cannot take anything over; the
+	// migration removes it first.
+	EmptyNew bool
+}
+
 // Source records where the effective config came from, for the startup log and
-// agent-box doctor.
+// culibox doctor.
 type Source struct {
-	Path    string // the file read; "" with Default
-	Default bool   // no file found: built-in defaults
+	Path    string   // the file read; "" with Default
+	Default bool     // no file found: built-in defaults
+	Root    RootInfo // the data root Resolve picked
 }
 
 func (s Source) String() string {
@@ -22,40 +50,141 @@ func (s Source) String() string {
 	return s.Path
 }
 
-// Root is agent-box's single home: everything it writes (state, sockets on
-// Linux, profiles, its config file) lives under it, so one directory is the
-// whole install. $AGENT_BOX_HOME (abHome) moves it and must be absolute;
-// otherwise it is ~/.local/share/agent-box.
-func Root(home, abHome string) (string, error) {
-	if abHome != "" {
-		if !filepath.IsAbs(abHome) {
-			return "", fmt.Errorf("AGENT_BOX_HOME %q is not an absolute path", abHome)
+// DefaultRoots are the two default data roots: the new one and the one from
+// before the rename.
+func DefaultRoots(home string) (newRoot, legacyRoot string) {
+	base := filepath.Join(home, ".local", "share")
+	return filepath.Join(base, RootName), filepath.Join(base, LegacyRootName)
+}
+
+// HomeEnv reads the root env var: CULIBOX_HOME, or the deprecated
+// AGENT_BOX_HOME. notice is a line for stderr (and a doctor WARN), empty when
+// nothing is deprecated. Both set to different paths is an error: nothing is
+// picked silently. A relative value is an error naming the variable it came
+// from (ResolveRoot checks again, for callers that bring their own value).
+func HomeEnv(getenv func(string) string) (value, notice string, err error) {
+	n, o := getenv("CULIBOX_HOME"), getenv("AGENT_BOX_HOME")
+	pick := func(name, v, notice string) (string, string, error) {
+		if v != "" && !filepath.IsAbs(v) {
+			return "", "", fmt.Errorf("%s %q is not an absolute path", name, v)
 		}
-		return filepath.Clean(abHome), nil
+		return v, notice, nil
+	}
+	switch {
+	case o == "":
+		return pick("CULIBOX_HOME", n, "")
+	case n == "":
+		return pick("AGENT_BOX_HOME", o, "AGENT_BOX_HOME is deprecated; rename it to CULIBOX_HOME")
+	case filepath.Clean(n) == filepath.Clean(o):
+		return pick("CULIBOX_HOME", n, "AGENT_BOX_HOME is deprecated and set to the same path as CULIBOX_HOME; unset it")
+	}
+	return "", "", fmt.Errorf("CULIBOX_HOME (%s) and AGENT_BOX_HOME (%s) disagree; unset one", n, o)
+}
+
+// Root is the data root's path; see ResolveRoot.
+func Root(home, envHome string) (string, error) {
+	ri, err := ResolveRoot(home, envHome)
+	return ri.Path, err
+}
+
+// ResolveRoot picks CuliBox's single home: everything it writes (state, sockets
+// on Linux, profiles, its config file) lives under it, so one directory is the
+// whole install. It never moves or creates anything.
+//
+// envHome (the value HomeEnv returned) must be absolute, is used as is, and is
+// never moved. Otherwise, with new = ~/.local/share/culibox and legacy =
+// ~/.local/share/agent-box, each checked with Lstat:
+//   - neither exists, or only new: new;
+//   - only legacy: legacy (the migration candidate). A legacy symlink to some
+//     other directory is used as spelled, not resolved (it is not moved either);
+//   - legacy a symlink to new: new, RootLinked (the link a migration leaves);
+//   - both the same directory otherwise: the spelling that is the real
+//     directory, so hash-derived names stay stable;
+//   - both exist and new is a real, empty directory: legacy with EmptyNew. When
+//     legacy is empty too the answer is the same: legacy holds the original
+//     hash-derived names and the choice must not depend on luck;
+//   - legacy or new a broken symlink, or not stat-able: an error naming it;
+//   - both exist with different content: an error naming both and the fix. A
+//     silent pick would hide data, or let a planted directory take over, since
+//     config.json names the binaries that run.
+func ResolveRoot(home, envHome string) (RootInfo, error) {
+	if envHome != "" {
+		if !filepath.IsAbs(envHome) {
+			return RootInfo{}, fmt.Errorf("CULIBOX_HOME (or the deprecated AGENT_BOX_HOME) %q is not an absolute path", envHome)
+		}
+		return RootInfo{Path: filepath.Clean(envHome), Kind: RootEnv}, nil
 	}
 	if !filepath.IsAbs(home) {
-		return "", fmt.Errorf("home dir %q is not an absolute path; set $HOME", home)
+		return RootInfo{}, fmt.Errorf("home dir %q is not an absolute path; set $HOME", home)
 	}
-	return filepath.Join(home, ".local", "share", "agent-box"), nil
+	newRoot, legacy := DefaultRoots(home)
+	nfi, nerr := os.Lstat(newRoot)
+	lfi, lerr := os.Lstat(legacy)
+	if nerr != nil && !errors.Is(nerr, os.ErrNotExist) {
+		return RootInfo{}, fmt.Errorf("data root %s cannot be checked: %w", newRoot, nerr)
+	}
+	if lerr != nil && !errors.Is(lerr, os.ErrNotExist) {
+		return RootInfo{}, fmt.Errorf("data root %s cannot be checked: %w", legacy, lerr)
+	}
+	newExists, legExists := nerr == nil, lerr == nil
+	if !legExists {
+		return RootInfo{Path: newRoot, Kind: RootNew}, nil
+	}
+	lst, serr := os.Stat(legacy) // follows a link
+	if serr != nil {
+		return RootInfo{}, fmt.Errorf("data root %s is a broken link or cannot be read (%v); fix or remove it, or set CULIBOX_HOME", legacy, serr)
+	}
+	if !newExists {
+		return RootInfo{Path: legacy, Kind: RootLegacy}, nil
+	}
+	nst, serr := os.Stat(newRoot)
+	if serr != nil && nfi.Mode()&os.ModeSymlink != 0 {
+		return RootInfo{}, fmt.Errorf("data root %s is a broken link or cannot be read (%v); fix or remove it, or set CULIBOX_HOME", newRoot, serr)
+	}
+	if serr == nil && os.SameFile(nst, lst) {
+		legLink, newLink := lfi.Mode()&os.ModeSymlink != 0, nfi.Mode()&os.ModeSymlink != 0
+		if legLink && !newLink {
+			return RootInfo{Path: newRoot, Kind: RootLinked}, nil
+		}
+		// New a link to legacy, or (two links to a third directory, or a bind
+		// mount) no real spelling to prefer: legacy, the name the hashes use today.
+		return RootInfo{Path: legacy, Kind: RootLegacy}, nil
+	}
+	if nfi.IsDir() { // a real directory, not a link
+		ents, err := os.ReadDir(newRoot)
+		if err != nil {
+			return RootInfo{}, fmt.Errorf("data root %s cannot be read: %w", newRoot, err)
+		}
+		if len(ents) == 0 {
+			return RootInfo{Path: legacy, Kind: RootLegacy, EmptyNew: true}, nil
+		}
+	}
+	return RootInfo{}, fmt.Errorf("both %s and %s exist with different content; set CULIBOX_HOME to the one to use, or move one aside", newRoot, legacy)
 }
 
 // Resolve loads the config. With an explicit -config (set), that file must
 // exist. Otherwise the first existing file wins: <root>/config.json, then —
-// only when AGENT_BOX_HOME is unset, so a relocated instance never picks up
-// another one's file — $XDG_CONFIG_HOME/agent-box/config.json (absolute XDG
-// only, per the spec), else ~/.config/agent-box/config.json; with none,
-// Defaults(). The current directory is deliberately NOT searched: running
-// agent-box inside a cloned repo must not load that repo's config
-// (allowed_hosts, password_env, agent bins). A config without data_dir gets the
-// root as its data dir.
-func Resolve(explicit string, set bool, home, xdg, abHome string) (Config, Source, error) {
-	root, err := Root(home, abHome)
+// only when no root env var is set (envHome == ""), so a relocated instance
+// never picks up another one's file — $XDG_CONFIG_HOME/culibox/config.json
+// (absolute XDG only, per the spec), else ~/.config/culibox/config.json, then
+// the same under agent-box. Both XDG files existing as different files is an
+// error. With none, Defaults(). The current directory is deliberately NOT
+// searched: running culibox inside a cloned repo must not load that repo's
+// config (allowed_hosts, password_env, agent bins). A config without data_dir
+// gets the root as its data dir.
+func Resolve(explicit string, set bool, home, xdg, envHome string) (Config, Source, error) {
+	ri, err := ResolveRoot(home, envHome)
 	if err != nil {
-		return Config{}, Source{Path: "$AGENT_BOX_HOME"}, err
+		label := "data root"
+		if envHome != "" {
+			label = "$CULIBOX_HOME"
+		}
+		return Config{}, Source{Path: label}, err
 	}
-	c, src, err := load(explicit, set, root, home, xdg, abHome != "")
+	c, src, err := load(explicit, set, ri.Path, home, xdg, envHome != "")
+	src.Root = ri
 	if err == nil && c.DataDir == "" {
-		c.DataDir = root
+		c.DataDir = ri.Path
 	}
 	return c, src, err
 }
@@ -68,9 +197,15 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	if err := checkRoot(root); err != nil {
 		return Config{}, Source{Path: root}, err
 	}
-	for _, p := range candidates(root, home, xdg, relocated) {
+	cands := candidates(root, home, xdg, relocated)
+	for i, p := range cands {
 		fi, err := os.Stat(p)
 		if err == nil {
+			if i == 1 { // the culibox XDG file: refuse if the legacy one is a different file
+				if lfi, lerr := os.Stat(cands[2]); lerr == nil && !os.SameFile(fi, lfi) {
+					return Config{}, Source{Path: p}, fmt.Errorf("both %s and %s exist; keep one", p, cands[2])
+				}
+			}
 			if err := checkOwned(p, fi); err != nil {
 				return Config{}, Source{Path: p}, err
 			}
@@ -84,25 +219,33 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	return Defaults(), Source{Default: true}, nil
 }
 
-// candidates are the config files load tries, in order.
+// XDGBase is the directory the ~/.config fallback lives in: an absolute
+// $XDG_CONFIG_HOME, else ~/.config.
+func XDGBase(home, xdg string) string {
+	if xdg != "" && filepath.IsAbs(xdg) {
+		return xdg
+	}
+	return filepath.Join(home, ".config")
+}
+
+// candidates are the config files load tries, in order: the root's, then (not
+// when relocated) the culibox and legacy XDG ones.
 func candidates(root, home, xdg string, relocated bool) []string {
 	out := []string{filepath.Join(root, "config.json")}
 	if !relocated {
-		base := filepath.Join(home, ".config")
-		if xdg != "" && filepath.IsAbs(xdg) {
-			base = xdg
-		}
-		out = append(out, filepath.Join(base, "agent-box", "config.json"))
+		base := XDGBase(home, xdg)
+		out = append(out, filepath.Join(base, RootName, "config.json"), filepath.Join(base, LegacyRootName, "config.json"))
 	}
 	return out
 }
 
 // ConfigFiles is every config file Resolve (with the same arguments) reads on
 // the next start, absolute, whether or not it exists yet: the explicit file,
-// else each candidate. A boxed workspace must not reach any of them (nor the
-// files they link to), or a box could write the config that names the
-// binaries agent-box runs.
-func ConfigFiles(explicit string, set bool, home, xdg, abHome string) ([]string, error) {
+// else each candidate. Unrelocated it adds the default root that is NOT in use,
+// so both default roots are protected whichever one is. A boxed workspace must
+// not reach any of them (nor the files they link to), or a box could write the
+// config that names the binaries culibox runs.
+func ConfigFiles(explicit string, set bool, home, xdg, envHome string) ([]string, error) {
 	if set {
 		p, err := filepath.Abs(explicit)
 		if err != nil {
@@ -110,11 +253,20 @@ func ConfigFiles(explicit string, set bool, home, xdg, abHome string) ([]string,
 		}
 		return []string{p}, nil
 	}
-	root, err := Root(home, abHome)
+	ri, err := ResolveRoot(home, envHome)
 	if err != nil {
 		return nil, err
 	}
-	return candidates(root, home, xdg, abHome != ""), nil
+	out := candidates(ri.Path, home, xdg, envHome != "")
+	if envHome == "" {
+		newRoot, legacy := DefaultRoots(home)
+		other := newRoot
+		if ri.Path == newRoot {
+			other = legacy
+		}
+		out = append(out, filepath.Join(other, "config.json"))
+	}
+	return out, nil
 }
 
 // Defaults is the zero-config laptop setup: loopback only, token login (no
@@ -144,6 +296,10 @@ func checkRoot(root string) error {
 	}
 	return checkOwned("data root "+root, fi)
 }
+
+// CheckOwned is checkOwned for other packages (the ~/.config move checks the
+// directory it moves a config into).
+func CheckOwned(what string, fi os.FileInfo) error { return checkOwned(what, fi) }
 
 // checkOwned refuses what is not ours or is writable by group or others
 // (group too: on macOS group staff is every local user).

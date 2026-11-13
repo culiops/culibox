@@ -49,7 +49,7 @@ test("M9.2 whole home: no strip, the banner, Proposed folders; the body counts t
   assert.strictEqual(m.banner.body, "It shares `~` read & write, so a box that broke out of its container could change any file in it, like `~/.zshrc`. Apply the list below and the VM sees only the 4 folders your boxes use.");
   assert.strictEqual(m.banner.muted, "Nothing changes until you apply: sessions still start as before.");
   assert.strictEqual(m.banner.action, "Apply (restart box VM)");
-  assert.strictEqual(m.banner.terminal, "or, in a terminal, `agent-box box share apply`");
+  assert.strictEqual(m.banner.terminal, "or, in a terminal, `culibox box share apply`");
   assert.strictEqual(m.title, "Proposed folders");
   assert.strictEqual(m.subtitle, "Made from your profiles and the folders boxed sessions ran in");
   assert.strictEqual(m.under, VMF_HELPER);

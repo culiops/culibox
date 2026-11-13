@@ -247,3 +247,24 @@ func TestInnerPid(t *testing.T) {
 		t.Error("InnerPid accepted an incomplete pidfile")
 	}
 }
+
+func TestLiveSessionsEmptyDir(t *testing.T) {
+	base := t.TempDir()
+	sock, pids := filepath.Join(base, "sock"), filepath.Join(base, "pids")
+	n, err := LiveSessions(sock, pids)
+	if err != nil || n != 0 {
+		t.Fatalf("LiveSessions = %d, %v; want 0, nil", n, err)
+	}
+	for _, d := range []string{sock, pids} {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Errorf("%s was created (%v)", d, err)
+		}
+	}
+	// An existing but empty socket dir also counts 0.
+	if err := os.Mkdir(sock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := LiveSessions(sock, pids); err != nil || n != 0 {
+		t.Fatalf("empty dir: LiveSessions = %d, %v; want 0, nil", n, err)
+	}
+}

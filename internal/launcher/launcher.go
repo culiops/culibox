@@ -203,12 +203,12 @@ var (
 	// the locked encrypted store. The text is fixed and secret-free so it can
 	// be shown to the caller; the secret name is appended only to wrapped
 	// errors, which go to the server log, never the response.
-	ErrStoreLocked = errors.New(`store is locked — unlock it in the UI or with "agent-box store unlock"`)
+	ErrStoreLocked = errors.New(`store is locked — unlock it in the UI or with "culibox store unlock"`)
 	// ErrStoreUnavailable refuses a spawn whose secrets live in a store whose
 	// key the macOS Keychain did not hand over. Not a lock: there is no
 	// passphrase to type. Wrapped errors also carry the secretstore
 	// UnavailableError, whose message holds the fix.
-	ErrStoreUnavailable = errors.New("the macOS Keychain did not give agent-box the store key")
+	ErrStoreUnavailable = errors.New("the macOS Keychain did not give CuliBox the store key")
 )
 
 // storeLocked returns the ErrStoreLocked (naming the secret, for the log) to
@@ -1161,11 +1161,11 @@ for a in "$@"; do
 	case $a in
 	--*) ;;
 	-*c*)
-		echo "agent-box: $0 is not in the box image, so its -c command cannot run" >&2
+		echo "culibox: $0 is not in the box image, so its -c command cannot run" >&2
 		exit 127 ;;
 	esac
 done
-echo "agent-box: $0 is not in the box image; starting /bin/bash instead" >&2
+echo "culibox: $0 is not in the box image; starting /bin/bash instead" >&2
 exec /bin/bash`
 
 // lookPathIn resolves bin against the given PATH string (not the daemon's env).

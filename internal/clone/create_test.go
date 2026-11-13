@@ -300,7 +300,7 @@ func TestEnsureCloneRefusesExisting(t *testing.T) {
 			if !errors.Is(err, box.ErrUnboxableWorkspace) {
 				t.Fatalf("err = %v, want ErrUnboxableWorkspace", err)
 			}
-			if !strings.Contains(err.Error(), "move it away and agent-box will create the clone") {
+			if !strings.Contains(err.Error(), "move it away and CuliBox will create the clone") {
 				t.Errorf("message lacks the action: %v", err)
 			}
 		})
@@ -478,7 +478,7 @@ func TestEnsureCloneRefusesSymlinkInParentChain(t *testing.T) {
 			if created || !errors.Is(err, box.ErrUnboxableWorkspace) {
 				t.Fatalf("created=%v err=%v, want ErrUnboxableWorkspace", created, err)
 			}
-			if !strings.Contains(err.Error(), "is a symlink; agent-box creates clones only under real directories") {
+			if !strings.Contains(err.Error(), "is a symlink; CuliBox creates clones only under real directories") {
 				t.Errorf("message: %v", err)
 			}
 			if len(rec.calls) != 0 {

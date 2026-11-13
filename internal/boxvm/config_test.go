@@ -129,7 +129,7 @@ func TestSocketPathLimit(t *testing.T) {
 	}
 	c := testCfg()
 	c.Root = "/Users/a/" + strings.Repeat("x", 80)
-	if err := c.CheckSocketPaths(); err == nil || !strings.Contains(err.Error(), "AGENT_BOX_HOME") {
+	if err := c.CheckSocketPaths(); err == nil || !strings.Contains(err.Error(), "CULIBOX_HOME") {
 		t.Fatalf("an over-long root must be refused with a remedy: %v", err)
 	}
 }
@@ -156,9 +156,9 @@ func TestValidateRefusesPathsDockerOrYAMLCannotCarry(t *testing.T) {
 			if !strings.Contains(err.Error(), fmt.Sprintf("%q", offender)) {
 				t.Fatalf("%s %q: error must name the path: %v", field, bad, err)
 			}
-			// AGENT_BOX_HOME moves the data root, not the home.
-			if has := strings.Contains(err.Error(), "AGENT_BOX_HOME"); has != (field == "root") {
-				t.Fatalf("%s %q: AGENT_BOX_HOME remedy present=%v, want %v: %v", field, bad, has, field == "root", err)
+			// CULIBOX_HOME moves the data root, not the home.
+			if has := strings.Contains(err.Error(), "CULIBOX_HOME"); has != (field == "root") {
+				t.Fatalf("%s %q: CULIBOX_HOME remedy present=%v, want %v: %v", field, bad, has, field == "root", err)
 			}
 			if field == "home" && !strings.Contains(err.Error(), "host tier") {
 				t.Fatalf("home %q: error must offer renaming the home or the host tier: %v", bad, err)

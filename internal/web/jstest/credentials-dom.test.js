@@ -429,7 +429,7 @@ test("a modal keeps its own amber strip", () => {
 // --- the store strip on macOS: a Keychain failure shows its fix, never an unlock form (#65) ---
 
 const kcStore = (over) => ({ initialized: true, locked: false, platform: "darwin", passphrase_mode: false, ...over });
-const unavailable = (kind) => ({ kind, reason: "The Keychain would not give the key.", fix: "Open Keychain Access and allow agent-box." });
+const unavailable = (kind) => ({ kind, reason: "The Keychain would not give the key.", fix: "Open Keychain Access and allow CuliBox." });
 const stripOf = (p, store) => p.box.credStrip({ store });
 const btnTexts = (n) => n.querySelectorAll("button").map((b) => b.textContent);
 
@@ -442,7 +442,7 @@ test("strip, darwin store unavailable: Keychain chip, the server's reason and fi
     assert.strictEqual(chip.textContent, "Keychain", kind);
     assert.ok(chip.className.split(/\s+/).includes("locked"), kind + ": amber chip class");
     assert.ok(strip.className.split(/\s+/).includes("need"), kind + ": the strip asks for attention");
-    assert.match(strip.textContent, /The Keychain would not give the key\. Open Keychain Access and allow agent-box\./, kind);
+    assert.match(strip.textContent, /The Keychain would not give the key\. Open Keychain Access and allow CuliBox\./, kind);
     assert.ok(strip.textContent.includes(p.box.storeUnavailableLabel(kind)), kind + ": the kind label");
     assert.strictEqual(wrap.querySelectorAll(".storeslot").length, 0, kind + ": no unlock slot");
     assert.strictEqual(wrap.querySelectorAll("input").length, 0, kind + ": no passphrase field");

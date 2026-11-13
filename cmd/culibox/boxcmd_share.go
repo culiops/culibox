@@ -138,13 +138,13 @@ func printShares(w io.Writer, svc *vmShareSvc, v web.VMFoldersView, changed bool
 	fmt.Fprintf(w, "rw  CuliBox data (%s/{boxstate}; ro: bundle, broker, ca)\n", vmshares.Display(svc.env.DataRoot, svc.env.Home))
 	switch {
 	case changed:
-		fmt.Fprintln(w, "not applied yet: run `agent-box box share apply` (restarts the box VM)")
+		fmt.Fprintln(w, "not applied yet: run `culibox box share apply` (restarts the box VM)")
 	case v.State == "pending":
-		fmt.Fprintln(w, "changes not applied yet: run agent-box box share apply")
+		fmt.Fprintln(w, "changes not applied yet: run culibox box share apply")
 	case v.State == "whole_home":
 		fmt.Fprintln(w, vmshares.WholeHomeLine(n))
 	case v.State == "not_set_up":
-		fmt.Fprintln(w, "the box VM is not set up yet: `agent-box box setup` starts it with this list")
+		fmt.Fprintln(w, "the box VM is not set up yet: `culibox box setup` starts it with this list")
 	default:
 		fmt.Fprintln(w, "applied")
 	}
@@ -197,7 +197,7 @@ func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, 
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(w, "FAIL box VM folders: interrupted (%v). The box VM may be stopped; run `agent-box box share apply -force` to finish.\n", ctx.Err())
+			fmt.Fprintf(w, "FAIL box VM folders: interrupted (%v). The box VM may be stopped; run `culibox box share apply -force` to finish.\n", ctx.Err())
 			return 1
 		case <-time.After(100 * time.Millisecond):
 		}

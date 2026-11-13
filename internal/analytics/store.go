@@ -207,6 +207,63 @@ func backupOnce(db *sql.DB, dst string) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// RewritePathPrefix copies every ingest_state row under oldRoot (the path
+// equal to it, or below it as a whole path component) to the same place under
+// newRoot, in one transaction, and returns how many rows it inserted. A data
+// root move (#255) calls it: without it each transcript would read as new and
+// be counted again from offset 0. The rows under oldRoot stay (ruling R12): an
+// older binary rolled back onto the link at the old path then resumes from the
+// offsets of the move instead of re-reading every transcript from 0. A row
+// already under newRoot
+// is kept as it is (INSERT OR IGNORE). A sibling such as <oldRoot>-prod is not
+// touched. Idempotent: a second run inserts nothing.
+func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT path FROM ingest_state`)
+	if err != nil {
+		return 0, err
+	}
+	var from []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if p == oldRoot || strings.HasPrefix(p, oldRoot+"/") {
+			from = append(from, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, p := range from {
+		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids)
+SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
+		if err != nil {
+			return 0, fmt.Errorf("analytics: copy %s: %w", p, err)
+		}
+		k, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		n += k
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // State returns the recorded size and read offset for a transcript path, and the
 // message ids already counted near that offset (oldest first), which let a
 // message split across two ingest batches be counted once.

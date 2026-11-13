@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culibox/internal/abduco"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/procinfo"
+	"github.com/culiops/culibox/internal/rootmove"
 )
 
 func input(t *testing.T) Input {
@@ -420,5 +422,182 @@ func TestDoctor_ReportsProcessTable(t *testing.T) {
 	out, _ := run(input(t))
 	if !strings.Contains(out, " process table: ") {
 		t.Fatalf("no process table line:\n%s", out)
+	}
+}
+
+// --- data root rows (#255) ---
+
+func dataRootIn(t *testing.T, kind config.RootKind, legacy bool) (in Input, newRoot, legacyRoot string) {
+	t.Helper()
+	home := t.TempDir()
+	newRoot, legacyRoot = config.DefaultRoots(home)
+	path := newRoot
+	if legacy {
+		path = legacyRoot
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	in = Input{Home: home, Source: config.Source{Root: config.RootInfo{Path: path, Kind: kind}}}
+	return in, newRoot, legacyRoot
+}
+
+func TestDataDirRowLegacy(t *testing.T) {
+	in, newRoot, legacy := dataRootIn(t, config.RootLegacy, true)
+	r := checkDataDir(in, legacy, "linux")
+	if r.Status != Pass || !strings.Contains(r.Detail, "next serve start moves it to "+newRoot) {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestDataDirRowLegacyKeptInPlace(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	in.RootNote = "2 session(s) running"
+	r := checkDataDir(in, legacy, "linux")
+	if !strings.Contains(r.Detail, "kept in place: 2 session(s) running") || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// R1: on darwin a legacy root that holds the box VM stays; doctor says why.
+func TestDataDirRowLegacyDarwinVM(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	if err := os.Mkdir(filepath.Join(legacy, "vm"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const want = "kept in place: the box VM lives here; it cannot follow a move without box setup -recreate"
+	r := checkDataDir(in, legacy, "darwin")
+	if !strings.Contains(r.Detail, want) || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("darwin with a VM: %+v", r)
+	}
+	// Linux has no precondition (f): the same layout is simply pending.
+	if r := checkDataDir(in, legacy, "linux"); !strings.Contains(r.Detail, "next serve start moves it to") {
+		t.Fatalf("linux with vm dir: %+v", r)
+	}
+	// darwin without a VM moves like Linux.
+	if err := os.Remove(filepath.Join(legacy, "vm")); err != nil {
+		t.Fatal(err)
+	}
+	if r := checkDataDir(in, legacy, "darwin"); !strings.Contains(r.Detail, "next serve start moves it to") {
+		t.Fatalf("darwin without a VM: %+v", r)
+	}
+}
+
+// R17: a legacy root that is a symlink (or a mount point) is never moved, so
+// doctor does not promise a move.
+func TestDataDirRowLegacyNotARealDirectory(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	real := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Rename(legacy, real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, legacy); err != nil {
+		t.Fatal(err)
+	}
+	r := checkDataDir(in, legacy, "linux")
+	if !strings.Contains(r.Detail, "(kept in place: not a real directory)") || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// R17: live sessions on the legacy root keep it in place; doctor counts them
+// from the socket dir Checks uses and <legacy>/sessions/pids.
+func TestDataDirRowLegacyLiveSessions(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	var gotSock, gotPids string
+	real := liveSessions
+	liveSessions = func(sock, pids string) (int, error) { gotSock, gotPids = sock, pids; return 2, nil }
+	t.Cleanup(func() { liveSessions = real })
+	r := checkDataDir(in, legacy, "linux")
+	if !strings.Contains(r.Detail, "(kept in place: 2 session(s) running)") || strings.Contains(r.Detail, "moves it") {
+		t.Fatalf("%+v", r)
+	}
+	if want := abduco.SocketDirFor("", "linux", legacy, os.Getuid()); gotSock != want {
+		t.Errorf("socket dir = %q, want %q", gotSock, want)
+	}
+	if want := filepath.Join(legacy, "sessions", "pids"); gotPids != want {
+		t.Errorf("pid dir = %q, want %q", gotPids, want)
+	}
+	// None running: the move is still promised.
+	liveSessions = func(string, string) (int, error) { return 0, nil }
+	if r := checkDataDir(in, legacy, "linux"); !strings.Contains(r.Detail, "next serve start moves it to") {
+		t.Fatalf("no sessions: %+v", r)
+	}
+}
+
+// Doctor stays read-only: counting sessions creates no directory.
+func TestDataDirRowLegacyCreatesNothing(t *testing.T) {
+	in, _, legacy := dataRootIn(t, config.RootLegacy, true)
+	checkDataDir(in, legacy, "linux")
+	for _, d := range []string{filepath.Join(legacy, "abduco"), filepath.Join(legacy, "sessions")} {
+		if _, err := os.Lstat(d); !os.IsNotExist(err) {
+			t.Errorf("%s was created (%v)", d, err)
+		}
+	}
+}
+
+func TestDataDirRowLinked(t *testing.T) {
+	in, newRoot, legacy := dataRootIn(t, config.RootLinked, false)
+	r := checkDataDir(in, newRoot, "linux")
+	if r.Status != Pass || !strings.Contains(r.Detail, "moved from "+legacy) || !strings.Contains(r.Detail, "a link remains at the old path") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestDataDirRowInterruptedMove(t *testing.T) {
+	in, newRoot, _ := dataRootIn(t, config.RootNew, false)
+	if err := os.WriteFile(filepath.Join(newRoot, rootmove.JournalName), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := checkDataDir(in, newRoot, "linux")
+	if !strings.Contains(r.Detail, "a move was interrupted; the next serve start finishes it") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A data_dir elsewhere is not the root: no root story is told about it.
+func TestDataDirRowNoStoryForCustomDataDir(t *testing.T) {
+	in, _, _ := dataRootIn(t, config.RootLegacy, true)
+	other := t.TempDir()
+	if err := os.Chmod(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if r := checkDataDir(in, other, "linux"); r.Detail != other {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestEnvNoticeRow(t *testing.T) {
+	in := input(t)
+	in.EnvNotice = "AGENT_BOX_HOME is deprecated; rename it to CULIBOX_HOME"
+	var got *Result
+	for _, r := range Checks(in) {
+		if r.Check == "env" {
+			r := r
+			got = &r
+		}
+	}
+	if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "CULIBOX_HOME") {
+		t.Fatalf("env row: %+v", got)
+	}
+}
+
+func TestEnvErrorFails(t *testing.T) {
+	in := input(t)
+	in.EnvErr = errors.New("CULIBOX_HOME (/a) and AGENT_BOX_HOME (/b) disagree; unset one")
+	out, code := run(in)
+	if code != 1 || !strings.Contains(out, "FAIL env: CULIBOX_HOME (/a) and AGENT_BOX_HOME (/b) disagree") {
+		t.Fatalf("code %d:\n%s", code, out)
+	}
+}
+
+// The two-roots refusal reaches doctor as the config FAIL.
+func TestRootRefusalFails(t *testing.T) {
+	in := input(t)
+	in.ConfigErr = errors.New("both /a and /b exist with different content; set CULIBOX_HOME to the one to use, or move one aside")
+	in.Source = config.Source{Path: "data root"}
+	out, code := run(in)
+	if code != 1 || !strings.Contains(out, "FAIL config: data root: both /a and /b exist") {
+		t.Fatalf("code %d:\n%s", code, out)
 	}
 }

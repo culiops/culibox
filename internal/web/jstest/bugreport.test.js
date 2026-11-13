@@ -149,6 +149,12 @@ test("the report is requested with POST, never a bare GET", async () => {
   assert.equal(seen[0][1] && seen[0][1].method, "POST");
 });
 
+test("while the report builds the preview names the culibox command it runs (#255)", () => {
+  const { t, els } = load({ api: () => new Promise(() => {}) });
+  t.openBugReport();
+  assert.equal(els["bug-preview"].textContent, "Building report… (runs culibox doctor, up to 30 s)");
+});
+
 test("versionLabel shortens git describe output for the header", () => {
   const { versionLabel } = require("../static/bugreport.js");
   assert.strictEqual(versionLabel("v0.1.0"), "v0.1.0");

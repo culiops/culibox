@@ -65,12 +65,12 @@ func (e *UnavailableError) Is(target error) bool { return target == ErrKeeperUna
 // Fix is what the operator does about it.
 func (e *UnavailableError) Fix() string {
 	if e.Kind == KindStoreUnreadable {
-		return fmt.Sprintf("agent-box cannot read its store directory %s: check that it exists and that your user can read it, then retry.", e.StoreDir)
+		return fmt.Sprintf("CuliBox cannot read its store directory %s: check that it exists and that your user can read it, then retry.", e.StoreDir)
 	}
 	if e.Kind == KindKeyLost {
-		return fmt.Sprintf(`The key for this store is gone, so its stored values cannot be decrypted. To start over: remove %s, run "agent-box store init", then add your tokens again.`, e.StoreDir)
+		return fmt.Sprintf(`The key for this store is gone, so its stored values cannot be decrypted. To start over: remove %s, run "culibox store init", then add your tokens again.`, e.StoreDir)
 	}
-	return "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about agent-box, then retry."
+	return "Unlock the login keychain (Keychain Access, or log out and in), or click Allow when macOS asks about CuliBox, then retry."
 }
 
 // Keeper holds the unlocked master identity outside the process: the kernel

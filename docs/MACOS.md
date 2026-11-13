@@ -7,43 +7,61 @@ boxed tier, which runs them in a container inside CuliBox's own colima VM; see
 ## Install (from source)
 
     brew install go abduco
-    tar xzf agent-box-src-<sha>.tar.gz && cd agent-box-src-<sha>
-    go build -ldflags "-X main.commit=<sha> -X main.version=<version>" -o agent-box ./cmd/agent-box
+    tar xzf culibox-src-<sha>.tar.gz && cd culibox-src-<sha>
+    go build -ldflags "-X main.commit=<sha> -X main.version=<version>" -o culibox ./cmd/culibox
     go test ./internal/procinfo/... ./internal/abduco/... ./internal/session/... ./internal/config/...
 
 A binary you build yourself is not quarantined by Gatekeeper.
 
 ## Check the machine
 
-    ./agent-box doctor
+    ./culibox doctor
 
 Every line is PASS, WARN or FAIL. The report contains no secrets, so it is safe
 to paste into an issue.
 
 ## Run
 
-    ./agent-box serve
+    ./culibox serve
 
 With no config file, CuliBox listens on `127.0.0.1:8899` and prints a login
 URL containing a login token (`#token=…`), generated on first start and kept in
-`~/.local/share/agent-box/login.token`. Open the URL in a browser on the same Mac.
+`~/.local/share/culibox/login.token`. Open the URL in a browser on the same Mac.
 
 Closing the terminal tab stops CuliBox but not your sessions; run
-`agent-box serve` again and they reattach. Only one CuliBox can serve a data
+`culibox serve` again and they reattach. Only one CuliBox can serve a data
 directory at a time.
 
 ## Configure
 
-Everything CuliBox writes lives in one directory, `~/.local/share/agent-box`
-(set `AGENT_BOX_HOME` to an absolute path to move it): its config, login token,
+Everything CuliBox writes lives in one directory, `~/.local/share/culibox`
+(set `CULIBOX_HOME` to an absolute path to move it): its config, login token,
 session records, profiles and analytics. Back it up, move it or delete it as a
 unit. Claude Code's own files stay in `~/.claude`; CuliBox only reads them. The one
 exception is the abduco socket directory, `/tmp/agent-box-<uid>-<hash>`, because macOS
-caps a socket path at 103 bytes; it holds only live sockets.
+caps a socket path at 103 bytes; it holds only live sockets. Its name keeps the old
+`agent-box` prefix on purpose.
 
-Optional config: `~/.local/share/agent-box/config.json` (see `config.example.json`), or
-pass `-config <path>`. When `AGENT_BOX_HOME` is unset, `~/.config/agent-box/config.json`
-(or `$XDG_CONFIG_HOME/agent-box/config.json`) is still read as a fallback. A
+**A Mac that has a box VM keeps its old data folder.** CuliBox used to be called
+agent-box, and a first `culibox serve` moves `~/.local/share/agent-box` to
+`~/.local/share/culibox` (see [Configuration](CONFIG.md)). On a Mac where
+`~/.local/share/agent-box/vm` exists, it does not: Lima and colima keep absolute
+paths to that folder in the VM's instance directory and in `colima.yaml`, so the
+VM cannot follow a move without `culibox box setup -recreate`. The folder stays
+usable in place; `culibox doctor` says "kept in place: the box VM lives here; it
+cannot follow a move without box setup -recreate".
+
+**Before you roll back to an older `agent-box` binary on a Mac, end your sessions.**
+The old binary names its abduco socket directory from the old folder path, so it
+does not see sessions that the new binary started. (On Linux the socket directory
+sits inside the data folder, which the link at the old path still reaches.) The
+colima profile is still named `agent-box` and the Keychain item `agent-box-store`;
+nothing needs to be redone.
+
+Optional config: `~/.local/share/culibox/config.json` (see `config.example.json`), or
+pass `-config <path>`. When `CULIBOX_HOME` is unset, `~/.config/culibox/config.json`
+(or `$XDG_CONFIG_HOME/culibox/config.json`) is read as a fallback, and so is the
+older `~/.config/agent-box/config.json` (see [Configuration](CONFIG.md)). A
 `config.json` in the current directory is deliberately not read, so running CuliBox
 inside a cloned repo never loads that repo's config. To reach
 CuliBox through a reverse proxy, add its hostname to `allowed_hosts`; any other
@@ -51,7 +69,7 @@ Host header is refused.
 
 ## Rotate credentials
 
-These files sit in the data directory (default `~/.local/share/agent-box`).
+These files sit in the data directory (default `~/.local/share/culibox`).
 
 - New login token: delete `login.token` and restart.
 - Log out every browser: delete `cookie.secret` and restart.
@@ -67,24 +85,24 @@ lives under the data root (`<data root>/vm`). It never becomes your docker
 context and never edits `~/.ssh/config`.
 
     brew install colima docker
-    agent-box box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
-    agent-box doctor           # the "boxed tier", "box image" and "containment" lines
+    culibox box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
+    culibox doctor           # the "boxed tier", "box image" and "containment" lines
 
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
-  `agent-box box stop` frees its memory (default all your Mac's cores and half
+  `culibox box stop` frees its memory (default all your Mac's cores and half
   its RAM in whole GiB, at least 4 GiB; `box_vm_cpus`, `box_vm_memory_gib` in
   config.json). It refuses while any box is running, even
-  an idle one; `agent-box box stop -force` stops the VM anyway and ends those
-  sessions. `agent-box box status` shows the VM, the image and the boxes.
+  an idle one; `culibox box stop -force` stops the VM anyway and ends those
+  sessions. `culibox box status` shows the VM, the image and the boxes.
 - **Upgrading with the size unset.** A VM created by an older CuliBox has 4
   CPUs / 4 GiB, and an existing VM keeps the size it was created with: while
   `box_vm_cpus` and `box_vm_memory_gib` are unset, CuliBox reads them back
   from the VM and nothing reads as changed. The host-derived default (every
   core, half the RAM) applies only when the VM is first set up, or after
-  `agent-box box setup -recreate`, which deletes the VM, so its images and
+  `culibox box setup -recreate`, which deletes the VM, so its images and
   cache go too (box homes live on the host and stay) and the next setup
   rebuilds the image. Setting either key explicitly to a different size also
-  changes the VM, and `agent-box doctor` then reports the change until you run
+  changes the VM, and `culibox doctor` then reports the change until you run
   `box setup -recreate`. Boxes size their memory from the VM (by default half
   of it, but at least `4g` or all of the VM if it has less), so the VM size is
   what bounds every box on a Mac.
@@ -104,19 +122,19 @@ context and never edits `~/.ssh/config`.
 - Not yet tested: company VPN/split-DNS from inside a box.
 - File-heavy work (`npm install`, large builds) is slower boxed than on the host
   tier: the workspace crosses a VM file share (virtiofs).
-- If doctor warns about the VM's mount type, `agent-box box setup -recreate`
+- If doctor warns about the VM's mount type, `culibox box setup -recreate`
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
 - Clone mode (a box works on a private copy of a repo and its branches come
   home for review) runs here too, in the box VM. The repo must be inside a VM
-  folder and its copy inside a read-write one; anything else is refused. `agent-box clone fetch`
+  folder and its copy inside a read-write one; anything else is refused. `culibox clone fetch`
   needs the VM running and never starts it. See
   [Clone mode](CLONE-MODE.md#on-macos). Not yet tested end to end on a Mac.
-- Restart `agent-box serve` after any `box setup -recreate`. A running
+- Restart `culibox serve` after any `box setup -recreate`. A running
   CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
-  still tell you to recreate. `agent-box doctor` reads the VM fresh each run.
+  still tell you to recreate. `culibox doctor` reads the VM fresh each run.
 
 ### VM folders
 
@@ -135,14 +153,14 @@ workspaces, clone sources (read-only) and clone parents, context paths
 (read-only), and Claude's project memory folders (read-only), plus the folders
 boxed sessions have already run in.
 
-- Manage it in Settings › VM folders, or with `agent-box box share list`,
+- Manage it in Settings › VM folders, or with `culibox box share list`,
   `add <dir> [-ro]`, `rm <dir>` and `apply [-force]`. A change is saved at
   once but reaches the VM only when you apply it.
 - Applying stops the VM, rewrites its folder settings and starts it again. It
   takes about 20 seconds, ends running boxes (so it refuses while any run,
   unless you use `-force`; it also refuses when the VM reads as not running,
   because running boxes cannot be ruled out, and needs `-force` then too) and keeps the images and the cache. It never
-  deletes the VM. `agent-box box setup` applies a folder-list-only change the
+  deletes the VM. `culibox box setup` applies a folder-list-only change the
   same way.
 - CuliBox refuses a folder that is your home folder or contains it, that
   overlaps its data folder, that holds CuliBox's own config, profiles or
@@ -158,7 +176,7 @@ boxed sessions have already run in.
   has, not against your saved list. A folder you added but have not applied is
   refused, with an offer to share it.
 - If you set up the VM with an older CuliBox it still shares your whole home
-  folder until you apply the list. Nothing breaks: `agent-box doctor` ("box VM folders") and Settings
+  folder until you apply the list. Nothing breaks: `culibox doctor` ("box VM folders") and Settings
   warn about it, and the home share goes away when you apply the list.
 - Switching a folder between read-write and read-only takes effect on one apply: after the
   start CuliBox remounts any folder the VM still shows at its old mode, then checks the
@@ -188,8 +206,8 @@ rail); a profile with bindings reaches only the hosts they allow. Rules in the
 VM's firewall let the box subnet reach those two ports and nothing else, and
 keep every other box off the relay. If those rules are missing or out of order
 (a VM from before egress control for all boxes, or one set up for other ports),
-agent-box refuses to start a boxed session and tells you to run
-`agent-box box setup -recreate`; it checks them again on every boxed spawn.
+CuliBox refuses to start a boxed session and tells you to run
+`culibox box setup -recreate`; it checks them again on every boxed spawn.
 
 Egress control for every macOS box was verified on a Mac (macOS 14, colima 0.8.1) on 2026-11-02: bound and unbound boxes are fenced, a box's proxy token is refused when used from another box, boxes cannot reach each other, and direct, DNS and Mac loopback connections are blocked.
 
@@ -206,12 +224,12 @@ access on a Mac:
 
 These limits are the same as on Linux and are not configurable.
 
-- After upgrading, run `agent-box box setup -recreate` once when doctor asks
+- After upgrading, run `culibox box setup -recreate` once when doctor asks
   for it. The rules live in the VM's provisioning, so an existing VM keeps the
   old ones until it is recreated: a VM set up before egress control for all
   boxes has none, and one set up before the broker fix (see
   [Token binding](#token-binding)) still lets containers on the VM's default
-  network reach the broker. `agent-box doctor` fails ("box VM config", and
+  network reach the broker. `culibox doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until
   you do. Sessions still running in boxes after the upgrade lose the egress
   proxy until then (the recreate ends them anyway), so end them first.
@@ -225,12 +243,12 @@ These limits are the same as on Linux and are not configurable.
   upgrade also lose the credential broker until you recreate the VM. Until the
   new version replaces it, the old relay still sends the old secret and what the
   boxes send, tokens included, to whatever holds CuliBox's ports, so on a Mac
-  shared with other accounts, stop the box VM (`agent-box box stop`) or end the
+  shared with other accounts, stop the box VM (`culibox box stop`) or end the
   boxed sessions before you stop the old CuliBox for this upgrade.
 - The egress network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
-  `docker network rm`. After an upgrade, run `agent-box box setup -recreate`
+  `docker network rm`. After an upgrade, run `culibox box setup -recreate`
   instead: it deletes the VM, so its networks and rules come back fresh. Then
   restart CuliBox.
 - The relay container has no restart policy. After a VM restart the next boxed
@@ -300,8 +318,8 @@ Docker network (not the egress network) reach the broker's port directly,
 without the relay. With the handshake such a container can still reach the port,
 but it cannot pass the handshake, so it cannot write a header the broker
 accepts. A VM set up with that rule keeps it until it is recreated:
-`agent-box doctor` fails "box VM firewall", and every boxed spawn is refused
-until you run `agent-box box setup -recreate`.
+`culibox doctor` fails "box VM firewall", and every boxed spawn is refused
+until you run `culibox box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -395,7 +413,7 @@ a git config `include`, and so on). What it covers and what it does not is in
     runs reopens the gap: the box can then change it through another spelling.
   - The locks are recorded in `inplace-locks.json` in the data folder, so a
     crash or a Mac restart does not leave them behind: CuliBox lifts the ones
-    whose box is gone when it starts (and when the box VM starts). `agent-box
+    whose box is gone when it starts (and when the box VM starts). `culibox
     doctor` lists the files locked now and any left behind, with the
     `chflags nouchg` line to lift one by hand. The session's side panel says
     which files are locked. If you move or rename the folder while a session
@@ -479,21 +497,21 @@ sees for the failing host and the export command below with the name filled in
    the root certificate's name in Keychain Access (usually under the System
    keychain, Certificates):
 
-       security find-certificate -c "<Root CN>" -p > ~/agent-box-ca.pem
+       security find-certificate -c "<Root CN>" -p > ~/culibox-ca.pem
 
 2. Add it to `config.json`, with an absolute path:
 
-       "extra_ca_certs": ["/Users/me/agent-box-ca.pem"]
+       "extra_ca_certs": ["/Users/me/culibox-ca.pem"]
 
    A config file replaces the built-in defaults. If you have none yet, create
-   `~/.local/share/agent-box/config.json` (or `$AGENT_BOX_HOME/config.json`) with
+   `~/.local/share/culibox/config.json` (or `$CULIBOX_HOME/config.json`) with
    the defaults as well, or CuliBox refuses it for having no agents:
 
        {
          "bind_addr": "127.0.0.1:8899",
          "default_runtime": "host",
          "agents": [{"name": "claude", "bin": "claude"}],
-         "extra_ca_certs": ["/Users/me/agent-box-ca.pem"]
+         "extra_ca_certs": ["/Users/me/culibox-ca.pem"]
        }
 
    The `HINT:` prints this file, and its path, when no config exists.
@@ -501,15 +519,15 @@ sees for the failing host and the export command below with the name filled in
 3. Apply it. The VM's provisioning changes, so the VM must be recreated.
    `-recreate` drops the VM's images, so the image is rebuilt (or pulled again):
 
-       agent-box box setup -recreate
+       culibox box setup -recreate
 
    It refuses while a box is running; add `-force` to end those sessions.
 
 4. Restart CuliBox. `extra_ca_certs` is read at daemon start only, so a running
-   `agent-box serve` keeps the old list until you restart it (your sessions
+   `culibox serve` keeps the old list until you restart it (your sessions
    survive the restart and reattach).
 
-`box setup` and `agent-box doctor` then print one line per CA:
+`box setup` and `culibox doctor` then print one line per CA:
 
     PASS extra-ca: <subject> sha256:<fingerprint> expires <YYYY-MM-DD>
 
@@ -536,10 +554,10 @@ time each box gets a read-only trust bundle (the image's own roots plus yours)
 mounted over `/etc/ssl/certs/ca-certificates.crt`, and the usual variables
 (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and the like) point at it. If you change
 the list while a box with live sessions is running, new sessions in that box
-are refused until the old ones end (on macOS, `agent-box box stop` also ends them).
+are refused until the old ones end (on macOS, `culibox box stop` also ends them).
 
 On Linux there is no VM. After a change, restart CuliBox; a box created after
-that uses the new list, and the image build needs `agent-box box setup -rebuild`. A registry pull (a
+that uses the new list, and the image build needs `culibox box setup -rebuild`. A registry pull (a
 `box_image` that is a `ghcr.io` digest) goes through the host's Docker daemon,
 which uses the host's own trust store. CuliBox does not manage that: install
 the proxy's root there (on Debian or Ubuntu, copy it into
@@ -572,7 +590,7 @@ What it checks, in order:
    with `GOARCH=amd64`, which runs under Rosetta 2. A failing test run does not
    stop the script; it is recorded as failed.
 3. Runs each extracted binary's `version` (the amd64 one under `arch -x86_64`)
-   and requires exactly `agent-box <tag> (<commit of the clone>)`.
+   and requires exactly `culibox <tag> (<commit of the clone>)`.
 4. Asks for the manual rows of the Mac test guide, one per line as
    `ID=pass|fail|na [note]`, and a blank line to finish. Nothing defaults to pass.
 5. Builds `macos-verification.json` and uploads it to the release, then rewrites

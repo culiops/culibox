@@ -158,11 +158,11 @@ func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want)
 		}
 	}
 	if n.Internal != w.Internal {
-		return Net{}, fmt.Errorf("egress network %s exists with internal=%v; agent-box will not use an open network for boxes. Remove it (docker network rm %s) and retry",
+		return Net{}, fmt.Errorf("egress network %s exists with internal=%v; CuliBox will not use an open network for boxes. Remove it (docker network rm %s) and retry",
 			name, n.Internal, name)
 	}
 	if w.NoICC && !n.NoICC {
-		return Net{}, fmt.Errorf("egress network %s exists with inter-container traffic on (%s); agent-box will not use a network on which boxes can reach each other. Remove it (docker network rm %s) and retry",
+		return Net{}, fmt.Errorf("egress network %s exists with inter-container traffic on (%s); CuliBox will not use a network on which boxes can reach each other. Remove it (docker network rm %s) and retry",
 			name, iccOption, name)
 	}
 	if w.Subnet != "" {

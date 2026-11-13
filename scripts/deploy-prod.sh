@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build agent-box and (re)deploy the PRODUCTION systemd --user service.
+# Build culibox and (re)deploy the PRODUCTION systemd --user service.
 # The prod service runs this pinned binary (never the dev `air` build), so dev
 # work can't affect prod until you deliberately run this.
 #
@@ -75,7 +75,7 @@ fi
 
 mkdir -p "$(dirname "$BIN")"
 echo "building CuliBox $version → $BIN"
-"$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/agent-box"
+"$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/culibox"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
 sleep 1

@@ -376,11 +376,11 @@ test("cloneRow: up to date is an info row with the fetch-origin tooltip", () => 
 
 test("cloneRow: unsent work names the fetch command; detached has none", () => {
   const r = cloneRow({ agent: "ab", clone: { refreshed: true, head_in_host: false, branch: "feat", ahead: 2 } });
-  assert.ok(r.v.includes("branch feat: 2 commits not sent to host (`agent-box clone fetch ab feat`)"));
+  assert.ok(r.v.includes("branch feat: 2 commits not sent to host (`culibox clone fetch ab feat`)"));
   const one = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 1 } });
   assert.ok(one.v.includes("1 commit not sent"));
   const zero = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 0 } });
-  assert.ok(zero.v.includes("branch feat: commits not sent to host (`agent-box clone fetch ab feat`)"));
+  assert.ok(zero.v.includes("branch feat: commits not sent to host (`culibox clone fetch ab feat`)"));
   const d = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "" } });
   assert.ok(d.v.includes("detached HEAD: commits not sent to host"));
   assert.ok(!d.v.includes("clone fetch"));
@@ -416,10 +416,10 @@ test("cloneRow: master base is used in every clause", () => {
   assert.ok(r.title.includes("origin/master"));
   // The fetch hint carries -base (flags before positionals) off the default branch only.
   const u = cloneRow({ agent: "ab", clone: { base: "master", head_in_host: false, branch: "feat", ahead: 1 } });
-  assert.ok(u.v.includes("`agent-box clone fetch -base master ab feat`"));
+  assert.ok(u.v.includes("`culibox clone fetch -base master ab feat`"));
   assert.ok(!u.v.includes("main"));
   const um = cloneRow({ agent: "ab", clone: { base: "main", head_in_host: false, branch: "feat", ahead: 1 } });
-  assert.ok(um.v.includes("`agent-box clone fetch ab feat`"));
+  assert.ok(um.v.includes("`culibox clone fetch ab feat`"));
   assert.ok(!um.v.includes("-base"));
   assert.ok(!cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 1 } }).v.includes("-base"));
   // A missing or garbled ff_count drops the "(+N)" instead of printing undefined.
@@ -455,7 +455,7 @@ test("toastCloneSuffix: one warn clause, else one short info clause", () => {
   assert.strictEqual(toastCloneSuffix({ clone: { error: "x" } }), " \u00b7 Clone not refreshed: x; the box is on older code.");
   assert.strictEqual(cloneLevel({ error: "x" }), "warn");
   const s = { agent: "ab", clone: { refreshed: true, base: "main", head_in_host: false, branch: "f", ahead: 1 } };
-  assert.strictEqual(toastCloneSuffix(s), " \u00b7 clone: branch f: 1 commit not sent to host (`agent-box clone fetch ab f`)");
+  assert.strictEqual(toastCloneSuffix(s), " \u00b7 clone: branch f: 1 commit not sent to host (`culibox clone fetch ab f`)");
   assert.strictEqual(toastCloneSuffix({ clone: { skipped: "in-use" } }), " \u00b7 clone: not refreshed: another session is using this clone");
   assert.strictEqual(toastCloneSuffix({ clone: { refreshed: true, base: "main" } }), " \u00b7 clone: up to date with host main");
   assert.strictEqual(toastCloneSuffix({ clone: {} }), "");

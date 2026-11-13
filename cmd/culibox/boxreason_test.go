@@ -15,7 +15,7 @@ import (
 // points at `agent-box doctor`; it never carries the error's own text, which can
 // hold a path.
 func TestBoxUnavailableReason(t *testing.T) {
-	const doctor = "run `agent-box doctor` for details"
+	const doctor = "run `culibox doctor` for details"
 	for _, tc := range []struct {
 		name string
 		err  error

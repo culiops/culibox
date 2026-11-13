@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -292,4 +293,98 @@ func mcpSourceUnreadable(path string, drops []bundle.Drop) bool {
 		}
 	}
 	return false
+}
+
+// RewriteStatusLinePrefix points each account's statusLine back at the data
+// root after the root moved (#255): for every
+// <dataDir>/accounts/*/claude/settings.json whose statusLine.command is oldRoot
+// or lies below it (a whole path component: <oldRoot>-prod is not touched), it
+// rewrites that one field to the same place under newRoot. Other keys and the
+// file's mode are kept; a command elsewhere (the user's own) is left alone.
+// Idempotent. A missing accounts dir is a no-op. One unreadable account does
+// not stop the others; their errors are joined.
+func RewriteStatusLinePrefix(dataDir, oldRoot, newRoot string) error {
+	root, err := os.OpenRoot(dataDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	d, err := root.Open(accountsDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	ents, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range ents {
+		if !e.IsDir() { // a symlink or file is not an account dir agent-box made
+			continue
+		}
+		cfgRel := filepath.Join(accountsDir, e.Name(), "claude")
+		if fi, err := root.Lstat(cfgRel); err != nil || !fi.IsDir() {
+			continue
+		}
+		if err := rewriteStatusLine(root, cfgRel, oldRoot, newRoot); err != nil {
+			errs = append(errs, fmt.Errorf("account %s: %w", e.Name(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func rewriteStatusLine(root *os.Root, cfgRel, oldRoot, newRoot string) error {
+	cr, err := root.OpenRoot(cfgRel)
+	if err != nil {
+		return err
+	}
+	defer cr.Close()
+	fi, err := cr.Lstat("settings.json")
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil
+	}
+	b, err := cr.ReadFile("settings.json")
+	if err != nil {
+		return err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return errors.New("settings.json is not valid JSON")
+	}
+	var sl map[string]json.RawMessage
+	if raw, ok := m["statusLine"]; !ok || json.Unmarshal(raw, &sl) != nil || sl == nil {
+		return nil
+	}
+	var cmd string
+	if raw, ok := sl["command"]; !ok || json.Unmarshal(raw, &cmd) != nil {
+		return nil
+	}
+	if cmd != oldRoot && !strings.HasPrefix(cmd, oldRoot+"/") {
+		return nil
+	}
+	if sl["command"], err = json.Marshal(newRoot + cmd[len(oldRoot):]); err != nil {
+		return err
+	}
+	if m["statusLine"], err = json.Marshal(sl); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	perm := fi.Mode().Perm()
+	if err := writeFileAtomic(cr, "settings.json", out, perm); err != nil {
+		return err
+	}
+	return cr.Chmod("settings.json", perm) // the umask may have narrowed the create mode
 }

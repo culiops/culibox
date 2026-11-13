@@ -524,7 +524,18 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
 	}
 	o := l.options(config.Config{DockerBin: "/bin/sh"})
-	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 || o.LockGuards {
+	if o.Prepare == nil {
+		t.Fatal("an unset box_image needs the adoption hook on linux too")
+	}
+	pinned, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", BoxImage: "me/img:1"}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := pinned.options(config.Config{DockerBin: "/bin/sh", BoxImage: "me/img:1"}).Prepare; p != nil {
+		t.Fatal("a pinned box_image needs no hook on linux")
+	}
+	o.Prepare = nil
+	if o.Verify != nil || o.Reachable != nil || o.Shares != nil || o.VMIDs != nil || len(o.DockerArgs) != 0 || o.LockGuards {
 		t.Fatalf("linux options must carry no VM hooks: %+v", o)
 	}
 	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
@@ -845,7 +856,7 @@ func TestPrepareMissingRemoteImageNeverPulls(t *testing.T) {
 	fc.running = true
 	l.image = "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
 	err := l.prepare(context.Background())
-	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "agent-box box setup") {
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "culibox box setup") {
 		t.Fatalf("a missing remote image must fail the spawn and name box setup: %v", err)
 	}
 	for _, line := range strings.Split(d.log(), "\n") {
@@ -1052,7 +1063,7 @@ func TestBoxStatusReportsVMImageAndBoxes(t *testing.T) {
 	d.set(t, "image", "arm64|0ld\n")
 	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t\n")
 	rc, out = runVM(t, l, cliArgs{Sub: "status"})
-	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this agent-box", "ab-box-1"} {
+	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this CuliBox", "ab-box-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status running lacks %q:\n%s", want, out)
 		}
@@ -1158,7 +1169,7 @@ func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	cfgDir := t.TempDir()
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(cfgDir, "config.json")},
 		filepath.Join(root, "profiles.json"), "", "")
-	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
+	if len(prot) != 2 || prot[0].What != "CuliBox's data directory" || prot[1].What != "CuliBox's config directory" {
 		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
 	}
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, prot)
@@ -1202,9 +1213,9 @@ func TestProtectedDirsFollowSymlinkedConfigAndProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for ws, want := range map[string]string{
-		dots:     "it is agent-box's config directory",
-		xdgDir:   "it is agent-box's config directory",
-		profDots: "it is agent-box's profiles directory",
+		dots:     "it is CuliBox's config directory",
+		xdgDir:   "it is CuliBox's config directory",
+		profDots: "it is CuliBox's profiles directory",
 	} {
 		if reason, bad := l.boxes.Unboxable(ws); !bad || !strings.Contains(reason, want) {
 			t.Errorf("%s: want %q, got %q %v", ws, want, reason, bad)
@@ -1241,7 +1252,7 @@ func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
 	if reason, bad := l.boxes.Unboxable(home); !bad || !strings.Contains(reason, "profiles directory") {
 		t.Fatalf("$HOME itself must be refused as the profiles dir: %q %v", reason, bad)
 	}
-	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside agent-box's data directory") {
+	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside CuliBox's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q %v", reason, bad)
 	}
 }
@@ -1419,5 +1430,121 @@ func TestBoxConfigFilesFatalOnlyOnDarwin(t *testing.T) {
 	}
 	if files, err := boxConfigFiles("darwin", []string{"/c"}, nil); err != nil || len(files) != 1 {
 		t.Fatalf("darwin ok: %v %v", files, err)
+	}
+}
+
+// adoptDocker is a docker whose daemon holds the images named in files
+// img-<ref with / and : as _>, and fails every inspect while the file "down"
+// exists. It logs argv.
+func adoptDocker(t *testing.T, present ...string) *fakeDocker {
+	t.Helper()
+	d := newFakeDocker(t)
+	script := `#!/bin/sh
+d=` + d.dir + `
+echo "$*" >> "$d/log"
+case "$1" in
+image)
+  [ -f "$d/down" ] && { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+  for a; do ref=$a; done
+  f="$d/img-$(echo "$ref" | tr '/:' '__')"
+  [ -f "$f" ] && cat "$f" || { echo "Error: No such image: $ref" >&2; exit 1; } ;;
+tag) touch "$d/tagged" ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(d.bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range present {
+		d.set(t, "img-"+strings.NewReplacer("/", "_", ":", "_").Replace(ref), "arm64|"+boximage.Hash()+"\n")
+	}
+	return d
+}
+
+func TestAdoptImageOnlyWhenUnset(t *testing.T) {
+	d := adoptDocker(t, config.LegacyDefaultBoxImage)
+	l, err := newBoxLayer(config.Config{DockerBin: d.bin, BoxImage: "me/img:1"}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.adoptImage(context.Background())
+	if err := l.boxes.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.log(); strings.Contains(got, "image") || strings.Contains(got, "tag") {
+		t.Fatalf("a pinned box_image must never inspect or tag: %s", got)
+	}
+	// Unset: the same layer shape adopts, through the manager's Prepare hook.
+	d = adoptDocker(t, config.LegacyDefaultBoxImage)
+	l, err = newBoxLayer(config.Config{DockerBin: d.bin}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.boxes.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "tag " + config.LegacyDefaultBoxImage + " " + config.DefaultBoxImage; !strings.Contains(d.log(), want) {
+		t.Fatalf("Prepare did not adopt (%q):\n%s", want, d.log())
+	}
+	for _, line := range strings.Split(d.log(), "\n") {
+		if strings.Contains(line, "rmi") || strings.Contains(line, "image rm") {
+			t.Fatalf("the old tag must be kept: %s", d.log())
+		}
+	}
+}
+
+// A daemon that is not ready is no answer: the next call tries again, and once
+// it has an answer the layer stops asking.
+func TestAdoptImageRetriesAfterError(t *testing.T) {
+	d := adoptDocker(t, config.LegacyDefaultBoxImage)
+	d.set(t, "down", "")
+	l, err := newBoxLayer(config.Config{DockerBin: d.bin}, t.TempDir(), t.TempDir(), "linux", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.adoptImage(context.Background())
+	if _, err := os.Stat(filepath.Join(d.dir, "tagged")); err == nil {
+		t.Fatal("tagged while the daemon was down")
+	}
+	if err := os.Remove(filepath.Join(d.dir, "down")); err != nil {
+		t.Fatal(err)
+	}
+	l.adoptImage(context.Background())
+	if _, err := os.Stat(filepath.Join(d.dir, "tagged")); err != nil {
+		t.Fatalf("the second call must adopt: %v\n%s", err, d.log())
+	}
+	before := d.log()
+	l.adoptImage(context.Background())
+	if d.log() != before {
+		t.Fatalf("an answered layer must not ask again:\n%s", d.log())
+	}
+}
+
+// Darwin keeps its own Prepare (which adopts before it inspects), and it is the
+// only one.
+func TestPrepareAdoptsTheLegacyDefaultBeforeInspect(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	fc.running = true
+	d := adoptDocker(t, config.LegacyDefaultBoxImage)
+	l.img = boximage.Docker{Bin: d.bin}
+	if err := l.prepare(context.Background()); err == nil {
+		t.Log("the fake's tag does not create the image, so the spawn is still refused")
+	}
+	if want := "tag " + config.LegacyDefaultBoxImage + " " + config.DefaultBoxImage; !strings.Contains(d.log(), want) {
+		t.Fatalf("prepare did not adopt:\n%s", d.log())
+	}
+	// Compare whole lines: "tag " as a bare substring could match inside
+	// another argument.
+	tagAt, inspectAt := -1, -1
+	for i, line := range strings.Split(d.log(), "\n") {
+		if tagAt < 0 && strings.HasPrefix(line, "tag ") {
+			tagAt = i
+		}
+		if strings.HasPrefix(line, "image inspect") {
+			inspectAt = i
+		}
+	}
+	if tagAt < 0 || tagAt > inspectAt {
+		t.Fatalf("the tag must come before the final inspect:\n%s", d.log())
 	}
 }

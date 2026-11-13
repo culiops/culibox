@@ -11,6 +11,7 @@ import (
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/config"
 )
 
 var setupNow = time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
@@ -31,7 +32,7 @@ func setupDocker(t *testing.T, images map[string]string, pullOK ...map[string]st
 		}
 	}
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + log + "\n" +
-		"case \"$*\" in\n*version*) echo arm64; exit 0;;\n\"build \"*) cat >/dev/null; exit 0;;\nesac\n" +
+		"case \"$*\" in\n*version*) echo arm64; exit 0;;\n\"tag \"*) exit 0;;\n\"build \"*) cat >/dev/null; exit 0;;\nesac\n" +
 		"last=\"\"; for a; do last=$a; done\n" +
 		"case \"$1\" in\npull)\n  case \"$last\" in\n"
 	i := 0
@@ -230,13 +231,13 @@ func TestBoxSetupRemoteMissingPulls(t *testing.T) {
 }
 
 func TestBoxSetupRemoteTagWarnsMutable(t *testing.T) {
-	tagRef := "ghcr.io/culiops/agent-box:base"
+	tagRef := "ghcr.io/culiops/culibox:base"
 	d, _ := setupDocker(t, nil, map[string]string{tagRef: current()})
 	var w bytes.Buffer
 	if rc := boxSetupImage(context.Background(), d, tagRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
-	if want := "WARN image: " + tagRef + " is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)"; !strings.Contains(w.String(), want) {
+	if want := "WARN image: " + tagRef + " is a mutable tag; pin box_image by digest (ghcr.io/culiops/culibox@sha256:…)"; !strings.Contains(w.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, w.String())
 	}
 }
@@ -314,7 +315,7 @@ func TestBoxSetupRemoteRebuildRefused(t *testing.T) {
 	if len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 0 {
 		t.Fatalf("a refused rebuild still ran docker: %s", argvLog(t, log))
 	}
-	if want := "FAIL image: " + remoteRef + " comes from a registry; agent-box pulls it and never builds it"; !strings.Contains(w.String(), want) {
+	if want := "FAIL image: " + remoteRef + " comes from a registry; CuliBox pulls it and never builds it"; !strings.Contains(w.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, w.String())
 	}
 }
@@ -358,5 +359,25 @@ func TestBoxStatusPinnedMissingDoesNotRepeatTheImage(t *testing.T) {
 	}
 	if strings.Contains(w.String(), datedRef+": pinned") || !strings.HasPrefix(w.String(), "FAIL image: pinned box image "+datedRef) {
 		t.Fatalf("output: %s", w.String())
+	}
+}
+
+// With box_image unset, `box setup` and `box status` adopt the legacy default
+// before they inspect; a pinned box_image is never adopted.
+func TestAdoptDefaultImageForTheCLI(t *testing.T) {
+	d, log := setupDocker(t, map[string]string{config.LegacyDefaultBoxImage: current()})
+	var w bytes.Buffer
+	adoptDefaultImage(context.Background(), d, config.Config{}, &w)
+	if want := "tag " + config.LegacyDefaultBoxImage + " " + config.DefaultBoxImage; !strings.Contains(argvLog(t, log), want) {
+		t.Fatalf("no %q in:\n%s", want, argvLog(t, log))
+	}
+	if want := "box image: tagged culiops/agent-box:base as culiops/culibox:base (kept the old tag)"; !strings.Contains(w.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, w.String())
+	}
+	d, log = setupDocker(t, map[string]string{config.LegacyDefaultBoxImage: current()})
+	w.Reset()
+	adoptDefaultImage(context.Background(), d, config.Config{BoxImage: datedRef}, &w)
+	if argvLog(t, log) != "" || w.Len() != 0 {
+		t.Fatalf("a pinned box_image must not touch docker: %q %q", argvLog(t, log), w.String())
 	}
 }

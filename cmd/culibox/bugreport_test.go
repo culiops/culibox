@@ -20,7 +20,7 @@ func TestRunBugReportExitsZeroOnDoctorFail(t *testing.T) {
 	if code := runBugReport(in, "somehost", "linux", &out, &errw); code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
-	if !strings.HasPrefix(out.String(), "agent-box bug report v1") {
+	if !strings.HasPrefix(out.String(), "culibox bug report v1") {
 		t.Errorf("stdout starts %q", firstLine(out.String()))
 	}
 	for _, want := range []string{"Issue link (needs access to the repo): https://", "pbcopy"} {
@@ -62,7 +62,7 @@ func TestBugReportLogHint(t *testing.T) {
 	if got := bugReportLogHint("linux"); !strings.Contains(got, "journalctl --user -u agent-box.service") {
 		t.Errorf("linux hint = %q", got)
 	}
-	if got := bugReportLogHint("darwin"); !strings.Contains(got, "agent-box serve") {
+	if got := bugReportLogHint("darwin"); !strings.Contains(got, "culibox serve") {
 		t.Errorf("darwin hint = %q", got)
 	}
 }

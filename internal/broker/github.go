@@ -267,7 +267,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	sid, nonce, ok := ParseToken(b.secret, tok)
 	if !hasBearer || !ok {
 		b.recordDenied(Row{Time: now, Provider: ProviderGitHub, Outcome: OutcomeDeniedToken}) // the claimed id is unverified: never stored
-		replyErr(w, http.StatusUnauthorized, "not an agent-box session")
+		replyErr(w, http.StatusUnauthorized, "not a CuliBox session")
 		return
 	}
 	sv, found := b.lookup(sid)
@@ -326,7 +326,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		row := base
 		row.Subject, row.Outcome, row.Error = entry.Owner, OutcomeDeniedScope, "repo required for a PAT owner"
 		b.recordDenied(row)
-		replyErr(w, http.StatusForbidden, "name the repository: a personal access token is not scoped by agent-box")
+		replyErr(w, http.StatusForbidden, "name the repository: a personal access token is not scoped by CuliBox")
 		return
 	}
 	if req.Repo != "" && !hasRepo(entry.Repos, req.Repo) {
@@ -340,7 +340,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !b.ghConfigured() {
-		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this agent-box host")
+		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this CuliBox host")
 		return
 	}
 
@@ -355,7 +355,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	// marked dead by it.
 	if b.closing {
 		b.mu.Unlock()
-		replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down")
+		replyErr(w, http.StatusServiceUnavailable, "CuliBox is shutting down")
 		return
 	}
 	if c, ok := b.ghCache[key]; ok && c.nonce == nonce && c.scopeKey == base.ScopeHash &&
@@ -398,7 +398,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	row.Outcome, row.Installation, row.Expires = OutcomeMinted, m.InstallationID, m.ExpiresAt
 	if err := b.rec.Record(row); err != nil {
 		log.Printf("broker: audit write failed (%v); GitHub token for %s withheld", err, sid) // the row holds identifiers only
-		replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this credential, so it was not issued; retry shortly")
+		replyErr(w, http.StatusServiceUnavailable, "CuliBox could not audit this credential, so it was not issued; retry shortly")
 		b.revokeAsync(sid, []issued{{value: m.Value, owner: entry.Owner, installation: m.InstallationID, expires: m.ExpiresAt}}) // withheld, so kill it
 		return
 	}
@@ -415,7 +415,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		b.mu.Unlock()
 		b.revokeAsync(sid, []issued{{value: m.Value, owner: entry.Owner, installation: m.InstallationID, expires: m.ExpiresAt}})
 		if closing {
-			replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down")
+			replyErr(w, http.StatusServiceUnavailable, "CuliBox is shutting down")
 			return
 		}
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding")
@@ -477,7 +477,7 @@ func (b *Broker) serveGitHubPAT(w http.ResponseWriter, base Row, sv SessionView,
 	row.Outcome = OutcomeFetched
 	if err := b.rec.Record(row); err != nil {
 		log.Printf("broker: audit write failed (%v); GitHub PAT for %s withheld", err, sid) // the row holds identifiers only
-		replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this token fetch, so it was not issued; retry shortly")
+		replyErr(w, http.StatusServiceUnavailable, "CuliBox could not audit this token fetch, so it was not issued; retry shortly")
 		return
 	}
 	writeGitHubToken(w, string(value), time.Time{})
@@ -503,7 +503,7 @@ func (b *Broker) ghMintFailed(w http.ResponseWriter, base Row, sid, owner string
 	default:
 		// The box gets a static message: the detail can name host key paths.
 		b.ghFail(w, base, OutcomeGitHubError, http.StatusBadGateway,
-			"GitHub token request failed; see the agent-box audit log on the host", sanitize(err.Error()))
+			"GitHub token request failed; see the CuliBox audit log on the host", sanitize(err.Error()))
 	}
 }
 

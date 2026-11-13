@@ -15,8 +15,8 @@ test("grantPanel: windows up to the binding's max, role, host-tier warning, prod
   assert.deepStrictEqual(grantPanel({ ...aws, elevate: { ...aws.elevate, max_minutes: 30 } }, st).windows, [30]);
   assert.strictEqual(grantPanel({ ...aws, prod: true }, st).needLabel, true);
   assert.deepStrictEqual(grantPanel(aws, null).hostSessions, []); // status not loaded yet: no list, not a crash
-  assert.strictEqual(grantPanel(aws, { elevate: { blocked: "a box started by an older agent-box (instance PROD) uses /w" } }).blocked,
-    "a box started by an older agent-box (instance PROD) uses /w");
+  assert.strictEqual(grantPanel(aws, { elevate: { blocked: "a box started by an older CuliBox (instance PROD) uses /w" } }).blocked,
+    "a box started by an older CuliBox (instance PROD) uses /w");
   assert.strictEqual(grantPanel({ label: "x" }, st), null); // no elevate block: no panel at all
   assert.strictEqual(grantPanel(null, st), null);
 });

@@ -16,7 +16,7 @@ func TestGitHubRefusesAfterRevokeAll(t *testing.T) {
 	b.RevokeAllGitHub(context.Background())
 	rowsBefore := len(rec.rows)
 	w := ghCall(b, tokA("s"), ghBody)
-	if w.Code != 503 || !strings.Contains(w.Body.String(), "agent-box is shutting down") {
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "CuliBox is shutting down") {
 		t.Fatalf("after: %d %s", w.Code, w.Body)
 	}
 	if fg.callCount() != 1 || len(rec.rows) != rowsBefore || len(b.ghIssued) != 0 || len(b.ghCache) != 0 {

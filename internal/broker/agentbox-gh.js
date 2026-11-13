@@ -130,7 +130,7 @@ function mint(payload, cb) {
     });
   });
   req.on('timeout', () => req.destroy(new Error('timed out after 15s')));
-  req.on('error', (e) => fail('agent-box broker unreachable (' + e.message + ')'));
+  req.on('error', (e) => fail('CuliBox broker unreachable (' + e.message + ')'));
   req.end(body);
 }
 
@@ -150,7 +150,7 @@ function runGh(args, env) {
 }
 
 function main() {
-  if (!ep || !tok) fail('not an agent-box GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
+  if (!ep || !tok) fail('not a CuliBox GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
   const args = process.argv.slice(2);
   const r = resolve(args);
   if (r && r.bad) fail('cannot read the repository in ' + JSON.stringify(r.bad) + '; use -R OWNER/REPO');

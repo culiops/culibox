@@ -163,7 +163,7 @@ const (
 	ReasonImportNotRegular    = "is not a regular file (a directory, socket, named pipe or device)"
 	ReasonImportTooLarge      = "is larger than 256 KiB"
 	ReasonImportTooMany       = "the imports exceed 64 files or 4 MiB; the rest are left out"
-	ReasonImportDenied        = "is inside a directory that holds host sockets, keys or agent-box state"
+	ReasonImportDenied        = "is inside a directory that holds host sockets, keys or CuliBox state"
 	ReasonImportOutsideHome   = "resolves outside your home directory"
 	ReasonImportLeavesHome    = "resolves outside the box's home directory"
 	ReasonImportReserved      = "would land on a path the box reserves"

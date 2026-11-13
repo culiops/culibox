@@ -303,7 +303,12 @@ func (c Config) BoxInstance() string {
 }
 
 // DefaultBoxImage is the box image every box runs when the config names none.
-const DefaultBoxImage = "culiops/agent-box:base"
+const DefaultBoxImage = "culiops/culibox:base"
+
+// LegacyDefaultBoxImage is the default before the rename to culibox. An
+// upgraded install with box_image unset still holds its image under this tag;
+// the box layer re-tags it as DefaultBoxImage (never deleting this one).
+const LegacyDefaultBoxImage = "culiops/agent-box:base"
 
 // BoxImageOrDefault is the instance-wide box image (box_image), or DefaultBoxImage.
 func (c Config) BoxImageOrDefault() string {
@@ -663,7 +668,7 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	}
 	for _, n := range extraca.DeniedEnvNames {
 		if _, set := a.Env[n]; set {
-			return WithField("env", fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n))
+			return WithField("env", fmt.Errorf("profile %q: env %s is set by CuliBox (extra_ca_certs in the config), not per profile", a.Name, n))
 		}
 	}
 	switch a.BasePolicy() {
@@ -787,13 +792,18 @@ func isLoopbackHost(h string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// ResolvedDataDir is data_dir, or ~/.local/share/agent-box for a Config that
-// did not come through Resolve (which always fills data_dir).
+// ResolvedDataDir is data_dir, or the default data root (ResolveRoot, no env
+// var) for a Config that did not come through Resolve (which always fills
+// data_dir). When the root cannot be resolved it is the new path.
 func (c Config) ResolvedDataDir(home string) string {
 	if c.DataDir != "" {
 		return c.DataDir
 	}
-	return filepath.Join(home, ".local", "share", "agent-box")
+	if ri, err := ResolveRoot(home, ""); err == nil {
+		return ri.Path
+	}
+	n, _ := DefaultRoots(home)
+	return n
 }
 
 // ResolvedProfilesPath is profiles_path, else profiles.json in the data dir.

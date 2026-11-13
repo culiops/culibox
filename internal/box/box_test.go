@@ -789,7 +789,7 @@ func TestVerifyRunsOnlyForNewContainers(t *testing.T) {
 
 func TestPrepareIsAPassThrough(t *testing.T) {
 	f := newFake()
-	want := fmt.Errorf("%w: run agent-box box setup", ErrBoxUnavailable)
+	want := fmt.Errorf("%w: run culibox box setup", ErrBoxUnavailable)
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Prepare: func(context.Context) error { return want }})
 	if err := m.Prepare(context.Background()); !errors.Is(err, ErrBoxUnavailable) {

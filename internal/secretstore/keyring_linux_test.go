@@ -202,3 +202,13 @@ func TestKeyringSetpermFailureLeavesNoKey(t *testing.T) {
 		t.Fatalf("key still linked in @u: %v", err)
 	}
 }
+
+// NewKeeperForHash(KeyHash(d)) names the same keyring entry as NewKeeper(d):
+// a moved data root reads its old key by the hash its journal recorded.
+func TestNewKeeperForHashMatchesNewKeeper(t *testing.T) {
+	d := t.TempDir()
+	got := NewKeeperForHash(KeyHash(d)).(*keyringKeeper).desc
+	if want := NewKeeper(d).(*keyringKeeper).desc; got != want {
+		t.Errorf("desc = %q, want %q", got, want)
+	}
+}

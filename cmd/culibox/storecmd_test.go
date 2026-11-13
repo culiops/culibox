@@ -302,7 +302,7 @@ func TestRunStoreSetRefusesCaseVariantOfExistingId(t *testing.T) {
 		t.Fatalf("set = %d %q", code, out)
 	}
 	code, out := r.run("set", "casetest", "other\n")
-	want := `agent-box store: "casetest" collides with existing "CaseTest" (ids are case-insensitive on macOS); use the exact id`
+	want := `culibox store: "casetest" collides with existing "CaseTest" (ids are case-insensitive on macOS); use the exact id`
 	if code != 1 || !strings.Contains(out, want) {
 		t.Fatalf("case variant = %d %q, want exit 1 with %q", code, out, want)
 	}
@@ -388,7 +388,7 @@ func TestRunStoreStatusUnavailable(t *testing.T) {
 	code, out = r.run("status", "", "")
 	if code != 0 || !strings.Contains(out, "state: key lost: no Keychain item for this store\n") ||
 		!strings.Contains(out, "fix: The key for this store is gone") || !strings.Contains(out, r.cfg.DataDir) ||
-		!strings.Contains(out, "agent-box store init") {
+		!strings.Contains(out, "culibox store init") {
 		t.Fatalf("key_lost status = %d %q", code, out)
 	}
 
@@ -402,7 +402,7 @@ func TestRunStoreStatusUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out = r2.run("status", "", "")
-	if code != 0 || !strings.Contains(out, "state: store unreadable: ") || !strings.Contains(out, "fix: agent-box cannot read its store directory") ||
+	if code != 0 || !strings.Contains(out, "state: store unreadable: ") || !strings.Contains(out, "fix: CuliBox cannot read its store directory") ||
 		strings.Contains(out, "Keychain") {
 		t.Fatalf("store_unreadable status = %d %q", code, out)
 	}

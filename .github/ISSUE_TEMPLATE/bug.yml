@@ -6,7 +6,7 @@ body:
     id: bundle
     attributes:
       label: Bug report bundle
-      description: "Paste the output of `agent-box bug-report` or Settings → About → Report a problem"
+      description: "Paste the output of `culibox bug-report` or Settings → About → Report a problem"
     validations:
       required: true
   - type: checkboxes

@@ -44,14 +44,15 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 	}
 	fmt.Fprint(out, bugreport.Markdown(bi))
 	fmt.Fprintf(errw, "Issue link (needs access to the repo): %s\n", bugreport.IssueURL(bi))
-	fmt.Fprintln(errw, "macOS: agent-box bug-report | pbcopy")
+	fmt.Fprintln(errw, "macOS: culibox bug-report | pbcopy")
 	return 0
 }
 
 // bugReportLogHint says where this platform's daemon logs are.
 func bugReportLogHint(goos string) string {
 	if goos == "darwin" {
-		return "the terminal that started agent-box serve (stderr)"
+		return "the terminal that started culibox serve (stderr)"
 	}
+	// Kept: these are the host's real unit names until the host-only follow-up renames them.
 	return "journalctl --user -u agent-box.service (or agent-box-prod.service) --since -1h"
 }

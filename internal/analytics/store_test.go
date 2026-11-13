@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -505,5 +506,97 @@ func TestRowsCarryStoredCost(t *testing.T) {
 	var cc1h int64
 	if err := s.db.QueryRow(`SELECT cache_creation_1h FROM session_rollup`).Scan(&cc1h); err != nil || cc1h != 6 {
 		t.Errorf("cache_creation_1h = %d err=%v, want 6", cc1h, err)
+	}
+}
+
+// ingestPaths lists every ingest_state path, sorted.
+func ingestPaths(t *testing.T, s *Store) []string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT path FROM ingest_state ORDER BY path`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func TestRewritePathPrefix(t *testing.T) {
+	s := openTemp(t)
+	for _, p := range []string{"/r/agent-box/x.jsonl", "/r/agent-box/accounts/w/claude/projects/p/y.jsonl", "/r/agent-box", "/home/u/.claude/projects/p/z.jsonl"} {
+		if err := s.Apply("S1", "proj", p, newParsed(), 10, 10, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.RewritePathPrefix("/r/agent-box", "/r/culibox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("copied %d rows, want 3", n)
+	}
+	// R12: the rows are copied, not moved: the legacy rows stay, so a rollback
+	// to an older binary (which reads through the link at the old path) does
+	// not re-read every transcript from 0.
+	got := strings.Join(ingestPaths(t, s), " ")
+	want := "/home/u/.claude/projects/p/z.jsonl /r/agent-box /r/agent-box/accounts/w/claude/projects/p/y.jsonl /r/agent-box/x.jsonl /r/culibox /r/culibox/accounts/w/claude/projects/p/y.jsonl /r/culibox/x.jsonl"
+	if got != want {
+		t.Errorf("paths = %s\nwant    %s", got, want)
+	}
+	// The offset travels with the copy: the transcript is not re-read.
+	for _, p := range []string{"/r/culibox/x.jsonl", "/r/agent-box/x.jsonl"} {
+		if _, off, ok, _, _ := s.State(p); !ok || off != 10 {
+			t.Errorf("state of %s after rewrite: ok=%v offset=%d, want true 10", p, ok, off)
+		}
+	}
+	// Idempotent: a second run (a resumed move) inserts nothing.
+	if n, err := s.RewritePathPrefix("/r/agent-box", "/r/culibox"); err != nil || n != 0 {
+		t.Errorf("second rewrite = %d, %v; want 0, nil", n, err)
+	}
+	if got2 := strings.Join(ingestPaths(t, s), " "); got2 != want {
+		t.Errorf("paths after the second run = %s", got2)
+	}
+}
+
+// A row already under the new prefix (written by a serve that ran on the new
+// root) wins: the copy does not overwrite it and does not fail.
+func TestRewritePathPrefixKeepsExistingNewRow(t *testing.T) {
+	s := openTemp(t)
+	if err := s.Apply("S1", "proj", "/r/agent-box/x.jsonl", newParsed(), 10, 10, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Apply("S1", "proj", "/r/culibox/x.jsonl", newParsed(), 20, 20, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.RewritePathPrefix("/r/agent-box", "/r/culibox")
+	if err != nil || n != 0 {
+		t.Fatalf("rewrite = %d, %v; want 0, nil", n, err)
+	}
+	if _, off, ok, _, _ := s.State("/r/culibox/x.jsonl"); !ok || off != 20 {
+		t.Errorf("new row offset = %d (ok=%v), want 20 kept", off, ok)
+	}
+}
+
+func TestRewritePathPrefixKeepsSiblingPrefix(t *testing.T) {
+	s := openTemp(t)
+	for _, p := range []string{"/r/agent-box-prod/x.jsonl", "/r/agent-boxx", "/r/agent-box/y.jsonl"} {
+		if err := s.Apply("S1", "proj", p, newParsed(), 10, 10, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.RewritePathPrefix("/r/agent-box", "/r/culibox")
+	if err != nil || n != 1 {
+		t.Fatalf("rewrite = %d, %v; want 1, nil", n, err)
+	}
+	got := strings.Join(ingestPaths(t, s), " ")
+	if want := "/r/agent-box-prod/x.jsonl /r/agent-box/y.jsonl /r/agent-boxx /r/culibox/y.jsonl"; got != want {
+		t.Errorf("paths = %s, want %s", got, want)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -694,7 +695,7 @@ func TestCheckForRemote(t *testing.T) {
 		has   []string
 		exact string // checked only when set
 	}{
-		{"missing", ImageState{}, true, []string{"agent-box box setup", "pull"}, ""},
+		{"missing", ImageState{}, true, []string{"culibox box setup", "pull"}, ""},
 		{"wrong arch", ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, []string{"amd64", "arm64"}, ""},
 		{"stale", ImageState{Present: true, Arch: "arm64", Hash: "0123456789ab"}, false, nil,
 			"this image was built from an older Dockerfile; pull a newer digest from ghcr"},
@@ -1880,5 +1881,71 @@ func TestDockerfileTurnsClaudeAttributionOffForEveryBox(t *testing.T) {
 	df := string(dockerfile)
 	if w, u := strings.Index(df, path), strings.Index(df, "\nUSER agent"); w < 0 || u < 0 || w > u {
 		t.Error("the managed settings must be written as root, before USER agent")
+	}
+}
+
+// fakeInspector is the daemon as AdoptLegacyDefault sees it.
+type fakeInspector struct {
+	present map[string]bool
+	err     error
+	tagErr  error
+	tagged  [][2]string
+}
+
+func (f *fakeInspector) Inspect(_ context.Context, image string) (ImageState, error) {
+	if f.err != nil {
+		return ImageState{}, f.err
+	}
+	return ImageState{Present: f.present[image], Arch: "arm64", Hash: Hash()}, nil
+}
+
+func (f *fakeInspector) Tag(_ context.Context, src, dst string) error {
+	f.tagged = append(f.tagged, [2]string{src, dst})
+	return f.tagErr
+}
+
+func TestAdoptLegacyDefault(t *testing.T) {
+	const img, legacy = "culiops/culibox:base", "culiops/agent-box:base"
+	cases := []struct {
+		name    string
+		present map[string]bool
+		adopted bool
+		tagged  [][2]string
+	}{
+		{"image present", map[string]bool{img: true, legacy: true}, false, nil},
+		{"only image present", map[string]bool{img: true}, false, nil},
+		{"only legacy present", map[string]bool{legacy: true}, true, [][2]string{{legacy, img}}},
+		{"neither present", map[string]bool{}, false, nil},
+	}
+	for _, c := range cases {
+		f := &fakeInspector{present: c.present}
+		got, err := AdoptLegacyDefault(context.Background(), f, img, legacy)
+		if err != nil || got != c.adopted || !reflect.DeepEqual(f.tagged, c.tagged) {
+			t.Errorf("%s: adopted=%v err=%v tagged=%v; want adopted=%v tagged=%v", c.name, got, err, f.tagged, c.adopted, c.tagged)
+		}
+	}
+	f := &fakeInspector{present: map[string]bool{legacy: true}, tagErr: errors.New("tag boom")}
+	if got, err := AdoptLegacyDefault(context.Background(), f, img, legacy); got || err == nil {
+		t.Errorf("a failed tag must be an error and not adopted: %v, %v", got, err)
+	}
+	f = &fakeInspector{err: errors.New("daemon down")}
+	if got, err := AdoptLegacyDefault(context.Background(), f, img, legacy); got || err == nil || len(f.tagged) != 0 {
+		t.Errorf("an inspect error must be an error and tag nothing: %v, %v, %v", got, err, f.tagged)
+	}
+}
+
+func TestDockerTagArgv(t *testing.T) {
+	bin, log := fakeDocker(t, "exit 0\n")
+	d := Docker{Bin: bin, Args: []string{"--host", "unix:///x.sock"}}
+	if err := d.Tag(context.Background(), "culiops/agent-box:base", "culiops/culibox:base"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if got, want := strings.TrimSpace(string(b)), "--host unix:///x.sock tag culiops/agent-box:base culiops/culibox:base"; got != want {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	bad, _ := fakeDocker(t, "echo 'no such image' >&2; exit 1\n")
+	if err := (Docker{Bin: bad}).Tag(context.Background(), "a", "b"); err == nil || !strings.Contains(err.Error(), "no such image") {
+		t.Fatalf("a failed tag must carry docker's message: %v", err)
 	}
 }

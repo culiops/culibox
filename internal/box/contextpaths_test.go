@@ -110,7 +110,7 @@ func TestCheckContextPathProtected(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	wantCtxErr(t, CheckContextPath(sub, "/h", []ProtectedDir{DataDirProtected(data)}, nil), sub, "agent-box's data directory")
+	wantCtxErr(t, CheckContextPath(sub, "/h", []ProtectedDir{DataDirProtected(data)}, nil), sub, "CuliBox's data directory")
 }
 
 func TestCheckContextPathShared(t *testing.T) {
@@ -418,7 +418,7 @@ func TestWorkspaceInPersonalConfigHasNoImportsHint(t *testing.T) {
 func TestCheckContextPathSharedHintIsReadOnly(t *testing.T) {
 	tmp := ctxTmp(t)
 	err := CheckContextPath(tmp, "/h", nil, &ShareView{Applied: []VMShare{{Path: "/Users/u"}}, Home: "/Users/u"})
-	if err == nil || !strings.Contains(err.Error(), "`agent-box box share add "+tmp+" -ro`") {
+	if err == nil || !strings.Contains(err.Error(), "`culibox box share add "+tmp+" -ro`") {
 		t.Fatalf("got %v", err)
 	}
 }

@@ -88,7 +88,7 @@ func TestCheckStoreKeyLostFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := checkStore(storeConfig(), st, nil, noEnv, "darwin", nil)
-	if !find(got, Fail, "no Keychain item for this store") || !find(got, Fail, dir) || !find(got, Fail, "agent-box store init") {
+	if !find(got, Fail, "no Keychain item for this store") || !find(got, Fail, dir) || !find(got, Fail, "culibox store init") {
 		t.Fatalf("want FAIL key lost with reason and store dir:\n%s", dump(got))
 	}
 	if find(got, Warn, "store locked") || find(got, Pass, "unlocked") {
@@ -119,7 +119,7 @@ func TestCheckStoreLockedWarns(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := checkStore(storeConfig(), st, nil, noEnv, "linux", nil)
-	if !find(got, Warn, `store locked (unlock with "agent-box store unlock")`) {
+	if !find(got, Warn, `store locked (unlock with "culibox store unlock")`) {
 		t.Fatalf("want WARN locked:\n%s", dump(got))
 	}
 }

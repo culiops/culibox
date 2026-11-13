@@ -6,9 +6,9 @@
 # <tag> is vX.Y.Z or vX.Y.Z-<prerelease>. <outdir> is created if missing and must
 # hold no culibox_* file yet, so assets from an earlier run never mix into this one.
 #
-# Each tarball, culibox_<tag without v>_<os>_<arch>.tar.gz, holds agent-box,
+# Each tarball, culibox_<tag without v>_<os>_<arch>.tar.gz, holds culibox,
 # LICENSE and README.md at its top level. The binary is stamped with the tag and
-# with `git rev-parse HEAD`, so `agent-box version` prints `agent-box <tag> (<sha>)`.
+# with `git rev-parse HEAD`, so `culibox version` prints `culibox <tag> (<sha>)`.
 #
 # The tarballs are reproducible: the same commit and tag give byte-identical files
 # (fixed mtime from the commit, sorted names, owner 0, no gzip timestamp), and so an
@@ -56,15 +56,15 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
   echo "build $name"
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
     -ldflags "-s -w -X main.version=$tag -X main.commit=$sha" \
-    -o "$dir/agent-box" ./cmd/agent-box
+    -o "$dir/culibox" ./cmd/culibox
   cp "$repo/LICENSE" "$repo/README.md" "$dir/"
   # Modes are recorded in the tar; the umask must not leak into it.
-  chmod 755 "$dir/agent-box"
+  chmod 755 "$dir/culibox"
   chmod 644 "$dir/LICENSE" "$dir/README.md"
   # POSIX sh has no pipefail, so `tar | gzip` would hide a failing tar: write the
   # .tar first (set -e stops on its exit status), then compress it.
   tar -C "$dir" --sort=name --mtime="@$mtime" --owner=0 --group=0 --numeric-owner \
-    -cf "$stage/$name.tar" agent-box LICENSE README.md
+    -cf "$stage/$name.tar" culibox LICENSE README.md
   gzip -n <"$stage/$name.tar" >"$outdir/$name.tar.gz"
   rm -f "$stage/$name.tar"
 done
@@ -80,8 +80,8 @@ for f in "$outdir"/culibox_*.tar.gz; do
     exit 1
   }
   members=$(printf '%s\n' "$list" | LC_ALL=C sort | tr '\n' ' ')
-  if [ "$members" != "LICENSE README.md agent-box " ]; then
-    echo "build.sh: $f holds '$members', want exactly agent-box, LICENSE and README.md" >&2
+  if [ "$members" != "LICENSE README.md culibox " ]; then
+    echo "build.sh: $f holds '$members', want exactly culibox, LICENSE and README.md" >&2
     exit 1
   fi
 done

@@ -52,8 +52,12 @@ func cloneDocker(ctx context.Context, cfg config.Config, goos, dataDir, home str
 		return nil, err
 	}
 	if l.vmStopped(ctx) {
-		return nil, errors.New("the box VM is not running; start it with `agent-box box setup` (or any boxed session), then run clone fetch again")
+		return nil, errors.New("the box VM is not running; start it with `culibox box setup` (or any boxed session), then run clone fetch again")
 	}
+	// The bundle container runs the box image: an upgraded install whose image
+	// still has only the pre-rename default name gets the new one (a no-op
+	// when box_image is set).
+	l.adoptImage(ctx)
 	return clone.ExecDocker{Bin: l.dockerBin, Args: l.dockerArgs}, nil
 }
 
@@ -62,7 +66,7 @@ func cloneDocker(ctx context.Context, cfg config.Config, goos, dataDir, home str
 // writing it, so it is safe to run while agent-box serves (a daemon restart aborts it; rerun).
 func runClone(a cliArgs, cfg config.Config, home, goos string, cfgFiles []string, w io.Writer) int {
 	fail := func(format string, args ...any) int {
-		fmt.Fprintf(w, "agent-box clone: "+format+"\n", args...)
+		fmt.Fprintf(w, "culibox clone: "+format+"\n", args...)
 		return 1
 	}
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))

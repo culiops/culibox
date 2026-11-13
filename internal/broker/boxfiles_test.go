@@ -211,18 +211,18 @@ func TestClientScriptAgainstBroker(t *testing.T) {
 		t.Fatalf("good token: %v %s", err, out)
 	}
 	_, stderr, err := run("AGENTBOX_BROKER=unix://"+sock, "AGENTBOX_BROKER_TOKEN=garbage")
-	if err == nil || stderr != "agentbox: not an agent-box session\n" {
+	if err == nil || stderr != "agentbox: not a CuliBox session\n" {
 		t.Fatalf("bad token: %v %q", err, stderr)
 	}
 	if strings.Contains(stderr, "garbage") {
 		t.Fatal("the token was printed")
 	}
 	out, stderr, err = run("AGENTBOX_BROKER=unix://"+filepath.Join(t.TempDir(), "none.sock"), "AGENTBOX_BROKER_TOKEN=tok-secret-xyz")
-	if err == nil || out != "" || !strings.HasPrefix(stderr, "agentbox: agent-box broker unreachable") || strings.Contains(stderr, "tok-secret-xyz") {
+	if err == nil || out != "" || !strings.HasPrefix(stderr, "agentbox: CuliBox broker unreachable") || strings.Contains(stderr, "tok-secret-xyz") {
 		t.Fatalf("unreachable: %v out=%q stderr=%q", err, out, stderr)
 	}
 	_, stderr, err = run()
-	if err == nil || !strings.Contains(stderr, "not an agent-box AWS session") {
+	if err == nil || !strings.Contains(stderr, "not a CuliBox AWS session") {
 		t.Fatalf("unset env: %v %q", err, stderr)
 	}
 }

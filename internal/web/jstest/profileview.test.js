@@ -192,8 +192,8 @@ test("boxes unavailable on a box profile is an error line with the reason", () =
   assert.strictEqual(colima.lines[1], "Boxes are unavailable on this machine: colima is not installed.");
   assert.strictEqual(colima.lines[2], "Sessions with this profile can't start until colima is installed.");
 
-  const doctor = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "run `agent-box doctor` for details" })), "runs");
-  assert.strictEqual(doctor.lines[1], "Boxes are unavailable on this machine: run `agent-box doctor` for details.");
+  const doctor = byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "run `culibox doctor` for details" })), "runs");
+  assert.strictEqual(doctor.lines[1], "Boxes are unavailable on this machine: run `culibox doctor` for details.");
   assert.strictEqual(doctor.lines[2], "Sessions with this profile can't start until boxes are available.");
   assert.strictEqual(doctor.tone, "error");
 
@@ -222,13 +222,13 @@ test("boxes unavailable on a profile that names no tier says its sessions start 
   assert.strictEqual(docker.tone, "error");
   assert.strictEqual(docker.toneAt, 1, "the red line is still the one that names the problem");
   assert.strictEqual(noTier("colima is not installed").lines[2], "Until it is, sessions start on this machine, uncontained.");
-  assert.strictEqual(noTier("run `agent-box doctor` for details").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
+  assert.strictEqual(noTier("run `culibox doctor` for details").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
   assert.strictEqual(noTier("").lines[2], "Until boxes are available, sessions start on this machine, uncontained.");
   // The instance's own default_runtime: box is a tier a session of this profile asks for, and with no box layer that is refused.
   const asked = (runtimeAsked, reason) => byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: reason, view: { ...unnamedView, runtime_asked: runtimeAsked }, doc: unnamedDoc })), "runs").lines[2];
   assert.strictEqual(asked("box", "Docker is not installed"), "Sessions with this profile can't start until Docker is installed.");
   assert.strictEqual(asked("box", "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
-  assert.strictEqual(asked("box", "run `agent-box doctor` for details"), "Sessions with this profile can't start until boxes are available.");
+  assert.strictEqual(asked("box", "run `culibox doctor` for details"), "Sessions with this profile can't start until boxes are available.");
   assert.strictEqual(asked("", "Docker is not installed"), "Until it is, sessions start on this machine, uncontained.", "nothing asked: an older server, or no default_runtime");
   assert.strictEqual(asked(undefined, "Docker is not installed"), "Until it is, sessions start on this machine, uncontained.");
   // The stored profile comes first: a stored host or box tier is not the default's to change.
@@ -265,7 +265,7 @@ test("boxes unavailable on a profile that names no tier but holds a readable fol
   assert.strictEqual(line({ ...bareView, clone_of: "  " }, { ...bare, clone_of: "" }), SPAWNS, "a blank copy source is no copy");
   // The reason's wording still shapes the sentence.
   assert.strictEqual(line({ ...bareView, context_paths: folders }, bare, "colima is not installed"), "Sessions with this profile can't start until colima is installed.");
-  assert.strictEqual(line({ ...bareView, clone_of: repo }, bare, "run `agent-box doctor` for details"), "Sessions with this profile can't start until boxes are available.");
+  assert.strictEqual(line({ ...bareView, clone_of: repo }, bare, "run `culibox doctor` for details"), "Sessions with this profile can't start until boxes are available.");
   // A profile that stores host is not a box profile at all: it gets no consequence line.
   assert.strictEqual(byId(pfvReadView(awsIn({ boxRuntime: "", boxUnavailableReason: "Docker is not installed", view: { ...bareView, runtime: "host" }, doc: { ...bare, runtime: "host" } })), "runs").lines.length, 2);
 });
@@ -339,7 +339,7 @@ test("private copy workspace lists not-home branches with today's reason text", 
   assert.strictEqual(a.scope, notHomeReasonText(notHome.branches[0]));
   assert.strictEqual(a.scope, "box/fix-drift on the host has commits this branch lacks");
   assert.strictEqual(a.fix, notHomeFix("gitops-clone", "master", notHome.branches[0]));
-  assert.strictEqual(a.fix, "`agent-box clone fetch -base master gitops-clone fix-drift` overwrites box/fix-drift");
+  assert.strictEqual(a.fix, "`culibox clone fetch -base master gitops-clone fix-drift` overwrites box/fix-drift");
   assert.strictEqual(b.scope, "box/bump-ingress-chart is checked out in your repo, so it did not move");
   assert.strictEqual(b.fix, "switch your repo off box/bump-ingress-chart; it comes home at the next exit or spawn");
   assert.strictEqual(b.sub, "checked out at /home/you/work/k8s-gitops", "the server's detail rides along as today's form shows it");

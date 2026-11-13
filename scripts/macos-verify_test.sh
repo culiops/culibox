@@ -9,7 +9,7 @@
 #   git clone                              a local fixture repo that has the tag
 #   abduco installer                       a stub that drops an executable abduco
 # The "binaries" in the fixture tarballs are tiny shell scripts that print the
-# expected `agent-box <tag> (<sha>)` line. Everything lives in one mktemp dir that is
+# expected `culibox <tag> (<sha>)` line. Everything lives in one mktemp dir that is
 # removed on exit.
 set -euo pipefail
 
@@ -245,7 +245,7 @@ EOF
 chmod 755 "$tmp"/bin/*
 
 # ---- one case = fixtures + out + tmpdir --------------------------------------------
-# new_case NAME [AMD64_SHA]: tarballs whose binaries print `agent-box v0.0.1 (<sha>)`;
+# new_case NAME [AMD64_SHA]: tarballs whose binaries print `culibox v0.0.1 (<sha>)`;
 # AMD64_SHA lets one case ship an amd64 binary stamped with another commit.
 new_case() {
   case_dir=$tmp/$1
@@ -264,11 +264,11 @@ new_case() {
 make_tarball() { # ARCH SHA
   local stage=$case_dir/stage-$1
   mkdir -p "$stage"
-  printf '%s\n' '#!/bin/sh' "[ \"\$1\" = version ] && echo \"agent-box $tag ($2)\"" >"$stage/agent-box"
-  chmod 755 "$stage/agent-box"
+  printf '%s\n' '#!/bin/sh' "[ \"\$1\" = version ] && echo \"culibox $tag ($2)\"" >"$stage/culibox"
+  chmod 755 "$stage/culibox"
   echo license >"$stage/LICENSE"
   echo readme >"$stage/README.md"
-  tar -C "$stage" -czf "$fix/culibox_${tarver}_darwin_$1.tar.gz" agent-box LICENSE README.md
+  tar -C "$stage" -czf "$fix/culibox_${tarver}_darwin_$1.tar.gz" culibox LICENSE README.md
 }
 
 # run_script INPUT [ENV=VALUE...]: runs the script in the current case. Sets rc; the
@@ -316,7 +316,7 @@ for f in "$arm_tgz" "$amd_tgz"; do
 done
 contains "$out/uploaded.json" '"mode": "native"' "(a) arm64 is recorded native"
 contains "$out/uploaded.json" '"mode": "rosetta2"' "(a) amd64 is recorded rosetta2"
-contains "$out/uploaded.json" "\"version_line\": \"agent-box $tag ($sha)\"" "(a) the version stamp is recorded"
+contains "$out/uploaded.json" "\"version_line\": \"culibox $tag ($sha)\"" "(a) the version stamp is recorded"
 contains "$out/uploaded.json" '"verifier": "testverifier"' "(a) the verifier comes from gh api user"
 contains "$out/uploaded.json" '"macos": "15.1"' "(a) the macOS version is recorded"
 contains "$out/uploaded.json" '"chip": "Apple M2"' "(a) the chip is recorded"
@@ -329,7 +329,7 @@ contains "$out/go.log" "ARGS=test -count=1 -v ./..." "(a) go test runs with -cou
 contains "$out/uploaded.json" '"test_summary": "go test ./... ok: 3 test(s) passed, 1 skipped, in 2 package(s)"' "(a) the summary counts tests, not packages"
 contains "$out/uploaded.json" '"test_env": "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"' "(a) the record says the tests ran with cgo off"
 for a in arm64 amd64; do
-  contains "$out/uploaded.json" "\"binary_sha256\": \"$(sha256sum "$case_dir/stage-$a/agent-box" | cut -d ' ' -f 1)\"" "(a) the record holds the sha256 of the $a binary that was run"
+  contains "$out/uploaded.json" "\"binary_sha256\": \"$(sha256sum "$case_dir/stage-$a/culibox" | cut -d ' ' -f 1)\"" "(a) the record holds the sha256 of the $a binary that was run"
 done
 contains "$case_dir/stdout" "Run the manual rows with these exact binaries" "(a) the prompt names the binaries the rows must use"
 contains "$case_dir/stdout" "arm64: $case_dir/tmpdir/" "(a) the arm64 binary path is printed"
@@ -394,7 +394,7 @@ expect_rc "$rc" 3 "(f) a stamp mismatch exits 3"
 expect_verdict "$out/uploaded.json" failed "(f) the verdict is failed"
 contains "$out/notes.out" "amd64 tests failed" "(f) amd64 is the failing arch"
 absent "$out/notes.out" "arm64 tests failed" "(f) arm64 still passes"
-contains "$out/uploaded.json" "agent-box $tag (0000000000000000000000000000000000000000)" "(f) the bad version_line is kept"
+contains "$out/uploaded.json" "culibox $tag (0000000000000000000000000000000000000000)" "(f) the bad version_line is kept"
 
 # ---- (g) a prior record for another commit aborts before go test -------------------
 echo "== (g) moved tag"
@@ -512,7 +512,7 @@ expect_verdict "$out/uploaded.json" failed "(p) the verdict is failed"
 contains "$out/uploaded.json" "abduco" "(p) the record names the abduco failure"
 contains "$out/notes.out" "❌ failed: arm64, amd64 tests failed" "(p) the notes say the tests failed"
 missing "$out/go-called.marker" "(p) go test was not run without abduco"
-contains "$out/uploaded.json" "agent-box $tag ($sha)" "(p) the version stamps are still checked"
+contains "$out/uploaded.json" "culibox $tag ($sha)" "(p) the version stamps are still checked"
 exists "$case_dir/tmpdir"/macos-verify.*/abduco-install.log "(p) the install log is kept"
 
 # ---- (q) a record without a verdict line is reported -------------------------------

@@ -1182,7 +1182,7 @@ func TestReleaseWorkflow(t *testing.T) {
 	}
 
 	// build: the script, the smoke test, the artifact (also on a dry run).
-	for _, want := range []string{"scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/agent-box" version`, "actions/upload-artifact@"} {
+	for _, want := range []string{"scripts/release/build.sh", "sha256sum -c SHA256SUMS", `/culibox" version`, "actions/upload-artifact@"} {
 		if !strings.Contains(build, want) {
 			t.Errorf("job build lacks %q", want)
 		}

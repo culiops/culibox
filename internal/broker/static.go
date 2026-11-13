@@ -37,7 +37,7 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 	sid, nonce, ok := ParseToken(b.secret, tok)
 	if !hasBearer || !ok {
 		b.recordDenied(Row{Time: now, Provider: ProviderStatic, Outcome: OutcomeDeniedToken}) // the claimed id is unverified: never stored
-		replyErr(w, http.StatusUnauthorized, "not an agent-box session")
+		replyErr(w, http.StatusUnauthorized, "not a CuliBox session")
 		return
 	}
 	sv, found := b.lookup(sid)
@@ -118,7 +118,7 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 	row.Outcome = OutcomeFetched
 	if err := b.rec.Record(row); err != nil {
 		log.Printf("broker: audit write failed (%v); static token %q for %s withheld", err, req.Name, sid) // the row holds identifiers only
-		replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this token fetch, so it was not issued; retry shortly")
+		replyErr(w, http.StatusServiceUnavailable, "CuliBox could not audit this token fetch, so it was not issued; retry shortly")
 		return
 	}
 	writeStaticToken(w, string(value), entry)

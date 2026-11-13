@@ -1,9 +1,9 @@
-# Builds the agent-box image for linux/amd64 and linux/arm64 on native runners
-# and publishes it to the public package ghcr.io/culiops/agent-box.
+# Builds the culibox image for linux/amd64 and linux/arm64 on native runners
+# and publishes it to the public package ghcr.io/culiops/culibox.
 #
 # Shape: each arch builds and pushes BY DIGEST (no tag), then one job merges
 # the two digests into a multi-arch index tagged <YYYY-MM-DD>-<7-char sha> and
-# `base`. The job summary prints the index digest; agent-box configs pin that
+# `base`. The job summary prints the index digest; culibox configs pin that
 # digest, never a tag (a tag is mutable).
 #
 # Supply chain (docker/agent-box/workflow_test.go guards this):
@@ -49,7 +49,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/culiops/agent-box
+  IMAGE: ghcr.io/culiops/culibox
   # The layer cache, a package of its own so cache manifests never show up as
   # versions of the public image (see the build step).
   CACHE: ghcr.io/culiops/agent-box-cache
@@ -191,7 +191,7 @@ jobs:
           platforms="$(jq -r '.manifests[] | "- " + .platform.os + "/" + .platform.architecture' <<<"${meta}")"
           test "$(grep -c '^- linux/' <<<"${platforms}")" -eq 2
           {
-            echo "### agent-box image"
+            echo "### culibox image"
             echo
             echo "Pin this digest as \`box_image\`:"
             echo

@@ -107,7 +107,7 @@ func runCloneArgs(e *cloneEnv, profile, branch, base string) (int, string) {
 func TestRunCloneUnknownProfile(t *testing.T) {
 	e := newCloneEnv(t, nil, nil)
 	rc, out := runCloneArgs(e, "nope", "b", "main")
-	if rc != 1 || out != "agent-box clone: unknown profile \"nope\"\n" {
+	if rc != 1 || out != "culibox clone: unknown profile \"nope\"\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -115,7 +115,7 @@ func TestRunCloneUnknownProfile(t *testing.T) {
 func TestRunCloneNoCloneOf(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{{Name: "plain", Bin: "claude"}})
 	rc, out := runCloneArgs(e, "plain", "b", "main")
-	if rc != 1 || out != "agent-box clone: profile \"plain\" has no clone_of\n" {
+	if rc != 1 || out != "culibox clone: profile \"plain\" has no clone_of\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 	if e.req.Branch != "" {
@@ -126,7 +126,7 @@ func TestRunCloneNoCloneOf(t *testing.T) {
 func TestRunCloneInvalidProfile(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("rel", "relative/path", "/c/d")})
 	rc, out := runCloneArgs(e, "rel", "b", "main")
-	if rc != 1 || !strings.HasPrefix(out, "agent-box clone: ") || !strings.Contains(out, "clone_of") {
+	if rc != 1 || !strings.HasPrefix(out, "culibox clone: ") || !strings.Contains(out, "clone_of") {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -203,7 +203,7 @@ func TestRunCloneFetchError(t *testing.T) {
 	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
 	e.err = errors.New("nothing to fetch")
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || out != "agent-box clone: nothing to fetch\n" {
+	if rc != 1 || out != "culibox clone: nothing to fetch\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -214,7 +214,7 @@ func TestRunCloneBackendError(t *testing.T) {
 		return nil, nil, errors.New("git not found")
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || out != "agent-box clone: git not found\n" {
+	if rc != 1 || out != "culibox clone: git not found\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 }
@@ -276,7 +276,7 @@ func TestCloneDockerRefusesAStoppedVM(t *testing.T) {
 	d := newFakeDocker(t)
 	fc := &fakeColima{}
 	_, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, fc, nil)
-	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "agent-box box setup") {
+	if err == nil || !strings.Contains(err.Error(), "box VM is not running") || !strings.Contains(err.Error(), "culibox box setup") {
 		t.Fatalf("err = %v; want the stopped-VM refusal", err)
 	}
 	if fc.called("start") {
@@ -300,13 +300,57 @@ func TestCloneDockerOnLinuxIsTheHosts(t *testing.T) {
 	}
 }
 
+// hasLinePrefix reports a line of log that starts with prefix.
+func hasLinePrefix(log, prefix string) bool {
+	for _, line := range strings.Split(log, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// I2: clone fetch runs the box image, so an upgraded install whose image still
+// carries only the pre-rename default name adopts it here too (box_image
+// unset); a pinned box_image is never tagged.
+func TestCloneDockerAdoptsTheLegacyDefault(t *testing.T) {
+	root := t.TempDir()
+	d := adoptDocker(t, config.LegacyDefaultBoxImage)
+	if _, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin}, "linux", root, root, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := "tag " + config.LegacyDefaultBoxImage + " " + config.DefaultBoxImage; !hasLinePrefix(d.log(), want) {
+		t.Fatalf("clone fetch did not adopt (%q):\n%s", want, d.log())
+	}
+
+	d = adoptDocker(t, config.LegacyDefaultBoxImage)
+	if _, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, BoxImage: "me/img:1"}, "linux", root, root, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if hasLinePrefix(d.log(), "tag ") || hasLinePrefix(d.log(), "image ") {
+		t.Fatalf("a pinned box_image must never inspect or tag:\n%s", d.log())
+	}
+}
+
+// A stopped VM is refused before any adoption: no image is inspected or tagged.
+func TestCloneDockerStoppedVMDoesNotAdopt(t *testing.T) {
+	root := resolved(t, shortRoot(t))
+	d := adoptDocker(t, config.LegacyDefaultBoxImage)
+	if _, err := cloneDocker(context.Background(), config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, "darwin", root, root, &fakeColima{}, nil); err == nil {
+		t.Fatal("a stopped VM was not refused")
+	}
+	if log := d.log(); strings.Contains(log, "image inspect") || strings.Contains(log, " tag "+config.LegacyDefaultBoxImage) {
+		t.Fatalf("image inspected or tagged with the VM stopped:\n%s", log)
+	}
+}
+
 func TestRunCloneUnreadableStore(t *testing.T) {
 	e := newCloneEnv(t, nil, nil)
 	if err := os.WriteFile(filepath.Join(e.data, "profiles.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rc, out := runCloneArgs(e, "p", "b", "main")
-	if rc != 1 || !strings.HasPrefix(out, "agent-box clone: ") {
+	if rc != 1 || !strings.HasPrefix(out, "culibox clone: ") {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
 	// Read-only: a corrupt store is reported, never quarantined or rewritten.

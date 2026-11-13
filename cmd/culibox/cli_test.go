@@ -52,12 +52,12 @@ func TestVersionLine(t *testing.T) {
 	oldVersion, oldCommit := version, commit
 	t.Cleanup(func() { version, commit = oldVersion, oldCommit })
 	version, commit = "v1.2.3", "abc123"
-	if got, want := versionLine(), "agent-box v1.2.3 (abc123)\n"; got != want {
+	if got, want := versionLine(), "culibox v1.2.3 (abc123)\n"; got != want {
 		t.Errorf("versionLine() = %q, want %q", got, want)
 	}
 	version, commit = "", ""
-	if got := versionLine(); !strings.HasPrefix(got, "agent-box dev (") {
-		t.Errorf("unstamped versionLine() = %q, want prefix %q", got, "agent-box dev (")
+	if got := versionLine(); !strings.HasPrefix(got, "culibox dev (") {
+		t.Errorf("unstamped versionLine() = %q, want prefix %q", got, "culibox dev (")
 	}
 }
 

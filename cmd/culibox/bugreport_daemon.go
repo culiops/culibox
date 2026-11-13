@@ -68,14 +68,14 @@ func buildBugReport(d bugDeps) func(context.Context) (string, string, error) {
 		select {
 		case o := <-ch:
 			if o.err != nil {
-				in.DoctorNote = "doctor failed; run agent-box bug-report in a terminal"
+				in.DoctorNote = "doctor failed; run culibox bug-report in a terminal"
 			} else {
 				in.Doctor = o.res
 			}
 		case <-timer.C:
-			in.DoctorNote = fmt.Sprintf("doctor timed out after %s; run agent-box bug-report in a terminal", d.timeout)
+			in.DoctorNote = fmt.Sprintf("doctor timed out after %s; run culibox bug-report in a terminal", d.timeout)
 		case <-ctx.Done():
-			in.DoctorNote = "doctor was cancelled; run agent-box bug-report in a terminal"
+			in.DoctorNote = "doctor was cancelled; run culibox bug-report in a terminal"
 		}
 		in.Profiles = d.profiles()
 		in.Live = &bugreport.Live{

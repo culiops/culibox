@@ -30,8 +30,7 @@ var pathEscapes = map[string]int{
 	"internal/vmshares/check.go literal .config": 3,
 	"internal/vmshares/check.go literal Library": 1,
 	// Locating the data root itself, and the ~/.config fallback for the config file.
-	"internal/config/config.go literal .local":   1, // ResolvedDataDir, for a Config not built by Resolve
-	"internal/config/resolve.go literal .local":  1,
+	"internal/config/resolve.go literal .local":  1, // DefaultRoots; ResolvedDataDir goes through it
 	"internal/config/resolve.go literal .config": 1,
 	// The bundle reads the user's Claude config (a read, never a write): "~" in
 	// bundle_source, the default ~/.claude source, and refusing a source whose
@@ -60,10 +59,10 @@ var pathEscapes = map[string]int{
 	"internal/doctor/doctor.go literal /tmp": 1,
 	// The home dir and XDG_CONFIG_HOME are resolved once, here, and handed to
 	// everything else; the -config help text names the lookup order.
-	"cmd/agent-box/main.go os.UserHomeDir":      1,
-	"cmd/agent-box/main.go env XDG_CONFIG_HOME": 1,
-	"cmd/agent-box/cli.go literal .local":       2, // -config help and the usage text
-	"cmd/agent-box/cli.go literal .config":      1,
+	"cmd/culibox/main.go os.UserHomeDir":      1,
+	"cmd/culibox/main.go env XDG_CONFIG_HOME": 1,
+	"cmd/culibox/cli.go literal .local":       2, // -config help and the usage text
+	"cmd/culibox/cli.go literal .config":      1,
 	// context_paths denylist: refuses /tmp itself as a context path (it would
 	// shadow the box's tmpfs), and the in-box /tmp/agentbox-gh and
 	// /tmp/ac-session-* (prefix match and its message); names compared with,
@@ -87,7 +86,7 @@ var pathEscapes = map[string]int{
 	// /tmp or the OS temp dir): a READ of another program's files. The fs API
 	// serves it read-only (#50); agent-box never writes there.
 	"internal/web/fsscratch.go literal /tmp": 1,
-	"cmd/agent-box/main.go os.TempDir":       1,
+	"cmd/culibox/main.go os.TempDir":         1,
 	// msgBoxOnly names /tmp/playwright-mcp in the refusal text: prose shown to
 	// the user, never a location used.
 	"internal/web/fsmsg.go literal /tmp": 1,

@@ -187,7 +187,7 @@ func TestMinterStoreKeyNotCached(t *testing.T) {
 func TestMinterStoreKeyNoStore(t *testing.T) {
 	m := NewMinter([]config.GitHubApp{{Name: "app", ClientID: "cid", PrivateKey: config.KeyRef{Type: "store", ID: "gh-key"}}}, Client{})
 	err := m.Check("app")
-	if err == nil || !strings.Contains(err.Error(), "store references need the agent-box store (not configured)") {
+	if err == nil || !strings.Contains(err.Error(), "store references need the CuliBox store (not configured)") {
 		t.Fatalf("no store: %v", err)
 	}
 }

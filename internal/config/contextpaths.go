@@ -162,7 +162,7 @@ func checkContextPath(p string) error {
 		return fmt.Errorf("context_paths %q: refused: it would shadow %s inside the box", p, p)
 	}
 	if rest, ok := strings.CutPrefix(p, "/tmp/"); ok && strings.HasPrefix(rest, contextDenyTmpPrefix) {
-		return fmt.Errorf("context_paths %q: refused: /tmp/%s* inside the box are agent-box's own files", p, contextDenyTmpPrefix)
+		return fmt.Errorf("context_paths %q: refused: /tmp/%s* inside the box are CuliBox's own files", p, contextDenyTmpPrefix)
 	}
 	return nil
 }

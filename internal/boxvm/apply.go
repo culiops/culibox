@@ -18,7 +18,7 @@ import (
 
 // ErrNeedsRecreate means the VM differs from the config by more than its folder
 // list; only `box setup -recreate` can fix that.
-var ErrNeedsRecreate = errors.New("the box VM has other changes (VM size, extra_ca_certs or the provision script) that need `agent-box box setup -recreate`")
+var ErrNeedsRecreate = errors.New("the box VM has other changes (VM size, extra_ca_certs or the provision script) that need `culibox box setup -recreate`")
 
 // ErrStartTimeout means the VM did not come back after an apply.
 var ErrStartTimeout = errors.New("The VM did not start within 2 minutes.")
@@ -404,7 +404,7 @@ func unescapeMount(s string) string {
 
 // ErrApplyLocked means another process (the daemon, or a `box share apply`
 // from a terminal) is applying the folder list now.
-var ErrApplyLocked = errors.New("another agent-box is applying the box VM's folder list; try again when it finishes")
+var ErrApplyLocked = errors.New("another CuliBox is applying the box VM's folder list; try again when it finishes")
 
 // ApplyLockPath is the advisory lock every process holds for an apply's whole
 // stop, write and start. v.lock is per process; this one spans processes.
@@ -447,7 +447,7 @@ func (v *VM) ApplyLockHeld() bool {
 
 // ErrMountsOverlap means two of the VM's mounts would nest or repeat once links
 // are followed: colima refuses to start with that, so the apply stops first.
-var ErrMountsOverlap = errors.New("two of the box VM's folders overlap once links are followed, and colima cannot start with one inside another; the VM was not touched. Remove one of them in Settings › VM folders (or `agent-box box share rm`)")
+var ErrMountsOverlap = errors.New("two of the box VM's folders overlap once links are followed, and colima cannot start with one inside another; the VM was not touched. Remove one of them in Settings › VM folders (or `culibox box share rm`)")
 
 // checkMountsDisjoint refuses a mount list where one location (resolved now)
 // equals or lies inside another.

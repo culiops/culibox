@@ -28,9 +28,9 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for ws, want := range map[string]string{
-		filepath.Join(elsewhere, "cfg"): "it contains agent-box's config directory",
-		profDir:                         "it is agent-box's profiles directory",
-		elsewhere:                       "it contains agent-box's config directory",
+		filepath.Join(elsewhere, "cfg"): "it contains CuliBox's config directory",
+		profDir:                         "it is CuliBox's profiles directory",
+		elsewhere:                       "it contains CuliBox's config directory",
 	} {
 		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), want) {
@@ -87,7 +87,7 @@ func TestDedupeProtectedKeepsTheFirstMeaning(t *testing.T) {
 	d := t.TempDir()
 	got := DedupeProtected([]ProtectedDir{DataDirProtected(d), ConfigDirProtected(d + "/"), ProfilesDirProtected(""),
 		ProfilesDirProtected(filepath.Join(d, "p"))})
-	if len(got) != 2 || got[0].What != "agent-box's data directory" || got[1].What != "agent-box's profiles directory" {
+	if len(got) != 2 || got[0].What != "CuliBox's data directory" || got[1].What != "CuliBox's profiles directory" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -111,18 +111,18 @@ func TestConfigAndProfilesDirsRefuseOnlyIsAndContains(t *testing.T) {
 	if r := ProtectedOverlap(proj, prof); r != "" {
 		t.Fatalf("a project under a profiles dir in $HOME must stay boxable: %q", r)
 	}
-	if r := ProtectedOverlap(home, prof); !strings.Contains(r, "it is agent-box's profiles directory") {
+	if r := ProtectedOverlap(home, prof); !strings.Contains(r, "it is CuliBox's profiles directory") {
 		t.Fatalf("the profiles dir itself must be refused: %q", r)
 	}
 	cfg := []ProtectedDir{ConfigDirProtected(filepath.Join(home, "cfg"))}
 	if r := ProtectedOverlap(sub, cfg); r != "" {
 		t.Fatalf("a subdir of a config dir must be boxable: %q", r)
 	}
-	if r := ProtectedOverlap(home, cfg); !strings.Contains(r, "it contains agent-box's config directory") {
+	if r := ProtectedOverlap(home, cfg); !strings.Contains(r, "it contains CuliBox's config directory") {
 		t.Fatalf("an ancestor of the config dir must be refused: %q", r)
 	}
 	data := []ProtectedDir{DataDirProtected(filepath.Join(home, "cfg"))}
-	if r := ProtectedOverlap(sub, data); !strings.Contains(r, "it is inside agent-box's data directory") {
+	if r := ProtectedOverlap(sub, data); !strings.Contains(r, "it is inside CuliBox's data directory") {
 		t.Fatalf("the data root still refuses a workspace inside it: %q", r)
 	}
 }
@@ -194,11 +194,11 @@ func TestProtectedOverlapMatchesTheLinkSpellingToo(t *testing.T) {
 func TestDedupeProtectedNeverDropsTheStricterEntry(t *testing.T) {
 	d := t.TempDir()
 	got := DedupeProtected([]ProtectedDir{ConfigDirProtected(d), DataDirProtected(d), ProfilesDirProtected(d)})
-	if len(got) != 2 || got[1].What != "agent-box's data directory" {
+	if len(got) != 2 || got[1].What != "CuliBox's data directory" {
 		t.Fatalf("got %+v", got)
 	}
 	inside := filepath.Join(d, "x")
-	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside agent-box's data directory") {
+	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside CuliBox's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q", r)
 	}
 }

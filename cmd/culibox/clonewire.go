@@ -419,7 +419,7 @@ func (h *cloneHooks) checkShared(c config.Clone) error {
 	}
 	view, err := h.shares()
 	if err != nil {
-		return fmt.Errorf("%w: cannot read the box VM's folder list (%v); run `agent-box doctor`", box.ErrUnboxableWorkspace, err)
+		return fmt.Errorf("%w: cannot read the box VM's folder list (%v); run `culibox doctor`", box.ErrUnboxableWorkspace, err)
 	}
 	for _, f := range []struct {
 		path  string
@@ -468,7 +468,7 @@ func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, 
 		if shares != nil {
 			v, err := shares()
 			if err != nil {
-				return nil, fmt.Errorf("%w: context_paths %s: cannot read the box VM's folder list (%v); run `agent-box doctor`", box.ErrUnboxableWorkspace, p, err)
+				return nil, fmt.Errorf("%w: context_paths %s: cannot read the box VM's folder list (%v); run `culibox doctor`", box.ErrUnboxableWorkspace, p, err)
 			}
 			view = &v
 		}

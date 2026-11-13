@@ -21,32 +21,33 @@ var commit string
 // when unstamped.
 var version string
 
-// versionLine is what `agent-box version` prints: the stamped release (dev when
+// versionLine is what `culibox version` prints: the stamped release (dev when
 // unstamped) and the commit. The release smoke tests and the macOS verify
-// script parse "agent-box <tag> (<sha>)", so keep the shape.
+// script parse "culibox <tag> (<sha>)", so keep the shape.
 func versionLine() string {
 	v := version
 	if v == "" {
 		v = "dev"
 	}
-	return fmt.Sprintf("agent-box %s (%s)\n", v, buildCommit())
+	return fmt.Sprintf("culibox %s (%s)\n", v, buildCommit())
 }
 
 const usage = `usage:
-  agent-box [serve] [-config <path>]                   run the web control-plane
-  agent-box doctor  [-config <path>]                   check this machine; prints no secrets
-  agent-box bug-report [-config <path>]                redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
-  agent-box box setup [-rebuild] [-recreate] [-force]  build the box image (macOS: also the box VM)
-  agent-box box status                                 list boxes (macOS: and the box VM)
-  agent-box box stop [-force]                          macOS: stop the box VM
-  agent-box box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
-  agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while agent-box serves (a daemon restart aborts it; rerun)
-  agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
-  agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
-  agent-box version                                    print the version and commit
+  culibox [serve] [-config <path>]                     run the web control-plane
+  culibox doctor  [-config <path>]                     check this machine; prints no secrets
+  culibox bug-report [-config <path>]                  redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
+  culibox box setup [-rebuild] [-recreate] [-force]    build the box image (macOS: also the box VM)
+  culibox box status                                   list boxes (macOS: and the box VM)
+  culibox box stop [-force]                            macOS: stop the box VM
+  culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]   macOS: the folders the box VM shares (apply restarts the VM)
+  culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while culibox serves (a daemon restart aborts it; rerun)
+  culibox store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
+  culibox store set|rm [-config <path>] <id>           put a value (read from stdin, never argv) or delete one
+  culibox version                                      print the version and commit
 
-Everything agent-box writes, its config.json included, lives in one data root:
-$AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
+Everything culibox writes, its config.json included, lives in one data root:
+$CULIBOX_HOME (absolute; the old name AGENT_BOX_HOME still works) or ~/.local/share/culibox.
+A ~/.local/share/agent-box from before the rename is moved there by serve, when that is safe.
 `
 
 type cliArgs struct {
@@ -137,13 +138,13 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $AGENT_BOX_HOME or ~/.local/share/agent-box; then $XDG_CONFIG_HOME or ~/.config/agent-box/config.json unless AGENT_BOX_HOME is set; else built-in defaults; never ./config.json)")
+	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $CULIBOX_HOME or ~/.local/share/culibox (an older ~/.local/share/agent-box is used until serve moves it); then $XDG_CONFIG_HOME or ~/.config/culibox/config.json (an older agent-box one is read too) unless CULIBOX_HOME is set; else built-in defaults; never ./config.json)")
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	force := fs.Bool("force", false, "box stop, box setup, box share apply: go ahead even with boxes running or the VM state unknown")
 	ro := fs.Bool("ro", false, "box share add: share the folder read-only")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
-	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history agent-box cannot verify, or that carries history host main rewrote away (printed as a warning)")
+	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history CuliBox cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}
