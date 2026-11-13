@@ -65,9 +65,9 @@ func TestBoxTierRows(t *testing.T) {
 		{"stale VM firewall fails", func(f *boxFacts) {
 			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `culibox box setup -recreate`")
 		}, Fail, "FAIL box VM firewall: the box VM's firewall lets containers"},
-		{"unreadable VM firewall warns", func(f *boxFacts) {
+		{"unreadable VM firewall fails: every spawn is refused", func(f *boxFacts) {
 			f.FirewallReadErr = errors.New("reading the box VM's firewall rules: exit status 255")
-		}, Warn, "WARN box VM firewall: could not read the rules (reading the box VM's firewall rules: exit status 255)"},
+		}, Fail, "FAIL box VM firewall: could not read the rules (reading the box VM's firewall rules: exit status 255); every boxed spawn is refused until they can be read"},
 		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},

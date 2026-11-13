@@ -227,20 +227,22 @@ These limits are the same as on Linux and are not configurable.
 - After upgrading, run `culibox box setup -recreate` once when doctor asks
   for it. The rules live in the VM's provisioning, so an existing VM keeps the
   old ones until it is recreated: a VM set up before egress control for all
-  boxes has none, and one set up before the broker fix (see
-  [Token binding](#token-binding)) still lets containers on the VM's default
-  network reach the broker. `culibox doctor` fails ("box VM config", and
+  boxes has none, and `culibox doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until
-  you do. Sessions still running in boxes after the upgrade lose the egress
-  proxy until then (the recreate ends them anyway), so end them first.
+  you recreate it. Sessions still running in boxes after the upgrade lose the
+  egress proxy until then (the recreate ends them anyway), so end them first. A VM set up before the broker fix (see
+  [Token binding](#token-binding)) still lets containers on the VM's default
+  network reach the broker: `culibox doctor` fails "box VM config" for it too,
+  but CuliBox deletes the old rule at each boxed spawn, the VM puts it back at
+  each start, and `culibox box setup -recreate` removes it for good.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards. Upgrading to the version with the
   relay handshake (see [Token binding](#token-binding)) creates a new secret in
   `relay2.secret` and deletes `relay.secret`. The old secret was sent on every
   connection, so it is never used again. The relay is replaced once, so
-  connections open through it drop once. On a VM that still needs the recreate
-  above, CuliBox removes the old relay instead, so sessions running across that
-  upgrade also lose the credential broker until you recreate the VM. Until the
+  connections open through it drop once. On a VM set up before egress control
+  for all boxes, CuliBox removes the old relay instead, so sessions running
+  across that upgrade also lose the credential broker until you recreate the VM. Until the
   new version replaces it, the old relay still sends the old secret and what the
   boxes send, tokens included, to whatever holds CuliBox's ports, so on a Mac
   shared with other accounts, stop the box VM (`culibox box stop`) or end the
@@ -317,9 +319,10 @@ An earlier version's firewall rule let any container on the box VM's default
 Docker network (not the egress network) reach the broker's port directly,
 without the relay. With the handshake such a container can still reach the port,
 but it cannot pass the handshake, so it cannot write a header the broker
-accepts. A VM set up with that rule keeps it until it is recreated:
-`culibox doctor` fails "box VM firewall", and every boxed spawn is refused
-until you run `culibox box setup -recreate`.
+accepts. A VM set up with that rule puts it back
+at every start, until it is recreated, and CuliBox deletes it again when it
+checks the firewall at each boxed spawn. If that delete fails, `culibox doctor` fails "box VM firewall", and every boxed spawn is
+refused until you run `culibox box setup -recreate`.
 
 The credential broker accepts a session's token only from the box that session
 runs in. On macOS it compares the address in the relay's header with that box's
@@ -345,7 +348,10 @@ Mac that holds a session's token, and an account that can read loopback traffic
 (see above); a process that receives the relay's connection on an address
 other than `127.0.0.1` could sit in the middle, because the proofs bind the port
 and not the address (see above; that the host agent dials `127.0.0.1` is
-inferred, not measured); and while CuliBox does not hold its ports, boxes cannot reach the
+inferred, not measured); a container on the VM's host network or another process in the VM,
+which reaches the Mac's loopback through the VM's own OUTPUT path (the DOCKER-USER
+rules do not apply there) and so can connect to the broker's port, but cannot pass
+the handshake without the relay secret; and while CuliBox does not hold its ports, boxes cannot reach the
 proxy or the broker.
 
 While CuliBox is not listening on its ports (stopped, restarting, or its

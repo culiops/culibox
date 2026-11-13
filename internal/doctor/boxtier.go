@@ -122,7 +122,7 @@ type boxFacts struct {
 	UserContext error    // boxvm.CheckUserDockerContext result
 	Stopped     []string // this instance's boxes that are not running
 	// ProvisionDrifted: the drift includes the provision script (the VM's
-	// firewall rules), so every boxed spawn is refused until the VM is recreated.
+	// firewall rules).
 	ProvisionDrifted bool
 	// FirewallRan: the VM runs and its live rules were asked for. FirewallReadErr:
 	// they could not be read. FirewallErr: read, and not the rules the relay
@@ -205,7 +205,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		// The folder list alone changed: "box VM folders" below says how to apply
 		// it, and a recreate is not needed.
 	} else if f.Drifted && f.ProvisionDrifted {
-		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"culibox box setup -recreate\" (every boxed spawn is refused until then)"})
+		out = append(out, Result{Fail, "box VM config", "its firewall rules differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run \"culibox box setup -recreate\""})
 	} else if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `culibox box setup -recreate`"})
 	}
@@ -250,7 +250,8 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.FirewallRan {
 		switch {
 		case f.FirewallReadErr != nil:
-			out = append(out, Result{Warn, "box VM firewall", "could not read the rules (" + f.FirewallReadErr.Error() + ")"})
+			// Relay.Ensure refuses every spawn while the rules cannot be read.
+			out = append(out, Result{Fail, "box VM firewall", "could not read the rules (" + f.FirewallReadErr.Error() + "); every boxed spawn is refused until they can be read"})
 		case f.FirewallErr != nil:
 			out = append(out, Result{Fail, "box VM firewall", f.FirewallErr.Error()})
 		default:

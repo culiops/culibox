@@ -370,3 +370,52 @@ func TestPerSourceConnCloseWriteErrorsWhenUnsupported(t *testing.T) {
 		t.Fatal("CloseWrite on a conn without it must fail so the caller falls back to Close")
 	}
 }
+
+// A listener built with a notice calls it once, the first time every slot is
+// taken, and not again however many times it fills later. Without one (Listener)
+// nothing is called.
+func TestListenerWithNoticeCallsItOnceWhenFull(t *testing.T) {
+	inner := newChanListener()
+	var notices atomic.Int32
+	l := ListenerWithNotice(inner, 2, func() { notices.Add(1) })
+	var held []net.Conn
+	for i := 0; i < 2; i++ {
+		c, p := pipeConn()
+		defer p.Close()
+		inner.ch <- c
+		a, err := l.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, a)
+	}
+	if n := notices.Load(); n != 0 {
+		t.Fatalf("notice called %d times before the cap was reached", n)
+	}
+	// The next Accept finds both slots taken: it waits, and says so.
+	done := make(chan struct{})
+	go func() { l.Accept(); close(done) }()
+	waitFor(t, func() bool { return notices.Load() == 1 }, "the notice when the cap was hit")
+	held[0].Close() // a slot frees; the waiting Accept takes it
+	c, p := pipeConn()
+	defer p.Close()
+	inner.ch <- c
+	<-done
+	// Full again: Accept waits a second time, with no second notice.
+	go func() { l.Accept() }()
+	time.Sleep(100 * time.Millisecond)
+	if n := notices.Load(); n != 1 {
+		t.Fatalf("notice called %d times, want once", n)
+	}
+	l.Close()
+}
+
+func waitFor(t *testing.T, ok func() bool, what string) {
+	t.Helper()
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}

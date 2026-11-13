@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"os"
 	"path"
@@ -111,6 +112,8 @@ type BoxSockets struct {
 	serve  func(net.Listener)
 	socks  map[string]*boxSock
 	closed bool
+	// logf says that a box reached its connection cap (log.Printf).
+	logf func(format string, args ...any)
 }
 
 type boxSock struct {
@@ -120,7 +123,7 @@ type boxSock struct {
 }
 
 func newBoxSockets(stateRoot string) *BoxSockets {
-	return &BoxSockets{stateRoot: stateRoot, socks: map[string]*boxSock{}}
+	return &BoxSockets{stateRoot: stateRoot, socks: map[string]*boxSock{}, logf: log.Printf}
 }
 
 // Start installs the function that serves a new listener. It must not block;
@@ -156,7 +159,12 @@ func (s *BoxSockets) Acquire(boxName string) (box.Mount, error) {
 	if err != nil {
 		return box.Mount{}, err
 	}
-	bl := &boxListener{Listener: netlimit.Listener(l, maxSockConns), box: boxName}
+	// A box at its cap would see its next connection hang with no error, so say
+	// so, once for this listener (a box's listener lives while it has sessions).
+	logf := s.logf
+	bl := &boxListener{Listener: netlimit.ListenerWithNotice(l, maxSockConns, func() {
+		logf("broker: box %s is at its limit of %d open connections on its broker socket; further connections wait until one closes", boxName, maxSockConns)
+	}), box: boxName}
 	s.socks[boxName] = &boxSock{l: bl, dir: dir, refs: 1}
 	s.serve(bl)
 	return box.Mount{Host: dir, Box: SockBoxDir}, nil
