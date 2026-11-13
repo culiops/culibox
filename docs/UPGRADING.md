@@ -63,12 +63,13 @@ Outside `<R>`:
 
 1. **Stop CuliBox** (Ctrl-C, or stop its service).
 2. **Put the previous binary back.** `scripts/setup.sh` keeps it as `culibox.prev` next to `culibox` and prints the line that restores it. `scripts/deploy-prod.sh` does the same for a deployed binary. Either script prints a `data:` line pointing here. Binary only: this does not undo data changes.
-3. **Restore the snapshot,** to also undo what the newer build did to your data. `B` is the backup folder (the log line named it, or list `<R>/backups/`) and `R` is the data root:
+3. **Restore the snapshot,** to also undo what the newer build did to your data. Run the exact line `serve` logged when it took the backup (`upgrade backup: ... then run: ...`). It already matches what that backup holds. It has one of two shapes. `B` is the backup folder (the log names it, or list `<R>/backups/`) and `R` is the data root:
 
 ```sh
-R=~/.local/share/culibox
-B="$R"/backups/<the folder you want>
+# the backup holds audit.db:
 rm -f "$R"/last-version && cp -a "$B"/. "$R"/ && rm -f "$R"/audit.db-wal "$R"/audit.db-shm
+# the backup has no audit.db (it was over 512 MB): audit.db is left alone
+rm -f "$R"/last-version && cp -a "$B"/. "$R"/
 ```
 
 4. **Start the old binary.**
@@ -77,13 +78,13 @@ What to know before you run it:
 
 - **Restore does not delete.** It copies the snapshot over `<R>` and leaves everything newer in place: accounts, store values, clone records and box homes made since the upgrade. `<R>` becomes the snapshot plus whatever is newer. Older builds ignore files they do not know.
 - **It also restores `last-version`,** so the next upgrade takes a fresh backup.
-- **Restoring `audit.db` drops the audit rows written since the upgrade.** To keep the current log, skip it and leave its `-wal` and `-shm` files alone:
+- **Restoring `audit.db` drops the audit rows written since the upgrade.** The first shape also removes `audit.db-wal` and `audit.db-shm`, because a newer WAL file must never be applied to the older database. Without `audit.db` in the backup, the second shape leaves the current `audit.db` and those two files untouched. To keep the current log even though the backup holds one, skip it and leave its `-wal` and `-shm` files alone:
 
 ```sh
 rm -f "$R"/last-version && find "$B" -mindepth 1 -maxdepth 1 ! -name audit.db -exec cp -a {} "$R"/ \;
 ```
 
-  Use this form too when the backup has no `audit.db` (it was over 512 MB). Whether an older build reads a newer `audit.db` is not tested yet.
+  Whether an older build reads a newer `audit.db` is not tested yet.
 - **Store changes revert too.** `store/` goes back to the snapshot, so a value you set, or a passphrase you changed (`culibox store passwd`), after the upgrade is gone. The old passphrase unlocks it again.
 - **Restore into the same path.** On macOS the Keychain key is named by a hash of the data root path. Restoring into a different path leaves the key behind (the same rule as a data root move), and the store cannot be unlocked there. On Linux you unlock again with the passphrase.
 
@@ -92,7 +93,7 @@ rm -f "$R"/last-version && find "$B" -mindepth 1 -maxdepth 1 ! -name audit.db -e
 - The data root is on the Mac (`~/.local/share/culibox`), not inside the VM, so the backup and the restore work as on Linux.
 - `vm-shares.json` and `inplace-locks.json` exist only on macOS. The backup includes them when present.
 - The Keychain item is not copied. A restore into the same path keeps it valid. See "Restore into the same path" above.
-- Security upgrades and the VM: see part D (#116). Until that is written, follow [macOS](MACOS.md), which says when `box setup -recreate` is needed.
+- Security upgrades that change the box VM: see [macOS](MACOS.md), which says when `box setup -recreate` is needed.
 
 ## For contributors: the migration rule
 

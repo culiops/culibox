@@ -165,13 +165,20 @@ func exists(root *os.Root, rel string) (bool, error) {
 }
 
 // RestoreCommand is the one-line shell recipe that puts a backup back over the
-// data root: it removes the stamp, copies the backup over (never deleting what
-// is newer), and drops the audit.db sidecars a restored audit.db must not
-// pair with. Both paths are single-quoted for POSIX sh.
+// data root: it removes the stamp and copies the backup over, never deleting
+// what is newer. When the backup holds audit.db (a regular file, Lstat), the
+// line also drops audit.db-wal and audit.db-shm: a newer WAL must never be
+// applied to the older restored database. When the backup has no audit.db (it
+// was over the size bound), the live audit.db stays, and so do its sidecars:
+// removing them would lose rows that only the WAL holds. Both paths are
+// single-quoted for POSIX sh.
 func RestoreCommand(dataDir, backupDir string) string {
 	r, b := shQuote(dataDir), shQuote(backupDir)
-	return "rm -f " + r + "/" + StampName + " && cp -a " + b + "/. " + r + "/ && rm -f " +
-		r + "/" + auditName + "-wal " + r + "/" + auditName + "-shm"
+	cmd := "rm -f " + r + "/" + StampName + " && cp -a " + b + "/. " + r + "/"
+	if fi, err := os.Lstat(filepath.Join(backupDir, auditName)); err == nil && fi.Mode().IsRegular() {
+		cmd += " && rm -f " + r + "/" + auditName + "-wal " + r + "/" + auditName + "-shm"
+	}
+	return cmd
 }
 
 // shQuote single-quotes s for POSIX sh, always, so the result is safe whatever
