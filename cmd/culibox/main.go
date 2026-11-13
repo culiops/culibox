@@ -345,6 +345,11 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// The deferred call keeps the lock file reachable for the whole of serve: an
 	// unreachable *os.File is closed by its finalizer, which would drop the flock.
 	defer release()
+	// Before anything below writes to the data root: on a version change, copy
+	// the small files aside, and refuse to start when that cannot be done.
+	if err := upgradeBackup(dataDir, cfgFiles, version, commit, time.Now(), exePath(), log.Printf); err != nil {
+		log.Fatalf("%v", err)
+	}
 	ln, err := net.Listen("tcp", cfg.BindAddr)
 	if err != nil {
 		log.Fatalf("listen %s: %v", cfg.BindAddr, err)

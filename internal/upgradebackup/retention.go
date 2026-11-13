@@ -18,9 +18,6 @@ const (
 	retainMin = 3
 	// retainMax caps the total number of backups, oldest deleted first.
 	retainMax = 20
-
-	// stampLayout is the UTC timestamp that ends every backup dir name.
-	stampLayout = "20060102T150405Z"
 )
 
 type backupEntry struct {

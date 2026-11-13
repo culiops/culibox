@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -161,4 +162,20 @@ func exists(root *os.Root, rel string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("stat %s: %w", rel, err)
+}
+
+// RestoreCommand is the one-line shell recipe that puts a backup back over the
+// data root: it removes the stamp, copies the backup over (never deleting what
+// is newer), and drops the audit.db sidecars a restored audit.db must not
+// pair with. Both paths are single-quoted for POSIX sh.
+func RestoreCommand(dataDir, backupDir string) string {
+	r, b := shQuote(dataDir), shQuote(backupDir)
+	return "rm -f " + r + "/" + StampName + " && cp -a " + b + "/. " + r + "/ && rm -f " +
+		r + "/" + auditName + "-wal " + r + "/" + auditName + "-shm"
+}
+
+// shQuote single-quotes s for POSIX sh, always, so the result is safe whatever
+// the path holds.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

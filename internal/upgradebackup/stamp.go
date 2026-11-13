@@ -96,11 +96,15 @@ func syncRoot(root *os.Root) error {
 	return d.Sync()
 }
 
+// stampLayout is the UTC timestamp that ends every backup dir name; dirName
+// writes it and backupTime (retention.go) parses it.
+const stampLayout = "20060102T150405Z"
+
 // dirName is the backup directory's base name: <from>-to-<to>-<UTC stamp>.
 // Every character outside [A-Za-z0-9._-] becomes "_", so a version such as
 // "a/b c" still yields one safe name inside backups/.
 func dirName(from, to string, now time.Time) string {
-	return fmt.Sprintf("%s-to-%s-%s", sanitizeName(from), sanitizeName(to), now.UTC().Format("20060102T150405Z"))
+	return fmt.Sprintf("%s-to-%s-%s", sanitizeName(from), sanitizeName(to), now.UTC().Format(stampLayout))
 }
 
 func sanitizeName(s string) string {
