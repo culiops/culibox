@@ -522,6 +522,18 @@ EOF
   not_called "^brew" "brew is never run without a typed y"
   says "brew install go" "the exact command is printed"
 }
+case_from_source_darwin_no_go_no_brew() {
+  newcase darwin_no_brew
+  use git
+  STUB_OS=Darwin STUB_ARCH=arm64
+  run_setup --from-source --version "$min"
+  bad_rc "darwin without go and without brew stops"
+  says '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' "the official Homebrew line is printed"
+  says "https://brew.sh" "with the brew.sh link"
+  not_called "^brew" "brew is never run"
+  not_called "^curl" "curl is never run"
+  nothing_installed "nothing is installed"
+}
 case_attest_public_fail() {
   newcase attest_fail
   mkrelease "$min" latest
@@ -529,6 +541,7 @@ case_attest_public_fail() {
   STUB_VIS=PUBLIC STUB_ATTEST_RC=1
   run_setup
   bad_rc "a failed attestation on a public repo is fatal"
+  says "rejected culibox_${min#v}_linux_amd64.tar.gz;" "the message names the rejected tarball"
   nothing_installed "nothing is installed"
   called "attestation verify .*--repo culiops/culibox" "gh attestation verify ran against the repo"
   init_not_run "init does not run"

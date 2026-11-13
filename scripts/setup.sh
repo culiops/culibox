@@ -207,7 +207,7 @@ verify_provenance() {
   case $vp_vis in
     PUBLIC)
       gh attestation verify "$1" --repo "$REPO" >/dev/null 2>&1 ||
-        die "provenance check failed: gh attestation verify rejected $(basename "$1"); nothing was installed"
+        die "provenance check failed: gh attestation verify rejected ${1##*/}; nothing was installed"
       note "provenance ok (build attestation verified)"
       ;;
     PRIVATE | INTERNAL)
@@ -257,7 +257,11 @@ ensure_go() {
   fi
   if ! command -v brew >/dev/null 2>&1; then
     printf '%s\n' "setup.sh: $eg_msg, and Homebrew is not installed." >&2
-    printf '%s\n' "Install Homebrew from https://brew.sh (the install command is on that page; this script never runs it), then run setup.sh again." >&2
+    # Printed for the user to run; this script never runs it.
+    printf '%s\n' "Install Homebrew from https://brew.sh :" >&2
+    # shellcheck disable=SC2016  # literal text for the user, not an expansion
+    printf '%s\n' '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+    printf '%s\n' "then run setup.sh again." >&2
     exit 1
   fi
   printf 'Install go via brew? [y/N] ' >&2
@@ -296,7 +300,7 @@ build_from_source() {
   ensure_go "$bs_need"
   say "building culibox $VERSION ($bs_sha)"
   (
-    cd "$WORK/src"
+    cd "$WORK/src" || exit 1
     CGO_ENABLED=0 go build -trimpath \
       -ldflags "-X main.version=$VERSION -X main.commit=$bs_sha" \
       -o "$WORK/culibox" ./cmd/culibox
@@ -310,6 +314,7 @@ install_binary() {
   mkdir -p "$PREFIX"
   if [ -e "$BIN" ]; then
     # The binary being replaced stays as the one-step rollback (the deploy-prod.sh convention).
+    rm -f "$BIN.prev"
     cp -p "$BIN" "$BIN.prev"
     KEPT=1
   fi
