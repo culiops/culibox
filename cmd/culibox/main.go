@@ -35,6 +35,7 @@ import (
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credfile"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/egress"
 	"github.com/culiops/culibox/internal/instancelock"
@@ -753,17 +754,15 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
 		log.Fatalf("profiles dir: %v", err)
 	}
-	st, err := store.Open(profilesPath)
+	// A profiles.json this build cannot parse is left where it is: the store starts
+	// empty and refuses writes, never renaming the file away or saving over it.
+	st, parseErr, err := store.OpenOrReadOnly(profilesPath)
 	if err != nil {
-		// A corrupt/hand-edited store must not brick startup: quarantine it and
-		// start with an empty store.
-		log.Printf("profiles store %q unreadable (%v); quarantining to %s.corrupt and starting empty",
-			profilesPath, err, profilesPath)
-		_ = os.Rename(profilesPath, profilesPath+".corrupt")
-		st, err = store.Open(profilesPath)
-		if err != nil {
-			log.Fatalf("profiles store: %v", err)
-		}
+		log.Fatalf("profiles store: %v", err)
+	}
+	if parseErr != nil {
+		log.Printf("profiles store %q has content this CuliBox cannot read (%v); profile edits are refused until it is fixed and CuliBox restarted; %s",
+			profilesPath, parseErr, datacompat.Hint)
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	// What CuliBox added itself is "builtin" in the profile list; config.json's own

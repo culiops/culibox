@@ -299,3 +299,84 @@ func TestFailedDeleteKeepsTheProfile(t *testing.T) {
 		t.Fatal("the file lost the profile")
 	}
 }
+
+func TestOpenOrReadOnlyParseError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+	raw := []byte(`{"version":2}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, parseErr, err := OpenOrReadOnly(path)
+	if err != nil {
+		t.Fatalf("a parse error is not a fatal one: %v", err)
+	}
+	if parseErr == nil {
+		t.Fatal("parseErr is nil for a file that does not parse")
+	}
+	if len(s.List()) != 0 {
+		t.Fatal("the read-only store should be empty")
+	}
+	if err := s.Save(config.AgentConfig{Name: "p", Bin: "bash"}); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("Save = %v, want ErrUnreadable", err)
+	}
+	if err := s.Delete("x"); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("Delete = %v, want ErrUnreadable", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, raw) {
+		t.Fatalf("the file was touched: %s", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("the directory holds more than profiles.json: %v", entries)
+	}
+}
+
+func TestOpenOrReadOnlyGood(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	w, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Save(config.AgentConfig{Name: "a", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	s, parseErr, err := OpenOrReadOnly(path)
+	if err != nil || parseErr != nil {
+		t.Fatalf("a valid file: parseErr=%v err=%v", parseErr, err)
+	}
+	if l := s.List(); len(l) != 1 || l[0].Name != "a" {
+		t.Fatalf("List = %v", l)
+	}
+	if err := s.Save(config.AgentConfig{Name: "b", Bin: "bash"}); err != nil {
+		t.Fatalf("Save on a good store: %v", err)
+	}
+	if err := s.Delete("a"); err != nil {
+		t.Fatalf("Delete on a good store: %v", err)
+	}
+	if l := s.List(); len(l) != 1 || l[0].Name != "b" {
+		t.Fatalf("List after = %v", l)
+	}
+}
+
+func TestOpenOrReadOnlyMissingFileIsAWritableEmptyStore(t *testing.T) {
+	s, parseErr, err := OpenOrReadOnly(filepath.Join(t.TempDir(), "profiles.json"))
+	if err != nil || parseErr != nil {
+		t.Fatalf("missing file: parseErr=%v err=%v", parseErr, err)
+	}
+	if err := s.Save(config.AgentConfig{Name: "a", Bin: "bash"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+}
+
+func TestOpenOrReadOnlyOtherReadErrorIsFatal(t *testing.T) {
+	// A directory where the file should be is a read error, not a parse error.
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s, parseErr, err := OpenOrReadOnly(path)
+	if err == nil || s != nil || parseErr != nil {
+		t.Fatalf("got s=%v parseErr=%v err=%v, want a plain error", s, parseErr, err)
+	}
+}

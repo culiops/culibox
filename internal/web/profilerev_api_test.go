@@ -301,3 +301,68 @@ func TestDeleteOverAHandEditedFileIs409(t *testing.T) {
 		t.Fatalf("the hand edit was overwritten: %s", b)
 	}
 }
+
+// readOnlyServer is a Server over a real store file that does not parse: the
+// store is read-only, as serve starts it.
+func readOnlyServer(t *testing.T) (s *Server, path string, raw []byte) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "profiles.json")
+	raw = []byte(`{"version":2}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, parseErr, err := store.OpenOrReadOnly(path)
+	if err != nil || parseErr == nil {
+		t.Fatalf("OpenOrReadOnly: parseErr=%v err=%v", parseErr, err)
+	}
+	return &Server{Profiles: NewProfileManager(nil, nil, "", nil, st, func([]config.AgentConfig) {})}, path, raw
+}
+
+// unreadableStore holds profile p but refuses every write as a read-only store
+// does; the real one is empty, so only this reaches a PUT and a DELETE of p.
+type unreadableStore struct{ *fakeStore }
+
+func (unreadableStore) Save(config.AgentConfig) error { return store.ErrUnreadable }
+func (unreadableStore) Delete(string) error           { return store.ErrUnreadable }
+
+func wantUnreadable(t *testing.T, what string, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	b := apiBody(t, rec)
+	if rec.Code != 409 || b["code"] != "profiles_file_unreadable" || b["error"] != profilesFileUnreadableMsg {
+		t.Fatalf("%s: %d %s, want 409 profiles_file_unreadable with the approved text", what, rec.Code, rec.Body)
+	}
+}
+
+func TestUnreadableProfilesFileRefusesAPostWithA409(t *testing.T) {
+	s, path, raw := readOnlyServer(t)
+	wantUnreadable(t, "POST", postProfile(s, `{"name":"p","bin":"bash"}`))
+	if _, ok := s.Profiles.Get("p"); ok {
+		t.Fatal("a refused POST left the profile in memory")
+	}
+	if b, _ := os.ReadFile(path); string(b) != string(raw) {
+		t.Fatalf("the file was changed: %s", b)
+	}
+	if _, err := os.Stat(path + ".corrupt"); err == nil {
+		t.Fatal("the file was quarantined")
+	}
+}
+
+func TestUnreadableProfilesFileRefusesAPutAndADeleteWith409(t *testing.T) {
+	fs := newFakeStore()
+	fs.m["p"] = config.AgentConfig{Name: "p", Bin: "bash"}
+	s := &Server{Profiles: NewProfileManager(nil, nil, "", nil, unreadableStore{fs}, func([]config.AgentConfig) {})}
+	wantUnreadable(t, "PUT", putProfile(t, s, "p", `{"name":"p","bin":"bash","args":["--x"]}`))
+	wantUnreadable(t, "DELETE", deleteProfile(s, "p"))
+	if _, ok := s.Profiles.Get("p"); !ok {
+		t.Fatal("a refused DELETE removed the profile from memory")
+	}
+}
+
+func TestUnreadableProfilesFileDeleteOfAnAbsentProfileIs404(t *testing.T) {
+	// The read-only store is empty, so there is nothing to delete; the screen
+	// shows no runtime profiles and a stale page gets the plain "no such profile".
+	s, _, _ := readOnlyServer(t)
+	if rec := deleteWithRev(s, "p", "x"); rec.Code != 404 {
+		t.Fatalf("DELETE of a profile the empty store lacks: %d %s", rec.Code, rec.Body)
+	}
+}

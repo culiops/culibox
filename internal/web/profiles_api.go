@@ -120,6 +120,8 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 				writeErrCode(w, http.StatusConflict, deleteChangedMsg, "profile_changed")
 			case errors.Is(err, store.ErrChangedOnDisk):
 				writeErrCode(w, http.StatusConflict, profilesFileChangedMsg, "profiles_file_changed")
+			case errors.Is(err, store.ErrUnreadable):
+				writeErrCode(w, http.StatusConflict, profilesFileUnreadableMsg, "profiles_file_unreadable")
 			default:
 				var sf *storeFailure
 				if errors.As(err, &sf) {
