@@ -395,7 +395,7 @@ func (r *Relay) RemoveStale(ctx context.Context) error {
 // The one exception is the old broker RETURN of a VM upgraded without a
 // recreate: Ensure deletes that exact rule live and reads the table again
 // (deleteOldBrokerReturn), and refuses only if the table is still wrong. Within one daemon run, live sessions keep their proxy
-// and broker; a daemon that starts on such a VM never starts its egress listener
+// and broker; a daemon that starts on a VM that is refused never starts its egress listener
 // (Ready fails before it), so they keep only the broker until the VM is
 // recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {

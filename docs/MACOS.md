@@ -229,20 +229,20 @@ These limits are the same as on Linux and are not configurable.
   old ones until it is recreated: a VM set up before egress control for all
   boxes has none, and `culibox doctor` fails ("box VM config", and
   "box VM firewall" while the VM runs) and every boxed spawn is refused until
-  you recreate it. A VM set up before the broker fix (see
+  you recreate it. Sessions still running in boxes after the upgrade lose the
+  egress proxy until then (the recreate ends them anyway), so end them first. A VM set up before the broker fix (see
   [Token binding](#token-binding)) still lets containers on the VM's default
   network reach the broker: `culibox doctor` fails "box VM config" for it too,
   but CuliBox deletes the old rule at each boxed spawn, the VM puts it back at
-  each start, and `culibox box setup -recreate` removes it for good. Sessions still running in boxes after the upgrade lose the egress
-  proxy until then (the recreate ends them anyway), so end them first.
+  each start, and `culibox box setup -recreate` removes it for good.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and CuliBox must be restarted afterwards. Upgrading to the version with the
   relay handshake (see [Token binding](#token-binding)) creates a new secret in
   `relay2.secret` and deletes `relay.secret`. The old secret was sent on every
   connection, so it is never used again. The relay is replaced once, so
-  connections open through it drop once. On a VM that still needs the recreate
-  above, CuliBox removes the old relay instead, so sessions running across that
-  upgrade also lose the credential broker until you recreate the VM. Until the
+  connections open through it drop once. On a VM set up before egress control
+  for all boxes, CuliBox removes the old relay instead, so sessions running
+  across that upgrade also lose the credential broker until you recreate the VM. Until the
   new version replaces it, the old relay still sends the old secret and what the
   boxes send, tokens included, to whatever holds CuliBox's ports, so on a Mac
   shared with other accounts, stop the box VM (`culibox box stop`) or end the

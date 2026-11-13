@@ -122,7 +122,7 @@ type boxFacts struct {
 	UserContext error    // boxvm.CheckUserDockerContext result
 	Stopped     []string // this instance's boxes that are not running
 	// ProvisionDrifted: the drift includes the provision script (the VM's
-	// firewall rules), so every boxed spawn is refused until the VM is recreated.
+	// firewall rules).
 	ProvisionDrifted bool
 	// FirewallRan: the VM runs and its live rules were asked for. FirewallReadErr:
 	// they could not be read. FirewallErr: read, and not the rules the relay
