@@ -565,8 +565,8 @@ func (l *boxLayer) reclaimBoxState(ctx context.Context) {
 	// The same failure comes back every hour until someone fixes it, and says
 	// the same thing each time.
 	if l.reclaimErr.changed(err.Error()) {
-		log.Printf("box state reclaim: %v. What it names stays (a whole home, or a cache "+
-			"path inside one); usually a directory a box left unwritable (chmod it back), "+
+		log.Printf("box state reclaim: %v. What it names stays (a whole home, its output dir, or a "+
+			"cache path inside a home); usually a directory a box left unwritable (chmod it back), "+
 			"otherwise a file owned by another uid or an old root-owned stub, which has to be "+
 			"removed as its owner. New boxes create neither. Logged once while it stays the "+
 			"same.", err)
