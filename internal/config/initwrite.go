@@ -139,7 +139,9 @@ func PlanInitWrite(existing []byte, e InitEdit) (out []byte, skipped []string, e
 
 	hasClaude := false
 	for _, a := range d.agents {
-		if filepath.Base(rawStr(a["bin"])) != claudeBin {
+		// The claude agent is found by name or by binary name, the same rule
+		// init's dependency step uses to pick the binary it runs.
+		if rawStr(a["name"]) != claudeBin && filepath.Base(rawStr(a["bin"])) != claudeBin {
 			continue
 		}
 		hasClaude = true

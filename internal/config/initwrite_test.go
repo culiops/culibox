@@ -137,6 +137,33 @@ func TestPlanInitWriteRespectsOtherAccount(t *testing.T) {
 	}
 }
 
+func TestPlanInitWriteWrapperNamedClaudeIsTheClaudeAgent(t *testing.T) {
+	existing := []byte(`{"bind_addr":"127.0.0.1:8899","agents":[{"name":"claude","bin":"/opt/bin/claude-wrap"}]}`)
+	top, skipped, _ := planParsed(t, existing, InitEdit{DefaultCwd: "/w", Account: "claude-box"})
+	as := agentsOf(t, top)
+	if len(as) != 1 {
+		t.Fatalf("a second claude agent was appended: %v", as)
+	}
+	if rawString(t, as[0], "account") != "claude-box" || rawString(t, as[0], "bin") != "/opt/bin/claude-wrap" {
+		t.Errorf("entry = %v", as[0])
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v", skipped)
+	}
+}
+
+func TestPlanInitWriteWrapperNamedClaudeOnOtherAccountIsSkipped(t *testing.T) {
+	existing := []byte(`{"bind_addr":"127.0.0.1:8899","agents":[{"name":"claude","bin":"/opt/bin/claude-wrap","account":"work"}]}`)
+	top, skipped, _ := planParsed(t, existing, InitEdit{DefaultCwd: "/w", Account: "claude-box"})
+	as := agentsOf(t, top)
+	if len(as) != 1 || rawString(t, as[0], "account") != "work" {
+		t.Fatalf("agents = %v", as)
+	}
+	if len(skipped) != 1 || skipped[0] != "claude" {
+		t.Errorf("skipped = %v", skipped)
+	}
+}
+
 func TestPlanInitWriteSameAccountNotReported(t *testing.T) {
 	existing := []byte(`{"bind_addr":"127.0.0.1:8899","agents":[{"name":"claude","bin":"claude","account":"claude-box"}]}`)
 	_, skipped, _ := planParsed(t, existing, InitEdit{DefaultCwd: "/w", Account: "claude-box"})
