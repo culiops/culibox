@@ -62,8 +62,10 @@ func moveDataRoot(home, xdg, goos string, logf func(string, ...any)) (rootmove.O
 	if err != nil {
 		return rootmove.Outcome{}, nil
 	}
-	moveXDGConfig(config.XDGBase(home, xdg), root, logf)
-	return runRootMove(home, xdg, goos, logf)
+	relinked := moveXDGConfig(config.XDGBase(home, xdg), root, logf)
+	out, err := runRootMove(home, xdg, goos, logf)
+	out.XDGRelinked = relinked
+	return out, err
 }
 
 // runRootMove runs rootmove.Run on the default roots with the default config's
@@ -106,32 +108,51 @@ func runRootMove(home, xdg, goos string, logf func(string, ...any)) (rootmove.Ou
 // moveXDGConfig moves ~/.config/agent-box/config.json to ~/.config/culibox/
 // while this process holds the instance lock on root: another serve there is a
 // reason to wait. A failure is logged and never stops serve; the link (or the
-// untouched file) keeps the config found.
-func moveXDGConfig(xdgBase, root string, logf func(string, ...any)) {
+// untouched file) keeps the config found. relinked reports a step that only made
+// the missing link beside a culibox file that was already there: that says
+// nothing about where the file came from (#266).
+func moveXDGConfig(xdgBase, root string, logf func(string, ...any)) (relinked bool) {
 	release, err := instancelock.Acquire(root)
 	if errors.Is(err, instancelock.ErrLocked) {
 		logf("config: the ~/.config file was not moved: another serve holds %s", root)
-		return
+		return false
 	}
 	if err != nil {
 		logf("config: the ~/.config file was not moved: %v", err)
-		return
+		return false
 	}
 	defer release()
+	oldF := filepath.Join(xdgBase, config.LegacyRootName, "config.json")
+	newF := filepath.Join(xdgBase, config.RootName, "config.json")
+	_, oerr := os.Lstat(oldF)
+	_, nerr := os.Lstat(newF)
 	moved, err := rootmoveXDG(xdgBase)
-	if err != nil {
+	switch {
+	case err != nil:
 		logf("WARNING: config file move: %v", err)
-	} else if moved {
-		logf("config moved: %s -> %s (a link was left at the old path)",
-			filepath.Join(xdgBase, config.LegacyRootName, "config.json"),
-			filepath.Join(xdgBase, config.RootName, "config.json"))
+	case moved && nerr == nil && errors.Is(oerr, os.ErrNotExist):
+		logf("config: a link was left at %s for %s", oldF, newF)
+		return true
+	case moved:
+		logf("config moved: %s -> %s (a link was left at the old path)", oldF, newF)
 	}
+	return false
 }
 
-// warnUnvettedConfig logs the WARN for a config read from the culibox ~/.config
-// file before the data root moved (#266); moved: the move happened in this start.
-func warnUnvettedConfig(src config.Source, moved bool, logf func(string, ...any)) {
-	if w := src.UnvettedWarning(moved); w != "" {
+// startFacts is what a start's moves did, for config.Source.UnvettedWarning.
+func startFacts(out rootmove.Outcome) config.StartFacts {
+	return config.StartFacts{RootMoved: out.Moved, ConfigRelinked: out.XDGRelinked}
+}
+
+// serveStartWarnings logs the WARN for a config read from the culibox ~/.config
+// file before the data root moved (#266). Only `serve` logs it (doctor has its
+// own row), and only for a config that loaded: main calls it right after
+// config.Resolve, so a later refusal (validateBoot) cannot skip it.
+func serveStartWarnings(cmd string, src config.Source, cfgErr error, f config.StartFacts, logf func(string, ...any)) {
+	if cmd != "serve" || cfgErr != nil {
+		return
+	}
+	if w := src.UnvettedWarning(f); w != "" {
 		logf("WARNING: %s", w)
 	}
 }

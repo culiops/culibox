@@ -356,7 +356,7 @@ func startConfigWarnings(t *testing.T, e *rootEnv) []string {
 		t.Fatal(err)
 	}
 	var logs []string
-	warnUnvettedConfig(src, out.Moved, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	serveStartWarnings("serve", src, nil, startFacts(out), func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
 	return logs
 }
 
@@ -415,5 +415,72 @@ func TestServeDoesNotWarnForOtherConfigSources(t *testing.T) {
 				t.Fatalf("%v", logs)
 			}
 		})
+	}
+}
+
+// #266 review: an agent-box directory WITHOUT a config.json makes serve's
+// ~/.config step link agent-box/config.json to the culibox file before Resolve.
+// That link is not evidence of where the file came from: the warning stays.
+func TestServeWarnsWhenOnlyARelinkHappened(t *testing.T) {
+	e := newRootEnv(t)
+	file := filepath.Join(e.xdg, "culibox", "config.json")
+	writeFile(t, file, warnCfg)
+	if err := os.MkdirAll(filepath.Join(e.xdg, "agent-box"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logs := startConfigWarnings(t, e)
+	if len(logs) != 1 || !strings.Contains(logs[0], file) {
+		t.Fatalf("first start: %v", logs)
+	}
+	if fi, err := os.Lstat(filepath.Join(e.xdg, "agent-box", "config.json")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the relink the case is about did not happen: %v", err)
+	}
+}
+
+func TestServeWarnsWhenRelinkAndDeferredMove(t *testing.T) {
+	e := newRootEnv(t)
+	file := filepath.Join(e.xdg, "culibox", "config.json")
+	writeFile(t, file, `{"bind_addr":"127.0.0.1:8899","data_dir":"`+e.legacy+`","agents":[{"name":"a","bin":"a"}]}`)
+	if err := os.MkdirAll(filepath.Join(e.xdg, "agent-box"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logs := startConfigWarnings(t, e)
+	if len(logs) != 1 || !strings.Contains(logs[0], file) {
+		t.Fatalf("first start: %v", logs)
+	}
+	if fi, err := os.Lstat(e.legacy); err != nil || !fi.IsDir() {
+		t.Fatalf("the move was meant to stay deferred: %v", err)
+	}
+}
+
+// A real move of the agent-box file never warns, even with the root moving.
+func TestServeNoWarnForAMovedAgentBoxFileWithRootMove(t *testing.T) {
+	e := newRootEnv(t)
+	writeFile(t, filepath.Join(e.xdg, "agent-box", "config.json"), warnCfg)
+	if logs := startConfigWarnings(t, e); len(logs) != 0 {
+		t.Fatalf("%v", logs)
+	}
+}
+
+func TestServeStartWarningsGate(t *testing.T) {
+	e := newRootEnv(t)
+	writeFile(t, filepath.Join(e.xdg, "culibox", "config.json"), warnCfg)
+	_, src, err := config.Resolve("", false, e.home, e.xdg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func(cmd string, cfgErr error) int {
+		n := 0
+		serveStartWarnings(cmd, src, cfgErr, config.StartFacts{}, func(string, ...any) { n++ })
+		return n
+	}
+	if count("serve", nil) != 1 {
+		t.Error("serve with a loaded config must warn")
+	}
+	if count("doctor", nil) != 0 || count("bug-report", nil) != 0 {
+		t.Error("only serve logs it; doctor has its own row")
+	}
+	if count("serve", errors.New("x")) != 0 {
+		t.Error("a config that did not load must not be warned about")
 	}
 }

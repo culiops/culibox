@@ -74,6 +74,9 @@ type Input struct {
 	// RootNote is why a running serve kept the old data root in place ("" for the
 	// CLI, which only resolves and never tries the move).
 	RootNote string
+	// Start is what a running serve's start did before it resolved the config
+	// (zero for the CLI): the in-app doctor warns on the start that moved the root.
+	Start config.StartFacts
 }
 
 // protectedFor is the protected-directory list serve and the CLI build

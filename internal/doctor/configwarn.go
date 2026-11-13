@@ -4,7 +4,7 @@ package doctor
 // ~/.config file while the data root is still the pre-rename one (#266). It
 // reads only the Source that config.Resolve filled in.
 func checkConfigFileWarn(in Input) []Result {
-	if w := in.Source.UnvettedWarning(false); w != "" {
+	if w := in.Source.UnvettedWarning(in.Start); w != "" {
 		return []Result{{Warn, "config", w}}
 	}
 	return nil

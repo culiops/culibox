@@ -84,3 +84,19 @@ func TestConfigFileWarnQuietCases(t *testing.T) {
 		})
 	}
 }
+
+// The in-app doctor of the start that moved the root still warns.
+func TestConfigFileWarnRootMovedThisStart(t *testing.T) {
+	in := configWarnIn(t, func(home, newRoot, legacy string) {
+		_ = os.MkdirAll(newRoot, 0o700)
+		_ = os.Symlink(newRoot, legacy)
+		writeXDG(t, home, "culibox")
+	})
+	if got := checkConfigFileWarn(in); len(got) != 0 {
+		t.Fatalf("without the start facts: %+v", got)
+	}
+	in.Start = config.StartFacts{RootMoved: true}
+	if got := checkConfigFileWarn(in); len(got) != 1 || got[0].Status != Warn {
+		t.Fatalf("with RootMoved: %+v", got)
+	}
+}

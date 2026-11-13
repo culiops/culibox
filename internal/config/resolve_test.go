@@ -629,7 +629,7 @@ func TestUnvettedConfigWarning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := src.UnvettedWarning(tc.moved)
+			got := src.UnvettedWarning(StartFacts{RootMoved: tc.moved})
 			if (got != "") != tc.warn {
 				t.Fatalf("warning %q, want warn=%v (source %+v)", got, tc.warn, src)
 			}
@@ -646,12 +646,12 @@ func TestUnvettedConfigWarningNotForEnvOrExplicit(t *testing.T) {
 	mkdir(t, legacy)
 	writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
 	env := privateDir(t)
-	if _, src, err := Resolve("", false, home, "", env); err != nil || src.UnvettedWarning(false) != "" {
+	if _, src, err := Resolve("", false, home, "", env); err != nil || src.UnvettedWarning(StartFacts{}) != "" {
 		t.Errorf("env root: %+v %v", src, err)
 	}
 	f := filepath.Join(privateDir(t), "c.json")
 	writeCfg(t, f, "127.0.0.1:3")
-	if _, src, err := Resolve(f, true, home, "", ""); err != nil || src.UnvettedWarning(false) != "" {
+	if _, src, err := Resolve(f, true, home, "", ""); err != nil || src.UnvettedWarning(StartFacts{}) != "" {
 		t.Errorf("-config: %+v %v", src, err)
 	}
 }
@@ -666,7 +666,27 @@ func TestUnvettedConfigWarningHonoursXDG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := src.UnvettedWarning(false); !strings.Contains(got, filepath.Join(xdg, "culibox", "config.json")) {
+	if got := src.UnvettedWarning(StartFacts{}); !strings.Contains(got, filepath.Join(xdg, "culibox", "config.json")) {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// A link at the agent-box path counts as "came from agent-box" unless this very
+// start only made it (ConfigRelinked).
+func TestUnvettedConfigWarningRelinked(t *testing.T) {
+	home, _, legacy := rootsOf(t)
+	mkdir(t, legacy)
+	writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+	mkdir(t, filepath.Dir(xdgFile(home, "agent-box")))
+	symlink(t, xdgFile(home, "culibox"), xdgFile(home, "agent-box"))
+	_, src, err := Resolve("", false, home, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := src.UnvettedWarning(StartFacts{}); got != "" {
+		t.Errorf("link from an earlier move: %q", got)
+	}
+	if got := src.UnvettedWarning(StartFacts{ConfigRelinked: true}); got == "" {
+		t.Error("a link made only by this start must not hide the warning")
 	}
 }
