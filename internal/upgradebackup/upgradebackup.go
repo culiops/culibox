@@ -6,6 +6,7 @@ package upgradebackup
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,6 +34,9 @@ type Result struct {
 
 // backupsDir holds every backup, under the data root.
 const backupsDir = "backups"
+
+// auditName is the SQLite audit log; it is snapshotted, not byte-copied.
+const auditName = "audit.db"
 
 // topFiles are the top-level data-root files that go into a backup (spec,
 // "What is in the backup"). A missing one is skipped. config.json is handled
@@ -68,7 +72,7 @@ func Run(o Options) (Result, error) {
 	}
 	res := Result{From: from}
 
-	found, err := hasIncluded(root, o.IncludeConfig)
+	found, err := hasIncluded(root, o)
 	if err != nil {
 		return res, fmt.Errorf("upgrade backup: %w", err)
 	}
@@ -79,8 +83,8 @@ func Run(o Options) (Result, error) {
 		return res, nil
 	}
 
-	name := dirName(from, o.Version, o.Now)
-	if err := copyBackup(root, name); err != nil {
+	name, err := copyBackup(root, from, o)
+	if err != nil {
 		return res, fmt.Errorf("upgrade backup: %w", err)
 	}
 	res.Taken = true
@@ -91,34 +95,62 @@ func Run(o Options) (Result, error) {
 	return res, nil
 }
 
-// hasIncluded reports whether any allowlisted top-level file exists. An entry
-// of any type counts (Lstat, never followed): it is data the upgrade could touch.
-func hasIncluded(root *os.Root, includeConfig bool) (bool, error) {
-	names := topFiles
-	if includeConfig {
-		names = append(append([]string(nil), topFiles...), "config.json")
+// hasIncluded reports whether the data root holds anything the backup would
+// take: any allowlisted top-level entry (of any type, Lstat, never followed),
+// config.json when included, a non-empty topDir or bin/, an account file under
+// accounts/*/claude/, or audit.db (existence only; its snapshot is Task 3's).
+func hasIncluded(root *os.Root, o Options) (bool, error) {
+	names := append([]string(nil), topFiles...)
+	if o.IncludeConfig {
+		names = append(names, "config.json")
 	}
+	names = append(names, auditName)
 	for _, n := range names {
-		_, err := root.Lstat(n)
-		if err == nil {
+		ok, err := exists(root, n)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	for _, d := range append(append([]string(nil), topDirs...), binDir) {
+		fi, err := root.Lstat(d)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("stat %s: %w", d, err)
+		}
+		if !fi.IsDir() {
 			return true, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("stat %s: %w", n, err)
+		ents, err := fs.ReadDir(root.FS(), d)
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", d, err)
+		}
+		if len(ents) > 0 {
+			return true, nil
 		}
 	}
-	return false, nil
+	found := false
+	err := forEachAccount(root, o.logf, func(claude string) error {
+		for _, f := range accountFiles {
+			ok, err := exists(root, filepath.Join(claude, f))
+			if err != nil {
+				return err
+			}
+			found = found || ok
+		}
+		return nil
+	})
+	return found, err
 }
 
-// copyBackup is a stub until the copy lands: it builds backups/.tmp-<name> and
-// renames it to backups/<name>, both mode 0700.
-func copyBackup(root *os.Root, name string) error {
-	if err := root.Mkdir(backupsDir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
+func exists(root *os.Root, rel string) (bool, error) {
+	_, err := root.Lstat(rel)
+	if err == nil {
+		return true, nil
 	}
-	tmp := filepath.Join(backupsDir, ".tmp-"+name)
-	if err := root.Mkdir(tmp, 0o700); err != nil {
-		return err
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
-	return root.Rename(tmp, filepath.Join(backupsDir, name))
+	return false, fmt.Errorf("stat %s: %w", rel, err)
 }
