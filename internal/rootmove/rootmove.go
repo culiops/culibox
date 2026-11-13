@@ -56,6 +56,9 @@ var configNames = []string{"config.json", "credentials.json"}
 type Outcome struct {
 	Moved, Resumed bool
 	Reason         string
+	// XDGRelinked is set by the caller (not by Run): the ~/.config step of this
+	// start only made a missing link beside a culibox file that was already there.
+	XDGRelinked bool
 }
 
 // Run moves legacyRoot to newRoot when every precondition of spec D2 holds,

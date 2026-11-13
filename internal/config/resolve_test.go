@@ -572,3 +572,121 @@ func TestConfigFilesIncludesOtherDefaultRoot(t *testing.T) {
 		t.Fatalf("new in use: %v", got)
 	}
 }
+
+// --- #266: a ~/.config/culibox file read while the data root is the old one ---
+
+func xdgFile(home, name string) string { return filepath.Join(home, ".config", name, "config.json") }
+
+func TestUnvettedConfigWarning(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, home, newRoot, legacy string)
+		moved bool
+		warn  bool
+	}{
+		{"culibox file, legacy root", func(t *testing.T, home, _, legacy string) {
+			mkdir(t, legacy)
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, false, true},
+		{"culibox file, legacy root moved this start", func(t *testing.T, home, newRoot, legacy string) {
+			mkdir(t, newRoot)
+			symlink(t, newRoot, legacy)
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, true, true},
+		{"culibox file, root already moved earlier", func(t *testing.T, home, newRoot, legacy string) {
+			mkdir(t, newRoot)
+			symlink(t, newRoot, legacy)
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, false, false},
+		{"fresh culibox root", func(t *testing.T, home, newRoot, _ string) {
+			mkdir(t, newRoot)
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, false, false},
+		{"nothing exists yet", func(t *testing.T, home, _, _ string) {
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, false, false},
+		{"config in the data root wins", func(t *testing.T, home, _, legacy string) {
+			writeCfg(t, filepath.Join(legacy, "config.json"), "127.0.0.1:2")
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+		}, false, false},
+		{"only the agent-box file", func(t *testing.T, home, _, legacy string) {
+			mkdir(t, legacy)
+			writeCfg(t, xdgFile(home, "agent-box"), "127.0.0.1:1")
+		}, false, false},
+		{"agent-box file moved to culibox by serve (link left)", func(t *testing.T, home, _, legacy string) {
+			mkdir(t, legacy)
+			writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+			mkdir(t, filepath.Dir(xdgFile(home, "agent-box")))
+			symlink(t, xdgFile(home, "culibox"), xdgFile(home, "agent-box"))
+		}, false, false},
+		{"no config at all, legacy root", func(t *testing.T, _, _, legacy string) { mkdir(t, legacy) }, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home, newRoot, legacy := rootsOf(t)
+			tc.setup(t, home, newRoot, legacy)
+			_, src, err := Resolve("", false, home, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := src.UnvettedWarning(StartFacts{RootMoved: tc.moved})
+			if (got != "") != tc.warn {
+				t.Fatalf("warning %q, want warn=%v (source %+v)", got, tc.warn, src)
+			}
+			if tc.warn && !strings.Contains(got, xdgFile(home, "culibox")) {
+				t.Errorf("warning must name the file: %q", got)
+			}
+		})
+	}
+}
+
+// A relocated instance and an explicit -config never read the ~/.config file.
+func TestUnvettedConfigWarningNotForEnvOrExplicit(t *testing.T) {
+	home, _, legacy := rootsOf(t)
+	mkdir(t, legacy)
+	writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+	env := privateDir(t)
+	if _, src, err := Resolve("", false, home, "", env); err != nil || src.UnvettedWarning(StartFacts{}) != "" {
+		t.Errorf("env root: %+v %v", src, err)
+	}
+	f := filepath.Join(privateDir(t), "c.json")
+	writeCfg(t, f, "127.0.0.1:3")
+	if _, src, err := Resolve(f, true, home, "", ""); err != nil || src.UnvettedWarning(StartFacts{}) != "" {
+		t.Errorf("-config: %+v %v", src, err)
+	}
+}
+
+// $XDG_CONFIG_HOME moves the file: the warning names the path actually read.
+func TestUnvettedConfigWarningHonoursXDG(t *testing.T) {
+	home, _, legacy := rootsOf(t)
+	mkdir(t, legacy)
+	xdg := t.TempDir()
+	writeCfg(t, filepath.Join(xdg, "culibox", "config.json"), "127.0.0.1:1")
+	_, src, err := Resolve("", false, home, xdg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := src.UnvettedWarning(StartFacts{}); !strings.Contains(got, filepath.Join(xdg, "culibox", "config.json")) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A link at the agent-box path counts as "came from agent-box" unless this very
+// start only made it (ConfigRelinked).
+func TestUnvettedConfigWarningRelinked(t *testing.T) {
+	home, _, legacy := rootsOf(t)
+	mkdir(t, legacy)
+	writeCfg(t, xdgFile(home, "culibox"), "127.0.0.1:1")
+	mkdir(t, filepath.Dir(xdgFile(home, "agent-box")))
+	symlink(t, xdgFile(home, "culibox"), xdgFile(home, "agent-box"))
+	_, src, err := Resolve("", false, home, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := src.UnvettedWarning(StartFacts{}); got != "" {
+		t.Errorf("link from an earlier move: %q", got)
+	}
+	if got := src.UnvettedWarning(StartFacts{ConfigRelinked: true}); got == "" {
+		t.Error("a link made only by this start must not hide the warning")
+	}
+}

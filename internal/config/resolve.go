@@ -41,6 +41,34 @@ type Source struct {
 	Path    string   // the file read; "" with Default
 	Default bool     // no file found: built-in defaults
 	Root    RootInfo // the data root Resolve picked
+	// XDGCulibox: the file read is the culibox ~/.config one. XDGTwin: something
+	// (a file, or the link a move leaves) sits at the agent-box path beside it
+	// (#266). See UnvettedWarning.
+	XDGCulibox, XDGTwin bool
+}
+
+// StartFacts are what serve's start did before the config was resolved, for
+// UnvettedWarning. The zero value is "nothing happened" (the CLI, doctor).
+type StartFacts struct {
+	// RootMoved: the data root move happened in this very start, so the root now
+	// resolves as the new one although the config was read before any move.
+	RootMoved bool
+	// ConfigRelinked: this start only made a missing link at the agent-box path
+	// for a culibox file that is already there. The link says nothing about where
+	// the file came from, so the file still counts as new.
+	ConfigRelinked bool
+}
+
+// UnvettedWarning is the WARN for a config read from the culibox ~/.config file
+// before the one-time data root move (#266). "" when there is nothing to warn
+// about.
+func (s Source) UnvettedWarning(f StartFacts) string {
+	fresh := s.XDGCulibox && (!s.XDGTwin || f.ConfigRelinked)
+	if !fresh || s.Default || (s.Root.Kind != RootLegacy && !f.RootMoved) {
+		return ""
+	}
+	return fmt.Sprintf("%s was read before the data root moved from %s. Before the rename this folder was not protected from box workspaces and shares, so check that the file is yours (it names the programs CuliBox runs), or delete it",
+		s.Path, filepath.Join(filepath.Dir(s.Root.Path), LegacyRootName))
 }
 
 func (s Source) String() string {
@@ -210,7 +238,12 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 				return Config{}, Source{Path: p}, err
 			}
 			c, lerr := Load(p)
-			return c, Source{Path: p}, lerr
+			src := Source{Path: p}
+			if i == 1 { // a link a move leaves at the agent-box path counts as something there
+				_, aerr := os.Lstat(cands[2])
+				src.XDGCulibox, src.XDGTwin = true, !errors.Is(aerr, os.ErrNotExist)
+			}
+			return c, src, lerr
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, Source{Path: p}, err

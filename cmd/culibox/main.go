@@ -98,12 +98,14 @@ func main() {
 	// The one-time data root move, before the config is resolved so the config,
 	// credentials and protected list are all built from the new path.
 	var rootNote string
+	var facts config.StartFacts
 	if homeErr == nil && envErr == nil {
 		out, err := maybeMoveDataRoot(args.Cmd, args.ConfigSet, envHome, home, xdg, runtime.GOOS, log.Printf)
 		if err != nil {
 			log.Fatalf("culibox: %v", err)
 		}
 		rootNote = out.Reason
+		facts = startFacts(out)
 	}
 	var (
 		cfg    config.Config
@@ -114,6 +116,7 @@ func main() {
 		cfgErr = envErr
 	} else {
 		cfg, src, cfgErr = config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, envHome)
+		serveStartWarnings(args.Cmd, src, cfgErr, facts, log.Printf)
 	}
 	if src.Default && cfgErr == nil {
 		// No file yet: let the TLS-interception hint say where to create one.
@@ -185,7 +188,7 @@ func main() {
 	}
 	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
 		Home: home, Commit: buildCommit(), CredErrors: cred.Problems(), ConfigFiles: cfgFiles,
-		EnvNotice: envNotice, RootNote: rootNote}, ring)
+		EnvNotice: envNotice, RootNote: rootNote, Start: facts}, ring)
 }
 
 // boxConfigFiles: `box` uses the config files only for the macOS VM's
