@@ -104,6 +104,9 @@ func TestMoveDataRootBindsDeps(t *testing.T) {
 	if _, _, ok, _, err := st.State(moved); err != nil || !ok {
 		t.Errorf("analytics ingest row not rewritten to %s: ok=%v err=%v", moved, ok, err)
 	}
+	if _, _, ok, _, err := st.State(transcript); err != nil || !ok {
+		t.Errorf("legacy analytics ingest row dropped (R12 copies): ok=%v err=%v", ok, err)
+	}
 	// A second start has nothing to move.
 	if out, err := moveDataRoot(e.home, e.xdg, "linux", e.logf); err != nil || out.Moved || out.Reason != "" {
 		t.Fatalf("second start: %+v %v", out, err)
