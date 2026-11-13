@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/culiops/culibox/internal/config"
@@ -74,6 +75,9 @@ type Service struct {
 	ep     Endpoint
 	ln     net.Listener
 	closed bool
+	// conflictLogged: LinuxBindConflict is already in the log for the current
+	// run of failed binds; a successful listen clears it.
+	conflictLogged bool
 }
 
 func NewService(o ServiceOptions) *Service {
@@ -180,10 +184,22 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	s.o.Proxy.SetNetwork(n.Subnet, n.Gateway, true)
 	l, err := s.o.Listen("tcp", addr)
 	if err != nil {
-		// Only macOS has a relay in front of the port, so only there does a
-		// bind conflict need saying who may hold it (#118); Linux's text is as it was.
-		if s.o.GOOS == "darwin" {
+		// A bind conflict needs saying who may hold the port. macOS has a relay
+		// in front of it that proves the key first (#118), so the holder gets
+		// nothing from the boxes. On Linux there is no such proof: the holder
+		// of the gateway's address can act as the proxy (#131), so the text
+		// says that, and it is logged once per episode (a retry on the next
+		// spawn does not repeat it).
+		switch {
+		case s.o.GOOS == "darwin":
 			err = proxyline.ExplainBindError(s.o.Port, err)
+		case s.o.GOOS == "linux" && errors.Is(err, syscall.EADDRINUSE):
+			msg := LinuxBindConflict(s.o.Port)
+			if !s.conflictLogged {
+				s.conflictLogged = true
+				log.Printf("egress: %s", msg)
+			}
+			err = fmt.Errorf("%w; %s", err, msg)
 		}
 		return Endpoint{}, fmt.Errorf("egress: listen %s: %w", addr, err)
 	}
@@ -216,6 +232,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 		host = n.Gateway.String()
 	}
 	s.ln = l
+	s.conflictLogged = false
 	s.ep = Endpoint{Net: n, ProxyHost: host, Port: port}
 	s.warnCIDROverlap(n.Subnet) // once: a later Ready returns early above
 	go func() {
@@ -288,4 +305,14 @@ func listenAddr(goos string, n Net, port int) (string, error) {
 		return net.JoinHostPort(gw.String(), strconv.Itoa(port)), nil
 	}
 	return "", fmt.Errorf("egress: unsupported platform %q", goos)
+}
+
+// LinuxBindConflict is the fixed text for an address-in-use error on the egress
+// port on Linux (#131). The proxy listens on TCP at the box network's gateway
+// address, so while CuliBox is stopped another account on the host can take
+// that address and port; boxes that are still running would then send their
+// proxy connections to it. Nothing here guesses who holds the port: it may be an
+// earlier CuliBox still running.
+func LinuxBindConflict(port int) string {
+	return fmt.Sprintf("port %d on the box network's gateway is already in use by another process, so the egress proxy cannot start and boxes cannot reach it. If it is not an earlier CuliBox still running, another account on this host may have taken that address while CuliBox was stopped and could act as the proxy for running boxes; run `culibox doctor` and see docs/SECURITY.md (Services on this host)", port)
 }
