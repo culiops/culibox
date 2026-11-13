@@ -186,7 +186,7 @@ func move(newRoot, legacy string, d Deps) (Outcome, error) {
 		syncDir(filepath.Dir(legacy))
 	}
 
-	// 4-6.
+	// 4-6 (link first, then the rewrites: see finish).
 	finish(newRoot, legacy, d, false)
 	return Outcome{Moved: true}, nil
 }
@@ -291,7 +291,8 @@ func keyTarget(newRoot string) (string, error) {
 	return filepath.Join(parent, filepath.Base(newRoot)), nil
 }
 
-// resume finishes a move a kill interrupted after the rename (steps 4-6).
+// resume finishes a move a kill interrupted after the rename (steps 4-6),
+// whether or not the link was made yet.
 func resume(newRoot, legacyArg string, d Deps) (Outcome, error) {
 	release, err := d.Lock(newRoot)
 	if errors.Is(err, instancelock.ErrLocked) {
@@ -353,7 +354,16 @@ func recopyKey(newRoot, hash string, d Deps) bool {
 
 // finish is steps 4-6, each idempotent. keepJournal leaves the journal so the
 // next start runs them again (a key copy is still pending).
+//
+// The link (spec step 5) is made before the rewrites (spec step 4), ruling
+// R13: right after the rename the old path is briefly empty, and an older
+// agent-box serve started then would create a fresh, empty root there. Linking
+// first shrinks that window to the gap between two syscalls. Crash safety is unchanged:
+// the journal stays until step 6, so a kill after the link resumes, accepts the
+// link and runs the rewrites.
 func finish(newRoot, legacy string, d Deps, keepJournal bool) {
+	// 5. The compat link.
+	linked := leaveLink(newRoot, legacy, d)
 	// 4. Rewrite stored paths. A failure loses nothing: the link keeps the old
 	// paths resolving.
 	for i, rw := range d.Rewrite {
@@ -361,8 +371,6 @@ func finish(newRoot, legacy string, d Deps, keepJournal bool) {
 			d.Logf("WARNING: data root move: stored path rewrite %d of %d failed (%v); paths under %s keep working through the link at the old path", i+1, len(d.Rewrite), err, legacy)
 		}
 	}
-	// 5. The compat link.
-	linked := leaveLink(newRoot, legacy, d)
 	// 6. Done.
 	if keepJournal {
 		return

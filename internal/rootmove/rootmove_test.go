@@ -648,16 +648,23 @@ func TestKeyHashPrecomputedMatchesAfterRename(t *testing.T) {
 	}
 }
 
+// Something sits at the old path when the link is due (a kill after the
+// rename, then something else took the path before the next start): the move
+// warns and still finishes. A fresh move has no hook between its rename and its
+// link (R13 makes them adjacent), so the state is set up as the resume sees it.
 func TestMoveLinkFailureWarnsAndFinishes(t *testing.T) {
 	e := newEnv(t, "linux", true)
-	// Something takes the old path between the rename and the link.
-	e.d.Rewrite = append(e.d.Rewrite, func(o, n string) error { return os.WriteFile(o, []byte("x"), 0o600) })
+	e.afterRename(secretstore.KeyHash(e.legacy))
+	write(t, e.legacy, "x")
 	out := e.run()
 	if !out.Moved || out.Reason != "" {
 		t.Fatalf("Outcome = %+v", out)
 	}
 	if exists(filepath.Join(e.newDir, JournalName)) {
 		t.Error("journal left")
+	}
+	if len(e.rewrites) != 2 {
+		t.Errorf("rewrites = %v, want both run", e.rewrites)
 	}
 	if !hasLog(e.logs, "WARNING") || !hasLog(e.logs, e.legacy) {
 		t.Errorf("no WARNING naming the old path: %q", e.logs)
@@ -666,6 +673,47 @@ func TestMoveLinkFailureWarnsAndFinishes(t *testing.T) {
 		t.Errorf("final line claims a link: %q", last(e.logs))
 	}
 	if !strings.HasPrefix(last(e.logs), "data root moved: "+e.legacy+" → "+e.newDir) {
+		t.Errorf("final line = %q", last(e.logs))
+	}
+}
+
+// R13: the compat link is made right after the rename, before the rewrites, so
+// an older serve started meanwhile finds the moved root through it.
+func TestMoveLinksBeforeRewrites(t *testing.T) {
+	e := newEnv(t, "linux", true)
+	linkedFirst := false
+	e.d.Rewrite = []func(string, string) error{func(o, n string) error {
+		fi, err := os.Lstat(o)
+		linkedFirst = err == nil && fi.Mode()&os.ModeSymlink != 0
+		return nil
+	}}
+	e.assertMoved(e.run())
+	if !linkedFirst {
+		t.Error("the rewrites ran before the link was made")
+	}
+}
+
+// A kill between the link and the rewrites: the journal is in the new root and
+// the link at the old path. The next start accepts the link, runs the rewrites
+// and removes the journal.
+func TestResumeAfterLinkBeforeRewrites(t *testing.T) {
+	e := newEnv(t, "linux", true)
+	e.afterRename(secretstore.KeyHash(e.legacy))
+	if err := os.Symlink(e.newDir, e.legacy); err != nil {
+		t.Fatal(err)
+	}
+	out := e.run()
+	if !out.Resumed {
+		t.Fatalf("Outcome = %+v, want Resumed", out)
+	}
+	e.assertMoved(out)
+	if len(e.rewrites) != 2 || e.rewrites[0] != [2]string{e.legacy, e.newDir} {
+		t.Errorf("rewrites = %v, want both with (legacy, new)", e.rewrites)
+	}
+	if hasLog(e.logs, "WARNING") {
+		t.Errorf("an existing correct link warned: %q", e.logs)
+	}
+	if !strings.Contains(last(e.logs), "a link was left") {
 		t.Errorf("final line = %q", last(e.logs))
 	}
 }
