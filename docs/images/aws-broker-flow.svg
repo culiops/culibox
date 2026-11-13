@@ -60,7 +60,7 @@ text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Aria
                   <!-- lane heads -->
                   <rect class="node" x="40" y="18" width="170" height="40" rx="3"></rect>
                   <use href="#i-key" x="56" y="29" width="18" height="18" color="#121923"></use>
-                  <text class="sb" x="80" y="43" font-size="13">You, on the host</text>
+                  <text class="sb" x="78" y="43" font-size="12">You, on the host</text>
                   <path class="wall" fill-rule="evenodd" d="M285 18H455V58H285Z M291 24V52H449V24Z"></path>
                   <rect class="ln" x="285" y="18" width="170" height="40"></rect>
                   <rect x="291" y="24" width="158" height="28" fill="#f8fafc" stroke="#121923" stroke-width="1"></rect>
@@ -70,7 +70,7 @@ text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Aria
                   <text class="sb" x="577" y="43" font-size="14">CuliBox broker</text>
                   <rect class="node" x="785" y="18" width="170" height="40" rx="3"></rect>
                   <svg x="801" y="27" width="22" height="22" viewBox="0 0 80 80" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink">
-    <title>Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64</title>
+    <title>AWS IAM</title>
     <g id="Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
         <g id="Icon-Architecture-BG/64/Security-Identity-Compliance" fill="#DD344C">
             <rect id="Rectangle" x="0" y="0" width="80" height="80"></rect>

@@ -159,7 +159,7 @@ text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Aria
                 <text class="tm amf" x="863" y="148" font-size="12" text-anchor="middle">15:00</text>
                 <text class="sb amf" x="863" y="217" font-size="12" text-anchor="middle">1 h</text>
                 <text class="mu" x="863" y="244" font-size="12" text-anchor="middle">2 repos</text>
-                <text class="sb amf" x="867" y="313" font-size="11" text-anchor="middle">1 command</text>
+                <text class="sb amf" x="859" y="313" font-size="10.5" text-anchor="middle">1 command</text>
                 <text class="mu" x="863" y="340" font-size="12" text-anchor="middle">long-lived</text>
                 <text class="sb okf" x="863" y="409" font-size="12" text-anchor="middle">proxy</text>
                 <text class="tm mu" x="863" y="436" font-size="12" text-anchor="middle">443</text>
@@ -167,7 +167,7 @@ text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Aria
                 <!-- destinations -->
                 <rect class="node" x="900" y="96" width="272" height="68" rx="3"></rect>
                 <svg x="912" y="112" width="36" height="36" viewBox="0 0 80 80" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink">
-    <title>Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64</title>
+    <title>AWS IAM</title>
     <g id="Icon-Architecture/64/Arch_AWS-Identity-and-Access-Management_64" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
         <g id="Icon-Architecture-BG/64/Security-Identity-Compliance" fill="#DD344C">
             <rect id="Rectangle" x="0" y="0" width="80" height="80"></rect>
