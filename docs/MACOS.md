@@ -462,23 +462,38 @@ single `colima ssh` per spawn, so every boxed spawn now makes one, with or
 without context paths. The comparison inside the box is one `docker exec`, so a
 plain boxed spawn, without context paths, makes that too.
 
-- Known limit: on macOS the host's own reading of the workspace folder, the one
-  the folder opened to derive the guards is compared with, is an `lstat`, which
-  follows the folders above it. A parent swapped for a link between resolving
-  the folder and that reading is not seen by this comparison (Linux walks the
-  path without following links). The VM's read of the workspace and the
-  comparison inside the box still refuse a mount that is not the folder that
-  was checked.
-- A workspace typed in a case or Unicode form other than the one on disk may be
-  refused: a macOS volume ignores case and treats an accented letter in its
-  composed and decomposed forms as the same name, while the script compares the
-  path as given with the real path. The spawn is refused, not let through. Open
-  the folder by its exact name, as `ls` shows it.
+- The host's own reading of the workspace folder, the one the folder opened to
+  derive the guards is compared with, follows no link in any part of the path
+  (one `open` with `O_NOFOLLOW_ANY`, macOS 11+), so a folder above the workspace
+  swapped for a link between resolving the folder and that reading is refused.
+  It needs read permission on the workspace folder itself.
+- A real folder moved into place before the VM reads it is taken as the path you
+  listed: the VM read says what is at the path when it runs, not what was
+  there when the folder passed the checks. Only a link is caught. A change after
+  that read, up to the box's own mount, is caught by the comparison inside the
+  box.
+- A box created by a version before the identity check (it lacks the
+  `io.culiops.agent-box.identity` label) was never checked, so its guards are
+  compared once, by the first spawn into it after CuliBox starts: an idle box
+  that no longer matches is removed, and one with running sessions is kept and
+  the spawn refused until they end. A box that failed a check and could not be
+  removed is never reused as it is: the next spawn removes it again first, and is
+  refused while it cannot.
+- A workspace reached by another spelling of its name (another case, or the
+  composed and decomposed forms of an accented letter) started on a Mac with the
+  identity equal to that of the real folder, and was not refused (measured on
+  2026-11-10, colima 0.10.3). The script compares the path as given with the
+  real path, so a spelling it does not accept is refused, not let through: open
+  the folder by its exact name, as `ls` shows it, if that happens.
+- Measured on a Mac (M2 mini, colima 0.10.3, 2026-11-10): the workspace read and
+  the comparison add a median of 0.32 s to a plain boxed spawn (Linux: 0.11 s).
+  The read is bounded at 10 s, so a wedged `colima ssh` stalls other spawns for
+  that long at most; a read that takes longer is refused, and spawning again
+  retries it.
 - Not yet measured on a Mac: that the identity the VM reports for the workspace
   and for the guards is the one the box shows (measured for context paths
-  above, on colima 0.8.1), how often a case or Unicode spelling of a workspace
-  is refused in practice, and what the extra `colima ssh` and `docker exec` add
-  to a spawn.
+  above, on colima 0.8.1), and that the `O_NOFOLLOW_ANY` open refuses a link
+  in each position of the path on APFS.
 - Tested only on Linux, against a stand-in for the VM read: the order of the
   read and of the box's creation, that the workspace is first in it, and the
   refusal and removal of a box whose mount changed.

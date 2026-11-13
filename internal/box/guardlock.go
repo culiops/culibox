@@ -601,6 +601,10 @@ func (m *Manager) holdLocks(name string, lk *lockReq) error {
 // boxGone is called once a box's container was removed: the locks it held are
 // released, and a file no other box holds is unlocked. Caller holds opMu.
 func (m *Manager) boxGone(name string) {
+	m.mu.Lock()
+	delete(m.mismatched, name)
+	delete(m.guardsChecked, name)
+	m.mu.Unlock()
 	if m.locks != nil {
 		m.locks.releaseBox(name)
 	}

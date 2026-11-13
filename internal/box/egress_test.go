@@ -29,6 +29,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 		"--label", LabelWorkspace + "=/home/user/proj",
 		"--label", LabelInstance + "=TEST",
 		"--label", LabelClaims + "=1",
+		"--label", LabelIdentity + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",

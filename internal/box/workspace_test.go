@@ -135,3 +135,23 @@ func TestInPlaceMountsAtComparesTheHostIdentity(t *testing.T) {
 		t.Fatalf("err = %v, want the root accepted: HostID is the one compared with it", err)
 	}
 }
+
+// The host's reading must not follow a link in any folder above the workspace
+// (the Lstat it replaced did): a parent that is a link is a path that changed
+// since it was resolved, however the link leads.
+func TestHostWorkspaceIDRefusesALinkInAParent(t *testing.T) {
+	d := ctxTmp(t)
+	real := filepath.Join(d, "a", "b")
+	mkdirs(t, real)
+	link := filepath.Join(d, "link")
+	if err := os.Symlink(filepath.Join(d, "a"), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostWorkspaceID(real); err != nil {
+		t.Fatalf("the real path: %v", err)
+	}
+	_, err := hostWorkspaceID(filepath.Join(link, "b"))
+	if !errors.Is(err, ErrWorkspaceMountChanged) || !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("err = %v, want ErrWorkspaceMountChanged and ErrBoxUnavailable for a parent that is a symlink", err)
+	}
+}

@@ -114,16 +114,17 @@ func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 
 // InspectMounts is Inspect plus the box's bind destinations, from the same
 // docker call, so ensure pays one round trip under opMu, not two.
-func (c CLIClient) InspectMounts(ctx context.Context, name string) (State, []string, string, error) {
+func (c CLIClient) InspectMounts(ctx context.Context, name string) (State, []string, BoxLabels, error) {
 	return c.inspect(ctx, name, true)
 }
 
 // inspectMountsFormat prints the CA label on the first line (blank when the box
-// has none), the running flag on the second and one "type|destination" line per
-// mount after it.
-const inspectMountsFormat = `{{index .Config.Labels "` + extraca.Label + `"}}{{"\n"}}{{.State.Running}}{{range .Mounts}}{{"\n"}}{{.Type}}|{{.Destination}}{{end}}`
+// has none), the identity label on the second (blank likewise), the running flag
+// on the third and one "type|destination" line per mount after it.
+const inspectMountsFormat = `{{index .Config.Labels "` + extraca.Label + `"}}{{"\n"}}{{index .Config.Labels "` + LabelIdentity +
+	`"}}{{"\n"}}{{.State.Running}}{{range .Mounts}}{{"\n"}}{{.Type}}|{{.Destination}}{{end}}`
 
-func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (State, []string, string, error) {
+func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (State, []string, BoxLabels, error) {
 	format := "{{.State.Running}}"
 	if withMounts {
 		format = inspectMountsFormat
@@ -139,29 +140,31 @@ func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (S
 			// The wording's case differs between docker versions ("Error: No such
 			// object" vs "error: no such object"), so compare case-insensitively.
 			if l := strings.ToLower(stderr); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
-				return StateMissing, nil, "", nil
+				return StateMissing, nil, BoxLabels{}, nil
 			}
 		}
-		return StateMissing, nil, "", fmt.Errorf("docker inspect: %w: %s", err, stderr)
+		return StateMissing, nil, BoxLabels{}, fmt.Errorf("docker inspect: %w: %s", err, stderr)
 	}
 	// Only the end is trimmed: with the label line first, a box without a label
 	// starts with a blank line that is part of the answer.
 	text := strings.TrimRight(string(out), " \t\r\n")
-	var label string
+	var labels BoxLabels
 	if withMounts {
 		l, rest, _ := strings.Cut(text, "\n")
-		label, text = strings.TrimSpace(l), rest
+		id, rest, _ := strings.Cut(rest, "\n")
+		labels = BoxLabels{CA: strings.TrimSpace(l), Identity: strings.TrimSpace(id) == "1"}
+		text = rest
 	}
 	first, rest, _ := strings.Cut(text, "\n")
 	switch s := strings.TrimSpace(first); s {
 	case "true":
-		return StateRunning, parseMounts(rest), label, nil
+		return StateRunning, parseMounts(rest), labels, nil
 	case "false":
-		return StateStopped, nil, label, nil
+		return StateStopped, nil, labels, nil
 	default:
 		// Fail closed: the caller force-removes a Stopped box, so an answer we
 		// cannot read must never be taken for one.
-		return StateMissing, nil, "", fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
+		return StateMissing, nil, BoxLabels{}, fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
 	}
 }
 
