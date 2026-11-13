@@ -416,6 +416,31 @@ func TestMoveDataRootExplicitConfigResumesInItsOwnRoot(t *testing.T) {
 	}
 }
 
+// #273 review: a data_dir naming the legacy path, which a pending move has
+// already emptied, protects that path only; the journal sits in the new root,
+// unprotected, so it is not finished. A -config that cannot be read uses no
+// root either.
+func TestMoveDataRootExplicitConfigSkipsResumeForLegacyDataDirOrBadConfig(t *testing.T) {
+	for name, body := range map[string]string{
+		"legacy data_dir": `{"data_dir":"LEGACY"}`,
+		"unreadable":      `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newRootEnv(t)
+			pendingMove(t, e, e.legacy+"\n"+secretstore.KeyHash(e.legacy)+"\n")
+			explicit := filepath.Join(e.home, "x.json")
+			writeFile(t, explicit, strings.Replace(body, "LEGACY", e.legacy, 1))
+			out, err := maybeMoveDataRoot("serve", explicit, true, "", e.home, e.xdg, "linux", e.logf)
+			if err != nil || out.Moved || out.Reason == "" {
+				t.Fatalf("%+v %v", out, err)
+			}
+			if _, err := os.Lstat(e.legacy); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a link was made at the legacy path: %v", err)
+			}
+		})
+	}
+}
+
 // --- #266: serve warns about a ~/.config/culibox file read before the move ---
 
 // startConfigWarnings is what serve does at start for the config row: the

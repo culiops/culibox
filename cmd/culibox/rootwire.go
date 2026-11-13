@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -30,16 +31,17 @@ var rootmoveXDG = rootmove.MoveXDGConfig
 // precondition (e) read the default one), so neither the root nor the
 // ~/.config file starts to move; the reason is logged and reaches doctor. An
 // interrupted move is still finished under -config (ruling R14): the resume
-// reads only its journal, not the config serve loads. It is finished only when
-// that instance uses a default root (#273): one whose data_dir is elsewhere
-// does not protect them from its boxes, so the journal could be a box's.
+// reads its journal and the default config, not the config serve loads. It is
+// finished only when that instance's data dir is the new root (#273): only then
+// is the folder holding the journal protected from its boxes; otherwise the
+// journal could be a box's.
 func maybeMoveDataRoot(cmd, configPath string, configSet bool, envHome, home, xdg, goos string, logf func(string, ...any)) (rootmove.Outcome, error) {
 	if cmd != "serve" || envHome != "" {
 		return rootmove.Outcome{}, nil
 	}
 	if configSet {
 		if newRoot, legacy := config.DefaultRoots(home); rootmove.Pending(newRoot, legacy) {
-			if why := notDefaultRoot(configPath, newRoot, legacy); why != "" {
+			if why := notNewRoot(configPath, newRoot); why != "" {
 				logf("data root: the interrupted move in %s was not finished (%s); a serve start that uses that root finishes it", newRoot, why)
 				return rootmove.Outcome{Reason: why}, nil
 			}
@@ -163,10 +165,12 @@ func serveStartWarnings(cmd string, src config.Source, cfgErr error, f config.St
 	}
 }
 
-// notDefaultRoot says why the -config file at path does not use one of the
-// default roots ("" when it does: no data_dir, or a data_dir naming one). An
-// unreadable file uses none; the config step then reports it.
-func notDefaultRoot(path, newRoot, legacy string) string {
+// notNewRoot says why the -config file at path does not use the new default
+// root ("" when it does: no data_dir, which resolves to it while a move is
+// pending, or a data_dir naming it). A data_dir naming the legacy path does
+// not: a pending move has emptied it, and protecting it does not protect the
+// new root. An unreadable file uses none; the config step then reports it.
+func notNewRoot(path, newRoot string) string {
 	c, err := config.Load(path)
 	if err != nil {
 		return "serve -config could not be read"
@@ -175,10 +179,10 @@ func notDefaultRoot(path, newRoot, legacy string) string {
 		return ""
 	}
 	d, err := filepath.Abs(c.DataDir)
-	if err == nil && (d == newRoot || d == legacy) {
+	if err == nil && d == newRoot {
 		return ""
 	}
-	return "serve -config sets data_dir " + c.DataDir
+	return fmt.Sprintf("serve -config sets data_dir %q", c.DataDir)
 }
 
 // setsDataDir reports whether the config file at path sets data_dir.
