@@ -4,6 +4,15 @@ What an upgrade keeps, what it may reset, the backup `culibox serve` takes for y
 
 The rule: **rolling back means restoring a snapshot.** Restoring returns the data root to how it was just before the upgrade, and whatever was written after it (new sessions, audit rows, profile edits) is lost. CuliBox does not promise that an older build runs on data a newer build wrote.
 
+## How to upgrade
+
+1. **Finish work you cannot lose.** Sessions normally survive a restart, but surviving an upgrade is not guaranteed. On macOS, read the upgrade notes in [macOS](MACOS.md) first: recreating the box VM ends boxed sessions, and on a Mac shared with other accounts one release asks you to stop the box VM (`culibox box stop`) or end boxed sessions before you stop the old CuliBox.
+2. **Install the new build, keeping the old binary.**
+   - With `setup.sh` (recommended): run it again, the same way you installed (`sh setup.sh`, or `sh setup.sh --version vX.Y.Z`). It keeps the binary it replaces as `culibox.prev` next to `culibox` and prints the line that puts it back.
+   - By hand (a downloaded release or your own build): copy the current binary to `culibox.prev` next to it (`cp -p culibox culibox.prev`), then put the new binary in place.
+3. **Restart CuliBox** (stop the old `culibox serve`, then start the new one, or restart its service). On its first start, the new version backs up the data root before `serve` changes anything else in it (see [The automatic backup](#the-automatic-backup)) and logs the line that restores it. If the backup cannot be made, it refuses to start and says why.
+4. **Run `culibox doctor`.** On macOS it says when the box VM must be recreated (`culibox box setup -recreate`).
+
 ## What an upgrade keeps
 
 Every row is a file or folder CuliBox writes. "Backup" says whether the automatic backup copies it; "Deleted" says whether an upgrade may delete it. Paths are relative to `<R>`.
@@ -36,6 +45,8 @@ Outside `<R>`:
 - **Workspaces and clones.** The folders at `default_cwd` and every clone folder. An upgrade does not touch them, and the backup does not copy them: it holds only the records in `<R>` about clones.
 - **The store key.** Linux: the unlocked key sits in the kernel keyring and is gone after a reboot; the passphrase unlocks `identity.age`. macOS: the master key is in the login Keychain (service `agent-box-store`, named by a hash of the data root path). It is not part of the backup.
 - **The XDG config.** `~/.config/culibox/config.json`, when you keep your config there. No upgrade rewrites it, and the backup does not copy it.
+
+Tested: on a data root filled through the previous release (host tier, no box VM), an upgrade changes no file outside a short allowlist (runtime state, the backup, the version stamp, and rows compared by content), and the automatic backup holds the pre-upgrade bytes. A binary-only rollback reads the data back, also after a column is added to every audit table. `scripts/upgrade-test.sh` runs in `scripts/test.sh` and in CI on Linux for every push to main and every release. It has not been run on macOS yet.
 
 ## What an upgrade may reset
 
