@@ -78,7 +78,7 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 		if l == "provision:" {
 			// colima reads an empty list as "mount the home folder read-write".
 			if len(out) == 0 {
-				return bad(i, "empty mounts: block")
+				return nil, fmt.Errorf("%s: %w", yamlPath, ErrMountsIncomplete)
 			}
 			return out, nil
 		}
@@ -114,7 +114,7 @@ func ReadMounts(yamlPath string) ([]Mount, error) {
 
 // ErrMountsIncomplete means the written colima.yaml is not one CuliBox wrote:
 // it lacks the four data mounts and does not share the home folder either.
-var ErrMountsIncomplete = errors.New("the box VM's colima.yaml does not hold the folders CuliBox always shares; it was edited or cut short, so its folder list is not trusted")
+var ErrMountsIncomplete = errors.New("the box VM's colima.yaml does not hold the folders CuliBox always shares; it was edited or cut short, so its folder list is not trusted. Run `culibox box share apply` to write it again; if that is refused, run `culibox box setup -recreate`")
 
 // checkApplied is nil when ms is a list CuliBox could have written: the four
 // data mounts (and maybe shares), or, for a VM set up by an older CuliBox, a

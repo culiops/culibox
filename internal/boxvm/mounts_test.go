@@ -206,6 +206,13 @@ func TestAppliedMountsNeedTheDataMountsOrTheWholeHome(t *testing.T) {
 			t.Errorf("%s: read back as applied: %v", name, got)
 		}
 	}
+	write(nil)
+	_, err := v.AppliedMounts()
+	for _, want := range []string{"`culibox box share apply`", "`culibox box setup -recreate`"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %v does not say how to recover (%s)", err, want)
+		}
+	}
 	write([]Mount{{c.Home, true}})
 	if got, err := v.AppliedMounts(); err != nil || len(got) != 1 {
 		t.Errorf("a whole-home list (older CuliBox) must stay readable: %v %v", got, err)
