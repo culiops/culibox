@@ -505,6 +505,8 @@ function selectSettingsTab(name) {
   setDialogError("settings-modal", "");
   // The Access-tokens tab loads its list lazily whenever it is shown.
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
+  // Leaving it takes a one-time token reveal off the page (tokens.js); coming back loads the tab afresh.
+  if (name !== "tokens" && typeof tokLeave === "function") tokLeave();
   if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
   if (name === "creds" && typeof loadCredentials === "function") loadCredentials();
   if (name === "vmfolders" && typeof loadVMFolders === "function") loadVMFolders();
@@ -549,6 +551,8 @@ function initDialogs() {
     // to its home first: focusTerminal cannot focus a pane while #grid is hidden.
     d.addEventListener("close", () => { if (typeof pageClosed === "function") pageClosed(d); });
     d.addEventListener("close", focusTerminal);
+    // Settings closing is leaving the Access-tokens tab: a one-time token reveal goes with it.
+    d.addEventListener("close", () => { if (d.id === "settings-modal" && typeof tokLeave === "function") tokLeave(); });
     // Sheets attach a one-shot onClose callback (openSheet's opts.onClose);
     // every other dialog leaves __onClose unset, so this is a no-op for them.
     d.addEventListener("close", () => {

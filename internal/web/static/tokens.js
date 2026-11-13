@@ -181,8 +181,7 @@ async function loadTokens() {
   setTokErr("");
   // Hide any one-time reveal from a previous create: the secret must not linger
   // in the DOM once the user has moved on (reopened the tab, refreshed the list).
-  const reveal = document.getElementById("tok-reveal");
-  if (reveal) reveal.hidden = true;
+  tokHideReveal();
   let items;
   try {
     items = await api("/api/tokens");
@@ -242,6 +241,35 @@ async function loadTokens() {
   }
 }
 
+// tokHideReveal: hide the one-time reveal and take the secret out of the page with it: the value node's text, and the
+// copy hook's copy of it when that still holds this value. Every way the reveal goes (Done, a repaint, leaving) ends here.
+function tokHideReveal() {
+  const box = document.getElementById("tok-reveal");
+  const val = document.getElementById("tok-reveal-val");
+  if (val) {
+    const held = val.textContent;
+    if (held && typeof window !== "undefined" && window.__lastCopied === held) window.__lastCopied = "";
+    val.textContent = "";
+  }
+  if (box) box.hidden = true;
+}
+
+// tokOnScreen: is the Access-tokens tab what the user is looking at (Settings open, this tab selected)? Asked when a
+// created token is ready to paint: a create that was in flight when the tab was left and came back still shows it, one
+// that was left for good never paints the secret into a panel nobody sees.
+function tokOnScreen() {
+  const dlg = document.getElementById("settings-modal");
+  const panel = document.getElementById("tokens");
+  if (dlg && !dlg.open) return false;
+  return !(panel && panel.hidden);
+}
+
+// tokLeave: the Access-tokens tab (or Settings) is no longer on screen; shell.js calls it from selectSettingsTab and the
+// Settings dialog's close.
+function tokLeave() {
+  tokHideReveal();
+}
+
 function revealToken(plain) {
   const box = document.getElementById("tok-reveal");
   const val = document.getElementById("tok-reveal-val");
@@ -270,6 +298,7 @@ async function createToken() {
     // The list refreshes first, so the new row is on screen; the reveal is the
     // last thing painted and the first thing the next refresh takes away.
     await loadTokens();
+    if (!tokOnScreen()) return; // the tab was left meanwhile and not come back to: the token is painted nowhere
     revealToken(res.token);
   } catch (e) {
     setTokErr("Create failed: " + e.message);
@@ -337,7 +366,7 @@ function initTokens() {
   if (copyBtn) {
     copyBtn.onclick = () => {
       const val = document.getElementById("tok-reveal-val");
-      if (val) copyText(val.textContent, (ok) => {
+      if (val && val.textContent) copyText(val.textContent, (ok) => {
         copyBtn.textContent = ok ? "Copied" : "Copy failed";
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
       });
@@ -351,10 +380,7 @@ function initTokens() {
   if (navLogout) navLogout.onclick = navSignOut;
 
   const done = document.getElementById("tok-done");
-  if (done) done.onclick = () => {
-    const box = document.getElementById("tok-reveal");
-    if (box) box.hidden = true;
-  };
+  if (done) done.onclick = tokHideReveal;
 }
 
 if (typeof document !== "undefined") {
