@@ -31,6 +31,18 @@ func (p initDep) label() string {
 	return p.name
 }
 
+// initClaudeBin is the claude agent's binary: by name or by binary name (as
+// doctor's box-tier rows and the config writer pick it), else plain `claude`.
+// Step 1 looks for it and step 5 runs `setup-token` with it.
+func initClaudeBin(cfg config.Config) string {
+	for _, a := range cfg.Agents {
+		if a.Bin != "" && (a.Name == "claude" || filepath.Base(a.Bin) == "claude") {
+			return a.Bin
+		}
+	}
+	return "claude"
+}
+
 // initDepList is what step 1 checks, in order: abduco, docker, colima (macOS
 // only: the box VM), then the default agent's binary.
 func initDepList(cfg config.Config, goos string) []initDep {
@@ -40,15 +52,7 @@ func initDepList(cfg config.Config, goos string) []initDep {
 		}
 		return v
 	}
-	// The claude agent: by name or by binary name (as doctor's box-tier rows
-	// and the config writer pick it), else plain `claude`.
-	agent := "claude"
-	for _, a := range cfg.Agents {
-		if a.Bin != "" && (a.Name == "claude" || filepath.Base(a.Bin) == "claude") {
-			agent = a.Bin
-			break
-		}
-	}
+	agent := initClaudeBin(cfg)
 	deps := []initDep{
 		{name: "abduco", bin: or(cfg.AbducoBin, "abduco"), brew: []string{"abduco"}, pkg: "abduco"},
 		{name: "docker", bin: or(cfg.DockerBin, "docker"), brew: []string{"docker"}, link: dockerEngineDoc},

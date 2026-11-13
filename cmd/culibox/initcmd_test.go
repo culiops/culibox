@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/secretstore"
 )
 
 // fakeInit is an initDeps whose lookPath finds exactly the names in have, and
@@ -47,6 +48,10 @@ func (f *fakeInit) deps(goos string) initDeps {
 		},
 		macOSMajor: func() int { return 14 },
 		osRelease:  func() string { return "" },
+		// Step 5: a fresh Keychain-style fake store (no passphrase), and a terminal
+		// that answers nothing, so the token is skipped.
+		readSecret: func() ([]byte, error) { return nil, errors.New("no terminal") },
+		newKeeper:  func(string) secretstore.Keeper { return secretstore.NewFakeKeeper(false) },
 	}
 }
 
@@ -557,5 +562,48 @@ func TestInitStopsWhenNoWorkspaceIsGiven(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "step 4/8") {
 		t.Fatalf("a stopped step must end the chain: %s", out.String())
+	}
+}
+
+func TestInitRunsTheTokenStepAfterVMSize(t *testing.T) {
+	home := initHome(t)
+	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
+	d := f.deps("linux")
+	k := secretstore.NewFakeKeeper(true)
+	d.newKeeper = func(string) secretstore.Keeper { return k }
+	reads := []string{tokPass, tokPass, tokTest}
+	d.readSecret = func() ([]byte, error) {
+		if len(reads) == 0 {
+			return nil, errors.New("no terminal")
+		}
+		r := reads[0]
+		reads = reads[1:]
+		return []byte(r), nil
+	}
+	var out bytes.Buffer
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+"n\n"), true, &out, d); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "== step 5/8: Claude token") {
+		t.Fatalf("out=%s", out.String())
+	}
+	noToken(t, out.String())
+	if len(reads) != 0 {
+		t.Fatalf("token step did not read its answers: %v", reads)
+	}
+}
+
+func TestInitStopsWhenTheTokenStepStops(t *testing.T) {
+	home := initHome(t)
+	f := &fakeInit{have: allHave("abduco", "docker", "claude")}
+	d := f.deps("linux")
+	k := secretstore.NewFakeKeeper(true) // readSecret fails: the passphrase cannot be read
+	d.newKeeper = func(string) secretstore.Keeper { return k }
+	var out bytes.Buffer
+	if code := runInit(cliArgs{Cmd: "init"}, home, strings.NewReader(wsAnswer+"n\n"), true, &out, d); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "stopped:") {
+		t.Fatalf("out=%s", out.String())
 	}
 }

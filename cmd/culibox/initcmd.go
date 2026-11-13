@@ -229,6 +229,9 @@ func runInit(a cliArgs, home string, in io.Reader, inTTY bool, out io.Writer, d 
 	if _, _, ok := initVMSizeStep(u, cfg, dataDir, d); !ok {
 		return 1
 	}
+	if _, ok := initTokenStep(u, cfg, dataDir, d); !ok {
+		return 1
+	}
 	return 0
 }
 
