@@ -285,17 +285,17 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, string, error) {
+func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, BoxLabels, error) {
 	st, err := f.Inspect(ctx, name)
 	if err != nil || st != StateRunning {
-		return st, nil, "", err
+		return st, nil, BoxLabels{}, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mountsErr != nil {
-		return StateMissing, nil, "", f.mountsErr
+		return StateMissing, nil, BoxLabels{}, f.mountsErr
 	}
-	return st, append([]string(nil), f.mounts[name]...), f.labels[name][extraca.Label], nil
+	return st, append([]string(nil), f.mounts[name]...), BoxLabels{CA: f.labels[name][extraca.Label], Identity: f.labels[name][LabelIdentity] == "1"}, nil
 }
 
 func (f *fakeClient) BindSource(_ context.Context, name, dst string) (string, error) {

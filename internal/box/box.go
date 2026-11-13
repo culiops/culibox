@@ -40,6 +40,10 @@ const (
 	// workspaces, so older boxes (without it) are known not to honour claims.
 	LabelExclusive = "io.culiops.agent-box.exclusive"
 	LabelClaims    = "io.culiops.agent-box.claims"
+	// LabelIdentity marks a box created by a build that checks, when it starts,
+	// that the workspace and its guards are the folder and files that passed the
+	// checks (#108). A box without it was never checked.
+	LabelIdentity = "io.culiops.agent-box.identity"
 	// LabelCAScratch marks the never-started container caBundle creates to read
 	// the image's trust bundle. It is deliberately not LabelInstance: claimCheck
 	// and Sweep select boxes by that key and a leftover would read as a box with
@@ -220,6 +224,15 @@ func UnderMount(path string, mounts []string) bool {
 	return false
 }
 
+// BoxLabels are the labels of a box that ensure reads when it finds one running.
+type BoxLabels struct {
+	// CA is the extraca.Label value, "" when the box has none.
+	CA string
+	// Identity is whether the box carries LabelIdentity=1: it was created by a
+	// build that checks the workspace and guard identity at start.
+	Identity bool
+}
+
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
 type Client interface {
@@ -235,8 +248,8 @@ type Client interface {
 	// InspectMounts is Inspect plus the in-box destinations of the box's bind
 	// mounts, as docker reports them: the truth for every box, adopted ones and
 	// ones created by an older build included. Mounts are nil unless running.
-	// The third value is the box's extraca.Label value, "" when it has none.
-	InspectMounts(ctx context.Context, name string) (State, []string, string, error)
+	// The third value is the box's labels that ensure reads.
+	InspectMounts(ctx context.Context, name string) (State, []string, BoxLabels, error)
 	// BindSource is the host path of the running box's bind mount at the in-box
 	// destination dst ("" when it has none). Only the broker's mount is read this
 	// way (reuseBrokerDir), so a box pays the extra call only when it has one.
@@ -355,6 +368,15 @@ type Manager struct {
 	// it is listed here, so a box left over from before a daemon restart, or one
 	// whose failed removal left it running, is verified again before any use.
 	verified map[string]bool
+	// mismatched holds the boxes that failed a mount check and whose removal
+	// failed: they still run, with a mount that is not the checked one. ensure
+	// removes one before it can be reused (removeMismatched), and refuses the
+	// spawn while it cannot. Cleared when the box is gone (boxGone). Guarded by mu.
+	mismatched map[string]bool
+	// guardsChecked holds the boxes without LabelIdentity (an older build's,
+	// never checked) whose guards this process has compared once, so a later
+	// editor save does not refuse every session. Cleared by boxGone. Guarded by mu.
+	guardsChecked map[string]bool
 	// drift marks boxes whose counter disagreed with the registry at the last
 	// sweep (guarded by mu).
 	drift map[string]bool
@@ -402,9 +424,11 @@ func New(opts Options) (*Manager, error) {
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
 
-		verified:  map[string]bool{},
-		drift:     map[string]bool{},
-		exclusive: map[string]bool{},
+		verified:      map[string]bool{},
+		mismatched:    map[string]bool{},
+		guardsChecked: map[string]bool{},
+		drift:         map[string]bool{},
+		exclusive:     map[string]bool{},
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -1045,10 +1069,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	}
 
 	// One docker call answers both whether the box runs and what it mounts.
-	st, have, caLabel, err := m.opts.Client.InspectMounts(ctx, name)
+	st, have, labels, err := m.opts.Client.InspectMounts(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
+	}
+	if st == StateMissing {
+		// No container: nothing can be left over from one that failed a check.
+		m.mu.Lock()
+		delete(m.mismatched, name)
+		m.mu.Unlock()
 	}
 	if st == StateStopped {
 		// Its agents are already dead (docker exec does not survive the
@@ -1060,6 +1090,21 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		}
 		m.boxGone(name)
 		st = StateMissing
+	}
+	if st == StateRunning && m.isMismatched(name) {
+		// A box that failed a mount check earlier and could not be removed then:
+		// its guards are not compared on reuse, so it must not be reused. Removed
+		// now, and the spawn creates one that is checked; refused while it stays.
+		if st, err = m.removeMismatched(ctx, name); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
+		// Removing it took a docker call: claim the folder again, as for any
+		// box removed to be recreated.
+		if err := m.claimCheck(ctx, name, ws.Path, exclusive); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 	}
 	if st == StateRunning {
 		// Mounts are fixed at `docker run`, and the box key does not say which
@@ -1080,7 +1125,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		// The bundle mounts at one fixed destination, so reuseMounts cannot see a
 		// stale CA set; the label can (also for a box from before extra CAs).
 		if st == StateRunning {
-			if st, err = m.reuseCA(ctx, name, caLabel); err != nil {
+			if st, err = m.reuseCA(ctx, name, labels.CA); err != nil {
 				m.rearmIfIdle(name)
 				return err
 			}
@@ -1129,6 +1174,10 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		}
 	}
 	created := false
+	// A box this build checked when it started has its guards compared only then.
+	// One without the label was never checked: its guards are compared once, by
+	// this process (see skipGuard).
+	guards := st == StateRunning && !labels.Identity && !m.isGuardsChecked(name)
 	if st == StateMissing {
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
@@ -1205,6 +1254,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
 		created = true
+		guards = true
 		if verify != nil {
 			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
@@ -1217,12 +1267,15 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	// runs in it. A reused box has had no VM identity read yet (a created one
 	// has, above, and this is then a no-op): the box's mount is old, the path's
 	// identity is now.
-	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, created); err != nil {
+	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, guards); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
-	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created); err != nil {
+	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created, guards); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
+	}
+	if guards && !created {
+		m.markGuardsChecked(name)
 	}
 	// A box this spawn did not create: it may hold the locks already (another
 	// session's), or predate them, or the files may have changed since. Held
@@ -1570,6 +1623,45 @@ func (m *Manager) markVerified(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.verified[name] = true
+}
+
+func (m *Manager) isMismatched(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mismatched[name]
+}
+
+// markMismatched remembers a box that failed a mount check and could not be removed.
+func (m *Manager) markMismatched(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mismatched[name] = true
+}
+
+func (m *Manager) isGuardsChecked(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.guardsChecked[name]
+}
+
+func (m *Manager) markGuardsChecked(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.guardsChecked[name] = true
+}
+
+// removeMismatched removes a box that failed a mount check earlier and was left
+// running because its removal failed. It answers StateMissing once it is gone
+// (the caller creates a new box) and refuses the spawn when it cannot be removed
+// again: never a reuse. Caller holds opMu.
+func (m *Manager) removeMismatched(ctx context.Context, name string) (State, error) {
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("%w: box %s failed a mount check and could not be removed: %v; it is not reused and is removed again on the next spawn",
+			ErrBoxUnavailable, name, err)
+	}
+	m.boxGone(name)
+	return StateMissing, nil
 }
 
 // unverify forgets that a box passed Verify. Every path that stops or removes a

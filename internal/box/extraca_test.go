@@ -151,6 +151,7 @@ func TestRunArgsUnchangedWithoutCA(t *testing.T) {
 		"--label", LabelWorkspace + "=/w",
 		"--label", LabelInstance + "=TEST",
 		"--label", LabelClaims + "=1",
+		"--label", LabelIdentity + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
