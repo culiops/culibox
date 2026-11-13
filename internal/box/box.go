@@ -1824,6 +1824,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			left[name] = true
+			// Left running with no session and no memory of its checks: the
+			// identity label says a checking build made it, not that it passed
+			// (a crash between `docker run` and the check leaves such a box). Never
+			// reused as it is: the next spawn removes it again first.
+			m.markMismatched(name)
 			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 			continue
 		}

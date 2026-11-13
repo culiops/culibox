@@ -113,8 +113,11 @@ func workspaceAt(cwd, real string, idOf func(string) (*FileID, error)) (workspac
 func hostWorkspaceID(p string) (*FileID, error) {
 	st, err := hostNoFollowStat(p)
 	if err != nil {
-		if errors.Is(err, unix.ELOOP) {
+		switch {
+		case errors.Is(err, unix.ELOOP):
 			return nil, wsChanged(p, "its path is now a symlink or has a symlink in it")
+		case errors.Is(err, unix.ENOTDIR): // macOS opens with O_DIRECTORY
+			return nil, fmt.Errorf("%w: %s: it is not a directory", ErrUnboxableWorkspace, p)
 		}
 		return nil, wsChanged(p, fmt.Sprintf("it cannot be read (%v)", err))
 	}

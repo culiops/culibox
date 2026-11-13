@@ -142,3 +142,37 @@ func TestANewBoxCarriesTheIdentityLabel(t *testing.T) {
 		t.Fatalf("labels = %v, want %s=1", f.labels[name], LabelIdentity)
 	}
 }
+
+// The identity label says a box was made by a checking build, not that it passed.
+// A box left running by a failed removal at boot (Reconcile), whose guard check
+// may never have finished (a crash between `docker run` and the check), is not
+// reused as it is: the next spawn removes it first and creates one that is checked.
+func TestAnOrphanReconcileCouldNotRemoveIsNotReusedUnchecked(t *testing.T) {
+	m, f, ws := guardFlipWorkspace(t)
+	writeFile(t, filepath.Join(ws, "CLAUDE.md"), "# rules\n")
+	_, _, name, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name) // idle, as after a daemon restart
+	f.existing = append(f.existing, name)
+	f.stopFails = 1
+	if err := m.Reconcile(context.Background()); err == nil {
+		t.Fatal("test setup: the removal was meant to fail")
+	}
+	if f.labels[name][LabelIdentity] != "1" {
+		t.Fatal("test setup: the orphan must carry the identity label")
+	}
+	// The guard file was replaced meanwhile: a reused box would still show the old one.
+	tmp := filepath.Join(ws, "CLAUDE.md.tmp")
+	writeFile(t, tmp, "# other\n")
+	if err := os.Rename(tmp, filepath.Join(ws, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s2", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.runs() != 2 || f.stops() != 2 {
+		t.Fatalf("runs=%d stops=%d, want the orphan removed again and a checked box created, not reused", f.runs(), f.stops())
+	}
+}
