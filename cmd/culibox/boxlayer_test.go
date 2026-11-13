@@ -1533,7 +1533,18 @@ func TestPrepareAdoptsTheLegacyDefaultBeforeInspect(t *testing.T) {
 	if want := "tag " + config.LegacyDefaultBoxImage + " " + config.DefaultBoxImage; !strings.Contains(d.log(), want) {
 		t.Fatalf("prepare did not adopt:\n%s", d.log())
 	}
-	if i, j := strings.Index(d.log(), "tag "), strings.LastIndex(d.log(), "image inspect"); i > j {
+	// Compare whole lines: "tag " as a bare substring could match inside
+	// another argument.
+	tagAt, inspectAt := -1, -1
+	for i, line := range strings.Split(d.log(), "\n") {
+		if tagAt < 0 && strings.HasPrefix(line, "tag ") {
+			tagAt = i
+		}
+		if strings.HasPrefix(line, "image inspect") {
+			inspectAt = i
+		}
+	}
+	if tagAt < 0 || tagAt > inspectAt {
 		t.Fatalf("the tag must come before the final inspect:\n%s", d.log())
 	}
 }
