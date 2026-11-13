@@ -251,7 +251,15 @@ var (
 	wfPersist     = regexp.MustCompile(`^\s*persist-credentials: false\s*(?:#.*)?$`)
 	wfTopPerms    = regexp.MustCompile(`(?m)^permissions:[ \t]*(?:#.*)?\n  contents: read[ \t]*(?:#.*)?\n`)
 	wfWith        = regexp.MustCompile(`^\s*with:\s*(?:#.*)?$`)
-	wfBlockScalar = regexp.MustCompile(`:\s*[|>][-+]?\s*$`)
+	wfBlockScalar = regexp.MustCompile(`:\s*[|>][-+0-9]*\s*$`)
+	// A block scalar opener on any line, a list item (`- |`) included.
+	wfBlockOpen = regexp.MustCompile(`(?::|^\s*-)\s*[|>][-+0-9]*\s*$`)
+	// The only line shapes outside a script: `key:`, `key: value`, `- item`.
+	wfKeyLine  = regexp.MustCompile(`^\s*(?:-\s+)*[\w.-]+:(?:\s|$)`)
+	wfItemLine = regexp.MustCompile(`^\s*-(?:\s|$)`)
+	// A character that ends a YAML line, besides LF: it can start a new key in the
+	// middle of what the guard reads as one line (a run script included).
+	wfOddBreak = regexp.MustCompile("[\r\u0085\u2028\u2029]")
 
 	// Forms the line-based reader cannot follow. Each one could hide a `uses:`, a
 	// trigger or a write grant from the rules above, so the guard refuses the form
@@ -444,6 +452,14 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		}
 	}
 
+	// Whole file, run scripts included: a lone CR, NEL, LS or PS is a line break to a
+	// YAML parser, so the text after one in a script can be a `permissions:` line.
+	for n, raw := range strings.Split(content, "\n") {
+		if wfOddBreak.MatchString(raw) {
+			add(n+1, "line break other than LF (carriage return, U+0085, U+2028 or U+2029) anywhere in the file, a run script included: the guard reads LF line ends only")
+		}
+	}
+
 	topKeys := map[string]int{}
 	for i, l := range lines {
 		text := strings.TrimSpace(l.text)
@@ -451,9 +467,6 @@ func checkWorkflowSupplyChain(name, content string) []string {
 			continue
 		}
 		if !l.inScript {
-			if strings.Contains(l.text, "\r") {
-				add(l.n, "carriage return: the guard reads LF line endings only: %q", text)
-			}
 			if lead := l.text[:len(l.text)-len(strings.TrimLeft(l.text, " \t"))]; strings.Contains(lead, "\t") {
 				add(l.n, "tab in indentation is not valid YAML and is not read by the guard: %q", text)
 			}
@@ -469,9 +482,15 @@ func checkWorkflowSupplyChain(name, content string) []string {
 				}
 			}
 			code := wfTrailing.ReplaceAllString(l.text, "")
+			if !wfKeyLine.MatchString(code) && !wfItemLine.MatchString(code) {
+				add(l.n, "line is not a `key:`, `key: value` or `- item` (a continuation line or a multi-line scalar could carry a value the guard cannot read): %q", text)
+			}
 			// bare: expressions and quoted text taken out, then the comment, so a brace
 			// or an exclamation mark inside text is not structure.
 			bare := wfTrailing.ReplaceAllString(wfQuotedText.ReplaceAllString(wfExprSpan.ReplaceAllString(l.text, "x"), `""`), "")
+			if wfBlockOpen.MatchString(bare) && !wfSingleRunKey.MatchString(code) {
+				add(l.n, "block scalar (`|` or `>`) is allowed only on a `run:` key: %q", text)
+			}
 			if !wfSingleRunKey.MatchString(code) {
 				if strings.Contains(bare, "{") {
 					add(l.n, "flow map (`{...}`) is not supported by the guard: write a block mapping: %q", text)
@@ -654,6 +673,13 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 	if bad := checkWorkflowSupplyChain("good.yml", flowOK); len(bad) != 0 {
 		t.Fatalf("one-line scalar lists and quoted brackets reported: %v", bad)
 	}
+	// A run: block scalar may carry any chomping or indent indicator.
+	for _, ind := range []string{"|", "|-", "|+", ">", ">-", "|2", "|2-", "|-2", ">+1"} {
+		wf := top + head + checkout + "      - run: " + ind + "\n          echo a\n          x: y\n"
+		if bad := checkWorkflowSupplyChain("good.yml", wf); len(bad) != 0 {
+			t.Errorf("run: %s script reported: %v", ind, bad)
+		}
+	}
 	// Shell text and quoted values in a script are not YAML structure.
 	scripted := top + head + checkout + "      - name: s\n        run: |\n          echo \"a: b\" && ls *.go\n          case x in *) : ;; esac\n          x=\"uses :\"\n"
 	if bad := checkWorkflowSupplyChain("good.yml", scripted); len(bad) != 0 {
@@ -732,7 +758,21 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"document end":           {top + head + checkout + "...\n", "document marker"},
 		"on children misaligned": {"name: x\non:\n    push:\n  issue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "inconsistent indentation under `on:`"},
 		"tab in indentation":     {"name: x\non:\n  push:\n\tissue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "tab"},
-		"carriage return":        {strings.Replace(top+head+checkout, "\n", "\r\n", 1), "carriage return"},
+		"carriage return":        {strings.Replace(top+head+checkout, "\n", "\r\n", 1), "line break"},
+		// A lone CR, NEL, LS or PS ends a YAML line anywhere, a run script included: the
+		// text after it could be a `permissions:` line the guard sees as shell text.
+		"CR inside a run script":  {top + head + checkout + "      - run: |\n          echo a\r    permissions:\r      contents: write\n", "line break"},
+		"NEL inside a run script": {top + head + checkout + "      - run: |\n          echo a\u0085      contents: write\n", "line break"},
+		"LS inside a run script":  {top + head + checkout + "      - run: |\n          echo a\u2028      contents: write\n", "line break"},
+		"PS inside a run script":  {top + head + checkout + "      - run: |\n          echo a\u2029      contents: write\n", "line break"},
+		// A write value is read from one line only if every line is `key:`, `key: value`
+		// or `- item`, and a block scalar belongs to a run: key alone.
+		"write on the next line":      {top + head + checkout + "  w:\n    permissions:\n      packages:\n        write\n", "not a `key:`"},
+		"top write on the next line":  {strings.Replace(top, "contents: read\n", "contents: read\n  packages:\n    write\n", 1) + head + checkout, "not a `key:`"},
+		"write in a folded scalar":    {top + head + checkout + "  w:\n    permissions:\n      packages: >-\n        write\n", "block scalar"},
+		"top write in a literal":      {strings.Replace(top, "contents: read\n", "contents: read\n  packages: |\n    write\n", 1) + head + checkout, "block scalar"},
+		"block scalar with indicator": {top + head + checkout + "    env:\n      A: |2+\n        x\n", "block scalar"},
+		"plain scalar continuation":   {top + head + checkout + "    env:\n      A: x\n        write\n", "not a `key:`"},
 	} {
 		bad := checkWorkflowSupplyChain("bad.yml", tc.wf)
 		if len(bad) == 0 {
