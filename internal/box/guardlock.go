@@ -623,7 +623,7 @@ func (g *guardLocks) unlockAt(r GuardLock, lp LockPath) error {
 		return err
 	}
 	defer f.Close()
-	if id.Dev != r.Dev || id.Ino != r.Ino {
+	if id.Ino != r.Ino {
 		return errLockGone
 	}
 	imm, err := g.ops.immutable(f)
@@ -632,6 +632,12 @@ func (g *guardLocks) unlockAt(r GuardLock, lp LockPath) error {
 	}
 	if !imm {
 		return errLockGone
+	}
+	if id.Dev != r.Dev {
+		// The same inode on another device number: an external disk mounted
+		// again, or another file. Never cleared on a guess; the record stays
+		// as a leftover, so doctor names the file and how to unlock it.
+		return fmt.Errorf("it is on another device number than when it was locked (a disk mounted again?), so CuliBox cannot tell it is the file it locked")
 	}
 	return g.ops.setImmutable(f, false)
 }

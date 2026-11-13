@@ -1066,3 +1066,38 @@ func readLocksAt(t *testing.T, dir string) []GuardLock {
 	}
 	return rs
 }
+
+// #247 (2): the same inode at the recorded path on another device number (an
+// external disk mounted again) may be the file CuliBox locked, or not: its
+// flag is never cleared on a guess, and the record stays as a leftover, so
+// doctor names it with the line that unlocks it. Once it is unflagged, the
+// record goes.
+func TestGuardLocksDeviceChangedStaysAsLeftover(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	ws := lockWS(t)
+	p := filepath.Join(ws, "CLAUDE.md")
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatal(err)
+	}
+	g.mu.Lock()
+	g.recs[0].Dev++ // the disk came back with another device number
+	g.mu.Unlock()
+	g.releaseBox("b1")
+	if !ff.flagged(t, p) {
+		t.Fatal("a file on another device number is never unlocked on a guess")
+	}
+	if rs := g.all(); len(rs) != 1 || len(rs[0].Boxes) != 0 || !rs[0].Ours {
+		t.Fatalf("the record stays as a leftover of ours for doctor: %+v", rs)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ff.setImmutable(f, false) // unlocked by hand, as doctor says
+	f.Close()
+	g.sweep(nil)
+	if len(g.all()) != 0 {
+		t.Fatalf("an unflagged file's record goes: %+v", g.all())
+	}
+}
