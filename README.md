@@ -4,8 +4,6 @@ A self-hosted web control plane for running, watching, containing and steering A
 
 CuliBox is the safe way to let an AI agent touch your cloud. You start Claude Code sessions from a browser, each one in its own container by default, and you keep an eye on what they are doing and what they cost. AWS access, when you grant it, is short-lived and scoped, and every grant is logged.
 
-The binary, CLI and box image are still named `agent-box`.
-
 ## Why it exists
 
 Letting an agent run commands against real infrastructure is useful and risky. The usual setup is a terminal on a machine that holds your SSH keys, your cloud credentials and your whole home directory, with the agent running as you.
@@ -51,7 +49,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 - **Static tokens.** Grafana, Sentry, Atlassian or a GitHub personal access token, handed to one command at a time, with egress opened only to that service's hosts. The agent can read a bound token, and it is long-lived and not revoked when the session ends. See [Static tokens](docs/STATIC-TOKENS.md).
 - **Audit.** CloudTrail records the agent session rather than you (not in SSO-direct mode), and every mint, refusal and token fetch is written to a local audit log, never the value.
 - **Secrets by reference, and an encrypted store.** Config names secrets instead of holding them. An optional encrypted store keeps values unreadable in disk snapshots and backups. See [Store](docs/STORE.md).
-- **`agent-box doctor`.** A read-only machine check that prints PASS, WARN or FAIL lines, safe to paste into an issue.
+- **`culibox doctor`.** A read-only machine check that prints PASS, WARN or FAIL lines, safe to paste into an issue.
 
 ## Requirements
 
@@ -64,7 +62,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Install
 
-Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `agent-box`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [Quick start](#quick-start).
+Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [Quick start](#quick-start).
 
 On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.1.0`):
 
@@ -78,7 +76,7 @@ curl -fsSLO "$base/SHA256SUMS"
 grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | sha256sum -c -
 mkdir culibox && tar -xzf "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" -C culibox
 cd culibox
-./agent-box version
+./culibox version
 ```
 
 On macOS, set `OS=darwin` (`ARCH=arm64` on Apple Silicon) and check with `shasum` instead:
@@ -87,12 +85,12 @@ On macOS, set `OS=darwin` (`ARCH=arm64` on Apple Silicon) and check with `shasum
 grep "culibox_${VERSION}_${OS}_${ARCH}.tar.gz" SHA256SUMS | shasum -a 256 -c -
 ```
 
-The check must print `OK` for your tarball. `version` prints `agent-box v<version> (<commit>)`.
+The check must print `OK` for your tarball. `version` prints `culibox v<version> (<commit>)`.
 
 **macOS binaries are unsigned.** A file downloaded with `curl` is not quarantined and runs as it is. A file downloaded in a browser is quarantined, so remove the flag before the first run:
 
 ```sh
-xattr -d com.apple.quarantine agent-box
+xattr -d com.apple.quarantine culibox
 ```
 
 **Is the macOS build verified?** Every release's notes end with a Platform status block. The Linux lines say the build was tested in CI, with a link to the run. The macOS lines say one of these:
@@ -111,16 +109,16 @@ Releases are checked on a Mac in batches, so a new release usually starts as not
 ```sh
 git clone https://github.com/culiops/culibox.git
 cd culibox
-go build -ldflags "-X main.version=$(scripts/version.sh)" -o agent-box ./cmd/agent-box
-./agent-box doctor
+go build -ldflags "-X main.version=$(scripts/version.sh)" -o culibox ./cmd/culibox
+./culibox doctor
 ```
 
-Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `agent-box bug-report` name it. A build without the flag works but shows no version.
+Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `culibox bug-report` name it. A build without the flag works but shows no version.
 
 **2. Try it uncontained.** With no config file, CuliBox listens on `127.0.0.1:8899` and runs one `claude` agent on the **host** tier (not contained):
 
 ```sh
-./agent-box serve
+./culibox serve
 ```
 
 It prints a login URL with a one-time token. Open it in a browser on the same machine. The token is kept in `login.token` in the data root.
@@ -128,12 +126,12 @@ It prints a login URL with a one-time token. Open it in a browser on the same ma
 **3. Turn on boxes.** Build the box image (on macOS this also creates the VM; see [docs/MACOS.md](docs/MACOS.md)):
 
 ```sh
-./agent-box box setup
+./culibox box setup
 ```
 
-`box setup` tags every build with its date (for example `culiops/agent-box:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/agent-box@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/agent-box:base`) and run `box setup`: it pulls the image for your daemon's architecture instead of building it. Pin by digest, never by `:base`.
+`box setup` tags every build with its date (for example `culiops/culibox:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/culibox@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/culibox:base`) and run `box setup`: it pulls the image for your daemon's architecture instead of building it. Pin by digest, never by `:base`.
 
-Then put this in `~/.local/share/agent-box/config.json` and run `./agent-box serve` again:
+Then put this in `~/.local/share/culibox/config.json` and run `./culibox serve` again:
 
 ```json
 {
@@ -149,6 +147,19 @@ Then put this in `~/.local/share/agent-box/config.json` and run `./agent-box ser
 Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token`, store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)), and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
 
 Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
+
+## Upgrading from agent-box
+
+CuliBox used to be called agent-box. An existing install keeps working with the new `culibox` binary:
+
+- **Changes.**
+  - The binary and every command are now `culibox`. Replace `agent-box` in your service file or scripts.
+  - The environment variable is `CULIBOX_HOME`. `AGENT_BOX_HOME` still works and prints a notice. If both are set to different paths, CuliBox refuses to start.
+  - New installs build the box image as `culiops/culibox:base` and pull from `ghcr.io/culiops/culibox`.
+- **Moves on its own.** On the first start of `culibox serve`, the data folder `~/.local/share/agent-box` is moved to `~/.local/share/culibox`, and a link is left at the old path. Your store key, profiles, accounts and history come along. It waits for a start when no session is running, and it does not move a folder you set with `CULIBOX_HOME`/`AGENT_BOX_HOME`. On a Mac with a box VM it stays where it is. `culibox doctor` shows which folder is in use, and why. A `~/.config/agent-box/config.json` moves to `~/.config/culibox/` the same way.
+- **Stays.**
+  - A `box_image` you pinned keeps working. If you never set one, your existing image is reused.
+  - Keychain and keyring entry names, the colima profile `agent-box`, container labels and browser layout settings keep their old names. Nothing needs to be redone.
 
 ## Security
 

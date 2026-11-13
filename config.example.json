@@ -5,7 +5,7 @@
   "env_label": "DEV",
   "env_color": "#64748b",
 
-  "comment_allowed_hosts": "Extra Host header values this instance answers to, beyond loopback and bind_addr. Add the hostname of a reverse proxy / tunnel in front of agent-box (host or host:port, no scheme, path or wildcard); any other Host header is refused.",
+  "comment_allowed_hosts": "Extra Host header values this instance answers to, beyond loopback and bind_addr. Add the hostname of a reverse proxy / tunnel in front of CuliBox (host or host:port, no scheme, path or wildcard); any other Host header is refused.",
   "allowed_hosts": ["box.example.com"],
 
   "comment_replies": "Kill-switch for replying to a waiting session and answering its permission prompts Yes/No from the UI. Off unless true; read at boot, so a restart applies a change. Peek (last-message summary) works either way.",
@@ -13,7 +13,7 @@
 
   "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
 
-  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. abduco must be installed (the daemon fails fast if not). data_dir and abduco_socket_dir are optional: leave them out and everything lives in the data root ($AGENT_BOX_HOME, else ~/.local/share/agent-box), which is also where this file belongs. Setting them pins a fixed path and stops AGENT_BOX_HOME from moving it.",
+  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. abduco must be installed (the daemon fails fast if not). data_dir and abduco_socket_dir are optional: leave them out and everything lives in the data root ($CULIBOX_HOME, else ~/.local/share/culibox), which is also where this file belongs. Setting them pins a fixed path and stops AGENT_BOX_HOME from moving it.",
   "abduco_bin": "abduco",
 
   "comment_transfer": "File transfer caps. All optional; omitting one uses the default shown. There is deliberately no way to express 'unlimited': 0 or a negative number means 'use the default', so a typo cannot uncap the write path.",
@@ -26,7 +26,7 @@
   "box_image": "culiops/culibox:base",
   "comment_extra_ca": "PEM files of extra CA certificates (e.g. a corporate TLS-inspection root) that every box trusts on top of the image's own. Export only the root you need, not a whole system bundle. Empty = none. Read at daemon start.",
   "extra_ca_certs": [],
-  "comment_vm_folders": "macOS only: the box VM shares only the folders listed in vm-shares.json in the data root, which agent-box writes. It is not a config key. Manage it in Settings > VM folders or with: agent-box box share list|add <dir> [-ro]|rm <dir>|apply.",
+  "comment_vm_folders": "macOS only: the box VM shares only the folders listed in vm-shares.json in the data root, which CuliBox writes. It is not a config key. Manage it in Settings > VM folders or with: culibox box share list|add <dir> [-ro]|rm <dir>|apply.",
   "box_idle_ttl_seconds": 900,
   "audit_egress_retention_days": 90,
   "docker_bin": "docker",

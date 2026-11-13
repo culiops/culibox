@@ -11,7 +11,7 @@ Every feature in detail. The [README](../README.md) has the one-line summary.
 
 ## Run and steer
 
-- **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the CuliBox daemon. On restart, CuliBox re-attaches. Closing the browser or the terminal that runs `agent-box serve` does not kill sessions.
+- **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the CuliBox daemon. On restart, CuliBox re-attaches. Closing the browser or the terminal that runs `culibox serve` does not kill sessions.
 - **Steer from the UI.** Interrupt a session, restart an exited one (Claude Code sessions on the host tier resume the same conversation), and, if `"replies_enabled": true` is set in config.json (off by default; restart to apply), answer permission prompts or send a one-line reply from the needs-you card. This is limited to Claude Code sessions.
 - **Profiles.** Agents are defined in the config file or created at runtime in the UI, with launch options (flags and env vars) as toggles on the spawn form. A quick-shell profile is detected from `$SHELL`. A save made from a stale editor is refused, so an older tab or another device cannot overwrite a newer change.
 - **Files.** Browse, search, view, edit, upload, and download folders as an archive, with size and file-count caps.
@@ -32,4 +32,4 @@ Every feature in detail. The [README](../README.md) has the one-line summary.
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you (not in the opt-in [SSO-direct mode](AWS.md#sso-role-directly-opt-in), where CloudTrail shows you). The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
 - **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment, a file or the encrypted store, injected only into the agent that declares them, and never logged.
 - **Encrypted value store.** A small encrypted store in the data root holds tokens, a GitHub App key or the Claude token as ciphertext, so a disk snapshot or backup does not expose what you keep in it (see [Store](STORE.md)).
-- **`agent-box doctor`.** Checks the machine and prints PASS, WARN or FAIL lines. It is read-only and prints no secrets, so the output is safe to paste into an issue.
+- **`culibox doctor`.** Checks the machine and prints PASS, WARN or FAIL lines. It is read-only and prints no secrets, so the output is safe to paste into an issue.

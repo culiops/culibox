@@ -2,7 +2,7 @@
 
 Sessions are made restart-proof by [abduco](https://www.brain-dump.org/projects/abduco/):
 each agent runs under an abduco server that outlives the daemon, so restarting the
-`agent-box` process (or its container) re-attaches to still-running agents
+`culibox` process (or its container) re-attaches to still-running agents
 instead of killing them.
 
 For this to actually survive a container restart, two things must hold.
@@ -38,10 +38,10 @@ ephemeral filesystem:
 
 ```yaml
 services:
-  agent-box:
-    image: agent-box
+  culibox:
+    image: culibox
     environment:
-      AGENT_BOX_HOME: /data   # config.json goes in /data; leave data_dir out of it
+      CULIBOX_HOME: /data   # config.json goes in /data; leave data_dir out of it
     volumes:
       - agent-data:/data
 volumes:

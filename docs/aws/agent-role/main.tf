@@ -48,7 +48,7 @@ locals {
   })
 }
 
-# The agent identity. agent-box assumes it from the engineer's SSO role with a
+# The agent identity. CuliBox assumes it from the engineer's SSO role with a
 # session policy and SourceIdentity = agentbox-<session>, so CloudTrail shows the
 # agent, not the human. ReadOnlyAccess is the ceiling; the session policy narrows it.
 resource "aws_iam_role" "agent" {
@@ -66,7 +66,7 @@ output "role_arn" {
   value = aws_iam_role.agent.arn
 }
 
-# The write identity (M3b). Only a human grant in the agent-box UI mints it, for
+# The write identity (M3b). Only a human grant in the CuliBox UI mints it, for
 # 15 minutes at a time and never past the grant's window; the session policy
 # narrows it further.
 resource "aws_iam_role" "agent_write" {

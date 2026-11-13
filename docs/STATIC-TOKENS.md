@@ -80,11 +80,11 @@ The two share a variable name, which is fine: the agent picks one per command (`
 "egress": [ { "host": "grafana.corp.example", "port": 8443, "private": true, "cidr": "10.20.0.0/24" } ]
 ```
 
-**Residual:** an exception trusts DNS for that one name. Whoever controls it can point it at any address inside `cidr`, so make `cidr` as narrow as the service. `agent-box doctor` warns on a range wider than `/16` (IPv4) or `/48` (IPv6). The proxy dials from the host, so a VPN route on the host applies to these hosts.
+**Residual:** an exception trusts DNS for that one name. Whoever controls it can point it at any address inside `cidr`, so make `cidr` as narrow as the service. `culibox doctor` warns on a range wider than `/16` (IPv4) or `/48` (IPv6). The proxy dials from the host, so a VPN route on the host applies to these hosts.
 
 **GitHub personal access tokens.** A `github` owner can name a token entry instead of an App: set `"token": "<entry>"` and leave `app` out (exactly one of the two). The entry's `value` is the PAT. It works for `git` and `gh` like an App, with these differences:
 
-- A PAT is not narrowed by CuliBox. The binding's `permissions` do not apply, and the token may reach more than the listed repositories. `repos` is only checked by the broker: a request has to name one of them, and one that names no repository is refused with `name the repository: a personal access token is not scoped by agent-box`. The `gh` wrapper fails closed when it cannot read the repository from `-R`.
+- A PAT is not narrowed by CuliBox. The binding's `permissions` do not apply, and the token may reach more than the listed repositories. `repos` is only checked by the broker: a request has to name one of them, and one that names no repository is refused with `name the repository: a personal access token is not scoped by CuliBox`. The `gh` wrapper fails closed when it cannot read the repository from `-R`.
 - Nothing is revoked when the session ends: CuliBox cannot revoke a PAT.
 - Each fetch counts against the same 60-per-minute limit as `agentbox-env` (App tokens keep their own 10 per minute) and writes an audit row.
 - The profile form's owner picker offers PAT entries in a "Personal access tokens" group and shows the same caveat.
@@ -98,5 +98,5 @@ When you create the token on GitHub, make it a fine-grained one: only the repos 
 - A running session keeps the entry it was spawned with, even across a daemon restart. Deleting an entry stops its fetches but not its egress; kill the session to cut an agent off.
 - `static_tokens` is read at daemon start only: adding, removing or editing an entry needs a restart. The token itself is read at each fetch, so rotating a token file takes effect with no restart. An `env` reference is the daemon's environment, so changing it needs a restart too.
 - A session may fetch at most 60 tokens a minute; more are refused with a rate-limit error.
-- `agent-box doctor` prints a line per entry: whether its reference resolves (a file problem fails; an `env` variable unset in doctor's own shell is a warning, because the daemon reads its own environment) and a warning for a wide private `cidr`.
+- `culibox doctor` prints a line per entry: whether its reference resolves (a file problem fails; an `env` variable unset in doctor's own shell is a warning, because the daemon reads its own environment) and a warning for a wide private `cidr`.
 - The box image must ship `agentbox-env` and the MCP server binaries your entries use (Grafana, Sentry, Atlassian): use an image built from this release and set `box_image` to it.
