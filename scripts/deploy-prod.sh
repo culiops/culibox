@@ -9,8 +9,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 GO="${GO:-$HOME/.local/bin/go}"
-BIN="${AB_PROD_BIN:-$HOME/bin/agent-box-prod}"
-SERVICE="${AB_PROD_SERVICE:-agent-box-prod}"
+BIN="${AB_PROD_BIN:-$HOME/bin/culibox-prod}"
+SERVICE="${AB_PROD_SERVICE:-culibox-prod}"
 RELEASE_BRANCH="${AB_PROD_BRANCH:-main}"
 STAMP="$BIN.deployed-sha"
 

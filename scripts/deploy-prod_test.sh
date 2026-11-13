@@ -68,7 +68,7 @@ chmod +x "$tmp/bin/go" "$tmp/bin/systemctl"
 export PATH=$tmp/bin:$PATH STUB_OUT=$tmp
 export GO=$tmp/bin/go AB_PROD_CONFIRM=yes AB_PROD_SERVICE=stub-prod
 # A space in the path: the printed rollback line is pasted into a shell, so it must quote.
-export AB_PROD_BIN="$HOME/prod bin/agent-box-prod"
+export AB_PROD_BIN="$HOME/prod bin/culibox-prod"
 bin=$AB_PROD_BIN
 stamp=$bin.deployed-sha
 
