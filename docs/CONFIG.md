@@ -42,6 +42,8 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 | `replies_enabled` | `false` | Lets the needs-you card answer permission prompts and send a one-line reply. Claude Code sessions only. Restart to apply. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
+`culibox init` ([macOS](MACOS.md#what-culibox-init-does)) writes these keys for you, after showing the file or a diff and asking: `default_runtime` (`box`), `default_cwd` (the workspace folder you picked), `box_vm_cpus` and `box_vm_memory_gib` (the VM size, macOS only), and `account` (`claude-box`) on each `claude` agent that has none. A `claude` agent already linked to another account is left as it is, and when there is no `claude` agent it adds one. It rewrites the file with sorted keys and two-space indent, and writes it atomically, mode 0600, never through a symlink. Its file is the `-config <path>` you pass, else the config CuliBox already reads, else `<data root>/config.json`.
+
 `box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
 Profiles made or edited in the UI are saved to `profiles.json` in the data root (or at the path set by `profiles_path`) and override a profile of the same name from `agents`. CuliBox reads that file when it starts. You can edit it by hand while CuliBox runs, but the next save or delete of a profile from the UI is then refused until you restart CuliBox, which loads your edit. A save from an editor that was opened before another change to the same profile is refused too: reload the profile and save again. After an update, a page that was open before it must be reloaded before it can save a profile.

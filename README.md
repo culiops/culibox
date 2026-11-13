@@ -62,7 +62,7 @@ One line each here; every detail is in [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Install
 
-Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [Quick start](#quick-start).
+Each release on the [Releases page](https://github.com/culiops/culibox/releases) has a tarball for Linux and for macOS, each for amd64 and arm64, and a `SHA256SUMS` file. A tarball holds `culibox`, `LICENSE` and `README.md`. It does not include abduco or Docker; see [Requirements](#requirements). To build from source instead, use [From source (manual)](#from-source-manual). The [Quick start](#quick-start) installer does the download and the check below for you.
 
 On Linux (use `arm64` on an ARM machine, and the release you want in place of `0.1.0`):
 
@@ -104,34 +104,58 @@ Releases are checked on a Mac in batches, so a new release usually starts as not
 
 ## Quick start
 
-**1. Build.**
+**1. Install and set up.** Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
+sh setup.sh
+```
+
+`setup.sh` is a short POSIX `sh` script. It installs a checksum-verified `culibox` into `~/.local/bin` (it never uses `sudo` and writes only there), then runs `culibox init`. `init` is a guided setup that checks the programs CuliBox needs (offering `brew install` on macOS, one package at a time, and only printing commands on Linux), your workspace folder, the macOS box VM size, a Claude token, the config file, `box setup` and `culibox doctor`. Each of its 8 steps prints one result line, and you can run it again at any time to continue. Every step of both, so you can do it by hand, is in [docs/MACOS.md](docs/MACOS.md#install). Options: `--version vX.Y.Z`, `--from-source` (build that release instead of downloading a binary) and `--prefix DIR`.
+
+Until a release that includes `culibox init` is published (the script requires `v0.34.0` or newer), plain `sh setup.sh` refuses by design. Until then only `sh setup.sh --from-source --version <a pushed tag, v0.34.0 or newer>` works, or follow [From source (manual)](#from-source-manual). While the repository is private, `raw.githubusercontent.com` answers 404: run `sh scripts/setup.sh` from a clone, or fetch the script with `gh api` (see [docs/MACOS.md](docs/MACOS.md#install)).
+
+**2. Start CuliBox.**
+
+```sh
+culibox serve
+```
+
+CuliBox listens on `127.0.0.1:8899` and prints a login URL with a login token. Open it in a browser on the same machine. The token is generated on the first start and kept in `login.token` in the data root; it stays valid across restarts until you delete that file (which makes a new one).
+
+### From source (manual)
+
+This is what `setup.sh --from-source` and `culibox init` do for you.
+
+**1. Build.** Build into `~/.local/bin`, not into the source folder: a folder that holds a program CuliBox runs can only be shared with the box VM read-only.
 
 ```sh
 git clone https://github.com/culiops/culibox.git
 cd culibox
-go build -ldflags "-X main.version=$(scripts/version.sh)" -o culibox ./cmd/culibox
-./culibox doctor
+mkdir -p ~/.local/bin
+go build -ldflags "-X main.version=$(scripts/version.sh)" -o ~/.local/bin/culibox ./cmd/culibox
+culibox doctor
 ```
 
-Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `culibox bug-report` name it. A build without the flag works but shows no version.
+Add `~/.local/bin` to your `PATH` if it is not there. Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `culibox bug-report` name it. A build without the flag works but shows no version.
 
-**2. Try it uncontained.** With no config file, CuliBox listens on `127.0.0.1:8899` and runs one `claude` agent on the **host** tier (not contained):
+**2. Try it uncontained.** With no config file, CuliBox runs one `claude` agent on the **host** tier (not contained):
 
 ```sh
-./culibox serve
+culibox serve
 ```
 
-It prints a login URL with a one-time token. Open it in a browser on the same machine. The token is kept in `login.token` in the data root.
+It prints a login URL with a login token. Open it in a browser on the same machine. The token is kept in `login.token` in the data root and stays valid until you delete the file.
 
 **3. Turn on boxes.** Build the box image (on macOS this also creates the VM; see [docs/MACOS.md](docs/MACOS.md)):
 
 ```sh
-./culibox box setup
+culibox box setup
 ```
 
 `box setup` tags every build with its date (for example `culiops/culibox:2026-10-18`) and prints how to pin it. To pull instead of build, set `"box_image": "ghcr.io/culiops/culibox@sha256:<digest>"` (the digest is in the CI job summary, or from `docker buildx imagetools inspect ghcr.io/culiops/culibox:base`) and run `box setup`: it pulls the image for your daemon's architecture instead of building it. Pin by digest, never by `:base`.
 
-Then put this in `~/.local/share/culibox/config.json` and run `./culibox serve` again:
+Then put this in `~/.local/share/culibox/config.json` and run `culibox serve` again:
 
 ```json
 {
@@ -144,7 +168,7 @@ Then put this in `~/.local/share/culibox/config.json` and run `./culibox serve` 
 }
 ```
 
-Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token`, store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)), and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
+Open `http://127.0.0.1:8899` (use the printed login URL the first time). Sessions are boxed unless a profile says `"runtime": "host"`. The workspace folder must not be your home directory, because a box mounts the whole workspace. Claude Code needs a login inside the box: create a long-lived token with `claude setup-token` and paste it on an agent account's row in Settings → Agent accounts (see [Features](docs/FEATURES.md); `culibox init` does this for an account named `claude-box`), or store it as a secret (see `secret_sources` in [Configuration](docs/CONFIG.md)) and list `CLAUDE_CODE_OAUTH_TOKEN` under the agent's `secrets`.
 
 Every key is in [Configuration](docs/CONFIG.md); [config.example.json](config.example.json) is a fuller example. Only one CuliBox can serve a data root at a time.
 
