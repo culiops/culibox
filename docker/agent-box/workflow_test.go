@@ -267,6 +267,8 @@ var (
 	// The one flow form the guard reads: `key: [a, "b"]` on one line, items plain or
 	// quoted scalars (so no nested collection, pair, alias, anchor or tag in it).
 	wfFlowList     = regexp.MustCompile(`^\s*[\w.-]+:\s*\[\s*(?:` + wfFlowItem + `(?:\s*,\s*` + wfFlowItem + `)*)?\s*\]\s*$`)
+	wfDocMarker    = regexp.MustCompile(`^(?:---|\.\.\.)(?:\s|$)`)
+	wfTopKey       = regexp.MustCompile(`^([\w-]+):`)
 	wfMergeKey     = regexp.MustCompile(`^\s*<<\s*:`)
 	wfSingleRunKey = regexp.MustCompile(`^\s*(?:-\s+)?run:`)
 )
@@ -329,8 +331,9 @@ var (
 // workflowTriggers returns the event names under a workflow's top-level `on:`
 // in any of its three forms: a block of keys (or a `- item` list), a flow
 // list/map (`on: [push, x]`) or a scalar (`on: push`). ok is false when there is
-// no `on:` at all.
-func workflowTriggers(lines []wfLine) (names []string, ok bool) {
+// no `on:` at all. misaligned is true when a line under a block `on:` sits left of
+// the first child (not valid YAML, and the reader would skip it).
+func workflowTriggers(lines []wfLine) (names []string, ok, misaligned bool) {
 	for i, l := range lines {
 		m := wfOn.FindStringSubmatch(l.text)
 		if m == nil {
@@ -352,6 +355,9 @@ func workflowTriggers(lines []wfLine) (names []string, ok bool) {
 				if base < 0 {
 					base = ind
 				}
+				if ind < base {
+					misaligned = true
+				}
 				if ind != base {
 					continue
 				}
@@ -372,9 +378,9 @@ func workflowTriggers(lines []wfLine) (names []string, ok bool) {
 		default:
 			names = append(names, strings.Trim(rest, `"'`))
 		}
-		return names, true
+		return names, true, misaligned
 	}
-	return nil, false
+	return nil, false, false
 }
 
 // flowMapKeys returns the top-level keys of a one-line flow map `{a: 1, b: {c: 2}}`.
@@ -422,9 +428,12 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		add(0, "top level must declare `permissions:` with `contents: read` directly below")
 	}
 
-	if trig, ok := workflowTriggers(lines); !ok {
+	if trig, ok, misaligned := workflowTriggers(lines); !ok {
 		add(0, "no top-level `on:` found")
 	} else {
+		if misaligned {
+			add(0, "inconsistent indentation under `on:`: a trigger could be hidden from the guard")
+		}
 		if len(trig) == 0 {
 			add(0, "no trigger found under `on:` (an empty or unreadable `on:` must not pass)")
 		}
@@ -435,12 +444,30 @@ func checkWorkflowSupplyChain(name, content string) []string {
 		}
 	}
 
+	topKeys := map[string]int{}
 	for i, l := range lines {
 		text := strings.TrimSpace(l.text)
 		if text == "" {
 			continue
 		}
 		if !l.inScript {
+			if strings.Contains(l.text, "\r") {
+				add(l.n, "carriage return: the guard reads LF line endings only: %q", text)
+			}
+			if lead := l.text[:len(l.text)-len(strings.TrimLeft(l.text, " \t"))]; strings.Contains(lead, "\t") {
+				add(l.n, "tab in indentation is not valid YAML and is not read by the guard: %q", text)
+			}
+			if wfDocMarker.MatchString(l.text) {
+				add(l.n, "document marker (`---` or `...`): a workflow is one document, the guard reads only that: %q", text)
+			}
+			if wfIndent(l.text) == 0 {
+				if m := wfTopKey.FindStringSubmatch(l.text); m != nil {
+					if first, dup := topKeys[m[1]]; dup {
+						add(l.n, "duplicate top-level key %q (first at line %d): the guard reads one of them: %q", m[1], first, text)
+					}
+					topKeys[m[1]] = l.n
+				}
+			}
 			code := wfTrailing.ReplaceAllString(l.text, "")
 			// bare: expressions and quoted text taken out, then the comment, so a brace
 			// or an exclamation mark inside text is not structure.
@@ -698,6 +725,14 @@ func TestWorkflowGuardCatchesViolations(t *testing.T) {
 		"tag on a value":         {top + head + checkout + "    env:\n      A: !!binary x\n", "YAML tag"},
 		"tag in a flow list":     {top + head + checkout + "    needs: [!x y]\n", "YAML tag"},
 		"persist sibling key":    {top + head + "      - uses: actions/checkout@" + sha + " # v7.0.1\n        with:\n          ref: x\n        env:\n          persist-credentials: false\n", "persist-credentials"},
+		// Documents, duplicate keys, tabs and CRs are not forms the line reader models:
+		// a second `on:` or a second document could carry a trigger the first one lacks.
+		"duplicate top key":      {top + "on:\n  issue_comment:\n" + head + checkout, "duplicate top-level key"},
+		"second document":        {top + head + checkout + "---\non: issue_comment\n", "document marker"},
+		"document end":           {top + head + checkout + "...\n", "document marker"},
+		"on children misaligned": {"name: x\non:\n    push:\n  issue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "inconsistent indentation under `on:`"},
+		"tab in indentation":     {"name: x\non:\n  push:\n\tissue_comment:\npermissions:\n  contents: read\njobs:\n" + head + checkout, "tab"},
+		"carriage return":        {strings.Replace(top+head+checkout, "\n", "\r\n", 1), "carriage return"},
 	} {
 		bad := checkWorkflowSupplyChain("bad.yml", tc.wf)
 		if len(bad) == 0 {
