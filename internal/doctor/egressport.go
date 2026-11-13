@@ -97,9 +97,13 @@ func checkEgressPort(ctx context.Context, port int, inspect func(context.Context
 			"doctor runs as root, so every socket of another uid looks foreign: uid %s has a socket listening on port %d, %s. If that is CuliBox's own, nothing is wrong; run `culibox doctor` without sudo to tell",
 			uids, port, where)}
 	}
+	effect := "new fenced sessions are refused, and running boxes send their proxy connections to it"
+	if !ok {
+		effect = "new fenced sessions are refused" // no network, so no fenced box runs yet
+	}
 	return Result{Fail, egressPortCheck, fmt.Sprintf(
-		"another account (uid %s) has a socket listening on port %d, %s. While it holds that address the proxy cannot start: new fenced sessions are refused, and running boxes send their proxy connections to it. Stop it; see docs/SECURITY.md (Services on this host)",
-		uids, port, where)}
+		"another account (uid %s) has a socket listening on port %d, %s. While it holds that address the proxy cannot start: %s. Stop it; see docs/SECURITY.md (Services on this host)",
+		uids, port, where, effect)}
 }
 
 type holder struct {

@@ -230,6 +230,10 @@ func TestEgressPortAbsentNetworkStillChecksWildcards(t *testing.T) {
 			if r.Status != Fail || !strings.Contains(r.Detail, "1234") || strings.Contains(r.Detail, "gateway 172") {
 				t.Fatalf("got %+v", r)
 			}
+			// No network means no fenced box runs, so none sends anything to the holder.
+			if strings.Contains(r.Detail, "running boxes") || !strings.Contains(r.Detail, "new fenced sessions are refused") {
+				t.Errorf("absent-network text: %s", r.Detail)
+			}
 		})
 	}
 	// A socket on one specific address is not known to be the gateway: no finding.
