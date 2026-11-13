@@ -250,7 +250,7 @@ func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
 		res, err := tx.Exec(`INSERT OR IGNORE INTO ingest_state(path,size,read_offset,mtime,seen_ids)
 SELECT ?,size,read_offset,mtime,seen_ids FROM ingest_state WHERE path=?`, newRoot+p[len(oldRoot):], p)
 		if err != nil {
-			return 0, fmt.Errorf("analytics: copy %s: %w", p, err)
+			return 0, fmt.Errorf("analytics: copy %q: %w", p, err)
 		}
 		k, err := res.RowsAffected()
 		if err != nil {

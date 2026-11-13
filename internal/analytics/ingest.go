@@ -60,6 +60,9 @@ func ingestFile(s *Store, path, project string, st *IngestStats) error {
 // lower it.
 var boxMaxReadPerPass int64 = 1 << 30
 
+// Paths below a box home are chosen by the box, newlines included, so every log
+// line here quotes them (%q), and an error that wraps one is quoted whole.
+
 // ingestOpened is ingestFile with the open supplied by the caller, so a box
 // tree can be opened through an os.Root. path is only the store key and log
 // label; it is never opened here. maxRead > 0 caps the bytes read this pass.
@@ -89,7 +92,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 		return nil
 	}
 	if size < offset {
-		log.Printf("analytics: %s shrank (%d < %d); clamping offset, not re-ingesting", path, size, offset)
+		log.Printf("analytics: %q shrank (%d < %d); clamping offset, not re-ingesting", path, size, offset)
 		return s.Apply("", project, path, newParsed(), size, size, mtime, seen)
 	}
 
@@ -105,7 +108,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 		return err
 	}
 	if overlongTail {
-		log.Printf("analytics: %s: unterminated line over %d bytes skipped to EOF", path, boxread.MaxLineBytes)
+		log.Printf("analytics: %q: unterminated line over %d bytes skipped to EOF", path, boxread.MaxLineBytes)
 	}
 	if sessionID == "" {
 		sessionID = stemSessionID(path)
@@ -140,7 +143,7 @@ func ingestRoot(s *Store, root string, st *IngestStats) {
 		st.Scanned++
 		if err := ingestFile(s, path, project, st); err != nil {
 			st.Errors++
-			log.Printf("analytics: ingest %s: %v", path, err)
+			log.Printf("analytics: ingest %q: %q", path, err.Error())
 		}
 		return nil
 	})
@@ -216,7 +219,7 @@ func ingestBoxRoot(s *Store, boxStateDir, root string, st *IngestStats) {
 		})
 		if err != nil {
 			st.Errors++
-			log.Printf("analytics: ingest %s: %v", path, err)
+			log.Printf("analytics: ingest %q: %q", path, err.Error())
 		}
 		return nil
 	})
