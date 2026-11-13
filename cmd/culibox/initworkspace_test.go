@@ -266,7 +266,7 @@ func TestVMSizeStepOverride(t *testing.T) {
 }
 
 func TestVMSizeStepInvalidIsReasked(t *testing.T) {
-	for _, bad := range []string{"99 8", "6 99", "0 4", "4 0", "-1 4", "6", "a b", "6 8 9", "4.5 8"} {
+	for _, bad := range []string{"99 8", "6 99", "0 4", "4 0", "4 1", "-1 4", "6", "a b", "6 8 9", "4.5 8"} {
 		var out bytes.Buffer
 		c, g, ok := initVMSizeStep(newTestUI(bad+"\n6 8\n", &out), config.Config{}, "/d", vmDeps("darwin", 10, 16*gib, false))
 		if !ok || c != 6 || g != 8 {
@@ -275,6 +275,17 @@ func TestVMSizeStepInvalidIsReasked(t *testing.T) {
 		if n := strings.Count(out.String(), "VM size: 5 CPUs"); n != 2 {
 			t.Errorf("%q: asked %d times, want 2: %s", bad, n, out.String())
 		}
+	}
+}
+
+func TestVMSizeStepLowMemoryExplainsTheFloor(t *testing.T) {
+	var out bytes.Buffer
+	c, g, ok := initVMSizeStep(newTestUI("4 1\n4 2\n", &out), config.Config{}, "/d", vmDeps("darwin", 10, 16*gib, false))
+	if !ok || c != 4 || g != 2 {
+		t.Fatalf("got %d,%d,%v: %s", c, g, ok, out.String())
+	}
+	if !strings.Contains(out.String(), "GiB must be between 2 and 16") || !strings.Contains(out.String(), "too small") {
+		t.Fatalf("the floor and its reason must be said: %s", out.String())
 	}
 }
 

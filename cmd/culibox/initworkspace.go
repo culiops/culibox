@@ -116,9 +116,13 @@ func defaultVMSize(cpus int, memBytes uint64) (vmCPUs, vmGiB int) {
 	return max(2, cpus/2), min(8, max(4, hostGiB(memBytes)/4))
 }
 
-// parseVMSize reads "CPUs GiB" and checks it against the host: at least 1 of
-// each and no more than the host has (a host value of 0 is unknown and sets no
-// upper bound).
+// minVMGiB is the smallest VM memory init accepts for a typed size (a floor
+// chosen so the VM can hold Docker and a box container; inferred, not measured).
+const minVMGiB = 2
+
+// parseVMSize reads "CPUs GiB" and checks it against the host: at least 1 CPU
+// and minVMGiB GiB, and no more than the host has (a host value of 0 is unknown
+// and sets no upper bound).
 func parseVMSize(s string, hostCPUs int, hostMemBytes uint64) (cpus, gib int, err error) {
 	f := strings.Fields(s)
 	if len(f) != 2 {
@@ -132,8 +136,8 @@ func parseVMSize(s string, hostCPUs int, hostMemBytes uint64) (cpus, gib int, er
 	if cpus < 1 || (hostCPUs > 0 && cpus > hostCPUs) {
 		return 0, 0, fmt.Errorf("CPUs must be between 1 and %d (this Mac has %d)", max(hostCPUs, 1), hostCPUs)
 	}
-	if gib < 1 || (hostMemBytes > 0 && gib > hostGiB(hostMemBytes)) {
-		return 0, 0, fmt.Errorf("GiB must be between 1 and %d (this Mac has %d GiB)", max(hostGiB(hostMemBytes), 1), hostGiB(hostMemBytes))
+	if gib < minVMGiB || (hostMemBytes > 0 && gib > hostGiB(hostMemBytes)) {
+		return 0, 0, fmt.Errorf("GiB must be between %d and %d (this Mac has %d GiB); a smaller VM is too small for Docker and the box", minVMGiB, max(hostGiB(hostMemBytes), minVMGiB), hostGiB(hostMemBytes))
 	}
 	return cpus, gib, nil
 }
