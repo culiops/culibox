@@ -188,7 +188,7 @@ func profileStoreErr(err error) error {
 const saveFailedMsg = "the profile could not be written; nothing was saved (details are in the CuliBox log)"
 
 // deleteFailedMsg is the 500 body of a delete the store could not write.
-const deleteFailedMsg = "delete failed"
+const deleteFailedMsg = "the profile could not be deleted (details are in the CuliBox log)"
 
 // deleteChangedMsg is the 409 body of a delete whose revision is not the
 // profile's: the profile was edited after the page opened it.

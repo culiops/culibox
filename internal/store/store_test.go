@@ -224,3 +224,78 @@ func TestOwnWritesAreNotHandEdits(t *testing.T) {
 		}
 	}
 }
+
+// A write that fails must leave the store as it was: the failed value is not
+// served by Get and not written by the next successful write, and a failed
+// delete leaves the profile where it was. Uses a real read-only directory, so
+// the failure comes from the flush itself, after the in-memory change.
+func readOnlyStore(t *testing.T) (s *Store, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir = t.TempDir()
+	s, err := Open(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(config.AgentConfig{Name: "a", Bin: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	return s, dir
+}
+
+func TestFailedSaveOfAnExistingProfileKeepsTheOldOne(t *testing.T) {
+	s, dir := readOnlyStore(t)
+	if err := s.Save(config.AgentConfig{Name: "a", Bin: "new"}); err == nil {
+		t.Fatal("the save into a read-only directory succeeded")
+	}
+	if p, _ := s.Get("a"); p.Bin != "old" {
+		t.Fatalf("Get after a failed save = %q, want the old value", p.Bin)
+	}
+	_ = os.Chmod(dir, 0o700)
+	if err := s.Save(config.AgentConfig{Name: "b", Bin: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	re, err := Open(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := re.Get("a"); p.Bin != "old" {
+		t.Fatalf("the failed save was persisted by the next write: %q", p.Bin)
+	}
+}
+
+func TestFailedSaveOfANewProfileLeavesNoTrace(t *testing.T) {
+	s, _ := readOnlyStore(t)
+	if err := s.Save(config.AgentConfig{Name: "new", Bin: "x"}); err == nil {
+		t.Fatal("the save into a read-only directory succeeded")
+	}
+	if _, ok := s.Get("new"); ok {
+		t.Fatal("a profile whose save failed is served by Get")
+	}
+	if len(s.List()) != 1 {
+		t.Fatalf("List = %d profiles, want 1", len(s.List()))
+	}
+}
+
+func TestFailedDeleteKeepsTheProfile(t *testing.T) {
+	s, dir := readOnlyStore(t)
+	if err := s.Delete("a"); err == nil {
+		t.Fatal("the delete in a read-only directory succeeded")
+	}
+	if p, ok := s.Get("a"); !ok || p.Bin != "old" {
+		t.Fatalf("the profile after a failed delete: %+v %v", p, ok)
+	}
+	re, err := Open(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := re.Get("a"); !ok {
+		t.Fatal("the file lost the profile")
+	}
+}

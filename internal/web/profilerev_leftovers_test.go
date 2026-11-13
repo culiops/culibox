@@ -75,6 +75,10 @@ func TestDeleteStoreFailureIs500AndNamesNoHostPath(t *testing.T) {
 	if rec.Code != 500 || strings.Contains(rec.Body.String(), "/home/") {
 		t.Fatalf("DELETE with a failing store: %d %s, want 500 with no path", rec.Code, rec.Body)
 	}
+	// the page prefixes "Delete failed: ", so the text must not say it again
+	if msg, _ := apiBody(t, rec)["error"].(string); strings.HasPrefix(strings.ToLower(msg), "delete failed") {
+		t.Fatalf("the 500 text %q repeats the client's \"Delete failed\" prefix", msg)
+	}
 }
 
 // deleteWithRev is what the editor does: DELETE with the revision it opened.
