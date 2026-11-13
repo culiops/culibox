@@ -17,16 +17,18 @@ import (
 // reaches a clone. A new one fails here until someone shows it cannot, or makes
 // it refuse while clone.ReadReturnState reports branches not home.
 var removeAllSites = map[string]int{
-	"internal/bundle/plugins.go":    2, // bundle staging dirs (a temp tree and a replaced final tree)
-	"internal/bundle/bundle.go":     4, // bundle staging dirs, and the imports temp dir and its replaced final dir
-	"internal/bundle/importsfs.go":  1, // the imports temp dir, under the bundle root
-	"internal/bundle/gc.go":         1, // a condemned bundle or imports dir: a direct child of the bundle root, exact generated name
-	"internal/web/fsops.go":         1, // the file tree's user-confirmed delete (a person's action, not cleanup)
-	"internal/box/boxout.go":        1, // box output dirs under the state root
-	"internal/box/reclaim.go":       3, // a box's home and out dirs under the state root (one call in a loop over those two paths), and one of four fixed cache paths inside a home through an os.Root, never through a symlink (two calls: the retry after the chmod walk)
-	"internal/clone/create.go":      1, // the temp dir a new clone is built in, before it is renamed into place
-	"internal/doctor/doctor.go":     1, // doctor's throwaway probe dir
-	"internal/secretstore/store.go": 1, // the secret store's own dir
+	"internal/bundle/plugins.go":          2, // bundle staging dirs (a temp tree and a replaced final tree)
+	"internal/bundle/bundle.go":           4, // bundle staging dirs, and the imports temp dir and its replaced final dir
+	"internal/bundle/importsfs.go":        1, // the imports temp dir, under the bundle root
+	"internal/bundle/gc.go":               1, // a condemned bundle or imports dir: a direct child of the bundle root, exact generated name
+	"internal/web/fsops.go":               1, // the file tree's user-confirmed delete (a person's action, not cleanup)
+	"internal/box/boxout.go":              1, // box output dirs under the state root
+	"internal/box/reclaim.go":             3, // a box's home and out dirs under the state root (one call in a loop over those two paths), and one of four fixed cache paths inside a home through an os.Root, never through a symlink (two calls: the retry after the chmod walk)
+	"internal/clone/create.go":            1, // the temp dir a new clone is built in, before it is renamed into place
+	"internal/doctor/doctor.go":           1, // doctor's throwaway probe dir
+	"internal/upgradebackup/copy.go":      1, // a leftover backups/.tmp-* dir, through an os.Root on the data root: only upgrade-backup copies of small files, never a clone dir (clone-dirs is copied as a file)
+	"internal/upgradebackup/retention.go": 1, // a pruned backups/<name> dir by retention, through an os.Root on the data root; the dir holds copies, never a clone dir
+	"internal/secretstore/store.go":       1, // the secret store's own dir
 }
 
 func TestNothingRemovesACloneDir(t *testing.T) {

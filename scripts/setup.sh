@@ -327,6 +327,7 @@ install_binary() {
   if [ "$KEPT" = 1 ]; then
     note "kept the previous binary as $BIN.prev; to roll back, run:"
     note "rollback: mv -f $BIN.prev $BIN"
+    note "to also undo data changes, restore the backup taken at upgrade: see docs/UPGRADING.md"
   fi
 }
 
