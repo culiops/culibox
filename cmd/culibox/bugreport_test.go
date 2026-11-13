@@ -59,7 +59,7 @@ func TestRunBugReportUnreadableProfilesNotesIt(t *testing.T) {
 }
 
 func TestBugReportLogHint(t *testing.T) {
-	if got := bugReportLogHint("linux"); !strings.Contains(got, "journalctl --user -u agent-box.service") {
+	if got := bugReportLogHint("linux"); !strings.Contains(got, "journalctl --user -u culibox.service") {
 		t.Errorf("linux hint = %q", got)
 	}
 	if got := bugReportLogHint("darwin"); !strings.Contains(got, "culibox serve") {

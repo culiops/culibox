@@ -53,6 +53,5 @@ func bugReportLogHint(goos string) string {
 	if goos == "darwin" {
 		return "the terminal that started culibox serve (stderr)"
 	}
-	// Kept: these are the host's real unit names until the host-only follow-up renames them.
-	return "journalctl --user -u agent-box.service (or agent-box-prod.service) --since -1h"
+	return "journalctl --user -u culibox.service (or culibox-prod.service) --since -1h"
 }
