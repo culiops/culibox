@@ -304,3 +304,32 @@ func TestProgramDirHolderIsShareableOnlyReadOnly(t *testing.T) {
 		t.Errorf("skipped = %+v, want the child named", skipped)
 	}
 }
+
+// #235 review: NormalizeResolved is Normalize plus the resolved path of each
+// kept entry, in the same order, taken from the resolution that checked it.
+func TestNormalizeResolvedReturnsTheKeys(t *testing.T) {
+	env := testEnv(t, false)
+	real := filepath.Join(env.Home, "code")
+	link := filepath.Join(env.Home, "lnk")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	in := []Share{{Path: link, Mode: RW}, sh(env, "zz", RO), sh(env, "aa", RO)}
+	out, keys, skipped := NormalizeResolved(in, env)
+	plain, plainSkipped := Normalize(in, env)
+	if !reflect.DeepEqual(out, plain) || !reflect.DeepEqual(skipped, plainSkipped) {
+		t.Fatalf("NormalizeResolved differs from Normalize: %+v vs %+v", out, plain)
+	}
+	if len(keys) != len(out) {
+		t.Fatalf("keys %v for %+v", keys, out)
+	}
+	for i, s := range out {
+		want := s.Path
+		if s.Path == link {
+			want = real
+		}
+		if keys[i] != want {
+			t.Errorf("keys[%d] = %s, want %s", i, keys[i], want)
+		}
+	}
+}

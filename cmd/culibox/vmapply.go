@@ -144,7 +144,8 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 		s.mu.Unlock()
 		return web.VMApply{}, errApplyElsewhere{}
 	}
-	if err := s.recheckList(); err != nil {
+	resolved, err := s.recheckList()
+	if err != nil {
 		s.mu.Unlock()
 		return web.VMApply{}, err
 	}
@@ -152,7 +153,11 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 		s.mu.Unlock()
 		return web.VMApply{}, web.ErrVMNotSetUp
 	}
-	s.ctl.SetListed(append([]vmshares.Share{}, s.list...))
+	if rs, ok := s.ctl.(resolvedLister); ok {
+		rs.SetListedResolved(resolved) // the paths the re-check resolved, not resolved again
+	} else {
+		s.ctl.SetListed(append([]vmshares.Share{}, s.list...))
+	}
 	s.nextID++
 	now := time.Now()
 	s.job = &web.VMApply{ID: s.nextID, State: "running", StartedMs: now.UnixMilli(), Steps: []web.VMApplyStep{
@@ -172,17 +177,28 @@ func (s *vmShareSvc) Apply() (web.VMApply, error) {
 // as they are now (resolved), just before it is handed to the VM. A folder
 // that changed on disk since it was added (a link retargeted) and is no longer
 // allowed, or no longer a separate entry, refuses the apply. The caller holds s.mu.
-func (s *vmShareSvc) recheckList() error {
-	out, skipped := vmshares.Normalize(s.list, s.env)
+//
+// It returns the list with each path replaced by the resolved path it was
+// checked on, for resolvedLister.
+func (s *vmShareSvc) recheckList() ([]vmshares.Share, error) {
+	out, keys, skipped := vmshares.NormalizeResolved(s.list, s.env)
 	if len(skipped) == 0 && slices.Equal(out, s.list) {
-		return nil
+		resolved := make([]vmshares.Share, len(out))
+		for i, sh := range out {
+			resolved[i] = vmshares.Share{Path: keys[i], Mode: sh.Mode}
+		}
+		return resolved, nil
 	}
 	for _, k := range skipped {
 		s.logf("box VM folders: not applying: %s: %s", k.Path, k.Reason)
 	}
 	s.logf("box VM folders: not applying: the folder list no longer passes the checks")
-	return web.ErrSharesChanged
+	return nil, web.ErrSharesChanged
 }
+
+// resolvedLister is a vmControl that can take paths already resolved and
+// checked (the real one); the others get SetListed.
+type resolvedLister interface{ SetListedResolved([]vmshares.Share) }
 
 func (s *vmShareSvc) runJob(ctx context.Context, id int) {
 	err := s.ctl.Apply(ctx, func(name, state, sub string) {
@@ -341,6 +357,8 @@ func (c *layerVMControl) VMRunning() bool {
 	c.runVal, c.runAt, c.runSet = c.l.vm.Running(ctx), now(), true
 	return c.runVal
 }
+
+func (c *layerVMControl) SetListedResolved(l []vmshares.Share) { c.l.vm.SetResolvedShares(l) }
 
 func (c *layerVMControl) SetListed(l []vmshares.Share) { c.l.vm.SetShares(l) }
 

@@ -26,6 +26,7 @@ type fakeVMControl struct {
 	whole     bool
 	notSetUp  bool
 	listed    []vmshares.Share
+	resolved  []vmshares.Share // what SetListedResolved was handed
 	names     []string
 	cwds      []string
 	applying  bool
@@ -44,6 +45,11 @@ func (f *fakeVMControl) Applied() ([]vmshares.Share, bool, bool, error) {
 func (f *fakeVMControl) SetListed(l []vmshares.Share) {
 	f.mu.Lock()
 	f.listed = l
+	f.mu.Unlock()
+}
+func (f *fakeVMControl) SetListedResolved(l []vmshares.Share) {
+	f.mu.Lock()
+	f.listed, f.resolved = l, l
 	f.mu.Unlock()
 }
 func (f *fakeVMControl) RunningBoxed() []string { return f.names }
@@ -592,4 +598,26 @@ func TestApplyChecksTheListAgainBeforeItReachesTheVM(t *testing.T) {
 		t.Fatalf("an unchanged list must apply: %v", err)
 	}
 	waitJob(t, s)
+}
+
+// #235 review: Apply hands the VM the paths its re-check already resolved, so
+// they are not resolved a second time on the way in.
+func TestApplyHandsTheVMTheKeysTheRecheckResolved(t *testing.T) {
+	f := newSvcFixture(t)
+	code := f.sub(t, "code")
+	link := filepath.Join(f.home, "link")
+	if err := os.Symlink(code, link); err != nil {
+		t.Fatal(err)
+	}
+	s := f.svc(t)
+	if _, _, err := s.Add(link, "rw", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, s)
+	if len(f.ctl.resolved) != 1 || f.ctl.resolved[0].Path != code || f.ctl.resolved[0].Mode != vmshares.RW {
+		t.Fatalf("the VM was handed %+v, want %s resolved", f.ctl.resolved, code)
+	}
 }

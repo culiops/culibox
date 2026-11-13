@@ -148,6 +148,14 @@ func Remove(list []Share, path string, fold bool) ([]Share, error) {
 // read-only parent of a read-write child becomes read-write so existing
 // profiles keep working, covered children are dropped. Output is sorted by path.
 func Normalize(list []Share, env Env) (out []Share, skipped []Skip) {
+	out, _, skipped = NormalizeResolved(list, env)
+	return out, skipped
+}
+
+// NormalizeResolved is Normalize plus the resolved path of each kept entry
+// (keys[i] belongs to out[i]): the very resolution the entry was checked and
+// merged on, for a caller that must hand the VM exactly that path.
+func NormalizeResolved(list []Share, env Env) (out []Share, keys []string, skipped []Skip) {
 	type keyed struct {
 		Share
 		key string
@@ -218,9 +226,23 @@ outer:
 			kept = append(kept, s)
 		}
 	}
+	order := func(s Share) string {
+		if env.Fold {
+			return strings.ToLower(s.Path)
+		}
+		return s.Path
+	}
+	sort.SliceStable(kept, func(i, j int) bool { // the order of sorted()
+		if ki, kj := order(kept[i].Share), order(kept[j].Share); ki != kj {
+			return ki < kj
+		}
+		return kept[i].Path < kept[j].Path
+	})
 	out = []Share{}
+	keys = []string{}
 	for _, s := range kept {
 		out = append(out, s.Share)
+		keys = append(keys, s.key)
 	}
-	return sorted(out, env.Fold), skipped
+	return out, keys, skipped
 }

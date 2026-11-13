@@ -125,6 +125,14 @@ func (v *VM) SetShares(s []vmshares.Share) {
 	v.flagMu.Unlock()
 }
 
+// SetResolvedShares is SetShares for paths the caller has already resolved and
+// checked: they are stored as given, never resolved a second time.
+func (v *VM) SetResolvedShares(s []vmshares.Share) {
+	v.flagMu.Lock()
+	v.cfg.Shares = append([]vmshares.Share(nil), s...)
+	v.flagMu.Unlock()
+}
+
 // ApplyStep names a slow step of ApplyMounts.
 type ApplyStep int
 
