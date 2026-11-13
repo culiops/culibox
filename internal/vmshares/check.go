@@ -19,6 +19,7 @@ const (
 	KindProtected    = "protected"
 	KindNotDir       = "notdir"
 	KindRelative     = "relative"
+	KindReadOnly     = "readonly"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	reasonData      = "overlaps CuliBox's data folder, which is always shared in the parts boxes need."
 	reasonNotDir    = "is a file, not a folder."
 	reasonRelative  = "Use a full path, like ~/code/project."
+	reasonReadOnly  = "holds files your own Claude Code loads, so it can only be shared read-only."
 )
 
 const reasonProtectedFmt = "holds %s, so it can never be shared with the box VM."
@@ -95,6 +97,41 @@ func Check(p string, env Env) error {
 		return refuse(KindNotDir, reasonNotDir)
 	}
 	return nil
+}
+
+// CheckMode is Check plus the rule that depends on the mode: a folder inside
+// ~/.claude (the clone memory folders, the only part of it a share may be) can
+// only be read-only, because the host's own Claude Code loads what is there
+// and a box that could write it could feed that agent instructions.
+func CheckMode(p string, m Mode, env Env) error {
+	if err := Check(p, env); err != nil {
+		return err
+	}
+	if m == RW && insideClaude(filepath.Clean(p), env) {
+		return &Refused{Path: p, Kind: KindReadOnly, Reason: reasonReadOnly, home: env.Home}
+	}
+	return nil
+}
+
+// insideClaude reports whether p, by spelling, symlink resolution or file
+// identity (a macOS firmlink, a link to the home), is ~/.claude or below it.
+func insideClaude(p string, env Env) bool {
+	if env.Home == "" {
+		return false
+	}
+	claude := filepath.Join(env.Home, ".claude")
+	ids := idCache{}
+	for _, c := range []string{p, resolveSpelling(p)} {
+		for _, cl := range spellings(claude) {
+			if Within(c, cl, env.Fold) {
+				return true
+			}
+		}
+		if _, in := ids.inside(c, claude); in {
+			return true
+		}
+	}
+	return false
 }
 
 // identityHit runs the home, sensitive, data-root and protected rules again by

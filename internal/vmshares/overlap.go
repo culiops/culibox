@@ -3,6 +3,7 @@ package vmshares
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -66,7 +67,7 @@ func sorted(list []Share, fold bool) []Share {
 // Add puts s in list under the rule that no share contains another, judged on
 // the resolved paths.
 func Add(list []Share, s Share, env Env) (Outcome, error) {
-	if err := Check(s.Path, env); err != nil {
+	if err := CheckMode(s.Path, s.Mode, env); err != nil {
 		return Outcome{}, err
 	}
 	ks, k := keys(list), Resolve(s.Path)
@@ -110,6 +111,11 @@ func SetMode(list []Share, path string, m Mode, env Env) ([]Share, error) {
 	k := Resolve(path)
 	for i, rk := range keys(out) {
 		if sameKey(rk, k, env.Fold) {
+			if m == RW {
+				if err := CheckMode(out[i].Path, m, env); err != nil {
+					return nil, err
+				}
+			}
 			out[i].Mode = m
 			return out, nil
 		}
@@ -155,6 +161,10 @@ outer:
 			}
 			skipped = append(skipped, Skip{Path: s.Path, Reason: reason})
 			continue
+		}
+		if s.Mode == RW && insideClaude(filepath.Clean(s.Path), env) {
+			s.Mode = RO
+			skipped = append(skipped, Skip{Path: s.Path, Reason: "made read-only: it " + reasonReadOnly})
 		}
 		k := Resolve(s.Path)
 		for i := range merged {

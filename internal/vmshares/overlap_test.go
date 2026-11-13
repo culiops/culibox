@@ -184,3 +184,37 @@ func TestOverlapUsesResolvedPaths(t *testing.T) {
 		t.Errorf("Remove by the other spelling = %+v, %v", got, err)
 	}
 }
+
+// #235 item 1: a hand-edited or old list that holds a ~/.claude folder rw is
+// read back read-only; the add and the mode switch refuse rw there.
+func TestClaudeFoldersAreReadOnlyEverywhere(t *testing.T) {
+	env := testEnv(t, false)
+	mem := sh(env, ".claude/projects/-a-b/memory", RW)
+
+	out, skipped := Normalize([]Share{mem, sh(env, "code", RW)}, env)
+	if len(out) != 2 || out[0].Path != mem.Path || out[0].Mode != RO || out[1].Mode != RW {
+		t.Fatalf("Normalize = %+v, want the memory folder ro and code rw", out)
+	}
+	if len(skipped) != 1 || skipped[0].Path != mem.Path || !strings.Contains(skipped[0].Reason, "read-only") {
+		t.Errorf("skipped = %+v, want one note saying why", skipped)
+	}
+	if _, err := Add(nil, mem, env); kindOf(err) != KindReadOnly {
+		t.Errorf("Add rw = %v, want a read-only refusal", err)
+	}
+	mem.Mode = RO
+	add, err := Add(nil, mem, env)
+	if err != nil || len(add.List) != 1 || add.List[0].Mode != RO {
+		t.Fatalf("Add ro = %+v, %v", add, err)
+	}
+	if _, err := SetMode(add.List, mem.Path, RW, env); kindOf(err) != KindReadOnly {
+		t.Errorf("SetMode rw = %v, want a read-only refusal", err)
+	}
+	if got, err := SetMode([]Share{sh(env, "code", RW)}, sh(env, "code", RW).Path, RO, env); err != nil || got[0].Mode != RO {
+		t.Errorf("SetMode to ro outside .claude = %+v, %v", got, err)
+	}
+	// Adding the same folder rw over its ro entry goes through SetMode's rule.
+	mem.Mode = RW
+	if _, err := Add(add.List, mem, env); kindOf(err) != KindReadOnly {
+		t.Errorf("Add rw over the ro entry = %v, want a read-only refusal", err)
+	}
+}
