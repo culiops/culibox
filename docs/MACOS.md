@@ -502,7 +502,10 @@ a git config `include`, and so on). What it covers and what it does not is in
     guess either: doctor lists it with the line to unlock it. If the records
     file cannot be read, CuliBox keeps it as `inplace-locks.json.unreadable`
     and starts with none: a file it had locked stays locked, and a spawn in
-    its folder is refused naming it, until you unlock it.
+    its folder is refused naming it, until you unlock it. Records written by
+    a newer CuliBox are left as they are, and every in-place box that needs a
+    lock is refused until you run that CuliBox or restore the pre-upgrade
+    backup.
 - After upgrading, a box that was started before this guard and still runs
   sessions is refused at the next spawn ("started without ... which this
   session needs") until you end those sessions. An idle one is recreated.

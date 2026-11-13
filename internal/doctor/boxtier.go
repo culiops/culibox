@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/credref"
+	"github.com/culiops/culibox/internal/datacompat"
 	"github.com/culiops/culibox/internal/secretchain"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/vmshares"
@@ -455,7 +456,11 @@ func guardLockRows(goos string, f boxFacts) []Result {
 		return nil
 	}
 	var out []Result
-	if f.LocksErr != nil {
+	if errors.Is(f.LocksErr, datacompat.ErrNewer) {
+		// Left in place, not moved aside: there is no flag to unlock by hand.
+		out = append(out, Result{Warn, ck, "the lock records are from a newer CuliBox and are left as they are, so every in-place box " +
+			"that needs a lock is refused (" + f.LocksErr.Error() + ")"})
+	} else if f.LocksErr != nil {
 		out = append(out, Result{Warn, ck, "the lock records cannot be read (" + f.LocksErr.Error() + "); a guarded file CuliBox " +
 			"locked may stay locked: check with `ls -lO` and unlock it with `chflags nouchg <file>`"})
 	}
