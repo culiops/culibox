@@ -390,6 +390,12 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	return parseConfig(b)
+}
+
+// parseConfig is Load's parse step on bytes already read, so a caller can
+// check a file it has not written yet the way Load would treat it.
+func parseConfig(b []byte) (Config, error) {
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)

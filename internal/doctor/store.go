@@ -29,6 +29,16 @@ func StoreFor(c config.Config, dataDir string) credref.StoreGetter {
 	return nil
 }
 
+// AccountStoreFor opens the encrypted store directly (an initialized store even
+// when the config does not reference it), for an account's own pasted token, the
+// launcher's acctTokenStore. Untyped nil when there is no store.
+func AccountStoreFor(c config.Config, dataDir string) credref.StoreGetter {
+	if st := openStoreForCheck(c, dataDir); st != nil {
+		return st
+	}
+	return nil
+}
+
 // openStore is StoreFor with the concrete type, nil when the config does not
 // use the store.
 func openStore(c config.Config, dataDir string) *secretstore.Store {

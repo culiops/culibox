@@ -4,25 +4,83 @@ Sessions run as your user (host tier, **not contained**) unless you set up the
 boxed tier, which runs them in a container inside CuliBox's own colima VM; see
 [Boxed tier](#boxed-tier-contained-sessions) below.
 
-## Install (from source)
+## Install
+
+Download the installer, read it, run it (use the release tag you want in place of `<tag>`):
+
+    curl -fsSLO https://raw.githubusercontent.com/culiops/culibox/<tag>/scripts/setup.sh
+    sh setup.sh
+
+It installs a checksum-verified `culibox` into `~/.local/bin` and then runs
+`culibox init`, which sets up everything else. It is a short POSIX `sh` script
+that never uses `sudo` and installs only under the install folder; it downloads
+and builds in a temporary folder that it removes, and with `--from-source` it may
+run `brew install go` after an explicit `y`. Read it before you run it. Options: `--version vX.Y.Z` (default: the newest published
+release), `--from-source` (build that release instead of downloading a binary,
+see below) and `--prefix DIR` (default `~/.local/bin`, or `$PREFIX`).
+
+**Until a release that has `culibox init` is published, plain `sh setup.sh`
+refuses, by design.** The script knows the first version that ships `init`
+(`MIN_VERSION`, currently `v0.34.0`) and stops with a clear message when the
+newest published release is older, or when there is none. Until then only
+`sh setup.sh --from-source --version <a pushed tag, v0.34.0 or newer>` works.
+
+**While the repository is private,** `raw.githubusercontent.com` answers 404.
+Run the script from a clone (`sh scripts/setup.sh`), or fetch it with the
+GitHub CLI:
+
+    gh api -H "Accept: application/vnd.github.raw" "repos/culiops/culibox/contents/scripts/setup.sh?ref=<tag>" > setup.sh
+
+With `gh` logged in, the script also uses it for the release lookup and downloads.
+
+### What `setup.sh` does
+
+Each step prints `==> <what>` before it runs. To do it by hand, follow the same steps:
+
+1. **Checks the platform.** macOS or Linux, on amd64 (`x86_64`) or arm64. Anything else is refused.
+2. **Picks the version.** `--version` as given (it must look like `vX.Y.Z`), else the newest published release (`gh release view`, or the GitHub releases API). A version older than `MIN_VERSION` is refused. The tag is resolved once and every later URL uses it.
+3. **Stops early when that version is already installed.** It runs `~/.local/bin/culibox version` and, on a match, skips the download and goes straight to `init`.
+4. **Gets the binary.** Into a temporary folder it downloads `culibox_<version>_<os>_<arch>.tar.gz` and `SHA256SUMS` from the release (with `gh release download` when `gh` is logged in, else `curl`). It finds the tarball's one line in `SHA256SUMS` and compares it with `shasum -a 256` (or `sha256sum`); a missing line, a repeated line or a mismatch installs nothing. It then checks the build attestation with `gh attestation verify <tarball> --repo culiops/culibox` once the repository is public (while it is private it prints "skipped"; with `gh` missing or logged out it prints "provenance not checked" and relies on the checksum). Last, it extracts `culibox` from the tarball. Nothing downloaded runs before its checksum matched.
+   With `--from-source` it instead clones the tag (`git clone --depth 1 --branch <tag>`), needs a Go at least as new as the `go` line of that `go.mod`, and builds `CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=<tag> -X main.commit=<sha>" -o <temp>/culibox ./cmd/culibox` in the temporary folder, never in a source tree you keep. If Go is missing or too old it asks `Install go via brew? [y/N]`; it never installs Homebrew (it prints the official install line from <https://brew.sh> and stops).
+5. **Installs.** Into `~/.local/bin/culibox` (creating the folder). If a different `culibox` was there, it first copies it to `culibox.prev` and prints `rollback: mv -f <path>.prev <path>`. It writes a side file and renames it, so a half-written binary is never in place. It prints the `export PATH=...` line to add to your shell's rc file when the folder is not on `PATH`.
+6. **Runs `culibox init`.**
+
+### What `culibox init` does
+
+`culibox init` is a guided first-time setup. It needs a terminal (it asks questions): without one it lists what it would check and exits 2. Every step prints `== step N/8: <what>` and then exactly one of `done`, `already done: <why>`, `skipped: <why>` or `stopped: <what to do next>`. A stopped step exits 1 and gives the command to finish by hand; run `culibox init` again afterwards, and it continues from where the machine is. A run through all eight steps exits 0 when `culibox doctor` found no FAIL. Run it as `culibox init [-config <path>]`; `-config` must name a file that exists (leave it out and init creates `<data root>/config.json`).
+
+1. **Dependencies.** Needs macOS 13 or newer, and `abduco`, `docker`, `colima` (macOS only) and `claude` on `PATH` (a binary you set in config, such as `docker_bin`, is looked up instead). For each missing one it asks, per package, ``Install <name> with `brew install ...`? [y/N]`` and runs only what you answered `y` to: `brew install abduco`, `brew install docker`, `brew install colima`, `brew install --cask claude-code`. By hand: run those. It never uses `sudo` and never installs Homebrew. On Linux it only prints the install commands.
+2. **Data root.** `~/.local/share/culibox` (or `$CULIBOX_HOME`), created with mode 0700 when absent. By hand: `mkdir -p -m 700 ~/.local/share/culibox`.
+3. **Workspace folder.** Asks for the folder where your agents work (default: `default_cwd` from your config). A box mounts the whole folder, so it must be a project folder: not the filesystem root, your home or a folder that contains it, and not CuliBox's own folders (the data root, the folder of the config file). It offers to create a folder that does not exist.
+4. **VM size (macOS only).** Proposes the box VM's size and asks you to press Enter or type `<CPUs> <GiB>`: CPUs = half the Mac's cores (at least 2), RAM = a quarter of the Mac's RAM in whole GiB, between 4 and 8. This is inferred from the Mac's size, not measured. When `box_vm_cpus` and `box_vm_memory_gib` are both set in your config, it proposes those instead. When the VM already exists it prints `already done` and asks nothing (a size change on an existing VM needs `culibox box setup -recreate`, which init never runs). On Linux the step is skipped.
+5. **Claude token.** Creates the [encrypted store](STORE.md) if there is none (on macOS the key goes in your login Keychain), offers to run `claude setup-token` (it opens a browser), and asks you to paste the token with the input hidden. The token goes into the store as `ACCT_CLAUDE_BOX_TOKEN` and an agent account named `claude-box` is created that uses it. The token is never printed and never written to `config.json`. By hand: `culibox store init`, `claude setup-token`, then in Settings → Agent accounts choose `+ new account`, name it `claude-box`, and paste the token on its row. An existing `claude-box` account is kept unless you answer yes to `Replace the token?`.
+6. **Config.** Sets `default_runtime` to `box`, `default_cwd` to the workspace, `box_vm_cpus` and `box_vm_memory_gib` to the VM size, and `account` to `claude-box` on every `claude` agent that has none (adding a `claude` agent when there is none). A `claude` agent that already uses another account is left alone. It shows the file it would write (or a diff against yours; it rewrites your file with sorted keys and two-space indent) and asks before it writes, atomically and mode 0600, never through a symlink. It writes the config file in use: `-config <path>` if given (the file must already exist), else the one CuliBox finds, else `<data root>/config.json`, which init creates. By hand: put the same keys in that file (see [Configuration](CONFIG.md)).
+7. **Box setup.** Runs `culibox box setup` (on macOS: creates the VM, builds the image, checks containment) unless the box is already ready, then, on macOS only, adds the workspace to the box VM's folders (`culibox box share add <workspace>`). The folder reaches the VM after `culibox box share apply`, which restarts the VM, or in Settings → VM folders.
+8. **Doctor and login URL.** Runs `culibox doctor`, then prints how to start CuliBox (`culibox serve`) and the login URL with the login token. A FAIL in doctor makes the run stop with exit 1.
+
+### From source (manual)
 
     brew install go abduco
-    tar xzf culibox-src-<sha>.tar.gz && cd culibox-src-<sha>
-    go build -ldflags "-X main.commit=<sha> -X main.version=<version>" -o culibox ./cmd/culibox
+    git clone https://github.com/culiops/culibox.git && cd culibox
+    mkdir -p ~/.local/bin
+    go build -ldflags "-X main.commit=$(git rev-parse --short HEAD) -X main.version=$(scripts/version.sh)" -o ~/.local/bin/culibox ./cmd/culibox
     go test ./internal/procinfo/... ./internal/abduco/... ./internal/session/... ./internal/config/...
+    culibox init
 
-A binary you build yourself is not quarantined by Gatekeeper.
+Build into `~/.local/bin`, not into the source folder: a folder that holds a program CuliBox runs can only be shared with the box VM read-only. Add `~/.local/bin` to your `PATH` if it is not there.
+
+A binary that `setup.sh` installs or that you build yourself is not quarantined by Gatekeeper.
 
 ## Check the machine
 
-    ./culibox doctor
+    culibox doctor
 
 Every line is PASS, WARN or FAIL. The report contains no secrets, so it is safe
 to paste into an issue.
 
 ## Run
 
-    ./culibox serve
+    culibox serve
 
 With no config file, CuliBox listens on `127.0.0.1:8899` and prints a login
 URL containing a login token (`#token=…`), generated on first start and kept in
@@ -84,6 +142,8 @@ A boxed session runs in a container inside CuliBox's **own** colima VM, which
 lives under the data root (`<data root>/vm`). It never becomes your docker
 context and never edits `~/.ssh/config`.
 
+`culibox init` runs these for you (steps 1 and 7); by hand:
+
     brew install colima docker
     culibox box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
     culibox doctor           # the "boxed tier", "box image" and "containment" lines
@@ -91,7 +151,8 @@ context and never edits `~/.ssh/config`.
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
   `culibox box stop` frees its memory (default all your Mac's cores and half
   its RAM in whole GiB, at least 4 GiB; `box_vm_cpus`, `box_vm_memory_gib` in
-  config.json). It refuses while any box is running, even
+  config.json; `culibox init` instead proposes a smaller size, half the cores
+  and a quarter of the RAM, and writes it to config.json). It refuses while any box is running, even
   an idle one; `culibox box stop -force` stops the VM anyway and ends those
   sessions. `culibox box status` shows the VM, the image and the boxes.
 - **Upgrading with the size unset.** A VM created by an older CuliBox has 4
@@ -116,8 +177,11 @@ context and never edits `~/.ssh/config`.
   CuliBox's own credential broker and the egress proxy (see below). CuliBox
   checks this on every new box and refuses the box if the check fails.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.
-  Create a token for boxes with `claude setup-token`, store it as a secret
-  source, and add `CLAUDE_CODE_OAUTH_TOKEN` to the agent's `secrets`.
+  `culibox init` creates a long-lived token with `claude setup-token`, keeps it
+  in the encrypted store and links it to an agent account named `claude-box`
+  (see [What `culibox init` does](#what-culibox-init-does), step 5). To do it by hand, or to
+  change the token later, paste a `claude setup-token` token on the account's
+  row in Settings → Agent accounts; it needs no `secret_sources` entry.
 - Requirements: macOS 13+, Apple Silicon (Intel Macs untested), colima 0.8+.
 - Not yet tested: company VPN/split-DNS from inside a box.
 - File-heavy work (`npm install`, large builds) is slower boxed than on the host

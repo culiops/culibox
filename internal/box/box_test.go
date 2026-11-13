@@ -1187,3 +1187,66 @@ func TestBoxNameNoImports(t *testing.T) {
 		t.Fatalf("BoxKey{} name %s, pre-change formula gives %s", plain, want)
 	}
 }
+
+// WorkspaceRefusal is the one exported workspace rule `culibox init` shares with
+// Wrap: no VM share rule, "" means the folder is allowed.
+func workspaceRefusalHome(t *testing.T) string {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	return home
+}
+
+func TestWorkspaceRefusalHome(t *testing.T) {
+	home := workspaceRefusalHome(t)
+	reason, err := WorkspaceRefusal(home, nil)
+	if err != nil || !strings.Contains(reason, "home directory") {
+		t.Fatalf("WorkspaceRefusal(home) = %q, %v; want a home directory reason", reason, err)
+	}
+}
+
+func TestWorkspaceRefusalAncestorOfHome(t *testing.T) {
+	home := workspaceRefusalHome(t)
+	reason, err := WorkspaceRefusal(filepath.Dir(home), nil)
+	if err != nil || reason == "" {
+		t.Fatalf("WorkspaceRefusal(parent of home) = %q, %v; want a reason", reason, err)
+	}
+}
+
+func TestWorkspaceRefusalDataDir(t *testing.T) {
+	workspaceRefusalHome(t)
+	dataDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := WorkspaceRefusal(dataDir, []ProtectedDir{DataDirProtected(dataDir)})
+	if err != nil || reason == "" {
+		t.Fatalf("WorkspaceRefusal(data dir) = %q, %v; want a reason", reason, err)
+	}
+}
+
+func TestWorkspaceRefusalSymlinkToHome(t *testing.T) {
+	home := workspaceRefusalHome(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	reason, err := WorkspaceRefusal(link, nil)
+	if err != nil || reason == "" {
+		t.Fatalf("WorkspaceRefusal(symlink to home) = %q, %v; want a reason", reason, err)
+	}
+}
+
+func TestWorkspaceRefusalOK(t *testing.T) {
+	home := workspaceRefusalHome(t)
+	work := filepath.Join(home, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if reason, err := WorkspaceRefusal(work, nil); err != nil || reason != "" {
+		t.Fatalf("WorkspaceRefusal(home/work) = %q, %v; want allowed", reason, err)
+	}
+}

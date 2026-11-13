@@ -33,7 +33,7 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
-| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). |
+| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). `culibox init` proposes a smaller size (half the cores, a quarter of the RAM, 4 to 8 GiB) and writes it, so the default applies to a Mac set up without init. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
@@ -41,6 +41,8 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 | `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](AWS.md#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |
 | `replies_enabled` | `false` | Lets the needs-you card answer permission prompts and send a one-line reply. Claude Code sessions only. Restart to apply. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
+
+`culibox init` ([macOS](MACOS.md#what-culibox-init-does)) writes these keys for you, after showing the file or a diff and asking: `default_runtime` (`box`), `default_cwd` (the workspace folder you picked), `box_vm_cpus` and `box_vm_memory_gib` (the VM size, macOS only), and `account` (`claude-box`) on each `claude` agent that has none. A `claude` agent already linked to another account is left as it is, and when there is no `claude` agent it adds one. It rewrites the file with sorted keys and two-space indent, and writes it atomically, mode 0600, never through a symlink. Its file is the `-config <path>` you pass (it must already exist: CuliBox stops on a missing `-config` file before init runs), else the config CuliBox already reads, else `<data root>/config.json`, which init creates when there is none.
 
 `box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 

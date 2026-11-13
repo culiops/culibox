@@ -170,6 +170,9 @@ func main() {
 		}
 		os.Exit(runBox(args, cfg, home, cfgFiles, os.Stdout))
 	}
+	if args.Cmd == "init" {
+		os.Exit(runInit(args, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout, realInitDeps(home)))
+	}
 	if args.Cmd == "store" {
 		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))
 	}

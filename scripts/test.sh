@@ -22,6 +22,9 @@ bash scripts/macos-verify_test.sh
 # The prod deploy script (kept previous binary, rollback line), against a stub go and
 # systemctl in a throwaway checkout.
 bash scripts/deploy-prod_test.sh
+# The installer (checksum, provenance, .prev + rollback, from-source) against stub curl, gh,
+# git, go and uname and a fake release dir; shellcheck runs when it is installed.
+bash scripts/setup_test.sh
 # The CI secret-scan script, against a stub gitleaks and a throwaway repo.
 bash scripts/ci/secret-scan_test.sh
 # The private-identifier gitleaks rules. Skips with a notice when gitleaks is not installed

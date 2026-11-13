@@ -32,6 +32,7 @@ import (
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/procinfo"
 	"github.com/culiops/culibox/internal/rootmove"
 	"github.com/culiops/culibox/internal/session"
@@ -185,10 +186,7 @@ func Checks(in Input) []Result {
 	out = append(out, checkExtraCA(in.Config, time.Now())...)
 	out = append(out, checkCredFile(in))
 	c := in.Config
-	dataDir := c.ResolvedDataDir(in.Home)
-	if abs, err := filepath.Abs(dataDir); err == nil {
-		dataDir = abs
-	}
+	dataDir := dataDirOf(in)
 	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
 	bin := c.AbducoBin
 	if bin == "" {
@@ -220,15 +218,55 @@ func Checks(in Input) []Result {
 	}
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
-	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
-	out = append(out, boxTierResults(runtime.GOOS, bf, ClaudeBoxToken(c, vst))...)
-	out = append(out, guardLockRows(runtime.GOOS, bf)...)
+	bt := gatherBoxTier(in, dataDir, vst)
+	out = append(out, bt.Rows...)
+	out = append(out, guardLockRows(runtime.GOOS, bt.facts)...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
 		out = append(out, CheckEgressPort(c))
 	}
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
+}
+
+// dataDirOf is the absolute data dir every check uses.
+func dataDirOf(in Input) string {
+	dataDir := in.Config.ResolvedDataDir(in.Home)
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		dataDir = abs
+	}
+	return dataDir
+}
+
+// BoxTierReport is doctor's box-tier rows and the token row behind them.
+type BoxTierReport struct {
+	// Rows are the box-tier rows exactly as Checks prints them (docker, the box
+	// VM, its folders, the image, containment and, on macOS, the token).
+	Rows []Result
+	// Token is the boxed claude token row (ClaudeBoxToken). On macOS it is in
+	// Rows unless an earlier row ended the tier; Checks never prints it on Linux.
+	Token Result
+	// TokenLockedOnly: Token is a WARN only because the store is locked; no
+	// agent lacks a credential for any other reason.
+	TokenLockedOnly bool
+	facts           boxFacts
+}
+
+// BoxTier is doctor's box-tier report, computed by the same code as Checks so
+// the two cannot drift. `culibox init` reads it to tell whether box setup
+// still has work to do. Like every check it never starts the VM.
+func BoxTier(in Input) BoxTierReport {
+	dataDir := dataDirOf(in)
+	return gatherBoxTier(in, dataDir, StoreFor(in.Config, dataDir))
+}
+
+// gatherBoxTier gathers the box facts and the token row and turns them into
+// rows. vst is the store the secret sources read (StoreFor).
+func gatherBoxTier(in Input, dataDir string, vst credref.StoreGetter) BoxTierReport {
+	c := in.Config
+	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
+	token, lockedOnly := claudeBoxToken(c, vst, AccountStoreFor(c, dataDir), storerefs.ReadAccounts(dataDir))
+	return BoxTierReport{Rows: boxTierResults(runtime.GOOS, bf, token), Token: token, TokenLockedOnly: lockedOnly, facts: bf}
 }
 
 func checkDataDir(in Input, dir, goos string) Result {

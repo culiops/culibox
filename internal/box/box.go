@@ -774,6 +774,16 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, view func() (*Shar
 	return unboxableResolved(abs, protected, view)
 }
 
+// WorkspaceRefusal is the workspace rule without the box VM's share list: the
+// reason cwd cannot be a box's workspace (the filesystem root, home or an
+// ancestor of it, a protected CuliBox directory, an unsafe mount source), or ""
+// when it is allowed. `culibox init` and Manager.UnboxableIgnoringShares both
+// use it, so init refuses the folders `box` refuses. With no share view the
+// error is always nil; it stays in the signature to match unboxableWorkspace.
+func WorkspaceRefusal(cwd string, protected []ProtectedDir) (reason string, err error) {
+	return unboxableWorkspace(cwd, protected, nil)
+}
+
 // unboxableResolved is unboxableWorkspace for a path that is already absolute and
 // symlink-resolved (workspace.Path), which it does not resolve again: the
 // protected check in it (protectedOverlapResolved) is about this very path.
@@ -864,7 +874,7 @@ func (m *Manager) Unboxable(cwd string) (string, bool) {
 // for a record that must not change when the user edits the VM folder list
 // (the boxed-workspace registry feeds the fs containment trees).
 func (m *Manager) UnboxableIgnoringShares(cwd string) (string, bool) {
-	reason, err := unboxableWorkspace(cwd, m.protected(), nil)
+	reason, err := WorkspaceRefusal(cwd, m.protected())
 	if err != nil {
 		return err.Error(), true
 	}
