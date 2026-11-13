@@ -33,7 +33,7 @@ Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute p
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
-| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). |
+| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). `culibox init` proposes a smaller size (half the cores, a quarter of the RAM, 4 to 8 GiB) and writes it, so the default applies to a Mac set up without init. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |

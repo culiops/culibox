@@ -13,8 +13,9 @@ Download the installer, read it, run it (use the release tag you want in place o
 
 It installs a checksum-verified `culibox` into `~/.local/bin` and then runs
 `culibox init`, which sets up everything else. It is a short POSIX `sh` script
-that never uses `sudo` and writes only under the install folder; read it before
-you run it. Options: `--version vX.Y.Z` (default: the newest published
+that never uses `sudo` and installs only under the install folder; it downloads
+and builds in a temporary folder that it removes, and with `--from-source` it may
+run `brew install go` after an explicit `y`. Read it before you run it. Options: `--version vX.Y.Z` (default: the newest published
 release), `--from-source` (build that release instead of downloading a binary,
 see below) and `--prefix DIR` (default `~/.local/bin`, or `$PREFIX`).
 
@@ -48,13 +49,13 @@ Each step prints `==> <what>` before it runs. To do it by hand, follow the same 
 
 `culibox init` is a guided first-time setup. It needs a terminal (it asks questions): without one it lists what it would check and exits 2. Every step prints `== step N/8: <what>` and then exactly one of `done`, `already done: <why>`, `skipped: <why>` or `stopped: <what to do next>`. A stopped step exits 1 and gives the command to finish by hand; run `culibox init` again afterwards, and it continues from where the machine is. A run through all eight steps exits 0 when `culibox doctor` found no FAIL. Run it as `culibox init [-config <path>]`.
 
-1. **Dependencies.** Needs macOS 13 or newer, and `abduco`, `docker`, `colima` and `claude` on `PATH` (a binary you set in config, such as `docker_bin`, is looked up instead). For each missing one it asks, per package, `Install <name> with `brew install ...`? [y/N]` and runs only what you answered `y` to: `brew install abduco`, `brew install docker`, `brew install colima`, `brew install --cask claude-code`. By hand: run those. It never uses `sudo` and never installs Homebrew. On Linux it only prints the install commands.
-2. **Data root.** `~/.local/share/culibox` (or `$CULIBOX_HOME`), created with mode 0700 when absent. By hand: `mkdir -m 700 ~/.local/share/culibox`.
+1. **Dependencies.** Needs macOS 13 or newer, and `abduco`, `docker`, `colima` (macOS only) and `claude` on `PATH` (a binary you set in config, such as `docker_bin`, is looked up instead). For each missing one it asks, per package, `Install <name> with `brew install ...`? [y/N]` and runs only what you answered `y` to: `brew install abduco`, `brew install docker`, `brew install colima`, `brew install --cask claude-code`. By hand: run those. It never uses `sudo` and never installs Homebrew. On Linux it only prints the install commands.
+2. **Data root.** `~/.local/share/culibox` (or `$CULIBOX_HOME`), created with mode 0700 when absent. By hand: `mkdir -p -m 700 ~/.local/share/culibox`.
 3. **Workspace folder.** Asks for the folder where your agents work (default: `default_cwd` from your config). A box mounts the whole folder, so it must be a project folder: not the filesystem root, your home or a folder that contains it, and not CuliBox's own folders (the data root, the folder of the config file). It offers to create a folder that does not exist.
-4. **VM size.** Proposes the box VM's size and asks you to press Enter or type `<CPUs> <GiB>`: CPUs = half the Mac's cores (at least 2), RAM = a quarter of the Mac's RAM in whole GiB, between 4 and 8. This is inferred from the Mac's size, not measured. Skipped when the VM already exists (a size change on an existing VM needs `culibox box setup -recreate`, which init never runs).
+4. **VM size (macOS only).** Proposes the box VM's size and asks you to press Enter or type `<CPUs> <GiB>`: CPUs = half the Mac's cores (at least 2), RAM = a quarter of the Mac's RAM in whole GiB, between 4 and 8. This is inferred from the Mac's size, not measured. When `box_vm_cpus` and `box_vm_memory_gib` are both set in your config, it proposes those instead. When the VM already exists it prints `already done` and asks nothing (a size change on an existing VM needs `culibox box setup -recreate`, which init never runs). On Linux the step is skipped.
 5. **Claude token.** Creates the [encrypted store](STORE.md) if there is none (on macOS the key goes in your login Keychain), offers to run `claude setup-token` (it opens a browser), and asks you to paste the token with the input hidden. The token goes into the store as `ACCT_CLAUDE_BOX_TOKEN` and an agent account named `claude-box` is created that uses it. The token is never printed and never written to `config.json`. By hand: `culibox store init`, `claude setup-token`, then in Settings → Agent accounts choose `+ new account`, name it `claude-box`, and paste the token on its row. An existing `claude-box` account is kept unless you answer yes to `Replace the token?`.
 6. **Config.** Sets `default_runtime` to `box`, `default_cwd` to the workspace, `box_vm_cpus` and `box_vm_memory_gib` to the VM size, and `account` to `claude-box` on every `claude` agent that has none (adding a `claude` agent when there is none). A `claude` agent that already uses another account is left alone. It shows the file it would write (or a diff against yours; it rewrites your file with sorted keys and two-space indent) and asks before it writes, atomically and mode 0600, never through a symlink. It writes the config file in use: `-config <path>` if given, else the one CuliBox finds, else `<data root>/config.json`. By hand: put the same keys in that file (see [Configuration](CONFIG.md)).
-7. **Box setup.** Runs `culibox box setup` (on macOS: creates the VM, builds the image, checks containment) unless the box is already ready, then adds the workspace to the box VM's folders (`culibox box share add <workspace>`). The folder reaches the VM after `culibox box share apply`, which restarts the VM, or in Settings → VM folders.
+7. **Box setup.** Runs `culibox box setup` (on macOS: creates the VM, builds the image, checks containment) unless the box is already ready, then, on macOS only, adds the workspace to the box VM's folders (`culibox box share add <workspace>`). The folder reaches the VM after `culibox box share apply`, which restarts the VM, or in Settings → VM folders.
 8. **Doctor and login URL.** Runs `culibox doctor`, then prints how to start CuliBox (`culibox serve`) and the login URL with the login token. A FAIL in doctor makes the run stop with exit 1.
 
 ### From source (manual)
@@ -150,7 +151,8 @@ context and never edits `~/.ssh/config`.
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
   `culibox box stop` frees its memory (default all your Mac's cores and half
   its RAM in whole GiB, at least 4 GiB; `box_vm_cpus`, `box_vm_memory_gib` in
-  config.json). It refuses while any box is running, even
+  config.json; `culibox init` instead proposes a smaller size, half the cores
+  and a quarter of the RAM, and writes it to config.json). It refuses while any box is running, even
   an idle one; `culibox box stop -force` stops the VM anyway and ends those
   sessions. `culibox box status` shows the VM, the image and the boxes.
 - **Upgrading with the size unset.** A VM created by an older CuliBox has 4
@@ -177,7 +179,7 @@ context and never edits `~/.ssh/config`.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.
   `culibox init` creates a long-lived token with `claude setup-token`, keeps it
   in the encrypted store and links it to an agent account named `claude-box`
-  (see [Install](#what-culibox-init-does), step 5). To do it by hand, or to
+  (see [What `culibox init` does](#what-culibox-init-does), step 5). To do it by hand, or to
   change the token later, paste a `claude setup-token` token on the account's
   row in Settings → Agent accounts; it needs no `secret_sources` entry.
 - Requirements: macOS 13+, Apple Silicon (Intel Macs untested), colima 0.8+.
