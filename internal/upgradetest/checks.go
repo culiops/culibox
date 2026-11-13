@@ -441,3 +441,66 @@ func unlockThroughBinary(t *testing.T, c *Client, f *Fixture) {
 	b, _ := os.ReadFile(out)
 	t.Errorf("upg-secret got %q, want %q", b, want)
 }
+
+// Relative paths (under HOME) of the data root before and after the #255
+// move, and the move's journal.
+const (
+	legacyRel   = ".local/share/agent-box"
+	newRel      = ".local/share/culibox"
+	moveJournal = ".culibox-move"
+)
+
+// MoveMapper maps a before-path under from onto the same path under to. from
+// itself is left alone: it becomes a symlink, which CheckMoved asserts.
+func MoveMapper(from, to string) func(string) string {
+	return func(rel string) string {
+		if strings.HasPrefix(rel, from+"/") {
+			return to + strings.TrimPrefix(rel, from)
+		}
+		return rel
+	}
+}
+
+// moveRewrite maps the legacy root onto the new one inside file contents and
+// API answers, in absolute (/…/.local/share/agent-box) and ~-relative forms.
+func moveRewrite(s string) string {
+	return strings.ReplaceAll(s, "/"+legacyRel, "/"+newRel)
+}
+
+// CheckMoved reports whether vN moved the legacy root: the legacy path is a
+// symlink to the absolute new root, the new root is a real directory, and no
+// journal is left in it. A half-done move is a test failure.
+func CheckMoved(t *testing.T, home string) bool {
+	t.Helper()
+	legacy, newRoot := filepath.Join(home, legacyRel), filepath.Join(home, newRel)
+	fi, err := os.Lstat(legacy)
+	if err != nil {
+		t.Errorf("the legacy root is gone after the upgrade: %v", err)
+		return false
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	if target, err := os.Readlink(legacy); err != nil || target != newRoot {
+		t.Errorf("the legacy root links to %q (%v), want %q", target, err, newRoot)
+	}
+	if ni, err := os.Lstat(newRoot); err != nil || !ni.IsDir() {
+		t.Errorf("the new root is not a directory: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(newRoot, moveJournal)); err == nil {
+		t.Errorf("the move journal %s is still in the new root", moveJournal)
+	}
+	return true
+}
+
+// rootmoveLines returns the serve log lines about the root move, for a
+// failure message.
+func rootmoveLines(log string) string {
+	var out []string
+	for _, l := range strings.Split(LogTail(log, 5000), "\n") {
+		if strings.Contains(l, "move") || strings.Contains(l, "culibox") {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}

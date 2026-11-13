@@ -58,6 +58,7 @@ func TestUpgrade(t *testing.T) {
 	prev, cur := needBins(t)
 	t.Logf("upgrade %s -> %s", os.Getenv("AB_UPGRADE_PREV_VERSION"), os.Getenv("AB_UPGRADE_CUR_VERSION"))
 	t.Run("S1", func(t *testing.T) { testPinnedRoot(t, prev, cur) })
+	t.Run("S2", func(t *testing.T) { testDefaultRoot(t, prev, cur) })
 }
 
 // testPinnedRoot is S1: the data root pinned with AGENT_BOX_HOME, a strict
@@ -105,6 +106,81 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 	}
 	ReadStoreCopy(t, root, storeValues)
 	phase(t, "S1 upgrade (vN)", start)
+}
+
+// testDefaultRoot is S2: no root env var, so vN-1 uses its default root and vN
+// resolves its own, moving ~/.local/share/agent-box to ~/.local/share/culibox
+// when vN-1 used the legacy root (#255). No session is left running: a live
+// session blocks the move.
+func testDefaultRoot(t *testing.T, prev, cur string) {
+	s := newScenario(t)
+	legacy, newRoot := filepath.Join(s.home, legacyRel), filepath.Join(s.home, newRel)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { KillSessions(legacy); KillSessions(newRoot) })
+	s.env = Env{Home: s.home}
+	WriteConfig(t, legacy, s.port, s.fake)
+
+	start := time.Now()
+	c := NewClient(s.port)
+	old := Start(t, prev, s.port, s.env, s.log)
+	// vN-1 serves the root that holds its login token: the legacy one for every
+	// release before the move, the culibox one for a release that already moved.
+	prevRoot := legacy
+	if _, err := os.Stat(filepath.Join(legacy, "login.token")); err != nil {
+		prevRoot = newRoot
+	}
+	f := &Fixture{Root: prevRoot, Home: s.home, Fake: s.fake, Log: s.log}
+	Populate(t, c, prev, s.env, f, false)
+	old.Stop(t)
+	SeedOffline(t, prevRoot, s.tmp)
+	f.AuditDB = auditDBRows(t, filepath.Join(prevRoot, "audit.db"))
+	before, err := Take(s.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase(t, "S2 populate (vN-1)", start)
+
+	start = time.Now()
+	srv := Start(t, cur, s.port, s.env, s.log)
+	moved := CheckMoved(t, s.home)
+	root, opts := prevRoot, DiffOptions{}
+	switch {
+	case moved:
+		t.Logf("PASS moved %s -> %s", legacyRel, newRel)
+		root = newRoot
+		// The two root entries are not generic: CheckMoved asserts the link, and
+		// the new root must keep the legacy root's mode (checked after the stop).
+		opts = DiffOptions{Rules: AllowRules(newRel, moveRewrite), MapBefore: MoveMapper(legacyRel, newRel), Ignore: []string{legacyRel, newRel}}
+		CheckUpgraded(t, c, f, moveRewrite)
+	case prevRoot == newRoot:
+		t.Logf("OBSERVE no move: vN-1 already uses the culibox root")
+		opts.Rules = AllowRules(newRel, nil)
+		CheckUpgraded(t, c, f, nil)
+	default:
+		t.Errorf("vN did not move the legacy root vN-1 used; serve log:\n%s", rootmoveLines(s.log))
+		opts.Rules = AllowRules(legacyRel, nil)
+		CheckUpgraded(t, c, f, nil)
+	}
+	srv.Stop(t)
+	after, err := Take(s.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range Diff(before, after, opts) {
+		t.Errorf("unexpected change: %s", v)
+	}
+	if moved && before[legacyRel].Mode != after[newRel].Mode {
+		t.Errorf("the moved root's mode is %v, the legacy root's was %v", after[newRel].Mode, before[legacyRel].Mode)
+	}
+	if miss := missingDBRows(f.AuditDB, auditDBRows(t, filepath.Join(root, "audit.db"))); len(miss) > 0 {
+		t.Errorf("audit.db rows lost in the upgrade: %v", miss)
+	} else {
+		t.Logf("PASS every audit.db row vN-1 wrote is still in audit.db")
+	}
+	ReadStoreCopy(t, root, storeValues)
+	phase(t, "S2 upgrade (vN)", start)
 }
 
 // observeLiveSession records what vN does with a session vN-1 left running.

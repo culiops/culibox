@@ -83,3 +83,33 @@ func TestTokensRuleAllowsOnlyLastUsed(t *testing.T) {
 		t.Fatal("last_used_at going back was allowed")
 	}
 }
+
+func TestMoveMapper(t *testing.T) {
+	m := MoveMapper(".local/share/agent-box", ".local/share/culibox")
+	for in, want := range map[string]string{
+		".local/share/agent-box/x/y": ".local/share/culibox/x/y",
+		".local/share/agent-box/x":   ".local/share/culibox/x",
+		".local/share/agent-box":     ".local/share/agent-box", // ignored: CheckMoved asserts it
+		".local/share/agent-boxer/x": ".local/share/agent-boxer/x",
+		".claude/projects/a/b.jsonl": ".claude/projects/a/b.jsonl",
+		".local/share/culibox/stray": ".local/share/culibox/stray",
+	} {
+		if got := m(in); got != want {
+			t.Errorf("%s -> %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestSettingsRuleAllowsOnlyRootRewrite(t *testing.T) {
+	r := settingsRule(moveRewrite)
+	before := entryOf(`{"statusLine":{"type":"command","command":"/h/.local/share/agent-box/bin/s.sh"},"k":1}`)
+	if err := r.Check(before, entryOf(`{"statusLine":{"type":"command","command":"/h/.local/share/culibox/bin/s.sh"},"k":1}`)); err != nil {
+		t.Fatalf("the root rewrite was refused: %v", err)
+	}
+	if err := r.Check(before, entryOf(`{"statusLine":{"type":"command","command":"/h/.local/share/culibox/bin/s.sh"},"k":2}`)); err == nil {
+		t.Fatal("another change was allowed")
+	}
+	if err := r.Check(before, entryOf(`{"statusLine":{"type":"command","command":"/z/bin/s.sh"},"k":1}`)); err == nil {
+		t.Fatal("a rewrite to another root was allowed")
+	}
+}
