@@ -189,9 +189,12 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
 // the broker without the relay and could write the PROXY line itself. Such a VM
 // is replaced, not repaired: a changed script reaches an existing stamped VM
 // only through `box setup -recreate` (Provision refuses a drifted one; a VM with
-// no stamp gets the new yaml and the delete runs on its next start), and until then
-// the relay's live check (CheckDockerUserRules) refuses boxed spawns on it. This
-// block only deletes the rule, so the script stays idempotent wherever it runs.
+// no stamp gets the new yaml and the delete runs on its next start). Until then
+// the VM's old script puts the rule back at every start, and the relay's live
+// check (CheckDockerUserRules) refuses boxed spawns on it unless it can delete
+// this one rule itself (Relay.deleteOldBrokerReturn runs the same delete over
+// colima ssh and reads the table again, at each spawn after a start). This block only deletes the
+// rule, so the script stays idempotent wherever it runs.
 const provisionBroker = `# credential broker (loopback on the Mac): reached through the relay only; delete
 # the TCP pass-through older versions inserted above the gateway DROP.
 while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
@@ -284,10 +287,10 @@ func (c Config) Validate() error {
 			continue
 		}
 		if p.what == "home" {
-			// AGENT_BOX_HOME moves the data root, never the user's home.
+			// CULIBOX_HOME moves the data root, never the user's home.
 			return fmt.Errorf("the box VM cannot share this home directory (%s). Rename the home directory, or run agents on the host tier instead", why)
 		}
-		return fmt.Errorf("the box VM cannot use this data root (%s). Choose another data root with AGENT_BOX_HOME", why)
+		return fmt.Errorf("the box VM cannot use this data root (%s). Choose another data root with CULIBOX_HOME", why)
 	}
 	for _, b := range []struct{ what, path string }{{"colima", c.ColimaBin}, {"docker", c.DockerBin}} {
 		if !filepath.IsAbs(b.path) {
@@ -347,6 +350,58 @@ func renderYAML(c Config, mounts []Mount) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
+// runPath is the PATH colima runs with: the directories of colima and docker,
+// then the usual places, each once.
+func runPath(colimaBin, dockerBin string) []string {
+	var dirs []string
+	seen := map[string]bool{}
+	for _, d := range []string{filepath.Dir(colimaBin), filepath.Dir(dockerBin),
+		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
+		if !seen[d] {
+			seen[d] = true
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// ProgramPaths are the host programs CuliBox runs, as absolute paths: docker,
+// colima, the limactl colima finds on its PATH, and CuliBox's own executable.
+// One that cannot be found is left out. Their folders are protected from VM
+// shares and boxed workspaces (box.ProtectedDirsFor).
+func ProgramPaths(cfg config.Config) []string {
+	var out []string
+	docker, derr := box.LookDocker(cfg.DockerBin)
+	colima, cerr := LookColima(cfg.ColimaBin)
+	for _, p := range []struct {
+		path string
+		err  error
+	}{{docker, derr}, {colima, cerr}} {
+		if p.err == nil && filepath.IsAbs(p.path) {
+			out = append(out, p.path)
+		}
+	}
+	if cerr == nil && filepath.IsAbs(colima) {
+		if derr != nil {
+			docker = "" // its folder is then ".", skipped below
+		}
+		for _, d := range runPath(colima, docker) {
+			if d == "." {
+				continue
+			}
+			p := filepath.Join(d, "limactl")
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil && filepath.IsAbs(exe) {
+		out = append(out, exe)
+	}
+	return out
+}
+
 // Env is the environment colima runs with: pinned to the data root, with the
 // user's own docker/lima endpoints removed, and a PATH that finds limactl and
 // docker even when agent-box was started without Homebrew on PATH.
@@ -362,15 +417,7 @@ next:
 		}
 		out = append(out, kv)
 	}
-	var dirs []string
-	seen := map[string]bool{}
-	for _, d := range []string{filepath.Dir(c.ColimaBin), filepath.Dir(c.DockerBin),
-		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
-		if !seen[d] {
-			seen[d] = true
-			dirs = append(dirs, d)
-		}
-	}
+	dirs := runPath(c.ColimaBin, c.DockerBin)
 	return append(out, "COLIMA_HOME="+c.ColimaHome(), "DOCKER_CONFIG="+c.DockerConfigDir(), "PATH="+strings.Join(dirs, ":"))
 }
 
@@ -386,7 +433,7 @@ func (c Config) CheckSocketPaths() error {
 	inst := filepath.Join(c.ColimaHome(), "_lima", "colima-"+Profile)
 	for _, p := range []string{c.DockerSocket(), filepath.Join(inst, "serialv.sock"), filepath.Join(inst, "ssh.sock")} {
 		if len(p) >= sunPathMax {
-			return fmt.Errorf("the box VM socket %q is %d bytes; macOS allows %d. Set AGENT_BOX_HOME to a shorter absolute path",
+			return fmt.Errorf("the box VM socket %q is %d bytes; macOS allows %d. Set CULIBOX_HOME to a shorter absolute path",
 				p, len(p), sunPathMax-1)
 		}
 	}

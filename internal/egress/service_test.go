@@ -830,9 +830,17 @@ func TestReadyDarwinNamesAProcessOnItsPort(t *testing.T) {
 	}
 }
 
-// D11 (#118): Linux has no relay and no imposter on the loopback, so its bind
-// error text stays exactly what it was.
-func TestReadyLinuxBindErrorUnchanged(t *testing.T) {
+// D11 (#118), changed deliberately for #131: Linux still gets no macOS text (there is no
+// relay and no key proof on the Linux bridge), but an address-in-use error on the
+// egress port now says so: a fixed message names the port, once in the log and in
+// the returned error, because another account that took the gateway's address
+// while CuliBox was down can act as the proxy. The cause stays wrapped and the
+// error still begins as it did, so callers and the retry on the next Ready are
+// unchanged.
+func TestReadyLinuxNamesAPortConflict(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
 	bind := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
 	f, lr := newFakeDocker(), &listenRec{err: bind}
 	s := linuxService(f, lr)
@@ -845,7 +853,83 @@ func TestReadyLinuxBindErrorUnchanged(t *testing.T) {
 		t.Errorf("linux error carries the macOS explanation: %v", err)
 	}
 	if !errors.Is(err, syscall.EADDRINUSE) || !strings.HasPrefix(err.Error(), "egress: listen 172.") {
-		t.Errorf("linux error changed: %v", err)
+		t.Errorf("linux error lost its start or its cause: %v", err)
+	}
+	want := LinuxBindConflict(9072)
+	if !strings.Contains(want, "9072") {
+		t.Fatalf("the fixed message does not name the port: %q", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error lacks the fixed message %q: %v", want, err)
+	}
+	if !strings.Contains(want, "new fenced sessions are refused") {
+		t.Errorf("the message does not say what happens to the boxes: %q", want)
+	}
+	var bc *BindConflictError
+	if !errors.As(err, &bc) || bc.Port != 9072 {
+		t.Errorf("error is not a BindConflictError: %v", err)
+	}
+	if got := strings.Count(buf.String(), want); got != 1 {
+		t.Errorf("log has the fixed message %d times, want once: %q", got, buf.String())
+	}
+	// Retried while the port stays taken: the error says it again, the log does not.
+	if _, err := s.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("second Ready: %v", err)
+	}
+	if got := strings.Count(buf.String(), want); got != 1 {
+		t.Errorf("log repeats the message on a retry: %d times", got)
+	}
+}
+
+// Any other Linux listen error keeps its text: only address-in-use means the
+// port is held by someone else.
+func TestReadyLinuxOtherListenErrorHasNoConflictText(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	denied := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EACCES)}
+	f, lr := newFakeDocker(), &listenRec{err: denied}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	_, err := s.Ready(context.Background())
+	if err == nil || !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), LinuxBindConflict(9072)) || strings.Contains(buf.String(), "already in use") {
+		t.Errorf("a non-conflict error got the conflict text: %v / %q", err, buf.String())
+	}
+}
+
+// The message is logged again for a new episode: once Listen works, a later
+// conflict is a new event.
+func TestReadyLinuxConflictLogsAgainAfterASuccess(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	bind := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+	f, lr := newFakeDocker(), &listenRec{err: bind}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err == nil {
+		t.Fatal("want a conflict")
+	}
+	lr.mu.Lock()
+	lr.err = nil
+	lr.mu.Unlock()
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.ln = nil // as if the accept loop had died; Close still closes the real one once
+	s.mu.Unlock()
+	lr.mu.Lock()
+	lr.err = bind
+	lr.mu.Unlock()
+	if _, err := s.Ready(context.Background()); err == nil {
+		t.Fatal("want a conflict")
+	}
+	if got := strings.Count(buf.String(), LinuxBindConflict(9072)); got != 2 {
+		t.Errorf("log has the message %d times, want 2 (one per episode)", got)
 	}
 }
 

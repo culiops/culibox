@@ -175,13 +175,13 @@ func TestPutWithAWrongSchemaIs409PageOutdatedAndStoresNothing(t *testing.T) {
 	}
 }
 
-func TestPutWithoutASchemaIs428LikeAMissingRev(t *testing.T) {
+func TestPutWithoutASchemaIs428(t *testing.T) {
 	s := revServer(t)
 	rev := revOf(t, s, "p")
 	for _, schema := range []string{noSchema, ""} {
 		rec := putWithRevSchema(t, s, "p", `{"name":"p","bin":"bash","args":["--x"]}`, rev, schema)
-		if rec.Code != 428 || apiCode(t, rec) != "rev_required" || !strings.Contains(rec.Body.String(), revRequiredMsg) {
-			t.Fatalf("PUT with schema %q: %d %s, want 428 rev_required with the same message as a missing rev", schema, rec.Code, rec.Body)
+		if rec.Code != 428 || apiCode(t, rec) != "rev_required" || !strings.Contains(rec.Body.String(), schemaRequiredMsg) {
+			t.Fatalf("PUT with schema %q: %d %s, want 428 rev_required with the missing-schema message", schema, rec.Code, rec.Body)
 		}
 	}
 	if p, _ := s.Profiles.Get("p"); len(p.Args) != 0 {
@@ -189,11 +189,11 @@ func TestPutWithoutASchemaIs428LikeAMissingRev(t *testing.T) {
 	}
 }
 
-func TestPutWithTheRightSchemaAndRevIs204(t *testing.T) {
+func TestPutWithTheRightSchemaAndRevIs200(t *testing.T) {
 	s := revServer(t)
 	rec := putWithRevSchema(t, s, "p", `{"name":"p","bin":"bash","args":["--x"]}`, revOf(t, s, "p"), profileSchema())
-	if rec.Code != 204 {
-		t.Fatalf("PUT with the right schema and rev: %d %s, want 204", rec.Code, rec.Body)
+	if rec.Code != 200 {
+		t.Fatalf("PUT with the right schema and rev: %d %s, want 200", rec.Code, rec.Body)
 	}
 	if p, _ := s.Profiles.Get("p"); len(p.Args) != 1 {
 		t.Fatalf("the save did not land: %+v", p)

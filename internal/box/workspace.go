@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // workspace is a workspace directory resolved once. The protected check, the box
@@ -33,14 +35,25 @@ type workspace struct {
 }
 
 // resolvePath is cwd made absolute and symlink-resolved: the one spelling a
-// workspace is checked, named and mounted by. An error is the text BoxName has
-// always returned for a path that does not resolve.
+// workspace is checked, named and mounted by. A `..` after a symlink leads where
+// the kernel takes it (the link target's parent): the path is resolved as it
+// stands, never cleaned first, which filepath.Abs does. A relative cwd hangs off
+// the resolved working directory (the process's own spelling of it may go through
+// a link). An error is the text BoxName has always returned for a path that does
+// not resolve.
 func resolvePath(cwd string) (string, error) {
-	abs, err := filepath.Abs(cwd)
-	if err != nil {
-		return "", fmt.Errorf("box: absolute path for %q: %w", cwd, err)
+	p := cwd
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err == nil {
+			wd, err = filepath.EvalSymlinks(wd)
+		}
+		if err != nil {
+			return "", fmt.Errorf("box: absolute path for %q: %w", cwd, err)
+		}
+		p = wd + string(filepath.Separator) + cwd // not filepath.Join: it would clean a `..` lexically
 	}
-	real, err := filepath.EvalSymlinks(abs)
+	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
@@ -92,26 +105,30 @@ func workspaceAt(cwd, real string, idOf func(string) (*FileID, error)) (workspac
 }
 
 // hostWorkspaceID is the host's identity reading of the workspace directory p
-// (already resolved) where the no-follow walk of workspaceID is not available:
-// an Lstat, with the same refusals for a leaf that has become a symlink or
-// vanished, and for one that is not a directory. It cannot see a parent swapped
-// since the resolution that precedes it, which the walk can.
+// (already resolved) where the descriptor walk of workspaceID is not available
+// (macOS): a read that follows no symlink in any component (hostNoFollowStat),
+// with the same refusals for a leaf that has become a symlink or vanished, and
+// for one that is not a directory. A link anywhere above it, swapped in since the
+// resolution that precedes this, is refused too: an Lstat would follow it.
 func hostWorkspaceID(p string) (*FileID, error) {
-	fi, err := os.Lstat(p)
+	st, err := hostNoFollowStat(p)
 	if err != nil {
+		switch {
+		case errors.Is(err, unix.ELOOP):
+			return nil, wsChanged(p, "its path is now a symlink or has a symlink in it")
+		case errors.Is(err, unix.ENOTDIR): // macOS opens with O_DIRECTORY
+			return nil, fmt.Errorf("%w: %s: it is not a directory", ErrUnboxableWorkspace, p)
+		}
 		return nil, wsChanged(p, fmt.Sprintf("it cannot be read (%v)", err))
 	}
-	switch {
-	case fi.Mode()&fs.ModeSymlink != 0:
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFDIR:
+	case unix.S_IFLNK:
 		return nil, wsChanged(p, "its path is now a symlink")
-	case !fi.IsDir():
+	default:
 		return nil, fmt.Errorf("%w: %s: it is not a directory", ErrUnboxableWorkspace, p)
 	}
-	id := hostFileID(fi)
-	if id == nil {
-		return nil, wsChanged(p, "it cannot be read (the host gave no identity)")
-	}
-	return id, nil
+	return &FileID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}, nil
 }
 
 // hostFileID is the identity the host's stat reports for fi, on any OS, nil when

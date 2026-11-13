@@ -186,7 +186,7 @@ func checkParents(c config.Clone) error {
 			return fmt.Errorf("%w: cannot inspect %s above the clone: %v", box.ErrUnboxableWorkspace, cur, err)
 		}
 		if st.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%w: %s is a symlink; agent-box creates clones only under real directories (use the resolved path in default_cwd)",
+			return fmt.Errorf("%w: %s is a symlink; CuliBox creates clones only under real directories (use the resolved path in default_cwd)",
 				box.ErrUnboxableWorkspace, cur)
 		}
 	}
@@ -246,7 +246,7 @@ func checkExisting(c config.Clone) (exists bool, err error) {
 		return false, nil
 	}
 	refuse := func(why string) (bool, error) {
-		return true, fmt.Errorf("%w: %s exists but is not a clone of %s (%s); move it away and agent-box will create the clone",
+		return true, fmt.Errorf("%w: %s exists but is not a clone of %s (%s); move it away and CuliBox will create the clone",
 			box.ErrUnboxableWorkspace, c.Dir, c.Of, why)
 	}
 	if lerr != nil {

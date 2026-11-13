@@ -99,7 +99,7 @@ func TestBundleWritesDelegate(t *testing.T) {
 			drop = &b.Lock.Dropped[i]
 		}
 	}
-	if drop == nil || drop.Reason != "replaced: the box runs agent-box's statusLine, which calls yours if it works in the box" {
+	if drop == nil || drop.Reason != "replaced: the box runs CuliBox's statusLine, which calls yours if it works in the box" {
 		t.Fatalf("drop = %+v", drop)
 	}
 }
@@ -141,7 +141,7 @@ func TestBundleNoDelegateForOtherTypesOrBlank(t *testing.T) {
 }
 
 func TestBundleLayoutBumped(t *testing.T) {
-	if layoutMarker != "layout\x00v5\n" {
-		t.Fatalf("layout marker = %q, want v5 so cached v4 bundles rebuild", layoutMarker)
+	if layoutMarker != "layout\x00v6\n" {
+		t.Fatalf("layout marker = %q, want v6 so cached v5 bundles (no attribution settings) rebuild", layoutMarker)
 	}
 }

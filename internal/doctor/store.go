@@ -29,6 +29,16 @@ func StoreFor(c config.Config, dataDir string) credref.StoreGetter {
 	return nil
 }
 
+// AccountStoreFor opens the encrypted store directly (an initialized store even
+// when the config does not reference it), for an account's own pasted token, the
+// launcher's acctTokenStore. Untyped nil when there is no store.
+func AccountStoreFor(c config.Config, dataDir string) credref.StoreGetter {
+	if st := openStoreForCheck(c, dataDir); st != nil {
+		return st
+	}
+	return nil
+}
+
 // openStore is StoreFor with the concrete type, nil when the config does not
 // use the store.
 func openStore(c config.Config, dataDir string) *secretstore.Store {
@@ -86,7 +96,7 @@ func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 		return seccompResults(ck, goos, seccomp)
 	}
 	if !s.Initialized {
-		return []Result{{Fail, ck, `store not initialized: the configuration reads it (run "agent-box store init")`}}
+		return []Result{{Fail, ck, `store not initialized: the configuration reads it (run "culibox store init")`}}
 	}
 	var out []Result
 	if s.Unavailable != nil {
@@ -95,7 +105,7 @@ func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 		return []Result{{Fail, ck, s.Unavailable.Error()}}
 	}
 	if s.Locked {
-		out = append(out, Result{Warn, ck, `store locked (unlock with "agent-box store unlock")`})
+		out = append(out, Result{Warn, ck, `store locked (unlock with "culibox store unlock")`})
 	} else if s.ExpiresAt.IsZero() {
 		out = append(out, Result{Pass, ck, fmt.Sprintf("store unlocked, %d values", s.Values)})
 	} else {

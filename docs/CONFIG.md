@@ -1,6 +1,13 @@
 # Configuration
 
-Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute path), else `~/.local/share/agent-box`. The config is read from `<data root>/config.json`, or from `-config <path>`. A `config.json` in the current directory is deliberately never read. The data root and config file must be owned by you and not writable by others.
+Everything CuliBox writes lives in one data root: `$CULIBOX_HOME` (an absolute path), else `~/.local/share/culibox`. The config is read from `<data root>/config.json`, or from `-config <path>`. A `config.json` in the current directory is deliberately never read. The data root and config file must be owned by you and not writable by others.
+
+**Root rules.**
+- `AGENT_BOX_HOME` is the deprecated old name of `CULIBOX_HOME`. It still works and prints a notice. If both are set to different paths, CuliBox refuses to start. A root set by either variable is used as it is and never moved.
+- With neither set, CuliBox looks at `~/.local/share/culibox` and at `~/.local/share/agent-box`, the root from before the rename. Only the old one exists: it is used in place. Only the new one exists, or neither: the new one. The old path is a link to the new one (what a move leaves behind): the new one. Both exist with different content: CuliBox refuses and names both; set `CULIBOX_HOME` or move one aside.
+- Only `culibox serve` moves the old root to the new one, once, and keeps the old path as a link. It moves only when all of this holds: no root variable and no `-config` flag; the old root is a real directory (not a link or mount point) on the same filesystem, and the new path is absent or empty; no other `serve` is running on it; no session is running; the config file in use does not set `data_dir`, and neither it nor `<old root>/credentials.json` names a path inside the old root (a plain text match); and, on a Mac, there is no box VM in it (see [macOS](MACOS.md#configure)). Otherwise the old root stays in use and `serve` logs why; the next start tries again. `doctor`, `store`, `clone`, `box` and `bug-report` never move anything.
+- `serve -config <file>` never starts a move: the move only reads the default config, so it cannot tell whether your file names paths inside the root. It does finish a move that was interrupted (the new root still holds `.culibox-move`), because finishing one reads only that file.
+- Without `CULIBOX_HOME` and `-config`, the config file is the first that exists of `<data root>/config.json`, `~/.config/culibox/config.json` (`$XDG_CONFIG_HOME/culibox/…` when that is absolute), and the old `~/.config/agent-box/config.json`. If there is no `<data root>/config.json` and both `~/.config` files exist and differ, CuliBox refuses. When no root variable and no `-config` is set, the data root resolves, and no other `serve` holds it, `serve` also moves the old `~/.config/agent-box/config.json` into `~/.config/culibox/` and leaves a link, even if the data root itself stays in place; other files there stay. It does not move the file when `~/.config/culibox` exists but is a link, not a folder, or a folder that is not yours or that others can write; `serve` logs why.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -10,7 +17,7 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `allowed_hosts` | `[]` | Extra `Host` values to answer to, such as a reverse proxy's hostname. |
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
 | `default_runtime` | `box` | Tier for agents that do not set their own: `box` or `host`. With no config file at all, the built-in default is `host`. |
-| `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; CuliBox never rebuilds or pulls a pinned tag. A digest or registry ref is pulled by `box setup` and never built; a box spawn never pulls. |
+| `box_image` | `culiops/culibox:base` | Image used for boxes. Set it to a dated tag to pin an instance; CuliBox never rebuilds or pulls a pinned tag. A digest or registry ref is pulled by `box setup` and never built; a box spawn never pulls. |
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. On macOS a box started in place that holds file locks (see [MACOS.md](MACOS.md)) is removed as soon as its last session ends instead. |
 | `audit_egress_retention_days` | `90` | Days of egress audit rows to keep; a daemon job prunes older ones once a day (at start, then every 24 h) while egress control is running; without it nothing is pruned and the Audit page says so. `0` keeps them forever (unset is `90`, not forever). Range 0-36500. Every other audit table is kept forever. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
@@ -26,7 +33,7 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
-| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). |
+| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](MACOS.md)). `culibox init` proposes a smaller size (half the cores, a quarter of the RAM, 4 to 8 GiB) and writes it, so the default applies to a Mac set up without init. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
@@ -34,6 +41,8 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 | `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](AWS.md#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |
 | `replies_enabled` | `false` | Lets the needs-you card answer permission prompts and send a one-line reply. Claude Code sessions only. Restart to apply. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
+
+`culibox init` ([macOS](MACOS.md#what-culibox-init-does)) writes these keys for you, after showing the file or a diff and asking: `default_runtime` (`box`), `default_cwd` (the workspace folder you picked), `box_vm_cpus` and `box_vm_memory_gib` (the VM size, macOS only), and `account` (`claude-box`) on each `claude` agent that has none. A `claude` agent already linked to another account is left as it is, and when there is no `claude` agent it adds one. It rewrites the file with sorted keys and two-space indent, and writes it atomically, mode 0600, never through a symlink. Its file is the `-config <path>` you pass (it must already exist: CuliBox stops on a missing `-config` file before init runs), else the config CuliBox already reads, else `<data root>/config.json`, which init creates when there is none.
 
 `box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
@@ -43,4 +52,4 @@ Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `
 
 ## VM folders
 
-On macOS the box VM shares only a list of folders, kept in `vm-shares.json` in the data root: `{"version":1,"shares":[{"path":"/Users/me/code","mode":"rw"}]}`, with `mode` `rw` or `ro`. CuliBox writes this file; it is not a `config.json` key, so do not add it there. Manage it in Settings › VM folders or with `agent-box box share list|add <dir> [-ro]|rm <dir>|apply [-force]`. If the file is missing, CuliBox builds it from your profiles on the first run. A change reaches the VM only when applied (a stop and start, about 20 seconds). See [macOS](MACOS.md#vm-folders).
+On macOS the box VM shares only a list of folders, kept in `vm-shares.json` in the data root: `{"version":1,"shares":[{"path":"/Users/me/code","mode":"rw"}]}`, with `mode` `rw` or `ro`. CuliBox writes this file; it is not a `config.json` key, so do not add it there. Manage it in Settings › VM folders or with `culibox box share list|add <dir> [-ro]|rm <dir>|apply [-force]`. If the file is missing, CuliBox builds it from your profiles on the first run. A change reaches the VM only when applied (a stop and start, about 20 seconds). See [macOS](MACOS.md#vm-folders).

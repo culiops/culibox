@@ -1,6 +1,6 @@
 # GitHub access for agents
 
-A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux (the allowlist is verified on a Mac; minting GitHub tokens there is not yet), and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](MACOS.md#every-box)).
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived GitHub App installation tokens for the repositories you list, read-only unless you allow write on contents, pull requests or issues, so the agent can `git clone`, `git fetch`, `git push` (when write is allowed) and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux (the allowlist is verified on a Mac; minting GitHub tokens there is not yet), and an existing VM needs `culibox box setup -recreate` once (see [docs/MACOS.md](MACOS.md#every-box)).
 
 **1. Create the GitHub App.** The in-app guide (the **How to create the App** guide in Settings › Credentials › Add GitHub › GitHub App) lists the permissions to tick. Give it read access, and add write on Contents, Pull requests and Issues only if agents should push and open PRs. Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
@@ -9,7 +9,7 @@ A boxed profile can carry a `github` binding. The credential broker then mints s
 ```json
 "github_apps": [
   { "name": "my-org", "client_id": "Iv23liXXXXXXXXXXXXXX",
-    "private_key": { "type": "file", "path": "/home/me/.config/agent-box/my-org.pem" } }
+    "private_key": { "type": "file", "path": "/home/me/.config/culibox/my-org.pem" } }
 ]
 ```
 
@@ -33,7 +33,7 @@ The key is never copied into a box. CuliBox reads the key file once per daemon r
 | `permissions` | Optional. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`, all `"read"`; `statuses` can be added. `contents`, `pull_requests` and `issues` may be `"write"`; every other key is `"read"` only, and any other value is refused. |
 | `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
 
-The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` in the [quick start](../README.md#quick-start)).
+The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` in the [quick start](../README.md#from-source-manual)).
 
 ## How the agent uses it
 

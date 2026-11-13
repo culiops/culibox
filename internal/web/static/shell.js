@@ -16,6 +16,9 @@ let toastTimer = null;
 // when it starts and stays silent if it moved: someone else owns the slot now.
 let toastSeq = 0;
 function toastSeqNow() { return toastSeq; }
+// slotHandle: the phone toast's handle. Negative, because stack ids count up from 1: the two never share a
+// value, so a phone handle cannot reach a stack entry (#183).
+function slotHandle() { return -toastSeq; }
 
 // placeToast keeps the toast clear of the phone's bottom chrome (#111). On the
 // phone layout the Terminal screen stacks the snippet row, the key bar and the
@@ -53,8 +56,9 @@ function placeToast(box) {
 //   detail        desktop only: an error's raw text, behind "Copy details" (F64)
 //   replace       desktop only: a listed toast's handle to update in place
 //   desktopOnly   the phone shows nothing (returns null)
-// The handle is the stack entry's id above 700px and the slot's sequence number
-// on the phone; dismissToast and resolveToast take it.
+// The handle is the stack entry's id above 700px (1, 2, 3, ...) and, on the phone, the slot's
+// sequence number made negative (slotHandle): a phone handle used after the window widens (an
+// upload's `replace`) cannot reach an unrelated stack entry. dismissToast and resolveToast take it.
 function showToast(msg, opts) {
   opts = opts || {};
   if (toastStacked()) return stackToast(msg, opts);
@@ -62,7 +66,7 @@ function showToast(msg, opts) {
   toastSeq++;
   const box = document.getElementById("toast");
   const undoBtn = document.getElementById("toast-undo");
-  if (!box) return toastSeq;
+  if (!box) return slotHandle();
   // The slot is one element for every kind, so the role follows the message.
   // index.html makes it polite-live from load (a region that turns live with its
   // first content is often not announced); that explicit aria-live would override
@@ -97,7 +101,7 @@ function showToast(msg, opts) {
   box.classList.add("show");
   clearTimeout(toastTimer);
   if (!opts.sticky) toastTimer = setTimeout(hideToast, opts.ms || 6000);
-  return toastSeq;
+  return slotHandle();
 }
 
 function hideToast() {
@@ -111,7 +115,7 @@ function hideToast() {
 // hidden stack); the phone slot only while it still shows that toast.
 function dismissToast(handle) {
   if (toastStack && toastStack.remove(handle)) toastChanged();
-  if (!toastStacked() && handle === toastSeq) hideToast();
+  if (!toastStacked() && handle === slotHandle()) hideToast();
 }
 
 // resolveToast(handle, msg, opts) -> handle: a toast (a pending one) becomes its
@@ -501,6 +505,8 @@ function selectSettingsTab(name) {
   setDialogError("settings-modal", "");
   // The Access-tokens tab loads its list lazily whenever it is shown.
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
+  // Leaving it takes a one-time token reveal off the page (tokens.js); coming back loads the tab afresh.
+  if (name !== "tokens" && typeof tokLeave === "function") tokLeave();
   if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
   if (name === "creds" && typeof loadCredentials === "function") loadCredentials();
   if (name === "vmfolders" && typeof loadVMFolders === "function") loadVMFolders();
@@ -545,6 +551,8 @@ function initDialogs() {
     // to its home first: focusTerminal cannot focus a pane while #grid is hidden.
     d.addEventListener("close", () => { if (typeof pageClosed === "function") pageClosed(d); });
     d.addEventListener("close", focusTerminal);
+    // Settings closing is leaving the Access-tokens tab: a one-time token reveal goes with it.
+    d.addEventListener("close", () => { if (d.id === "settings-modal" && typeof tokLeave === "function") tokLeave(); });
     // Sheets attach a one-shot onClose callback (openSheet's opts.onClose);
     // every other dialog leaves __onClose unset, so this is a no-op for them.
     d.addEventListener("close", () => {

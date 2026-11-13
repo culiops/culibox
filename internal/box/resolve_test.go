@@ -102,3 +102,31 @@ func TestResolveWorkspaceMakesARelativePathAbsolute(t *testing.T) {
 		t.Fatalf("ws = %+v, want Given rel and Path %s", ws, filepath.Join(d, "rel"))
 	}
 }
+
+// A `..` after a symlink is resolved the way the kernel does it (the link's
+// target's parent), not lexically: the workspace, and so the box name, is the
+// directory the path opens. Made absolute first, filepath.Abs would have cleaned
+// `link/..` to the folder holding the link.
+func TestResolvePathResolvesDotDotAfterASymlinkLikeTheKernel(t *testing.T) {
+	d := ctxTmp(t)
+	target := filepath.Join(d, "elsewhere", "deep")
+	mkdirs(t, target, filepath.Join(d, "here"))
+	link := filepath.Join(d, "here", "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(d, "elsewhere") // link/.. is deep's parent
+	got, err := resolvePath(link + "/..")
+	if err != nil || got != want {
+		t.Fatalf("resolvePath(link/..) = %q, %v; want %q", got, err, want)
+	}
+	// Relative to a working directory that is itself reached through a link.
+	t.Chdir(link)
+	got, err = resolvePath("..")
+	if err != nil || got != want {
+		t.Fatalf("resolvePath(..) from the link = %q, %v; want %q", got, err, want)
+	}
+	if got, err = resolvePath("."); err != nil || got != target {
+		t.Fatalf("resolvePath(.) = %q, %v; want %q", got, err, target)
+	}
+}

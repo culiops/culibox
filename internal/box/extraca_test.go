@@ -151,6 +151,7 @@ func TestRunArgsUnchangedWithoutCA(t *testing.T) {
 		"--label", LabelWorkspace + "=/w",
 		"--label", LabelInstance + "=TEST",
 		"--label", LabelClaims + "=1",
+		"--label", LabelIdentity + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
@@ -423,7 +424,7 @@ func TestEnsureRefusesLiveBoxWithOtherCALabel(t *testing.T) {
 			if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "different CA set") {
 				t.Fatalf("want ErrBoxUnavailable naming the different CA set, got %v", err)
 			}
-			if !strings.Contains(err.Error(), "end them, then spawn again (macOS: or run `agent-box box stop`)") || !strings.Contains(err.Error(), name) {
+			if !strings.Contains(err.Error(), "end them, then spawn again (macOS: or run `culibox box stop`)") || !strings.Contains(err.Error(), name) {
 				t.Fatalf("the refusal must give the remedy and the box: %v", err)
 			}
 			if f.stops() != 0 || f.runs() != 1 {

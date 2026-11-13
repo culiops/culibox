@@ -620,7 +620,9 @@ class TerminalTab {
     }
   }
 
-  onShow() { this.fit(); this.term.focus(); }
+  // grabFocus: the keyboard goes to this terminal unless an inline rename holds it (#178).
+  grabFocus() { if (typeof renameActive === "function" && renameActive()) return; this.term.focus(); }
+  onShow() { this.fit(); this.grabFocus(); }
   onHide() {}
 
   // openClickedPath: a boxed session's paths are the box's, so a click opens a
@@ -755,7 +757,7 @@ class TerminalTab {
     // would otherwise end up holding the cursor while another pane is outlined.
     ws.onopen = () => {
       this.openedAt = Date.now(); this.setStatus("connected"); this.sendResize();
-      if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.term.focus();
+      if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.grabFocus();
     };
     ws.onmessage = (ev) => {
       // Like onclose: only the current socket is this tab's output.

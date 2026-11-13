@@ -62,6 +62,39 @@ func (d Docker) ServerArch(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Tag gives the local image src a second name, dst (`docker tag src dst`). It
+// copies no layers and removes nothing: both names point at one image ID.
+func (d Docker) Tag(ctx context.Context, src, dst string) error {
+	out, err := d.command(ctx, "tag", src, dst).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker tag %s %s: %w: %s", src, dst, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// AdoptLegacyDefault gives an image held under the pre-rename default name the
+// new default name: when image is missing and legacy is present, it tags legacy
+// as image. The legacy tag stays. It reports whether it tagged. An image that
+// is already there, or neither, changes nothing; the error is the daemon's, and
+// means "no answer", so the caller may ask again.
+func AdoptLegacyDefault(ctx context.Context, d interface {
+	Inspect(context.Context, string) (ImageState, error)
+	Tag(context.Context, string, string) error
+}, image, legacy string) (adopted bool, err error) {
+	st, err := d.Inspect(ctx, image)
+	if err != nil || st.Present {
+		return false, err
+	}
+	old, err := d.Inspect(ctx, legacy)
+	if err != nil || !old.Present {
+		return false, err
+	}
+	if err := d.Tag(ctx, legacy, image); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // extraCAName is the context file the Dockerfile COPYs. It is always present,
 // empty when no CA is configured, so a COPY never fails and the argv is the
 // same with CAs on or off.
@@ -281,11 +314,11 @@ func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
 func (s ImageState) Check(serverArch string) (fatal bool, msg string) {
 	switch {
 	case !s.Present:
-		return true, "box image not built; run `agent-box box setup`"
+		return true, "box image not built; run `culibox box setup`"
 	case s.Arch != serverArch:
-		return true, fmt.Sprintf("box image is %s but the daemon is %s (it would run emulated); run `agent-box box setup -rebuild`", s.Arch, serverArch)
+		return true, fmt.Sprintf("box image is %s but the daemon is %s (it would run emulated); run `culibox box setup -rebuild`", s.Arch, serverArch)
 	case s.Hash != Hash():
-		return false, "box image is older than this agent-box; run `agent-box box setup -rebuild`"
+		return false, "box image is older than this CuliBox; run `culibox box setup -rebuild`"
 	}
 	return false, ""
 }
@@ -298,9 +331,9 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 	if IsRemote(image) {
 		switch {
 		case !s.Present:
-			return true, fmt.Sprintf("box image %s is not on this daemon; run `agent-box box setup` to pull it", image)
+			return true, fmt.Sprintf("box image %s is not on this daemon; run `culibox box setup` to pull it", image)
 		case s.Arch != serverArch:
-			return true, fmt.Sprintf("box image %s is linux/%s but the daemon is %s; pin the multi-arch index digest and run `agent-box box setup`", image, s.Arch, serverArch)
+			return true, fmt.Sprintf("box image %s is linux/%s but the daemon is %s; pin the multi-arch index digest and run `culibox box setup`", image, s.Arch, serverArch)
 		case s.Hash != Hash():
 			return false, "this image was built from an older Dockerfile; pull a newer digest from ghcr"
 		}
@@ -311,11 +344,11 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 	}
 	switch {
 	case !s.Present:
-		return true, fmt.Sprintf("pinned box image %s is missing; agent-box never rebuilds or pulls a pinned tag: set box_image to a present dated tag (docker images %s), or run agent-box box setup -rebuild and pin the tag it prints", image, mustRepo(image))
+		return true, fmt.Sprintf("pinned box image %s is missing; CuliBox never rebuilds or pulls a pinned tag: set box_image to a present dated tag (docker images %s), or run culibox box setup -rebuild and pin the tag it prints", image, mustRepo(image))
 	case s.Arch != serverArch || s.Hash == Hash():
 		return s.Check(serverArch)
 	}
-	return false, fmt.Sprintf("pinned to %s, built from an older Dockerfile than this agent-box (fine to keep); agent-box box setup -rebuild builds a new dated tag you can pin", image)
+	return false, fmt.Sprintf("pinned to %s, built from an older Dockerfile than this CuliBox (fine to keep); culibox box setup -rebuild builds a new dated tag you can pin", image)
 }
 
 // mustRepo drops Repo's error: it is only called for a dated image, which

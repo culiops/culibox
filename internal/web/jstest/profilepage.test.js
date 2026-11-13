@@ -177,7 +177,7 @@ function page(over) {
           if (kept.aws_connections || kept.tokens) row.network = "allowlist";
         }
         box.profiles = box.profiles.concat([row]);
-        return box.postReply || { name: body.name };
+        return Object.assign({ name: body.name, rev: kept.rev }, box.postReply);
       }
       if (m && method === "PUT") {
         const body = JSON.parse(opt.body);
@@ -187,7 +187,7 @@ function page(over) {
         const kept = Object.assign({}, body, { rev: "r" + (++box.revN) + "0" });
         delete kept.schema;
         box.docs[name] = kept;
-        return box.putReply || null;
+        return Object.assign({ rev: kept.rev }, box.putReply);
       }
       return null;
     },
@@ -760,7 +760,7 @@ test("pfvDelete confirms in red, deletes, and shows the next profile in list ord
   t.box.gone = "aws-ops";
   await t.box.pfvDelete();
   assert.ok(t.calls.includes("confirm:Delete profile:danger"));
-  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
+  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops?rev=r1"), "the delete names the revision the page opened");
   assert.strictEqual(t.run("pfvState").name, "infra-terraform", "the profile that followed it in the list");
   assert.deepStrictEqual(titles(t.els["pfv-in"]), ["infra-terraform"]);
 });
@@ -794,7 +794,7 @@ test("the menu's Delete… runs pfvDelete", async () => {
   t.box.gone = "aws-ops";
   const del = byText(t.els["pfv-in"], "button", "Delete…")[0];
   await del.click();
-  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
+  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops?rev=r1"));
   assert.notStrictEqual(t.run("pfvState").name, "aws-ops");
 });
 
@@ -870,7 +870,7 @@ test("a deleted profile leaves the screen as soon as the DELETE succeeds, before
   const done = t.box.pfvDelete();
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
-  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops"));
+  assert.ok(t.calls.includes("DELETE /api/profiles/aws-ops?rev=r1"));
   assert.strictEqual(t.run("pfvState").name, "", "nothing selected while the reload is out");
   assert.strictEqual(titles(t.els["pfv-in"]).length, 0, "the deleted profile's header, Start session and menu are gone");
   assert.ok(!byCls(t.els["pf-navlist"], "pfv-ni-name").some((n) => n.textContent === "aws-ops"), "and its nav row");
@@ -1558,7 +1558,7 @@ test("a save that succeeds but returns warnings shows them in words", async () =
   assert.match(w[0], /^Network settings apply only to a profile that holds cloud access or a token/);
 });
 
-test("a save whose reload fails still says it saved, and the next save is refused as stale instead of overwriting", async () => {
+test("a save whose reload fails still says it saved, and the next save carries the revision the save answered with", async () => {
   const t = page();
   await t.box.pfvShow("aws-ops");
   clickBtn(blockOf(t, "agent"), "Edit");
@@ -1569,6 +1569,14 @@ test("a save whose reload fails still says it saved, and the next save is refuse
   assert.deepStrictEqual(texts(t.els["pfv-in"], "pfv-err"), ["Saved, but reloading it failed: boom"]);
   assert.strictEqual(t.run("pfvState").openBlock, "");
   assert.strictEqual(t.run("pfvState").pending, false);
+  // The page holds the new revision, not the one it opened: a second save is not refused for the first.
+  assert.strictEqual(t.run("pfvState").doc.rev, t.box.docs["aws-ops"].rev);
+  t.box.getFail = null;
+  clickBtn(blockOf(t, "agent"), "Edit");
+  pickModel(t, "claude-opus-5");
+  assert.strictEqual(await clickBtn(blockOf(t, "agent"), "Save"), true);
+  assert.strictEqual(t.box.puts.length, 2);
+  assert.notStrictEqual(t.box.puts[1].rev, "r1", "the second save names the first save's revision");
 });
 
 test("a save for a profile you have left does not draw over the one on screen", async () => {

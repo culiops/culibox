@@ -253,6 +253,14 @@ type OptionsResolver interface {
 	AcceptedOptions(spec launcher.SpawnSpec) map[string]any
 }
 
+// BypassResolver is implemented by launchers that know whether a spawn runs its
+// agent with the bypass option (launcher.AgentLauncher.BypassesPermissions).
+// Optional, like BinResolver: without it no box home is asked to pre-accept the
+// bypass-permissions warning, and the dialog shows as before.
+type BypassResolver interface {
+	BypassesPermissions(spec launcher.SpawnSpec) bool
+}
+
 // AWSResolver is implemented by launchers that know a profile's AWS binding.
 // Optional, like BinResolver: without it no session is ever bound.
 type AWSResolver interface {
@@ -2232,6 +2240,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports}
+		// The bypass option the user chose for the profile or this spawn is the
+		// consent: the box home it creates pre-accepts the warning that nothing
+		// would answer in an unattended session. Not tied to the bundle or the
+		// account, since the dialog is Claude Code's own and shows for every box.
+		if br, ok := m.launcher.(BypassResolver); ok {
+			key.PreAcceptBypass = br.BypassesPermissions(spec)
+		}
 		if len(ctxPaths) > 0 {
 			key.Context = config.ContextHash(ctxPaths)
 		}

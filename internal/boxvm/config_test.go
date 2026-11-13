@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func TestSocketPathLimit(t *testing.T) {
 	}
 	c := testCfg()
 	c.Root = "/Users/a/" + strings.Repeat("x", 80)
-	if err := c.CheckSocketPaths(); err == nil || !strings.Contains(err.Error(), "AGENT_BOX_HOME") {
+	if err := c.CheckSocketPaths(); err == nil || !strings.Contains(err.Error(), "CULIBOX_HOME") {
 		t.Fatalf("an over-long root must be refused with a remedy: %v", err)
 	}
 }
@@ -156,9 +157,9 @@ func TestValidateRefusesPathsDockerOrYAMLCannotCarry(t *testing.T) {
 			if !strings.Contains(err.Error(), fmt.Sprintf("%q", offender)) {
 				t.Fatalf("%s %q: error must name the path: %v", field, bad, err)
 			}
-			// AGENT_BOX_HOME moves the data root, not the home.
-			if has := strings.Contains(err.Error(), "AGENT_BOX_HOME"); has != (field == "root") {
-				t.Fatalf("%s %q: AGENT_BOX_HOME remedy present=%v, want %v: %v", field, bad, has, field == "root", err)
+			// CULIBOX_HOME moves the data root, not the home.
+			if has := strings.Contains(err.Error(), "CULIBOX_HOME"); has != (field == "root") {
+				t.Fatalf("%s %q: CULIBOX_HOME remedy present=%v, want %v: %v", field, bad, has, field == "root", err)
 			}
 			if field == "home" && !strings.Contains(err.Error(), "host tier") {
 				t.Fatalf("home %q: error must offer renaming the home or the host tier: %v", bad, err)
@@ -952,6 +953,34 @@ func TestYAMLRefusesExpansionCharacters(t *testing.T) {
 		}
 		if _, err := ReadMounts(p); err == nil {
 			t.Errorf("%q must be refused by ReadMounts", bad)
+		}
+	}
+}
+
+// #235 item 2: the programs whose folders a share may not hold are the ones
+// CuliBox starts: docker, colima, the limactl colima finds on its PATH, and CuliBox itself.
+func TestProgramPaths(t *testing.T) {
+	bin := t.TempDir()
+	other := t.TempDir()
+	mk := func(dir, name string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	colima, docker, lima := mk(bin, "colima"), mk(other, "docker"), mk(bin, "limactl")
+	got := ProgramPaths(config.Config{ColimaBin: colima, DockerBin: docker})
+	exe, _ := os.Executable()
+	for _, want := range []string{docker, colima, lima, exe} {
+		if !slices.Contains(got, want) {
+			t.Errorf("ProgramPaths = %v, missing %s", got, want)
+		}
+	}
+	// Nothing found is nothing listed, never an empty or relative entry.
+	for _, p := range ProgramPaths(config.Config{ColimaBin: "colima-not-installed", DockerBin: "docker-not-installed"}) {
+		if !filepath.IsAbs(p) {
+			t.Errorf("entry %q is not absolute", p)
 		}
 	}
 }

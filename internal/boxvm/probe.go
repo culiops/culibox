@@ -106,7 +106,7 @@ func probeLoopback(ctx context.Context, exec ExecFunc, script func(port int) str
 		c.Close()
 	}
 	if accepted > 0 {
-		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `agent-box doctor`")
+		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `culibox doctor`")
 	}
 	if execErr != nil {
 		return fmt.Errorf("containment check could not run in the box: %w", execErr)
@@ -125,9 +125,9 @@ func probeLoopback(ctx context.Context, exec ExecFunc, script func(port int) str
 	}
 	switch {
 	case reached > 0:
-		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `agent-box doctor`")
+		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `culibox doctor`")
 	case needDNS && !dnsOK:
-		return errors.New("containment check inconclusive: the box has no working DNS, so a blocked loopback proves nothing; run `agent-box doctor`")
+		return errors.New("containment check inconclusive: the box has no working DNS, so a blocked loopback proves nothing; run `culibox doctor`")
 	case blocked == 0:
 		return errors.New("containment check inconclusive: the probe produced no result")
 	}

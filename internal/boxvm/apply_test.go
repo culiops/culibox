@@ -155,7 +155,7 @@ func TestApplyMountsRefusesOtherDrift(t *testing.T) {
 	v.cfg.CPUs = 8
 	before, _ := os.ReadFile(v.Config().YAMLPath())
 	err := v.ApplyMounts(context.Background(), ApplyHooks{})
-	if !errors.Is(err, ErrNeedsRecreate) || !strings.Contains(err.Error(), "agent-box box setup -recreate") {
+	if !errors.Is(err, ErrNeedsRecreate) || !strings.Contains(err.Error(), "culibox box setup -recreate") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(callNames(r)) != 0 {
@@ -387,7 +387,7 @@ func TestApplyMountsRefusesAConcurrentApply(t *testing.T) {
 		t.Error("ApplyLockHeld = false while an apply runs")
 	}
 	err := v2.ApplyMounts(context.Background(), ApplyHooks{})
-	if !errors.Is(err, ErrApplyLocked) || err.Error() != "another agent-box is applying the box VM's folder list; try again when it finishes" {
+	if !errors.Is(err, ErrApplyLocked) || err.Error() != "another CuliBox is applying the box VM's folder list; try again when it finishes" {
 		t.Fatalf("second apply: %v", err)
 	}
 	if len(callNames(r2)) != 0 {
@@ -439,5 +439,28 @@ func TestApplyMountsRefusesNestedMountsBeforeStopping(t *testing.T) {
 		if after, _ := os.ReadFile(v.Config().YAMLPath()); string(after) != string(before) {
 			t.Errorf("%s: colima.yaml was rewritten", name)
 		}
+	}
+}
+
+// #235 review: SetResolvedShares takes the paths as given: its caller has
+// resolved and checked them, and a second resolution could give another answer.
+func TestSetResolvedSharesDoesNotResolveAgain(t *testing.T) {
+	dir := shortRoot(t)
+	target := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	v := NewVM(Config{Root: dir, Home: "/h", ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}, &fakeRunner{})
+	v.SetResolvedShares([]vmshares.Share{{Path: link, Mode: vmshares.RO}})
+	if got := v.Config().Shares; len(got) != 1 || got[0].Path != link {
+		t.Fatalf("SetResolvedShares changed the path: %+v", got)
+	}
+	v.SetShares([]vmshares.Share{{Path: link, Mode: vmshares.RO}})
+	if got := v.Config().Shares; len(got) != 1 || got[0].Path != target {
+		t.Fatalf("SetShares must still resolve: %+v", got)
 	}
 }

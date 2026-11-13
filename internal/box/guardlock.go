@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Guard locks (#96, macOS). A Mac volume compares names case-insensitively by
@@ -30,9 +31,12 @@ import (
 // the box (its container), not a session. A box that holds a lock is therefore
 // removed when its last session ends, instead of idling (Manager.idleTTL).
 //
-// A flag the user had set already is recorded as not ours and never cleared.
-// The records live in the data root (guardLocksFile), so a crash or restart
-// clears what it left behind (Manager.Reconcile, Sweep, SweepGuardLocksNoBoxes).
+// A flag this instance did not set (the user's, or another instance's: each
+// keeps its own records) is never cleared, and an in-place spawn over it is
+// refused: the other instance would lift it when its own box ends. So at most
+// one instance holds a file at a time. The records live in the data root
+// (guardLocksFile), so a crash or restart clears what it left behind
+// (Manager.Reconcile, Sweep, SweepGuardLocksNoBoxes).
 //
 // The logic is OS-neutral over flagOps, so the refcount, persistence, user-flag
 // rule and sweep are tested on Linux with a fake; the real flags are darwin's
@@ -40,6 +44,10 @@ import (
 
 // guardLocksFile is the lock records' file in the data root.
 const guardLocksFile = "inplace-locks.json"
+
+// guardLocksUnreadable is where records that cannot be read are kept, so the
+// next save does not overwrite what they named.
+const guardLocksUnreadable = guardLocksFile + ".unreadable"
 
 // guardLocksVersion is the records' format: one record per file identity (2).
 // Version 1 (the first #96 build, never released) kept one per folder
@@ -119,18 +127,34 @@ type guardLocks struct {
 	recs []GuardLock
 }
 
+// guardFlockWait is how long a spawn waits for another process that is
+// locking the same file right now (flockGuarded) before it is refused.
+var guardFlockWait = 2 * time.Second
+
 // errLockGone: the recorded file is not at its path any more (missing, or
 // another file): there is nothing of ours to clear.
 var errLockGone = errors.New("the locked file is gone")
 
-// newGuardLocks loads the records under root. Unreadable records are logged
-// and dropped: a flag CuliBox set then reads as the user's and is never
-// cleared, which is the safe direction (doctor names the file to unlock).
+// newGuardLocks loads the records under root. Unreadable records are moved
+// aside (guardLocksUnreadable), never overwritten, and CuliBox starts with
+// none: a flag it set then has no record of ours, so it is never cleared and
+// an in-place spawn in its folder is refused, naming the file (hold). A move
+// fails when the data root cannot be written, and then no save can overwrite
+// them either.
 func newGuardLocks(root string, ops flagOps) *guardLocks {
 	g := &guardLocks{ops: ops, path: filepath.Join(root, guardLocksFile)}
 	recs, err := ReadGuardLocks(root)
 	if err != nil {
-		log.Printf("box: in-place lock records: %v (starting with none; a file CuliBox locked before stays locked until you run chflags nouchg on it)", err)
+		aside := filepath.Join(root, guardLocksUnreadable)
+		if _, serr := os.Lstat(aside); serr == nil {
+			aside += "." + time.Now().UTC().Format("20060102T150405.000000000")
+		}
+		if rerr := os.Rename(g.path, aside); rerr != nil {
+			log.Printf("box: in-place lock records: %v; it cannot be moved aside either: %v", err, rerr)
+		} else {
+			log.Printf("box: in-place lock records: %v (kept as %s; starting with none: a file CuliBox locked before stays "+
+				"locked until you run chflags nouchg on it, and a box in its folder is refused until then)", err, aside)
+		}
 	}
 	g.recs = recs
 	return g
@@ -356,6 +380,21 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 			f.Close()
 			return nil, lockRefusal(p, "it changed after it was checked; spawn again")
 		}
+		// Held until this call returns (closing f releases it): another
+		// CuliBox instance locking the same file waits here, so two never both
+		// read it unflagged and both take the flag for their own. A flock is
+		// the open file's: a hard link of a file this call already holds is
+		// not locked again (it would wait on this very call).
+		if !slices.ContainsFunc(all, func(o opened) bool { return o.id == id }) {
+			if err := flockGuarded(f); err != nil {
+				f.Close()
+				if errors.Is(err, errFlockBusy) {
+					return nil, refuseInPlace("%s is being locked by another process right now (another CuliBox starting a box "+
+						"here, or another program holding a lock on it), so this box is not started in place. Spawn again", p)
+				}
+				return nil, setRefusal(p, err)
+			}
+		}
 		imm, err := g.ops.immutable(f)
 		if err != nil {
 			f.Close()
@@ -366,24 +405,37 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// A flag this instance did not set is never relied on (#246): it may be
+	// another CuliBox instance's, which lifts it when its own box ends, with
+	// no way to know of this box. The user's own flag, or one whose record was
+	// lost, cannot be told apart from it, so the spawn is refused for all of
+	// them and the flag is left as it is.
+	for _, o := range all {
+		if i := g.find(o.id); o.imm && (i < 0 || !g.recs[i].Ours) {
+			p := filepath.Join(ws, o.name)
+			return nil, refuseInPlace("%s is locked already, and not by this CuliBox (by you, by another CuliBox on "+
+				"this Mac, or by an earlier run whose lock records were lost). A box started in place relies only on a "+
+				"lock it set itself, so it is not started. End the other CuliBox's box in this folder, use a clone-mode "+
+				"profile, or, if nothing else uses the file, unlock it: chflags nouchg %s", p, shQuote(p))
+		}
+	}
 	before := cloneLocks(g.recs)
 	var set []opened
 	for _, o := range all {
 		// By identity, not by name: another spelling of the folder reaches the
-		// same file, and a file already flagged by a record of ours is joined
-		// (still ours), never taken for the user's flag. A record left at this
-		// name for another file is not this one's; it is unlocked only on its
-		// own file (unlock checks the identity).
+		// same file, and a file flagged by a record of ours is joined. A record
+		// left at this name for another file is not this one's; it is unlocked
+		// only on its own file (unlock checks the identity).
 		i := g.find(o.id)
 		if i < 0 {
-			g.recs = append(g.recs, GuardLock{Workspace: ws, File: o.name, Dev: o.id.Dev, Ino: o.id.Ino, Ours: !o.imm})
+			g.recs = append(g.recs, GuardLock{Workspace: ws, File: o.name, Dev: o.id.Dev, Ino: o.id.Ino})
 			i = len(g.recs) - 1
 		}
 		r := &g.recs[i]
 		r.addPath(LockPath{ws, o.name})
 		if !o.imm {
-			// Unflagged: never locked, cleared by hand, or a crash between the
-			// record and the flag. Setting it now makes it ours.
+			// Unflagged: never locked, or cleared by hand. Setting it now
+			// makes it ours.
 			r.Ours = true
 			set = append(set, o)
 		}
@@ -394,25 +446,58 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 			r.Sessions = append(r.Sessions, LockSession{box, session})
 		}
 	}
-	// Recorded before any flag is set: a crash in between leaves a record of
-	// an unflagged file, which the sweep drops.
-	if err := g.save(); err != nil {
+	// The flags first, the record after: a record that says ours always
+	// names a flag CuliBox set. A crash in between leaves a flag with no
+	// record, which is never cleared and refuses the next spawn here, naming
+	// the file (fail closed); the reverse order could clear a flag the user
+	// set after the crash.
+	undo := func(k int) {
+		for _, d := range set[:k] {
+			_ = g.ops.setImmutable(d.f, false)
+		}
 		g.recs = before
-		return nil, lockRefusal(filepath.Join(ws, all[0].name), fmt.Sprintf("the lock record cannot be written: %v", err))
 	}
 	for k, o := range set {
 		if err := g.ops.setImmutable(o.f, true); err != nil {
-			for _, d := range set[:k] {
-				_ = g.ops.setImmutable(d.f, false)
-			}
-			g.recs = before
-			if serr := g.save(); serr != nil {
-				log.Printf("box: in-place lock records: %v", serr)
-			}
+			undo(k)
 			return nil, setRefusal(filepath.Join(ws, o.name), err)
 		}
 	}
+	if err := g.save(); err != nil {
+		undo(len(set))
+		return nil, lockRefusal(filepath.Join(ws, all[0].name), fmt.Sprintf("the lock record cannot be written: %v", err))
+	}
 	return g.lockedForLocked(box), nil
+}
+
+// shQuote single-quotes s for a pasted shell command.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// errFlockBusy: another process holds the file's flock past guardFlockWait.
+var errFlockBusy = errors.New("the file is being locked by another process")
+
+// flockGuarded takes an exclusive flock(2) on f, waiting up to guardFlockWait
+// for another holder. The flock is the open file's, so every spelling of the
+// file, in every CuliBox process, meets the same one.
+func flockGuarded(f *os.File) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(guardFlockWait)
+	for {
+		var ferr error
+		if err := rc.Control(func(fd uintptr) { ferr = syscall.Flock(int(fd), syscall.LOCK_EX|syscall.LOCK_NB) }); err != nil {
+			return err
+		}
+		if !errors.Is(ferr, syscall.EWOULDBLOCK) {
+			return ferr
+		}
+		if time.Now().After(deadline) {
+			return errFlockBusy
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // find is the record of the file with identity id, or -1. Caller holds g.mu.
@@ -562,7 +647,7 @@ func (g *guardLocks) unlockAt(r GuardLock, lp LockPath) error {
 		return err
 	}
 	defer f.Close()
-	if id.Dev != r.Dev || id.Ino != r.Ino {
+	if id.Ino != r.Ino {
 		return errLockGone
 	}
 	imm, err := g.ops.immutable(f)
@@ -571,6 +656,12 @@ func (g *guardLocks) unlockAt(r GuardLock, lp LockPath) error {
 	}
 	if !imm {
 		return errLockGone
+	}
+	if id.Dev != r.Dev {
+		// The same inode on another device number: an external disk mounted
+		// again, or another file. Never cleared on a guess; the record stays
+		// as a leftover, so doctor names the file and how to unlock it.
+		return fmt.Errorf("it is on another device number than when it was locked (a disk mounted again?), so CuliBox cannot tell it is the file it locked")
 	}
 	return g.ops.setImmutable(f, false)
 }
@@ -601,6 +692,10 @@ func (m *Manager) holdLocks(name string, lk *lockReq) error {
 // boxGone is called once a box's container was removed: the locks it held are
 // released, and a file no other box holds is unlocked. Caller holds opMu.
 func (m *Manager) boxGone(name string) {
+	m.mu.Lock()
+	delete(m.mismatched, name)
+	delete(m.guardsChecked, name)
+	m.mu.Unlock()
 	if m.locks != nil {
 		m.locks.releaseBox(name)
 	}

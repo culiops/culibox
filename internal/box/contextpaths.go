@@ -56,12 +56,12 @@ type FileID struct{ Dev, Ino uint64 }
 // link between that read and `docker run` would mount the link's target; this
 // catches it before the agent starts. One `docker exec` for all of them, paths
 // as argv (no shell). Mounts without an ID cost nothing. The guards of the
-// workspace are compared only when this spawn created the box (see
-// skipGuard). Caller holds opMu.
-func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, created bool) error {
+// workspace are compared only when guards is set (see skipGuard); created says
+// the box is this spawn's, for the refusal's wording. Caller holds opMu.
+func (m *Manager) checkMountIDs(ctx context.Context, name string, ms []Mount, created, guards bool) error {
 	var checked []Mount
 	for _, mt := range ms {
-		if mt.ID != nil && !skipGuard(mt, created) {
+		if mt.ID != nil && !skipGuard(mt, guards) {
 			checked = append(checked, mt)
 		}
 	}
@@ -114,14 +114,17 @@ func isIDLine(s string) bool {
 	return true
 }
 
-// skipGuard is true for a guard mount of a box this spawn did not create. A
+// skipGuard is true for a guard mount when guards is not set, which ensure does
+// for a box that was checked when it started: one this spawn created, and one
+// created by a build that checks (LabelIdentity) is compared only at creation. A
 // file bind mount pins the inode it was made with, and an editor that saves
 // CLAUDE.md by rename leaves the host's file with another identity while the
 // running box keeps the old one: comparing a guard on reuse would refuse the next
 // session after any such save. The workspace directory is not replaced by normal
-// work, so it is compared every time.
-func skipGuard(mt Mount, created bool) bool {
-	return mt.kind == mountGuard && !created
+// work, so it is compared every time. A box never checked (an older build's, or
+// one whose refusal could not remove it) has its guards compared once.
+func skipGuard(mt Mount, guards bool) bool {
+	return mt.kind == mountGuard && !guards
 }
 
 // wsHostFilesHint ends the refusal of a workspace that a box created by this
@@ -222,12 +225,12 @@ func identityFailed(ms []Mount, err error) error {
 // fillVMIDs gives every CheckID mount that has no ID its identity from
 // Options.VMIDs, and returns ms with those IDs set (a copy; the caller's slice
 // is never written to). Mounts that already carry an ID, mounts that are not
-// CheckID, and the guards of a box this spawn did not create (skipGuard), are
+// CheckID, and the guards when guards is not set (skipGuard), are
 // not asked about. It is one VMIDs call for all of them, and none when there is
 // nothing to ask or no hook (Linux records the identity on the host), so it can
 // run again for the same spawn at no cost. Fail closed: an error or a wrong
 // count refuses the spawn. Caller holds opMu.
-func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount, created bool) ([]Mount, error) {
+func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount, guards bool) ([]Mount, error) {
 	if m.opts.VMIDs == nil {
 		return ms, nil
 	}
@@ -235,7 +238,7 @@ func (m *Manager) fillVMIDs(ctx context.Context, ms []Mount, created bool) ([]Mo
 	var asked []Mount
 	var paths []string
 	for i, mt := range ms {
-		if mt.CheckID && mt.ID == nil && !skipGuard(mt, created) {
+		if mt.CheckID && mt.ID == nil && !skipGuard(mt, guards) {
 			at = append(at, i)
 			asked = append(asked, mt)
 			paths = append(paths, mt.Host)
@@ -284,8 +287,8 @@ func withWorkspace(wsm Mount, extraRO []Mount) []Mount {
 
 // fillMountIDs is fillVMIDs over the workspace mount and extraRO as one batch,
 // so the VM is asked once, the workspace first, and gives both back.
-func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount, created bool) (Mount, []Mount, error) {
-	all, err := m.fillVMIDs(ctx, withWorkspace(wsm, extraRO), created)
+func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount, guards bool) (Mount, []Mount, error) {
+	all, err := m.fillVMIDs(ctx, withWorkspace(wsm, extraRO), guards)
 	if err != nil {
 		return wsm, extraRO, err
 	}
@@ -296,8 +299,10 @@ func (m *Manager) fillMountIDs(ctx context.Context, wsm Mount, extraRO []Mount, 
 // created, or one no session of this process uses, is removed: nothing runs in
 // it, and it must not be reused with the wrong mount. A box other sessions run
 // in is kept (removing it would kill them) and the refusal says how to get it
-// recreated; every later spawn into it is checked, and refused, again.
-// Caller holds opMu.
+// recreated; every later spawn into it is checked, and refused, again. A box
+// that could not be removed is remembered (mismatched): it is never reused as it
+// is, whatever the next spawn's checks would skip for a box that started well
+// (see removeMismatched). Caller holds opMu.
 func (m *Manager) refuseMountChanged(ctx context.Context, name string, created bool, cerr error) error {
 	m.mu.Lock()
 	live := m.active[name]
@@ -309,6 +314,7 @@ func (m *Manager) refuseMountChanged(ctx context.Context, name string, created b
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		cerr = fmt.Errorf("%w (box %s could not be removed: %v; every spawn into it is checked again)", cerr, name, err)
+		m.markMismatched(name)
 	} else {
 		m.boxGone(name)
 		if !created {
@@ -397,7 +403,7 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, view *ShareVie
 			}
 		}
 	}
-	if reason, hint := ProtectedOverlapHint(p, protected); reason != "" {
+	if reason, hint := ProtectedOverlapHint(p, ReadOnlyUse(protected)); reason != "" {
 		if hint != "" {
 			reason += "; " + hint
 		}

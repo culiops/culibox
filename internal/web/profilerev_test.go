@@ -64,7 +64,7 @@ func TestProfileRevIsContentDerived(t *testing.T) {
 	// a restart: a second manager over the same store derives the same rev
 	fs := newFakeStore()
 	pm1, _ := revManager(t, nil, nil, fs)
-	if err := pm1.Create(a); err != nil {
+	if _, err := pm1.Create(a); err != nil {
 		t.Fatal(err)
 	}
 	pm2, _ := revManager(t, nil, nil, fs)
@@ -76,12 +76,12 @@ func TestProfileRevIsContentDerived(t *testing.T) {
 func TestUpdateAcceptsTheCurrentRevision(t *testing.T) {
 	pm, _ := revManager(t, nil, nil, newFakeStore())
 	p := config.AgentConfig{Name: "p", Bin: "bash"}
-	if err := pm.Create(p); err != nil {
+	if _, err := pm.Create(p); err != nil {
 		t.Fatal(err)
 	}
 	rev := profileRev(mustGet(t, pm, "p"))
 	p2 := config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--one"}}
-	if err := pm.Update(p2, rev); err != nil {
+	if _, err := pm.Update(p2, rev); err != nil {
 		t.Fatalf("Update with the current rev = %v, want nil", err)
 	}
 	if got := mustGet(t, pm, "p"); !reflect.DeepEqual(got, p2) {
@@ -91,18 +91,18 @@ func TestUpdateAcceptsTheCurrentRevision(t *testing.T) {
 
 func TestUpdateRefusesAStaleRevision(t *testing.T) {
 	pm, applies := revManager(t, nil, nil, newFakeStore())
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	rev := profileRev(mustGet(t, pm, "p"))
 	p2 := config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--one"}}
-	if err := pm.Update(p2, rev); err != nil {
+	if _, err := pm.Update(p2, rev); err != nil {
 		t.Fatal(err)
 	}
 	before := *applies
 
 	p3 := config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}
-	err := pm.Update(p3, rev)
+	_, err := pm.Update(p3, rev)
 	if !errors.Is(err, ErrProfileChanged) {
 		t.Fatalf("Update with a stale rev = %v, want ErrProfileChanged", err)
 	}
@@ -117,14 +117,14 @@ func TestUpdateRefusesAStaleRevision(t *testing.T) {
 func TestUpdateOfADeletedProfileIsRefusedAndNotRecreated(t *testing.T) {
 	fs := newFakeStore()
 	pm, _ := revManager(t, nil, nil, fs)
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	rev := profileRev(mustGet(t, pm, "p"))
 	if err := pm.Delete("p"); err != nil {
 		t.Fatal(err)
 	}
-	err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, rev)
+	_, err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, rev)
 	if !errors.Is(err, ErrProfileGone) {
 		t.Fatalf("Update of a deleted profile = %v, want ErrProfileGone", err)
 	}
@@ -136,12 +136,12 @@ func TestUpdateOfADeletedProfileIsRefusedAndNotRecreated(t *testing.T) {
 func TestUpdateRefusesAnotherProfilesRev(t *testing.T) {
 	pm, _ := revManager(t, nil, nil, newFakeStore())
 	for _, n := range []string{"a", "b"} {
-		if err := pm.Create(config.AgentConfig{Name: n, Bin: "bash"}); err != nil {
+		if _, err := pm.Create(config.AgentConfig{Name: n, Bin: "bash"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	revA := profileRev(mustGet(t, pm, "a"))
-	err := pm.Update(config.AgentConfig{Name: "b", Bin: "bash", Args: []string{"--two"}}, revA)
+	_, err := pm.Update(config.AgentConfig{Name: "b", Bin: "bash", Args: []string{"--two"}}, revA)
 	if !errors.Is(err, ErrProfileChanged) {
 		t.Fatalf("Update of b with a's rev = %v, want ErrProfileChanged", err)
 	}
@@ -155,7 +155,7 @@ func TestUpdateOfASeedWithItsRevCreatesTheOverride(t *testing.T) {
 	fs := newFakeStore()
 	pm, _ := revManager(t, seeds, nil, fs)
 	rev := profileRev(mustGet(t, pm, "bash"))
-	if err := pm.Update(config.AgentConfig{Name: "bash", Bin: "bash", Args: []string{"--two"}}, rev); err != nil {
+	if _, err := pm.Update(config.AgentConfig{Name: "bash", Bin: "bash", Args: []string{"--two"}}, rev); err != nil {
 		t.Fatalf("Update of a seed with its rev = %v, want nil", err)
 	}
 	if _, ok := fs.m["bash"]; !ok {
@@ -187,18 +187,18 @@ func TestUpdateAcceptsTheRevOfTheScopedProfile(t *testing.T) {
 		t.Fatalf("Get should scope the inapplicable option away: %+v", got.Options)
 	}
 	// The editor holds what Get showed; the guard must hash that same value.
-	if err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, profileRev(got)); err != nil {
+	if _, err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, profileRev(got)); err != nil {
 		t.Fatalf("Update with the rev of the scoped profile = %v, want nil", err)
 	}
 }
 
 func TestUpdateStillValidatesBeforeComparing(t *testing.T) {
 	pm, _ := revManager(t, nil, nil, newFakeStore())
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	stale := strings.Repeat("0", 64)
-	err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Base: "nope"}, stale)
+	_, err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Base: "nope"}, stale)
 	if err == nil {
 		t.Fatal("an invalid profile was accepted")
 	}
@@ -209,10 +209,10 @@ func TestUpdateStillValidatesBeforeComparing(t *testing.T) {
 
 func TestUpdateRefusesAnEmptyRev(t *testing.T) {
 	pm, _ := revManager(t, nil, nil, newFakeStore())
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, ""); !errors.Is(err, ErrProfileChanged) {
+	if _, err := pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, ""); !errors.Is(err, ErrProfileChanged) {
 		t.Fatalf("Update with no rev = %v, want ErrProfileChanged", err)
 	}
 }
@@ -221,12 +221,12 @@ func TestCreateRefusesATakenName(t *testing.T) {
 	seeds := []config.AgentConfig{{Name: "seed", Bin: "bash"}}
 	fs := newFakeStore()
 	pm, applies := revManager(t, seeds, nil, fs)
-	if err := pm.Create(config.AgentConfig{Name: "mine", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "mine", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	before := *applies
 	for _, name := range []string{"mine", "seed"} {
-		err := pm.Create(config.AgentConfig{Name: name, Bin: "bash", Args: []string{"--two"}})
+		_, err := pm.Create(config.AgentConfig{Name: name, Bin: "bash", Args: []string{"--two"}})
 		if !errors.Is(err, ErrProfileExists) {
 			t.Fatalf("Create(%q) = %v, want ErrProfileExists", name, err)
 		}
@@ -244,7 +244,7 @@ func TestCreateRefusesATakenName(t *testing.T) {
 
 func TestConcurrentUpdatesWithOneRevisionOneWins(t *testing.T) {
 	pm, _ := revManager(t, nil, nil, newFakeStore())
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	rev := profileRev(mustGet(t, pm, "p"))
@@ -258,7 +258,7 @@ func TestConcurrentUpdatesWithOneRevisionOneWins(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs[i] = pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{fmt.Sprint(i)}}, rev)
+			_, errs[i] = pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{fmt.Sprint(i)}}, rev)
 		}()
 	}
 	close(start)
@@ -287,7 +287,7 @@ func TestUpdateOverAChangedFileLeavesMemoryAndTheLauncherAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	pm, applies := revManager(t, nil, nil, st)
-	if err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
+	if _, err := pm.Create(config.AgentConfig{Name: "p", Bin: "bash"}); err != nil {
 		t.Fatal(err)
 	}
 	rev := profileRev(mustGet(t, pm, "p"))
@@ -297,7 +297,7 @@ func TestUpdateOverAChangedFileLeavesMemoryAndTheLauncherAlone(t *testing.T) {
 	}
 	before, beforeApplies := mustGet(t, pm, "p"), *applies
 
-	err = pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, rev)
+	_, err = pm.Update(config.AgentConfig{Name: "p", Bin: "bash", Args: []string{"--two"}}, rev)
 	if !errors.Is(err, store.ErrChangedOnDisk) {
 		t.Fatalf("Update over a changed file = %v, want store.ErrChangedOnDisk", err)
 	}

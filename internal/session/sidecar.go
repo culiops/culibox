@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -290,7 +291,13 @@ func (sc *sidecar) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := sc.path + ".tmp"
+	return writeSidecarFile(sc.path, b)
+}
+
+// writeSidecarFile replaces path with b atomically (temp file, fsync, rename,
+// mode 0600) and makes the rename durable.
+func writeSidecarFile(path string, b []byte) error {
+	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -306,12 +313,63 @@ func (sc *sidecar) flushLocked() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, sc.path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	if d, err := os.Open(filepath.Dir(sc.path)); err == nil {
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
 		_ = d.Sync()
 		_ = d.Close()
 	}
 	return nil
+}
+
+// RewriteSidecarPrefix rewrites every session's config_dir in the sidecar at
+// path that is oldRoot or lies below it (a whole path component: <oldRoot>-prod
+// is not touched) to the same place under newRoot. A data root move (#255)
+// calls it before the daemon reads the file. Every other key, including ones
+// this build does not know, is kept as written. A missing file is a no-op, and
+// so is a second run. The write is atomic (temp file and rename, mode 0600).
+func RewriteSidecarPrefix(path, oldRoot, newRoot string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	var m map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("sidecar: parse %s: %w", path, err)
+	}
+	changed := false
+	for _, md := range m {
+		raw, ok := md["config_dir"]
+		if !ok {
+			continue
+		}
+		var dir string
+		if json.Unmarshal(raw, &dir) != nil {
+			continue
+		}
+		if dir != oldRoot && !strings.HasPrefix(dir, oldRoot+"/") {
+			continue
+		}
+		nb, err := json.Marshal(newRoot + dir[len(oldRoot):])
+		if err != nil {
+			return err
+		}
+		md["config_dir"] = nb
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSidecarFile(path, out)
 }

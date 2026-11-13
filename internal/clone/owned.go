@@ -45,12 +45,12 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 		// a link nobody can read, so it is owned until proven otherwise.
 		if cwdErr != nil {
 			return cwd + " cannot be resolved (" + cwdErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
-				c.Dir + " (use agent-box clone fetch)", true
+				c.Dir + " (use culibox clone fetch)", true
 		}
 		dirSp, err := spellings(c.Dir)
 		if err != nil {
 			return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
-				cwd + " in case it is inside it (use agent-box clone fetch)", true
+				cwd + " in case it is inside it (use culibox clone fetch)", true
 		}
 		inside := false
 		for _, p := range cwdSp {
@@ -65,7 +65,7 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 			}
 			if idsErr != nil {
 				return cwd + " cannot be resolved (" + idsErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
-					c.Dir + " (use agent-box clone fetch)", true
+					c.Dir + " (use culibox clone fetch)", true
 			}
 			id, err := stat(c.Dir)
 			switch {
@@ -75,12 +75,12 @@ func boxOwned(cwd string, clones []config.Clone, stat func(string) (fs.FileInfo,
 				}
 			case !errors.Is(err, fs.ErrNotExist): // a clone not made yet has no identity
 				return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
-					cwd + " in case it is inside it (use agent-box clone fetch)", true
+					cwd + " in case it is inside it (use culibox clone fetch)", true
 			}
 		}
 		if inside {
 			return cwd + " is inside the box-owned clone " + c.Dir +
-				"; host tools must never run there (use agent-box clone fetch)", true
+				"; host tools must never run there (use culibox clone fetch)", true
 		}
 	}
 	return "", false

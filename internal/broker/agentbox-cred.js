@@ -45,7 +45,7 @@ function request(path, payload, timeoutMs, cb) {
     res.on('end', () => finish(null, res.statusCode, body));
   });
   req.on('timeout', () => req.destroy(new Error('timed out after ' + timeoutMs / 1000 + 's')));
-  req.on('error', (e) => finish(new Error('agent-box broker unreachable (' + e.message + ')')));
+  req.on('error', (e) => finish(new Error('CuliBox broker unreachable (' + e.message + ')')));
   if (payload !== undefined) req.write(payload);
   req.end();
 }
@@ -67,7 +67,7 @@ function awsCredentialProcess(conn) {
     process.exit(1);
   }
   if (conn !== undefined && !CONN_NAME_RE.test(conn)) fail('bad AWS connection name ' + JSON.stringify(conn));
-  if (!ep || !tok) fail('not an agent-box AWS session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
+  if (!ep || !tok) fail('not a CuliBox AWS session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
   request('/v1/credentials', conn === undefined ? undefined : { name: conn }, 10000, (err, status, body) => {
     if (err) fail(err.message);
     if (status === 200) { process.stdout.write(body); return; }
@@ -97,7 +97,7 @@ function githubGit(op) {
     const seg = (attrs.path || '').replace(/\/+$/, '').replace(/\.git$/, '').replace(/\/+$/, '').split('/').filter(Boolean);
     if (seg.length < 2) return;
     const warn = (m) => process.stderr.write('agentbox: ' + m + '\n');
-    if (!ep || !tok) return warn('not an agent-box GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
+    if (!ep || !tok) return warn('not a CuliBox GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
     request('/v1/github/token', { owner: seg[0], repo: seg[1] }, 15000, (err, status, body) => {
       if (err) return warn(err.message);
       if (status !== 200) return warn(brokerMessage(body, status));

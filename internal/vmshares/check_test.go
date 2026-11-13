@@ -185,7 +185,7 @@ func TestCheckRefusesProtectedDirs(t *testing.T) {
 		}
 	}
 	err := Check(cfg, env)
-	if err == nil || !strings.Contains(err.Error(), "holds CuliBox's own agent-box's config directory, so it can never be shared with the box VM.") {
+	if err == nil || !strings.Contains(err.Error(), "holds CuliBox's config directory, so it can never be shared with the box VM.") {
 		t.Errorf("reason: %v", err)
 	}
 	// Inside a non-Inside dir is allowed (a profiles file may sit directly in $HOME).
@@ -365,6 +365,53 @@ func TestCheckMemoryExceptionUsesTheRealPath(t *testing.T) {
 		}
 		if err := Check(filepath.Join(alias, ".claude", "projects", "-a-b", "memory"), env); err != nil {
 			t.Errorf("stub=%v a real memory folder via the alias: %v", stub, err)
+		}
+	}
+}
+
+// #235 item 1: everything inside ~/.claude (the clone memory folders) is
+// shareable read-only only: the host's own Claude Code loads what is in there.
+func TestReadOnlyInsideClaude(t *testing.T) {
+	env := testEnv(t, false)
+	h := env.Home
+	mem := filepath.Join(h, ".claude", "projects", "-a-b", "memory")
+	for _, p := range []string{mem, mem + "/x"} {
+		if err := Check(p, env); err != nil {
+			t.Fatalf("Check(%s) = %v; read-only memory must stay shareable", p, err)
+		}
+		if err := CheckMode(p, RO, env); err != nil {
+			t.Errorf("CheckMode(%s, ro) = %v", p, err)
+		}
+		err := CheckMode(p, RW, env)
+		if kindOf(err) != KindReadOnly {
+			t.Fatalf("CheckMode(%s, rw) = %v, want a %s refusal", p, err, KindReadOnly)
+		}
+		if want := "~/.claude/projects/-a-b/memory" + strings.TrimPrefix(p, mem) + " " + reasonReadOnly; err.Error() != want {
+			t.Errorf("Error() = %q, want %q", err, want)
+		}
+	}
+	if err := CheckMode(filepath.Join(h, "code"), RW, env); err != nil {
+		t.Errorf("a folder outside ~/.claude may be rw: %v", err)
+	}
+}
+
+// The same by another spelling of the home: a link to it, and a link below it.
+func TestReadOnlyInsideClaudeBySpelling(t *testing.T) {
+	env := testEnv(t, false)
+	h := env.Home
+	alias := filepath.Join(filepath.Dir(filepath.Dir(h)), "alias-home")
+	if err := os.Symlink(h, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, stub := range []bool{false, true} {
+		if stub {
+			old := resolveSpelling
+			resolveSpelling = filepath.Clean
+			t.Cleanup(func() { resolveSpelling = old })
+		}
+		p := filepath.Join(alias, ".claude", "projects", "-a-b", "memory")
+		if err := CheckMode(p, RW, env); kindOf(err) != KindReadOnly {
+			t.Errorf("stub=%v CheckMode(%s, rw) = %v, want read-only refusal", stub, p, err)
 		}
 	}
 }

@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/culiops/culibox/internal/vmshares"
@@ -47,12 +50,15 @@ func firstLine(s string) string {
 
 // Status is what `colima status --json` reports for the profile.
 type Status struct {
-	Running                               bool
+	Running bool
+	// Stopped: colima itself answered that the VM is not running. A status
+	// that failed any other way reads as neither: a box may still run.
+	Stopped                               bool
 	Driver, MountType, Arch, DockerSocket string
 }
 
 // ErrNotSetUp means `agent-box box setup` has not provisioned the VM yet.
-var ErrNotSetUp = errors.New("the box VM is not set up; run `agent-box box setup`")
+var ErrNotSetUp = errors.New("the box VM is not set up; run `culibox box setup`")
 
 // VM is agent-box's colima profile. sem (a one-slot lock a waiter can abandon
 // when its context ends) serialises start/stop, so concurrent boxed spawns
@@ -174,6 +180,10 @@ func (v *VM) ProvisionDrifted() bool {
 
 // Status asks colima. A non-zero exit means "not running" (colima reports a
 // stopped or never-created profile that way); a cancelled context is an error.
+// Stopped needs two independent signals: colima's "is not running" answer,
+// which colima also gives when it cannot read the lima instance (so alone it
+// may hide a running VM), and nothing listening on the VM's docker socket
+// (socketDead). Any other failure leaves it false: boxes may still run.
 func (v *VM) Status(ctx context.Context) (Status, error) {
 	if err := v.preflight(); err != nil {
 		return Status{}, err
@@ -183,7 +193,7 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 		return Status{}, ctx.Err()
 	}
 	if err != nil {
-		return Status{}, nil
+		return Status{Stopped: strings.Contains(out, "is not running") && socketDead(v.Config().DockerSocket())}, nil
 	}
 	var s struct {
 		Driver       string `json:"driver"`
@@ -196,6 +206,23 @@ func (v *VM) Status(ctx context.Context) (Status, error) {
 	}
 	return Status{Running: true, Driver: s.Driver, Arch: s.Arch, MountType: s.MountType,
 		DockerSocket: strings.TrimPrefix(s.DockerSocket, "unix://")}, nil
+}
+
+// socketDead reports whether nothing serves the unix socket p: it does not
+// exist, or a connect is refused (a file left behind). lima's host agent
+// serves the VM's docker socket. This signal relies on vmType vz
+// (config.go:330): there the VM runs inside the host agent, so a dead host
+// agent means a dead VM and no box is reachable or running. With qemu the VM
+// is a separate process that can outlive the host agent, so changing vmType
+// must revisit this check. Any other answer (it connects, a permission error,
+// a timeout) is not dead.
+func socketDead(p string) bool {
+	c, err := net.DialTimeout("unix", p, 2*time.Second)
+	if err == nil {
+		c.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func lastLine(s string) string {
@@ -216,6 +243,34 @@ func (v *VM) FilterRules(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("reading the box VM's firewall rules: %w", err)
 	}
 	return out, nil
+}
+
+var _ brokerReturnDeleter = (*VM)(nil)
+
+// DeleteBrokerReturn deletes one copy of the DOCKER-USER rule that VMs
+// provisioned before #113 carry for the broker port (the TCP pass-through to
+// the lima gateway above its DROP): the same delete the current provision script
+// runs on every start. A VM that was not recreated keeps its old colima.yaml,
+// whose script inserts the rule again at every start, so this runs at every
+// boxed spawn after a start until the VM is recreated. Like
+// FilterRules it runs over `colima ssh`, never starts a VM, and sends fixed
+// arguments only: the rule is built from constants and a port that must be a
+// valid TCP port, so nothing from a rule or an environment reaches the remote
+// shell. It deletes nothing else; the caller reads the table again and judges
+// it.
+func (v *VM) DeleteBrokerReturn(ctx context.Context, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("deleting the old broker firewall rule: %d is not a TCP port", port)
+	}
+	if err := v.preflight(); err != nil {
+		return err
+	}
+	_, err := v.r.Run(ctx, v.env(), v.Config().ColimaBin, "ssh", "--profile", Profile, "--",
+		"sudo", "iptables", "-w", "-D", "DOCKER-USER", "-d", LimaHostGateway, "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "RETURN")
+	if err != nil {
+		return fmt.Errorf("deleting the old broker firewall rule: %w", err)
+	}
+	return nil
 }
 
 // Running is Status without the error, for the sweep's reachability check.
@@ -304,7 +359,7 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		return err
 	}
 	if _, statErr := os.Stat(cfg.StampPath()); statErr == nil && v.Drifted() && !recreate {
-		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate` (deletes the VM's images and cache, not box homes)")
+		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `culibox box setup -recreate` (deletes the VM's images and cache, not box homes)")
 	}
 	if recreate {
 		fmt.Fprintln(w, "deleting the box VM …")

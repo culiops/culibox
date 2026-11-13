@@ -17,7 +17,7 @@ type Row struct {
 // WholeHomeLine is the doctor/serve warning for a VM that still shares all of
 // $HOME; n is the number of folders the proposed list holds.
 func WholeHomeLine(n int) string {
-	return fmt.Sprintf("the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `agent-box box share apply`) so it sees only %d folders", n)
+	return fmt.Sprintf("the box VM shares your whole home folder; apply the folder list in Settings › VM folders (or `culibox box share apply`) so it sees only %d folders", n)
 }
 
 // Describe explains each share: where it came from and which profiles use it.

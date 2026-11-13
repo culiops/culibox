@@ -263,9 +263,10 @@ func (s *Server) Handler() http.Handler {
 			"replies":           s.RepliesEnabled,
 			"commit":            s.Commit,
 			"version":           s.Version,
-			// The profile wire format this build knows. The page pins the value
-			// it reads at load and sends it with each profile save, so a page
-			// from before an update cannot save over fields it does not show.
+			// The profile wire format this build knows, for API clients. The page
+			// does not pin from here: it gets the same value baked into
+			// profileform.js (serveProfileForm), so form and schema cannot come
+			// from two builds across a restart.
 			"profile_schema": profileSchema(),
 		}
 		// Why there are no boxes (the layer failed to build), so the profile page
@@ -350,6 +351,10 @@ func (s *Server) Handler() http.Handler {
 		// browsers serve stale assets until a manual hard-refresh. The vendored
 		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
 		pth := r.URL.Path
+		if pth == "/profileform.js" {
+			s.serveProfileForm(w, r)
+			return
+		}
 		app := strings.HasSuffix(pth, ".js") || strings.HasSuffix(pth, ".css")
 		if pth == "/" || (app &&
 			!strings.HasPrefix(pth, "/xterm/") && !strings.HasPrefix(pth, "/vendor/")) {

@@ -756,6 +756,42 @@ test("sendResize sends each size once per socket and again on a new one", () => 
   } finally { delete global.WebSocket; delete global.location; }
 });
 
+// #178: double-clicking a session name opens the pane on the first click, and the
+// terminal focuses itself later (onShow, or the socket's open on a cold pane),
+// which pulled focus off the rename input that the second click had just opened:
+// the typed name then went to the session's PTY. While a rename is open no
+// terminal may take the keyboard.
+test("a terminal does not take focus from an open rename (#178)", () => {
+  const { TerminalTab } = require("../static/terminal-tab.js");
+  const sockets = [];
+  global.location = { protocol: "http:", host: "127.0.0.1:8899" };
+  global.WebSocket = class {
+    constructor() { this.readyState = 0; sockets.push(this); }
+    send() {}
+    close() {}
+  };
+  global.WebSocket.OPEN = 1;
+  try {
+    const tab = Object.create(TerminalTab.prototype);
+    let focused = 0;
+    tab.term = { rows: 24, cols: 80, reset() {}, focus() { focused++; } };
+    tab.fit = () => {};
+    global.renameActive = () => true;
+    tab.onShow();
+    tab.connect();
+    sockets[0].readyState = 1;
+    sockets[0].onopen();
+    assert.strictEqual(focused, 0, "neither onShow nor the socket opening may focus the terminal mid-rename");
+    global.renameActive = () => false;
+    tab.onShow();
+    assert.strictEqual(focused, 1, "with no rename open, onShow still focuses the terminal");
+    tab.connect();
+    sockets[1].readyState = 1;
+    sockets[1].onopen();
+    assert.strictEqual(focused, 2, "with no rename open, a connected socket still focuses the terminal");
+  } finally { delete global.WebSocket; delete global.location; delete global.renameActive; }
+});
+
 // termTheme (F05): the xterm theme, built from the kit tokens on a desktop and
 // pinned to the old black on a phone. get(name) reads one CSS custom property.
 const TOKENS = {

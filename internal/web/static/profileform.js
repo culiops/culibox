@@ -464,12 +464,35 @@ function withRev(p, loaded) {
   return out;
 }
 
-// schemaPin holds the profile schema a page read at load (/api/meta's
-// profile_schema: the server's fingerprint of the profile fields it knows). The
-// first usable value pinned wins and nothing moves it afterwards, so a page
-// loaded before an update keeps the old value for as long as it is open, and the
-// server, which now holds the new one, refuses its saves (a form that predates a
-// field would otherwise drop that field). One pin per page.
+// withSavedRev: p with the revision a save answered with (PUT and POST return the
+// revision of what they stored). The page then holds the right one even when
+// its re-read of the profile fails; without it the old revision stays and the
+// next Save would be refused for the user's own save. An answer with no usable
+// revision leaves p as it is. Never mutates p.
+function withSavedRev(p, saved) {
+  const out = Object.assign({}, p);
+  if (saved && typeof saved.rev === "string" && saved.rev) out.rev = saved.rev;
+  return out;
+}
+
+// deletePath: the URL of a profile's delete. The revision the page opened the profile
+// at rides in the query (a DELETE has no body to rely on) and only when `loaded` is
+// that profile; the server refuses the delete when the profile is no longer at it,
+// and answers a delete with none (a page from before this existed).
+function deletePath(name, loaded) {
+  const base = "/api/profiles/" + encodeURIComponent(name);
+  if (loaded && loaded.name === name && typeof loaded.rev === "string" && loaded.rev) return base + "?rev=" + encodeURIComponent(loaded.rev);
+  return base;
+}
+
+// schemaPin holds the profile schema a page loaded with: the server's fingerprint
+// of the profile fields it knows, which it appends to this very script as
+// PROFILE_SCHEMA_BAKED (app.js pins it), so the form's code and the schema come
+// out of one response of one build. The first usable value pinned wins and nothing
+// moves it afterwards, so a page loaded before an update keeps the old value for
+// as long as it is open, and the server, which now holds the new one, refuses its
+// saves (a form that predates a field would otherwise drop that field). One pin
+// per page.
 function schemaPin() {
   let pinned = "";
   return {
@@ -531,5 +554,5 @@ function profileListLabels(p) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, deleteProfileAsk, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, deleteProfileAsk, segValue, setSegValue, awsFieldsState, segFromRuntime, profileNeedsBox, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, ghUsableTokens, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, egressAllowFromText, egressAllowToText, egressToSend, withRev, withSavedRev, deletePath, withSchema, schemaPin, staleSave, profileSourceLabel, profileListLabels };
 }

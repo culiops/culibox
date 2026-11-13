@@ -489,21 +489,56 @@ test("desktopOnly shows on the desktop", (t) => {
   assert.deepStrictEqual(texts(pg), ["Ended docs"]);
 });
 
+// --- phone handles vs stack ids (#183) ------------------------------------------------
+// A phone toast's handle was the slot's sequence number and a stack entry's was the
+// model's id: both count 1, 2, 3. An upload started at 700px or less (a handle) and
+// then widened past 700px passed that number as `replace`, which updated whatever
+// stack entry had the same id: an error overwritten by upload progress.
+test("a phone handle used after the window widens never touches a stack entry with the same number (#183)", (t) => {
+  const pg = page(t, { width: 600 });
+  const h = pg.shell.showToast("Uploading f.txt…", { progress: 0, ms: 60000 });
+  globalThis.window.innerWidth = 1280;
+  pg.shell.showToast("Could not end docs.", { error: true });
+  assert.strictEqual(pg.entries()[0].id, Math.abs(h), "the first stack id is the same number as the phone handle: the collision case");
+  const h2 = pg.shell.showToast("Uploading f.txt: 50%", { progress: 0.5, ms: 60000, replace: h });
+  assert.deepStrictEqual(texts(pg), ["Uploading f.txt: 50%", "Could not end docs."], "the error stays; the progress is a toast of its own");
+  assert.notStrictEqual(h2, h);
+});
+
+test("dismissToast and resolveToast with a phone handle leave a stack entry with the same number alone (#183)", (t) => {
+  const pg = page(t, { width: 600 });
+  const h = pg.shell.showToast("Saved");
+  globalThis.window.innerWidth = 1280;
+  pg.shell.showToast("Could not end docs.", { error: true });
+  pg.shell.dismissToast(h);
+  assert.deepStrictEqual(texts(pg), ["Could not end docs."], "dismissToast(phone handle) removed nothing");
+  pg.shell.resolveToast(h, "Done", {});
+  assert.deepStrictEqual(texts(pg), ["Done", "Could not end docs."], "resolveToast pushes the result as a new toast");
+});
+
+test("a stack handle used after the window narrows still takes its entry away (#183)", (t) => {
+  const pg = page(t, { width: 1280 });
+  const h = pg.shell.showToast("Ending docs…", { sticky: true });
+  globalThis.window.innerWidth = 600;
+  pg.shell.dismissToast(h);
+  assert.deepStrictEqual(pg.entries(), []);
+});
+
 // --- phone slot --------------------------------------------------------------------
-test("the phone #toast gets role status, or alert for an error (F62); the handle is the slot's sequence number", (t) => {
+test("the phone #toast gets role status, or alert for an error (F62); the handle is the slot's sequence number, negated (#183)", (t) => {
   const pg = page(t, { width: 390 });
   assert.strictEqual(pg.shell.toastStacked(), false);
   const h1 = pg.shell.showToast("Saved");
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "status");
   assert.strictEqual(pg.slot["toast-msg"].textContent, "Saved");
-  assert.strictEqual(h1, pg.shell.toastSeqNow());
+  assert.strictEqual(h1, -pg.shell.toastSeqNow());
   assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "polite");
   const h2 = pg.shell.showToast("End failed: boom", { error: true, human: "Could not end docs.", detail: "boom" });
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "alert");
   // index.html's static aria-live="polite" would override the alert role's implicit assertive.
   assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "assertive", "an error interrupts, as role=alert does");
   assert.strictEqual(pg.slot["toast-msg"].textContent, "End failed: boom", "the phone shows msg, not human");
-  assert.strictEqual(h2, h1 + 1);
+  assert.strictEqual(h2, h1 - 1);
   pg.shell.showToast("Clone needs you", { warn: true });
   assert.strictEqual(pg.slot.toast.getAttribute("role"), "status");
   assert.strictEqual(pg.slot.toast.getAttribute("aria-live"), "polite");
@@ -526,7 +561,7 @@ test("the phone ignores replace; dismissToast hides the slot only while it still
   assert.strictEqual(pg.slot["toast-msg"].textContent, "Uploading f.txt: 50%");
   pg.shell.dismissToast(h);
   assert.strictEqual(pg.slot.visible(), true, "a newer toast owns the slot");
-  pg.shell.dismissToast(pg.shell.toastSeqNow());
+  pg.shell.dismissToast(-pg.shell.toastSeqNow());
   assert.strictEqual(pg.slot.visible(), false);
 });
 

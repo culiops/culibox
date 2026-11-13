@@ -1693,7 +1693,7 @@ func TestFetchFastForwardOnlyRefusesDiverged(t *testing.T) {
 	x.commitInClone("other.txt", "x", "other")
 	_, err := x.fetch()
 	r := wantReason(t, err, ReasonNotFF)
-	if want := "box/feat on the host has commits feat lacks; not overwritten (agent-box clone fetch overwrites it)"; !strings.Contains(r.Error(), want) {
+	if want := "box/feat on the host has commits feat lacks; not overwritten (culibox clone fetch overwrites it)"; !strings.Contains(r.Error(), want) {
 		t.Errorf("err = %q, want it to say %q", r.Error(), want)
 	}
 	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {

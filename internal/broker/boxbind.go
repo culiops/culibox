@@ -17,7 +17,7 @@ import (
 // the shared socket it still mounts. Fixed and path-free. It is the one reply
 // that says more than the path's uniform refusal, and only the shared socket
 // sends it: nothing there is a credential or an oracle for another box.
-const sharedSocketReply = "this box was started before agent-box tied credentials to the box that holds them; respawn this session to get credentials again"
+const sharedSocketReply = "this box was started before CuliBox tied credentials to the box that holds them; respawn this session to get credentials again"
 
 // Audit reasons for denied_box rows (the box is never told which).
 const (

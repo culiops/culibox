@@ -18,8 +18,8 @@ func goodRun() Run {
 			"culibox_v0.1.0_darwin_amd64.tar.gz": sum("amd"),
 		},
 		Arches: []ArchResult{
-			{Arch: "arm64", Mode: "native", TestsPassed: true},
-			{Arch: "amd64", Mode: "rosetta2", TestsPassed: true},
+			{Arch: "arm64", Mode: "native", TestsPassed: true, BinarySHA256: sum("armbin"), TestEnv: "CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"},
+			{Arch: "amd64", Mode: "rosetta2", TestsPassed: true, BinarySHA256: sum("amdbin"), TestEnv: "CGO_ENABLED=0 GOOS=darwin GOARCH=amd64"},
 		},
 		Manual: []ManualRow{{ID: "M1", Result: "pass"}},
 	}
@@ -56,6 +56,13 @@ func TestVerdict(t *testing.T) {
 		{"amd64 native not rosetta", mut(func(r *Run) { r.Arches[1].Mode = "native" }), "partial"},
 		{"arm64 under rosetta", mut(func(r *Run) { r.Arches[0].Mode = "rosetta2" }), "partial"},
 		{"empty mode", mut(func(r *Run) { r.Arches[0].Mode = "" }), "partial"},
+		// The shipped tarballs are built with CGO_ENABLED=0 and the manual rows run the
+		// extracted binary: "verified" needs the record to say both.
+		{"no binary sha256", mut(func(r *Run) { r.Arches[0].BinarySHA256 = "" }), "partial"},
+		{"bad binary sha256", mut(func(r *Run) { r.Arches[1].BinarySHA256 = "zz" }), "partial"},
+		{"no test env", mut(func(r *Run) { r.Arches[0].TestEnv = "" }), "partial"},
+		{"tests with cgo on", mut(func(r *Run) { r.Arches[1].TestEnv = "CGO_ENABLED=1 GOOS=darwin GOARCH=amd64" }), "partial"},
+		{"cgo off only by substring", mut(func(r *Run) { r.Arches[1].TestEnv = "CGO_ENABLED=01 GOOS=darwin GOARCH=amd64" }), "partial"},
 		{"failure beats bad archives", mut(func(r *Run) { r.Archives = nil; r.Arches[0].TestsPassed = false }), "failed"},
 		{"stored verdict ignored", mut(func(r *Run) { r.Verdict = "verified"; r.Manual = nil }), "partial"},
 	}
@@ -136,8 +143,24 @@ func TestRenderBlock_NoPriorVerification(t *testing.T) {
 			t.Errorf("block lacks %q:\n%s", want, b)
 		}
 	}
-	if strings.Count(b, "tested in CI (native)") != 2 {
-		t.Errorf("want two Linux lines saying tested in CI (native):\n%s", b)
+	// What CI really ran: both arches run the source tests (cgo, -race) on a native
+	// runner; only the linux/amd64 tarball is run (its version is checked), the
+	// linux/arm64 tarball never is. "tested in CI (native)" claimed more than that.
+	if strings.Contains(b, "tested in CI (native)") {
+		t.Errorf("the block must not say 'tested in CI (native)':\n%s", b)
+	}
+	amd := lineWith(b, "- linux/amd64:")
+	arm := lineWith(b, "- linux/arm64:")
+	for name, l := range map[string]string{"amd64": amd, "arm64": arm} {
+		if !strings.Contains(l, "source tests passed in CI on a native runner (cgo, -race)") {
+			t.Errorf("linux/%s line must say what the CI tests were: %q", name, l)
+		}
+	}
+	if !strings.Contains(amd, "this tarball ran and reported its version") {
+		t.Errorf("linux/amd64 line must say its tarball was run: %q", amd)
+	}
+	if !strings.Contains(arm, "this tarball was not run") || strings.Contains(arm, "reported its version") {
+		t.Errorf("linux/arm64 line must say its tarball was not run: %q", arm)
 	}
 	if strings.Count(b, ci) != 2 {
 		t.Errorf("both Linux lines must link the run URL:\n%s", b)
@@ -150,6 +173,16 @@ func TestRenderBlock_NoPriorVerification(t *testing.T) {
 			t.Errorf("block lacks line %q", p)
 		}
 	}
+}
+
+// lineWith returns the first line of s that starts with prefix.
+func lineWith(s, prefix string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			return l
+		}
+	}
+	return ""
 }
 
 func TestRenderBlock_WithPrior(t *testing.T) {
@@ -176,7 +209,9 @@ func TestRenderBlock_WithDarwinLine(t *testing.T) {
 
 func TestDarwinLine(t *testing.T) {
 	v := DarwinLine(goodRun())
-	for _, want := range []string{"✅ verified on macOS 15.1 (Apple M2)", "arm64 native", "amd64 under Rosetta 2 (not Intel hardware)", "2026-11-12"} {
+	for _, want := range []string{"✅ verified on macOS 15.1 (Apple M2)", "arm64 native", "amd64 under Rosetta 2 (not Intel hardware)", "2026-11-12",
+		// what the check covered, so the tick is not read as more
+		"tarball sha256", "shipped binary", "go test with CGO_ENABLED=0"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("verified line lacks %q: %s", want, v)
 		}
@@ -213,6 +248,8 @@ func TestDarwinLine(t *testing.T) {
 		"arm64 rosetta2": {func(r *Run) { r.Arches[0].Mode = "rosetta2" }, "arm64 ran in mode \"rosetta2\""},
 		"nil archives":   {func(r *Run) { r.Archives = nil }, "no darwin arm64 tarball sha256"},
 		"bad sha":        {func(r *Run) { r.Archives["culibox_v0.1.0_darwin_amd64.tar.gz"] = "zz" }, "darwin amd64 tarball sha256 is not 64 hex"},
+		"no binary sha":  {func(r *Run) { r.Arches[0].BinarySHA256 = "" }, "arm64 has no sha256 of the binary that was run"},
+		"cgo on":         {func(r *Run) { r.Arches[1].TestEnv = "CGO_ENABLED=1" }, "amd64 tests were not run with CGO_ENABLED=0"},
 	} {
 		r := goodRun()
 		tc.f(&r)
@@ -416,5 +453,35 @@ func TestCheckSumsCLI_DuplicateBaseName(t *testing.T) {
 	}
 	if err := run([]string{"check-sums", "--sums", sums, paths[0]}, &out); err != nil {
 		t.Fatalf("one file: %v", err)
+	}
+}
+
+// rewrite --not-verified puts both darwin lines back to "NOT yet verified" without a
+// record: macos-verify.sh uses it to clear an older tick before it uploads a new
+// record, so a failed notes edit afterwards can never leave that tick standing.
+func TestRewriteNotVerifiedCLI(t *testing.T) {
+	const ci = "https://github.com/culiops/culibox/actions/runs/42"
+	block := RenderBlock("v0.1.0", ci, Release{}, false, DarwinLine(goodRun()))
+	notes := "## v0.1.0\n\n- a thing\n\n" + block + "\n\ntail\n"
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(path, []byte(notes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := run([]string{"rewrite", "--notes", path, "--not-verified"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	want, err := RewriteDarwin(notes, notYetVerified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want || strings.Contains(out.String(), "✅") || strings.Count(out.String(), notYetVerified) != 2 {
+		t.Errorf("rewrite --not-verified printed:\n%s", out.String())
+	}
+	if err := run([]string{"rewrite", "--notes", path, "--not-verified", "--record", "x.json"}, &out); err == nil {
+		t.Error("--not-verified together with --record must error")
+	}
+	if err := run([]string{"rewrite", "--notes", path}, &out); err == nil {
+		t.Error("rewrite with neither --record nor --not-verified must error")
 	}
 }

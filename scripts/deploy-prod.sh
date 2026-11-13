@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build agent-box and (re)deploy the PRODUCTION systemd --user service.
+# Build culibox and (re)deploy the PRODUCTION systemd --user service.
 # The prod service runs this pinned binary (never the dev `air` build), so dev
 # work can't affect prod until you deliberately run this.
 #
@@ -73,9 +73,46 @@ if [ "${AB_PROD_CONFIRM:-}" != "yes" ]; then
   [ "$ans" = "deploy" ] || { echo "aborted — production not deployed."; exit 1; }
 fi
 
+PREV="$BIN.prev"
+UNVERIFIED="$BIN.unverified"
+# The one line that puts $PREV back, printed after every deploy that has one. It swaps
+# the binary only: data the newer build already wrote is not undone (#229).
+print_rollback() {
+  [ -e "$PREV" ] || return 0
+  local stamp_step
+  if [ -e "$PREV.deployed-sha" ]; then
+    stamp_step="cp $(printf %q "$PREV.deployed-sha") $(printf %q "$STAMP")"
+    echo "to roll back to $(cut -c1-7 "$PREV.deployed-sha") (the binary only: data this build wrote is not undone), run:"
+  else
+    stamp_step="rm -f $(printf %q "$STAMP")"
+    echo "to roll back to the previous binary (the binary only: data this build wrote is not undone), run:"
+  fi
+  echo "rollback: cp -p $(printf %q "$PREV") $(printf %q "$BIN.new") && mv -f $(printf %q "$BIN.new") $(printf %q "$BIN") && $stamp_step && rm -f $(printf %q "$UNVERIFIED") && systemctl --user restart $(printf %q "$SERVICE")"
+}
+
 mkdir -p "$(dirname "$BIN")"
+head_sha=$(git -C "$REPO" rev-parse HEAD)
 echo "building CuliBox $version → $BIN"
-"$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/agent-box"
+# Into a side file first: a failed build leaves the running binary and $PREV as they were.
+"$GO" build -ldflags "-X main.version=$version -X main.commit=$head_sha" -o "$BIN.new" "$REPO/cmd/culibox"
+
+# Keep the binary being replaced as $PREV, the one-step rollback. Only a binary that
+# came up is worth keeping: not a rebuild of the deployed commit (that would replace
+# the real previous one with a copy of itself), and not one whose restart failed
+# ($UNVERIFIED stays until the service is up), so fixing forward after a failed
+# deploy still keeps the last build that ran.
+last_sha=$(cat "$STAMP" 2>/dev/null || true)
+if [ -e "$BIN" ] && [ ! -e "$UNVERIFIED" ] && [ "$last_sha" != "$head_sha" ]; then
+  # The old record goes first: stopped between these lines, $PREV is unlabelled
+  # rather than labelled with the commit of the binary it no longer holds.
+  rm -f "$PREV.deployed-sha"
+  cp -p "$BIN" "$PREV"
+  if [ -n "$last_sha" ]; then echo "$last_sha" > "$PREV.deployed-sha"; fi
+  echo "kept the previous binary → $PREV"
+fi
+: > "$UNVERIFIED"
+# A rename, not a write into $BIN: the running binary cannot be opened for writing.
+mv -f "$BIN.new" "$BIN"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
 sleep 1
@@ -86,6 +123,7 @@ sleep 1
 if ! systemctl --user is-active --quiet "$SERVICE"; then
   echo "deployed the binary, but $SERVICE is not active — not recording this commit." >&2
   systemctl --user --no-pager --lines=20 status "$SERVICE" >&2 || true
+  print_rollback >&2
   exit 1
 fi
 
@@ -95,5 +133,7 @@ fi
 # the run reported failure. sed reads its input to the end, so there is no pipe
 # to break.
 systemctl --user --no-pager --lines=0 status "$SERVICE" | sed -n '1,5p'
-git -C "$REPO" rev-parse HEAD > "$STAMP"
+rm -f "$UNVERIFIED"
+echo "$head_sha" > "$STAMP"
 echo "deployed $version ($head) → $STAMP"
+print_rollback

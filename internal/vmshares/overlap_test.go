@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/culiops/culibox/internal/box"
 )
 
 func sh(env Env, rel string, m Mode) Share {
@@ -182,5 +184,152 @@ func TestOverlapUsesResolvedPaths(t *testing.T) {
 	}
 	if got, err := Remove(list, volProj, false); err != nil || len(got) != 0 {
 		t.Errorf("Remove by the other spelling = %+v, %v", got, err)
+	}
+}
+
+// #235 item 1: a hand-edited or old list that holds a ~/.claude folder rw is
+// read back read-only; the add and the mode switch refuse rw there.
+func TestClaudeFoldersAreReadOnlyEverywhere(t *testing.T) {
+	env := testEnv(t, false)
+	mem := sh(env, ".claude/projects/-a-b/memory", RW)
+
+	out, skipped := Normalize([]Share{mem, sh(env, "code", RW)}, env)
+	if len(out) != 2 || out[0].Path != mem.Path || out[0].Mode != RO || out[1].Mode != RW {
+		t.Fatalf("Normalize = %+v, want the memory folder ro and code rw", out)
+	}
+	if len(skipped) != 1 || skipped[0].Path != mem.Path || !strings.Contains(skipped[0].Reason, "read-only") {
+		t.Errorf("skipped = %+v, want one note saying why", skipped)
+	}
+	if _, err := Add(nil, mem, env); kindOf(err) != KindReadOnly {
+		t.Errorf("Add rw = %v, want a read-only refusal", err)
+	}
+	mem.Mode = RO
+	add, err := Add(nil, mem, env)
+	if err != nil || len(add.List) != 1 || add.List[0].Mode != RO {
+		t.Fatalf("Add ro = %+v, %v", add, err)
+	}
+	if _, err := SetMode(add.List, mem.Path, RW, env); kindOf(err) != KindReadOnly {
+		t.Errorf("SetMode rw = %v, want a read-only refusal", err)
+	}
+	if got, err := SetMode([]Share{sh(env, "code", RW)}, sh(env, "code", RW).Path, RO, env); err != nil || got[0].Mode != RO {
+		t.Errorf("SetMode to ro outside .claude = %+v, %v", got, err)
+	}
+	// Adding the same folder rw over its ro entry goes through SetMode's rule.
+	mem.Mode = RW
+	if _, err := Add(add.List, mem, env); kindOf(err) != KindReadOnly {
+		t.Errorf("Add rw over the ro entry = %v, want a read-only refusal", err)
+	}
+}
+
+// #235 item 3: a path is resolved once per operation. The value that was
+// checked is the one that is compared and merged, so a link retargeted while an
+// operation runs cannot give the check one answer and the comparison another.
+func TestAddAndNormalizeResolveEachPathOnce(t *testing.T) {
+	env := testEnv(t, false)
+	link := filepath.Join(env.Home, "lnk")
+	if err := os.Symlink(filepath.Join(env.Home, "code"), link); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	old := resolveSpelling
+	resolveSpelling = func(p string) string {
+		if p == link {
+			n++
+		}
+		return old(p)
+	}
+	t.Cleanup(func() { resolveSpelling = old })
+
+	if _, err := Add(nil, Share{Path: link, Mode: RW}, env); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("Add resolved the path %d times, want 1", n)
+	}
+	n = 0
+	Normalize([]Share{{Path: link, Mode: RW}}, env)
+	if n != 1 {
+		t.Errorf("Normalize resolved the path %d times, want 1", n)
+	}
+}
+
+// #235 review: a folder that holds a program CuliBox runs may be shared
+// read-only, never read & write: a read-only share cannot replace the program.
+func TestProgramDirHolderIsShareableOnlyReadOnly(t *testing.T) {
+	env := testEnv(t, false)
+	prog := filepath.Join(env.Home, "code", "tmp")
+	if err := os.MkdirAll(filepath.Join(prog, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env.Protected = []box.ProtectedDir{box.ProgramDirProtected(prog)}
+	code := sh(env, "code", RO)
+	work := sh(env, "code/proj", RW)
+
+	if err := Check(code.Path, env); err != nil {
+		t.Fatalf("Check (mode-agnostic) = %v", err)
+	}
+	if err := CheckMode(code.Path, RO, env); err != nil {
+		t.Errorf("ro: %v", err)
+	}
+	err := CheckMode(code.Path, RW, env)
+	if kindOf(err) != KindProtected || !strings.Contains(err.Error(), "can only be shared read-only") && !strings.Contains(err.Error(), "cannot be shared read & write") {
+		t.Fatalf("rw = %v, want a protected refusal", err)
+	}
+	if _, err := Add(nil, sh(env, "code", RW), env); kindOf(err) != KindProtected {
+		t.Errorf("Add rw = %v", err)
+	}
+	add, err := Add(nil, code, env)
+	if err != nil || len(add.List) != 1 {
+		t.Fatalf("Add ro = %+v %v", add, err)
+	}
+	if _, err := SetMode(add.List, code.Path, RW, env); kindOf(err) != KindProtected {
+		t.Errorf("SetMode rw = %v", err)
+	}
+	// Inside the program folder's parent but not holding it: fine either way.
+	if err := CheckMode(work.Path, RW, env); err != nil {
+		t.Errorf("a folder beside the program folder, rw: %v", err)
+	}
+	// A saved rw entry reads back ro.
+	out, skipped := Normalize([]Share{sh(env, "code", RW)}, env)
+	if len(out) != 1 || out[0].Mode != RO || len(skipped) != 1 {
+		t.Errorf("Normalize rw = %+v %+v", out, skipped)
+	}
+	// The promotion case: a ro parent holding the program folder must not be
+	// made rw by a rw child below it.
+	out, skipped = Normalize([]Share{code, work}, env)
+	if len(out) != 1 || out[0].Path != code.Path || out[0].Mode != RO {
+		t.Fatalf("Normalize promotion = %+v, want the parent kept read-only", out)
+	}
+	if len(skipped) != 1 || skipped[0].Path != work.Path {
+		t.Errorf("skipped = %+v, want the child named", skipped)
+	}
+}
+
+// #235 review: NormalizeResolved is Normalize plus the resolved path of each
+// kept entry, in the same order, taken from the resolution that checked it.
+func TestNormalizeResolvedReturnsTheKeys(t *testing.T) {
+	env := testEnv(t, false)
+	real := filepath.Join(env.Home, "code")
+	link := filepath.Join(env.Home, "lnk")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	in := []Share{{Path: link, Mode: RW}, sh(env, "zz", RO), sh(env, "aa", RO)}
+	out, keys, skipped := NormalizeResolved(in, env)
+	plain, plainSkipped := Normalize(in, env)
+	if !reflect.DeepEqual(out, plain) || !reflect.DeepEqual(skipped, plainSkipped) {
+		t.Fatalf("NormalizeResolved differs from Normalize: %+v vs %+v", out, plain)
+	}
+	if len(keys) != len(out) {
+		t.Fatalf("keys %v for %+v", keys, out)
+	}
+	for i, s := range out {
+		want := s.Path
+		if s.Path == link {
+			want = real
+		}
+		if keys[i] != want {
+			t.Errorf("keys[%d] = %s, want %s", i, keys[i], want)
+		}
 	}
 }

@@ -216,7 +216,7 @@ func (s *Server) handleStoreUnlock(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, secretstore.ErrNotApplicable):
 		writeErr(w, http.StatusBadRequest, "this platform's store unlocks with the Keychain, not a passphrase")
 	case errors.Is(err, secretstore.ErrNotInitialized):
-		writeErr(w, http.StatusConflict, "the store is not initialized — run \"agent-box store init\"")
+		writeErr(w, http.StatusConflict, "the store is not initialized — run \"culibox store init\"")
 	case errors.Is(err, secretstore.ErrKeeperUnavailable):
 		writeStoreUnavailable(w, err)
 	default:

@@ -239,7 +239,7 @@ function cloneClauses(c, profile) {
     else {
       const n = Number(c.ahead) || 0;
       out.unsent = "branch " + br + ": " + (n > 0 ? n + " commit" + (n === 1 ? "" : "s") : "commits") +
-        " not sent to host (`agent-box clone fetch " + (b === "main" ? "" : "-base " + b + " ") + profile + " " + br + "`)";
+        " not sent to host (`culibox clone fetch " + (b === "main" ? "" : "-base " + b + " ") + profile + " " + br + "`)";
     }
     out.info.push(out.unsent);
   }

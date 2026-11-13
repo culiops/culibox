@@ -32,7 +32,9 @@ import (
 	"github.com/culiops/culibox/internal/broker"
 	"github.com/culiops/culibox/internal/bundle"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/procinfo"
+	"github.com/culiops/culibox/internal/rootmove"
 	"github.com/culiops/culibox/internal/session"
 	"github.com/culiops/culibox/internal/store"
 	"github.com/culiops/culibox/internal/storerefs"
@@ -49,6 +51,10 @@ const (
 // observe that nothing is left behind.
 var probeRoot = "/tmp"
 
+// liveSessions is abduco.LiveSessions (it reads only, creating no dir); a
+// variable so the data-root row can be tested without a real abduco.
+var liveSessions = abduco.LiveSessions
+
 type Input struct {
 	Config    config.Config
 	Source    config.Source
@@ -61,13 +67,24 @@ type Input struct {
 	// ConfigFiles are the config files read on the next start (-config, the
 	// ~/.config fallback): their directories are protected from VM shares.
 	ConfigFiles []string
+	// EnvNotice is config.HomeEnv's deprecation notice ("" when none); EnvErr is
+	// its refusal (the two root env vars disagree, or a relative value). Both are
+	// rows: a WARN and a FAIL.
+	EnvNotice string
+	EnvErr    error
+	// RootNote is why a running serve kept the old data root in place ("" for the
+	// CLI, which only resolves and never tries the move).
+	RootNote string
+	// Start is what a running serve's start did before it resolved the config
+	// (zero for the CLI): the in-app doctor warns on the start that moved the root.
+	Start config.StartFacts
 }
 
 // protectedFor is the protected-directory list serve and the CLI build
 // (box.ProtectedDirsFor), from what doctor knows.
 func protectedFor(in Input, dataDir string) []box.ProtectedDir {
 	c := in.Config
-	return box.ProtectedDirsFor(dataDir, in.ConfigFiles, c.ResolvedProfilesPath(dataDir), bundle.DefaultSource(), bundle.SourceOf(c.BundleSource))
+	return box.ProtectedDirsFor(dataDir, in.ConfigFiles, c.ResolvedProfilesPath(dataDir), bundle.DefaultSource(), bundle.SourceOf(c.BundleSource), boxvm.ProgramPaths(c)...)
 }
 
 type Result struct{ Status, Check, Detail string }
@@ -146,11 +163,17 @@ func isPathChar(c byte) bool {
 }
 
 func Checks(in Input) []Result {
-	out := []Result{{Pass, "platform", fmt.Sprintf("%s/%s, %s, agent-box %s",
+	out := []Result{{Pass, "platform", fmt.Sprintf("%s/%s, %s, culibox %s",
 		runtime.GOOS, runtime.GOARCH, runtime.Version(), in.Commit)}}
 	if in.Home == "" {
 		// serve refuses this too; every path below would be built from it.
 		return append(out, Result{Fail, "home", "the home directory is empty or not an absolute path; set $HOME"})
+	}
+	if in.EnvErr != nil {
+		return append(out, Result{Fail, "env", in.EnvErr.Error()})
+	}
+	if in.EnvNotice != "" {
+		out = append(out, Result{Warn, "env", in.EnvNotice})
 	}
 	if in.ConfigErr != nil {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + in.ConfigErr.Error()})
@@ -159,14 +182,12 @@ func Checks(in Input) []Result {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + err.Error()})
 	}
 	out = append(out, Result{Pass, "config", in.Source.String()})
+	out = append(out, checkConfigFileWarn(in)...)
 	out = append(out, checkExtraCA(in.Config, time.Now())...)
 	out = append(out, checkCredFile(in))
 	c := in.Config
-	dataDir := c.ResolvedDataDir(in.Home)
-	if abs, err := filepath.Abs(dataDir); err == nil {
-		dataDir = abs
-	}
-	out = append(out, checkDataDir(dataDir), checkAuth(c, dataDir), checkBind(c), checkPort(c))
+	dataDir := dataDirOf(in)
+	out = append(out, checkDataDir(in, dataDir, runtime.GOOS), checkAuth(c, dataDir), checkBind(c), checkPort(c))
 	bin := c.AbducoBin
 	if bin == "" {
 		bin = "abduco"
@@ -197,17 +218,58 @@ func Checks(in Input) []Result {
 	}
 	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
-	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
-	out = append(out, boxTierResults(runtime.GOOS, bf, ClaudeBoxToken(c, vst))...)
-	out = append(out, guardLockRows(runtime.GOOS, bf)...)
+	bt := gatherBoxTier(in, dataDir, vst)
+	out = append(out, bt.Rows...)
+	out = append(out, guardLockRows(runtime.GOOS, bt.facts)...)
 	if _, err := box.LookDocker(c.DockerBin); err == nil && runtime.GOOS == "linux" {
 		out = append(out, CheckHostListeners())
+		out = append(out, CheckEgressPort(c))
 	}
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
 }
 
-func checkDataDir(dir string) Result {
+// dataDirOf is the absolute data dir every check uses.
+func dataDirOf(in Input) string {
+	dataDir := in.Config.ResolvedDataDir(in.Home)
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		dataDir = abs
+	}
+	return dataDir
+}
+
+// BoxTierReport is doctor's box-tier rows and the token row behind them.
+type BoxTierReport struct {
+	// Rows are the box-tier rows exactly as Checks prints them (docker, the box
+	// VM, its folders, the image, containment and, on macOS, the token).
+	Rows []Result
+	// Token is the boxed claude token row (ClaudeBoxToken). On macOS it is in
+	// Rows unless an earlier row ended the tier; Checks never prints it on Linux.
+	Token Result
+	// TokenLockedOnly: Token is a WARN only because the store is locked; no
+	// agent lacks a credential for any other reason.
+	TokenLockedOnly bool
+	facts           boxFacts
+}
+
+// BoxTier is doctor's box-tier report, computed by the same code as Checks so
+// the two cannot drift. `culibox init` reads it to tell whether box setup
+// still has work to do. Like every check it never starts the VM.
+func BoxTier(in Input) BoxTierReport {
+	dataDir := dataDirOf(in)
+	return gatherBoxTier(in, dataDir, StoreFor(in.Config, dataDir))
+}
+
+// gatherBoxTier gathers the box facts and the token row and turns them into
+// rows. vst is the store the secret sources read (StoreFor).
+func gatherBoxTier(in Input, dataDir string, vst credref.StoreGetter) BoxTierReport {
+	c := in.Config
+	bf := gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS, protectedFor(in, dataDir))
+	token, lockedOnly := claudeBoxToken(c, vst, AccountStoreFor(c, dataDir), storerefs.ReadAccounts(dataDir))
+	return BoxTierReport{Rows: boxTierResults(runtime.GOOS, bf, token), Token: token, TokenLockedOnly: lockedOnly, facts: bf}
+}
+
+func checkDataDir(in Input, dir, goos string) Result {
 	fi, err := os.Stat(dir)
 	if os.IsNotExist(err) {
 		return Result{Pass, "data dir", dir + " (created on first serve)"}
@@ -219,10 +281,52 @@ func checkDataDir(dir string) Result {
 	if st == nil || int(st.Uid) != os.Getuid() {
 		return Result{Fail, "data dir", dir + " is not owned by you"}
 	}
+	story := rootStory(in, dir, goos)
 	if fi.Mode().Perm()&0o077 != 0 {
-		return Result{Warn, "data dir", fmt.Sprintf("%s has mode %o; want 700 (it holds the login and cookie secrets)", dir, fi.Mode().Perm())}
+		return Result{Warn, "data dir", fmt.Sprintf("%s has mode %o; want 700 (it holds the login and cookie secrets)", dir, fi.Mode().Perm()) + story}
 	}
-	return Result{Pass, "data dir", dir}
+	return Result{Pass, "data dir", dir + story}
+}
+
+// rootStory says which data root is in use and why (spec D2 "doctor"), as a
+// suffix. doctor never tries the move or its preconditions: it states the rule,
+// plus the one darwin fact it can read (a box VM in the old root, precondition
+// (f)) and, from a running serve, the reason it kept the old root. Nothing for
+// a data_dir elsewhere or a root named by the env var.
+func rootStory(in Input, dir, goos string) string {
+	root := in.Source.Root
+	if root.Path == "" || root.Kind == config.RootEnv || filepath.Clean(root.Path) != filepath.Clean(dir) {
+		return ""
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, rootmove.JournalName)); err == nil && fi.Mode().IsRegular() {
+		return " (a move was interrupted; the next serve start finishes it)"
+	}
+	newRoot, legacy := config.DefaultRoots(in.Home)
+	switch root.Kind {
+	case config.RootLegacy:
+		if goos == "darwin" {
+			if _, err := os.Lstat(filepath.Join(dir, "vm")); err == nil {
+				return " (kept in place: the box VM lives here; it cannot follow a move without box setup -recreate)"
+			}
+		}
+		if in.RootNote != "" {
+			return " (kept in place: " + in.RootNote + ")"
+		}
+		// Two preconditions doctor can read without changing anything (R17):
+		// (b) a real directory, and (d) no live session, counted from the
+		// socket dir Checks uses for this data dir.
+		if !rootmove.RealDir(legacy) {
+			return " (kept in place: not a real directory)"
+		}
+		sock := abduco.SocketDirFor(in.Config.AbducoSocketDir, goos, dir, os.Getuid())
+		if n, err := liveSessions(sock, filepath.Join(legacy, "sessions", "pids")); err == nil && n > 0 {
+			return fmt.Sprintf(" (kept in place: %d session(s) running)", n)
+		}
+		return " (from before the rename; the next serve start moves it to " + newRoot + ")"
+	case config.RootLinked:
+		return " (moved from " + legacy + "; a link remains at the old path)"
+	}
+	return ""
 }
 
 func checkAuth(c config.Config, dataDir string) Result {
@@ -265,7 +369,7 @@ func checkPort(c config.Config) Result {
 	conn, err := net.DialTimeout("tcp", c.BindAddr, 300*time.Millisecond)
 	if err == nil {
 		conn.Close()
-		return Result{Warn, "port", c.BindAddr + " is in use (an agent-box may already be running)"}
+		return Result{Warn, "port", c.BindAddr + " is in use (a CuliBox may already be running)"}
 	}
 	return Result{Pass, "port", c.BindAddr + " is free"}
 }
@@ -487,7 +591,7 @@ func checkClaudeRegistry(home string) []Result {
 		if !match {
 			st = Warn
 		}
-		out = append(out, Result{st, "claude registry", fmt.Sprintf("pid %d: claude=%s agent-box=%s match=%v", e.Pid, theirs, ours, match)})
+		out = append(out, Result{st, "claude registry", fmt.Sprintf("pid %d: claude=%s culibox=%s match=%v", e.Pid, theirs, ours, match)})
 	}
 	if len(out) == 0 {
 		return []Result{{Warn, "claude registry", "no running Claude Code session to compare; start `claude` in another terminal and rerun"}}

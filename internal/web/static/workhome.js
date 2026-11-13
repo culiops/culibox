@@ -67,13 +67,13 @@ function notHomeTitle(st) {
 function notHomeFix(profile, base, nh, desktop) {
   const branch = (nh && nh.branch) || "";
   const B = base && base !== "main" ? "-base " + base + " " : "";
-  const pull = "`agent-box clone fetch " + B + profile + " " + branch + "`";
+  const pull = "`culibox clone fetch " + B + profile + " " + branch + "`";
   switch (nh && nh.reason) {
     case "off": return pull;
     case "not-ff": return pull + " overwrites box/" + branch;
     case "checked-out": return "switch your repo off box/" + branch + "; it comes home at the next exit or " + (desktop ? "start" : "spawn");
     case "refused":
-      return "rebase it in the box onto origin/" + (base || "main") + "; or, after checking it, `agent-box clone fetch -allow-old-history " + B + profile + " " + branch + "`";
+      return "rebase it in the box onto origin/" + (base || "main") + "; or, after checking it, `culibox clone fetch -allow-old-history " + B + profile + " " + branch + "`";
     case "name": return "rename the branch in the box";
     default: return 'use "Bring work home now", or ' + pull;
   }

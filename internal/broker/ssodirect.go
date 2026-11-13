@@ -58,7 +58,7 @@ type ssoOutcome struct {
 }
 
 // boxPending answers a request that ended before its flight did.
-const boxPending = "agent-box is still checking that this connection's SSO permission set is read-only; retry shortly"
+const boxPending = "CuliBox is still checking that this connection's SSO permission set is read-only; retry shortly"
 
 // serveSSODirect serves /v1/credentials for an sso_direct binding: the source
 // profile's own SSO permission-set credentials, with no AssumeRole, session
@@ -88,7 +88,7 @@ func (b *Broker) serveSSODirect(w http.ResponseWriter, r *http.Request, agent, n
 	if !joined {
 		if b.probeClosing { // the daemon is stopping: no detached work starts
 			b.mu.Unlock()
-			replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down; no credential was issued")
+			replyErr(w, http.StatusServiceUnavailable, "CuliBox is shutting down; no credential was issued")
 			return
 		}
 		if !b.allowMintLocked(ck, now) {
@@ -213,7 +213,7 @@ func (b *Broker) mintAndGate(ck connKey, agent, scope string, bnd config.AWSBind
 		b.eachStatsLocked(ck, func(st *Stats) { st.LastError = "the credential could not be audited, so it was not issued" })
 		b.mu.Unlock()
 		return ssoOutcome{status: http.StatusServiceUnavailable,
-			msg: "agent-box could not audit this credential, so it was not issued; retry shortly"}
+			msg: "CuliBox could not audit this credential, so it was not issued; retry shortly"}
 	}
 	return ssoOutcome{status: http.StatusOK, creds: c} // no base-role re-probe: there is no agent role to probe
 }
@@ -228,9 +228,9 @@ func (b *Broker) refuse(row Row, o Outcome, status int, boxMsg, hostMsg string) 
 // Box-facing refusals. They are static: the refusing actions and reasons are
 // for the host (audit row, Stats.LastError), never an oracle to the box.
 const (
-	boxNotReadOnly = "agent-box refused: this connection's SSO permission set is not read-only, so its credentials are not handed out; the refusing actions are in the agent-box audit log on the host"
-	boxUnverified  = "agent-box could not verify that this connection's SSO permission set is read-only, so no credential was issued; retry shortly (the reason is in the agent-box audit log on the host)"
-	boxNotSSO      = "agent-box refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the agent-box audit log on the host"
+	boxNotReadOnly = "CuliBox refused: this connection's SSO permission set is not read-only, so its credentials are not handed out; the refusing actions are in the CuliBox audit log on the host"
+	boxUnverified  = "CuliBox could not verify that this connection's SSO permission set is read-only, so no credential was issued; retry shortly (the reason is in the CuliBox audit log on the host)"
+	boxNotSSO      = "CuliBox refused: this connection's source profile is not usable for the SSO role directly (it needs an sso_account_id); see the CuliBox audit log on the host"
 )
 
 // gatePassed is the one test that lets an sso_direct credential out: a

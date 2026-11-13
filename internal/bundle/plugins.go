@@ -30,8 +30,8 @@ const (
 	KindBundle  = "bundle"
 
 	ReasonPluginsIncomplete = "the host plugin dir is incomplete; plugins load only with installed_plugins.json, known_marketplaces.json, cache/ and marketplaces/ all present"
-	ReasonPluginSymlink     = "is a symlink on the host; agent-box mounts only real files and directories"
-	ReasonPluginCredentials = "a plugin marketplace URL carries credentials; agent-box never mounts credentials into a box"
+	ReasonPluginSymlink     = "is a symlink on the host; CuliBox mounts only real files and directories"
+	ReasonPluginCredentials = "a plugin marketplace URL carries credentials; CuliBox never mounts credentials into a box"
 	ReasonBundleFailed      = "the config bundle could not be built; this box runs without your CLAUDE.md, skills, MCP servers, settings and plugins"
 )
 

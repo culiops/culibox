@@ -1,6 +1,6 @@
 # Clone mode
 
-Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `agent-box clone fetch`, for you to review. It works on Linux and, in the box VM, on macOS (see [On macOS](#on-macos)).
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except as a `box/<branch>` branch that CuliBox brings home, by itself or through `culibox clone fetch`, for you to review. It works on Linux and, in the box VM, on macOS (see [On macOS](#on-macos)).
 
 Two profile fields turn it on:
 
@@ -31,10 +31,10 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 ## Bringing code home
 
-Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `culibox clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
 
 ```sh
-agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
+culibox clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
 ```
 
 **Pushing to GitHub.** When the profile's GitHub binding can push to the clone's `origin` repository (it has write on `contents`, or it uses a personal access token), CuliBox adds a push-only URL rewrite to the session's git configuration. It is set through the session's environment; nothing is written into the clone. Inside the box, `git push -u origin <branch>` then goes to GitHub, while `git fetch origin` still reads the host repo, and `gh pr create` works. The `box/*` refs come home as usual (unless auto-return is off), whether or not you push. The boxed claude is told this in one appended system-prompt line, and the session shows "work comes home as a PR". Pushes that touch `.github/workflows/` are refused by GitHub for App tokens and for PATs without the Workflows permission (see [GitHub access for agents](GITHUB.md)).
@@ -65,8 +65,8 @@ Commit subjects are printed with control characters replaced, because a box wrot
 Clone mode works as on Linux, with the boxes in CuliBox's box VM (see [Running CuliBox on macOS](MACOS.md#boxed-tier-contained-sessions)). The containers that refresh a clone, list its branches and make the bundle for `clone fetch` run in that VM too, never on your own docker.
 
 - `clone_of` must be inside a VM folder (read-only is enough) and the copy's parent directory inside a read-write one: the VM shares only the folders on its list (see [VM folders](MACOS.md#vm-folders)), and the data root cannot hold either. Any other place is refused when you save the profile and when you spawn it, before the copy is made.
-- `agent-box clone fetch` needs the box VM running and never starts it. With the VM stopped it refuses and tells you to run `agent-box box setup` (or start any boxed session) first.
-- Leftover clone containers are removed when `agent-box serve` starts and the VM is running. While the VM is stopped no container runs in it.
+- `culibox clone fetch` needs the box VM running and never starts it. With the VM stopped it refuses and tells you to run `culibox box setup` (or start any boxed session) first.
+- Leftover clone containers are removed when `culibox serve` starts and the VM is running. While the VM is stopped no container runs in it.
 - Files the box writes in the clone are owned by your Mac user.
 
 ## Known limits

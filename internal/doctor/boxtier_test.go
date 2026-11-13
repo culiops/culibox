@@ -11,8 +11,10 @@ import (
 	"testing"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/credref"
 	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/vmshares"
 )
@@ -61,29 +63,52 @@ func TestBoxTierRows(t *testing.T) {
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
 		{"provision drift fails with the firewall reason", func(f *boxFacts) { f.Drifted = true; f.ProvisionDrifted = true }, Fail,
-			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "agent-box box setup -recreate"`},
+			`differ from what this version and config write (set up by an older version, or broker_port or egress_port changed); run "culibox box setup -recreate"`},
 		{"stale VM firewall fails", func(f *boxFacts) {
-			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `agent-box box setup -recreate`")
+			f.FirewallErr = errors.New("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay; run `culibox box setup -recreate`")
 		}, Fail, "FAIL box VM firewall: the box VM's firewall lets containers"},
-		{"unreadable VM firewall warns", func(f *boxFacts) {
+		{"unreadable VM firewall fails: every spawn is refused", func(f *boxFacts) {
 			f.FirewallReadErr = errors.New("reading the box VM's firewall rules: exit status 255")
-		}, Warn, "WARN box VM firewall: could not read the rules (reading the box VM's firewall rules: exit status 255)"},
+		}, Fail, "FAIL box VM firewall: could not read the rules (reading the box VM's firewall rules: exit status 255); every boxed spawn is refused until they can be read"},
 		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},
 		{"image inspect failed", func(f *boxFacts) { f.ImageErr = errors.New("docker image inspect: boom") }, Fail, "boom"},
 		{"wrong arch", func(f *boxFacts) { f.Image.Arch = "amd64" }, Fail, "amd64"},
 		{"stale image", func(f *boxFacts) { f.Image.Hash = "old" }, Warn, "-rebuild"},
+		{"legacy default present", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "arm64", Hash: boximage.Hash()}
+		}, Pass, "present as culiops/agent-box:base; becomes culiops/culibox:base on the next serve"},
+		{"legacy default stale", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "arm64", Hash: "old"}
+		}, Warn, "-rebuild"},
+		{"legacy default wrong arch", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+			f.Legacy = boximage.ImageState{Present: true, Arch: "amd64", Hash: boximage.Hash()}
+		}, Fail, "amd64"},
+		{"legacy default absent too", func(f *boxFacts) {
+			f.ImageName = config.DefaultBoxImage
+			f.Image = boximage.ImageState{}
+			f.LegacyName = config.LegacyDefaultBoxImage
+		}, Fail, "box setup"},
 		{"probe reached", func(f *boxFacts) {
 			f.ProbeErr = errors.New("containment check failed: the box can reach the Mac's loopback services")
 		}, Fail, "loopback"},
 		{"context switched", func(f *boxFacts) {
-			f.UserContext = errors.New("your docker CLI's current context is agent-box's box VM")
+			f.UserContext = errors.New("your docker CLI's current context is CuliBox's box VM")
 		}, Fail, "context"},
 		{"context unchecked", func(f *boxFacts) {
 			f.UserContext = fmt.Errorf("%w (docker context show: exit status 1)", boxvm.ErrContextUnchecked)
 		}, Warn, "could not check"},
-		{"socket too long", func(f *boxFacts) { f.SocketErr = errors.New("the box VM socket … Set AGENT_BOX_HOME") }, Fail, "AGENT_BOX_HOME"},
+		{"socket too long", func(f *boxFacts) { f.SocketErr = errors.New("the box VM socket … Set CULIBOX_HOME") }, Fail, "CULIBOX_HOME"},
 		{"stopped boxes", func(f *boxFacts) { f.Stopped = []string{"ab-box-1"} }, Warn, "ab-box-1"},
 		{"old colima", func(f *boxFacts) { f.ColimaVer = "0.6.9" }, Warn, "0.8"},
 	}
@@ -142,21 +167,21 @@ func TestBoxTierLinux(t *testing.T) {
 func TestClaudeBoxToken(t *testing.T) {
 	boxedClaude := config.AgentConfig{Name: "claude", Bin: "claude"}
 	c := config.Config{Agents: []config.AgentConfig{boxedClaude}}
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn || !strings.Contains(r.Detail, "claude setup-token") {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn || !strings.Contains(r.Detail, "culibox init") {
 		t.Fatalf("no secret configured: %+v", r)
 	}
 	boxedClaude.Secrets = []string{"CLAUDE_CODE_OAUTH_TOKEN"}
 	c = config.Config{Agents: []config.AgentConfig{boxedClaude}, SecretSources: []config.SecretSource{{Type: "env"}}}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-test-not-real")
-	if r := ClaudeBoxToken(c, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
 		t.Fatalf("configured token must pass and never print: %+v", r)
 	}
 	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN") // t.Setenv above restores it
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn {
 		t.Fatalf("a secret that does not resolve is not a credential: %+v", r)
 	}
 	host := config.AgentConfig{Name: "claude", Bin: "claude", Runtime: config.RuntimeHost}
-	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}, nil); r.Status != Pass {
+	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}, nil, nil, nil); r.Status != Pass {
 		t.Fatalf("no boxed claude agent: nothing to check: %+v", r)
 	}
 }
@@ -185,19 +210,19 @@ func TestClaudeBoxTokenStoreSource(t *testing.T) {
 	c := config.Config{Agents: []config.AgentConfig{boxed}, SecretSources: []config.SecretSource{{Type: "store"}, {Type: "env"}}}
 	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN")
 	ok := stubStore{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-store-not-real"}}
-	if r := ClaudeBoxToken(c, ok); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
+	if r := ClaudeBoxToken(c, ok, nil, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
 		t.Fatalf("store holds the token: %+v", r)
 	}
-	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}); r.Status != Warn ||
+	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}, nil, nil); r.Status != Warn ||
 		!strings.Contains(r.Detail, "is in the store, which is locked") || strings.Contains(r.Detail, "/login") {
 		t.Fatalf("a locked store does not resolve and must say so: %+v", r)
 	}
-	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
+	if r := ClaudeBoxToken(c, nil, nil, nil); r.Status != Warn {
 		t.Fatalf("a store source with no store: %+v", r)
 	}
 	// A Keychain failure is a FAIL with the fix: neither "locked" nor "/login".
 	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
-	if r := ClaudeBoxToken(c, stubStore{err: ue}); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
+	if r := ClaudeBoxToken(c, stubStore{err: ue}, nil, nil); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) ||
 		strings.Contains(r.Detail, "locked") || strings.Contains(r.Detail, "/login") {
 		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
 	}
@@ -266,7 +291,7 @@ func TestGatherBoxFactsDarwinNeverStartsTheVM(t *testing.T) {
 // Review focus 4: whether the user's own docker context is still theirs does not
 // depend on the box VM, so the row appears on every darwin early return too.
 func TestBoxTierContextRowSurvivesEarlyReturns(t *testing.T) {
-	switched := errors.New("your docker CLI's current context is agent-box's box VM")
+	switched := errors.New("your docker CLI's current context is CuliBox's box VM")
 	for name, mod := range map[string]func(*boxFacts){
 		"no colima":       func(f *boxFacts) { f.ColimaErr = errors.New("colima not found") },
 		"old macOS":       func(f *boxFacts) { f.MacOSMajor = 12 },
@@ -343,7 +368,7 @@ func TestBoxTierFoldersUnreadableWarns(t *testing.T) {
 	f := ok()
 	f.FoldersErr = errors.New("bad yaml")
 	d := detail(boxTierResults("darwin", f, tokenOK))
-	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `agent-box box setup`") || strings.Contains(d, "PASS box VM folders") {
+	if !strings.Contains(d, "WARN box VM folders: cannot read the box VM's folder list (bad yaml); run `culibox box setup`") || strings.Contains(d, "PASS box VM folders") {
 		t.Fatalf("got:\n%s", d)
 	}
 }
@@ -425,7 +450,7 @@ func TestBoxTierFolderMismatchFails(t *testing.T) {
 	f := ok()
 	f.MountsRan, f.MountsErr = true, errors.New("missing /x")
 	d := detail(boxTierResults("darwin", f, tokenOK))
-	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `agent-box box share apply`"
+	want := "FAIL box VM folders: the box VM's folders do not match its folder list (missing /x); run `culibox box share apply`"
 	if !strings.Contains(d, want) || strings.Contains(d, "PASS box VM folders") {
 		t.Fatalf("got:\n%s", d)
 	}
@@ -516,5 +541,110 @@ func TestGatherBoxFactsUsesTheProtectedList(t *testing.T) {
 	f := gatherBoxFacts(c, data, home, "darwin", protectedFor(in, data))
 	if f.SharesErr != nil || f.ShareCount != 0 {
 		t.Fatalf("a share over the config dir was counted: count %d, err %v", f.ShareCount, f.SharesErr)
+	}
+}
+
+// An account's own pasted token lives in the encrypted store under
+// account.TokenID, with no secret_sources entry: doctor must count it the way
+// the launcher does (acctTokenStore), or init can never end on a green doctor.
+func TestClaudeBoxTokenAccountOwnedTokenPasses(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	st := stubStore{vals: map[string]string{account.TokenID("claude-box"): "sk-acct-not-real"}}
+	if r := ClaudeBoxToken(c, nil, st, accts); r.Status != Pass || strings.Contains(r.Detail, "sk-acct") {
+		t.Fatalf("an account's own store token must pass and never print: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountLockedWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	r := ClaudeBoxToken(c, nil, stubStore{err: credref.ErrLocked}, accts)
+	if r.Status != Warn || !strings.Contains(r.Detail, "store unlock") || !strings.Contains(r.Detail, "claude") {
+		t.Fatalf("a locked store must WARN with the unlock fix: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountUnavailableFails(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	ue := &secretstore.UnavailableError{Kind: secretstore.KindAccess, Reason: "denied"}
+	if r := ClaudeBoxToken(c, nil, stubStore{err: ue}, accts); r.Status != Fail || !strings.Contains(r.Detail, ue.Fix()) {
+		t.Fatalf("an unavailable Keychain must FAIL with the fix: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountMissingWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude-ops", Bin: "claude", Account: "claude-box"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	st := stubStore{vals: map[string]string{account.TokenID("claude-box"): "sk-acct-not-real"}}
+	r := ClaudeBoxToken(c, nil, st, nil) // account not in accounts.json
+	if r.Status != Warn || !strings.Contains(r.Detail, "claude-ops") || !strings.Contains(r.Detail, `"culibox init"`) {
+		t.Fatalf("an unknown account is no credential: %+v", r)
+	}
+	// Known account but no value in the store.
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	if r := ClaudeBoxToken(c, nil, stubStore{}, accts); r.Status != Warn || !strings.Contains(r.Detail, "claude-ops") {
+		t.Fatalf("an account with no stored token is no credential: %+v", r)
+	}
+	// No store at all.
+	if r := ClaudeBoxToken(c, nil, nil, accts); r.Status != Warn {
+		t.Fatalf("no store: %+v", r)
+	}
+}
+
+func TestClaudeBoxTokenAccountNotOwnedWarns(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Account: "personal"}
+	c := config.Config{Agents: []config.AgentConfig{boxed}}
+	st := stubStore{vals: map[string]string{account.TokenID("personal"): "sk-acct-not-real", "OTHER": "x"}}
+	for _, a := range []account.Account{
+		{Name: "personal", Provider: "claude", InheritPersonal: true},
+		{Name: "personal", Provider: "claude", TokenSecret: "OTHER"}, // another store value, never injected
+	} {
+		if r := ClaudeBoxToken(c, nil, st, []account.Account{a}); r.Status != Warn {
+			t.Fatalf("%+v: a box cannot use a personal login or another store value: %+v", a, r)
+		}
+	}
+}
+
+func TestBoxTierWithoutDockerNeverPasses(t *testing.T) {
+	home := t.TempDir()
+	rows := BoxTier(Input{Config: config.Config{DockerBin: "culibox-no-such-docker"}, Home: home}).Rows
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	for _, r := range rows {
+		if r.Status == Pass {
+			t.Fatalf("a box tier without docker must not pass: %+v", rows)
+		}
+	}
+}
+
+// TokenLockedOnly marks the one WARN init may read as "found": every boxed
+// agent's credential failed only because the store is locked.
+func TestClaudeBoxTokenLockedOnly(t *testing.T) {
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	linked := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	box := func(as ...config.AgentConfig) config.Config {
+		return config.Config{DefaultRuntime: config.RuntimeBox, Agents: as}
+	}
+	if r, only := claudeBoxToken(box(linked), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn || !only {
+		t.Fatalf("locked alone: %+v %v", r, only)
+	}
+	if r := ClaudeBoxToken(box(linked), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn {
+		t.Fatalf("ClaudeBoxToken must be the same row: %+v", r)
+	}
+	orphan := config.AgentConfig{Name: "claude-ops", Bin: "claude"}
+	if r, only := claudeBoxToken(box(linked, orphan), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn || only {
+		t.Fatalf("locked plus missing is not locked-only: %+v %v", r, only)
+	}
+	if r, only := claudeBoxToken(box(orphan), nil, nil, accts); r.Status != Warn || only {
+		t.Fatalf("missing: %+v %v", r, only)
+	}
+	if _, only := claudeBoxToken(box(linked), nil, stubStore{vals: map[string]string{account.TokenID("claude-box"): "x"}}, accts); only {
+		t.Fatal("a pass is not locked-only")
 	}
 }

@@ -11,9 +11,12 @@
 # loads them, which IS that shared scope, and let eslint's no-undef read the
 # result. One rule, no style opinions — this is a linker check, not a linter.
 #
-# eslint comes from npx and needs the network on first run. The repo carries no
-# npm dependencies and this must not be the thing that stops you working on a
-# train, so an unavailable eslint SKIPS loudly rather than failing.
+# eslint is installed with `npm ci --ignore-scripts` from scripts/lint/package.json and
+# its lockfile: an exact version, every package checked against the lockfile's
+# integrity hash, no install script run. (npx eslint@<range> would resolve the newest
+# match and its dependencies fresh on each run, and CI runs this with the network.)
+# The install needs the network, and this must not be the thing that stops you
+# working on a train, so an unavailable eslint SKIPS loudly rather than failing.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -73,24 +76,30 @@ export default [{
 }];
 EOF
 
-if ! command -v npx >/dev/null 2>&1; then
-  echo "lint: SKIPPED — npx not on PATH, so the page scripts were not checked" >&2
+if ! command -v npm >/dev/null 2>&1; then
+  echo "lint: SKIPPED — npm not on PATH, so the page scripts were not checked" >&2
   exit 0
 fi
 
-# Run from the bundle's own directory: eslint refuses to lint a file outside the
-# base path it derives from the working directory.
-OUT="$WORK/report.json"
+mkdir "$WORK/npm"
+cp scripts/lint/package.json scripts/lint/package-lock.json "$WORK/npm/"
 set +e
-(cd "$WORK" && npx --yes eslint@9 --no-config-lookup -c eslint.config.mjs \
-  -f json -o report.json bundle.js) >"$WORK/npx.log" 2>&1
+(cd "$WORK/npm" && npm ci --ignore-scripts --no-audit --no-fund) >"$WORK/npm.log" 2>&1
+install_rc=$?
+if [ "$install_rc" -eq 0 ]; then
+  # Run from the bundle's own directory: eslint refuses to lint a file outside the
+  # base path it derives from the working directory.
+  (cd "$WORK" && "$WORK/npm/node_modules/.bin/eslint" --no-config-lookup -c eslint.config.mjs \
+    -f json -o report.json bundle.js) >>"$WORK/npm.log" 2>&1
+fi
 set -e
+OUT="$WORK/report.json"
 
 # eslint exits 1 for lint errors and 2 for its own failures; only the latter,
 # or a missing report, means the check could not run.
 if [ ! -s "$OUT" ]; then
   echo "lint: SKIPPED — could not run eslint (offline?), page scripts unchecked" >&2
-  sed 's/^/lint:   /' "$WORK/npx.log" >&2
+  sed 's/^/lint:   /' "$WORK/npm.log" >&2
   exit 0
 fi
 

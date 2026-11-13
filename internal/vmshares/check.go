@@ -19,6 +19,7 @@ const (
 	KindProtected    = "protected"
 	KindNotDir       = "notdir"
 	KindRelative     = "relative"
+	KindReadOnly     = "readonly"
 )
 
 const (
@@ -28,9 +29,13 @@ const (
 	reasonData      = "overlaps CuliBox's data folder, which is always shared in the parts boxes need."
 	reasonNotDir    = "is a file, not a folder."
 	reasonRelative  = "Use a full path, like ~/code/project."
+	reasonReadOnly  = "holds files your own Claude Code loads, so it can only be shared read-only."
 )
 
-const reasonProtectedFmt = "holds CuliBox's own %s, so it can never be shared with the box VM."
+const reasonProtectedFmt = "holds %s, so it can never be shared with the box VM."
+
+// reasonProgramRWFmt: a program folder may be shared read-only.
+const reasonProgramRWFmt = "holds %s, so it cannot be shared read & write."
 
 // Refused is a folder the box VM may not share. Error() is Display(Path)+" "+Reason.
 type Refused struct {
@@ -50,6 +55,16 @@ var resolveSpelling = Resolve
 // Check returns nil or a *Refused for p. The rules run on both p and its
 // symlink-resolved form; Path in the error is p as given.
 func Check(p string, env Env) error {
+	if !filepath.IsAbs(p) {
+		return checkResolved(p, p, env)
+	}
+	return checkResolved(p, resolveSpelling(filepath.Clean(p)), env)
+}
+
+// checkResolved is Check for a p the caller has already resolved to rp, so a
+// path is resolved once and the value that was checked is the value that is
+// compared and stored (a link retargeted in between cannot give two answers).
+func checkResolved(p, rp string, env Env) error {
 	refuse := func(kind, reason string) error {
 		return &Refused{Path: p, Kind: kind, Reason: reason, home: env.Home}
 	}
@@ -57,7 +72,7 @@ func Check(p string, env Env) error {
 		return refuse(KindRelative, reasonRelative)
 	}
 	p = filepath.Clean(p)
-	for _, c := range []string{p, resolveSpelling(p)} {
+	for _, c := range []string{p, rp} {
 		if box.MountUnsafe(c) != "" || YAMLSafe(c) != nil {
 			return refuse(KindUnsafe, reasonUnsafe)
 		}
@@ -82,11 +97,11 @@ func Check(p string, env Env) error {
 		if env.DataRoot != "" && (Within(c, env.DataRoot, env.Fold) || Within(env.DataRoot, c, env.Fold)) {
 			return refuse(KindData, reasonData)
 		}
-		if what := protectedHit(c, env); what != "" {
+		if what := protectedHit(c, env, false); what != "" {
 			return refuse(KindProtected, fmt.Sprintf(reasonProtectedFmt, what))
 		}
 	}
-	for _, c := range []string{p, resolveSpelling(p)} {
+	for _, c := range []string{p, rp} {
 		if kind, reason := identityHit(c, env); kind != "" {
 			return refuse(kind, reason)
 		}
@@ -95,6 +110,69 @@ func Check(p string, env Env) error {
 		return refuse(KindNotDir, reasonNotDir)
 	}
 	return nil
+}
+
+// CheckMode is Check plus the rule that depends on the mode: a folder inside
+// ~/.claude (the clone memory folders, the only part of it a share may be) can
+// only be read-only, because the host's own Claude Code loads what is there
+// and a box that could write it could feed that agent instructions.
+func CheckMode(p string, m Mode, env Env) error {
+	if !filepath.IsAbs(p) {
+		return checkModeResolved(p, p, m, env)
+	}
+	return checkModeResolved(p, resolveSpelling(filepath.Clean(p)), m, env)
+}
+
+func checkModeResolved(p, rp string, m Mode, env Env) error {
+	if err := checkResolved(p, rp, env); err != nil {
+		return err
+	}
+	if m == RW && insideClaude(filepath.Clean(p), rp, env) {
+		return &Refused{Path: p, Kind: KindReadOnly, Reason: reasonReadOnly, home: env.Home}
+	}
+	if m == RW {
+		if what := programHit(filepath.Clean(p), rp, env); what != "" {
+			return &Refused{Path: p, Kind: KindProtected, Reason: fmt.Sprintf(reasonProgramRWFmt, what), home: env.Home}
+		}
+	}
+	return nil
+}
+
+// programHit is the What of a program folder (a WriteOnly protected directory)
+// that p, or its resolved form rp, is or holds; "". A read-only share of such a
+// folder cannot replace the program, a read & write one could.
+func programHit(p, rp string, env Env) string {
+	ids := idCache{}
+	for _, c := range []string{p, rp} {
+		if what := protectedHit(c, env, true); what != "" {
+			return what
+		}
+		if what := identityProtected(c, env, ids, true); what != "" {
+			return what
+		}
+	}
+	return ""
+}
+
+// insideClaude reports whether p, by spelling, symlink resolution or file
+// identity (a macOS firmlink, a link to the home), is ~/.claude or below it.
+func insideClaude(p, rp string, env Env) bool {
+	if env.Home == "" {
+		return false
+	}
+	claude := filepath.Join(env.Home, ".claude")
+	ids := idCache{}
+	for _, c := range []string{p, rp} {
+		for _, cl := range spellings(claude) {
+			if Within(c, cl, env.Fold) {
+				return true
+			}
+		}
+		if _, in := ids.inside(c, claude); in {
+			return true
+		}
+	}
+	return false
 }
 
 // identityHit runs the home, sensitive, data-root and protected rules again by
@@ -141,9 +219,19 @@ func identityHit(c string, env Env) (kind, reason string) {
 			return KindData, reasonData
 		}
 	}
+	if what := identityProtected(c, env, ids, false); what != "" {
+		return KindProtected, fmt.Sprintf(reasonProtectedFmt, what)
+	}
+	return "", ""
+}
+
+// identityProtected is the protected-directory rule by file identity: the What
+// of the first env.Protected directory (the WriteOnly ones when write is set,
+// the others otherwise) that c equals or holds, or sits inside when Inside is set.
+func identityProtected(c string, env Env, ids idCache, write bool) string {
 	claudeFI := ids.stat(filepath.Join(env.Home, ".claude"))
 	for _, d := range env.Protected {
-		if d.Path == "" {
+		if d.Path == "" || d.WriteOnly != write {
 			continue
 		}
 		// sensitive() owns the default account's ~/.claude, as in protectedHit.
@@ -151,13 +239,13 @@ func identityHit(c string, env Env) (kind, reason string) {
 			continue
 		}
 		if ids.contains(c, d.Path) {
-			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+			return d.What
 		}
 		if _, in := ids.inside(c, d.Path); d.Inside && in {
-			return KindProtected, fmt.Sprintf(reasonProtectedFmt, d.What)
+			return d.What
 		}
 	}
-	return "", ""
+	return ""
 }
 
 // memoryRel reports whether rel (the components below ~/.claude) is
@@ -262,13 +350,14 @@ func sensitive(c string, env Env) bool {
 }
 
 // protectedHit is the What of the first env.Protected directory that c equals
-// or contains, or (when the directory sets Inside) sits inside; "" if none. The
-// default account's ~/.claude is skipped here: sensitive() owns it, with its
-// projects/<slug>/memory exception.
-func protectedHit(c string, env Env) string {
+// or contains, or (when the directory sets Inside) sits inside; "" if none. With
+// write=false only the directories that refuse every use count; with write=true
+// only the WriteOnly ones (program folders). The default account's ~/.claude is
+// skipped here: sensitive() owns it, with its projects/<slug>/memory exception.
+func protectedHit(c string, env Env, write bool) string {
 	claude := spellings(filepath.Join(env.Home, ".claude"))
 	for _, d := range env.Protected {
-		if d.Path == "" {
+		if d.Path == "" || d.WriteOnly != write {
 			continue
 		}
 		spell := spellings(d.Path)

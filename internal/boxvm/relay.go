@@ -79,7 +79,7 @@ func RelayName(instance string) string {
 // provisioning writes. Option (a) VMs, VMs provisioned before the egress rules
 // existed, and VMs provisioned for other ports end up here.
 func errRulesMissing(why string) error {
-	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes, or broker_port or egress_port changed since setup; run `agent-box box setup -recreate`", why)
+	return fmt.Errorf("the box VM's egress INPUT rules are missing or out of order (%s); this VM predates egress control for all boxes, or broker_port or egress_port changed since setup; run `culibox box setup -recreate`", why)
 }
 
 // CheckInputRules verifies that the first four rules of the INPUT chain in
@@ -113,28 +113,46 @@ func CheckInputRules(out string, egressPort, brokerPort int) error {
 	return nil
 }
 
-// CheckDockerUserRules refuses a DOCKER-USER rule that lets TCP through. VMs
-// provisioned before #113 carry one for the broker port, which lets every
-// container on the VM's default network reach the broker on the Mac without the
-// relay, and so write the PROXY line that names a box itself. Nothing CuliBox
-// writes passes TCP there now and docker adds at most a bare RETURN, so any such
-// rule (any port, any address, RETURN or ACCEPT) means the VM still runs an old
-// provision script. The gateway DROP itself must be there too, for the address
-// the relay dials (LimaHostGateway): the provision script drops the address
-// host.lima.internal resolves to, which is that one (measured in the spike), and
-// a VM where they differ must not pass. Rules in other chains are not looked at.
-func CheckDockerUserRules(out string) error {
-	drop := false
+// errDockerUserRules is the one message for a DOCKER-USER chain that is not the
+// one provisioning writes. It always names the gateway: the rules exist to keep
+// containers on the VM's default network off the Mac's loopback.
+func errDockerUserRules(why string) error {
+	return fmt.Errorf("the box VM's DOCKER-USER firewall chain is not the one provisioning writes (%s), so containers on its default network may reach the Mac's loopback through the lima gateway %s; run `culibox box setup -recreate`",
+		why, LimaHostGateway)
+}
+
+// dockerUserRules is the DOCKER-USER rules of `iptables -S` output, in order,
+// each as its fields after "-A DOCKER-USER".
+func dockerUserRules(out string) [][]string {
+	var rules [][]string
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 || f[0] != "-A" || f[1] != "DOCKER-USER" {
 			continue
 		}
-		if normaliseRule(f[2:]) == "-d "+LimaHostGateway+" -j DROP" {
-			drop = true
-		}
+		rules = append(rules, f[2:])
+	}
+	return rules
+}
+
+// CheckDockerUserRules verifies the DOCKER-USER chain in `iptables -S` output.
+// The first three rules must be exactly the ones provisioning writes, in order,
+// as CheckInputRules does for INPUT: the egress subnet DROP, the udp/53 RETURN
+// for the address host.lima.internal resolves to (LimaHostGateway: the address
+// the relay dials, measured in the spike), then the DROP for that address. A
+// foreign rule above the gateway DROP, of any protocol or target (a bare RETURN
+// or ACCEPT, "-p all", a jump to a chain that accepts), changes what the DROP
+// covers, so it is refused, as is a head that lost a rule or has them reordered.
+// What follows the head is not ordered (docker may add a bare RETURN there), but
+// no rule after it may let TCP through either. VMs provisioned before #113
+// carry such a rule for the broker port, which lets every container on the VM's
+// default network reach the broker on the Mac without the relay, and so write
+// the PROXY line that names a box itself. Rules in other chains are not looked at.
+func CheckDockerUserRules(out string) error {
+	rules := dockerUserRules(out)
+	for _, f := range rules {
 		var proto, target string
-		for i := 2; i+1 < len(f); i++ {
+		for i := 0; i+1 < len(f); i++ {
 			switch f[i] {
 			case "-p":
 				proto = f[i+1]
@@ -143,23 +161,34 @@ func CheckDockerUserRules(out string) error {
 			}
 		}
 		if proto == "tcp" && (target == "RETURN" || target == "ACCEPT") {
-			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `agent-box box setup -recreate`",
-				strings.Join(f[2:], " "))
+			return fmt.Errorf("the box VM's firewall lets containers on its default network reach the Mac's loopback without the relay (DOCKER-USER rule %q); this VM was set up before that rule was removed; run `culibox box setup -recreate`",
+				strings.Join(f, " "))
 		}
 	}
-	if !drop {
-		return fmt.Errorf("the box VM's firewall has no DOCKER-USER DROP for the lima gateway %s, so containers on its default network may reach the Mac's loopback; run `agent-box box setup -recreate`", LimaHostGateway)
+	want := []string{
+		fmt.Sprintf("-s %s -j DROP", EgressSubnet),
+		fmt.Sprintf("-d %s -p udp --dport 53 -j RETURN", LimaHostGateway),
+		fmt.Sprintf("-d %s -j DROP", LimaHostGateway),
+	}
+	for i, w := range want {
+		if i >= len(rules) {
+			return errDockerUserRules(fmt.Sprintf("rule %d of %d is absent", i+1, len(want)))
+		}
+		if got := normaliseRule(rules[i]); got != w {
+			return errDockerUserRules(fmt.Sprintf("rule %d is %q, want %q", i+1, got, w))
+		}
 	}
 	return nil
 }
 
 // normaliseRule joins a rule's fields after dropping what iptables adds on
-// output: "-m tcp" (implied by --dport) and the /32 on a single address.
+// output: "-m tcp" and "-m udp" (implied by -p and --dport) and the /32 on a
+// single address.
 func normaliseRule(f []string) string {
 	var out []string
 	for i := 0; i < len(f); i++ {
 		switch {
-		case f[i] == "-m" && i+1 < len(f) && f[i+1] == "tcp":
+		case f[i] == "-m" && i+1 < len(f) && (f[i+1] == "tcp" || f[i+1] == "udp"):
 			i++
 		case (f[i] == "-s" || f[i] == "-d") && i+1 < len(f):
 			out = append(out, f[i], strings.TrimSuffix(f[i+1], "/32"))
@@ -359,11 +388,14 @@ func (r *Relay) RemoveStale(ctx context.Context) error {
 // started after the rules were verified this boot, a VM reboot or dockerd
 // restart stops it (no restart policy), and a transient ssh failure must not cut
 // every live fenced session's proxy and broker, so a current relay stays. A
-// DOCKER-USER chain that lets TCP past the relay or lacks the gateway DROP
-// (CheckDockerUserRules) is refused the same way, a current relay kept and any
-// other removed: that path does not go through the relay, so removing a current
-// one would close nothing. Within one daemon run, live sessions keep their proxy
-// and broker; a daemon that starts on such a VM never starts its egress listener
+// DOCKER-USER chain that is not the provisioned one (CheckDockerUserRules: a TCP
+// pass-through, a foreign rule above the gateway DROP, a missing rule) is
+// refused the same way, a current relay kept and any other removed: that path
+// does not go through the relay, so removing a current one would close nothing.
+// The one exception is the old broker RETURN of a VM upgraded without a
+// recreate: Ensure deletes that exact rule live and reads the table again
+// (deleteOldBrokerReturn), and refuses only if the table is still wrong. Within one daemon run, live sessions keep their proxy
+// and broker; a daemon that starts on a VM that is refused never starts its egress listener
 // (Ready fails before it), so they keep only the broker until the VM is
 // recreated, which ends them anyway.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
@@ -389,7 +421,9 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return r.removeAlso(ctx, err)
 	}
 	if err := CheckDockerUserRules(rules); err != nil {
-		return r.removeUnlessCurrent(ctx, gw, err)
+		if err = r.deleteOldBrokerReturn(ctx, rules, err); err != nil {
+			return r.removeUnlessCurrent(ctx, gw, err)
+		}
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
@@ -414,6 +448,57 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return r.removeAlso(ctx, err)
 	}
 	return nil
+}
+
+// brokerReturnDeleter is what a VM offers to delete the old broker RETURN live;
+// a VM without it (a test fake) is only ever refused.
+type brokerReturnDeleter interface {
+	DeleteBrokerReturn(ctx context.Context, port int) error
+}
+
+// maxBrokerReturnDeletes bounds the deletes for one check: the script's own
+// `while -D` loop ends when no copy is left, and a chain does not hold this many.
+const maxBrokerReturnDeletes = 16
+
+// deleteOldBrokerReturn is the live repair for a VM that was upgraded but not
+// recreated (#117, #116 option b): that VM's colima.yaml still holds the old
+// provision script (only Provision and ApplyMounts rewrite it), which inserts
+// the broker RETURN above the gateway DROP at every VM start, so the rule is
+// back from each start until the first boxed spawn deletes it. cause is CheckDockerUserRules' refusal of rules.
+// When rules hold that exact rule (the gateway, tcp, the broker port, RETURN)
+// each copy is deleted with a fixed, validated `iptables -w -D` and the table is
+// read again: nil only if the fresh table passes CheckDockerUserRules. Anything
+// else, another rule, a wrong head, a failed delete or re-read, a rule that is
+// still there, returns an error that names the recreate, and nothing but that
+// one rule is ever deleted.
+func (r *Relay) deleteOldBrokerReturn(ctx context.Context, rules string, cause error) error {
+	vm, ok := r.VM.(brokerReturnDeleter)
+	if !ok {
+		return cause
+	}
+	old := fmt.Sprintf("-d %s -p tcp --dport %d -j RETURN", LimaHostGateway, r.BrokerPort)
+	n := 0
+	for _, f := range dockerUserRules(rules) {
+		if normaliseRule(f) == old {
+			n++
+		}
+	}
+	if n == 0 {
+		return cause
+	}
+	var delErr error
+	for i := 0; i < min(n, maxBrokerReturnDeletes) && delErr == nil; i++ {
+		delErr = vm.DeleteBrokerReturn(ctx, r.BrokerPort)
+	}
+	fresh, err := r.VM.FilterRules(ctx)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("the firewall rules could not be read again after deleting the old broker rule: %w", err))
+	}
+	err = CheckDockerUserRules(fresh)
+	if err != nil && delErr != nil {
+		err = errors.Join(err, delErr)
+	}
+	return err
 }
 
 // waitListening reads the relay's own log until it reports both listeners on

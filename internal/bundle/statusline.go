@@ -41,7 +41,7 @@ func (m *Manager) applyStatusLine(tmp string, settings map[string]any, lock *Loc
 		return nil
 	}
 	lock.Dropped = append(lock.Dropped, Drop{Kind: "settings", Name: "statusLine",
-		Reason: "replaced: the box runs agent-box's statusLine, which calls yours if it works in the box"})
+		Reason: "replaced: the box runs CuliBox's statusLine, which calls yours if it works in the box"})
 	cmd := delegateCommand(host)
 	if cmd == "" {
 		return nil

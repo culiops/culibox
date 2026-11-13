@@ -83,13 +83,18 @@ const settle = () => new Promise((r) => setImmediate(r));
 // phone's modal. `calls` records the requests the code makes.
 function page({ items, asPage = true, api } = {}) {
   const calls = [];
+  const copied = [];
   Node.focused = null;
   const els = {
     "set-act-tokens": Object.assign(new Node("button"), { id: "set-act-tokens" }),
-    "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "" }),
+    "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "", open: true }),
     "tok-list": new Node("ul"),
     "tok-err": new Node("div"),
     "tok-reveal": Object.assign(new Node("div"), { hidden: true }),
+    "tok-reveal-val": new Node("div"),
+    "tok-new": new Node("button"),
+    "tok-copy": Object.assign(new Node("button"), { own: "Copy" }),
+    "tok-done": new Node("button"),
   };
   const ctx = {
     document: {
@@ -99,11 +104,15 @@ function page({ items, asPage = true, api } = {}) {
     },
     api: api ? async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return api(url, (opts && opts.method) || "GET"); }
       : async (url, opts) => { calls.push([url, (opts && opts.method) || "GET"]); return items; },
+    window: {},
+    askPrompt: async () => "laptop",
+    copyText: (text, done) => { ctx.window.__lastCopied = text; copied.push(text); done(true); },
+    setTimeout: () => 0,
     console,
   };
   vm.createContext(ctx);
   new vm.Script(SRC, { filename: "tokens.js" }).runInContext(ctx);
-  return { ctx, els, list: els["tok-list"], calls };
+  return { ctx, els, list: els["tok-list"], calls, copied };
 }
 
 const TOKENS = [
@@ -713,4 +722,146 @@ test("the phone's list has no role, even after the page drew it (the mode can fl
   assert.strictEqual(list.getAttribute("role"), null);
   assert.strictEqual(list.children.length, 3, "the phone's three rows");
   assert.ok(list.children.every((li) => li.getAttribute("role") === null && li.className === "tokrow"));
+});
+
+// --- the one-time reveal leaves no secret in the DOM (#208) ---------------------------------------------------------
+
+const SECRET = "abox_one-time-secret";
+// create(): a page whose POST answers with SECRET, the list refresh answering TOKENS; resolves once the reveal is up.
+async function create(opts = {}) {
+  const p = page({ items: TOKENS, api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS), ...opts });
+  await p.els["tok-new"].onclick();
+  return p;
+}
+const shown = (p) => !p.els["tok-reveal"].hidden;
+const value = (p) => p.els["tok-reveal-val"].textContent;
+
+test("a created token is shown in the reveal and stays there while it is visible", async () => {
+  const p = await create();
+  assert.ok(shown(p), "the reveal is up");
+  assert.strictEqual(value(p), SECRET, "with the value, so it can be read and copied");
+  await p.els["tok-copy"].onclick();
+  assert.deepStrictEqual(p.copied, [SECRET], "Copy still copies it");
+});
+
+test("Done hides the reveal and empties the value node (#208)", async () => {
+  const p = await create();
+  p.els["tok-done"].onclick();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "", "no bearer token text is left in the DOM");
+});
+
+test("a repaint that hides the reveal empties the value node (#208)", async () => {
+  const p = await create();
+  await p.ctx.loadTokens();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("leaving the tab empties the value node (#208)", async () => {
+  const p = await create();
+  p.ctx.tokLeave();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("the copy hook does not keep the token once the reveal hides, and Copy then copies nothing (#208)", async () => {
+  const p = await create();
+  await p.els["tok-copy"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, SECRET, "fixture: the hook holds the copied token");
+  p.els["tok-done"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, "", "cleared with the reveal");
+  p.copied.length = 0;
+  await p.els["tok-copy"].onclick();
+  assert.deepStrictEqual(p.copied, [], "a hidden reveal has nothing to copy");
+});
+
+test("the hook is left alone when it holds something else (#208)", async () => {
+  const p = await create();
+  p.ctx.window.__lastCopied = "git status";
+  p.els["tok-done"].onclick();
+  assert.strictEqual(p.ctx.window.__lastCopied, "git status");
+});
+
+// shellPage: the page above with the two shell.js functions that leave the tab (selectSettingsTab, initDialogs) lifted out
+// of the real source into the same context, over a Settings dialog with two panels, so a tab switch and a dialog close
+// are driven rather than read off the source.
+function shellPage(opts) {
+  const p = page({ items: TOKENS, ...opts });
+  const dlg = p.els["settings-modal"];
+  dlg.id = "settings-modal";
+  const listeners = {};
+  dlg.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
+  Object.defineProperty(dlg, "classList", { value: { contains: (c) => dlg.has(c), toggle() {} } });
+  p.els.manage = Object.assign(new Node("div"), { id: "manage" });
+  p.els.tokens = Object.assign(new Node("div"), { id: "tokens" });
+  const panels = [p.els.manage, p.els.tokens];
+  p.ctx.document.querySelectorAll = (sel) => (sel === "dialog" ? [dlg] : sel === "#settings-modal .dbd" ? panels : []);
+  p.ctx.setDialogError = () => {};
+  p.ctx.pageClosed = () => {};
+  p.ctx.focusTerminal = () => {};
+  const shell = read("shell.js");
+  for (const name of ["selectSettingsTab", "initDialogs"]) {
+    const at = shell.indexOf("function " + name + "(");
+    new vm.Script(shell.slice(at, shell.indexOf("\n}\n", at) + 2), { filename: "shell.js#" + name }).runInContext(p.ctx);
+  }
+  p.ctx.initDialogs();
+  const select = (tab) => p.ctx.selectSettingsTab(tab);
+  select("tokens");
+  return { ...p, dlg, select, fire: (type) => (listeners[type] || []).forEach((fn) => fn()) };
+}
+
+test("choosing another Settings tab empties the reveal (#208)", async () => {
+  const p = shellPage({ api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS) });
+  await p.els["tok-new"].onclick();
+  assert.strictEqual(value(p), SECRET, "fixture: the reveal is up on the Access-tokens tab");
+  p.select("manage");
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("closing Settings empties the reveal (#208)", async () => {
+  const p = shellPage({ api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS) });
+  await p.els["tok-new"].onclick();
+  assert.strictEqual(value(p), SECRET, "fixture");
+  p.dlg.open = false;
+  p.fire("close");
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+// A create is slow (the POST, then the list refresh). Whether its token is painted is decided when it is ready.
+function slowCreate() {
+  let release;
+  const p = shellPage({ api: (url, method) => (method === "POST" ? new Promise((r) => { release = r; }) : Promise.resolve(TOKENS)) });
+  const creating = p.els["tok-new"].onclick();
+  return { p, creating, finish: async () => { await settle(); release({ token: SECRET }); await creating; } };
+}
+
+test("a create that finishes after the user left the tab, and did not come back, never paints the token (#208)", async () => {
+  const { p, finish } = slowCreate();
+  await settle();
+  p.select("manage");                                // the tab is left while the POST is out
+  await finish();
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "", "the value never reaches a panel nobody is looking at");
+});
+
+test("a create that finishes after Settings was closed never paints the token (#208)", async () => {
+  const { p, finish } = slowCreate();
+  await settle();
+  p.dlg.open = false;
+  p.fire("close");
+  await finish();
+  assert.strictEqual(value(p), "");
+});
+
+test("a create still shows its token when the user left the tab and came back while it was in flight (#208)", async () => {
+  const { p, finish } = slowCreate();
+  await settle();
+  p.select("manage");
+  p.select("tokens");
+  await finish();
+  assert.ok(shown(p));
+  assert.strictEqual(value(p), SECRET);
 });

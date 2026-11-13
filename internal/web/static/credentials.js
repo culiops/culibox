@@ -3535,7 +3535,7 @@ async function credAppForm(entry, opts) {
     const nodes = [];
     if (useFile) {
       const f = credField(uid + "-path", edit ? "Key file (leave empty to keep the current key)" : "Key file", {
-        full: true, placeholder: "/home/you/.config/agent-box/app.pem",
+        full: true, placeholder: "/home/you/.config/culibox/app.pem",
         hint: "An absolute path on this host. The daemon reads the file when a session needs a token; nothing is copied into the store.",
       });
       pathEl = f.inp;

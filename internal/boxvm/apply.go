@@ -18,7 +18,7 @@ import (
 
 // ErrNeedsRecreate means the VM differs from the config by more than its folder
 // list; only `box setup -recreate` can fix that.
-var ErrNeedsRecreate = errors.New("the box VM has other changes (VM size, extra_ca_certs or the provision script) that need `agent-box box setup -recreate`")
+var ErrNeedsRecreate = errors.New("the box VM has other changes (VM size, extra_ca_certs or the provision script) that need `culibox box setup -recreate`")
 
 // ErrStartTimeout means the VM did not come back after an apply.
 var ErrStartTimeout = errors.New("The VM did not start within 2 minutes.")
@@ -67,9 +67,12 @@ func (v *VM) DriftKind() (Drift, error) {
 }
 
 // AppliedMounts are the mounts in the VM's written colima.yaml (what the VM has
-// or will have at its next start), cached by the file's mtime and size.
+// or will have at its next start), cached by the file's mtime and size. A file
+// that lacks the four data mounts and does not share the home folder is an
+// error (ErrMountsIncomplete), never an applied list.
 func (v *VM) AppliedMounts() ([]Mount, error) {
-	path := v.Config().YAMLPath()
+	cfg := v.Config()
+	path := cfg.YAMLPath()
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -81,6 +84,9 @@ func (v *VM) AppliedMounts() ([]Mount, error) {
 	}
 	ms, err := ReadMounts(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkApplied(cfg, ms); err != nil {
 		return nil, err
 	}
 	v.mountsCache = &mountsCache{fi.ModTime(), fi.Size(), ms}
@@ -116,6 +122,14 @@ func (v *VM) SetShares(s []vmshares.Share) {
 	}
 	v.flagMu.Lock()
 	v.cfg.Shares = rs
+	v.flagMu.Unlock()
+}
+
+// SetResolvedShares is SetShares for paths the caller has already resolved and
+// checked: they are stored as given, never resolved a second time.
+func (v *VM) SetResolvedShares(s []vmshares.Share) {
+	v.flagMu.Lock()
+	v.cfg.Shares = append([]vmshares.Share(nil), s...)
 	v.flagMu.Unlock()
 }
 
@@ -404,7 +418,7 @@ func unescapeMount(s string) string {
 
 // ErrApplyLocked means another process (the daemon, or a `box share apply`
 // from a terminal) is applying the folder list now.
-var ErrApplyLocked = errors.New("another agent-box is applying the box VM's folder list; try again when it finishes")
+var ErrApplyLocked = errors.New("another CuliBox is applying the box VM's folder list; try again when it finishes")
 
 // ApplyLockPath is the advisory lock every process holds for an apply's whole
 // stop, write and start. v.lock is per process; this one spans processes.
@@ -447,7 +461,7 @@ func (v *VM) ApplyLockHeld() bool {
 
 // ErrMountsOverlap means two of the VM's mounts would nest or repeat once links
 // are followed: colima refuses to start with that, so the apply stops first.
-var ErrMountsOverlap = errors.New("two of the box VM's folders overlap once links are followed, and colima cannot start with one inside another; the VM was not touched. Remove one of them in Settings › VM folders (or `agent-box box share rm`)")
+var ErrMountsOverlap = errors.New("two of the box VM's folders overlap once links are followed, and colima cannot start with one inside another; the VM was not touched. Remove one of them in Settings › VM folders (or `culibox box share rm`)")
 
 // checkMountsDisjoint refuses a mount list where one location (resolved now)
 // equals or lies inside another.

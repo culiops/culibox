@@ -14,7 +14,12 @@
 #     write are each granted once, to the release job only
 #   - a tag name reaches a script only through env:, never interpolated
 #   - a tag that is not on main fails the run at the ancestry check, before any
-#     test or build runs
+#     test or build runs. This file is the tagged commit's own, so that check is a
+#     convenience, not a trust boundary: scripts/macos-verify.sh repeats it on the
+#     Mac before running anything, and the repository's tag ruleset is the control
+#   - GH_TOKEN is set on the two steps that call gh only, not job-wide (narrower
+#     exposure; the job's write permissions and the tag ruleset are what bound a
+#     release)
 #
 # Runners: Linux only. There are no macOS runners (the darwin tarballs are
 # cross-compiled here and verified on a real Mac afterwards, see
@@ -78,6 +83,8 @@ jobs:
   tests:
     needs: verify
     uses: ./.github/workflows/ci.yml
+    with:
+      caller: release
 
   build:
     needs: [verify, tests]
@@ -106,8 +113,8 @@ jobs:
           (cd "$DIST" && sha256sum -c SHA256SUMS)
           dir=$(mktemp -d "$RUNNER_TEMP/smoke.XXXXXX")
           tar -C "$dir" -xzf "$DIST/culibox_${TAG#v}_linux_amd64.tar.gz"
-          got=$("$dir/agent-box" version)
-          want="agent-box $TAG ($(git rev-parse HEAD))"
+          got=$("$dir/culibox" version)
+          want="culibox $TAG ($(git rev-parse HEAD))"
           if [ "$got" != "$want" ]; then
             echo "::error::version is '$got', want '$want'"
             exit 1
@@ -134,8 +141,11 @@ jobs:
       attestations: write
     env:
       TAG: ${{ github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+    # GH_TOKEN is not in the job env: only the two steps that call gh set it, so the
+    # steps that run repository code (go run) start without it in their environment.
+    # That narrows exposure, it is not a boundary: the job still holds the write
+    # permissions above, and the real control is who may push a v* tag (the tag ruleset).
     steps:
       # Full history and tags: the notes list the commits since the previous tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,11 +172,16 @@ jobs:
         if: github.event.repository.visibility != 'public'
         run: |
           echo "attestations skipped: repository is private" >> "$GITHUB_STEP_SUMMARY"
-      - name: Write the release notes
+      - name: List the earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # --paginate prints one array per page; --jq '.[]' | jq -s . makes one.
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]' | jq -s . > releases.json
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
           prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "refs/tags/${TAG}^{commit}^" 2>/dev/null || true)
           {
             echo "## $TAG"
@@ -185,4 +200,6 @@ jobs:
       # --draft: the founder publishes by hand. --verify-tag: the tag already
       # exists, and this must never create one.
       - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md dist/*

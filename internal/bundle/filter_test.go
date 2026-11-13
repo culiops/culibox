@@ -1,8 +1,10 @@
 package bundle
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -145,7 +147,13 @@ func TestBoxedSettingsOutputIsByteIdenticalDespiteInheritableKeys(t *testing.T) 
 		t.Fatal(err)
 	}
 	const want = `{
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "effortLevel": "high",
+  "includeCoAuthoredBy": false,
   "model": "opus",
   "statusLine": {
     "command": "AGENTBOX_STATUSLINE_DELEGATE_FILE=/opt/agent-bundle/statusline-delegate /opt/agent-bundle/statusline-ratelimits.sh",
@@ -178,5 +186,103 @@ func TestEnabledPluginsSurvivesTheSettingsFilter(t *testing.T) {
 		if _, ok := kept[bad]; ok {
 			t.Errorf("%q must still be dropped", bad)
 		}
+	}
+}
+
+// A box commits as the agent, and a commit must carry no AI attribution (the
+// repo-wide rule). Claude Code adds a Co-Authored-By trailer unless told not to,
+// and a box does not get the host's own includeCoAuthoredBy:false unless the
+// bundle carries it. So the bundle writes the setting itself, in both forms
+// Claude Code 2.1.311 reads: the deprecated includeCoAuthoredBy and attribution
+// (an empty commit/pr text hides it).
+func TestBoxSettingsTurnAttributionOffWithNoHostSettings(t *testing.T) {
+	b := buildForTest(t, t.TempDir()) // no settings.json at all
+	assertAttributionOff(t, readBoxSettings(t, b.Dir))
+}
+
+// The user's own setting must not be able to switch it back on in a box.
+func TestBoxSettingsAttributionOffBeatsTheHostsSetting(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "settings.json"),
+		[]byte(`{"includeCoAuthoredBy":true,"attribution":{"commit":"Co-Authored-By: x","pr":"made by x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := buildForTest(t, src)
+	assertAttributionOff(t, readBoxSettings(t, b.Dir))
+	var recorded bool
+	for _, d := range b.Lock.Dropped {
+		if d.Kind == "settings" && d.Name == "includeCoAuthoredBy" {
+			recorded = true
+		}
+	}
+	if !recorded {
+		t.Errorf("overriding the host's includeCoAuthoredBy:true must be recorded as a drop: %v", b.Lock.Dropped)
+	}
+	// The host's attribution is replaced, not merely "off the keep-list": the row
+	// must say what the box does instead, and appear once.
+	var rows []Drop
+	for _, d := range b.Lock.Dropped {
+		if d.Kind == "settings" && d.Name == "attribution" {
+			rows = append(rows, d)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want exactly one drop row for the host's attribution, got %v", rows)
+	}
+	if r := rows[0].Reason; strings.Contains(r, "keep-list") || !strings.Contains(r, "attribution") {
+		t.Errorf("drop reason %q should say CuliBox sets attribution off in boxes", r)
+	}
+}
+
+// A host that already turned it off is the common case: nothing to report.
+func TestBoxSettingsHostAttributionOffIsNotADrop(t *testing.T) {
+	for name, host := range map[string]string{
+		"legacy key":        `{"includeCoAuthoredBy":false}`,
+		"attribution texts": `{"attribution":{"commit":"","pr":""}}`,
+		"attribution false": `{"attribution":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := t.TempDir()
+			if err := os.WriteFile(filepath.Join(src, "settings.json"), []byte(host), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			b := buildForTest(t, src)
+			assertAttributionOff(t, readBoxSettings(t, b.Dir))
+			for _, d := range b.Lock.Dropped {
+				if d.Name == "includeCoAuthoredBy" || d.Name == "attribution" {
+					t.Errorf("a host setting that already matches is not a drop: %v", d)
+				}
+			}
+		})
+	}
+}
+
+func readBoxSettings(t *testing.T, dir string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func assertAttributionOff(t *testing.T, m map[string]any) {
+	t.Helper()
+	if v, ok := m["includeCoAuthoredBy"].(bool); !ok || v {
+		t.Errorf("includeCoAuthoredBy = %v, want false", m["includeCoAuthoredBy"])
+	}
+	attr, _ := m["attribution"].(map[string]any)
+	commit, cok := attr["commit"].(string)
+	pr, pok := attr["pr"].(string)
+	if !cok || commit != "" || !pok || pr != "" {
+		t.Errorf("attribution = %v, want commit and pr set to empty strings", m["attribution"])
+	}
+	// The Claude-Session trailer that remote sessions add (measured in 2.1.311's schema).
+	if v, ok := attr["sessionUrl"].(bool); !ok || v {
+		t.Errorf("attribution.sessionUrl = %v, want false", attr["sessionUrl"])
 	}
 }

@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -514,5 +516,53 @@ func TestSharedSocketCapsConnections(t *testing.T) {
 func TestMaxSockConnsIsBounded(t *testing.T) {
 	if maxSockConns <= 0 || maxSockConns > maxDarwinConns {
 		t.Fatalf("maxSockConns = %d", maxSockConns)
+	}
+}
+
+// A box that reaches its connection cap would otherwise just see its next
+// connection hang. The daemon logs it once per box, naming the box and the cap,
+// and not again however often the cap is hit later.
+func TestPerBoxSocketLogsOnceWhenTheCapIsHit(t *testing.T) {
+	root := shortDir(t)
+	s := newBoxSockets(root)
+	var mu sync.Mutex
+	var lines []string
+	s.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	s.Start((&serveLog{}).serve)
+	t.Cleanup(s.Close)
+	if _, err := s.Acquire(bx); err != nil {
+		t.Fatal(err)
+	}
+	sock := perBoxSock(root, bx)
+	got := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), lines...)
+	}
+	held := holdConns(t, sock, maxSockConns-1)
+	time.Sleep(200 * time.Millisecond)
+	if l := got(); len(l) != 0 {
+		t.Fatalf("logged below the cap: %q", l)
+	}
+	held = append(held, holdConns(t, sock, 1)...)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(got()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	l := got()
+	if len(l) != 1 || !strings.Contains(l[0], bx) || !strings.Contains(l[0], strconv.Itoa(maxSockConns)) {
+		t.Fatalf("log = %q, want one line naming %s and %d", l, bx, maxSockConns)
+	}
+	// Free a slot and hit the cap again: still one line.
+	held[0].Close()
+	time.Sleep(200 * time.Millisecond)
+	holdConns(t, sock, 1)
+	time.Sleep(300 * time.Millisecond)
+	if l := got(); len(l) != 1 {
+		t.Fatalf("log = %q, want it once per box", l)
 	}
 }

@@ -13,21 +13,39 @@ import (
 // 30-line copy of golang.org/x/net/netutil.LimitListener, which is not a
 // dependency of this module.)
 func Listener(l net.Listener, n int) net.Listener {
-	return &limitedListener{Listener: l, sem: make(chan struct{}, n), done: make(chan struct{})}
+	return ListenerWithNotice(l, n, nil)
+}
+
+// ListenerWithNotice is Listener that also calls notice, at most once for the
+// life of the listener, the first time Accept finds every slot taken. Past that
+// point a client waits in the kernel's queue and sees nothing, so the owner has
+// to say it somewhere. notice runs on the accept goroutine: it must not block.
+// A nil notice is Listener.
+func ListenerWithNotice(l net.Listener, n int, notice func()) net.Listener {
+	return &limitedListener{Listener: l, sem: make(chan struct{}, n), done: make(chan struct{}), notice: notice}
 }
 
 type limitedListener struct {
 	net.Listener
-	sem       chan struct{}
-	done      chan struct{}
-	closeOnce sync.Once
+	sem        chan struct{}
+	done       chan struct{}
+	closeOnce  sync.Once
+	notice     func()
+	noticeOnce sync.Once
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
 	select {
 	case l.sem <- struct{}{}:
-	case <-l.done:
-		return nil, net.ErrClosed
+	default:
+		if l.notice != nil {
+			l.noticeOnce.Do(l.notice)
+		}
+		select {
+		case l.sem <- struct{}{}:
+		case <-l.done:
+			return nil, net.ErrClosed
+		}
 	}
 	c, err := l.Listener.Accept()
 	if err != nil {

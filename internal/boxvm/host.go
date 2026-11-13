@@ -25,7 +25,7 @@ func CheckUserDockerContext(ctx context.Context, dockerBin string) error {
 		return fmt.Errorf("%w (docker context show: %v)", ErrContextUnchecked, err)
 	}
 	if strings.TrimSpace(string(out)) == "colima-"+Profile {
-		return errors.New("your docker CLI's current context is agent-box's box VM; run `docker context use default` (or your usual context)")
+		return errors.New("your docker CLI's current context is CuliBox's box VM; run `docker context use default` (or your usual context)")
 	}
 	return nil
 }

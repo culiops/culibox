@@ -96,7 +96,7 @@ function vmfModel(view, cardOpen) {
       body: "It shares `~` read & write, so a box that broke out of its container could change any file in it, like `~/.zshrc`. Apply the list below and the VM sees only " + (live === 1 ? "the folder" : "the " + live + " folders") + " your boxes use.",
       muted: "Nothing changes until you apply: sessions still start as before.",
       action: "Apply (restart box VM)",
-      terminal: "or, in a terminal, `agent-box box share apply`",
+      terminal: "or, in a terminal, `culibox box share apply`",
     } : null,
     title: whole ? "Proposed folders" : "Shared folders",
     subtitle: whole ? "Made from your profiles and the folders boxed sessions ran in" : "",
@@ -819,7 +819,7 @@ function vmfFailExtras(job) {
   });
   toggle.setAttribute("aria-expanded", "false");
   const chev = vmfEl("span", "vmf-chev", "›");
-  toggle.append(chev, vmfEl("span", "", "Details"), vmfEl("span", "muted", "The error as the VM reported it"));
+  toggle.append(chev, vmfEl("span", "", "Details"), vmfEl("span", "muted", "Where the full error is"));
   const raw = vmfEl("pre", "vmf-raw mono t-sm", job.detail || job.error || "");
   raw.hidden = true;
   wrap.append(toggle, raw, vmfEl("p", "t-md muted vmf-or", "Or try it from a terminal on this Mac:"));
@@ -831,7 +831,7 @@ function vmfFailExtras(job) {
   wrap.appendChild(cmd);
   return wrap;
 }
-const VMA_CLI_TEXT = "agent-box box share apply";
+const VMA_CLI_TEXT = "culibox box share apply";
 
 function vmfCopy(text, okMsg) {
   if (typeof copyText !== "function") return;

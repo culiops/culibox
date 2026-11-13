@@ -59,6 +59,7 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		"--label", LabelWorkspace + "=" + cwd,
 		"--label", LabelInstance + "=" + m.opts.Instance,
 		"--label", LabelClaims + "=1",
+		"--label", LabelIdentity + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",

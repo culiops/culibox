@@ -382,7 +382,7 @@ func TestGrantBlocker(t *testing.T) {
 	}
 	f.others = []BoxInfo{{Name: "ab-box-old", Workspace: real + "/sub", State: "running", Instance: "PROD"}}
 	why, _ := m.GrantBlocker(context.Background(), dir, self)
-	if !strings.Contains(why, "older agent-box") || !strings.Contains(why, "PROD") {
+	if !strings.Contains(why, "older CuliBox") || !strings.Contains(why, "PROD") {
 		t.Fatalf("a claims-less box: %q", why)
 	}
 	f.others[0].Claims = true

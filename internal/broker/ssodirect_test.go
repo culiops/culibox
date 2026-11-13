@@ -206,7 +206,7 @@ func TestServeSSODirectSSOExpired(t *testing.T) {
 	w := call(b, tokA("s-1"))
 	var body struct{ Error string }
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
-	const want = `SSO session for profile "sso-ro" expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile sso-ro" on the host).`
+	const want = `SSO session for profile "sso-ro" expired. CuliBox has asked a human to sign in; retry after they do (or run "aws sso login --profile sso-ro" on the host).`
 	if w.Code != 503 || body.Error != want {
 		t.Fatalf("status %d body %s", w.Code, w.Body)
 	}

@@ -772,7 +772,7 @@ func TestGitHubPATOwnerWithoutApps(t *testing.T) {
 		t.Fatalf("PAT owner: %d: %s", w.Code, w.Body)
 	}
 	w := ghCall(b, tokA("s"), ghBody)
-	if w.Code != 503 || !strings.Contains(w.Body.String(), "GitHub is not configured on this agent-box host") {
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "GitHub is not configured on this CuliBox host") {
 		t.Fatalf("App owner: %d: %s", w.Code, w.Body)
 	}
 }
@@ -780,7 +780,7 @@ func TestGitHubPATOwnerWithoutApps(t *testing.T) {
 func TestGitHubPATOwnerNeedsRepo(t *testing.T) {
 	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
 	w := ghCall(b, tokA("s"), `{"owner":"acme"}`)
-	if w.Code != 403 || !strings.Contains(w.Body.String(), "name the repository: a personal access token is not scoped by agent-box") {
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "name the repository: a personal access token is not scoped by CuliBox") {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 	if fr.count() != 0 || len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope ||

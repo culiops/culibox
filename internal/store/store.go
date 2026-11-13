@@ -77,31 +77,47 @@ func (s *Store) Get(name string) (config.AgentConfig, bool) {
 
 // Save creates or updates a profile and persists atomically. It returns
 // ErrChangedOnDisk, changing nothing, when the file was changed behind the
-// store's back.
+// store's back. A write that fails leaves the store as it was: the previous
+// profile (or none) is put back, so Get does not serve a value that is not on
+// disk and the next successful write does not persist it.
 func (s *Store) Save(p config.AgentConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkDiskLocked(); err != nil {
 		return err
 	}
+	prev, had := s.m[p.Name]
 	s.m[p.Name] = p
-	return s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		if had {
+			s.m[p.Name] = prev
+		} else {
+			delete(s.m, p.Name)
+		}
+		return err
+	}
+	return nil
 }
 
 // Delete removes a profile and persists atomically. Like Save it returns
 // ErrChangedOnDisk, changing nothing, when the file was changed behind the
-// store's back.
+// store's back, and a write that fails puts the profile back.
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[name]; !ok {
+	prev, ok := s.m[name]
+	if !ok {
 		return ErrNotFound
 	}
 	if err := s.checkDiskLocked(); err != nil {
 		return err
 	}
 	delete(s.m, name)
-	return s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		s.m[name] = prev
+		return err
+	}
+	return nil
 }
 
 // checkDiskLocked compares the file as it is now with what this process last

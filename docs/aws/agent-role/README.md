@@ -1,6 +1,6 @@
 # agent role for the credential broker
 
-`main.tf` creates the IAM role a boxed agent-box session works as when its profile has an
+`main.tf` creates the IAM role a boxed CuliBox session works as when its profile has an
 `aws` binding. The broker on the host assumes this role from the engineer's own SSO role,
 for 15 minutes at a time, and hands the credentials to the box through `credential_process`.
 
@@ -10,12 +10,12 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
   (S3 objects outside the binding's `s3_read` allowlist, Secrets Manager values, SSM
   parameters, DynamoDB items, KMS decrypt outside S3). Effective permissions are the
   intersection of the two.
-  agent-box simulates the role's own policy at spawn to check whether it can write, so a
+  CuliBox simulates the role's own policy at spawn to check whether it can write, so a
   custom permissions policy must allow `iam:SimulatePrincipalPolicy` on the role itself
   (`ReadOnlyAccess` already does).
 - **Trust:** only the account's IAM Identity Center (SSO) roles of the permission sets you
   name in `sso_permission_sets`, and only with a `SourceIdentity` matching `agentbox-*`.
-  agent-box sets `SourceIdentity = RoleSessionName = agentbox-<session id>`, so CloudTrail
+  CuliBox sets `SourceIdentity = RoleSessionName = agentbox-<session id>`, so CloudTrail
   records the agent session, not the human. A plain `aws sts assume-role` without that
   source identity is refused.
 - **Session length:** `max_session_duration` is 1 hour. Role chaining (SSO role to this role)
@@ -115,7 +115,7 @@ does and does not cover). Only a definite "read-only"
 lets credentials out, a save happen or a spawn proceed. Anything the gate cannot verify (SSO
 expired, a timeout, a throttled call, a missing permission, a policy it cannot parse) refuses.
 There is no "I understand" override. The gate runs when you save the connection, when a session
-spawns, in `agent-box doctor`, and again on **every** credential mint, a refresh included
+spawns, in `culibox doctor`, and again on **every** credential mint, a refresh included
 (about 5 minutes before the credentials expire). A permission set that gains a write
 mid-session is refused at the next mint. Credentials already issued keep working until they
 expire (up to N h), and AWS applies the permission set's current policy to them immediately;
@@ -276,7 +276,7 @@ a boxed session works as while a human has granted it write access.
   every mint.
 - **Trust:** identical to the read role (one shared definition): only the named SSO
   permission sets, only with `SourceIdentity = agentbox-*`.
-- **Who mints it:** only a human grant in the agent-box steer rail. Each credential lasts
+- **Who mints it:** only a human grant in the CuliBox steer rail. Each credential lasts
   15 minutes and is never issued past the grant's window (30 or 60 minutes). The agent cannot
   ask for it on its own.
 

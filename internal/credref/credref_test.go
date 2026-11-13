@@ -184,7 +184,7 @@ func TestResolveStore(t *testing.T) {
 	}
 
 	_, err = Default{}.Resolve(ref)
-	if err == nil || err.Error() != "store references need the agent-box store (not configured)" {
+	if err == nil || err.Error() != "store references need the CuliBox store (not configured)" {
 		t.Fatalf("nil store: %v", err)
 	}
 

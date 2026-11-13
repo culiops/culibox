@@ -58,7 +58,7 @@ func (r KeyRef) Validate() error {
 			return fmt.Errorf("env var %q is not a valid variable name", r.Var)
 		}
 		if strings.HasPrefix(r.Var, "AB_") {
-			return fmt.Errorf("env var %q is reserved: the AB_ prefix holds agent-box's own settings", r.Var)
+			return fmt.Errorf("env var %q is reserved: the AB_ prefix holds CuliBox's own settings", r.Var)
 		}
 	case "store":
 		if r.Path != "" || r.Var != "" {

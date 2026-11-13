@@ -61,7 +61,7 @@ func shareSource(of, rel string, protected []box.ProtectedDir) (isDir bool, err 
 	if why := box.MountUnsafe(src); why != "" {
 		return refuse(why)
 	}
-	if why := box.ProtectedOverlap(src, protected); why != "" {
+	if why := box.ProtectedOverlap(src, box.ReadOnlyUse(protected)); why != "" {
 		return refuse(why)
 	}
 	return st.IsDir(), nil

@@ -40,6 +40,10 @@ const (
 	// workspaces, so older boxes (without it) are known not to honour claims.
 	LabelExclusive = "io.culiops.agent-box.exclusive"
 	LabelClaims    = "io.culiops.agent-box.claims"
+	// LabelIdentity marks a box created by a build that checks, when it starts,
+	// that the workspace and its guards are the folder and files that passed the
+	// checks (#108). A box without it was never checked.
+	LabelIdentity = "io.culiops.agent-box.identity"
 	// LabelCAScratch marks the never-started container caBundle creates to read
 	// the image's trust bundle. It is deliberately not LabelInstance: claimCheck
 	// and Sweep select boxes by that key and a leftover would read as a box with
@@ -220,6 +224,15 @@ func UnderMount(path string, mounts []string) bool {
 	return false
 }
 
+// BoxLabels are the labels of a box that ensure reads when it finds one running.
+type BoxLabels struct {
+	// CA is the extraca.Label value, "" when the box has none.
+	CA string
+	// Identity is whether the box carries LabelIdentity=1: it was created by a
+	// build that checks the workspace and guard identity at start.
+	Identity bool
+}
+
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
 type Client interface {
@@ -235,8 +248,8 @@ type Client interface {
 	// InspectMounts is Inspect plus the in-box destinations of the box's bind
 	// mounts, as docker reports them: the truth for every box, adopted ones and
 	// ones created by an older build included. Mounts are nil unless running.
-	// The third value is the box's extraca.Label value, "" when it has none.
-	InspectMounts(ctx context.Context, name string) (State, []string, string, error)
+	// The third value is the box's labels that ensure reads.
+	InspectMounts(ctx context.Context, name string) (State, []string, BoxLabels, error)
 	// BindSource is the host path of the running box's bind mount at the in-box
 	// destination dst ("" when it has none). Only the broker's mount is read this
 	// way (reuseBrokerDir), so a box pays the extra call only when it has one.
@@ -355,6 +368,15 @@ type Manager struct {
 	// it is listed here, so a box left over from before a daemon restart, or one
 	// whose failed removal left it running, is verified again before any use.
 	verified map[string]bool
+	// mismatched holds the boxes that failed a mount check and whose removal
+	// failed: they still run, with a mount that is not the checked one. ensure
+	// removes one before it can be reused (removeMismatched), and refuses the
+	// spawn while it cannot. Cleared when the box is gone (boxGone). Guarded by mu.
+	mismatched map[string]bool
+	// guardsChecked holds the boxes without LabelIdentity (an older build's,
+	// never checked) whose guards this process has compared once, so a later
+	// editor save does not refuse every session. Cleared by boxGone. Guarded by mu.
+	guardsChecked map[string]bool
 	// drift marks boxes whose counter disagreed with the registry at the last
 	// sweep (guarded by mu).
 	drift map[string]bool
@@ -402,9 +424,11 @@ func New(opts Options) (*Manager, error) {
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
 
-		verified:  map[string]bool{},
-		drift:     map[string]bool{},
-		exclusive: map[string]bool{},
+		verified:      map[string]bool{},
+		mismatched:    map[string]bool{},
+		guardsChecked: map[string]bool{},
+		drift:         map[string]bool{},
+		exclusive:     map[string]bool{},
 	}
 	if opts.LockGuards {
 		ops := platformFlagOps()
@@ -497,6 +521,13 @@ type BoxKey struct {
 	// user, which keeps a repo's own settings and hooks from loading; without it
 	// the dialog is the only gate before those run, so it stays.
 	PreTrust bool
+	// PreAcceptBypass asks for Claude Code's "Bypass Permissions mode" warning to
+	// be pre-accepted in the box home (see acceptBypassPermissions). Not identity,
+	// like PreTrust: it is applied when the box is created. The session layer sets
+	// it only when the spawn creating the box runs the agent with the bypass option
+	// (--dangerously-skip-permissions or --permission-mode bypassPermissions), so
+	// the option the user chose is the consent. Host-tier sessions never get here.
+	PreAcceptBypass bool
 	// NoImports is set when the profile turns CLAUDE.md imports off, so the box
 	// carries no import mounts. It is part of the identity, like Context:
 	// reuseMounts treats a box with extra mounts as fine for a spawn that asks
@@ -743,6 +774,16 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, view func() (*Shar
 	return unboxableResolved(abs, protected, view)
 }
 
+// WorkspaceRefusal is the workspace rule without the box VM's share list: the
+// reason cwd cannot be a box's workspace (the filesystem root, home or an
+// ancestor of it, a protected CuliBox directory, an unsafe mount source), or ""
+// when it is allowed. `culibox init` and Manager.UnboxableIgnoringShares both
+// use it, so init refuses the folders `box` refuses. With no share view the
+// error is always nil; it stays in the signature to match unboxableWorkspace.
+func WorkspaceRefusal(cwd string, protected []ProtectedDir) (reason string, err error) {
+	return unboxableWorkspace(cwd, protected, nil)
+}
+
 // unboxableResolved is unboxableWorkspace for a path that is already absolute and
 // symlink-resolved (workspace.Path), which it does not resolve again: the
 // protected check in it (protectedOverlapResolved) is about this very path.
@@ -771,7 +812,7 @@ func unboxableResolved(abs string, protected []ProtectedDir, view func() (*Share
 	if view != nil {
 		v, err := view()
 		if err != nil {
-			return "cannot read the box VM's folder list (" + err.Error() + "); run `agent-box doctor`", nil
+			return "cannot read the box VM's folder list (" + err.Error() + "); run `culibox doctor`", nil
 		}
 		if v != nil {
 			if err := v.Check(abs, true); err != nil {
@@ -833,7 +874,7 @@ func (m *Manager) Unboxable(cwd string) (string, bool) {
 // for a record that must not change when the user edits the VM folder list
 // (the boxed-workspace registry feeds the fs containment trees).
 func (m *Manager) UnboxableIgnoringShares(cwd string) (string, bool) {
-	reason, err := unboxableWorkspace(cwd, m.protected(), nil)
+	reason, err := WorkspaceRefusal(cwd, m.protected())
 	if err != nil {
 		return err.Error(), true
 	}
@@ -932,7 +973,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	// Last, so the clone and guard mounts above count as covering too.
 	extraRO = yieldCovered(ws.Path, extraRO)
-	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, lk); err != nil {
+	if err := m.ensure(ctx, name, ws, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust, key.PreAcceptBypass, lk); err != nil {
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -995,7 +1036,7 @@ func withoutNames(env, names []string) []string {
 // lk, when set, are the guard locks the box must hold before anything runs in
 // it: taken right before `docker run`, or, for a box already running, before
 // the session is counted. A lock that cannot be taken refuses the spawn.
-func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust bool, lk *lockReq) error {
+func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO []Mount, partial, bound, exclusive, preTrust, preAcceptBypass bool, lk *lockReq) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -1038,10 +1079,16 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	}
 
 	// One docker call answers both whether the box runs and what it mounts.
-	st, have, caLabel, err := m.opts.Client.InspectMounts(ctx, name)
+	st, have, labels, err := m.opts.Client.InspectMounts(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
+	}
+	if st == StateMissing {
+		// No container: nothing can be left over from one that failed a check.
+		m.mu.Lock()
+		delete(m.mismatched, name)
+		m.mu.Unlock()
 	}
 	if st == StateStopped {
 		// Its agents are already dead (docker exec does not survive the
@@ -1053,6 +1100,21 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		}
 		m.boxGone(name)
 		st = StateMissing
+	}
+	if st == StateRunning && m.isMismatched(name) {
+		// A box that failed a mount check earlier and could not be removed then:
+		// its guards are not compared on reuse, so it must not be reused. Removed
+		// now, and the spawn creates one that is checked; refused while it stays.
+		if st, err = m.removeMismatched(ctx, name); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
+		// Removing it took a docker call: claim the folder again, as for any
+		// box removed to be recreated.
+		if err := m.claimCheck(ctx, name, ws.Path, exclusive); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 	}
 	if st == StateRunning {
 		// Mounts are fixed at `docker run`, and the box key does not say which
@@ -1073,7 +1135,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		// The bundle mounts at one fixed destination, so reuseMounts cannot see a
 		// stale CA set; the label can (also for a box from before extra CAs).
 		if st == StateRunning {
-			if st, err = m.reuseCA(ctx, name, caLabel); err != nil {
+			if st, err = m.reuseCA(ctx, name, labels.CA); err != nil {
 				m.rearmIfIdle(name)
 				return err
 			}
@@ -1122,6 +1184,10 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		}
 	}
 	created := false
+	// A box this build checked when it started has its guards compared only then.
+	// One without the label was never checked: its guards are compared once, by
+	// this process (see skipGuard).
+	guards := st == StateRunning && !labels.Identity && !m.isGuardsChecked(name)
 	if st == StateMissing {
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
@@ -1150,6 +1216,12 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		if preAcceptBypass {
+			// Best effort, like the trust entry: without it the agent just asks.
+			if err := m.preAcceptBypass(name); err != nil {
+				log.Printf("box: %s: bypass-permissions warning not pre-accepted: %v", name, err)
+			}
 		}
 		// Like the home: made by us, as us, before docker can create it as root.
 		// Also where the previous run's old screenshots are pruned.
@@ -1192,6 +1264,7 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
 		created = true
+		guards = true
 		if verify != nil {
 			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
@@ -1204,12 +1277,15 @@ func (m *Manager) ensure(ctx context.Context, name string, ws workspace, extraRO
 	// runs in it. A reused box has had no VM identity read yet (a created one
 	// has, above, and this is then a no-op): the box's mount is old, the path's
 	// identity is now.
-	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, created); err != nil {
+	if wsm, extraRO, err = m.fillMountIDs(ctx, wsm, extraRO, guards); err != nil {
 		m.rearmIfIdle(name)
 		return err
 	}
-	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created); err != nil {
+	if err := m.checkMountIDs(ctx, name, withWorkspace(wsm, extraRO), created, guards); err != nil {
 		return m.refuseMountChanged(ctx, name, created, err)
+	}
+	if guards && !created {
+		m.markGuardsChecked(name)
 	}
 	// A box this spawn did not create: it may hold the locks already (another
 	// session's), or predate them, or the files may have changed since. Held
@@ -1396,7 +1472,7 @@ func (m *Manager) reuseCA(ctx context.Context, name, label string) (State, error
 	live := m.active[name]
 	m.mu.Unlock()
 	if live > 0 {
-		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `agent-box box stop`)",
+		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `culibox box stop`)",
 			ErrBoxUnavailable, name, live)
 	}
 	if err := m.removeIdle(ctx, name); err != nil {
@@ -1426,7 +1502,7 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 			continue
 		}
 		if b.Unreadable {
-			return fmt.Errorf("%w: container %q carries agent-box labels that cannot be read, so it may be using %s. "+
+			return fmt.Errorf("%w: container %q carries CuliBox labels that cannot be read, so it may be using %s. "+
 				"Remove that container, or use a separate folder or worktree.", ErrWorkspaceHeld, b.Name, cwd)
 		}
 		if knownWorkspace(b.Workspace) && !Overlaps(b.Workspace, cwd) {
@@ -1515,13 +1591,13 @@ func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, e
 		}
 		switch {
 		case b.Unreadable:
-			return fmt.Sprintf("container %q carries agent-box labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
+			return fmt.Sprintf("container %q carries CuliBox labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
 		case !knownWorkspace(b.Workspace):
 			return fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real), nil
 		case !Overlaps(b.Workspace, real):
 			continue
 		case !b.Claims:
-			return fmt.Sprintf("a box started by an older agent-box (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
+			return fmt.Sprintf("a box started by an older CuliBox (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
 		}
 		return fmt.Sprintf("another box (instance %s) uses %s; stop the session in it first", b.Instance, b.Workspace), nil
 	}
@@ -1557,6 +1633,45 @@ func (m *Manager) markVerified(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.verified[name] = true
+}
+
+func (m *Manager) isMismatched(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mismatched[name]
+}
+
+// markMismatched remembers a box that failed a mount check and could not be removed.
+func (m *Manager) markMismatched(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mismatched[name] = true
+}
+
+func (m *Manager) isGuardsChecked(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.guardsChecked[name]
+}
+
+func (m *Manager) markGuardsChecked(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.guardsChecked[name] = true
+}
+
+// removeMismatched removes a box that failed a mount check earlier and was left
+// running because its removal failed. It answers StateMissing once it is gone
+// (the caller creates a new box) and refuses the spawn when it cannot be removed
+// again: never a reuse. Caller holds opMu.
+func (m *Manager) removeMismatched(ctx context.Context, name string) (State, error) {
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("%w: box %s failed a mount check and could not be removed: %v; it is not reused and is removed again on the next spawn",
+			ErrBoxUnavailable, name, err)
+	}
+	m.boxGone(name)
+	return StateMissing, nil
 }
 
 // unverify forgets that a box passed Verify. Every path that stops or removes a
@@ -1719,6 +1834,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			left[name] = true
+			// Left running with no session and no memory of its checks: the
+			// identity label says a checking build made it, not that it passed
+			// (a crash between `docker run` and the check leaves such a box). Never
+			// reused as it is: the next spawn removes it again first.
+			m.markMismatched(name)
 			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 			continue
 		}

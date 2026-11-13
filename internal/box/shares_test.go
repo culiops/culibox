@@ -13,7 +13,7 @@ func TestShareViewCheck(t *testing.T) {
 		Listed:  []VMShare{{Path: "/h/code", Writable: true}, {Path: "/h/ref"}, {Path: "/h/code/newproj", Writable: true}},
 		Home:    "/h",
 	}
-	notShared := "~/other is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `agent-box box share add ~/other`"
+	notShared := "~/other is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `culibox box share add ~/other`"
 	cases := []struct {
 		name  string
 		view  ShareView
@@ -25,10 +25,10 @@ func TestShareViewCheck(t *testing.T) {
 		{"ro under ro, read", v, "/h/ref/x", false, ""},
 		{"not shared", v, "/h/other", true, notShared},
 		{"read only", v, "/h/ref/x", true,
-			"~/ref/x is shared read-only with the box VM, but a workspace needs read & write. Switch it in Settings › VM folders, or run `agent-box box share add ~/ref/x`"},
+			"~/ref/x is shared read-only with the box VM, but a workspace needs read & write. Switch it in Settings › VM folders, or run `culibox box share add ~/ref/x`"},
 		{"pending", ShareView{Applied: []VMShare{{Path: "/h/ref"}}, Listed: []VMShare{{Path: "/h/code"}}, Home: "/h"}, "/h/code/newproj", true,
-			"~/code/newproj was added to the box VM folders but not applied yet: apply it in Settings › VM folders (this restarts the box VM), or run `agent-box box share apply`"},
-		{"no fold", v, "/h/Code/x", true, "~/Code/x is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `agent-box box share add ~/Code/x`"},
+			"~/code/newproj was added to the box VM folders but not applied yet: apply it in Settings › VM folders (this restarts the box VM), or run `culibox box share apply`"},
+		{"no fold", v, "/h/Code/x", true, "~/Code/x is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `culibox box share add ~/Code/x`"},
 		{"fold", ShareView{Applied: v.Applied, Home: "/h", Fold: true}, "/h/Code/x", true, ""},
 	}
 	for _, c := range cases {
@@ -112,7 +112,7 @@ func TestNotSharedHintFollowsTheNeededAccess(t *testing.T) {
 	if !errors.As(err, &ns) || ns.NeedWrite {
 		t.Fatalf("read-only need: %v (%+v)", err, ns)
 	}
-	if want := "~/orig is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `agent-box box share add ~/orig -ro`"; err.Error() != want {
+	if want := "~/orig is not shared with the box VM, so a box can’t use it. Add it in Settings › VM folders, or run `culibox box share add ~/orig -ro`"; err.Error() != want {
 		t.Errorf("got  %q\nwant %q", err, want)
 	}
 	err = v.Check("/h/other", true)

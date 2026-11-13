@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,12 @@ type ArchResult struct {
 	TestsPassed bool   `json:"tests_passed"`
 	TestSummary string `json:"test_summary"`
 	VersionLine string `json:"version_line"`
+	// BinarySHA256 is the sha256 of the extracted agent-box binary that was run and
+	// that the manual rows were told to use. TestEnv is the Go environment of the
+	// test run ("CGO_ENABLED=0 GOOS=darwin GOARCH=arm64"): the shipped binaries are
+	// built with CGO_ENABLED=0, so a run with cgo on proves less.
+	BinarySHA256 string `json:"binary_sha256"`
+	TestEnv      string `json:"test_env"`
 }
 
 // ManualRow is one manual acceptance row. Result is "pass", "fail" or "na".
@@ -133,6 +140,12 @@ func incomplete(r Run) []string {
 		if want, ok := wantMode[arch]; ok && a.Mode != want {
 			out = append(out, fmt.Sprintf("%s ran in mode %q, want %q", arch, a.Mode, want))
 		}
+		if !isHex64(a.BinarySHA256) {
+			out = append(out, arch+" has no sha256 of the binary that was run")
+		}
+		if !slices.Contains(strings.Fields(a.TestEnv), "CGO_ENABLED=0") {
+			out = append(out, arch+" tests were not run with CGO_ENABLED=0 (the shipped build)")
+		}
 	}
 	return append(out, tarballProblems(r)...)
 }
@@ -181,7 +194,10 @@ func DarwinLine(r Run) string {
 		if r.Date != "" {
 			s += ", " + r.Date
 		}
-		return s
+		// What the tick covers, so it is not read as more: the files users download
+		// (sums, and each binary run), plus the source's tests built the way the
+		// shipped binaries are.
+		return s + "; checked: tarball sha256 sums, shipped binary version, go test with CGO_ENABLED=0 (the shipped build)"
 	case "failed":
 		fa, fr := failures(r)
 		var parts []string
@@ -332,8 +348,11 @@ func RenderBlock(tag, ciRunURL string, last Release, hasLast bool, darwin string
 	var b strings.Builder
 	b.WriteString(beginMarker + "\n")
 	b.WriteString("### Platform status\n\n")
-	fmt.Fprintf(&b, "- linux/amd64: tested in CI (native), [run](%s)\n", ciRunURL)
-	fmt.Fprintf(&b, "- linux/arm64: tested in CI (native), [run](%s)\n", ciRunURL)
+	// Exactly what CI ran (ci.yml and release.yml): both arches run the source tests
+	// (cgo on, -race) on a native runner; only the linux/amd64 tarball is run, for its
+	// version. The linux/arm64 tarball is built but never run.
+	fmt.Fprintf(&b, "- linux/amd64: source tests passed in CI on a native runner (cgo, -race); this tarball ran and reported its version, [run](%s)\n", ciRunURL)
+	fmt.Fprintf(&b, "- linux/arm64: source tests passed in CI on a native runner (cgo, -race); this tarball was not run, [run](%s)\n", ciRunURL)
 	b.WriteString(darwinARM + " " + darwin + "\n")
 	b.WriteString(darwinAMD + " " + darwin + "\n\n")
 	b.WriteString("Last macOS-verified release: " + prior + "\n")

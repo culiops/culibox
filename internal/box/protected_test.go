@@ -28,9 +28,9 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for ws, want := range map[string]string{
-		filepath.Join(elsewhere, "cfg"): "it contains agent-box's config directory",
-		profDir:                         "it is agent-box's profiles directory",
-		elsewhere:                       "it contains agent-box's config directory",
+		filepath.Join(elsewhere, "cfg"): "it contains CuliBox's config directory",
+		profDir:                         "it is CuliBox's profiles directory",
+		elsewhere:                       "it contains CuliBox's config directory",
 	} {
 		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), want) {
@@ -87,7 +87,7 @@ func TestDedupeProtectedKeepsTheFirstMeaning(t *testing.T) {
 	d := t.TempDir()
 	got := DedupeProtected([]ProtectedDir{DataDirProtected(d), ConfigDirProtected(d + "/"), ProfilesDirProtected(""),
 		ProfilesDirProtected(filepath.Join(d, "p"))})
-	if len(got) != 2 || got[0].What != "agent-box's data directory" || got[1].What != "agent-box's profiles directory" {
+	if len(got) != 2 || got[0].What != "CuliBox's data directory" || got[1].What != "CuliBox's profiles directory" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -111,18 +111,18 @@ func TestConfigAndProfilesDirsRefuseOnlyIsAndContains(t *testing.T) {
 	if r := ProtectedOverlap(proj, prof); r != "" {
 		t.Fatalf("a project under a profiles dir in $HOME must stay boxable: %q", r)
 	}
-	if r := ProtectedOverlap(home, prof); !strings.Contains(r, "it is agent-box's profiles directory") {
+	if r := ProtectedOverlap(home, prof); !strings.Contains(r, "it is CuliBox's profiles directory") {
 		t.Fatalf("the profiles dir itself must be refused: %q", r)
 	}
 	cfg := []ProtectedDir{ConfigDirProtected(filepath.Join(home, "cfg"))}
 	if r := ProtectedOverlap(sub, cfg); r != "" {
 		t.Fatalf("a subdir of a config dir must be boxable: %q", r)
 	}
-	if r := ProtectedOverlap(home, cfg); !strings.Contains(r, "it contains agent-box's config directory") {
+	if r := ProtectedOverlap(home, cfg); !strings.Contains(r, "it contains CuliBox's config directory") {
 		t.Fatalf("an ancestor of the config dir must be refused: %q", r)
 	}
 	data := []ProtectedDir{DataDirProtected(filepath.Join(home, "cfg"))}
-	if r := ProtectedOverlap(sub, data); !strings.Contains(r, "it is inside agent-box's data directory") {
+	if r := ProtectedOverlap(sub, data); !strings.Contains(r, "it is inside CuliBox's data directory") {
 		t.Fatalf("the data root still refuses a workspace inside it: %q", r)
 	}
 }
@@ -194,11 +194,11 @@ func TestProtectedOverlapMatchesTheLinkSpellingToo(t *testing.T) {
 func TestDedupeProtectedNeverDropsTheStricterEntry(t *testing.T) {
 	d := t.TempDir()
 	got := DedupeProtected([]ProtectedDir{ConfigDirProtected(d), DataDirProtected(d), ProfilesDirProtected(d)})
-	if len(got) != 2 || got[1].What != "agent-box's data directory" {
+	if len(got) != 2 || got[1].What != "CuliBox's data directory" {
 		t.Fatalf("got %+v", got)
 	}
 	inside := filepath.Join(d, "x")
-	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside agent-box's data directory") {
+	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside CuliBox's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q", r)
 	}
 }
@@ -406,5 +406,85 @@ func TestPersonalConfigDirRefusesIsContainsAndInside(t *testing.T) {
 	}
 	if r := ProtectedOverlap(proj, dirs); r != "" {
 		t.Fatalf("a sibling must stay boxable: %q", r)
+	}
+}
+
+// #235 item 2: the directory of each program CuliBox runs (docker, colima,
+// limactl, its own binary) is protected like the config dirs: a workspace or a
+// VM share that is it, or holds it, is refused; one inside it, or beside it, is not.
+func TestProtectedDirsForProtectsProgramDirs(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(t.TempDir(), "brew") // like /opt/homebrew
+	for _, d := range []string{"bin", "lib", "Cellar/docker/1/bin"} {
+		if err := os.MkdirAll(filepath.Join(prefix, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real := filepath.Join(prefix, "Cellar/docker/1/bin/docker")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(prefix, "bin", "docker")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	dirs := ProtectedDirsFor(root, nil, filepath.Join(root, "profiles.json"), "", "", link, "")
+	for _, c := range []struct {
+		ws   string
+		want string // "" = allowed
+	}{
+		{prefix, "it contains a program CuliBox runs"},
+		{filepath.Join(prefix, "bin"), "it is a program CuliBox runs"},
+		{filepath.Join(prefix, "Cellar/docker/1/bin"), "it is a program CuliBox runs"},
+		{filepath.Join(prefix, "Cellar"), "it contains a program CuliBox runs"},
+		{filepath.Join(prefix, "lib"), ""},
+		{filepath.Join(prefix, "bin", "sub"), ""},
+	} {
+		got := ProtectedOverlap(c.ws, dirs)
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("ProtectedOverlap(%s) = %q, want %q", c.ws, got, c.want)
+		}
+	}
+}
+
+// #235 review: a program folder matters only to a use that can WRITE there.
+// Workspaces keep refusing it; context paths, which are read-only binds, do not.
+func TestProgramDirsAreEnforcedOnlyForWritableUses(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(repo, "tmp", "main")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirs := ProtectedDirsFor(root, nil, filepath.Join(root, "profiles.json"), "", "", bin)
+	if r := ProtectedOverlap(repo, dirs); !strings.Contains(r, "a program CuliBox runs") {
+		t.Errorf("a workspace holding the program folder = %q, want a refusal", r)
+	}
+	if err := CheckContextPath(repo, "/nonexistent-home", dirs, nil); err != nil {
+		t.Errorf("a read-only context path holding the program folder was refused: %v", err)
+	}
+	// The data root is refused for every use.
+	if err := CheckContextPath(root, "/nonexistent-home", dirs, nil); err == nil {
+		t.Error("a context path at the data root was accepted")
+	}
+	for _, d := range ReadOnlyUse(dirs) {
+		if d.What == "a program CuliBox runs" {
+			t.Errorf("ReadOnlyUse kept %+v", d)
+		}
+	}
+	if len(ReadOnlyUse(dirs)) == 0 {
+		t.Error("ReadOnlyUse dropped everything")
+	}
+}
+
+// A program folder never hides a config folder of the same path.
+func TestDedupeKeepsAConfigDirNextToAProgramDir(t *testing.T) {
+	d := t.TempDir()
+	out := DedupeProtected([]ProtectedDir{ProgramDirProtected(d), ConfigDirProtected(d)})
+	if len(out) != 2 {
+		t.Fatalf("%+v", out)
 	}
 }
