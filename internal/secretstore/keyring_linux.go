@@ -26,8 +26,13 @@ type keyringKeeper struct{ desc string }
 var keyctlSetperm = unix.KeyctlSetperm
 
 // NewKeeper returns the Linux keeper for dataDir.
-func NewKeeper(dataDir string) Keeper {
-	return &keyringKeeper{desc: "agent-box:store:" + KeyHash(dataDir)}
+func NewKeeper(dataDir string) Keeper { return NewKeeperForHash(KeyHash(dataDir)) }
+
+// NewKeeperForHash returns the Linux keeper for the data dir whose KeyHash is
+// hash: a moved data root (#255) reads its old key this way after the old path
+// is gone.
+func NewKeeperForHash(hash string) Keeper {
+	return &keyringKeeper{desc: "agent-box:store:" + hash}
 }
 
 func (k *keyringKeeper) NeedsPassphrase() bool { return true }

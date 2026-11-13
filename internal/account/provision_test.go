@@ -442,3 +442,87 @@ func TestProvisionKeepsMCPWhenSourceInvalid(t *testing.T) {
 		t.Fatalf("absent source left %d servers", n)
 	}
 }
+
+// writeAccountSettings writes <data>/accounts/<name>/claude/settings.json.
+func writeAccountSettings(t *testing.T, data, name, body string, mode os.FileMode) string {
+	t.Helper()
+	dir := filepath.Join(data, "accounts", name, "claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(p, []byte(body), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, mode); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestRewriteStatusLinePrefix(t *testing.T) {
+	data := t.TempDir()
+	p := writeAccountSettings(t, data, "work",
+		`{"model":"opus","statusLine":{"type":"command","command":"/r/agent-box/bin/agentbox-statusline.sh","padding":0},"env":{"A":"1"}}`, 0o640)
+	if err := RewriteStatusLinePrefix(data, "/r/agent-box", "/r/culibox"); err != nil {
+		t.Fatal(err)
+	}
+	m := readJSON(t, p)
+	sl, _ := m["statusLine"].(map[string]any)
+	if sl["command"] != "/r/culibox/bin/agentbox-statusline.sh" {
+		t.Errorf("command = %v", sl["command"])
+	}
+	if sl["type"] != "command" || sl["padding"] != float64(0) {
+		t.Errorf("other statusLine keys not kept: %v", sl)
+	}
+	if m["model"] != "opus" || m["env"].(map[string]any)["A"] != "1" {
+		t.Errorf("other keys not kept: %v", m)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %o, want 640 (kept)", fi.Mode().Perm())
+	}
+	// Idempotent.
+	if err := RewriteStatusLinePrefix(data, "/r/agent-box", "/r/culibox"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readJSON(t, p)["statusLine"].(map[string]any)["command"]; got != "/r/culibox/bin/agentbox-statusline.sh" {
+		t.Errorf("after second run command = %v", got)
+	}
+}
+
+func TestRewriteStatusLinePrefixKeepsSiblingPrefix(t *testing.T) {
+	data := t.TempDir()
+	body := `{"statusLine":{"type":"command","command":"/r/agent-box-prod/bin/agentbox-statusline.sh"}}`
+	p := writeAccountSettings(t, data, "work", body, 0o600)
+	if err := RewriteStatusLinePrefix(data, "/r/agent-box", "/r/culibox"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != body {
+		t.Errorf("sibling-prefix settings changed: %s", b)
+	}
+}
+
+func TestRewriteStatusLinePrefixLeavesUserCommand(t *testing.T) {
+	data := t.TempDir()
+	user := `{"statusLine":{"type":"command","command":"~/bin/my-status.sh"}}`
+	p := writeAccountSettings(t, data, "work", user, 0o600)
+	none := `{"model":"opus"}`
+	q := writeAccountSettings(t, data, "home", none, 0o600)
+	if err := RewriteStatusLinePrefix(data, "/r/agent-box", "/r/culibox"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != user {
+		t.Errorf("user command changed: %s", b)
+	}
+	if b, _ := os.ReadFile(q); string(b) != none {
+		t.Errorf("settings without statusLine changed: %s", b)
+	}
+	// No accounts dir at all is not an error.
+	if err := RewriteStatusLinePrefix(t.TempDir(), "/r/agent-box", "/r/culibox"); err != nil {
+		t.Errorf("no accounts dir: %v", err)
+	}
+}

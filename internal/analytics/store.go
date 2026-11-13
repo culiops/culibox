@@ -207,6 +207,51 @@ func backupOnce(db *sql.DB, dst string) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// RewritePathPrefix moves every ingest_state row under oldRoot (the path equal
+// to it, or below it as a whole path component) to the same place under
+// newRoot, in one transaction, and returns how many rows it moved. A data root
+// move (#255) calls it: without it each transcript would read as new and be
+// counted again from offset 0. A sibling such as <oldRoot>-prod is not touched.
+// Idempotent: a second run finds nothing left under oldRoot.
+func (s *Store) RewritePathPrefix(oldRoot, newRoot string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT path FROM ingest_state`)
+	if err != nil {
+		return 0, err
+	}
+	var from []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if p == oldRoot || strings.HasPrefix(p, oldRoot+"/") {
+			from = append(from, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, p := range from {
+		if _, err := tx.Exec(`UPDATE ingest_state SET path=? WHERE path=?`, newRoot+p[len(oldRoot):], p); err != nil {
+			return 0, fmt.Errorf("analytics: rewrite %s: %w", p, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(from), nil
+}
+
 // State returns the recorded size and read offset for a transcript path, and the
 // message ids already counted near that offset (oldest first), which let a
 // message split across two ingest batches be counted once.

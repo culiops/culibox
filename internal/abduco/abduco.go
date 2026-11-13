@@ -182,6 +182,24 @@ func (a *Adapter) List() ([]string, error) {
 	return ids, err
 }
 
+// LiveSessions counts the sessions abduco would reattach under socketDir:
+// each listed id whose agent is still running (InnerAlive, the check Reconcile
+// trusts). It reads only; neither directory is created.
+func LiveSessions(socketDir, pidDir string) (int, error) {
+	a := &Adapter{SocketDir: socketDir, PidDir: pidDir}
+	ids, err := a.List()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, id := range ids {
+		if a.InnerAlive(id) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Alive reports whether the session's socket is present. NOT the exit/detach
 // discriminator (socket unlink races the attach EOF) — use InnerAlive for that.
 func (a *Adapter) Alive(id string) bool {
