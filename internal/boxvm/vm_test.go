@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -98,24 +99,37 @@ func TestStatusParsesRunningAndStopped(t *testing.T) {
 	}
 }
 
-// #247 (1): only colima's own "not running" answer is a confirmed stop. Any
-// other failed status (colima or lima erroring while the VM may run) still
-// reads as not running, but not as Stopped: a box may run.
-func TestStatusStoppedOnlyOnColimasWord(t *testing.T) {
+// #247 (1): a confirmed stop needs two independent signals: colima's "is not
+// running" answer (which colima also prints when it fails to read the lima
+// instance) AND nothing listening on the VM's docker socket (lima's host agent
+// serves it, and with vmType vz the VM runs inside that agent). Anything else
+// is not Stopped: a box may run.
+func TestStatusStoppedNeedsColimaAndADeadSocket(t *testing.T) {
 	r := &fakeRunner{}
 	v := setUpVM(t, r)
 	r.running.Store(false)
+	sock := v.Config().DockerSocket()
 	if st, err := v.Status(context.Background()); err != nil || st.Running || !st.Stopped {
-		t.Fatalf("colima says not running: want Stopped, got %+v %v", st, err)
+		t.Fatalf("not running and no socket: want Stopped, got %+v %v", st, err)
+	}
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := v.Status(context.Background()); err != nil || st.Running || st.Stopped {
+		t.Fatalf("colima says not running but the docker socket answers: want not Stopped, got %+v %v", st, err)
+	}
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	l.Close()
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("want a stale socket file: %v", err)
+	}
+	if st, err := v.Status(context.Background()); err != nil || !st.Stopped {
+		t.Fatalf("a stale socket nobody serves: want Stopped, got %+v %v", st, err)
 	}
 	r.failOn = "status"
 	if st, err := v.Status(context.Background()); err != nil || st.Running || st.Stopped {
-		t.Fatalf("colima failed: want neither Running nor Stopped, got %+v %v", st, err)
-	}
-	r.failOn = ""
-	r.running.Store(true)
-	if st, err := v.Status(context.Background()); err != nil || !st.Running || st.Stopped {
-		t.Fatalf("running: %+v %v", st, err)
+		t.Fatalf("colima failed without its answer: want neither Running nor Stopped, got %+v %v", st, err)
 	}
 }
 

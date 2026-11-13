@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,7 +32,6 @@ type fakeColima struct {
 	socket  string // docker_socket reported while running
 	mount   string // mount_type reported while running; "" = virtiofs
 	garbled bool   // status exits 0 with output that is not colima's JSON
-	failed  bool   // status exits non-zero without colima's "not running" answer
 	hang    bool   // status blocks until its context ends (a wedged hostagent)
 	rules   string // what `ssh … iptables -S` prints
 	mounts  string // what `ssh … cat /proc/self/mounts` prints
@@ -60,9 +60,6 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		}
 		if f.garbled {
 			return "WARN something colima printed\n", nil
-		}
-		if f.failed {
-			return "error: lima: connection refused", errors.New("exit status 1")
 		}
 		if !f.running {
 			return "colima [profile=agent-box] is not running", errors.New("exit status 1")
@@ -899,19 +896,30 @@ func TestBootSweepsGuardLocksOnlyOnAConfirmedStop(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		garbled   bool
-		failed    bool
+		sockAlive bool
 		wantSweep bool
 	}{
 		{"stopped", false, false, true},
 		{"status unreadable", true, false, false},
-		// #247 (1): a status that failed without colima saying the VM is not
-		// running is not a confirmed stop either.
-		{"status failed", false, true, false},
+		// #247 (1): colima also says "is not running" when it cannot read the
+		// lima instance; while the VM's docker socket still answers, that is
+		// not a confirmed stop.
+		{"docker socket answers", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, fc, _ := darwinLayer(t, false)
 			fc.garbled = tc.garbled
-			fc.failed = tc.failed
+			if tc.sockAlive {
+				sock := l.vm.Config().DockerSocket()
+				if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				ln, err := net.Listen("unix", sock)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { ln.Close() })
+			}
 			swept := 0
 			l.sweepLocksNoBoxes = func() { swept++ }
 			if l.bootReconcile(context.Background()) {
