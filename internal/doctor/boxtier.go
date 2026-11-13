@@ -36,6 +36,14 @@ import (
 // the way the launcher does when secret_sources has no store entry. accts is
 // accounts.json (storerefs.ReadAccounts).
 func ClaudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.StoreGetter, accts []account.Account) Result {
+	r, _ := claudeBoxToken(c, st, acctStore, accts)
+	return r
+}
+
+// claudeBoxToken is ClaudeBoxToken; lockedOnly is true when the row is a WARN
+// only because the store is locked (no agent is missing a credential or hit a
+// Keychain failure).
+func claudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.StoreGetter, accts []account.Account) (r Result, lockedOnly bool) {
 	const check = "boxed claude token"
 	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
@@ -96,19 +104,19 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter, acctStore credref.S
 	}
 	switch {
 	case boxed == 0:
-		return Result{Pass, check, "no boxed claude agent in config.json"}
+		return Result{Pass, check, "no boxed claude agent in config.json"}, false
 	case len(unavailableAgents) > 0:
 		return Result{Fail, check, "agent(s) " + strings.Join(unavailableAgents, ", ") +
-			": the Claude token is in the store, but " + unavailable.Error()}
+			": the Claude token is in the store, but " + unavailable.Error()}, false
 	case len(locked) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
-			`: the Claude token is in the store, which is locked — unlock it ("culibox store unlock")`}
+			`: the Claude token is in the store, which is locked — unlock it ("culibox store unlock")`}, len(missing) == 0
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
 			" have no Claude token that resolves (account or CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret); a boxed claude will ask to /login. " +
-			`Run "culibox init" or paste a setup-token under Settings → Agent accounts`}
+			`Run "culibox init" or paste a setup-token under Settings → Agent accounts`}, false
 	}
-	return Result{Pass, check, fmt.Sprintf("%d boxed claude agent(s) have a credential", boxed)}
+	return Result{Pass, check, fmt.Sprintf("%d boxed claude agent(s) have a credential", boxed)}, false
 }
 
 // boxFacts is everything doctor learned about the box tier. Gathering never

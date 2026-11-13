@@ -612,7 +612,7 @@ func TestClaudeBoxTokenAccountNotOwnedWarns(t *testing.T) {
 
 func TestBoxTierWithoutDockerNeverPasses(t *testing.T) {
 	home := t.TempDir()
-	rows := BoxTier(Input{Config: config.Config{DockerBin: "culibox-no-such-docker"}, Home: home})
+	rows := BoxTier(Input{Config: config.Config{DockerBin: "culibox-no-such-docker"}, Home: home}).Rows
 	if len(rows) == 0 {
 		t.Fatal("no rows")
 	}
@@ -620,5 +620,31 @@ func TestBoxTierWithoutDockerNeverPasses(t *testing.T) {
 		if r.Status == Pass {
 			t.Fatalf("a box tier without docker must not pass: %+v", rows)
 		}
+	}
+}
+
+// TokenLockedOnly marks the one WARN init may read as "found": every boxed
+// agent's credential failed only because the store is locked.
+func TestClaudeBoxTokenLockedOnly(t *testing.T) {
+	accts := []account.Account{{Name: "claude-box", Provider: "claude", TokenSecret: account.TokenID("claude-box")}}
+	linked := config.AgentConfig{Name: "claude", Bin: "claude", Account: "claude-box"}
+	box := func(as ...config.AgentConfig) config.Config {
+		return config.Config{DefaultRuntime: config.RuntimeBox, Agents: as}
+	}
+	if r, only := claudeBoxToken(box(linked), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn || !only {
+		t.Fatalf("locked alone: %+v %v", r, only)
+	}
+	if r := ClaudeBoxToken(box(linked), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn {
+		t.Fatalf("ClaudeBoxToken must be the same row: %+v", r)
+	}
+	orphan := config.AgentConfig{Name: "claude-ops", Bin: "claude"}
+	if r, only := claudeBoxToken(box(linked, orphan), nil, stubStore{err: credref.ErrLocked}, accts); r.Status != Warn || only {
+		t.Fatalf("locked plus missing is not locked-only: %+v %v", r, only)
+	}
+	if r, only := claudeBoxToken(box(orphan), nil, nil, accts); r.Status != Warn || only {
+		t.Fatalf("missing: %+v %v", r, only)
+	}
+	if _, only := claudeBoxToken(box(linked), nil, stubStore{vals: map[string]string{account.TokenID("claude-box"): "x"}}, accts); only {
+		t.Fatal("a pass is not locked-only")
 	}
 }

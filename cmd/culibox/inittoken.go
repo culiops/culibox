@@ -62,14 +62,10 @@ func initTokenStep(u *initUI, cfg config.Config, dataDir string, d initDeps) (st
 	}
 	if status.Initialized {
 		// List never decrypts, so a locked store answers without a passphrase.
-		ents, err := st.List()
+		stored, err := storeHasID(st, tokenID)
 		if err != nil {
 			u.stopped(storeErrText(err) + "; fix that, then run culibox init again")
 			return "", false
-		}
-		stored := false
-		for _, e := range ents {
-			stored = stored || e.ID == tokenID
 		}
 		if haveAccount && stored {
 			if !u.ask("Replace the token?", false) {
@@ -117,6 +113,21 @@ func initTokenStep(u *initUI, cfg config.Config, dataDir string, d initDeps) (st
 	}
 	u.done()
 	return initAccountName, true
+}
+
+// storeHasID says whether the store lists id. List never decrypts, so a
+// locked store answers without a passphrase.
+func storeHasID(st *secretstore.Store, id string) (bool, error) {
+	ents, err := st.List()
+	if err != nil {
+		return false, err
+	}
+	for _, e := range ents {
+		if e.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 const initForeignAccountWhy = "it inherits your personal login, or uses another token; in Settings, Agent accounts, give it its own token, or rename it"

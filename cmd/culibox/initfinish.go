@@ -8,16 +8,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	boximage "github.com/culiops/culibox/docker/agent-box"
+	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/box"
 	"github.com/culiops/culibox/internal/boxvm"
 	"github.com/culiops/culibox/internal/config"
 	"github.com/culiops/culibox/internal/doctor"
-	"github.com/culiops/culibox/internal/storerefs"
+	"github.com/culiops/culibox/internal/secretstore"
 	"github.com/culiops/culibox/internal/vmshares"
 )
 
@@ -249,26 +251,52 @@ func initVMSetUp(cfg config.Config, dataDir, home, goos string) bool {
 	return l.vm.SetUp()
 }
 
-// initBoxReady says whether box setup has nothing left to do. macOS: the VM is
-// set up and doctor's box rows have no FAIL and no WARN, including a "box
-// image" PASS (so the VM runs and the image is current) and the boxed claude
-// token. Linux: the token resolves and the image is current.
+// initBoxReady says whether box setup has nothing left to do (see
+// initBoxReadyFrom). macOS also needs the VM set up, checked first because it
+// is cheap.
 func initBoxReady(cfg config.Config, cfgFiles []string, dataDir, home, goos string) bool {
-	if goos == "darwin" {
-		if !initVMSetUp(cfg, dataDir, home, goos) {
+	if goos == "darwin" && !initVMSetUp(cfg, dataDir, home, goos) {
+		return false
+	}
+	rep := doctor.BoxTier(doctor.Input{Config: cfg, Home: home, ConfigFiles: cfgFiles})
+	return initBoxReadyFrom(goos, rep,
+		func() bool { return initTokenStored(dataDir, newKeeper(dataDir)) },
+		func() bool { return initImageCurrent(cfg) })
+}
+
+// initBoxReadyFrom reads doctor's box-tier report: every row PASS, and the
+// boxed claude token row PASS too (doctor prints it only on macOS). The one
+// exception is a token row that is a WARN only because the store is locked
+// while the claude-box token is in it (tokenStored, which never decrypts): a
+// Linux store's unlock expires, and a locked store is no reason to rebuild. The
+// image must be current: macOS reads doctor's "box image" row (present only
+// while the VM runs), Linux asks the host's docker (imageCurrent).
+func initBoxReadyFrom(goos string, rep doctor.BoxTierReport, tokenStored, imageCurrent func() bool) bool {
+	rows := rep.Rows
+	if goos != "darwin" {
+		rows = append(slices.Clone(rows), rep.Token)
+	}
+	image := false
+	for _, r := range rows {
+		switch {
+		case r.Status == doctor.Pass:
+			image = image || r.Check == "box image"
+		case r.Check == rep.Token.Check && rep.TokenLockedOnly && tokenStored():
+		default:
 			return false
 		}
-		image := false
-		for _, r := range doctor.BoxTier(doctor.Input{Config: cfg, Home: home, ConfigFiles: cfgFiles}) {
-			if r.Status != doctor.Pass {
-				return false
-			}
-			image = image || r.Check == "box image"
-		}
+	}
+	if goos == "darwin" {
 		return image
 	}
-	tok := doctor.ClaudeBoxToken(cfg, doctor.StoreFor(cfg, dataDir), doctor.AccountStoreFor(cfg, dataDir), storerefs.ReadAccounts(dataDir))
-	return tok.Status == doctor.Pass && initImageCurrent(cfg)
+	return imageCurrent()
+}
+
+// initTokenStored says whether the store holds the claude-box token, by the
+// same list step 5 reads (no passphrase, no decryption).
+func initTokenStored(dataDir string, k secretstore.Keeper) bool {
+	ok, err := storeHasID(secretstore.Open(dataDir, k, nil), account.TokenID(initAccountName))
+	return err == nil && ok
 }
 
 // initImageCurrent says whether the box image is present, built for the

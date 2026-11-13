@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/culibox/internal/account"
 	"github.com/culiops/culibox/internal/auth"
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/doctor"
 	"github.com/culiops/culibox/internal/secretstore"
 )
 
@@ -520,5 +521,87 @@ func TestRealInitDepsNeverReachABoxWithoutDocker(t *testing.T) {
 	}
 	if d.boxReady(cfg, nil, t.TempDir()) {
 		t.Fatal("no docker: the box is not ready")
+	}
+}
+
+var (
+	tierPass   = doctor.Result{Status: doctor.Pass, Check: "boxed tier", Detail: "docker found"}
+	imagePass  = doctor.Result{Status: doctor.Pass, Check: "box image", Detail: "current"}
+	tokenPass  = doctor.Result{Status: doctor.Pass, Check: "boxed claude token", Detail: "1 agent"}
+	tokenLock  = doctor.Result{Status: doctor.Warn, Check: "boxed claude token", Detail: "locked"}
+	stoppedBox = doctor.Result{Status: doctor.Warn, Check: "stopped boxes", Detail: "x"}
+)
+
+func TestInitBoxReadyFrom(t *testing.T) {
+	yes := func() bool { return true }
+	no := func() bool { return false }
+	cases := []struct {
+		name         string
+		goos         string
+		rep          doctor.BoxTierReport
+		stored, imgs func() bool
+		want         bool
+	}{
+		{"linux all pass", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenPass}, no, yes, true},
+		{"linux image missing", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenPass}, no, no, false},
+		{"linux locked, token stored", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock, TokenLockedOnly: true}, yes, yes, true},
+		{"linux locked, token not stored", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock, TokenLockedOnly: true}, no, yes, false},
+		{"linux token WARN not only locked", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock}, yes, yes, false},
+		{"linux another WARN", "linux", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, stoppedBox}, Token: tokenPass}, yes, yes, false},
+		{"darwin all pass", "darwin", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, imagePass, tokenPass}, Token: tokenPass}, no, no, true},
+		{"darwin no image row (VM stopped)", "darwin", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, tokenPass}, Token: tokenPass}, no, yes, false},
+		{"darwin locked, token stored", "darwin", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, imagePass, tokenLock}, Token: tokenLock, TokenLockedOnly: true}, yes, no, true},
+		{"darwin locked, token not stored", "darwin", doctor.BoxTierReport{Rows: []doctor.Result{tierPass, imagePass, tokenLock}, Token: tokenLock, TokenLockedOnly: true}, no, no, false},
+	}
+	for _, c := range cases {
+		if got := initBoxReadyFrom(c.goos, c.rep, c.stored, c.imgs); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// On Linux the store is a passphrase store whose CLI unlock expires: a locked
+// store holding the claude-box token is still a ready box, so a re-run asks
+// before running box setup again.
+func TestBoxStepLinuxLockedStoreWithTokenIsReady(t *testing.T) {
+	f := newTokFix(t, true)
+	if err := f.store().Init([]byte(tokPass), "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store().Set(account.TokenID(initAccountName), []byte(tokTest), "t"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.store().Status().Locked {
+		t.Fatal("setup: the store must be locked")
+	}
+	rep := doctor.BoxTierReport{Rows: []doctor.Result{tierPass}, Token: tokenLock, TokenLockedOnly: true}
+	d := (&fakeInit{}).deps("linux")
+	d.boxReady = func(config.Config, []string, string) bool {
+		return initBoxReadyFrom("linux", rep, func() bool { return initTokenStored(f.dataDir, f.k) }, func() bool { return true })
+	}
+	setupRan := false
+	d.boxSetup = func(config.Config, []string, io.Writer) int { setupRan = true; return 0 }
+	var out bytes.Buffer
+	ok := initBoxStep(newTestUI("\n", &out), config.Config{}, nil, f.dataDir, "/w/proj", d)
+	s := out.String()
+	if !ok || setupRan || !strings.Contains(s, "Run box setup again? [y/N]") || !strings.Contains(s, "already done:") {
+		t.Fatalf("ok=%v setupRan=%v out=%s", ok, setupRan, s)
+	}
+	noToken(t, s)
+}
+
+func TestInitTokenStoredNeedsTheTokenID(t *testing.T) {
+	f := newTokFix(t, true)
+	if initTokenStored(f.dataDir, f.k) {
+		t.Fatal("no store: not stored")
+	}
+	if err := f.store().Init([]byte(tokPass), "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store().Set("OTHER_SECRET", []byte("x"), "t"); err != nil {
+		t.Fatal(err)
+	}
+	if initTokenStored(f.dataDir, f.k) {
+		t.Fatal("another id is not the claude-box token")
 	}
 }
