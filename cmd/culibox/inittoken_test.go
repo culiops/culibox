@@ -320,6 +320,12 @@ func TestTokenStepFreshLinuxAsksPassphrase(t *testing.T) {
 	if !st.Status().Initialized {
 		t.Fatal("store not initialized")
 	}
+	if st.Status().Locked {
+		t.Fatal("the new store must be left unlocked, like culibox store init")
+	}
+	if err := st.Lock("t"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Unlock([]byte(tokPass), time.Minute, "t"); err != nil {
 		t.Fatalf("the passphrase typed must unlock the store: %v", err)
 	}

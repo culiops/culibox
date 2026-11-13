@@ -73,7 +73,7 @@ func initTokenStep(u *initUI, cfg config.Config, dataDir string, d initDeps) (st
 				return initAccountName, true
 			}
 		}
-	} else if !initStoreInit(u, st, d) {
+	} else if !initStoreInit(u, st, cfg, d) {
 		return "", false
 	}
 
@@ -165,8 +165,9 @@ func initStoreFailed(u *initUI, err error) {
 
 // initStoreInit creates the store: on macOS the master key goes to the Keychain
 // with no passphrase; on Linux it asks for a new one (hidden, twice, at least
-// secretstore.MinPassphraseChars) like `culibox store init`.
-func initStoreInit(u *initUI, st *secretstore.Store, d initDeps) bool {
+// secretstore.MinPassphraseChars) and unlocks the new store with it, like
+// `culibox store init`.
+func initStoreInit(u *initUI, st *secretstore.Store, cfg config.Config, d initDeps) bool {
 	var pass []byte
 	if st.Status().PassphraseMode {
 		u.say("the store is new: choose a passphrase for it (at least %d characters; you type it again to unlock the store)", secretstore.MinPassphraseChars)
@@ -179,6 +180,14 @@ func initStoreInit(u *initUI, st *secretstore.Store, d initDeps) bool {
 	if err := st.Init(pass, storeActor); err != nil {
 		initStoreFailed(u, err)
 		return false
+	}
+	if pass != nil {
+		// Init leaves the store locked on purpose; unlock it with the passphrase
+		// just typed, so there is no second prompt.
+		if err := st.Unlock(pass, cfg.StoreUnlockTTL(), storeActor); err != nil {
+			u.stopped("the store was created but unlocking it failed (" + storeErrText(err) + "); run culibox store unlock, then culibox init again")
+			return false
+		}
 	}
 	u.say("created the encrypted store")
 	return true
