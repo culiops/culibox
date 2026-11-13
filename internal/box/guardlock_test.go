@@ -300,8 +300,8 @@ func TestGuardLocksRefuseAFlagNotOurs(t *testing.T) {
 	fi, _ := os.Lstat(p)
 	_, err := g.hold(ws, []guardFile{{"CLAUDE.md", fi}}, "b1", "s1")
 	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), p) ||
-		!strings.Contains(err.Error(), "is locked already") {
-		t.Fatalf("want a refusal naming %s, got %v", p, err)
+		!strings.Contains(err.Error(), "is locked already") || !strings.Contains(err.Error(), "chflags nouchg '"+p+"'") {
+		t.Fatalf("want a refusal naming %s with the line to unlock it, got %v", p, err)
 	}
 	if len(g.all()) != 0 || g.holdsOurs("b1") {
 		t.Fatalf("a refused file is not recorded: %+v", g.all())
@@ -1007,7 +1007,8 @@ func TestGuardLocksWaitForAnotherLocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = g.hold(ws, claudeFile(t, ws), "b1", "")
-	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "being locked") {
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "being locked") ||
+		!strings.Contains(err.Error(), "another program holding a lock on it") {
 		t.Fatalf("want a refusal while another process locks it, got %v", err)
 	}
 	if ff.flagged(t, p) || len(g.all()) != 0 {
@@ -1155,5 +1156,21 @@ func TestGuardLocksHardLinkedGuardFiles(t *testing.T) {
 	g.releaseBox("b1")
 	if ff.flagged(t, filepath.Join(ws, "AGENTS.md")) {
 		t.Fatal("unlocked with its box")
+	}
+}
+
+// The refusal's unlock line pastes safely for any folder name.
+func TestGuardLocksRefusalQuotesTheUnlockLine(t *testing.T) {
+	_, _, ff := lockMgr(t)
+	g := newGuardLocks(t.TempDir(), ff)
+	tmp := realTemp(t)
+	ws := filepath.Join(tmp, "it's $(x)")
+	writeFile(t, filepath.Join(ws, "CLAUDE.md"), "x")
+	p := filepath.Join(ws, "CLAUDE.md")
+	ff.userSets(t, p)
+	_, err := g.hold(ws, claudeFile(t, ws), "b1", "")
+	want := "chflags nouchg '" + strings.ReplaceAll(p, "'", `'\''`) + "'"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("want %s in %v", want, err)
 	}
 }

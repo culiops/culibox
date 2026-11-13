@@ -390,7 +390,7 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 				f.Close()
 				if errors.Is(err, errFlockBusy) {
 					return nil, refuseInPlace("%s is being locked by another process right now (another CuliBox starting a box "+
-						"in this folder?), so this box is not started in place. Spawn again", p)
+						"here, or another program holding a lock on it), so this box is not started in place. Spawn again", p)
 				}
 				return nil, setRefusal(p, err)
 			}
@@ -412,10 +412,11 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 	// them and the flag is left as it is.
 	for _, o := range all {
 		if i := g.find(o.id); o.imm && (i < 0 || !g.recs[i].Ours) {
+			p := filepath.Join(ws, o.name)
 			return nil, refuseInPlace("%s is locked already, and not by this CuliBox (by you, by another CuliBox on "+
 				"this Mac, or by an earlier run whose lock records were lost). A box started in place relies only on a "+
-				"lock it set itself, so it is not started. End the other CuliBox's box in this folder, or unlock the "+
-				"file with chflags nouchg if nothing else uses it, or use a clone-mode profile", filepath.Join(ws, o.name))
+				"lock it set itself, so it is not started. End the other CuliBox's box in this folder, use a clone-mode "+
+				"profile, or, if nothing else uses the file, unlock it: chflags nouchg %s", p, shQuote(p))
 		}
 	}
 	before := cloneLocks(g.recs)
@@ -468,6 +469,9 @@ func (g *guardLocks) hold(ws string, files []guardFile, box, session string) ([]
 	}
 	return g.lockedForLocked(box), nil
 }
+
+// shQuote single-quotes s for a pasted shell command.
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // errFlockBusy: another process holds the file's flock past guardFlockWait.
 var errFlockBusy = errors.New("the file is being locked by another process")
