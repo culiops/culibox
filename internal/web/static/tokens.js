@@ -254,14 +254,19 @@ function tokHideReveal() {
   if (box) box.hidden = true;
 }
 
-// How many times the tab has been left: a create that was in flight when it was left must not paint its secret into a
-// panel nobody is looking at.
-let tokLeft = 0;
+// tokOnScreen: is the Access-tokens tab what the user is looking at (Settings open, this tab selected)? Asked when a
+// created token is ready to paint: a create that was in flight when the tab was left and came back still shows it, one
+// that was left for good never paints the secret into a panel nobody sees.
+function tokOnScreen() {
+  const dlg = document.getElementById("settings-modal");
+  const panel = document.getElementById("tokens");
+  if (dlg && !dlg.open) return false;
+  return !(panel && panel.hidden);
+}
 
 // tokLeave: the Access-tokens tab (or Settings) is no longer on screen; shell.js calls it from selectSettingsTab and the
 // Settings dialog's close.
 function tokLeave() {
-  tokLeft++;
   tokHideReveal();
 }
 
@@ -275,7 +280,6 @@ function revealToken(plain) {
 
 async function createToken() {
   setTokErr("");
-  const left = tokLeft;
   const name = await askPrompt({
     title: "New access token",
     body: "A name to recognise this token later (e.g. \"macbook\", \"cli\").",
@@ -294,7 +298,7 @@ async function createToken() {
     // The list refreshes first, so the new row is on screen; the reveal is the
     // last thing painted and the first thing the next refresh takes away.
     await loadTokens();
-    if (left !== tokLeft) return; // the tab was left meanwhile: the token is not painted anywhere
+    if (!tokOnScreen()) return; // the tab was left meanwhile and not come back to: the token is painted nowhere
     revealToken(res.token);
   } catch (e) {
     setTokErr("Create failed: " + e.message);

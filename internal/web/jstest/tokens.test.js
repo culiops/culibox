@@ -87,7 +87,7 @@ function page({ items, asPage = true, api } = {}) {
   Node.focused = null;
   const els = {
     "set-act-tokens": Object.assign(new Node("button"), { id: "set-act-tokens" }),
-    "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "" }),
+    "settings-modal": Object.assign(new Node("dialog"), { className: asPage ? "as-page" : "", open: true }),
     "tok-list": new Node("ul"),
     "tok-err": new Node("div"),
     "tok-reveal": Object.assign(new Node("div"), { hidden: true }),
@@ -783,21 +783,85 @@ test("the hook is left alone when it holds something else (#208)", async () => {
   assert.strictEqual(p.ctx.window.__lastCopied, "git status");
 });
 
-test("a create that finishes after the user left the tab never paints the token (#208)", async () => {
+// shellPage: the page above with the two shell.js functions that leave the tab (selectSettingsTab, initDialogs) lifted out
+// of the real source into the same context, over a Settings dialog with two panels, so a tab switch and a dialog close
+// are driven rather than read off the source.
+function shellPage(opts) {
+  const p = page({ items: TOKENS, ...opts });
+  const dlg = p.els["settings-modal"];
+  dlg.id = "settings-modal";
+  const listeners = {};
+  dlg.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
+  Object.defineProperty(dlg, "classList", { value: { contains: (c) => dlg.has(c), toggle() {} } });
+  p.els.manage = Object.assign(new Node("div"), { id: "manage" });
+  p.els.tokens = Object.assign(new Node("div"), { id: "tokens" });
+  const panels = [p.els.manage, p.els.tokens];
+  p.ctx.document.querySelectorAll = (sel) => (sel === "dialog" ? [dlg] : sel === "#settings-modal .dbd" ? panels : []);
+  p.ctx.setDialogError = () => {};
+  p.ctx.pageClosed = () => {};
+  p.ctx.focusTerminal = () => {};
+  const shell = read("shell.js");
+  for (const name of ["selectSettingsTab", "initDialogs"]) {
+    const at = shell.indexOf("function " + name + "(");
+    new vm.Script(shell.slice(at, shell.indexOf("\n}\n", at) + 2), { filename: "shell.js#" + name }).runInContext(p.ctx);
+  }
+  p.ctx.initDialogs();
+  const select = (tab) => p.ctx.selectSettingsTab(tab);
+  select("tokens");
+  return { ...p, dlg, select, fire: (type) => (listeners[type] || []).forEach((fn) => fn()) };
+}
+
+test("choosing another Settings tab empties the reveal (#208)", async () => {
+  const p = shellPage({ api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS) });
+  await p.els["tok-new"].onclick();
+  assert.strictEqual(value(p), SECRET, "fixture: the reveal is up on the Access-tokens tab");
+  p.select("manage");
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+test("closing Settings empties the reveal (#208)", async () => {
+  const p = shellPage({ api: async (url, method) => (method === "POST" ? { token: SECRET } : TOKENS) });
+  await p.els["tok-new"].onclick();
+  assert.strictEqual(value(p), SECRET, "fixture");
+  p.dlg.open = false;
+  p.fire("close");
+  assert.ok(!shown(p));
+  assert.strictEqual(value(p), "");
+});
+
+// A create is slow (the POST, then the list refresh). Whether its token is painted is decided when it is ready.
+function slowCreate() {
   let release;
-  const p = page({ items: TOKENS, api: (url, method) => (method === "POST" ? new Promise((r) => { release = r; }) : Promise.resolve(TOKENS)) });
+  const p = shellPage({ api: (url, method) => (method === "POST" ? new Promise((r) => { release = r; }) : Promise.resolve(TOKENS)) });
   const creating = p.els["tok-new"].onclick();
+  return { p, creating, finish: async () => { await settle(); release({ token: SECRET }); await creating; } };
+}
+
+test("a create that finishes after the user left the tab, and did not come back, never paints the token (#208)", async () => {
+  const { p, finish } = slowCreate();
   await settle();
-  p.ctx.tokLeave();                                  // the tab is left while the POST is out
-  release({ token: SECRET });
-  await creating;
+  p.select("manage");                                // the tab is left while the POST is out
+  await finish();
   assert.ok(!shown(p));
   assert.strictEqual(value(p), "", "the value never reaches a panel nobody is looking at");
 });
 
-test("the shell empties the reveal when another Settings tab is chosen and when Settings closes (#208)", () => {
-  const shell = read("shell.js");
-  const body = (name) => { const at = shell.indexOf("function " + name + "("); return shell.slice(at, shell.indexOf("\n}\n", at) + 2); };
-  assert.match(body("selectSettingsTab"), /if \(name !== "tokens" && typeof tokLeave === "function"\) tokLeave\(\);/);
-  assert.match(body("initDialogs"), /d\.id === "settings-modal" && typeof tokLeave === "function"\) tokLeave\(\);/);
+test("a create that finishes after Settings was closed never paints the token (#208)", async () => {
+  const { p, finish } = slowCreate();
+  await settle();
+  p.dlg.open = false;
+  p.fire("close");
+  await finish();
+  assert.strictEqual(value(p), "");
+});
+
+test("a create still shows its token when the user left the tab and came back while it was in flight (#208)", async () => {
+  const { p, finish } = slowCreate();
+  await settle();
+  p.select("manage");
+  p.select("tokens");
+  await finish();
+  assert.ok(shown(p));
+  assert.strictEqual(value(p), SECRET);
 });
