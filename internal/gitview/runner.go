@@ -314,7 +314,7 @@ func (r *Runner) acquire(ctx context.Context) (release func(), err error) {
 // still creating the container, which then appears with nobody to start it.
 func (r *Runner) removeFailed(name string) {
 	r.remove(name)
-	r.SweepLater(sweepDelay)
+	r.SweepLater(SweepDelay)
 }
 
 // remove force-removes the named container on a fresh context, since the run's

@@ -35,7 +35,9 @@ func TestSweepGitLeftoversAtStart(t *testing.T) {
 	var delays []time.Duration
 	r := &gitview.Runner{AfterFunc: func(d time.Duration, _ func()) { delays = append(delays, d) }}
 	sweepGitLeftovers(r)
-	if !slices.Equal(delays, []time.Duration{0}) {
-		t.Fatalf("scheduled %v, want one sweep right away", delays)
+	// Not right away: a leftover of the restart itself is still younger than
+	// the sweep's grace then, and nothing else would sweep it.
+	if !slices.Equal(delays, []time.Duration{gitview.SweepDelay}) {
+		t.Fatalf("scheduled %v, want one sweep at %v", delays, gitview.SweepDelay)
 	}
 }

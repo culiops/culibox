@@ -85,7 +85,7 @@ func TestSweepRemovesOnlyOldStoppedGitContainers(t *testing.T) {
 		t.Fatalf("Sweep removed %d %q, want %q", n, f.removed, want)
 	}
 	args := f.args[0]
-	for _, a := range []string{"name=^agent-box-git-", "status=created", "status=exited", "status=dead"} {
+	for _, a := range []string{"label=" + Label + "=1", "name=^agent-box-git-", "status=created", "status=exited", "status=dead"} {
 		if i := slices.Index(args, a); i < 1 || args[i-1] != "--filter" {
 			t.Errorf("ps argv %q lacks --filter %s", args, a)
 		}
@@ -198,5 +198,21 @@ func TestSweepLaterSchedulesTheGivenDelay(t *testing.T) {
 	r.SweepLater(0)
 	if after.count() != 1 || after.delays[0] != 0 {
 		t.Fatalf("scheduled %v, want one sweep now", after.delays)
+	}
+}
+
+// A listing past the cap still sweeps every whole row before it.
+func TestSweepCappedListingSweepsWholeRows(t *testing.T) {
+	c := newClock()
+	row := psLine(leakOld, "created", c.now().Add(-time.Hour)) + "\n"
+	filler := psLine("someone-else", "exited", c.now()) + "\n"
+	list := row + strings.Repeat(filler, maxSweepBytes/len(filler)+1)
+	f := &fakeDocker{run: func(_ context.Context, _ []string, w io.Writer) error {
+		_, err := io.WriteString(w, list)
+		return err
+	}}
+	n, err := newRunner(f, c).Sweep(context.Background())
+	if err != nil || n != 1 || !slices.Equal(f.removed, []string{leakOld}) {
+		t.Fatalf("n %d err %v removed %q, want the whole row before the cap removed", n, err, f.removed)
 	}
 }

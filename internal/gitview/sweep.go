@@ -14,9 +14,6 @@ const (
 	// start, and every run ends within its 10s timeout, so an older one has
 	// nobody left to start or remove it.
 	sweepGrace = 2 * time.Minute
-	// sweepDelay is how long after a failed run its sweep runs: past sweepGrace,
-	// so the container a killed CLI left half-made is old enough by then.
-	sweepDelay = 3 * time.Minute
 	// sweepTimeout bounds the docker ps of one sweep.
 	sweepTimeout = 30 * time.Second
 	// maxSweepBytes bounds the listing; rows past it wait for the next sweep.
@@ -24,6 +21,11 @@ const (
 
 	namePrefix = "agent-box-git-"
 )
+
+// SweepDelay is how long after a failed run, or after serve starts, a sweep
+// runs: past sweepGrace, so a container a killed CLI or a restart left
+// half-made is old enough by then.
+const SweepDelay = 3 * time.Minute
 
 // gitName is exactly what newName makes, so a sweep never touches a container
 // someone else named with the same prefix.
@@ -48,7 +50,7 @@ func (r *Runner) Sweep(ctx context.Context) (int, error) {
 	defer cancel()
 	out := &capBuffer{max: maxSweepBytes}
 	err := r.Docker.RunStream(ctx, []string{"ps", "-a",
-		"--filter", "name=^" + namePrefix,
+		"--filter", "label=" + Label + "=1", "--filter", "name=^" + namePrefix,
 		"--filter", "status=created", "--filter", "status=exited", "--filter", "status=dead",
 		"--format", psFormat}, out)
 	if err != nil && !out.hit {
