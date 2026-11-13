@@ -48,8 +48,15 @@ type VMApply struct {
 	ElapsedMs int64         `json:"elapsed_ms"` // server's now - started, while running
 	Steps     []VMApplyStep `json:"steps"`
 	Error     string        `json:"error"`  // short, for the page
-	Detail    string        `json:"detail"` // the raw error
+	Detail    string        `json:"detail"` // fixed text: VMApplyDetail
+	// Raw is the error as it came (OS and colima text, data-dir paths). It is
+	// never sent to a browser; the log and the local CLI have it.
+	Raw string `json:"-"`
 }
+
+// VMApplyDetail is the Detail of every failed apply job: the raw error stays in
+// the log, not in the browser.
+const VMApplyDetail = "The full error is in the CuliBox log."
 
 // VMAddResult says what an add did beyond adding: the folder that already
 // covered it, or the listed folders it swallowed.
@@ -72,4 +79,5 @@ var (
 	ErrApplyRunning = errors.New("the VM is already restarting to apply its folders")
 	ErrVMNotSetUp   = errors.New("the box VM is not set up; run `culibox box setup`")
 	ErrListCorrupt  = errors.New("the folder list file is damaged; fix or delete vm-shares.json")
+	ErrVMBadMode    = errors.New("the mode must be rw or ro")
 )

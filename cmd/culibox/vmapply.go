@@ -220,7 +220,8 @@ func (s *vmShareSvc) runJob(ctx context.Context, id int) {
 	}
 	s.job.State = "failed"
 	s.job.Error = applyErrorText(failed, err)
-	s.job.Detail = err.Error()
+	s.job.Detail = web.VMApplyDetail
+	s.job.Raw = err.Error() // the logf below has it too; the CLI prints it, the browser never gets it
 	s.logf("box VM folders: apply failed at %s: %v", failed, err)
 }
 

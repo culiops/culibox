@@ -181,8 +181,8 @@ func applyShares(ctx context.Context, force bool, svc *vmShareSvc, l *boxLayer, 
 				fmt.Fprintf(w, "%s… done (%d s)\n", s.Name, (s.Ms+500)/1000)
 			} else if s.State == "failed" && st.State != "running" {
 				fmt.Fprintf(w, "%s… failed: %s\n", s.Name, st.Error)
-				if st.Detail != "" {
-					fmt.Fprintf(w, "detail: %s\n", strings.TrimSpace(st.Detail))
+				if st.Raw != "" {
+					fmt.Fprintf(w, "detail: %s\n", strings.TrimSpace(st.Raw))
 				}
 			} else {
 				break

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -262,5 +264,43 @@ func TestSpawnErrNotSharedNeedWrite(t *testing.T) {
 		if b["need_write"] != need {
 			t.Fatalf("need %v: body %s", need, rec.Body)
 		}
+	}
+}
+
+// #235 item 5: an error the page cannot act on is sent as fixed copy; its text
+// (OS paths, colima output) goes to the log only.
+func TestVMFoldersUnknownErrorIsFixedCopy(t *testing.T) {
+	s, f := vmSrv()
+	raw := errors.New("open /home/me/.local/share/culibox/vm-shares.json: permission denied")
+	f.addErr = raw
+	var logged strings.Builder
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	w := do(s.handleVMFolders, vmReq("POST", "/api/vm-folders", `{"path":"~/a","mode":"rw"}`, "http://"+host, credCookie))
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "permission denied") || strings.Contains(w.Body.String(), "/home/me") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), vmFoldersFailed) {
+		t.Errorf("body %s lacks the fixed copy", w.Body)
+	}
+	if !strings.Contains(logged.String(), "permission denied") {
+		t.Errorf("the raw error is not in the log: %q", logged.String())
+	}
+	// Errors that are our own words stay as they are.
+	for _, c := range []struct {
+		err  error
+		code int
+		text string
+	}{{vmshares.ErrNotListed, 400, "that folder is not in the shared list"}, {ErrVMBadMode, 400, "rw or ro"}} {
+		f.addErr = c.err
+		w = do(s.handleVMFolders, vmReq("POST", "/api/vm-folders", `{"path":"~/a","mode":"rw"}`, "http://"+host, credCookie))
+		if w.Code != c.code || !strings.Contains(w.Body.String(), c.text) {
+			t.Errorf("%v: %d %s", c.err, w.Code, w.Body)
+		}
+	}
+	f.applyErr = raw
+	w = do(s.handleVMFoldersApply, vmReq("POST", "/api/vm-folders/apply", "", "http://"+host, credCookie))
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "/home/me") {
+		t.Errorf("apply: %d %s", w.Code, w.Body)
 	}
 }

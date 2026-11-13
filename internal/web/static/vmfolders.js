@@ -819,7 +819,7 @@ function vmfFailExtras(job) {
   });
   toggle.setAttribute("aria-expanded", "false");
   const chev = vmfEl("span", "vmf-chev", "›");
-  toggle.append(chev, vmfEl("span", "", "Details"), vmfEl("span", "muted", "The error as the VM reported it"));
+  toggle.append(chev, vmfEl("span", "", "Details"), vmfEl("span", "muted", "Where the full error is"));
   const raw = vmfEl("pre", "vmf-raw mono t-sm", job.detail || job.error || "");
   raw.hidden = true;
   wrap.append(toggle, raw, vmfEl("p", "t-md muted vmf-or", "Or try it from a terminal on this Mac:"));

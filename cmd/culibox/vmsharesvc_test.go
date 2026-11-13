@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -294,8 +295,13 @@ func TestApplyJobStepsAndFailure(t *testing.T) {
 	if _, err := s.Apply(); err != nil {
 		t.Fatal(err)
 	}
-	if j := waitJob(t, s); j.ID != 2 || j.Error != "The VM did not start." || j.Detail != "boom" {
+	if j = waitJob(t, s); j.ID != 2 || j.Error != "The VM did not start." || j.Detail != web.VMApplyDetail || j.Raw != "boom" {
 		t.Fatalf("%+v", j)
+	}
+	// What the browser is sent never holds the raw error.
+	b, err := json.Marshal(j)
+	if err != nil || strings.Contains(string(b), "boom") {
+		t.Fatalf("the job JSON carries the raw error: %s %v", b, err)
 	}
 }
 
