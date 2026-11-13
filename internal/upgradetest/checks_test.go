@@ -113,3 +113,25 @@ func TestSettingsRuleAllowsOnlyRootRewrite(t *testing.T) {
 		t.Fatal("a rewrite to another root was allowed")
 	}
 }
+
+func TestAllowRulesRefuseUnknownRootChanges(t *testing.T) {
+	before := Snapshot{"r/profiles.json": *entryOf("[]"), "r/credentials.json": *entryOf("{}")}
+	after := Snapshot{
+		"r/profiles.json":    {Type: "file", Data: []byte("[1]"), SHA256: "x"},
+		"r/unexpected.json":  *entryOf("{}"),
+		"r/last-version":     *entryOf("v2 abc\n"),
+		"r/backups":          {Type: "dir"},
+		"r/backups/x/a.json": *entryOf("{}"),
+	}
+	got := strings.Join(Diff(before, after, DiffOptions{Rules: AllowRules("r", nil)}), "\n")
+	for _, want := range []string{"r/profiles.json: changed", "r/unexpected.json: new", "r/credentials.json: vanished"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	for _, allowed := range []string{"last-version", "backups"} {
+		if strings.Contains(got, allowed) {
+			t.Errorf("%s is part A's and checked by backupProblems, not here:\n%s", allowed, got)
+		}
+	}
+}

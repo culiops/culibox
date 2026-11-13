@@ -21,12 +21,8 @@ import (
 
 // AllowRules is the allowlist for one data root, as a slash path relative to
 // the snapshot base (HOME). rewrite, when set, maps a before-path string onto
-// the after root (S2's move); S1 passes nil.
-//
-// TODO(229A): when part A (version stamp + pre-upgrade backup) is on main, add
-// rules for last-version and backups/** and assert the backup's bytes (spec,
-// "Part A backup"). Until then a new last-version or backups/ is not on this
-// list, so it fails the diff on purpose.
+// the after root (S2's move); S1 passes nil. Part A's stamp and backups are
+// allowed here and checked in detail by backupProblems.
 func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 	p := func(s string) string { return rootRel + "/" + s }
 	db := func(name, why string) []Rule {
@@ -43,6 +39,9 @@ func AllowRules(rootRel string, rewrite func(string) string) []Rule {
 		{Pattern: p("serve.lock"), Why: "instance lock, empty in both versions", AllowNew: true, Check: emptyBoth},
 		withName(sessionsRule(rewrite), p("sessions.json")),
 		withName(tokensRule(), p("tokens.json")),
+		{Pattern: p("last-version"), Why: "part A's version stamp (backupProblems checks it)", AllowNew: true},
+		{Pattern: p("backups"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
+		{Pattern: p("backups/**"), Why: "part A's pre-upgrade backup (backupProblems checks it)", AllowNew: true},
 	}
 	rules = append(rules, db("audit.db", "SQLite: rows are compared (auditDBRows)")...)
 	rules = append(rules, db("analytics.db", "SQLite: compared through the analytics API")...)

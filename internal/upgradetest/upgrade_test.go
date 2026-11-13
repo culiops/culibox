@@ -16,8 +16,8 @@ import (
 // skips: go test -tags upgrade alone runs only the unit tests.
 func needBins(t *testing.T) (prev, cur string) {
 	prev, cur = os.Getenv("AB_UPGRADE_PREV_BIN"), os.Getenv("AB_UPGRADE_CUR_BIN")
-	if prev == "" || cur == "" {
-		t.Skip("SKIP needs AB_UPGRADE_PREV_BIN/AB_UPGRADE_CUR_BIN (run scripts/upgrade-test.sh)")
+	if prev == "" || cur == "" || os.Getenv("AB_UPGRADE_CUR_VERSION") == "" {
+		t.Skip("SKIP needs AB_UPGRADE_PREV_BIN, AB_UPGRADE_CUR_BIN and AB_UPGRADE_CUR_VERSION (run scripts/upgrade-test.sh)")
 	}
 	return prev, cur
 }
@@ -102,6 +102,7 @@ func testPinnedRoot(t *testing.T, prev, cur string) {
 	for _, v := range Diff(before, after, DiffOptions{Rules: AllowRules("r", nil)}) {
 		t.Errorf("unexpected change: %s", v)
 	}
+	checkBackup(t, before, after, "r", "r", root, os.Getenv("AB_UPGRADE_CUR_VERSION"), f, nil)
 	if miss := missingDBRows(f.AuditDB, auditDBRows(t, filepath.Join(root, "audit.db"))); len(miss) > 0 {
 		t.Errorf("audit.db rows lost in the upgrade: %v", miss)
 	} else {
@@ -182,6 +183,14 @@ func testDefaultRoot(t *testing.T, prev, cur string) {
 	for _, v := range Diff(before, after, opts) {
 		t.Errorf("unexpected change: %s", v)
 	}
+	beforeRoot, rootRel, rewrite := legacyRel, legacyRel, (func(string) string)(nil)
+	if prevRoot == newRoot {
+		beforeRoot, rootRel = newRel, newRel
+	}
+	if moved {
+		rootRel, rewrite = newRel, moveRewrite
+	}
+	checkBackup(t, before, after, beforeRoot, rootRel, root, os.Getenv("AB_UPGRADE_CUR_VERSION"), f, rewrite)
 	if moved && before[legacyRel].Mode != after[newRel].Mode {
 		t.Errorf("the moved root's mode is %v, the legacy root's was %v", after[newRel].Mode, before[legacyRel].Mode)
 	}
