@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 func mkfifo(p string) error { return syscall.Mkfifo(p, 0o644) }
@@ -542,8 +544,95 @@ func TestGuardLocksUnreadableRecordsStartEmpty(t *testing.T) {
 	}
 	b, _ := json.Marshal(guardLockDoc{Version: 99})
 	_ = os.WriteFile(filepath.Join(dir, guardLocksFile), b, 0o600)
-	if _, err := ReadGuardLocks(dir); err == nil {
-		t.Fatal("an unknown version is not read")
+	if _, err := ReadGuardLocks(dir); !errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("a newer version reads as newer, got %v", err)
+	}
+	// Version 0 is not "from the future": it is moved aside like bad JSON.
+	_ = os.WriteFile(filepath.Join(dir, guardLocksFile), []byte(`{"version":0,"locks":[]}`), 0o600)
+	if _, err := ReadGuardLocks(dir); err == nil || errors.Is(err, datacompat.ErrNewer) {
+		t.Fatalf("version 0 is an error, not newer: %v", err)
+	}
+}
+
+// Records from a newer CuliBox are left exactly as they are (it made those
+// files immutable and needs the records after a re-upgrade), and the guard
+// refuses every in-place box that needs a lock until then. Nothing writes or
+// removes the file, and no flag is touched.
+func TestGuardLocksNewerVersionFreezes(t *testing.T) {
+	for _, body := range []string{
+		`{"version":3,"locks":{"x":1}}`, // a body this build's types cannot decode
+		`{"version":3,"locks":[]}`,
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, guardLocksFile)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadGuardLocks(dir); !errors.Is(err, datacompat.ErrNewer) {
+			t.Fatalf("%s: ReadGuardLocks = %v, want ErrNewer", body, err)
+		}
+		fk := newFakeFlags()
+		g := newGuardLocks(dir, fk)
+		same := func(when string) {
+			t.Helper()
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != body {
+				t.Fatalf("%s: the file changed %s: %q, %v", body, when, got, err)
+			}
+			if m, _ := filepath.Glob(path + ".unreadable*"); len(m) != 0 {
+				t.Fatalf("%s: moved aside %s: %v", body, when, m)
+			}
+		}
+		same("on load")
+
+		ws := lockWS(t)
+		_, err := g.hold(ws, claudeFile(t, ws), "b1", "")
+		if err == nil || !strings.Contains(err.Error(), "newer CuliBox") {
+			t.Fatalf("%s: hold = %v, want a refusal naming the newer CuliBox", body, err)
+		}
+		if !errors.Is(err, ErrUnboxableWorkspace) {
+			t.Fatalf("%s: hold = %v, want an in-place refusal", body, err)
+		}
+		for _, want := range []string{"clone-mode"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: refusal lacks %q: %v", body, want, err)
+			}
+		}
+		for _, bad := range []string{"remove it", "own the file"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Fatalf("%s: refusal says %q, which is wrong for a newer file: %v", body, bad, err)
+			}
+		}
+		if fk.sets != 0 || len(g.all()) != 0 {
+			t.Fatalf("%s: a flag or record was set: sets=%d recs=%v", body, fk.sets, g.all())
+		}
+		g.sweep(map[string]bool{})
+		g.releaseBox("b1")
+		g.forgetSession("b1", "s1")
+		same("by sweep, releaseBox and forgetSession")
+		if err := g.save(); err == nil || !errors.Is(err, datacompat.ErrNewer) {
+			t.Fatalf("%s: save = %v, want the newer error", body, err)
+		}
+		same("by save")
+	}
+}
+
+// The freeze is only about spawns that would need a lock: a case-sensitive
+// volume, or no guarded files, needs none and is not refused.
+func TestGuardLocksFrozenStillAllowsSpawnsThatNeedNoLock(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, guardLocksFile), []byte(`{"version":3,"locks":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fk := newFakeFlags()
+	fk.sensitive = true
+	g := newGuardLocks(dir, fk)
+	ws := lockWS(t)
+	if _, err := g.hold(ws, claudeFile(t, ws), "b1", ""); err != nil {
+		t.Fatalf("case-sensitive volume: %v", err)
+	}
+	if _, err := g.hold(ws, nil, "b1", ""); err != nil {
+		t.Fatalf("no guarded files: %v", err)
 	}
 }
 

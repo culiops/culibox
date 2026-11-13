@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 const (
@@ -71,6 +73,13 @@ func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, s
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("boxedws: read %s: %w", fileName, err)
+	}
+	// Probe the version before the typed decode: a newer CuliBox may have
+	// changed the other fields' types, and that must read as "newer", not as a
+	// parse error. Still an error either way (fail closed).
+	var probe struct{ Version int }
+	if json.Unmarshal(b, &probe) == nil && probe.Version > version {
+		return nil, false, datacompat.Newer(filepath.Join(dataDir, fileName), fmt.Sprintf("version %d, this build understands %d", probe.Version, version))
 	}
 	var f fileFormat
 	if err := json.Unmarshal(b, &f); err != nil {

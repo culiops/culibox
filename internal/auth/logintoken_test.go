@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/culiops/culibox/internal/config"
+	"github.com/culiops/culibox/internal/datacompat"
 )
 
 var tokenShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -44,12 +47,24 @@ func TestLoginToken_HandEditedWhitespaceKept(t *testing.T) {
 	}
 }
 
-func TestLoginToken_MalformedRegenerates(t *testing.T) {
+func TestLoginToken_BlankMinted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), LoginTokenFile)
-	_ = os.WriteFile(path, []byte("short"), 0o600)
+	_ = os.WriteFile(path, []byte("  \n"), 0o600)
 	got, err := LoadOrCreateLoginToken(path)
 	if err != nil || !tokenShape.MatchString(got) {
-		t.Fatalf("malformed file: got %q,%v", got, err)
+		t.Fatalf("blank file: got %q,%v", got, err)
+	}
+}
+
+func TestLoginToken_MalformedRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), LoginTokenFile)
+	_ = os.WriteFile(path, []byte("short"), 0o600)
+	_, err := LoadOrCreateLoginToken(path)
+	if !errors.Is(err, datacompat.ErrNewer) || !strings.Contains(err.Error(), "password_env") {
+		t.Fatalf("want ErrNewer naming password_env, got %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "short" {
+		t.Fatalf("a refused token must stay untouched, file now %q", b)
 	}
 }
 

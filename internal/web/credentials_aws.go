@@ -643,6 +643,8 @@ func writeCredErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "in_use", "used_by": inUse.By})
 	case errors.Is(err, ErrCredNotFound):
 		writeErrCode(w, http.StatusNotFound, err.Error(), "not_found")
+	case errors.Is(err, ErrCredReadOnly):
+		writeErrCode(w, http.StatusConflict, ErrCredReadOnly.Error(), "file_read_only")
 	case errors.Is(err, ErrCredPersist):
 		log.Printf("credentials: %v", err)
 		writeErr(w, http.StatusInternalServerError, ErrCredPersist.Error())
