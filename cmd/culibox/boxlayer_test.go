@@ -1548,3 +1548,13 @@ func TestPrepareAdoptsTheLegacyDefaultBeforeInspect(t *testing.T) {
 		t.Fatalf("the tag must come before the final inspect:\n%s", d.log())
 	}
 }
+
+// The VM identity read holds the box manager's operation lock, so its bound is
+// how long one wedged `colima ssh` can stall every spawn. The number comes from
+// the Mac measurements on #122 (see vmIDsTimeout): well above the measured
+// median and slowest spawn, well below the 30 s it was.
+func TestVMIDsTimeoutIsShortEnoughToNotStallSpawns(t *testing.T) {
+	if vmIDsTimeout != 10*time.Second {
+		t.Fatalf("vmIDsTimeout = %v, want 10s (see its comment for the measurement)", vmIDsTimeout)
+	}
+}

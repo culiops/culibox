@@ -377,10 +377,16 @@ func (l *boxLayer) verify(ctx context.Context, name string) error {
 	return nil
 }
 
-// vmIDsTimeout bounds the VM identity read of a boxed spawn's context paths.
-// The box manager runs it under its operation lock, so a wedged `colima ssh`
-// must not hold every other spawn. A var so a test can shorten it.
-var vmIDsTimeout = 30 * time.Second
+// vmIDsTimeout bounds the VM identity read of a boxed spawn: the workspace, its
+// guards and the context paths, in one `colima ssh`. The box manager runs it
+// under its operation lock, so a wedged `colima ssh` holds every other spawn up
+// to this long. Measured on a Mac (M2 mini, colima 0.10.3, 2026-11-10, #122) the
+// whole read-and-compare added a median of 0.32 s to a spawn whose slowest run
+// took 4.1 s in total, so 10 s is about thirty times the median and more than
+// twice the slowest whole spawn; the earlier 30 s only lengthened a stall. A read
+// that does take longer is refused, never let through (spawn again). A var so a
+// test can shorten it.
+var vmIDsTimeout = 10 * time.Second
 
 // vmIDs is box.Options.VMIDs on macOS: the identity of each path as the VM
 // sees it, which is the one the box's bind mount shows (a Mac inode number is
